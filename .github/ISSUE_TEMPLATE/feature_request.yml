@@ -1,0 +1,21 @@
+name: Feature request
+description: A new broker, a tax rule, a report, or a command
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The tax situation or workflow, not the solution. If it's a rule, cite the CRA/IRS source if you know it (see REFERENCES.md).
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What taxjson should compute or print. A synthetic example (never real statements) helps.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Broker parser, Canada rules, US rules, Reports / exports, CLI / config, Web UI, Docs]

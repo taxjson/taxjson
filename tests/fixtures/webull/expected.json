@@ -1,0 +1,47 @@
+[
+ {
+  "account": "WB",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2025-01-14",
+  "date_settle": "2025-01-15",
+  "description": "NVIDIA CORP",
+  "fee": 1.0,
+  "gross_amount": 1200.0,
+  "net_amount": 1201.0,
+  "price": 120.0,
+  "quantity": 10.0,
+  "symbol": "NVDA.US",
+  "time": "09:30:00"
+ },
+ {
+  "account": "WB",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2025-03-19",
+  "date_settle": "2025-03-20",
+  "description": "NVIDIA CORP",
+  "fee": 0.8,
+  "gross_amount": 600.0,
+  "net_amount": 599.2,
+  "price": 150.0,
+  "quantity": -4.0,
+  "symbol": "NVDA.US",
+  "time": "09:30:00"
+ },
+ {
+  "account": "WB",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2024-12-13",
+  "date_settle": "2024-12-15",
+  "description": "CALL ABBV01/17/25 190",
+  "fee": 1.0,
+  "gross_amount": 250.0,
+  "net_amount": 251.0,
+  "price": 2.5,
+  "quantity": 1.0,
+  "symbol": "ABBV250117C00190000.US",
+  "time": "09:30:00"
+ }
+]

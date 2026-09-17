@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>taxjson</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">taxjson</a>
+    <nav>
+      <a href="/holdings">Holdings</a>
+      <a href="/wash-radar">Wash radar</a>
+    </nav>
+    <span class="proj" title="{{ ctx.root }}">{{ ctx.country }} · {{ ctx.base_currency }}{% if ctx.year %} · {{ ctx.year }}{% endif %}</span>
+  </header>
+  <main>
+    {% if freshness and freshness.stale %}
+    <p class="banner stale" style="background:#fff3cd;border:1px solid #e0c368;padding:.5em .8em;border-radius:4px">
+      Reports generated {{ freshness.generated }} — inputs have changed since.
+      Re-run <code>taxjson run</code> for current numbers.
+    </p>
+    {% endif %}
+    {% for e in ([error] if error else []) + (errors | default([])) %}
+    <p class="banner error" style="background:#f8d7da;border:1px solid #d9534f;padding:.5em .8em;border-radius:4px">
+      {{ e }}
+    </p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

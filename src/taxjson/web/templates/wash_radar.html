@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Wash-sale radar — {{ account }}</h1>
+{% if radar_accounts and radar_accounts|length > 1 %}
+<p class="toolbar">
+  {% for a in radar_accounts %}
+    {% if a == account %}<b>{{ a }}</b>{% else %}<a href="/wash-radar?account={{ a }}">{{ a }}</a>{% endif %}
+    {%- if not loop.last %} · {% endif %}
+  {% endfor %}
+</p>
+{% endif %}
+{% for s in sections %}
+  <h2>{{ s.title }}</h2>
+  <table>
+    <thead><tr><th>Ticker</th><th class="num">Taxable</th><th class="num">Sheltered</th>
+               <th>Clears in</th><th>Advisory</th></tr></thead>
+    <tbody>
+    {% for r in s.rows %}
+      <tr>
+        <td>{{ r.ticker }}</td><td class="num">{{ r.taxable }}</td>
+        <td class="num">{{ r.sheltered }}</td><td>{{ r.clears_in }}</td>
+        <td class="advisory">{{ r.advisory }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p class="muted">No wash-radar report yet — run <code>taxjson run</code>.</p>
+{% endfor %}
+{% endblock %}

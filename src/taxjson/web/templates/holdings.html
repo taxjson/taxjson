@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Holdings — {{ account }}</h1>
+
+<form method="get" class="toolbar">
+  <label>Account
+    <select name="account" onchange="this.form.submit()">
+      {% for a in holdings_accounts %}
+        <option value="{{ a }}" {% if a == account %}selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<p class="muted">Basis: native per-account snapshot, pre-blend — for the filing ACB (s.47 blended across taxable accounts) use <code>taxjson list</code>.</p>
+<table>
+  <thead>
+    <tr><th>Symbol</th><th class="num">Qty</th><th class="num">Cost/sh</th>
+        <th class="num">Base cost/sh</th><th class="num">Total cost</th><th>Since</th></tr>
+  </thead>
+  <tbody>
+  {% for h in rows %}
+    <tr>
+      <td><a href="/holdings/{{ account }}/{{ h.symbol }}">{{ h.symbol }}</a></td>
+      <td class="num">{{ h.quantity }}</td>
+      {% if h.mixed_currency %}
+      {# A cross-currency (JOURNAL-folded) bucket: the snapshot carries
+         no single native cost, only per-currency components — same
+         MIXED marker as the .sum; the base columns are unaffected. #}
+      <td class="num"><span class="muted" title="mixed-currency position: no single native cost per share">MIXED</span></td>
+      <td class="num">{{ h.base_cost_per_share | default('—') }} {{ h.base_currency | default('') }}</td>
+      <td class="num">{% for k, v in h.items() | sort if k.startswith('total_cost_') %}{{ v }} {{ k[11:] | upper }}{% if not loop.last %} + {% endif %}{% endfor %} <span class="muted">(MIXED)</span></td>
+      {% else %}
+      <td class="num">{{ h.cost_per_share }} {{ h.currency }}</td>
+      <td class="num">{{ h.base_cost_per_share | default('—') }} {{ h.base_currency | default('') }}</td>
+      <td class="num">{{ h.total_cost }}</td>
+      {% endif %}
+      <td>{{ h.position_start_date | default('—') }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">No holdings — run <code>taxjson run</code>.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,97 @@
+name: tests
+
+# NOTE: this private repo's Actions minutes are billing-gated; the
+# authoritative gate is scripts/ci.sh, run locally before every push.
+# macOS runners are excluded (10x minute multiplier) so the matrix fits
+# the free tier whenever Actions is enabled.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"     # nightly deep fuzz (UTC)
+
+jobs:
+  lint:
+    # Critical-tier only (syntax errors, undefined names, misused
+    # comparisons): the class of defect that once let a dead parameter
+    # survive five audit cycles. Style rules are deliberately excluded.
+    name: ruff (critical tier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check --select E9,F63,F7,F82 src/ tests/
+
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+
+  test-extras:
+    # One cell with every optional extra installed, so the web/fx/
+    # analytics code paths (fastapi, yfinance, pandas...) are actually
+    # imported in CI instead of silently skipping — the extras rotted
+    # undetected before this job existed. [dev] adds httpx so
+    # fastapi.testclient works and the web-route tests actually run.
+    name: ubuntu / 3.12 / all extras
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package with all extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[all,dev]"
+      - name: Run tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+  fuzz-nightly:
+    # The three property fuzzers at nightly depth (the suite runs them
+    # at 200/150/200 books; this is 5000/3000/1600). Only on the
+    # schedule or a manual dispatch — too slow for every push.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: ubuntu / 3.12 / nightly fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Deep fuzz
+        env:
+          TAXJSON_FUZZ_BOOKS: "5000"
+          TAXJSON_TRANSFER_FUZZ_BOOKS: "3000"
+          TAXJSON_STRADDLE_FUZZ_BOOKS: "1600"
+        run: |
+          cd tests
+          python -m unittest -q test_engine_invariants test_transfer_fuzz test_settle_straddle_fuzz

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/holdings?account={{ account }}">← {{ account }} holdings</a></p>
+<h1>{{ symbol }} <span class="muted">({{ account }})</span></h1>
+
+{% if holding %}
+<p>
+  Qty <b>{{ holding.quantity }}</b> ·
+  {% if holding.mixed_currency %}
+  cost <b>MIXED</b> ({% for k, v in holding.items() | sort if k.startswith('total_cost_') %}{{ v }} {{ k[11:] | upper }}{% if not loop.last %} + {% endif %}{% endfor %}) ·
+  {% else %}
+  cost/sh {{ holding.cost_per_share }} {{ holding.currency }} ·
+  {% endif %}
+  base {{ holding.base_cost_per_share | default('—') }} {{ holding.base_currency | default('') }} ·
+  since {{ holding.position_start_date | default('—') }}
+</p>
+{% if holding.mixed_currency %}
+<p class="muted">Mixed-currency position (a JOURNAL-folded cross-listing): the native cost is shown per currency, as in the .sum — the base-currency figures above are the comparable ones.</p>
+{% endif %}
+
+<h2>Trades — current position</h2>
+<p class="muted">Basis: native per-account snapshot, pre-blend — for the filing ACB (s.47 blended across taxable accounts) use <code>taxjson list</code>.</p>
+<table>
+  <thead><tr><th>Date</th><th>Action</th><th class="num">Qty</th><th class="num">Price</th></tr></thead>
+  <tbody>
+  {% for t in holding.trades | default([]) %}
+    <tr><td>{{ t.date }}</td><td>{{ t.action }}</td><td class="num">{{ t.qty }}</td><td class="num">{{ t.price }}</td></tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">No trade history.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>What if I sell today?</h2>
+<form method="post" action="/whatif" class="toolbar">
+  <input type="hidden" name="account" value="{{ account }}">
+  <input type="hidden" name="symbol" value="{{ symbol }}">
+  <input type="hidden" name="price_currency" value="{{ holding.currency or ctx.base_currency }}">
+  <label>Qty <input name="qty" type="number" step="any" value="{{ holding.quantity }}" required></label>
+  <label>Price ({{ holding.currency or ctx.base_currency }}) <input name="price" type="number" step="any" required></label>
+  <button type="submit">Simulate</button>
+</form>
+<p class="muted">Enter the price in the holding's own currency ({{ holding.currency or ctx.base_currency }}); it is converted to {{ ctx.base_currency }} at today's rate before the engine computes the gain and any superficial-loss.</p>
+{% else %}
+<p class="muted">No open position for {{ symbol }} in {{ account }}.</p>
+{% endif %}
+{% endblock %}

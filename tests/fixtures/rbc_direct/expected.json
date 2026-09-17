@@ -1,0 +1,61 @@
+[
+ {
+  "account": "RBC",
+  "action": "BUYSELL",
+  "currency": "CAD",
+  "date": "2024-01-12",
+  "date_settle": "2024-01-15",
+  "description": "ROYAL BANK OF CANADA - Buy",
+  "fee": 9.95,
+  "gross_amount": 13000.0,
+  "net_amount": 13009.95,
+  "price": 130.0,
+  "quantity": 100.0,
+  "symbol": "RY.TO",
+  "time": "09:30:00"
+ },
+ {
+  "account": "RBC",
+  "action": "BUYSELL",
+  "currency": "CAD",
+  "date": "2024-09-10",
+  "date_settle": "2024-09-12",
+  "description": "ROYAL BANK OF CANADA - Sell",
+  "fee": 9.95,
+  "gross_amount": 9900.0,
+  "net_amount": 9890.05,
+  "price": 165.0,
+  "quantity": -60.0,
+  "symbol": "RY.TO",
+  "time": "09:30:00"
+ },
+ {
+  "account": "RBC",
+  "action": "DIVIDEND",
+  "currency": "CAD",
+  "date": "2024-03-28",
+  "date_settle": "2024-03-28",
+  "description": "ISHARES REIT ETF CASH DIST ON 100 SHS",
+  "gross_amount": 12.34,
+  "net_amount": 12.34,
+  "price": 0.1234,
+  "quantity": 100.0,
+  "symbol": "XRE.TO",
+  "time": "09:30:00",
+  "type": "dividend"
+ },
+ {
+  "account": "RBC",
+  "action": "ADJUST",
+  "currency": "CAD",
+  "date": "2024-06-28",
+  "date_settle": "2024-06-28",
+  "description": "ISHARES REIT ETF RETURN OF CAPITAL ON 100 SHS",
+  "gross_amount": 0.0,
+  "net_amount": -8.1,
+  "quantity": 0.0,
+  "symbol": "XRE.TO",
+  "time": "09:30:00",
+  "type": "roc"
+ }
+]

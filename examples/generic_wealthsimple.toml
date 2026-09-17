@@ -1,0 +1,34 @@
+# Column mapping template for a Wealthsimple activity CSV imported
+# through the GENERIC importer. Copy next to your export as
+#   inputs/<account>/generic_wealthsimple.csv.toml    (sidecar), or
+#   inputs/<account>/generic.toml                     (whole folder)
+# and adjust the header names/action values to match YOUR export —
+# Wealthsimple has shipped several layouts. When you've confirmed a
+# mapping works, consider contributing the sample so a dedicated
+# parser can be generated (taxjson-generate-parser).
+
+[columns]
+date     = "Date"
+action   = "Transaction type"
+symbol   = "Symbol"
+quantity = "Quantity"
+price    = "Price"
+amount   = "Amount"           # signed, fee-inclusive total
+currency = "Currency"
+
+[formats]
+date = "%Y-%m-%d"
+
+[actions]
+"BUY"       = "buy"
+"SELL"      = "sell"
+"DIV"       = "dividend"
+"DIVIDEND"  = "dividend"
+"NRT"       = "tax"           # non-resident tax withheld
+"INT"       = "interest"
+"FEE"       = "fee"
+"TRFIN"     = "skip"          # transfers: supply real history instead
+"TRFOUT"    = "skip"
+
+[defaults]
+currency = "CAD"

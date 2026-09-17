@@ -1,0 +1,20 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers (Synthetic Demo)
+Statement,Data,Title,Activity Statement
+Statement,Data,Period,"January 1, 2024 - December 31, 2024"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Name,Demo User
+Account Information,Data,Account,U1234567
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,USD,MSFT,"2024-02-12, 09:35:14",50,400.00,400.00,-20000.00,-1.00,20001.00,0,0,O
+Trades,Data,Order,Stocks,USD,MSFT,"2024-06-18, 13:22:01",-50,440.00,440.00,22000.00,-1.00,-20001.00,1998.00,0,C
+Trades,Data,Order,Stocks,USD,NVDA,"2024-04-05, 10:15:33",10,850.00,850.00,-8500.00,-1.00,8501.00,0,0,O
+Trades,Data,Order,Stocks,USD,NVDA,"2024-11-20, 14:48:22",-10,140.00,140.00,1400.00,-1.00,-850.10,-7101.10,0,C
+Trades,Data,Order,Stocks,USD,NVDA,"2024-12-05, 11:00:00",10,135.00,135.00,-1350.00,-1.00,1351.00,0,0,O
+Dividends,Header,Currency,Date,Description,Amount
+Dividends,Data,USD,2024-03-14,MSFT (US5949181045) CASH DIVIDEND USD 0.75 PER SHARE (Ordinary Dividend),37.50
+Dividends,Data,USD,2024-06-13,MSFT (US5949181045) CASH DIVIDEND USD 0.75 PER SHARE (Ordinary Dividend),37.50
+Dividends,Data,Total,,,75.00
+Withholding Tax,Header,Currency,Date,Description,Amount,Code
+Withholding Tax,Data,USD,2024-03-14,MSFT (US5949181045) CASH DIVIDEND USD 0.75 PER SHARE - US TAX,-5.63,
+Withholding Tax,Data,USD,2024-06-13,MSFT (US5949181045) CASH DIVIDEND USD 0.75 PER SHARE - US TAX,-5.63,

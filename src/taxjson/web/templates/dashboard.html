@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+<p class="muted">Project: <code>{{ ctx.root }}</code></p>
+
+<h2>Accounts</h2>
+<table>
+  <thead><tr><th>Account</th><th>Type</th><th>Holdings</th></tr></thead>
+  <tbody>
+  {% for a in accounts %}
+    <tr>
+      <td>{{ a.name }}</td>
+      <td>{{ a.type }}{% if a.crypto %} · crypto{% endif %}</td>
+      <td>
+        {% if a.name in holdings_accounts %}
+          <a href="/holdings?account={{ a.name }}">{{ counts.get(a.name, 0) }} positions</a>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<p><a href="/wash-radar">→ Wash-sale radar</a></p>
+{% endblock %}

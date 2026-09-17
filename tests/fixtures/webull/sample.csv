@@ -1,0 +1,4 @@
+"Currency","Date","Action Code","Symbol","Security Description","Type Code","Quantity","Price","Proceeds"
+USD,15-01-2025,BUY,NVDA,NVIDIA CORP,STK,10,120.00,"(1201.00)"
+USD,20-03-2025,SELL,NVDA,NVIDIA CORP,STK,4,150.00,"599.20"
+USD,15-12-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,1,2.50,"(251.00)"

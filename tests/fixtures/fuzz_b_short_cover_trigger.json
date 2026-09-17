@@ -1,0 +1,8 @@
+{"transactions":[
+ {"action":"BUYSELL","date":"2025-01-06","date_settle":"2025-01-06","time":"09:30:00","symbol":"XYZ.TO","quantity":100,"price":60,"net_amount":6000,"currency":"CAD","account":"margin"},
+ {"action":"BUYSELL","date":"2025-02-03","date_settle":"2025-02-03","time":"09:30:00","symbol":"XYZ.TO","quantity":-200,"price":40,"net_amount":8000,"currency":"CAD","account":"margin"},
+ {"action":"BUYSELL","date":"2025-02-10","date_settle":"2025-02-10","time":"09:30:00","symbol":"XYZ.TO","quantity":50,"price":40,"net_amount":2000,"currency":"CAD","account":"margin"},
+ {"action":"BUYSELL","date":"2025-02-20","date_settle":"2025-02-20","time":"09:30:00","symbol":"XYZ.TO","quantity":50,"price":40,"net_amount":2000,"currency":"CAD","account":"margin"},
+ {"action":"BUYSELL","date":"2025-02-25","date_settle":"2025-02-25","time":"09:30:00","symbol":"XYZ.TO","quantity":100,"price":40,"net_amount":4000,"currency":"CAD","account":"margin"},
+ {"action":"BUYSELL","date":"2025-04-15","date_settle":"2025-04-15","time":"09:30:00","symbol":"XYZ.TO","quantity":-100,"price":40,"net_amount":4000,"currency":"CAD","account":"margin"}
+]}

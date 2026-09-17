@@ -1,0 +1,153 @@
+[project]
+name = "taxjson"
+version = "0.14.0"
+description = "Capital gains, dividend income, and wash-sale / superficial-loss computation from brokerage CSVs (Canada + US)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "cksci", email = "ckscijdtest@gmail.com" },
+]
+keywords = ["tax", "capital-gains", "wash-sale", "acb", "fifo", "brokerage", "csv", "canada", "us"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+
+# `tomllib` is in the stdlib only from Python 3.11. `taxjson_run.py`
+# falls back to `tomli` on older versions; declare it so 3.9/3.10
+# users get a working install instead of a "pip install tomli"
+# stderr at first invocation.
+dependencies = [
+    'tomli >= 1.2.0; python_version < "3.11"',
+]
+
+[project.urls]
+Homepage = "https://github.com/taxjson/taxjson"
+Repository = "https://github.com/taxjson/taxjson"
+Issues = "https://github.com/taxjson/taxjson/issues"
+
+[project.optional-dependencies]
+# FX-rate fetcher (taxjson-to-base-curr). Pulls historical exchange
+# rates from Yahoo Finance for currency-of-account conversion.
+fx = [
+    "yfinance>=0.2",
+    "pandas>=1.5",
+]
+# XLSX → CSV preprocessor (taxjson-xlsx-to-csv). Some brokerages ship
+# statements only as Excel; convert with this tool before
+# taxjson-brokerage.
+xlsx = [
+    "pandas>=1.5",
+    "openpyxl>=3.0",
+]
+# Maintainer tool: AI-aided parser scaffolding (taxjson-generate-parser).
+# Either provider works; lazy imports tolerate either being absent.
+generate-parser = [
+    "anthropic>=0.40",
+    "google-generativeai>=0.7",
+]
+# IBKR price tier for the pricing chain (`taxjson harvest` prefers a
+# running TWS / IB Gateway before falling back to yfinance). Lazy-
+# imported, so the rest of the toolkit installs and runs without it.
+ibkr = [
+    "ib_insync>=0.9.86",
+]
+# Local web UI (taxjson serve). A 127.0.0.1 FastAPI app over the reports/
+# JSON with a live "what-if sell" engine. Server-rendered (Jinja), no build
+# step. Lazy-imported, so the core toolkit installs and runs without it.
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.7",   # required by FastAPI for the /whatif POST form
+]
+# Test/CI dependencies beyond the runtime extras. fastapi.testclient
+# needs httpx; without it the web-route tests SILENTLY SKIP (the
+# 2026-07b audit found the web layer had zero effective coverage in
+# every environment). Full suite: pip install -e ".[all,dev]".
+dev = [
+    "httpx>=0.24",
+    # Newer starlette's TestClient imports httpx2; without it the web
+    # TestClient tests ERROR (not skip) on an up-to-date venv.
+    "httpx2",
+]
+# Everything, for users who want one install command.
+all = [
+    "yfinance>=0.2",
+    "pandas>=1.5",
+    "numpy>=1.20",
+    "openpyxl>=3.0",
+    "anthropic>=0.40",
+    "google-generativeai>=0.7",
+    "ib_insync>=0.9.86",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.7",
+]
+
+[project.scripts]
+taxjson = "taxjson.bin.taxjson_run:main"
+taxjson-brokerage = "taxjson.bin.taxjson_brokerage:main"
+taxjson-convert-currency = "taxjson.bin.taxjson_convert_currency:main"
+taxjson-convert-tt = "taxjson.bin.taxjson_convert_tt:main"
+taxjson-corp-actions = "taxjson.bin.taxjson_corp_actions:main"
+taxjson-detect-brokerage = "taxjson.bin.taxjson_detect_brokerage:main"
+taxjson-extractors = "taxjson.bin.taxjson_extractors:main"
+taxjson-generate-parser = "taxjson.bin.taxjson_generate_parser:main"
+taxjson-gains = "taxjson.bin.taxjson_gains:main"
+taxjson-explain = "taxjson.bin.taxjson_explain:main"
+taxjson-audit = "taxjson.bin.taxjson_audit:main"
+taxjson-diff = "taxjson.bin.taxjson_diff:main"
+taxjson-merge = "taxjson.bin.taxjson_merge:main"
+taxjson-merge2 = "taxjson.bin.taxjson_merge2:main"
+taxjson-safe-to-sell = "taxjson.bin.taxjson_safe_to_sell:main"
+taxjson-sort = "taxjson.bin.taxjson_sort:main"
+taxjson-sum-gains = "taxjson.bin.taxjson_sum_gains:main"
+taxjson-sum-income = "taxjson.bin.taxjson_sum_income:main"
+taxjson-t1135 = "taxjson.bin.taxjson_t1135:main"
+taxjson-carryover = "taxjson.bin.taxjson_carryover:main"
+taxjson-form-export = "taxjson.bin.taxjson_form_export:main"
+taxjson-reconcile-slips = "taxjson.bin.taxjson_reconcile_slips:main"
+taxjson-harvest = "taxjson.bin.taxjson_harvest:main"
+# Canonical name: the tool is the brokerage fee ROLL-UP — `taxjson
+# fees-sum`'s standalone twin, not `taxjson fees`' (the per-trade view).
+taxjson-fees-sum = "taxjson.bin.taxjson_fees:main"
+taxjson-lint-crosslistings = "taxjson.bin.taxjson_lint_crosslistings:main"
+taxjson-ticker-map = "taxjson.bin.taxjson_ticker_map:main"
+taxjson-wash-radar = "taxjson.bin.taxjson_wash_radar:main"
+taxjson-to-base-curr = "taxjson.bin.to_base_curr:main"
+taxjson-fill-crypto = "taxjson.bin.fill_crypto_prices:main"
+taxjson-apply-distributions = "taxjson.bin.taxjson_apply_distributions:main"
+taxjson-split-gains = "taxjson.bin.taxjson_split_gains:main"
+taxjson-validate = "taxjson.bin.taxjson_validate:main"
+taxjson-leaps-gains = "taxjson.bin.taxjson_leaps_gains:main"
+taxjson-missing-history = "taxjson.bin.taxjson_missing_history:main"
+taxjson-ccd-gains = "taxjson.bin.taxjson_ccd_gains:main"
+taxjson-export = "taxjson.bin.taxjson_export:main"
+taxjson-xlsx-to-csv = "taxjson.bin.xlsx_to_csv:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the web UI's Jinja templates and static assets in the wheel/sdist so a
+# non-editable `pip install .[web]` can find them (editable installs read them
+# from the source tree directly).
+[tool.setuptools.package-data]
+"taxjson.web" = ["templates/*.html", "static/*", "static/**/*"]

@@ -1,0 +1,39 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+venv/
+env/
+.env
+
+# Packages
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local agent context (project memory, scratch files)
+.claude/
+
+# User tax data — never commit. The tool is designed to be run inside
+# a working directory with these; keep real financial data out of git.
+inputs/
+reports/
+.taxjson_cache/
+taxjson.toml
+*.tt
+tmp*/
+.ci/

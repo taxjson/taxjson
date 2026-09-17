@@ -1,0 +1,43 @@
+[
+ {
+  "account": "Coinbase",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2025-01-15",
+  "date_settle": "2025-01-15",
+  "fee": 10.0,
+  "gross_amount": 4500.0,
+  "net_amount": 4510.0,
+  "price": 3000.0,
+  "quantity": 1.5,
+  "symbol": "ETH",
+  "time": "10:00:00"
+ },
+ {
+  "account": "Coinbase",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2025-04-10",
+  "date_settle": "2025-04-10",
+  "fee": 5.0,
+  "gross_amount": 1700.0,
+  "net_amount": 1695.0,
+  "price": 3400.0,
+  "quantity": -0.5,
+  "symbol": "ETH",
+  "time": "09:00:00"
+ },
+ {
+  "account": "Coinbase",
+  "action": "TRANSFER",
+  "currency": "USD",
+  "date": "2025-05-01",
+  "date_settle": "2025-05-01",
+  "description": "Receive",
+  "net_amount": 0.0,
+  "price": 0.0,
+  "quantity": 0.2,
+  "symbol": "ETH",
+  "time": "00:00:00"
+ }
+]

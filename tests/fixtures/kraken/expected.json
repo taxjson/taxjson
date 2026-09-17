@@ -1,0 +1,32 @@
+[
+ {
+  "account": "Kraken",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2025-01-15",
+  "date_settle": "2025-01-15",
+  "fee": 10.0,
+  "gross_amount": 6000.0,
+  "id": "TX1",
+  "net_amount": 6010.0,
+  "price": 60000.0,
+  "quantity": 0.1,
+  "symbol": "BTC",
+  "time": "10:00:00"
+ },
+ {
+  "account": "Kraken",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2025-05-20",
+  "date_settle": "2025-05-20",
+  "fee": 5.0,
+  "gross_amount": 2800.0,
+  "id": "TX2",
+  "net_amount": 2795.0,
+  "price": 70000.0,
+  "quantity": -0.04,
+  "symbol": "BTC",
+  "time": "14:30:00"
+ }
+]

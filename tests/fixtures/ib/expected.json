@@ -1,0 +1,45 @@
+[
+ {
+  "account": "IB",
+  "action": "BUYSELL",
+  "currency": "USD",
+  "date": "2025-02-05",
+  "date_settle": "2025-02-06",
+  "description": "MSFT",
+  "fee": 1.0,
+  "gross_amount": 20000.0,
+  "net_amount": 20001.0,
+  "price": 400.0,
+  "quantity": 50.0,
+  "symbol": "MSFT.US",
+  "time": "09:31:00"
+ },
+ {
+  "account": "IB",
+  "action": "DIVIDEND",
+  "currency": "USD",
+  "date": "2025-06-12",
+  "date_settle": "2025-06-12",
+  "description": "MSFT(US5949181045) Cash Dividend USD 0.75 per Share",
+  "gross_amount": 37.5,
+  "net_amount": 37.5,
+  "price": 0.75,
+  "quantity": 50.0,
+  "symbol": "MSFT.US",
+  "time": "09:30:00",
+  "type": "dividend"
+ },
+ {
+  "account": "IB",
+  "action": "TAX",
+  "currency": "USD",
+  "date": "2025-06-12",
+  "date_settle": "2025-06-12",
+  "description": "MSFT(US5949181045) Cash Dividend USD 0.75 per Share - US Tax",
+  "net_amount": 5.63,
+  "quantity": 0.0,
+  "symbol": "MSFT.US",
+  "time": "09:30:00",
+  "type": "tax"
+ }
+]

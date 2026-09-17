@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>What-if sell</h1>
+{% if result.ok %}
+<p><a href="/holdings/{{ result.account }}/{{ result.symbol }}">← {{ result.symbol }}</a></p>
+<p>Sell <b>{{ result.qty }}</b> {{ result.symbol }} @ {{ result.price }} {{ result.price_currency }} on {{ result.date }}
+   {% if result.price_currency != result.currency %}
+   <span class="muted">(≈ {{ result.price_base }} {{ result.currency }} @ FX {{ result.fx_rate }})</span>
+   {% endif %}
+</p>
+{% if result.fx_note %}<p class="err">FX: {{ result.fx_note }}</p>{% endif %}
+{% for w in result.warnings or [] %}<p class="err">Warning: {{ w }}</p>{% endfor %}
+<table>
+  <tr><td>Proceeds</td><td class="num">{{ result.proceeds }} {{ result.currency }}</td></tr>
+  <tr><td>Cost basis</td><td class="num">{{ result.cost_basis }}</td></tr>
+  <tr><td>Economic gain/loss</td>
+      <td class="num {{ 'neg' if result.economic_gain < 0 else 'pos' }}">{{ result.economic_gain }}</td></tr>
+  <tr><td>Superficial loss?</td>
+      <td>{% if result.is_wash_sale %}<b class="neg">YES — loss partly disallowed</b>{% else %}no{% endif %}</td></tr>
+  <tr><td>Disallowed (superficial)</td><td class="num">{{ result.disallowed_amount }}</td></tr>
+  <tr><td>Permanently denied</td><td class="num">{{ result.permanently_disallowed }}</td></tr>
+  {% if result.sheltered %}
+  <tr><td>Deductible now</td>
+      <td><b class="neg">not deductible (registered account)</b> — gains and losses in a sheltered account are not taxable events</td></tr>
+  {% else %}
+  <tr><td>Deductible now</td>
+      <td class="num {{ 'neg' if result.allowed_gain < 0 else 'pos' }}">{{ result.allowed_gain }}</td></tr>
+  {% endif %}
+  <tr><td>Term / days held</td><td>{{ result.term or '—' }} / {{ result.days_held if result.days_held is not none else '—' }}</td></tr>
+</table>
+{% if result.basis %}<p class="note">Basis: {{ result.basis }} — this simulates one account's book; the filed numbers blend taxable accounts, and a recent buy in a sibling taxable account (a wash trigger this view can't see) can change the outcome. The COMBINED wash radar has the cross-account view.</p>{% endif %}
+{% else %}
+<p class="err">Could not simulate: {{ result.reason }}</p>
+{% for w in result.warnings or [] %}<p class="err">Warning: {{ w }}</p>{% endfor %}
+{% endif %}
+{% endblock %}
