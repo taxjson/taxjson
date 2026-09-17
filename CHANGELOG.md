@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson shares`: the combined quantity held of each symbol across all
+  accounts (post ticker.map, wash-adjusted where built) with a
+  per-account breakdown and combined book cost; `--taxable` /
+  `--sheltered` scope, `--options` to include contracts, `--sort qty`,
+  `--json`.
 - `scripts/check-pii.sh`: personal-data / secret scan — broker account-id
   shapes, home paths, unlisted e-mail addresses, credential-looking
   strings, and a private denylist kept outside the repository

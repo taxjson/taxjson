@@ -5704,6 +5704,105 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
     return sorted(items), notes
 
 
+def cmd_shares(args: argparse.Namespace) -> None:
+    """`taxjson shares [--options] [--taxable|--sheltered] [--json]`: the
+    COMBINED quantity held of each symbol across all accounts — the
+    canonical inventory (post ticker.map, base-currency, wash-adjusted
+    where built), summed per symbol with a per-account breakdown. Shorts
+    net against longs (the breakdown shows them). Option contracts are
+    left out unless --options; positions netting to zero are dropped."""
+    import json
+    from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.report_model import (fmt_qty as qfmt,
+                                          gains_basis_label,
+                                          resolve_gains_files)
+    root = Path(args.dir).resolve()
+    cache = root / "work"
+    files = resolve_gains_files(cache)
+    if not files:
+        sys.exit(f"taxjson shares: no gains files in {cache} "
+                 f"(run `taxjson run` first).")
+    basis = gains_basis_label(files)
+    want = None
+    if getattr(args, "taxable", False) or getattr(args, "sheltered", False):
+        want = "taxable" if args.taxable else "sheltered"
+        if not (root / "taxjson.toml").exists():
+            sys.exit("taxjson shares: --taxable/--sheltered need "
+                     "taxjson.toml (account types).")
+        types = {n: (a or {}).get("type", "sheltered")
+                 for n, a in (load_config(root).get("accounts") or {}).items()}
+        files = {n: f for n, f in files.items() if types.get(n) == want}
+    by_sym: Dict[str, Dict[str, Any]] = {}
+    year = None
+    for acct, f in files.items():
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"taxjson: warning: could not read {f}: {e}",
+                  file=sys.stderr)
+            continue
+        year = year or (data.get("summary") or {}).get("year")
+        for h in (data.get("inventory") or []):
+            sym = str(h.get("symbol") or "")
+            qty = float(h.get("qty", 0) or 0)
+            if not sym or abs(qty) < 1e-12:
+                continue
+            if not getattr(args, "options", False) and is_option_symbol(sym):
+                continue
+            e = by_sym.setdefault(sym, {"qty": 0.0, "cost": 0.0,
+                                        "accounts": {}})
+            e["qty"] += qty
+            e["cost"] += float(h.get("total_cost", 0) or 0)
+            e["accounts"][acct] = e["accounts"].get(acct, 0.0) + qty
+    rows = [(sym, e) for sym, e in by_sym.items()
+            if abs(e["qty"]) > 1e-9]
+    if getattr(args, "sort", "symbol") == "qty":
+        rows.sort(key=lambda r: (-abs(r[1]["qty"]), r[0]))
+    else:
+        rows.sort(key=lambda r: r[0])
+    base = _base_currency(root)
+    if getattr(args, "json", False):
+        _json_out({"basis": basis, "year": year, "currency": base,
+                   "scope": want or "all",
+                   "options_included": bool(getattr(args, "options",
+                                                    False)),
+                   "rows": [{"symbol": sym, "qty": e["qty"],
+                             "cost": round(e["cost"], 2),
+                             "accounts": {a: q for a, q in
+                                          sorted(e["accounts"].items())}}
+                            for sym, e in rows]})
+        return
+    scope = f" ({want} accounts)" if want else ""
+    print(f"SHARES HELD — combined across{scope} "
+          f"{', '.join(sorted(files))}; tax year {year}, basis: {basis}  "
+          f"(after ticker.map; option contracts "
+          f"{'included' if getattr(args, 'options', False) else 'excluded'})")
+    print()
+    if not rows:
+        print("No open positions.")
+        return
+    # The per-account breakdown has spaces inside it, and the shared
+    # table formatter splits cells on whitespace — so align the three
+    # numeric-safe columns with it, then append the breakdown as a
+    # trailing free-text column.
+    out = ["SYMBOL SHARES COST"]
+    breakdowns = ["ACCOUNTS"]
+    for sym, e in rows:
+        out.append(" ".join([sym, qfmt(e["qty"]), fmt_money(e["cost"])]))
+        breakdowns.append(", ".join(
+            f"{a} {qfmt(q)}" for a, q in sorted(e["accounts"].items())
+            if abs(q) > 1e-12))
+    lines = format_report_table(out)
+    width = max(len(b) for b in breakdowns)
+    for i, line in enumerate(lines):
+        if i == 1 and set(line.strip()) == {"-"}:      # the header rule
+            print(line + "-" * (3 + width))
+            continue
+        j = i if i == 0 else i - 1                     # rule line offset
+        print(f"{line}   {breakdowns[j]}")
+    print(f"\n{len(rows)} symbol(s); COST is combined book cost in {base}.")
+
+
 def cmd_sanity(args: argparse.Namespace) -> None:
     """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
@@ -9027,6 +9126,23 @@ def main() -> None:
     p_pos.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_pos.set_defaults(func=cmd_positions)
+
+    p_sh = sub.add_parser(
+        "shares",
+        help="Combined shares held of each symbol across all accounts "
+             "(post ticker.map), with a per-account breakdown")
+    p_sh.add_argument("--options", action="store_true",
+                      help="Include option contracts (excluded by default)")
+    g = p_sh.add_mutually_exclusive_group()
+    g.add_argument("--taxable", action="store_true",
+                   help="Only taxable accounts")
+    g.add_argument("--sheltered", action="store_true",
+                   help="Only sheltered (registered) accounts")
+    p_sh.add_argument("--sort", choices=["symbol", "qty"], default="symbol",
+                      help="Order by symbol (default) or by size")
+    p_sh.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text")
+    p_sh.set_defaults(func=cmd_shares)
 
     p_san = sub.add_parser(
         "sanity",
