@@ -142,7 +142,7 @@ gain that authority by accident:
 One line, no clone — installs the latest release into `~/.local/share/taxjson` with its own virtualenv and puts `taxjson` on your PATH (re-run to upgrade; `TAXJSON_CHANNEL=dev` tracks `main`):
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/taxjson/taxjson/main/install.sh)"
+bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 ```
 
 Then `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init`. See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.

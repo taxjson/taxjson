@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # taxjson one-line installer.
 #
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/taxjson/taxjson/main/install.sh)"
+#   bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 #
 # What it does: checks git and Python 3.9+, clones the LATEST RELEASE
 # (newest vX.Y.Z tag) into ~/.local/share/taxjson — or fast-forwards an
@@ -112,6 +112,6 @@ cat <<DONE
      mkdir -p ~/taxes/$(date +%Y) && cd ~/taxes/$(date +%Y) && taxjson init
    then drop your broker CSV exports into inputs/<account>/ and run
      taxjson run
-   Docs: https://github.com/taxjson/taxjson#readme
+   Docs: https://taxjson.com  ·  https://github.com/taxjson/taxjson#readme
    Upgrade later by re-running this installer.
 DONE
