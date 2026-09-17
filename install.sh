@@ -109,7 +109,7 @@ cat <<DONE
 ✅ taxjson installed.
 
    Next: make a folder for a tax year and scaffold it —
-     mkdir -p ~/taxes/$(date +%Y) && cd ~/taxes/$(date +%Y) && taxjson init
+     mkdir -p ~/taxes/$(date +%Y) && cd ~/taxes/$(date +%Y) && taxjson init --country canada   (or --country usa)
    then drop your broker CSV exports into inputs/<account>/ and run
      taxjson run
    Docs: https://taxjson.com  ·  https://github.com/taxjson/taxjson#readme

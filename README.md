@@ -145,7 +145,7 @@ One line, no clone — installs the latest release into `~/.local/share/taxjson`
 bash -c "$(curl -fsSL https://taxjson.com/install.sh)"
 ```
 
-Then `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init`. See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.
+Then `mkdir -p ~/taxes/2026 && cd ~/taxes/2026 && taxjson init --country canada` (or `--country usa`). See [REFERENCES.md](REFERENCES.md) for the CRA/IRS sources behind every rule and [docs/releasing.md](docs/releasing.md) for how releases are cut.
 
 From source (development):
 
