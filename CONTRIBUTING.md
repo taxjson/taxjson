@@ -24,7 +24,7 @@ The package uses a `src/` layout, so tests import it **as installed** —
 run `pip install -e .` (from Setup above) first, then:
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py"
+python -m unittest discover -s tests -p "test_*.py" </dev/null
 ```
 
 Or use the wrapper:

@@ -2,13 +2,19 @@
 
 ## Unreleased
 
+## v0.15.0 (2026-09-17)
+- Gate: `scripts/ci.sh` runs with stdin detached (`exec </dev/null`).
+  CLI tests spawn `taxjson run` subprocesses that inherit stdin, so a
+  gate started from a terminal (e.g. by `scripts/release.sh`) stopped at
+  a fixture's election prompt waiting on the keyboard, then recorded the
+  default and failed the non-TTY deferral test. The pending-election
+  tests also pass `stdin=DEVNULL` themselves.
 - Tests: the two tests that drive pipeline stages in-process now capture
   their progress lines, so the gate prints only stage summaries — the
   leaked `==> margin wash-radar pass` lines named a synthetic fixture's
   account and read like a run on real books. docs/releasing.md states
   that the gate never reads a real project.
 
-## v0.15.0 (2026-09-17)
 
 - Tests: the web-UI tests skip (not error) when `fastapi` is installed
   without starlette's test transport (`httpx2`, in the `[dev]` extra) —

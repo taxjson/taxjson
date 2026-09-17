@@ -35,7 +35,11 @@ def _taxjson(root, *args):
     return subprocess.run(
         [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
          *args],
-        cwd=REPO_ROOT, capture_output=True, text=True)
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        # The "non-TTY" cases must not depend on how the suite itself was
+        # launched: from a terminal the child would inherit the TTY and
+        # stop at the election prompt.
+        stdin=subprocess.DEVNULL)
 
 
 def _project(tmp):
