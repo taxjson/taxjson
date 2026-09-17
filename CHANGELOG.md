@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Tests: the two tests that drive pipeline stages in-process now capture
+  their progress lines, so the gate prints only stage summaries — the
+  leaked `==> margin wash-radar pass` lines named a synthetic fixture's
+  account and read like a run on real books. docs/releasing.md states
+  that the gate never reads a real project.
+
+## v0.15.0 (2026-09-17)
+
 - Tests: the web-UI tests skip (not error) when `fastapi` is installed
   without starlette's test transport (`httpx2`, in the `[dev]` extra) —
   starlette raises `RuntimeError`, not `ImportError`, for that case.

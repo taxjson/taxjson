@@ -122,9 +122,14 @@ class TestWashPassGetsPhantoms(unittest.TestCase):
                 [{"symbol": "PHM.TO", "account": "margin"}]))
             settings = {"year": 2026, "country": "canada",
                         "tax_date": "settle", "base_currency": "CAD"}
-            stage_wash_pass("margin", settings, cache, reports,
-                            cache / "sheltered_base.json",
-                            incomplete_history=phantoms)
+            # In-process stage: capture its progress lines (they name
+            # the fixture's `margin` account and read like a live run).
+            import contextlib, io
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                stage_wash_pass("margin", settings, cache, reports,
+                                cache / "sheltered_base.json",
+                                incomplete_history=phantoms)
             wash = json.loads((cache / "margin_gains_wash.json").read_text())
         mrr = wash.get("manual_reporting_required") or []
         self.assertTrue(any(r.get("symbol") == "PHM.TO" for r in mrr),

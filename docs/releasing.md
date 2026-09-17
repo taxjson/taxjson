@@ -13,7 +13,7 @@ taxjson has one development line and a sequence of production tags.
 scripts/release.sh 0.15.0
 ```
 
-The script refuses on a dirty tree or off `main`, promotes the CHANGELOG's `## Unreleased` section to `## v0.15.0 (date)`, bumps `pyproject.toml`, runs the **full** local gate, then commits, tags, and pushes `main` and the tag. GitHub Actions is not part of the gate — the local run is the source of truth (see CONTRIBUTING.md).
+The script refuses on a dirty tree or off `main`, promotes the CHANGELOG's `## Unreleased` section to `## v0.15.0 (date)`, bumps `pyproject.toml`, runs the **full** local gate, then commits, tags, and pushes `main` and the tag. The gate runs the test suite only: a handful of tests drive the real pipeline, but on synthetic two-trade projects written into temporary directories and deleted afterwards. Nothing in the suite or the release script reads a real tax project. GitHub Actions is not part of the gate — the local run is the source of truth (see CONTRIBUTING.md).
 
 Semantic versioning, applied to tax output: a change that alters any filed number for an already-supported input is at least a minor bump and gets a CHANGELOG entry that names the rule and the direction of the change. Parser additions, new commands, and report-format changes are minor; documentation and internal refactors are patch.
 

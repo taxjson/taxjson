@@ -31,7 +31,12 @@ class TestWashRadarWithoutSheltered(unittest.TestCase):
                 {"transactions": [], "summary": {"year": "2026"}}))
 
             # sheltered_base=None is the taxable-only project case.
-            stage_cross_reports([gains], [base], None, reports)
+            # In-process stage: capture its progress lines so the suite
+            # never prints what looks like a live run.
+            import contextlib, io
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                stage_cross_reports([gains], [base], None, reports)
 
             rpt = reports / "wash_radar_margin.rpt"
             self.assertTrue(rpt.exists(),
