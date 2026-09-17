@@ -493,7 +493,7 @@ class TestR6_CliRenderingHardening(unittest.TestCase):
         # header with 400.
         try:
             from fastapi.testclient import TestClient
-        except ImportError:
+        except (ImportError, RuntimeError):
             self.skipTest("fastapi not installed")
         from taxjson.web.app import create_app
         from taxjson.web.context import ProjectContext
@@ -655,7 +655,7 @@ class TestR9_WebWhatIf(unittest.TestCase):
             # httpx2) — importing `httpx` by name silently skipped
             # this whole class on envs where TestClient works fine.
             from fastapi.testclient import TestClient  # noqa: F401
-        except ImportError:
+        except (ImportError, RuntimeError):
             raise unittest.SkipTest("fastapi test client not installed")
 
     def _client(self, d):

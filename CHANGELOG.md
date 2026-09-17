@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Tests: the web-UI tests skip (not error) when `fastapi` is installed
+  without starlette's test transport (`httpx2`, in the `[dev]` extra) —
+  starlette raises `RuntimeError`, not `ImportError`, for that case.
+  `scripts/dev-setup.sh` now installs `[web,fx,dev]` so a fresh clone
+  runs the whole suite.
 - Open-source release plumbing: a curl one-line installer (`install.sh`,
   latest release tag into `~/.local/share/taxjson`, `TAXJSON_CHANNEL=dev`
   tracks main), `scripts/release.sh` (dirty-tree/branch checks, CHANGELOG

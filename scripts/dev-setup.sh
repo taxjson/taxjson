@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 
 python3 -m venv venv                       # no-op if venv already exists
 venv/bin/pip install --upgrade pip --quiet
-venv/bin/pip install -e ".[web,fx]"
+venv/bin/pip install -e ".[web,fx,dev]"
 
 echo "✅ taxjson installed. Activate with: source setup.sh"
 echo "   Optional: venv/bin/pip install -e '.[ibkr]' for the harvest IBKR price tier"
