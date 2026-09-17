@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Installed into .git/hooks/pre-push by scripts/dev-setup.sh. On a public
+# repository a push IS publication, so this is the last check: scan only
+# the lines the push would add, against the generic patterns and your
+# private denylist. Refuse on any hit. Bypass knowingly: git push --no-verify
+set -u
+root="$(git rev-parse --show-toplevel)"
+z=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$z" ] && continue                  # branch delete
+  if [ "$remote_sha" = "$z" ]; then range="$local_sha"; else range="$remote_sha..$local_sha"; fi
+  if ! git log -p --format='' "$range" -- | "$root/scripts/check-pii.sh" --diff; then
+    echo "pre-push: refusing to publish $local_ref — see the hits above." >&2
+    exit 1
+  fi
+done
+exit 0

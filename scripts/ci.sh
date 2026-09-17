@@ -47,6 +47,7 @@ fi
 
 # 2. Release consistency, then the full unit suite.
 stage consistency bash scripts/check-consistency.sh
+stage pii bash scripts/check-pii.sh
 stage suite "$PY" -m unittest discover -s tests -p "test_*.py" -q
 
 # 3. Property fuzzers at depth. The suite already runs them at the

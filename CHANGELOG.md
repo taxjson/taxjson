@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `scripts/check-pii.sh`: personal-data / secret scan — broker account-id
+  shapes, home paths, unlisted e-mail addresses, credential-looking
+  strings, and a private denylist kept outside the repository
+  (`~/.config/taxjson/pii-denylist`, scaffolded by `dev-setup.sh`). Runs
+  as a `ci.sh` stage in every mode and as the `pre-push` hook
+  `dev-setup.sh` installs, which scans only the lines a push would
+  publish and refuses on a hit. On a public repository a push is
+  publication; this is the check that sits in front of it.
 ## v0.15.0 (2026-09-17)
 - Gate: `scripts/ci.sh` runs with stdin detached (`exec </dev/null`).
   CLI tests spawn `taxjson run` subprocesses that inherit stdin, so a

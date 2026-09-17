@@ -18,6 +18,20 @@ source venv/bin/activate
 pip install -e .
 ```
 
+## Before anything is pushed: personal data
+
+This is a public repository, so a push is publication. `scripts/check-pii.sh`
+scans for broker account-id shapes, home paths, unlisted e-mail addresses,
+credential-looking strings, and — for the maintainer — a **private denylist**
+at `~/.config/taxjson/pii-denylist` (one regex per line: your real account
+numbers, name, addresses; it lives outside every repository, so the strings
+it guards are never themselves committed). It runs in every `scripts/ci.sh`
+mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs, which
+scans only the lines a push would add and refuses on any hit. Mark a genuine
+false positive with the word `pii-ok` on that line; bypass knowingly with
+`git push --no-verify`. Fixtures must be synthetic: fake account ids
+(`U1234567`, `99900001`), made-up ISINs, no real statements.
+
 ## Running tests
 
 The package uses a `src/` layout, so tests import it **as installed** —
