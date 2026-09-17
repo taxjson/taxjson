@@ -46,7 +46,8 @@ echo "== full gate =="
 scripts/ci.sh || { echo "gate FAILED — release aborted (CHANGELOG/pyproject edits left for you to inspect)"; exit 1; }
 
 git add CHANGELOG.md pyproject.toml
-git commit -q -m "release $TAG"
+# An earlier aborted run may already have committed the bump: tag HEAD then.
+git diff --cached --quiet || git commit -q -m "release $TAG"
 git tag -a "$TAG" -m "taxjson $TAG"
 git push --quiet origin main "$TAG"
 echo "released $TAG — installers pick it up on their next run"
