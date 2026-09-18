@@ -432,6 +432,31 @@ class TestSanity(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("holdings = [...]", r.stderr)
 
+    def test_malformed_holdings_files_are_clear_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            e = root / "ext"
+            (e / "bad1.toml").write_text('[[holding]]\nsymbol = "X"\nquantity = "ten"\n')
+            (e / "bad2.toml").write_text('[holding]\nsymbol = "X"\n')
+            (e / "bad3.toml").write_text('[[holding]]\nsymbol = "X"\nquantity = "nan"\n')
+            for f in ("bad1.toml", "bad2.toml", "bad3.toml"):
+                r = _run(root, "sanity", "margin", str(e / f))
+                self.assertNotEqual(r.returncode, 0, f)
+                self.assertNotIn("Traceback", r.stderr, f)
+                self.assertIn("taxjson sanity:", r.stderr, f)
+
+    def test_plus_sign_in_a_config_holdings_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            d = root / "IB+QT"
+            d.mkdir()
+            _holdings_toml(d / "h.toml", "U1", {"ALK.TO": 30000, "ANET.US": 50,
+                                                 "XIU.TO": 100})
+            self._config_with_holdings(root, ["IB+QT/h.toml"], ["ext/U3_holdings.toml"])
+            r = _run(root, "sanity", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertTrue(json.loads(r.stdout)["clean"])
+
     def test_map_symbol_helper(self):
         from taxjson.bin.taxjson_ticker_map import map_symbol
         m = {"AEM.US": "AEM.TO", "FB.US": "META.US"}

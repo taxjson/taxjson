@@ -29,6 +29,7 @@ say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+main() {
 say "1/4 Prerequisites"
 if ! have git; then
   if [ "$OS" = Darwin ]; then
@@ -57,6 +58,7 @@ else
   mkdir -p "$(dirname "$DIR")"
   git clone --quiet "$REPO" "$DIR"
 fi
+DIR="$(cd "$DIR" && pwd -P)"          # canonical: the symlink target must be absolute
 if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no)" ]; then
   echo
   echo "   These tracked files differ from the checkout:"
@@ -69,10 +71,11 @@ Then re-run this installer. (Your tax project folders are untouched either way.)
 fi
 case "$CHANNEL" in
   release)
-    TARGET="$(git -C "$DIR" tag -l 'v[0-9]*' --sort=-v:refname | head -1)"
+    # Releases are exactly vX.Y.Z: a hand-pushed rc/four-part tag never ships.
+    TARGET="$(git -C "$DIR" tag -l 'v[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
     [ -n "$TARGET" ] || die "No release tags found in $REPO (set TAXJSON_CHANNEL=dev to track main)."
     CUR="$(git -C "$DIR" describe --tags --exact-match 2>/dev/null || echo none)"
-    [ "$CUR" = "$TARGET" ] || git -C "$DIR" checkout --quiet "$TARGET"
+    [ "$CUR" = "$TARGET" ] || git -C "$DIR" checkout --quiet "refs/tags/$TARGET"
     echo "   release $TARGET"
     ;;
   dev)
@@ -97,6 +100,9 @@ echo "   $("$DIR/venv/bin/taxjson" --version)"
 
 say "4/4 Command → $BIN/taxjson"
 mkdir -p "$BIN"
+if [ -e "$BIN/taxjson" ] && [ ! -L "$BIN/taxjson" ]; then
+  die "$BIN/taxjson exists and is not a symlink (another install, e.g. pipx?). Move it aside or set TAXJSON_BIN."
+fi
 ln -sfn "$DIR/venv/bin/taxjson" "$BIN/taxjson"
 case ":$PATH:" in
   *":$BIN:"*) ;;
@@ -115,3 +121,6 @@ cat <<DONE
    Docs: https://taxjson.com  ·  https://github.com/taxjson/taxjson#readme
    Upgrade later by re-running this installer.
 DONE
+}
+trap 'printf "\n\033[31m✗ install did not complete — re-running this installer is safe and resumes.\033[0m\n" >&2' ERR
+main "$@"

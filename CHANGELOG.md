@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+Pre-release audit (2026-09-18) of everything since v0.15.0 — two
+independent adversarial reviews, every finding reproduced before it was
+fixed:
+- `scripts/check-pii.sh` failed OPEN in several ways: file names with an
+  apostrophe or a space aborted `xargs` silently ("clean"); a malformed or
+  CRLF denylist line disabled that entry; UTF-16 exports read as binary
+  and were skipped; errors went to /dev/null. It now uses NUL-delimited
+  file lists, validates every denylist regex, fails closed on scanner
+  errors and on text files containing NUL bytes, scans file NAMES (IB
+  names downloads after the account id) and — via the hook — commit
+  messages, resolves ad-hoc paths before changing directory, and masks
+  hits without interpreting the pattern.
+- `scripts/hooks/pre-push` scanned `git log -p` of `remote..local`, which
+  omits merge-commit resolutions and, when the remote tip is unknown
+  locally, dies silently and lets the push through. It now scans the net
+  `git diff remote local` (or everything not on the remote), plus the
+  commit messages, and fails closed.
+- `taxjson redact`: ids under five characters and date-like 8-digit
+  numbers are no longer ids (small "ids" were rewriting quantities and
+  prices); the integer part of a decimal is not an id; `_` is a word
+  boundary; IB `DU`/`F` ids, Fidelity/Schwab-style `Z…`/hyphenated ids,
+  `ClientAccountID`/`AccountAlias` columns, `Owner:`/`Customer:` rows and
+  quoted `"Name: Last, First"` headers are recognised; the id in the
+  FILE NAME is replaced too; UTF-16 and cp1252 exports are decoded (and
+  noted) instead of passing through unredacted; CRLF, BOM and sibling
+  cells' quoting are preserved; an invalid denylist/`--also` regex is a
+  note, not a traceback; the report shows id lengths, never digits;
+  an existing copy needs `--force`, a symlink is never written through.
+- `taxjson shares`: an empty `--taxable`/`--sheltered` scope is an error,
+  a non-table `[accounts]` entry no longer tracebacks, JSON quantities
+  are rounded.
+- `taxjson sanity`: malformed holdings files (non-numeric or non-finite
+  quantities, a `[holding]` table) are clear errors; a `+` in a
+  configured holdings path no longer breaks the config-driven pairing.
+- `install.sh`: only exact `vX.Y.Z` tags are installable (an rc or
+  four-part tag never ships), the body runs inside `main()` so a
+  truncated download executes nothing, an existing non-symlink
+  `~/.local/bin/taxjson` (pipx?) is refused rather than replaced, the
+  install dir is canonicalised, and a failed run says re-running resumes.
+  `dev-setup.sh` warns when the hook cannot be installed (worktree,
+  `core.hooksPath`, an existing hook) and creates the denylist 0600.
 - Scope: the US engine is labelled EXPERIMENTAL — README, the country
   table, a note printed by `taxjson init --country usa` and at the start
   of every US `run`. Its rules are implemented and unit-tested but have

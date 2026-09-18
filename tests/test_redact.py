@@ -89,7 +89,7 @@ class TestRedact(unittest.TestCase):
             self.assertTrue(dst.exists())
             self.assertEqual(src.read_text(), QT)          # untouched
             self.assertNotIn("55500001", dst.read_text())
-            self.assertIn("55****01 ->", r.stdout)           # masked, never the id
+            self.assertIn("8 digits -> 99900001", r.stdout)  # shape only, never the id
             self.assertNotIn("55500001", r.stdout)
             # A redacted copy is skipped, not re-redacted.
             r2 = subprocess.run(
@@ -98,6 +98,14 @@ class TestRedact(unittest.TestCase):
                 cwd=REPO_ROOT, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL)
             self.assertIn("already a redacted copy", r2.stderr)
+            # A second run refuses to overwrite the copy unless --force.
+            r2b = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "redact",
+                 str(src), "--no-denylist"],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL)
+            self.assertNotEqual(r2b.returncode, 0)
+            self.assertIn("use --force", r2b.stderr)
             # --check writes nothing.
             r3 = subprocess.run(
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "redact",
@@ -106,6 +114,87 @@ class TestRedact(unittest.TestCase):
                 stdin=subprocess.DEVNULL)
             self.assertEqual(r3.returncode, 0, r3.stderr)
             self.assertFalse((Path(tmp) / "x").exists())
+
+
+
+class TestRedactAuditFindings(unittest.TestCase):
+    """Pins for the 2026-09-18 pre-release audit of the redactor."""
+
+    def test_small_ids_and_decimals_never_rewrite_quantities(self):
+        text = "Date,Acct,Symbol,Qty,Price\n2026-01-01,1,X,1,1.5\n2026-01-02,2,Y,2,12.25\n"
+        out, rep = redact_text(text)
+        self.assertEqual(out, text)                       # 1-digit "ids" are not ids
+        out, rep = redact_text('"Account: 12345.67"\nQty\n12345\n')
+        self.assertIn("12345.67", out)                    # decimal part is not an id
+        self.assertIn("\n12345\n", out)
+        out, rep = redact_text('"Account: 10000 - Margin"\nDate,Qty\n2026-01-01,10000\n')
+        self.assertIn(",10000\n", out)                    # 5-digit free-text "id" too short
+        out, rep = redact_text("Account #\n20260115\n")  # pii-ok (synthetic fixture)
+        self.assertEqual(rep.accounts, {})                # date-like 8 digits skipped
+
+    def test_more_id_and_identity_shapes(self):
+        text = ('Account ID: 5550000301\nName,Jane Q Sample\nPrimary Owner: Jane Q Sample\n'  # pii-ok (synthetic fixture)
+                'Wire ref U55512346_2025\nid DU55512347 and F55512348\n'
+                '"Account: 555-00004-1 - Margin"\nAccount Number\nZ55512345\n5551-2345\n'  # pii-ok (synthetic fixture)
+                '"Name: Sample, Jane",x\n')
+        out, rep = redact_text(text)
+        for gone in ("5550000301", "Jane", "U55512346", "DU55512347", "F55512348",  # pii-ok (synthetic fixture)
+                     "555-00004-1", "Z55512345", "5551-2345"):
+            self.assertNotIn(gone, out, gone)
+        self.assertIn("U99900002_2025", out)              # `_` is a boundary
+        self.assertIn('"Account: 999-00000-', out)        # shape kept
+        self.assertIn('"Name: REDACTED",x', out)
+        out, rep = redact_text("ClientAccountID,AccountAlias,Symbol\nU55512345,jane-margin,MSFT\n")  # pii-ok (synthetic fixture)
+        self.assertEqual(out.splitlines()[1], "U99900001,REDACTED,MSFT")
+
+    def test_bytes_it_promises_to_keep(self):
+        out, rep = redact_text('"Account Information","Data","Country","Canada","x"\n')
+        self.assertEqual(out, '"Account Information","Data","Country","REDACTED","x"\n')
+        out, rep = redact_text("Account #,Qty\r\n55512345,5\r\n")  # pii-ok (synthetic fixture)
+        self.assertTrue(out.endswith("\r\n"))              # CRLF preserved
+        from taxjson.bin.taxjson_redact import decode_export
+        t, enc, bom = decode_export("Account #,Qty\r\n55512345,5\r\n".encode("utf-16"))  # pii-ok (synthetic fixture)
+        self.assertEqual(enc, "utf-16")
+        self.assertIn("55512345", t)                      # decoded, so it WILL be redacted
+        t, enc, bom = decode_export(b"\xef\xbb\xbfAccount #\n")
+        self.assertEqual((enc, bom), ("utf-8", b"\xef\xbb\xbf"))
+        t, enc, bom = decode_export(b"Qu\xe9bec\n")
+        self.assertEqual(enc, "cp1252")
+
+    def test_bad_pattern_is_a_note_not_a_traceback(self):
+        out, rep = redact_text("x Jane (Smith)\n", ["Jane (", "JANE"])
+        self.assertEqual(out, "x REDACTED (Smith)\n")      # case-insensitive
+        self.assertEqual(len(rep.notes), 1)
+
+    def test_id_in_file_name_is_replaced_and_report_masks(self):
+        from taxjson.bin.taxjson_redact import redacted_name, Report
+        self.assertEqual(redacted_name(Path("U55512345_20250101_20251231.csv"), {}),
+                         "U99900001_20250101_20251231.redacted.csv")
+        self.assertEqual(Report.masked("U55512345"), "U + 8 digits")  # pii-ok (synthetic fixture)
+        self.assertEqual(Report.masked("55512"), "5 digits")
+
+    def test_symlink_target_refused_and_dashdash_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "a.csv").write_text(QT)
+            (d / "elsewhere.txt").write_text("keep")
+            (d / "a.redacted.csv").symlink_to(d / "elsewhere.txt")
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "redact",
+                 str(d / "a.csv"), "--no-denylist", "--force"],
+                cwd=REPO_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("symlink", r.stderr)
+            self.assertEqual((d / "elsewhere.txt").read_text(), "keep")
+            (d / "--check").write_text(QT)
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "redact",
+                 "--no-denylist", "--", str(d / "--check")],
+                cwd=REPO_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue((d / "--check.redacted").exists() or
+                            any(x.name.startswith("--check") and "redacted" in x.name
+                                for x in d.iterdir()))
 
 
 if __name__ == "__main__":

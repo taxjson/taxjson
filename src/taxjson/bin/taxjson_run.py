@@ -5651,7 +5651,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
 
 
 def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
-                              root: Path) -> Tuple[List[str], List[str]]:
+                              root: Path) -> Tuple[List[Tuple[List[str], List[str]]],
+                                                   List[str]]:
     """Paired `taxjson sanity` items from each account's
     `holdings = [...]` (paths; `~` expanded, relative to the project).
     Accounts that list a common file — one broker export covering
@@ -5708,9 +5709,11 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
         for p in files_of[n]:
             if p not in files:
                 files.append(p)
-    items = [f"{'+'.join(sorted(a))}={'+'.join(f)}"
-             for a, f in groups.values()]
-    return sorted(items), notes
+    # Structured (accounts, files) groups — never re-joined into the
+    # `a+b=f1+f2` argument syntax, so a `+` or `=` inside a path is safe.
+    items = sorted(((sorted(a), list(f)) for a, f in groups.values()),
+                   key=lambda g: g[0])
+    return items, notes
 
 
 def cmd_shares(args: argparse.Namespace) -> None:
@@ -5738,9 +5741,14 @@ def cmd_shares(args: argparse.Namespace) -> None:
         if not (root / "taxjson.toml").exists():
             sys.exit("taxjson shares: --taxable/--sheltered need "
                      "taxjson.toml (account types).")
-        types = {n: (a or {}).get("type", "sheltered")
+        types = {n: (a.get("type", "sheltered") if isinstance(a, dict)
+                     else "sheltered")
                  for n, a in (load_config(root).get("accounts") or {}).items()}
         files = {n: f for n, f in files.items() if types.get(n) == want}
+        if not files:
+            sys.exit(f"taxjson shares: no {want} account with books in "
+                     f"{cache} (accounts and their types come from "
+                     f"taxjson.toml; run `taxjson run` first).")
     by_sym: Dict[str, Dict[str, Any]] = {}
     year = None
     for acct, f in files.items():
@@ -5775,9 +5783,9 @@ def cmd_shares(args: argparse.Namespace) -> None:
                    "scope": want or "all",
                    "options_included": bool(getattr(args, "options",
                                                     False)),
-                   "rows": [{"symbol": sym, "qty": e["qty"],
+                   "rows": [{"symbol": sym, "qty": round(e["qty"], 8),
                              "cost": round(e["cost"], 2),
-                             "accounts": {a: q for a, q in
+                             "accounts": {a: round(q, 8) for a, q in
                                           sorted(e["accounts"].items())}}
                             for sym, e in rows]})
         return
@@ -5816,15 +5824,18 @@ def cmd_redact(args: argparse.Namespace) -> None:
     """`taxjson redact FILE...`: strip account numbers and identity from
     broker exports (row shapes kept) — see taxjson_redact."""
     from taxjson.bin.taxjson_redact import main as redact_main
-    argv = list(args.files)
+    argv: List[str] = []
     if args.out:
         argv += ["--out", args.out]
     for a in args.also or []:
         argv += ["--also", a]
     if args.no_denylist:
         argv.append("--no-denylist")
+    if args.force:
+        argv.append("--force")
     if args.check:
         argv.append("--check")
+    argv += ["--", *args.files]          # a file named `--check` stays a file
     raise SystemExit(redact_main(argv))
 
 
@@ -5941,6 +5952,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                          f"more than one group ({owner} and {gname})")
 
     items = list(args.items or [])
+    config_groups: List[Tuple[List[str], List[str]]] = []
     config_notes: List[str] = []
     if not items:
         # No arguments: pairings come from taxjson.toml — each
@@ -5950,8 +5962,9 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             _accts_cfg = load_config(root).get("accounts") or {}
         except SystemExit:
             _accts_cfg = {}
-        items, config_notes = _sanity_items_from_config(_accts_cfg, root)
-        if not items:
+        config_groups, config_notes = _sanity_items_from_config(_accts_cfg,
+                                                                root)
+        if not config_groups:
             for n in config_notes:
                 print(f"taxjson sanity: note: {n}", file=sys.stderr)
             sys.exit("taxjson sanity: no arguments, and no account in "
@@ -5960,6 +5973,15 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                      "pass items — `taxjson sanity margin=U1.toml` — "
                      "or add e.g.\n  [accounts.margin]\n  holdings = "
                      "[\"~/portoml-run/U1_holdings.toml\"]")
+    for accts, paths in config_groups:
+        key = tuple(accts)
+        gname = "+".join(key)
+        grp = groups.setdefault(key, {"accounts": [], "files": [],
+                                      "paired": True})
+        for n in key:
+            _place(grp, gname, _account(n, "taxjson.toml"), None)
+        for f in paths:
+            _place(grp, gname, None, _file(f, "taxjson.toml"))
     for a in items:
         if "=" in a and not Path(a).expanduser().is_file():
             lhs, rhs = a.split("=", 1)
@@ -6048,13 +6070,29 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 doc = tomllib.loads(path.read_text(encoding="utf-8"))
             except Exception as e:
                 sys.exit(f"taxjson sanity: cannot parse {path}: {e}")
-            labels.append(str((doc.get("meta") or {}).get("account")
-                              or path.stem))
-            for h in (doc.get("holding") or []):
-                if (h.get("asset_type") or "").lower() == "cash":
+            meta = doc.get("meta") if isinstance(doc, dict) else None
+            labels.append(str((meta or {}).get("account") or path.stem)
+                          if isinstance(meta, (dict, type(None)))
+                          else path.stem)
+            holdings = doc.get("holding") if isinstance(doc, dict) else None
+            if not isinstance(holdings, list):
+                sys.exit(f"taxjson sanity: {path.name} has no [[holding]] "
+                         f"array (portoml-style file expected)")
+            for h in holdings:
+                if not isinstance(h, dict):
+                    sys.exit(f"taxjson sanity: {path.name}: a [[holding]] "
+                             f"entry is not a table")
+                if (str(h.get("asset_type") or "")).lower() == "cash":
                     continue
                 sym = str(h.get("symbol") or "").strip()
-                q = float(h.get("quantity") or 0.0)
+                try:
+                    q = float(h.get("quantity") or 0.0)
+                except (TypeError, ValueError):
+                    sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "
+                             f"quantity {h.get('quantity')!r} is not a number")
+                if q != q or q in (float("inf"), float("-inf")):
+                    sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "
+                             f"quantity is not finite")
                 if not sym or abs(q) <= 1e-12:
                     continue
                 tgt = _mapped(sym)
@@ -9186,6 +9224,8 @@ def main() -> None:
                             "(repeatable)")
     p_red.add_argument("--no-denylist", action="store_true",
                        help="Ignore ~/.config/taxjson/pii-denylist")
+    p_red.add_argument("--force", action="store_true",
+                       help="Overwrite an existing redacted copy")
     p_red.add_argument("--check", action="store_true",
                        help="Report only; write nothing")
     p_red.set_defaults(func=cmd_redact)

@@ -11,11 +11,20 @@ venv/bin/pip install --upgrade pip --quiet
 venv/bin/pip install -e ".[web,fx,dev]"
 
 # Pre-push personal-data scan (a push to a public repo IS publication).
-ln -sfn ../../scripts/hooks/pre-push .git/hooks/pre-push 2>/dev/null && echo "   pre-push hook installed (scripts/check-pii.sh)"
+if [ -d .git/hooks ]; then
+  if [ -e .git/hooks/pre-push ] && [ ! -L .git/hooks/pre-push ]; then
+    echo "   NOTE: .git/hooks/pre-push already exists and is not ours — left alone; chain scripts/hooks/pre-push from it."
+  else
+    ln -sfn ../../scripts/hooks/pre-push .git/hooks/pre-push && echo "   pre-push hook installed (scripts/check-pii.sh)"
+  fi
+  [ -z "$(git config core.hooksPath)" ] || echo "   NOTE: core.hooksPath=$(git config core.hooksPath) is set — git ignores .git/hooks; install scripts/hooks/pre-push there."
+else
+  echo "   NOTE: no .git/hooks directory (worktree?) — install scripts/hooks/pre-push as the pre-push hook by hand."
+fi
 DENY="$HOME/.config/taxjson/pii-denylist"
 if [ ! -e "$DENY" ]; then
   mkdir -p "$(dirname "$DENY")"
-  cat > "$DENY" <<'DL'
+  (umask 077; cat > "$DENY") <<'DL'
 # taxjson private PII denylist — one extended regex per line. Lives OUTSIDE
 # every repository. Put here the exact strings that must never be
 # published: your broker account numbers, your name, personal e-mail,

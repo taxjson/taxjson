@@ -82,6 +82,34 @@ class TestShares(unittest.TestCase):
             r = _run(root, "shares", "--taxable", "--sheltered")
             self.assertNotEqual(r.returncode, 0)
 
+    def test_empty_scope_and_odd_config_are_clear_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2026\ncountry = "canada"\n'
+                'base_currency = "CAD"\n[accounts.rrsp]\ntype = "sheltered"\n')
+            _gains(root, "rrsp", {"XIU.TO": (40, 1300.0)})
+            r = _run(root, "shares", "--taxable")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("no taxable account", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            # A non-table [accounts] entry must not traceback.
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2026\ncountry = "canada"\n'
+                'base_currency = "CAD"\n[accounts]\nrrsp = "x"\n')
+            r = _run(root, "shares", "--sheltered", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            # JSON quantities are rounded, not float noise.
+            _gains(root, "rrsp", {"F.US": (0.1, 1.0)})
+            _gains(root, "margin", {"F.US": (0.2, 1.0)})
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2026\ncountry = "canada"\n'
+                'base_currency = "CAD"\n[accounts.rrsp]\ntype = "sheltered"\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            doc = json.loads(_run(root, "shares", "--json").stdout)
+            self.assertEqual(doc["rows"][0]["qty"], 0.3)
+
     def test_no_gains_files_is_a_clear_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

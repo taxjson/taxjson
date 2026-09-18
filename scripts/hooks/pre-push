@@ -1,17 +1,29 @@
 #!/usr/bin/env bash
 # Installed into .git/hooks/pre-push by scripts/dev-setup.sh. On a public
-# repository a push IS publication, so this is the last check: scan only
-# the lines the push would add, against the generic patterns and your
-# private denylist. Refuse on any hit. Bypass knowingly: git push --no-verify
-set -u
+# repository a push IS publication, so this is the last check: scan the
+# net diff the push would add (merge resolutions included) and the commit
+# messages, against the generic patterns and your private denylist.
+# Refuses on any hit or scanner error. Bypass knowingly: git push --no-verify
+set -uo pipefail
 root="$(git rev-parse --show-toplevel)"
+remote="$1"
 z=0000000000000000000000000000000000000000
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$z" ] && continue                  # branch delete
-  if [ "$remote_sha" = "$z" ]; then range="$local_sha"; else range="$remote_sha..$local_sha"; fi
-  if ! git log -p --format='' "$range" -- | "$root/scripts/check-pii.sh" --diff; then
-    echo "pre-push: refusing to publish $local_ref — see the hits above." >&2
-    exit 1
+  if [ "$remote_sha" != "$z" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    diff_cmd=(git diff --text "$remote_sha" "$local_sha" --)
+    log_range=("$remote_sha..$local_sha")
+  else
+    # New branch/tag, or a remote tip we do not have: everything not
+    # already on that remote.
+    diff_cmd=(git log -p --text --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
+    log_range=("$local_sha" --not --remotes="$remote/*")
+  fi
+  if ! "${diff_cmd[@]}" | "$root/scripts/check-pii.sh" --diff; then
+    echo "pre-push: refusing to publish $local_ref — see above." >&2; exit 1
+  fi
+  if ! git log --format=%B "${log_range[@]}" | "$root/scripts/check-pii.sh" --text; then
+    echo "pre-push: refusing to publish $local_ref — a commit MESSAGE hit the scan." >&2; exit 1
   fi
 done
 exit 0
