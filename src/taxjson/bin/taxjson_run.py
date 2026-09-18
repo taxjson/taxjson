@@ -571,6 +571,13 @@ CORP_ACTION_BROKERS = {"ib", "interactive_brokers", "questrade", "qt",
 _COUNTRY_CANON = {"ca": "canada", "canada": "canada", "us": "usa", "usa": "usa"}
 
 
+_US_EXPERIMENTAL_NOTE = (
+    "NOTE: the US engine is EXPERIMENTAL — its rules are implemented and "
+    "unit-tested but have not been validated against a real account. "
+    "Treat the output as a draft, and consider contributing a redacted "
+    "export (`taxjson redact`) so it can be.")
+
+
 def _normalize_country(c: str) -> str:
     key = (c or "").strip().lower()
     return _COUNTRY_CANON.get(key, key)
@@ -1799,6 +1806,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     _CONFIG_PATH = root / "taxjson.toml"
     settings = cfg.get("settings", {})
     accounts = cfg.get("accounts", {})
+    if _normalize_country(str(settings.get("country", "canada"))) == "usa":
+        print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
 
     # Orphaned artifacts from RENAMED/REMOVED accounts: work/ files
     # keep matching the discovery globs (resolve_gains_files, fees
@@ -5803,6 +5812,22 @@ def cmd_shares(args: argparse.Namespace) -> None:
     print(f"\n{len(rows)} symbol(s); COST is combined book cost in {base}.")
 
 
+def cmd_redact(args: argparse.Namespace) -> None:
+    """`taxjson redact FILE...`: strip account numbers and identity from
+    broker exports (row shapes kept) — see taxjson_redact."""
+    from taxjson.bin.taxjson_redact import main as redact_main
+    argv = list(args.files)
+    if args.out:
+        argv += ["--out", args.out]
+    for a in args.also or []:
+        argv += ["--also", a]
+    if args.no_denylist:
+        argv.append("--no-denylist")
+    if args.check:
+        argv.append("--check")
+    raise SystemExit(redact_main(argv))
+
+
 def cmd_sanity(args: argparse.Namespace) -> None:
     """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
@@ -8748,6 +8773,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         country, getattr(args, "year", None))
     cfg.write_text(config_text)
     written.append("taxjson.toml")
+    if country == "usa":
+        print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
 
     # Everything else is written ONLY when absent, so re-running `init
     # --force` re-templates the config without clobbering a ticker.map or
@@ -9143,6 +9170,25 @@ def main() -> None:
     p_sh.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_sh.set_defaults(func=cmd_shares)
+
+    p_red = sub.add_parser(
+        "redact",
+        help="Strip account numbers and identity from broker exports "
+             "(row shapes kept) so a real statement can be shared as a "
+             "parser sample or bug report")
+    p_red.add_argument("files", nargs="+", metavar="FILE")
+    p_red.add_argument("--out", metavar="DIR",
+                       help="Write redacted copies here (default: beside "
+                            "each input as NAME.redacted.EXT)")
+    p_red.add_argument("--also", action="append", default=[],
+                       metavar="REGEX",
+                       help="Extra pattern to replace with REDACTED "
+                            "(repeatable)")
+    p_red.add_argument("--no-denylist", action="store_true",
+                       help="Ignore ~/.config/taxjson/pii-denylist")
+    p_red.add_argument("--check", action="store_true",
+                       help="Report only; write nothing")
+    p_red.set_defaults(func=cmd_redact)
 
     p_san = sub.add_parser(
         "sanity",

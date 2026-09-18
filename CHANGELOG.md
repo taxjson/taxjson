@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Scope: the US engine is labelled EXPERIMENTAL — README, the country
+  table, a note printed by `taxjson init --country usa` and at the start
+  of every US `run`. Its rules are implemented and unit-tested but have
+  never been validated on a real account; Canada is the supported
+  product. CONTRIBUTING gains a "Help wanted: broker exports" section.
+- `taxjson redact FILE...`: strip account numbers and identity from
+  broker exports while keeping every row shape — same-length placeholders
+  (`U99900001`, `99900001`) applied consistently across the file,
+  IB Account Information name/alias/address rows, `Name:`/`Client:`
+  header lines, e-mail addresses, and the private denylist. Writes
+  `NAME.redacted.EXT`, never touches the input, reports masked ids only.
+  Verified on real IB, Questrade, RBC and Webull exports: the copies
+  parse to identical tax objects apart from the account field.
 - `taxjson shares`: the combined quantity held of each symbol across all
   accounts (post ticker.map, wash-adjusted where built) with a
   per-account breakdown and combined book cost; `--taxable` /

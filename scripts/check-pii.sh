@@ -27,7 +27,9 @@ if [ "$mode" = diff ]; then
   INPUT="$(grep -E '^\+' | grep -vE '^\+\+\+ ' | sed -E 's/^\+//')"
   scan() { printf '%s\n' "$INPUT" | grep -nE "$1" | sed -E 's/^([0-9]+):/added line \1: /'; }
 else
-  if [ $# -gt 0 ]; then FILES=$(find "$@" -type f); else FILES=$(git ls-files); fi
+  # Tracked AND untracked (not ignored): a new file is scanned before it
+  # is ever committed — git ls-files alone let an untracked fixture through.
+  if [ $# -gt 0 ]; then FILES=$(find "$@" -type f); else FILES=$(git ls-files --cached --others --exclude-standard); fi
   scan() { printf '%s\n' "$FILES" | xargs -r grep -InE "$1" 2>/dev/null; }
 fi
 
@@ -41,8 +43,8 @@ report() {   # report LABEL PATTERN [EXCLUDE-REGEX]
   printf '%s\n' "$out" | head -20 | sed -E "s~($2)~<masked>~g" | cut -c1-140 | sed 's/^/   /'
 }
 
-report "IB account id (U + 7 digits)"                    '\bU[0-9]{7}\b'                        'U1234567'
-report "8-digit number next to the word account"        '[Aa]ccount[^0-9]{0,20}[0-9]{8}'       '9990[0-9]{4}|1234567[89]'
+report "IB account id (U + 7-8 digits)"                  '\bU[0-9]{7,8}\b'                      'U1234567[0-9]?|U9990[0-9]+'
+report "8-digit number next to the word account"        '[Aa]ccount[^0-9]{0,20}[0-9]{8}'       '9990[0-9]{4,}|1234567[89]'
 report "home directory path"                            '/home/[a-z][a-z0-9_-]+|/Users/[A-Za-z][A-Za-z0-9_-]+' ''
 report "e-mail address not on the allowlist"            '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}' "$ALLOW_EMAILS"
 report "credential-looking string"                      'ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}' ''

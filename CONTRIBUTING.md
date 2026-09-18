@@ -18,6 +18,24 @@ source venv/bin/activate
 pip install -e .
 ```
 
+## Help wanted: broker exports
+
+The most valuable contribution is a **redacted real export** from a broker
+the parsers don't cover yet (Wealthsimple, TD Direct, BMO InvestorLine,
+CIBC Investor's Edge, Scotia iTRADE, National Bank Direct, Qtrade,
+Desjardins…) or a US account for the experimental US engine. Run
+
+```bash
+taxjson redact ~/Downloads/activity.csv        # writes activity.redacted.csv
+```
+
+It replaces every account number with a same-length placeholder (so the
+file still parses), removes name/alias/address rows and e-mail addresses,
+and prints a report. Read the free-text description column once for
+names, then attach the `.redacted.csv` to an issue or pull request.
+Quantities, prices, dates and symbols are kept — that is what a parser
+needs. Never attach an un-redacted statement.
+
 ## Before anything is pushed: personal data
 
 This is a public repository, so a push is publication. `scripts/check-pii.sh`
