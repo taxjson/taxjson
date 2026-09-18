@@ -1,6 +1,6 @@
 [project]
 name = "taxjson"
-version = "0.15.0"
+version = "0.15.1"
 description = "Capital gains, dividend income, and wash-sale / superficial-loss computation from brokerage CSVs (Canada + US)"
 readme = "README.md"
 license = { file = "LICENSE" }
