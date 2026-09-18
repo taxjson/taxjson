@@ -2254,14 +2254,6 @@ def cmd_run(args: argparse.Namespace) -> None:
         )
 
 
-def cmd_show(args: argparse.Namespace) -> None:
-    root = Path(args.dir).resolve()
-    sum_path = root / "reports" / f"{args.account}.sum"
-    if not sum_path.exists():
-        _die(f"no report at {sum_path}. Run `taxjson run` first.")
-    sys.stdout.buffer.write(sum_path.read_bytes())
-
-
 _TEMPLATE_CONFIG = """\
 # taxjson configuration. See https://github.com/taxjson/taxjson
 
@@ -7934,56 +7926,6 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                   f"{e['symbol'] or '-'}")
 
 
-def cmd_verify(args: argparse.Namespace) -> None:
-    """`taxjson verify`: fetch LIVE Questrade holdings and cross-check
-    them against the computed books — "does my book match the broker
-    right now?" Positions only (no activity download), written to
-    work/<account>_live_holdings.toml, then compared per account with
-    `taxjson sanity`'s machinery. Exit 1 on any mismatch. Chain after
-    a rebuild: `taxjson fetch run verify`."""
-    from taxjson.bin import taxjson_fetch as F
-    root = Path(args.dir).resolve()
-    cache = root / "work"
-    cfg = load_config(root)
-    fetch_cfg = _fetch_sources(cfg)
-    qt_accounts = [a for a in (list(args.account) or sorted(fetch_cfg))
-                   if (fetch_cfg.get(a) or {}).get("source")
-                   == "questrade"]
-    if not qt_accounts:
-        _die("verify reads LIVE positions from the Questrade API, and "
-             "no account declares `brokerage = \"questrade\"` "
-             "(IBKR Flex statements carry no live-position feed).")
-    live = _qt_live_holdings(root, cache, cfg, qt_accounts,
-                             F.default_http_get, print)
-    failures = errors = 0
-    for a, toml_path in live.items():
-        print(f"== {a} vs live broker holdings")
-        try:
-            cmd_sanity(argparse.Namespace(
-                dir=str(root), items=[a, str(toml_path)],
-                tolerance=getattr(args, "tolerance", 1e-4),
-                json=False))
-        except SystemExit as e:
-            if e.code not in (None, 0):
-                if isinstance(e.code, str):
-                    # cmd_sanity reports fatal CONFIGURATION problems
-                    # via sys.exit("<message>"); swallowing it
-                    # misreported them as broker mismatches.
-                    print(e.code, file=sys.stderr)
-                    errors += 1
-                else:
-                    failures += 1
-    if errors:
-        sys.exit(f"taxjson verify: {errors} account(s) could not be "
-                 f"checked (see above) and {failures} did not match.")
-    if failures:
-        sys.exit(f"taxjson verify: {failures} account(s) do not "
-                 f"match the broker's live holdings — a missed or "
-                 f"unparsed transaction is the usual cause "
-                 f"(re-run `taxjson fetch run` first if the books "
-                 f"are stale).")
-
-
 def _wash_class_context(root: Path, cache: Path, prog: str):
     """(radar, canon, last_loss) shared by buy-check and sell-check:
     the combined radar document flattened per ticker, a symbol-class
@@ -8875,10 +8817,6 @@ def main() -> None:
                             "banner. Recommended for CI/cron")
     p_run.set_defaults(func=cmd_run)
 
-    p_show = sub.add_parser("show", help="Print a report")
-    p_show.add_argument("account")
-    p_show.set_defaults(func=cmd_show)
-
     p_elect = sub.add_parser(
         "elect", help="View/redo corporate-action tax elections")
     p_elect.add_argument("account", nargs="?",
@@ -9394,20 +9332,6 @@ def main() -> None:
     p_sellchk.add_argument("--json", action="store_true",
                            help="Emit verdicts as JSON")
     p_sellchk.set_defaults(func=cmd_sell_check)
-
-    p_verify = sub.add_parser(
-        "verify",
-        help="Fetch LIVE Questrade holdings and cross-check them "
-             "against the computed books (positions only — no "
-             "activity download). Exit 1 on mismatch; the usual cause "
-             "is a missed or unparsed transaction. Chain after a "
-             "rebuild: `taxjson fetch run verify`")
-    p_verify.add_argument("account", nargs="*",
-                          help="Accounts to verify (default: every "
-                               "Questrade fetch-enabled account)")
-    p_verify.add_argument("--tolerance", type=float, default=1e-4,
-                          help="Quantity tolerance (default: 0.0001)")
-    p_verify.set_defaults(func=cmd_verify)
 
     p_audit = sub.add_parser(
         "audit",

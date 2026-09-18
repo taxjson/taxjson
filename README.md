@@ -60,10 +60,11 @@ query_id = "123456"      # an Activity Flex query: format CSV, with
 ```
 
 Then `taxjson fetch` (or `taxjson fetch run` to rebuild in the same
-breath, or `taxjson fetch run verify` to also cross-check the rebuilt
-books against the broker's LIVE holdings — `fetch --positions` writes
-the same `work/<account>_live_holdings.toml` snapshots without the
-comparison). Credentials never go in `taxjson.toml`: Questrade takes a
+breath; a run ends with the broker cross-check when `taxjson.toml`
+names the holdings files — see `taxjson sanity`. `fetch --positions`
+writes `work/<account>_live_holdings.toml` snapshots of Questrade's
+live positions, which can serve as those files). Credentials never go
+in `taxjson.toml`: Questrade takes a
 refresh token once (`--refresh-token` or `$QUESTRADE_REFRESH_TOKEN`) and
 caches the rotated token in `~/.questrade_token` (shared machine-wide —
 Questrade runs one rotating chain per API app; `$QUESTRADE_TOKEN_FILE`
@@ -196,7 +197,7 @@ Then, whenever you add new statements:
 ```bash
 taxjson run           # full pipeline, full rebuild — never serves stale data (stages run in-process: no per-stage interpreter start-up)
 taxjson run --fast    # incremental: mtime-cached stages with unchanged inputs are skipped
-taxjson show margin   # print reports/margin.sum
+cat reports/margin.sum  # the per-account report
 ```
 
 `taxjson run` orchestrates everything end to end: parse each broker CSV → apply corporate actions (prompting once for any new merger/spinoff election — saved to `inputs/<account>/manifest.json`, which you should COMMIT; pure ticker renames auto-elect) → merge and FX-convert to the base currency → run the ACB/FIFO gains + wash-sale engine → and write every report to `reports/`:
@@ -304,7 +305,6 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson run --account NAME` | Re-run a single account. ⚠️ Skips cross-account wash-sale and cross-listing detection — those need a full run. |
 | `taxjson sanity ACCOUNT\|FILE.toml\|ACCOUNT=FILE ...` | Cross-check open positions against externally produced holdings `.toml` files (portoml-style `[[holding]]`), per symbol (`--tolerance`, `--json`; exit 1 on any discrepancy). Bare items form one aggregate group (combined positions vs combined holdings — quick, but blind to a position sitting in the wrong account). `ACCOUNT[+ACCOUNT]=FILE[+FILE]` pairs specific accounts with specific files and is checked as its own group — many-to-many because a taxjson account can span several broker accounts (`margin=ibkr.toml+webull.toml`, or repeat `margin=…`) and one broker export can cover several accounts (`rrsp+lira=flex.toml`). Both forms mix freely. With no arguments the pairings come from `taxjson.toml` — each account's `holdings = [...]` — and `taxjson run` finishes with the same check as a warning. Option rows whose root the file spells differently (`RCI…` vs taxjson's `RCI.B…`) are matched through the row's `underlying` field. |
 | `taxjson run --strict` | Promote per-account validation ERRORs (oversold positions, malformed rows) to fatal instead of publishing reports with a DIAGNOSTICS banner. Recommended for CI/cron. |
-| `taxjson show NAME` | Print `reports/NAME.sum`. |
 | `taxjson run sum` (chaining) | Subcommands chain in one invocation, each with its own flags: `taxjson run close-year check-filed`. Note a chained `--json` command's stdout follows the earlier commands' progress output — pipe consumers should run the JSON command standalone. Also: `taxjson run close-year check-filed`. A failing command stops the chain and its exit code propagates. Option values that collide with command names are handled (`--account sum`); for the rare ambiguous positional, separate with `--`. |
 | `taxjson close-year` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. |
 | `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks (every full run also auto-checks; `--strict` aborts on drift). |
@@ -326,7 +326,6 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson wash-radar` / `wash-sales` | Wash-sale radar (forward) and denied-loss report (backward). |
 | `taxjson fx-cash` | FX capital gains on foreign-currency **cash** — foreign cash is property, so spending USD realizes the rate move since it was acquired. Canada: ITA s.39(1.1) with the $200/year de minimis; US: the §988 ordinary-income figure. A standalone report reconstructed from the taxable accounts' native books (`--events` for the per-disposal detail, `--json` for machines); changes NO other number. Set `fx_cash_gains = true` under `[settings]` to also print it (and write `reports/fx_cash.rpt`) at the end of every run — off by default. |
 | `taxjson watch` | Cron-able change detector: reports only what CHANGED since the last watch run — new/changed/cleared radar advisories, moved clear dates, and (with `--harvest`) the harvestable-now loss total moving more than `--threshold` (default 100). Silent with exit 0 when nothing changed, so a cron line mails only on news; `--exit-code` exits 1 on changes for scripting, `--json` for machines. State: `work/.watch_state.json`; `--state PATH` gives a cron cadence its own baseline (daily and weekly lines can coexist). |
-| `taxjson verify [ACCOUNT ...]` | Questrade-only shortcut: fetch LIVE positions and run the `sanity` compare on them (prefer `taxjson sanity` with `holdings = [...]` in `taxjson.toml`, which covers every broker): "does my book match the broker right now?" Exit 1 on mismatch — the usual cause is a missed or unparsed transaction. `--tolerance` sets the per-symbol quantity slack (default 1e-4; `0` demands exact). Questrade only — IBKR Flex statements carry no live-position feed. The complete loop: `taxjson fetch run verify`. |
 | `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` — Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Defaults to year-to-date (`--year`/`--from`/`--days` to widen, `--trim-overlap` to drop rows your manual exports already cover, `--dry-run` to preview). Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` fetches live holdings instead of activity. Chain it: `taxjson fetch run`. |
 | `taxjson scan` | Lint the project for common tax-efficiency mistakes: cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding), and ticker.map cross-listing gaps. `--online` probes yfinance for unmapped .TO twins. Exit 1 on findings. |
 | `taxjson t1135` | CRA T1135 foreign-property helper: filing-threshold test + per-property/per-country tables. |

@@ -96,8 +96,8 @@ class TestChainedExecution(unittest.TestCase):
     def test_failure_stops_the_chain(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp)
-            # `show nope` fails (no reports yet); `run` must NOT execute.
-            r = _cli(root, "show", "nope", "run", "--no-input")
+            # `sanity nope` fails (no books yet); `run` must NOT execute.
+            r = _cli(root, "sanity", "nope", "run", "--no-input")
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse((Path(tmp) / "work").exists(),
                          "the failed first command must stop the chain")

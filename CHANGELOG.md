@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Removed `taxjson show` (it printed `reports/NAME.sum`; use `cat`) and
+  `taxjson verify` (Questrade-only live-positions check; `taxjson sanity`
+  with `holdings = [...]` covers every broker and runs at the end of
+  `taxjson run`).
 - Docs refresh: README (website and REFERENCES links, the broker
   cross-check and the privacy gate under Verification, audit history,
   current test counts), a twelve-slide overview deck
