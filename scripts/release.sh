@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cut a release: scripts/release.sh X.Y.Z
+# Cut a release: scripts/release.sh vX.Y.Z   (X.Y.Z also accepted)
 #
 # main is the development line; a vX.Y.Z tag is production — the curl
 # installer checks out the newest tag, never main. This script is the
@@ -14,8 +14,9 @@
 # next patch version — never by moving or deleting a published tag.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-V="${1:?usage: scripts/release.sh X.Y.Z}"
-[[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be X.Y.Z (no leading v)"; exit 1; }
+V="${1:?usage: scripts/release.sh vX.Y.Z (or X.Y.Z)}"
+V="${V#v}"                                   # vX.Y.Z and X.Y.Z both accepted
+[[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be vX.Y.Z or X.Y.Z (got '$1')"; exit 1; }
 TAG="v$V"
 PY="${PYTHON:-$PWD/venv/bin/python3}"
 

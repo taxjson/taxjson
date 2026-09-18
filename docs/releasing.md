@@ -10,7 +10,7 @@ taxjson has one development line and a sequence of production tags.
 ## Cutting a release
 
 ```bash
-scripts/release.sh 0.15.0
+scripts/release.sh v0.15.0      # or 0.15.0 — both forms are accepted
 ```
 
 The script refuses on a dirty tree or off `main`, promotes the CHANGELOG's `## Unreleased` section to `## v0.15.0 (date)`, bumps `pyproject.toml`, runs the **full** local gate, then commits, tags, and pushes `main` and the tag. The gate runs the test suite only: a handful of tests drive the real pipeline, but on synthetic two-trade projects written into temporary directories and deleted afterwards. Nothing in the suite or the release script reads a real tax project. The gate also runs `scripts/check-pii.sh` (personal data and secrets, plus the maintainer's private denylist), the same scan the `pre-push` hook applies to every push. GitHub Actions is not part of the gate — the local run is the source of truth (see CONTRIBUTING.md).
@@ -24,7 +24,7 @@ Never move or delete a published tag — installers may already have it. Tag the
 ```bash
 git checkout v0.15.0
 git checkout -b hotfix && git cherry-pick <fix> && …
-scripts/release.sh 0.15.1
+scripts/release.sh v0.15.1
 ```
 
 ## Your own production install

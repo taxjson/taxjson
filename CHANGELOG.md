@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `scripts/release.sh` accepts `vX.Y.Z` as well as `X.Y.Z`.
 Pre-release audit (2026-09-18) of everything since v0.15.0 — two
 independent adversarial reviews, every finding reproduced before it was
 fixed:
