@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Docs refresh: README (website and REFERENCES links, the broker
+  cross-check and the privacy gate under Verification, audit history,
+  current test counts), a twelve-slide overview deck
+  (`docs/deck/taxjson-deck.{html,pdf}`, rendered with WeasyPrint), and
+  taxjson.com gains a commands-at-a-glance section.
 
 ## v0.15.1 (2026-09-18)
 

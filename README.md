@@ -4,6 +4,8 @@
 
 A free, open-source command-line toolkit for computing **capital gains, dividend income, and wash-sale / superficial-loss adjustments** from raw brokerage CSV exports. Built for filers who want auditable numbers they can reproduce locally — no cloud upload, no signup, no fee.
 
+Website: **[taxjson.com](https://taxjson.com)** · one-line install below · every rule cites its source in [REFERENCES.md](REFERENCES.md).
+
 > **Not tax advice.** This tool produces numbers; it does not give legal or accounting advice. Always reconcile against your broker's official tax slips (T5008, 1099-B, etc.) and consult a qualified professional before filing.
 
 ## What it does
@@ -324,7 +326,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson wash-radar` / `wash-sales` | Wash-sale radar (forward) and denied-loss report (backward). |
 | `taxjson fx-cash` | FX capital gains on foreign-currency **cash** — foreign cash is property, so spending USD realizes the rate move since it was acquired. Canada: ITA s.39(1.1) with the $200/year de minimis; US: the §988 ordinary-income figure. A standalone report reconstructed from the taxable accounts' native books (`--events` for the per-disposal detail, `--json` for machines); changes NO other number. Set `fx_cash_gains = true` under `[settings]` to also print it (and write `reports/fx_cash.rpt`) at the end of every run — off by default. |
 | `taxjson watch` | Cron-able change detector: reports only what CHANGED since the last watch run — new/changed/cleared radar advisories, moved clear dates, and (with `--harvest`) the harvestable-now loss total moving more than `--threshold` (default 100). Silent with exit 0 when nothing changed, so a cron line mails only on news; `--exit-code` exits 1 on changes for scripting, `--json` for machines. State: `work/.watch_state.json`; `--state PATH` gives a cron cadence its own baseline (daily and weekly lines can coexist). |
-| `taxjson verify [ACCOUNT ...]` | Fetch LIVE Questrade holdings (positions only — fast) and cross-check them against the computed books via the sanity machinery: "does my book match the broker right now?" Exit 1 on mismatch — the usual cause is a missed or unparsed transaction. `--tolerance` sets the per-symbol quantity slack (default 1e-4; `0` demands exact). Questrade only — IBKR Flex statements carry no live-position feed. The complete loop: `taxjson fetch run verify`. |
+| `taxjson verify [ACCOUNT ...]` | Questrade-only shortcut: fetch LIVE positions and run the `sanity` compare on them (prefer `taxjson sanity` with `holdings = [...]` in `taxjson.toml`, which covers every broker): "does my book match the broker right now?" Exit 1 on mismatch — the usual cause is a missed or unparsed transaction. `--tolerance` sets the per-symbol quantity slack (default 1e-4; `0` demands exact). Questrade only — IBKR Flex statements carry no live-position feed. The complete loop: `taxjson fetch run verify`. |
 | `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` — Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Defaults to year-to-date (`--year`/`--from`/`--days` to widen, `--trim-overlap` to drop rows your manual exports already cover, `--dry-run` to preview). Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` fetches live holdings instead of activity. Chain it: `taxjson fetch run`. |
 | `taxjson scan` | Lint the project for common tax-efficiency mistakes: cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding), and ticker.map cross-listing gaps. `--online` probes yfinance for unmapped .TO twins. Exit 1 on findings. |
 | `taxjson t1135` | CRA T1135 foreign-property helper: filing-threshold test + per-property/per-country tables. |
@@ -969,7 +971,10 @@ Each command takes `--help`. The full pipeline is composable — outputs from on
 
 ## Documentation
 
+- [taxjson.com](https://taxjson.com) — the website; [`docs/deck/taxjson-deck.pdf`](./docs/deck/taxjson-deck.pdf) — a twelve-slide overview
+- [`REFERENCES.md`](./REFERENCES.md) — the ITA / CRA / IRC source behind every rule, and every deliberate non-feature
 - [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md) — known limitations and deferred fixes
+- [`docs/releasing.md`](./docs/releasing.md) — the dev/release scheme (`main` vs `vX.Y.Z` tags) and how a release is cut
 - [`CHANGELOG.md`](./CHANGELOG.md) — release history
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests and submit changes
 - [`SECURITY.md`](./SECURITY.md) — vulnerability reporting policy
@@ -980,6 +985,13 @@ Each command takes `--help`. The full pipeline is composable — outputs from on
 The numbers this tool emits go on real returns, so correctness is
 defended in layers rather than by tests alone:
 
+- **The broker's positions are the external check.** `taxjson sanity`
+  compares the positions the books say you hold with the positions your
+  broker's own export says you hold, account by account; `taxjson run`
+  ends with it when `taxjson.toml` names the holdings files. Internal
+  reports can all agree and still be wrong — this is the check that
+  found a phantom 8.4-share residue and a split option class that every
+  other report had accepted.
 - **The audit command is the authority.** `taxjson audit` recomputes
   every disposition from the parsed broker row through FX, ACB/FIFO
   and the wash determination, and ties each figure out against the
@@ -992,10 +1004,16 @@ defended in layers rather than by tests alone:
   they are what still finds engine bugs after seven audit rounds.
 - **Mutation testing** of the wash-sale regions, so a boundary that
   no test pins gets noticed.
-- **Independent audits.** Seven rounds so far — adversarial reviews,
-  hand-computed statutory scenarios, security/I/O boundary — with
-  every confirmed finding fixed and pinned. `KNOWN_ISSUES.md` lists
-  what was deliberately left, with the reasoning.
+- **Independent audits.** Eight rounds plus a pre-release security and
+  correctness audit of the public surfaces — adversarial reviews,
+  hand-computed statutory scenarios, parser coverage against real
+  exports, the installer and the privacy gate — with every confirmed
+  finding reproduced, fixed and pinned. `KNOWN_ISSUES.md` lists what was
+  deliberately left, with the reasoning.
+- **Nothing personal leaves the machine.** `scripts/check-pii.sh` runs
+  in every gate and as the `pre-push` hook, fails closed, and reads a
+  private denylist kept outside the repository; `taxjson redact` lets
+  users share a real export with the identifiers stripped.
 - **Filed-year locks.** `taxjson close-year` snapshots a filed year;
   every later run recomputes it and reports drift.
 
@@ -1003,7 +1021,7 @@ defended in layers rather than by tests alone:
 
 ## Status
 
-Pre-1.0. The core pipeline (parse → merge → gains → summarize) is stable and covered by 1,800+ tests, but expect occasional breaking changes to CLI flags and JSON field names until 1.0.
+Pre-1.0. The core pipeline (parse → merge → gains → summarize) is stable and covered by 2,100+ tests and three property fuzzers, but expect occasional breaking changes to CLI flags and JSON field names until 1.0.
 
 The tests run against synthetic fixtures and check that the code implements the rules as written here — they are not an assurance that the rules themselves are correctly interpreted for your situation, and no output has been reviewed by a tax professional. The planning commands (`estimate`, `instalments`, the AMT check, `fx-cash`) are explicitly estimates: they say so in their own output, and they should be checked against your assessment or your accountant before you rely on them. Report anything that looks wrong.
 
