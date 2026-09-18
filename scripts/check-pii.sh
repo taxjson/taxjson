@@ -43,14 +43,20 @@ RAWF=""
 if [ "$mode" != tree ]; then
   RAWF="$(mktemp)"; trap 'rm -f "$RAWF"' EXIT
   cat > "$RAWF"
-  if ! LC_ALL=C tr -d '\0' < "$RAWF" | cmp -s - "$RAWF"; then
-    fail "pushed content contains NUL bytes (a UTF-16 or binary text file): redact it or convert to UTF-8"
+  if [ "$mode" = text ] && ! LC_ALL=C tr -d '\0' < "$RAWF" | cmp -s - "$RAWF"; then
+    fail "commit message contains NUL bytes"
   fi
 fi
 if [ "$mode" = diff ]; then
   RAW="$(tr -d '\0' < "$RAWF")"
   INPUT="$(printf '%s\n' "$RAW" | grep -E '^\+' | grep -vE '^\+\+\+ ' | sed -E 's/^\+//')"
   NAMES="$(printf '%s\n' "$RAW" | sed -nE 's#^\+\+\+ b/##p')"
+  # git shows binaries as "Binary files … differ" and cannot scan them.
+  # A real binary (pdf, png) is fine; a TEXT-extension file that git
+  # calls binary is a UTF-16 (or NUL-stuffed) export and must not slip
+  # through unscanned.
+  b="$(printf '%s\n' "$RAW" | sed -nE 's#^Binary files .* and (b/)?(.*) differ$#\2#p' | grep -E "\.($TEXT_EXT)$" || true)"
+  [ -z "$b" ] || fail "text-extension file(s) git treats as binary (UTF-16?) — cannot be scanned; convert to UTF-8" "$(printf '%s\n' "$b" | mask)"
   scan() { printf '%s\n' "$INPUT" | grep -nE -e "$1" | sed -E 's/^([0-9]+):/added line \1: /'; }
 elif [ "$mode" = text ]; then
   INPUT="$(tr -d '\0' < "$RAWF")"
