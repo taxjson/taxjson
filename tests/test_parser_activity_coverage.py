@@ -751,6 +751,67 @@ class TestKrakenActivities(unittest.TestCase):
         buy = next(t for t in txs if t['action'] == 'BUYSELL')
         self.assertAlmostEqual(buy['quantity'], 0.001)
 
+    def test_ledgers_2026_format_prices_rewards_from_amountusd(self):
+        """The 2026 ledger export adds amountusd/feeusd/balanceusd/
+        feecurrency. amountusd is Kraken's USD valuation at credit time
+        — the reward's FMV — so both legs are priced here and the fill
+        step (which has no quote for some coins, e.g. HYPE) is not
+        needed. Older exports without the column still ship price=0."""
+        head = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
+                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n")
+        csv = head + (
+            "L1,,2026-03-01 10:00:00,earn,reward,currency,,HYPE,earn / locked,"
+            "0.2653,0,5,19.06,0,360.1,USD\n"
+            "L2,,2026-03-01 10:00:00,earn,reward,currency,,USDC,spot / main,"
+            "27.7115,0,100,27.71,0,100,USD\n")
+        txs = _parse_csv(KrakenBrokerage, csv)
+        div = next(t for t in txs if t['action'] == 'DIVIDEND' and t['symbol'] == 'HYPE')
+        buy = next(t for t in txs if t['action'] == 'BUYSELL' and t['symbol'] == 'HYPE')
+        self.assertAlmostEqual(div['net_amount'], 19.06)
+        self.assertAlmostEqual(div['gross_amount'], 19.06)
+        self.assertAlmostEqual(div['price'], round(19.06 / 0.2653, 8))
+        self.assertAlmostEqual(buy['net_amount'], 19.06)     # cost basis = FMV
+        self.assertAlmostEqual(buy['price'], div['price'])
+        self.assertEqual(div['currency'], 'USD')
+        usdc = next(t for t in txs if t['symbol'] == 'USDC')
+        self.assertAlmostEqual(usdc['price'], 1.0)          # stablecoin rule unchanged
+        # Old format: no amountusd column -> unpriced pair for the fill step.
+        old = ("txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n"
+               "L1,,2025-01-15 10:00:00,earn,reward,currency,HYPE,,0.2653,0,5\n")
+        txs = _parse_csv(KrakenBrokerage, old)
+        self.assertTrue(all(t.get('price', 0.0) == 0.0 and t['net_amount'] == 0.0 for t in txs))
+
+    def test_ledgers_earn_allocations_are_recognised_non_events(self):
+        """Allocation / deallocation / autoallocation pairs move coins
+        between the spot and Earn wallets; hybridearnwithdrawal rows
+        move them out of the Hybrid Earn product. Ownership never
+        changes: counted non-events, not 'unhandled' types, and no
+        transaction is emitted."""
+        head = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
+                "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n")
+        csv = head + (
+            "L1,,2026-01-14 09:00:00,earn,allocation,currency,,SOL,spot / main,-83.36,0,0,-12225.83,0,0,USD\n"
+            "L2,,2026-01-14 09:00:00,earn,allocation,currency,,SOL,earn / bonded,83.36,0,83.36,12225.83,0,12225.83,USD\n"
+            "L3,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,earn / bonded,-9.08,0,0,-20577.75,0,0,USD\n"
+            "L4,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,spot / main,9.08,0,9.08,20577.75,0,20577.75,USD\n"
+            "L5,,2026-05-10 09:00:00,hybridearnwithdrawal,,currency,,USDC,spot / main,-852.38,0,0,-852.19,0,0,USD\n")
+        parser = KrakenBrokerage()
+        import io, contextlib, tempfile, os
+        from pathlib import Path as _P
+        err = io.StringIO()
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, prefix="kr_ledgers_") as f:
+            f.write(csv); name = f.name
+        try:
+            with contextlib.redirect_stderr(err):
+                txs = parser.parse_file(_P(name))
+        finally:
+            os.remove(name)
+        self.assertEqual(txs, [])
+        self.assertNotIn("unhandled", err.getvalue())
+        moves = {k: v for k, v in parser._skip_counts.items() if "Earn wallet move" in k}
+        self.assertEqual(sum(moves.values()), 5)
+        self.assertTrue(all(k.startswith(KrakenBrokerage.KNOWN_NONEVENT_PREFIX) for k in moves))
+
     def test_ledgers_instant_trade(self):
         """spend + receive pair with same refid = one logical trade."""
         csv = (

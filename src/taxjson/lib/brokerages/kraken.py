@@ -276,9 +276,27 @@ class KrakenBrokerage(BaseBrokerage):
                     # symbol it refuses to price, so a USDC reward
                     # booked $0 income. _build_staking_reward prices a
                     # stablecoin at 1.0/unit itself (net = qty).
+                    # Ledgers exported since 2026 carry `amountusd` —
+                    # Kraken's own USD valuation at credit time, i.e.
+                    # the FMV the reward is income at and the cost the
+                    # coins are acquired at. Used when present; older
+                    # exports still ship price=0 for the fill step
+                    # (which has no quote for some coins, e.g. HYPE).
+                    usd_value = self.clean_number(row.get('amountusd'))
                     transactions.extend(self._build_staking_reward(
                         _normalize_asset(asset_raw, fold_stable=False),
-                        date, time, abs(amount), abs(fee), txid))
+                        date, time, abs(amount), abs(fee), txid,
+                        usd_value=(abs(usd_value) if usd_value else None)))
+                elif (type_raw == 'earn' and subtype in (
+                        'allocation', 'deallocation', 'autoallocation')
+                      ) or type_raw.startswith('hybridearn'):
+                    # Moves between the spot and Earn wallets (and the
+                    # Hybrid Earn product): the coins never leave your
+                    # ownership, so no acquisition, disposition or
+                    # custody event — a recognised non-event, counted
+                    # rather than listed as "unhandled".
+                    self.count_nonevent("Kraken Earn wallet move "
+                                        "(allocation/deallocation)")
                 elif ((type_raw in ('withdrawal', 'deposit')
                        # Peer-to-peer transfers (Kraken "send to a
                        # Kraken user") leave custody exactly like a
@@ -381,10 +399,14 @@ class KrakenBrokerage(BaseBrokerage):
         self.emit_skip_summary(path.name)
         return transactions
 
-    def _build_staking_reward(self, asset, date, time, qty, fee, txid=''):
+    def _build_staking_reward(self, asset, date, time, qty, fee, txid='',
+                              usd_value=None):
         # Carry the reward qty on the DIVIDEND record so fill_crypto_prices
         # computes income as qty*FMV. Without it the prices-filler defaults
         # qty to 1.0 and a $4k ETH reward of 0.001 ETH ends up as $4k income.
+        # `usd_value` (the ledger's amountusd) prices BOTH legs here — the
+        # income and the acquisition cost are the same FMV — and the fill
+        # step leaves a priced row alone.
         div = {
             'action': 'DIVIDEND',
             'date': date, 'time': time, 'date_settle': date,
@@ -415,6 +437,12 @@ class KrakenBrokerage(BaseBrokerage):
             div['net_amount'] = qty
             div['gross_amount'] = qty
             return [div]
+        if usd_value is not None and qty > 1e-12:
+            price = round(usd_value / qty, 8)
+            for leg in (div, buy):
+                leg['price'] = price
+                leg['net_amount'] = round(usd_value, 8)
+            div['gross_amount'] = round(usd_value, 8)
         return [div, buy]
 
     def _build_instant_trade(self, trade, refid=''):

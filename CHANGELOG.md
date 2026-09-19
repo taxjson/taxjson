@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Kraken: the 2026 ledger format (new `amountusd` / `feeusd` /
+  `balanceusd` / `feecurrency` columns) parses as before, and
+  `amountusd` — Kraken's USD valuation at credit time — now prices
+  staking rewards at the parser (income and the acquisition cost of the
+  rewarded coins alike) instead of leaving them to the price filler,
+  which had no quote for HYPE and booked those rewards at $0. Earn
+  allocation / deallocation / autoallocation and `hybridearn*` rows
+  (moves between the spot and Earn wallets) are recognised non-events
+  rather than "unhandled" types.
 - Removed `taxjson show` (it printed `reports/NAME.sum`; use `cat`) and
   `taxjson verify` (Questrade-only live-positions check; `taxjson sanity`
   with `holdings = [...]` covers every broker and runs at the end of

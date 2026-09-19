@@ -14,7 +14,8 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** the RBC CSV ships only a net amount with no separate withholding column, no foreign-country indicator, and no ticker-to-domicile lookup. Computing the correct rate per row requires external data (a ticker → domicile mapping plus the applicable treaty rate). That's an AI/web-lookup problem, not a parser problem.
 - **Workaround:** US-domiciled holdings dominate most Canadian users' RBC activity and use the 15% US treaty rate, so the default is accurate for the common case. For other domiciles, hand-edit the affected rows after parsing.
 
-### Kraken staking emits `net_amount=0`
+### Kraken staking emits `net_amount=0` (pre-2026 exports only)
+- **Update (2026-09):** ledgers exported since 2026 carry `amountusd`; the parser prices both reward legs from it (income and cost basis at Kraken's own credit-time valuation), so this only applies to older exports without the column.
 - **Where:** `src/taxjson/lib/brokerages/kraken.py:_build_staking_reward`.
 - **Current behavior:** Kraken's `kr_ledgers.csv` has no price column on staking-reward rows, so the parser can't populate `net_amount` from the CSV alone. Staking rows ship with `price=0` / `net_amount=0`.
 - **Why this is the design (not a bug):** the pipeline runs `taxjson-fill-crypto` between `taxjson-sort` and `taxjson-convert-currency` precisely to backfill these from a historical-price cache. The filler at `fill_crypto_prices.py` only fills when `abs(tx.price) < 1e-8`, so non-Kraken rows with a real price are left alone.
