@@ -92,9 +92,14 @@ def detect_phantoms(
     """
     # state[(symbol, account, currency)] -> running, peak_short, first_neg, count
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    # Same-date rows with equal clock times keep the engine's convention
+    # (buys before sells): a Norbert's-gambit pair — sell DLR.TO, buy
+    # DLR.U.TO the same morning, folded to one symbol by the ticker map —
+    # otherwise read as a 4,000-share phantom short (real 2025 book).
     sorted_txs = _drop_duplicate_splits(sorted(
         transactions,
-        key=lambda t: event_sort_key(t, profile='phantom_walk'),
+        key=lambda t: (event_sort_key(t, profile='phantom_walk'),
+                       0 if float(t.quantity or 0) > 0 else 1),
     ))
 
     for tx in sorted_txs:
@@ -105,13 +110,20 @@ def detect_phantoms(
             continue
         if not include_options and is_option_symbol(tx.symbol):
             continue
-        key = (tx.symbol, tx.account, tx.currency or '')
+        # One pool per (symbol, account) — NOT per currency: the engine
+        # pools identical property regardless of the leg's native
+        # currency (base conversion happens before pooling), so a CAD
+        # sell against a USD buy of the same mapped symbol is one pool.
+        key = (tx.symbol, tx.account, '')
         s = state.setdefault(key, {
             'running': 0.0,
             'peak_short': 0.0,
             'first_negative_date': None,
             'disposition_count': 0,
+            'currencies': set(),
         })
+        if tx.currency:
+            s['currencies'].add(tx.currency)
 
         if tx.action == 'SPLIT':
             factor = float(tx.quantity or 0.0)
@@ -122,11 +134,12 @@ def detect_phantoms(
                 # aren't seen as appearing from nowhere. Without this, a
                 # later sale of the renamed position reads as a phantom
                 # short (the acquirer never had a BUY in this data).
-                tgt = state.setdefault((new_sym, tx.account, tx.currency or ''), {
+                tgt = state.setdefault((new_sym, tx.account, ''), {
                     'running': 0.0,
                     'peak_short': 0.0,
                     'first_negative_date': None,
                     'disposition_count': 0,
+                    'currencies': set(),
                 })
                 tgt['running'] += s['running'] * factor
                 s['running'] = 0.0
@@ -155,7 +168,7 @@ def detect_phantoms(
         out.append(PhantomCandidate(
             symbol=symbol,
             account=account,
-            currency=currency,
+            currency='/'.join(sorted(s.get('currencies') or [])) or currency,
             first_negative_date=s['first_negative_date'] or '',
             peak_short=s['peak_short'],
             end_position=s['running'],

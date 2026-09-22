@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `find-missing-history`: the phantom walk pooled positions per
+  (symbol, account, CURRENCY) and had no buy-before-sell tie-break at
+  equal timestamps, so a Norbert's-gambit pair (sell DLR.TO in CAD, buy
+  DLR.U.TO in USD the same morning, one symbol after the ticker map)
+  read as a 5,140-share phantom short "affecting 2025" while the engine
+  had matched every sale correctly. Pools are per (symbol, account) like
+  the engine's, and buys sort before sells at equal times.
 - Questrade: a US-listed security bought in a CAD-only account (RESP)
   is settled in CAD with `EXCHANGE RATE r` in the description — Price and
   Gross Amount are USD, Net Amount is the CAD paid, and the Currency
