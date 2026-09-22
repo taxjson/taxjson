@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Questrade: a US-listed security bought in a CAD-only account (RESP)
+  is settled in CAD with `EXCHANGE RATE r` in the description — Price and
+  Gross Amount are USD, Net Amount is the CAD paid, and the Currency
+  column says CAD. The parser filed such buys as `.TO` (a CDR-shaped
+  symbol the `DISTINCT` rule then kept apart from the real US pool) with
+  the USD gross taken as the CAD cost, under-stating the ACB by the
+  whole exchange rate (real AVGO/GS/CAT/BABA rows, 2026-09-18). They are
+  now the `.US` listing, costed at the CAD actually paid, and their
+  dividends key to the US listing too.
 - Kraken: the 2026 ledger format (new `amountusd` / `feeusd` /
   `balanceusd` / `feecurrency` columns) parses as before, and
   `amountusd` — Kraken's USD valuation at credit time — now prices

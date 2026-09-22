@@ -702,6 +702,36 @@ class TestCoinbaseActivities(unittest.TestCase):
 # ============================================================================
 # Kraken (crypto — two distinct CSV formats: trades and ledgers)
 # ============================================================================
+class TestQuestradeFxSettledUsTrades(unittest.TestCase):
+    """A US-listed security bought in a CAD-only Questrade account
+    (RESP): Price and Gross Amount are USD, Net Amount is the CAD paid,
+    Currency says CAD and the description carries EXCHANGE RATE. Real
+    2026 rows filed AVGO/GS/CAT/BABA as `.TO` with the USD gross as the
+    CAD cost — a 42% under-statement and a CDR-shaped symbol."""
+    HEAD = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
+            'Account #,Activity Type,Account Type\n')
+
+    def test_us_listing_and_cad_cost_as_paid(self):
+        csv = self.HEAD + (
+            '2026-09-18 12:00:00 AM,2026-09-21 12:00:00 AM,Buy,AVGO,'
+            'BROADCOM INC COMMON STOCK WE ACTED AS AGENT EXCHANGE RATE 1.42018800,'
+            '4,348.4,-1393.6,0,-1979.17,CAD,99900001,Trades,API\n'
+            '2026-09-18 12:00:00 AM,2026-09-21 12:00:00 AM,Buy,LFE.TO,'
+            'CANADIAN LIFE COMPANIES SPLIT CORP CL A,200,8.89,-1778,0,-1778,'
+            'CAD,99900001,Trades,API\n')
+        txs = _parse_csv(QuestradeBrokerage, csv)
+        avgo = next(t for t in txs if t['symbol'].startswith('AVGO'))
+        self.assertEqual(avgo['symbol'], 'AVGO.US')          # the listing
+        self.assertEqual(avgo['currency'], 'CAD')            # settled in CAD
+        self.assertAlmostEqual(avgo['net_amount'], 1979.17)   # the CAD paid
+        self.assertAlmostEqual(avgo['price'], round(348.4 * 1.420188, 8))
+        self.assertEqual(avgo['quantity'], 4)
+        lfe = next(t for t in txs if t['symbol'].startswith('LFE'))
+        self.assertEqual(lfe['symbol'], 'LFE.TO')             # plain CAD row untouched
+        self.assertAlmostEqual(lfe['net_amount'], 1778.0)
+
+
 class TestKrakenActivities(unittest.TestCase):
     def test_trades_buy(self):
         csv = (

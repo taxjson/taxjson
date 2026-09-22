@@ -17,6 +17,12 @@ _SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SH', re.IGNORECASE)
 # distributions): DIS / 'Dividends' with 'STK DIV' in the description
 # and the DELIVERED share count in Quantity. Distinct from STK SPLIT
 # (ratio-based) and from cash DIV rows (zero Quantity).
+# A US-listed security bought in a CAD-only account (RESP, some RRSPs):
+# Questrade settles in CAD and writes the rate into the description —
+# Price and Gross Amount are in USD, Net Amount is the CAD actually paid,
+# and the Currency column says CAD (the SETTLEMENT currency).
+_FX_SETTLED_RE = re.compile(r'EXCHANGE RATE\s+([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE)
+
 _CIL_RE = re.compile(r'CASH\s+IN\s+LIEU\s+OF\s+([0-9]*\.?[0-9]+)', re.I)
 _REINV_PRICE_RE = re.compile(r'REINV@(?:[A-Z]{1,3}\$)?\s*([0-9]+(?:\.[0-9]+)?)', re.I)
 _STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b',
@@ -113,6 +119,8 @@ class QuestradeBrokerage(BaseBrokerage):
             sym = re.sub(r'\.TO$', '', sym, flags=re.IGNORECASE)
             cur = (row.get('Currency') or '').strip() or 'USD'
             desc = row.get('Description') or ''
+            if cur.upper() == 'CAD' and _FX_SETTLED_RE.search(desc):
+                cur = 'USD'          # listing currency, not settlement
             key = _get_desc_key(desc)
             if key and sym and not _INTERNAL_CODE_RE.match(sym):
                 desc_to_ticker.setdefault(key, (sym, cur))
@@ -327,6 +335,24 @@ class QuestradeBrokerage(BaseBrokerage):
             else:
                 net = (gross + comm) if qty > 0 else (gross - comm)
 
+            # CAD-settled US trade (see _FX_SETTLED_RE): the security is
+            # the US listing, and the ACB is the CAD the account paid —
+            # Net Amount — not the USD gross read as if it were CAD
+            # (which under-stated a Broadcom buy by the whole exchange
+            # rate and filed it as AVGO.TO, a CDR-shaped symbol the
+            # DISTINCT rule then kept apart from the real pool).
+            listing_currency = currency
+            fx_m = _FX_SETTLED_RE.search(desc) if is_trade else None
+            if fx_m and currency.upper() == 'CAD' and float(fx_m.group(1)) > 0:
+                rate = float(fx_m.group(1))
+                listing_currency = 'USD'
+                price = round(price * rate, 8)
+                net_col = abs(self.clean_number(row.get('Net Amount')))
+                if net_col > 0:
+                    net = net_col
+                else:
+                    net = round(net * rate, 8)
+
             # Option symbol reconstruction from Description; fall back to
             # the bare Symbol column (which is often non-OCC like AAPL.OPT).
             opt = self.parse_option_from_description(desc)
@@ -334,7 +360,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 symbol = self.format_occ_symbol(opt['right'], opt['base'], opt['expiry'], opt['strike'])
             else:
                 symbol = row.get('Symbol') or ''
-            symbol = self.apply_currency_suffix(symbol, currency)
+            symbol = self.apply_currency_suffix(symbol, listing_currency)
 
             transactions.append({
                 'action': 'ASSIGN' if is_assigned else 'BUYSELL',
