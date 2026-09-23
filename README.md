@@ -221,6 +221,10 @@ machines), resolve each with `taxjson elect <account> --set
 - `<account>_holdings.toml` — machine-readable positions (native + base-currency cost, and the per-position acquisition/sell `trades` history)
 - `exports/` — SeekingAlpha / FastGraph / TradingView watchlist CSVs
 
+When the year is over, [`docs/filing.md`](./docs/filing.md) is the
+checklist that takes a project from "last export dropped in" to a filed
+and locked return — which command proves each step, in order.
+
 ### Project layout and configuration
 
 The full `taxjson.toml` schema (unknown keys warn at run start, with
@@ -1011,6 +1015,7 @@ Each command takes `--help`. The full pipeline is composable — outputs from on
 - [taxjson.com](https://taxjson.com) — the website; [`docs/deck/taxjson-deck.pdf`](./docs/deck/taxjson-deck.pdf) — a twelve-slide overview
 - [`REFERENCES.md`](./REFERENCES.md) — the ITA / CRA / IRC source behind every rule, and every deliberate non-feature
 - [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md) — known limitations and deferred fixes
+- [`docs/filing.md`](./docs/filing.md) — the filing checklist: every step from frozen inputs to the `close-year` lock, with the command that proves it
 - [`docs/releasing.md`](./docs/releasing.md) — the dev/release scheme (`main` vs `vX.Y.Z` tags) and how a release is cut
 - [`CHANGELOG.md`](./CHANGELOG.md) — release history
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests and submit changes

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`docs/filing.md`**: the filing checklist — freeze inputs, build and
+  clean, reconcile to the slips, produce the numbers, file and lock,
+  after assessment — each step with the command that proves it. Linked
+  from the README workflow and documentation sections.
 - **`taxjson init` scaffold**: every switch in one canonical, column-aligned
   layout (`year`, `country`, `province`, `base_currency`,
   `source_currencies`, `tax_date`, then the commented defaults for
