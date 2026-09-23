@@ -223,7 +223,9 @@ machines), resolve each with `taxjson elect <account> --set
 
 When the year is over, [`docs/filing.md`](./docs/filing.md) is the
 checklist that takes a project from "last export dropped in" to a filed
-and locked return — which command proves each step, in order.
+and locked return — which command proves each step, in order — and
+`taxjson checklist` runs it: each step auto-detected, `--done ID` for
+the ones only you can confirm, `--walk` to go through the open ones.
 
 ### Project layout and configuration
 
@@ -337,6 +339,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (books recomputed via the engine's `--as-of` cutoff: full ACB + deferred-wash fidelity; pre-wash, pre-ticker.map); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
+| `taxjson checklist [--walk] [--done ID] [--skip ID] [--undo ID] [--quick] [--json]` | The filing checklist ([`docs/filing.md`](./docs/filing.md)) as a command: every step is auto-detected by running the command that proves it (run, sanity, find-missing-history, elect, audit, option-boundary, reconcile-slips, form-export, t1135, check-filed, git status); the steps no command can prove are confirmed with `--done` (marks live in `checklist.json`, commit it) and never hide a later finding; `--walk` visits the open steps one at a time. Exit 1 while anything is open. |
 | `taxjson redact FILE... [--out DIR] [--also REGEX] [--check]` | Strip account numbers and identity from broker exports while keeping every row shape (same-length placeholders, consistent across the file; the private denylist applies) so a real statement can be shared as a parser sample or bug report. Writes `NAME.redacted.EXT`; never touches the input. |
 | `taxjson sell-check SYMBOL ...` | Sell-side wash check: is selling this ticker **at a loss** today safe? **UNSAFE** when a recent affiliated buy would deny it (LOCKED — permanently for the registered-matched portion); **ACTION** when a rescueable violation is open (sell the full position before the deadline); **SAFE\*/SAFE** with the applicable caveats. Whether it *is* a loss at today's price is `harvest`'s job. `--json` for machines; exit 1 on unsafe. |
 | `taxjson buy-check SYMBOL ...` | Buy-side wash check: is buying this ticker today safe? **UNSAFE** when a loss was sold within the past 30 days (the rebuy cancels it — permanently if bought sheltered), with the safe-from date when one is determinable (violations defer to `wash-radar` rather than print a date that would invite an early rebuy); **SAFE\*** when buying merely extends an open wash window. Root-matched (`buy-check NU` covers `NU.US` and cross-listings, folding in `ticker.map` pairs); `--json` for machines; exit 1 on unsafe. |

@@ -5962,6 +5962,118 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         print("No amended return is required by these contracts under the timing in force.")
 
 
+def cmd_checklist(args: argparse.Namespace) -> None:
+    """`taxjson checklist`: the filing checklist (docs/filing.md) with each
+    step auto-detected — the command that proves a step is run and its
+    verdict shown — plus manual marks for the steps no command can prove
+    (`--done ID`, `--skip ID`, `--undo ID`; stored in checklist.json at the
+    project root, which you should commit). `--walk` steps through the open
+    items one at a time. Exit 1 while anything is open."""
+    import json as _json
+    from datetime import date as _date
+    from taxjson.lib import checklist as cl
+
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    settings = cfg.get("settings") or {}
+    year = settings.get("year")
+    if not isinstance(year, int):
+        sys.exit("taxjson checklist: [settings] year is required")
+    country = _normalize_country(str(settings.get("country", "canada")))
+
+    marks = [(args.done, "done"), (args.skip, "skipped"), (args.undo, None)]
+    for step, mark in marks:
+        if step:
+            try:
+                cl.set_override(root, year, step, mark, note=args.note or "")
+            except KeyError:
+                sys.exit(f"taxjson checklist: unknown step {step!r} "
+                         f"(ids: {', '.join(s[0] for s in cl.STEPS)})")
+            verb = {"done": "marked done", "skipped": "marked skipped",
+                    None: "mark removed"}[mark]
+            print(f"taxjson checklist: {step} {verb} "
+                  f"(recorded in {cl.STATE_FILE}).")
+    if args.reset:
+        (root / cl.STATE_FILE).unlink(missing_ok=True)
+        print(f"taxjson checklist: {cl.STATE_FILE} removed.")
+    if (args.done or args.skip or args.undo or args.reset) and not args.walk \
+            and not args.show:
+        return
+
+    ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=_date.today(),
+                 run_sub=cl.default_run_sub(root))
+    only = [args.only] if args.only else None
+    if only and args.only not in {s[0] for s in cl.STEPS}:
+        sys.exit(f"taxjson checklist: unknown step {args.only!r}")
+
+    if args.walk:
+        if not sys.stdin.isatty():
+            sys.exit("taxjson checklist --walk needs a terminal (use "
+                     "`taxjson checklist` for the report, --done/--skip to "
+                     "record steps).")
+        _checklist_walk(ctx, cl, only)
+        return
+
+    results = cl.evaluate(ctx, only=only, quick=args.quick)
+    if args.json:
+        print(_json.dumps(cl.to_json(results, year, country), indent=2))
+    else:
+        print(cl.render(results, year, country, quick=args.quick))
+    if not all(r.passed for r in results):
+        sys.exit(1)
+
+
+def _checklist_walk(ctx, cl, only) -> None:
+    """Interactive pass over the open steps: show why the step matters and
+    what the detector found, then record the user's decision."""
+    meta = {s[0]: s for s in cl.STEPS}
+    results = cl.evaluate(ctx, only=only)
+    open_steps = [r for r in results if not r.passed]
+    if not open_steps:
+        print(cl.render(results, ctx.year, ctx.settings.get("country", "canada")))
+        print("\nEvery step is done.")
+        return
+    print(f"{len(open_steps)} open step(s). For each: [d]one  [s]kip  "
+          f"[r]e-check  [n]ext  [q]uit\n")
+    i = 0
+    while i < len(open_steps):
+        r = open_steps[i]
+        sid, stage, title, cmd, why = meta[r.id]
+        stage_name = dict(cl.STAGES)[stage]
+        print(f"--- {i + 1}/{len(open_steps)}  [{stage}. {stage_name}]  {sid}")
+        print(f"    {title}")
+        print(f"    why:     {why}")
+        print(f"    proves:  {cmd}")
+        print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}")
+        try:
+            ans = input("    > ").strip().lower()
+        except EOFError:
+            print()
+            return
+        if ans in ("q", "quit"):
+            return
+        if ans in ("d", "done"):
+            note = input("    note (optional): ").strip()
+            cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
+            print(f"    recorded: {sid} done\n")
+            i += 1
+        elif ans in ("s", "skip"):
+            note = input("    reason (optional): ").strip()
+            cl.set_override(ctx.root, ctx.year, sid, "skipped", note=note)
+            print(f"    recorded: {sid} skipped\n")
+            i += 1
+        elif ans in ("r", "recheck", "re-check"):
+            fresh = cl.evaluate(ctx, only=[sid])[0]
+            open_steps[i] = fresh
+            if fresh.passed:
+                print(f"    now: {cl.SYMBOL[fresh.effective]} {fresh.detail}\n")
+                i += 1
+        else:
+            i += 1
+    results = cl.evaluate(ctx, only=only)
+    print(cl.render(results, ctx.year, ctx.settings.get("country", "canada")))
+
+
 def cmd_sanity(args: argparse.Namespace) -> None:
     """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
@@ -9309,6 +9421,29 @@ def main() -> None:
     p_ob.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_ob.set_defaults(func=cmd_option_boundary)
+
+    p_ck = sub.add_parser(
+        "checklist",
+        help="The filing checklist (docs/filing.md) with each step "
+             "auto-detected; --done/--skip/--undo record the steps no "
+             "command can prove; --walk steps through the open ones")
+    p_ck.add_argument("--walk", action="store_true",
+                      help="Interactive: visit each open step in turn")
+    p_ck.add_argument("--done", metavar="ID", help="Mark a step done")
+    p_ck.add_argument("--skip", metavar="ID", help="Mark a step skipped (n/a for you)")
+    p_ck.add_argument("--undo", metavar="ID", help="Remove a manual mark")
+    p_ck.add_argument("--note", metavar="TEXT", help="Note to store with --done/--skip")
+    p_ck.add_argument("--reset", action="store_true",
+                      help="Remove every manual mark (deletes checklist.json)")
+    p_ck.add_argument("--only", metavar="ID", help="Check one step")
+    p_ck.add_argument("--quick", action="store_true",
+                      help="Skip the detectors that run slow sub-commands "
+                           "(audit, sanity, ...)")
+    p_ck.add_argument("--show", action="store_true",
+                      help="With --done/--skip/--undo: also print the checklist")
+    p_ck.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text")
+    p_ck.set_defaults(func=cmd_checklist)
 
     p_san = sub.add_parser(
         "sanity",

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`taxjson checklist`**: the filing checklist as a command. Every
+  step is auto-detected by running the command that proves it (run,
+  sanity, find-missing-history, elect --pending, audit, option-boundary,
+  reconcile-slips on `inputs/slips/`, form-export, t1135, check-filed,
+  git status); steps no command can prove are confirmed with `--done ID`
+  (or `--skip`, `--undo`, `--reset`; marks in `checklist.json`) and a
+  mark never hides a later detector finding; `--walk` steps through the
+  open items interactively; `--quick` skips the slow detectors; `--json`
+  for machines. Exit 1 while anything is open.
 - **`docs/filing.md`**: the filing checklist — freeze inputs, build and
   clean, reconcile to the slips, produce the numbers, file and lock,
   after assessment — each step with the command that proves it. Linked

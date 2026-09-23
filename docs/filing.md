@@ -7,6 +7,13 @@ command is clean, not when it has been run. Amending a filed year
 (T1-ADJ) is the same list from step 2 with `close-year --force` at the
 end.
 
+`taxjson checklist` is this list as a command. Each step below has a
+detector that runs the command named beside it and reports done,
+attention, to do, blocked, or — for the steps no command can prove —
+manual, which you confirm with `taxjson checklist --done ID` (marks are
+kept in `checklist.json`; commit it). `taxjson checklist --walk` visits
+the open steps one at a time; `--quick` skips the slow detectors.
+
 ## 1. Freeze the inputs
 
 - [ ] **Full-year broker activity plus January of the next year** in
