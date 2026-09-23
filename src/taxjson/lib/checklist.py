@@ -117,8 +117,6 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "CRA charges interest on the least of the methods your figures support."),
 ]
 
-MANUAL = {"roc-entered", "t5-t3", "foreign-tax", "fees", "estimate", "noa"}
-
 SYMBOL = {"done": "[x]", "attention": "[!]", "todo": "[ ]", "manual": "[m]",
           "blocked": "[b]", "n/a": "[-]", "skipped": "[~]"}
 
@@ -253,7 +251,11 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
         for t in d.get("transactions") or []:
             latest = max(latest, str(t.get("date_settle") or t.get("date") or ""))
     cutoff = date(ctx.year + 1, 1, 31)
-    if latest and date.fromisoformat(latest[:10]) >= cutoff:
+    try:
+        latest_d = date.fromisoformat(latest[:10]) if latest else None
+    except ValueError:
+        latest_d = None
+    if latest_d and latest_d >= cutoff:
         return Result("inputs-frozen", "done", f"latest activity {latest[:10]}")
     if ctx.today <= cutoff:
         return Result("inputs-frozen", "todo",

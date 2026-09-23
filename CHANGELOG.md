@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Docs: deck and website refreshed for s.49 option timing, `option-boundary`
+  and `checklist`; the site's FAQ named a `taxjson filed` command that does
+  not exist (it is `close-year` / `check-filed`).
 - **`taxjson checklist`**: the filing checklist as a command. Every
   step is auto-detected by running the command that proves it (run,
   sanity, find-missing-history, elect --pending, audit, option-boundary,
