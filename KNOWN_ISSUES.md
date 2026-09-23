@@ -129,11 +129,40 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ---
 ---
 
-### Option written in one year, exercised in the next (IT-479R para 25)
-- **Where:** `src/taxjson/lib/core.py` `ASSIGN` handling (Canada).
-- **Current behavior:** an assigned/exercised option's premium is folded into the share leg's cost or proceeds in the year of exercise, as IT-479R paras 26–27 direct. When the option was written in an earlier tax year, that year already reported the premium as a capital gain; IT-479R para 25 says the earlier return should be amended to remove it. The engine folds silently and does not flag the cross-year case.
-- **Why deferred:** the amendment is a filing action (T1-ADJ), not a computation; the engine has no record of what was filed unless `taxjson filed` locked it.
-- **Workaround:** the events view shows the option's write date; if it is in a prior year, amend that year or, per CRA practice for immaterial amounts, report the net in the exercise year consistently. See REFERENCES.md.
+### Superficial-loss attribution when both a taxable and a registered account bought in the window
+- **Where:** `src/taxjson/lib/core.py` allocation loop (post-loss triggers chronologically, then pre-loss latest-first).
+- **Current behavior:** when both a taxable account and an RRSP/TFSA acquire the property inside the window and both still hold at day 30, which one absorbs the denial follows that order, so the same loss can be permanent (registered) or deferred (taxable) depending on which leg settled first.
+- **Why deferred:** s.53(1)(f) does not prescribe an allocation and CRA has published none; the ordering is a stated policy, not a rule. A "taxable first" option would be a defensible alternative.
+- **Workaround:** `taxjson wash-sales` shows the trigger chosen; a `.tt` note of the intended attribution is the record.
+
+### Transfers TO a registered plan at a loss (s.40(2)(g)(iv))
+- **Where:** taxable-account TRANSFER rows are dropped at parse and rejected by the engine.
+- **Current behavior:** the taxable-side disposition of an in-kind contribution is booked only if you record it as a `.tt` BUYSELL at fair market value in the taxable account. A loss on it is then denied indirectly (as a superficial loss against the plan's acquisition, permanent), which coincides with s.40(2)(g)(iv) — a loss on a transfer to an RRSP/TFSA is nil — in the common case; a gain is taxable as usual.
+- **Workaround:** record the contribution day as a BUYSELL sell at FMV in the taxable account (and the plan's acquisition with `transfers = true`).
+
+### Second-order superficial losses from the ACB bump's date
+- **Where:** `src/taxjson/lib/core.py` (the deferral ADJUST is dated the trigger).
+- **Current behavior:** with a rebuy, a partial sale inside the window and the rest sold later, the inner sale inherits part of the bump and can itself be denied and re-deferred; T4037 attributes the whole denied amount to the shares still held at day 30. Year totals agree unless the inner and outer sales straddle a year end; the extra DISALLOW row shows in `wash-sales`.
+
+### Estimate classifies dividends by listing suffix
+- **Where:** `taxjson estimate` / `lib/tax_estimate.py`.
+- **Current behavior:** a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign (15% FTC assumed). A Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson scan` flags the cross-listing case. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
+
+### Interest expense and carrying charges are not surfaced
+- **Where:** IB `INTEREST` rows keep their sign; `sum-income` nets debit against credit interest.
+- **Current behavior:** margin interest paid (deductible under s.20(1)(c), line 22100; only 50% for the 2024+ AMT) disappears into the income total instead of being reported as a deduction. The estimate excludes interest entirely.
+
+### Spin-off default wording
+- **Where:** `lib/corp_actions.py` spin-off default.
+- **Current behavior:** every spin-off distribution is labelled a "foreign dividend at FMV"; a Canadian parent's in-kind distribution is an eligible dividend (or a s.86 reorganisation), and the estimate then classifies it by the target's suffix.
+
+### Carryover has no inclusion-rate adjustment for pre-2001 losses
+- **Where:** `bin/taxjson_carryover.py`.
+- **Current behavior:** the ledger is at 100% with the 50% rate applied on the T1A, correct for post-2000 losses; a pre-2001 net capital loss (¾ or ⅔ rate) fed in via `--claimed` is not rescaled per s.111(1.1). (The cancelled 2024 two-thirds proposal was never applied anywhere.)
+
+### `days_held` uses trade dates
+- **Where:** `lib/core.py` closing branch.
+- **Current behavior:** the days-held figure in traces counts from trade dates while every other Canadian date is settlement-basis. Cosmetic — Canada has no holding-period rule.
 
 ### Non-eligible dividends are estimated as eligible
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
@@ -204,6 +233,10 @@ These are real bugs in code paths the standard `taxjson run` flow never exercise
 ---
 
 ## Graduated (fixed)
+
+- **Option premium timing across a year end (ITA s.49(1); IT-479R paras 21–25)** — 2026-09: a written option's premium is now a gain in the year written under `option_premium_timing = "grant"` (Canada default), a buy-back a loss in its own year, an assignment folded with no grant record; `taxjson option-boundary` names any filed year to amend. Previously the premium was recognised at the close (the US §1234 convention).
+- **Negative ACB after a return of capital (s.40(3))** — 2026-09: booked as a deemed gain in the distribution year with the ACB reset to nil; previously only a warning, with the whole amount landing in the sale year.
+- **Re-short "superficial loss" (s.54)** — 2026-09: a new short sale or written option no longer triggers a denial of a cover loss (it acquires nothing); a long purchase held at day 30 still does. Previously the US §1091(e) re-short branch applied.
 
 ### Broker-parser coverage gaps (graduated 2026-09-14)
 Kraken stablecoin (`USDC`/`USDT`/`DAI`) `earn/reward` rows were folded

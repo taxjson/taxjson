@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+Canada rules, from a design + impact study and an adversarial audit of
+the engine against the Act (docs/design/canada-rules-2026-09.md):
+
+- **Option premium timing (ITA s.49(1)–(4)).** A written option's
+  premium is a capital gain in the year WRITTEN; a buy-back is a loss in
+  its own year; expiry adds nothing; an assignment folds into the share
+  leg with no grant record (the s.49(4) post-amendment state). New
+  `[settings] option_premium_timing = "grant" | "close"` (Canada default
+  grant; the US engine keeps close = §1234) and
+  `option_grant_timing_since = YEAR` (contracts written earlier keep
+  close timing — the transition from books filed the old way; default:
+  the project year). Same-year round trips are unchanged in total; only
+  year-straddling contracts move. Threaded through run, the raw pass,
+  wash pass, blended pass, audit, explain, close-year/check-filed and
+  the web what-if; `summary.option_premium_timing` records the choice.
+  Grant records carry `grant: true` and a note; `audit` shows WRITE.
+  `option_buyback_loss_superficial` (default false) decides whether a
+  buy-back loss is fed to the superficial-loss rule; the strict reading
+  permanently denied an 18.5k loss on a real 30-second order
+  correction because a LIRA held the same series.
+- **`taxjson option-boundary`**: every written option whose write and
+  close straddle a tax-year boundary (or that is open at year end), with
+  where each amount lands and — using the `filed/` locks — whether a
+  filed year needs a T1-ADJ (assignment after the grant year was filed).
+- **s.40(3) deemed gain**: a return of capital that drives ACB below
+  zero is booked as a qty-0 gain in the distribution year, ACB reset to
+  nil (was a warning; the whole amount landed in the sale year).
+- **s.54 short sales**: a new short sale or written option is not an
+  acquisition and never triggers a superficial loss on a cover loss (the
+  US §1091(e) re-short branch applied before); a long purchase held at
+  day 30 still does, and its bump lands on that long holding.
+- Documented (KNOWN_ISSUES) from the audit: superficial-loss attribution
+  order between taxable and registered triggers; the s.40(2)(g)(iv)
+  path; second-order denials from the bump date; the estimate's
+  suffix-based dividend classification; interest expense not surfaced;
+  spin-off wording; pre-2001 loss rates; `days_held` on trade dates.
+  REFERENCES: s.39(1.1) for fx-cash, short sales' income character.
 - `find-missing-history`: the phantom walk pooled positions per
   (symbol, account, CURRENCY) and had no buy-before-sell tie-break at
   equal timestamps, so a Norbert's-gambit pair (sell DLR.TO in CAD, buy

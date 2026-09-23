@@ -26,7 +26,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules
 from taxjson.lib.numeric import round_floats
@@ -832,6 +832,13 @@ class GainsRequest:
     detect_wash: Optional[bool] = None        # None → taxable and not no_wash
     cross_asset: bool = False
     phantom_hint: bool = True
+    # ITA s.49(1) premium timing for written options (Canada only):
+    # 'grant' recognises the premium on the write date, 'close' at the
+    # closing transaction (the US §1234 convention). Contracts written
+    # before `option_grant_since` keep close timing (transition).
+    option_premium_timing: str = 'close'
+    option_grant_since: Optional[int] = None
+    option_buyback_loss_superficial: bool = False
     # Blended multi-account mode: US FIFO pools keyed per
     # (account, symbol) while §1091 matching stays cross-account.
     # Canada needs no flag — its symbol-global pools already blend
@@ -889,6 +896,10 @@ def run_gains(transactions, sheltered_transactions=(),
     if (req.per_account_basis
             and (req.country or '').strip().lower() in ('us', 'usa')):
         _extra['per_account_basis'] = True
+    if (req.country or '').strip().lower() not in ('us', 'usa'):
+        _extra['option_premium_timing'] = req.option_premium_timing or 'close'
+        _extra['option_grant_since'] = req.option_grant_since
+        _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
     results = rules.compute_gains(
         transactions,
         sheltered_transactions=sheltered_transactions,
@@ -937,6 +948,10 @@ def run_gains(transactions, sheltered_transactions=(),
                 if (w.get('loss_date') or '').startswith(year_str)]
         results['summary']['year'] = year_str
         results['summary']['tax_date_basis'] = tax_date
+        if (req.country or '').strip().lower() not in ('us', 'usa'):
+            results['summary']['option_premium_timing'] = req.option_premium_timing or 'close'
+            results['summary']['option_grant_since'] = req.option_grant_since
+            results['summary']['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
         results['summary']['total_gain'] = sum(t.get('gain', 0.0) for t in results['transactions'])
         if 'wash_sales' in results:
             # Wash record shape diverges by engine. Canada builds
@@ -1132,3 +1147,38 @@ def run_gains(transactions, sheltered_transactions=(),
         w.pop('trace', None)
 
     return round_floats(results)
+
+
+def option_timing_from_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """The engine kwargs for `[settings] option_premium_timing` /
+    `option_grant_timing_since` (Canada). Default: statutory grant timing
+    from the project year on — earlier contracts keep close timing so a
+    premium that was open at a prior year end is not taxed nowhere."""
+    country = str(settings.get("country", "canada")).strip().lower()
+    if country in ("us", "usa"):
+        return {}
+    timing = str(settings.get("option_premium_timing", "grant")).strip().lower()
+    since = settings.get("option_grant_timing_since")
+    if since in (None, ""):
+        since = settings.get("year")
+    try:
+        since = int(since) if since is not None else None
+    except (TypeError, ValueError):
+        since = None
+    bb = settings.get("option_buyback_loss_superficial", False)
+    return {"option_premium_timing": timing, "option_grant_since": since,
+            "option_buyback_loss_superficial": bool(bb) if bb is not None else False}
+
+
+def option_timing_flags(settings: Dict[str, Any]) -> List[str]:
+    """The same choice as CLI flags for the taxjson-gains / audit / explain
+    subprocesses."""
+    kw = option_timing_from_settings(settings)
+    if not kw:
+        return []
+    fl = ["--option-premium-timing", kw["option_premium_timing"]]
+    if kw.get("option_grant_since") is not None:
+        fl += ["--option-grant-since", str(kw["option_grant_since"])]
+    if kw.get("option_buyback_loss_superficial", False):
+        fl.append("--option-buyback-wash")
+    return fl

@@ -78,6 +78,21 @@ def _parse_args():
              "that date, incl. ACB and deferred wash). Trade-date "
              "cutoff regardless of the settle/trade basis setting.")
     parser.add_argument(
+        "--option-premium-timing", choices=["grant", "close"], default="close",
+        help="Canada: recognise a written option's premium on the write "
+             "date (grant — ITA s.49(1)) or at the closing transaction "
+             "(close). Ignored for the US engine.")
+    parser.add_argument(
+        "--option-grant-since", type=int, default=None, metavar="YEAR",
+        help="With grant timing: contracts written before YEAR keep close "
+             "timing (transition from books filed under close timing).")
+    parser.add_argument(
+        "--option-buyback-wash", action="store_true",
+        help="Canada, grant timing: treat the loss on buying back a written "
+             "option as a superficial loss when identical options are acquired "
+             "within 30 days and held (strict reading; default off — a "
+             "closing purchase is not a disposition s.54 reaches).")
+    parser.add_argument(
         "--cross-asset",
         action="store_true",
         help=(
@@ -329,6 +344,9 @@ def _main():
         no_wash=args.no_wash,
         cross_asset=args.cross_asset,
         per_account_basis=args.per_account_basis,
+        option_premium_timing=args.option_premium_timing,
+        option_grant_since=args.option_grant_since,
+        option_buyback_loss_superficial=args.option_buyback_wash,
     )
 
     if args.suggest_phantoms:

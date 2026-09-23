@@ -111,6 +111,12 @@ def parse_args():
         help="phantoms.json of (symbol, account) pairs with missing pre-data "
              "history — applied exactly like taxjson-gains, so traces match "
              "the pipeline's books.")
+    parser.add_argument("--option-premium-timing", choices=["grant", "close"],
+                        default="close", help="Canada: s.49(1) grant timing "
+                        "or close timing for written options (match the run).")
+    parser.add_argument("--option-grant-since", type=int, default=None,
+                        metavar="YEAR")
+    parser.add_argument("--option-buyback-wash", action="store_true")
     parser.add_argument("--color", action="store_true",
                         help="Enable ANSI color output (off by default).")
     parser.add_argument(
@@ -240,11 +246,17 @@ def main():
     rules = get_tax_rules(args.country)
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
+        _kw = {}
+        if str(args.country).strip().lower() not in ("us", "usa"):
+            _kw = {"option_premium_timing": args.option_premium_timing,
+                   "option_grant_since": args.option_grant_since,
+                   "option_buyback_loss_superficial": args.option_buyback_wash}
         results = rules.compute_gains(
             transactions,
             sheltered_transactions=sheltered,
             affiliated_transactions=affiliated,
             trace=True,
+            **_kw,
         )
     except AmbiguousTransferDateError as e:
         sys.exit(f"taxjson-explain: {e}")

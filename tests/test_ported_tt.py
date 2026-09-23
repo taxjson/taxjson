@@ -85,8 +85,12 @@ class TestPortedTT(unittest.TestCase):
             TaxTransaction(action='BUYSELL', date='2025-01-20', symbol='ABC.US', quantity=-100.0, net_amount=13000.0, currency='USD', id='b2'),
         ]
         result = self.rules.compute_gains(txs)
-        
-        self.assertEqual(len(result['wash_sales']), 1, "Should detect wash sale on short position")
+        # 2026-09 Canada audit: a new short is not an acquisition (ITA s.54),
+        # so the cover loss stands; only a LONG rebuy held at day 30 denies.
+        self.assertEqual(len(result['wash_sales']), 0, "a re-short must not trigger a superficial loss")
+        txs[2] = TaxTransaction(action='BUYSELL', date='2025-01-20', symbol='ABC.US', quantity=100.0, net_amount=13000.0, currency='USD', id='b2')
+        result = self.rules.compute_gains(txs)
+        self.assertEqual(len(result['wash_sales']), 1, "a long rebuy held at day 30 denies the cover loss")
         self.assertAlmostEqual(result['wash_sales'][0]['disallowed_amount'], 2000.0, 2)
 
     def test_scenario_7_safe_disposition(self):

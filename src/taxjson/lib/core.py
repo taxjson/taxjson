@@ -692,7 +692,7 @@ class TaxRules:
         raise NotImplementedError()
 
 class CanadaTaxRules(TaxRules):
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True) -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False) -> Dict[str, Any]:
         """
         Detects Superficial Losses (Wash Sales) based on CRA rules and calculates gains.
         Handles multi-account pooling and iterative adjustments.
@@ -947,6 +947,62 @@ class CanadaTaxRules(TaxRules):
         # across many accounts) can in principle exhaust this. We detect
         # non-convergence below and warn — silently truncating would
         # silently mis-state gains.
+        # --- ITA s.49(1) option premium timing (see docs/design) -------
+        # 'grant': a written option's premium is a capital gain on the
+        # write date; a buy-back is a loss on its own date; expiry adds
+        # nothing; a stock-settled assignment folds the premium into the
+        # share leg and its grant record is never emitted (the s.49(4)
+        # post-amendment state). Pools still retain the premium as book
+        # cost — this is an EMISSION change, not a pool change.
+        # Contracts written before `option_grant_since` keep close timing.
+        # A pre-scan walks each option symbol's short side FIFO by write
+        # order (pools are symbol-global, so across accounts) and marks
+        # how many units of each write end up stock-assigned.
+        _grant_mode = (str(option_premium_timing or 'close').lower() == 'grant')
+        _assigned_by_write: Dict[str, float] = {}
+        if _grant_mode:
+            _scan = sorted(all_txs, key=lambda x: event_sort_key(
+                x, profile='ca_main', date_of=get_sort_date))
+            _pos: Dict[str, float] = {}
+            _lots: Dict[str, List[List[Any]]] = {}     # symbol -> [[tx_id, units]]
+            _other = sheltered_ids | affiliated_ids
+            for _t in _scan:
+                if (_t.action not in ('BUYSELL', 'ASSIGN')
+                        or not is_option_symbol(_t.symbol or '')
+                        or _t.id in _other):
+                    continue
+                _q = float(_t.quantity or 0.0)
+                _sym = _t.symbol
+                _p = _pos.get(_sym, 0.0)
+                if _q < 0:
+                    _close_long = min(-_q, max(_p, 0.0))
+                    _open = -_q - _close_long
+                    if _open > 1e-9:
+                        _lots.setdefault(_sym, []).append([_t.id, _open])
+                elif _q > 0 and _p < -1e-9:
+                    _rem = min(_q, -_p)
+                    for _lot in _lots.get(_sym, []):
+                        if _rem <= 1e-9:
+                            break
+                        _take = min(_rem, _lot[1])
+                        _lot[1] -= _take
+                        _rem -= _take
+                        if _t.action == 'ASSIGN':
+                            _assigned_by_write[_lot[0]] = (
+                                _assigned_by_write.get(_lot[0], 0.0) + _take)
+                    _lots[_sym] = [l for l in _lots.get(_sym, []) if l[1] > 1e-9]
+                _pos[_sym] = _p + _q
+
+        def _grant_applies(tx) -> bool:
+            if not _grant_mode or not is_option_symbol(tx.symbol or ''):
+                return False
+            if option_grant_since is None:
+                return True
+            try:
+                return int(str(get_sort_date(tx))[:4]) >= int(option_grant_since)
+            except (TypeError, ValueError):
+                return True
+
         solver_converged = False
         solver_iterations_used = 0
         for iteration in range(1000):
@@ -1013,7 +1069,7 @@ class CanadaTaxRules(TaxRules):
                     # on the next open). Used by the inventory section
                     # so a downstream tool can look up the price as of
                     # the position entry date.
-                    global_pools[symbol] = {'qty': 0.0, 'total_cost': Decimal(0), 'last_acq_date': '1970-01-01', 'currency': '', 'tainted': False, 'position_start_date': None, 'deferred_wash': 0.0}
+                    global_pools[symbol] = {'qty': 0.0, 'total_cost': Decimal(0), 'last_acq_date': '1970-01-01', 'currency': '', 'tainted': False, 'position_start_date': None, 'deferred_wash': 0.0, 'grants': []}
                 pool = global_pools[symbol]
 
                 # Currency-mix guard: a single ACB pool must be
@@ -1182,15 +1238,38 @@ class CanadaTaxRules(TaxRules):
                         # below zero is a deemed capital gain in that
                         # year. Rare enough to warrant human eyes rather
                         # than silent computation — flag, don't book.
-                        if pool['qty'] > 1e-6 and pool['total_cost'] < D('-0.005'):
+                        if (pool['qty'] > 1e-6 and pool['total_cost'] < D('-0.005')
+                                and not str(tx.id or '').startswith('WASH_')):
+                            # ITA s.40(3): a return of capital that drives
+                            # the ACB below zero is a capital gain in the
+                            # year of the distribution, and the ACB resets
+                            # to nil. Booked as a qty-0 record dated the
+                            # ADJUST (the sale year got the whole amount
+                            # before — right total, wrong year).
+                            _excess = float(-pool['total_cost'])
+                            pool['total_cost'] = Decimal(0)
+                            if tx.id in taxable_ids:
+                                iteration_realized_gains.append({
+                                    'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
+                                    'date_settle': tx.date_settle or tx.date,
+                                    'gain': _excess, 'qty': 0.0,
+                                    'cost': 0.0, 'proceeds': _excess,
+                                    'disallowed': 0.0, 'taxable_gain': _excess,
+                                    'days_held': 0, 'account': tx.account,
+                                    'currency': tx.currency,
+                                    'commission': 0.0, 'fee': 0.0,
+                                    'direction': 'LONG',
+                                    'tainted': pool.get('tainted', False),
+                                    'deemed': True,
+                                    'note': 'DEEMED GAIN — return of capital exceeded ACB (ITA s.40(3)); ACB reset to nil',
+                                    'trace': [],
+                                })
                             print(
-                                f"warning: {symbol} ACB went NEGATIVE "
-                                f"({float(pool['total_cost']):.2f}) after "
-                                f"ADJUST on {tx.date} — under s.40(3) the "
-                                f"excess is a deemed capital gain in that "
-                                f"year, which this engine does NOT "
-                                f"compute. Verify the ROC amounts and "
-                                f"report the deemed gain manually.",
+                                f"NOTE: {symbol}: return of capital on "
+                                f"{tx.date} exceeded the ACB by "
+                                f"{_excess:.2f} — booked as a deemed "
+                                f"capital gain in that year (ITA s.40(3)); "
+                                f"ACB reset to nil.",
                                 file=sys.stderr,
                             )
                     _shown_adj = (_applied_adj if not is_other_scope
@@ -1258,6 +1337,9 @@ class CanadaTaxRules(TaxRules):
                                 existing['deferred_wash'] = (
                                     existing.get('deferred_wash', 0.0)
                                     + pool.get('deferred_wash', 0.0))
+                                existing['grants'] = (
+                                    existing.get('grants', [])
+                                    + pool.get('grants', []))
                                 # Parked flat-pool deferral dollars ride
                                 # the rename too — dropping them here
                                 # silently erased the denied loss's
@@ -1386,6 +1468,50 @@ class CanadaTaxRules(TaxRules):
                             pool['qty'] += qty
                             pool['last_acq_date'] = tx.date
 
+                            if qty < 0 and _grant_applies(tx):
+                                # Sell-to-open under grant timing: the
+                                # premium (net of commission) is the
+                                # disposition proceeds of the option
+                                # granted — a gain now for every unit
+                                # that will NOT be stock-assigned later.
+                                _units = abs(qty)
+                                _per_unit = abs(float(tx.net_amount or 0.0)) / _units
+                                _asg = min(_units, _assigned_by_write.get(tx.id, 0.0))
+                                _rec_units = _units - _asg
+                                pool.setdefault('grants', []).append({
+                                    'tx_id': tx.id, 'per_unit': _per_unit,
+                                    'rec_units': _rec_units, 'asg_units': _asg,
+                                    'date': tx.date})
+                                if _rec_units > 1e-9 and tx.id in taxable_ids:
+                                    _g = _rec_units * _per_unit
+                                    _gt = []
+                                    if trace:
+                                        if symbol not in symbol_acb_traces:
+                                            symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
+                                        symbol_acb_traces[symbol].append(
+                                            f"# {tx.date} WRITE {_rec_units:10.4f} @ {tx.price:7.4f} | premium {_g:10.4f} recognised now (ITA s.49(1))")
+                                        _gt = list(symbol_acb_traces[symbol])
+                                    iteration_realized_gains.append({
+                                        'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
+                                        'date_settle': tx.date_settle or tx.date,
+                                        'gain': _g, 'qty': _rec_units,
+                                        'cost': _g, 'proceeds': 0.0,
+                                        'disallowed': 0.0, 'taxable_gain': _g,
+                                        'days_held': 0, 'account': account,
+                                        'currency': tx.currency,
+                                        'commission': float(tx.commission or 0),
+                                        'fee': float(tx.fee or 0),
+                                        'direction': 'SHORT',
+                                        'tainted': pool.get('tainted', False),
+                                        'grant': True,
+                                        'note': 'WRITE — premium recognised on grant (ITA s.49(1))',
+                                        'trace': _gt,
+                                    })
+                                    if _g < -0.001:
+                                        iteration_losses.append({
+                                            'tx': tx, 'loss_amount': abs(_g),
+                                            'qty': _rec_units, 'direction': 'SHORT'})
+
                             if trace:
                                 if symbol not in symbol_acb_traces:
                                     symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
@@ -1418,7 +1544,40 @@ class CanadaTaxRules(TaxRules):
                             effective_proceeds = proceeds + (chunk_adj if pool['qty'] < 0 else -chunk_adj)
                             
                             gain = (effective_proceeds - cost_basis) if pool['qty'] > 0 else (cost_basis - effective_proceeds)
-                            
+
+                            # Grant-timing units closed here: the premium
+                            # already recognised on the write date comes
+                            # out of this record, so a buy-back is the
+                            # loss of the amount paid and an expiry is
+                            # zero. A stock-settled ASSIGN consumes the
+                            # units the pre-scan marked (never recognised)
+                            # and folds the full premium as before.
+                            _recognized = 0.0
+                            _grant_units_closed = 0.0
+                            if pool['qty'] < 0 and pool.get('grants'):
+                                _rem = closing_qty
+                                for _lot in pool['grants']:
+                                    if _rem <= 1e-9:
+                                        break
+                                    if is_option_assign:
+                                        _ta = min(_rem, _lot['asg_units']); _lot['asg_units'] -= _ta; _rem -= _ta
+                                        _tr = min(_rem, _lot['rec_units']); _lot['rec_units'] -= _tr; _rem -= _tr
+                                        _recognized += _tr * _lot['per_unit']
+                                        _grant_units_closed += _ta + _tr
+                                    else:
+                                        _tr = min(_rem, _lot['rec_units']); _lot['rec_units'] -= _tr; _rem -= _tr
+                                        _recognized += _tr * _lot['per_unit']
+                                        _ta = min(_rem, _lot['asg_units']); _lot['asg_units'] -= _ta; _rem -= _ta
+                                        _grant_units_closed += _ta + _tr
+                                pool['grants'] = [l for l in pool['grants']
+                                                  if l['rec_units'] + l['asg_units'] > 1e-9]
+                            _rec_gain = gain - _recognized
+                            _rec_cost = cost_basis - _recognized
+                            _suppress_record = (_grant_units_closed >= closing_qty - 1e-9
+                                                and closing_qty > 1e-9
+                                                and abs(_rec_gain) < 0.005
+                                                and abs(effective_proceeds) < 0.005)
+
                             # Days held
                             try:
                                 acq_dt = datetime.strptime(pool['last_acq_date'], '%Y-%m-%d')
@@ -1437,13 +1596,13 @@ class CanadaTaxRules(TaxRules):
                             # Check for taxable event (if tx is in the main transactions list)
                             is_taxable = tx.id in taxable_ids
                             
-                            if is_taxable and not is_option_assign:
+                            if is_taxable and not is_option_assign and not _suppress_record:
                                 # Check for virtual disallowance for this specific ID
                                 disallowance_tx = next((v for v in final_virtual_txs if v.action == 'DISALLOW' and v.id == tx.id), None)
                                 if disallowance_tx:
                                     disallowed_amt = disallowance_tx.net_amount
                                 
-                                realized_pl = gain
+                                realized_pl = _rec_gain
                                 
                                 rg_trace = []
                                 if trace:
@@ -1470,9 +1629,9 @@ class CanadaTaxRules(TaxRules):
                                 iteration_realized_gains.append({
                                     'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
                                     'date_settle': tx.date_settle or tx.date,
-                                    'gain': gain,
-                                    'qty': closing_qty, 'cost': cost_basis, 'proceeds': effective_proceeds,
-                                    'disallowed': disallowed_amt, 'taxable_gain': gain + disallowed_amt,
+                                    'gain': _rec_gain,
+                                    'qty': closing_qty, 'cost': _rec_cost, 'proceeds': effective_proceeds,
+                                    'disallowed': disallowed_amt, 'taxable_gain': _rec_gain + disallowed_amt,
                                     'days_held': days_held, 'account': account,
                                     'currency': tx.currency,
                                     'commission': float(tx.commission or 0) * fee_share,
@@ -1493,9 +1652,21 @@ class CanadaTaxRules(TaxRules):
                                 # flowed into total_disallowed. The tainted
                                 # disposition itself is already excluded from
                                 # the gains report (manual_reporting_required).
-                                if (gain + disallowed_amt) < -0.001 and not is_tainted:
+                                # A buy-back loss on grant-timed units is fed
+                                # to the superficial-loss solver only when the
+                                # project opts in: s.54 needs "a loss from the
+                                # disposition of a property" and a closing
+                                # purchase disposes of nothing; CRA has no
+                                # published position applying the rule to it,
+                                # and the strict reading denies the loss for
+                                # good when a registered account holds the
+                                # same series (a 30-second order correction
+                                # cost 18.5k that way on a real book).
+                                _wash_eligible = (option_buyback_loss_superficial
+                                                  or _grant_units_closed <= 1e-9)
+                                if (_rec_gain + disallowed_amt) < -0.001 and not is_tainted and _wash_eligible:
                                     iteration_losses.append({
-                                        'tx': tx, 'loss_amount': abs(gain),
+                                        'tx': tx, 'loss_amount': abs(_rec_gain),
                                         'qty': closing_qty, 'direction': 'LONG' if pool['qty'] > 0 else 'SHORT'
                                     })
                             
@@ -1574,6 +1745,7 @@ class CanadaTaxRules(TaxRules):
                     # "opened, closed, reopened" pattern: the user
                     # wants the date of the SECOND open, not the first.
                     pool['position_start_date'] = None
+                    pool['grants'] = []
                     # Phantom shares are fully drained — the pool re-cleans.
                     # Subsequent buys form a fresh, fully-known ACB.
                     if pool.get('tainted', False):
@@ -1711,12 +1883,11 @@ class CanadaTaxRules(TaxRules):
                         continue
                     t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
                     if abs((t_date - loss_date).days) <= 30:
-                        if (loss['direction'] == 'LONG' and t.quantity > 0) or \
-                           (loss['direction'] == 'SHORT' and t.quantity < 0):
+                        if t.quantity > 0:
                             # Only the OPENING portion is replacement
                             # property; a pure cover/close is not a
                             # trigger (FUZZ #B).
-                            if _opening_qty(t, loss['direction']) > 1e-6:
+                            if _opening_qty(t, 'LONG') > 1e-6:
                                 if getattr(t, 'type', '') \
                                         == 'transfer_rewrite':
                                     raise AmbiguousTransferDateError(
@@ -1810,10 +1981,15 @@ class CanadaTaxRules(TaxRules):
                     and t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
                                      'OPENING_BALANCE'))
 
-                if (loss['direction'] == 'LONG' and bal_at_end > 1e-6) or \
-                   (loss['direction'] == 'SHORT' and bal_at_end < -1e-6):
+                # ITA s.54: the trigger must be an ACQUISITION of identical
+                # property still OWNED at the end of the window. A new
+                # sell-to-open (short sale or written option) acquires
+                # nothing, so the US §1091(e) "re-short" branch does not
+                # apply here: every loss uses the LONG criteria — opening
+                # long acquisitions, positive balance at day 30.
+                if bal_at_end > 1e-6:
                     acquired_qty = sum(
-                        _row_loss_units(t, _opening_qty(t, loss['direction']))
+                        _row_loss_units(t, _opening_qty(t, 'LONG'))
                         for t in potential_triggers)
                     disallowed_qty = min(loss['qty'], acquired_qty, abs(bal_at_end))
                     disallowed_amt = disallowed_qty * (loss['loss_amount'] / loss['qty'])
@@ -1850,7 +2026,7 @@ class CanadaTaxRules(TaxRules):
                     _rem = disallowed_qty
                     for trg in ordered:
                         cap = _row_loss_units(
-                            trg, _opening_qty(trg, loss['direction']))
+                            trg, _opening_qty(trg, 'LONG'))
                         take = min(_rem, cap)
                         if take > 1e-9:
                             amt = take * per_share_loss
@@ -1882,9 +2058,7 @@ class CanadaTaxRules(TaxRules):
                         and t.id not in affiliated_ids
                         and t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
                                          'OPENING_BALANCE'))
-                    _backed = (max(0.0, _bal_tax)
-                               if loss['direction'] == 'LONG'
-                               else max(0.0, -_bal_tax))
+                    _backed = max(0.0, _bal_tax)     # replacement is always a LONG holding (s.54)
                     _defer_room = min(disallowed_qty, _backed)
                     _trimmed = []
                     for trg, take, amt in allocations:
@@ -1933,8 +2107,7 @@ class CanadaTaxRules(TaxRules):
                                               + _row_loss_units(
                                                   t, t.quantity))
                             _pool_repr.setdefault(_k, t.symbol)
-                    _lsign = (1.0 if loss['direction'] == 'LONG'
-                              else -1.0)
+                    _lsign = 1.0                     # replacement is always a LONG holding (s.54)
                     _back_left = {k: max(0.0, _lsign * v)
                                   for k, v in _pool_back.items()}
                     _adjust_land: Dict[str, str] = {}
@@ -1981,7 +2154,7 @@ class CanadaTaxRules(TaxRules):
                         # sound); symbol keyed to the trigger's pool AS
                         # OF the adjust date — following renames so the
                         # bump lands on the LIVE pool (FUZZ #F8).
-                        a_amt = amt if loss['direction'] == 'LONG' else -amt
+                        a_amt = amt                  # bump the LONG replacement's ACB (s.53(1)(f))
                         # Backing-routed landing (see _adjust_land):
                         # the pool that still holds the substituted
                         # property, named as of the adjust date so the
@@ -2025,9 +2198,7 @@ class CanadaTaxRules(TaxRules):
                         # solver re-iteration could update the WRONG ADJUST and a
                         # report row could attach another loss's adjustment.
                         adj_id_prefix = f"WASH_{tx.id}__"
-                        _new_amts = {f"WASH_{tx.id}__{trg.id}":
-                                     (amt if loss['direction'] == 'LONG'
-                                      else -amt)
+                        _new_amts = {f"WASH_{tx.id}__{trg.id}": amt
                                      for trg, _q, amt in allocations}
                         _seen_adj = set()
                         for v in final_virtual_txs:
@@ -2076,15 +2247,9 @@ class CanadaTaxRules(TaxRules):
                             role = 'loss_sale'
                         elif t.id in loss_to_triggers_multi.get(tx.id, []):
                             role = 'trigger'
-                        elif t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER') and (
-                            (loss['direction'] == 'LONG' and t.quantity > 0) or
-                            (loss['direction'] == 'SHORT' and t.quantity < 0)
-                        ):
+                        elif t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER') and t.quantity > 0:
                             role = 'candidate'
-                        elif t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER') and (
-                            (loss['direction'] == 'LONG' and t.quantity < 0) or
-                            (loss['direction'] == 'SHORT' and t.quantity > 0)
-                        ):
+                        elif t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER') and t.quantity < 0:
                             role = 'other_sell' if loss['direction'] == 'LONG' else 'other_buy'
                         else:
                             role = 'context'
@@ -2322,6 +2487,11 @@ class CanadaTaxRules(TaxRules):
                 'term': None,
                 'wash_replacements': None,
                 'tainted': g.get('tainted', False),
+                # Grant-timing write records and s.40(3) deemed gains carry
+                # a note naming the provision; consumers show it verbatim.
+                'note': g.get('note', ''),
+                'grant': bool(g.get('grant', False)),
+                'deemed': bool(g.get('deemed', False)),
             }
             if 'trace' in g:
                 gain_entry['trace'] = g['trace']

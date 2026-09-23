@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note
+from taxjson.lib.pipeline import option_timing_flags
 from taxjson.lib.report_model import (align_columns, fmt_money,
                                       fmt_qty, format_report_table)
 
@@ -443,7 +444,8 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
 
 _SETTINGS_KEYS = ("year", "country", "base_currency", "tax_date",
                   "source_currencies", "cross_asset", "province",
-                  "fx_cash_gains")
+                  "fx_cash_gains", "option_premium_timing",
+                  "option_grant_timing_since", "option_buyback_loss_superficial")
 _ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                  "brokerage", "account", "query_id", "holdings")
 _ACCOUNT_TYPES = ("taxable", "sheltered")
@@ -481,6 +483,19 @@ def validate_config(cfg: Dict[str, Any],
     if tax_date is not None and tax_date not in ("settle", "trade"):
         _die(f"[settings] tax_date must be settle|trade, "
                  f"got {tax_date!r}")
+    _opt = settings.get("option_premium_timing")
+    if _opt is not None and str(_opt).strip().lower() not in ("grant", "close"):
+        _die(f"[settings] option_premium_timing must be \"grant\" or "
+             f"\"close\" (got {_opt!r}).")
+    _since = settings.get("option_grant_timing_since")
+    if _since is not None and not (isinstance(_since, int)
+                                   and not isinstance(_since, bool)
+                                   and 1990 <= _since <= 2100):
+        _die(f"[settings] option_grant_timing_since must be a tax year "
+             f"(got {_since!r}).")
+    _bb = settings.get("option_buyback_loss_superficial")
+    if _bb is not None and not isinstance(_bb, bool):
+        _die(f"[settings] option_buyback_loss_superficial must be true/false (got {_bb!r}).")
     ca_flag = settings.get("cross_asset")
     if ca_flag is not None and not isinstance(ca_flag, bool):
         _die(f"[settings] cross_asset must be true/false, "
@@ -1251,6 +1266,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # Warn-only option-as-replacement scan (numbers never change).
     if is_taxable and settings.get("cross_asset"):
         cmd.append("--cross-asset")
+    cmd += option_timing_flags(settings)
     # Project-wide phantom opening-balances (from `find-missing-history
     # --gen-phantoms`). load_phantoms filters by (symbol, account), so passing
     # the whole file to every account's gains run is safe — non-matching pairs
@@ -1305,8 +1321,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # Canadian-style ACB blended pool — wrong total_cost per
                 # symbol on the holdings.toml handoff.
                 run_to_file(_cmd("taxjson-gains") + [
-                    "--country", country, str(raw_json),
-                ], raw_gains, capture_diag=False)
+                    "--country", country,
+                ] + option_timing_flags(settings) + [str(raw_json)],
+                            raw_gains, capture_diag=False)
             # Base-currency companion: convert the SAME raw merge to the base
             # currency (per-transaction FX, no ticker consolidation — so symbols
             # stay per-listing and line up 1:1 with raw_gains) then re-run gains.
@@ -1454,6 +1471,7 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
     ]
     if settings.get("cross_asset"):
         cmd.append("--cross-asset")
+    cmd += option_timing_flags(settings)
     # Same phantom opening-balances as the main gains pass — without this the
     # wash-adjusted books (which `taxjson wash-sales` PREFERS when present)
     # were computed on different, phantom-less books than <account>.sum.
@@ -1555,6 +1573,7 @@ def stage_blended_wash_pass(names: List[str],
         cmd += ["--sheltered", str(sheltered_base)]
     if settings.get("cross_asset"):
         cmd.append("--cross-asset")
+    cmd += option_timing_flags(settings)
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(combined_base))
@@ -2265,6 +2284,11 @@ tax_date = "{tax_date}"          # settle | trade (default: settle for canada �
 # Currencies you hold that aren't base_currency. Used to fetch FX rates.
 source_currencies = ["{source_currency}"]
 {province_line}# cross_asset = true    # WARN-ONLY: flag option-as-replacement wash triggers
+# option_premium_timing = "grant"      # Canada: written-option premium is a gain in the year WRITTEN (ITA s.49(1));
+#                                      #   "close" nets it at the closing transaction instead
+# option_grant_timing_since = 2025      # contracts written before this year keep close timing (default: year)
+# option_buyback_loss_superficial = false  # grant timing: treat a buy-back loss as superficial when identical
+#                                          #   options are bought within 30 days and held (strict reading; default off)
 #                       # (long call vs share loss / long put vs short loss);
 #                       # computed numbers never change.
 # fx_cash_gains = true  # end-of-run FX-on-cash report ({fx_rule})
@@ -5831,6 +5855,80 @@ def cmd_redact(args: argparse.Namespace) -> None:
     raise SystemExit(redact_main(argv))
 
 
+def cmd_option_boundary(args: argparse.Namespace) -> None:
+    """`taxjson option-boundary [--json]`: every written option in the
+    taxable accounts whose write and close straddle a tax-year boundary
+    (or that is still open at the project year's end) — where each
+    amount lands under the timing in force (ITA s.49), and whether a
+    filed year needs a T1-ADJ. A `filed/<year>.json` lock is what turns
+    "if that year was filed" into a fact."""
+    import json
+    from taxjson.lib.core import TaxTransaction
+    from taxjson.lib.option_boundary import straddling
+    from taxjson.lib.pipeline import option_timing_from_settings
+    root = Path(args.dir).resolve()
+    cache = root / "work"
+    cfg = load_config(root)
+    settings = cfg.get("settings", {})
+    year = int(settings.get("year") or 0)
+    kw = option_timing_from_settings(settings)
+    timing = kw.get("option_premium_timing", "close") if kw else "close"
+    since = kw.get("option_grant_since") if kw else None
+    filed_years = set()
+    for f in (root / "filed").glob("*.json"):
+        try:
+            filed_years.add(int(f.stem))
+        except ValueError:
+            pass
+    rows = []
+    for name, acfg in sorted((cfg.get("accounts") or {}).items()):
+        if not isinstance(acfg, dict) or acfg.get("type", "sheltered") != "taxable":
+            continue
+        base = cache / f"{name}_base.json"
+        if not base.exists():
+            print(f"taxjson option-boundary: warning: no {base.name} — run `taxjson run` first",
+                  file=sys.stderr)
+            continue
+        doc = json.loads(base.read_text(encoding="utf-8"))
+        txs = []
+        for r in (doc.get("transactions", doc) if isinstance(doc, dict) else doc):
+            try:
+                txs.append(TaxTransaction(**{k: v for k, v in r.items()
+                                             if k in TaxTransaction.__dataclass_fields__}))
+            except TypeError:
+                continue
+        for r in straddling(txs, year, timing, since, filed_years):
+            r["account"] = r["account"] or name
+            rows.append(r)
+    if getattr(args, "json", False):
+        _json_out({"year": year, "timing": timing, "since": since,
+                   "filed_years": sorted(filed_years), "rows": rows})
+        return
+    print(f"OPTION YEAR-BOUNDARY REVIEW — tax year {year}; premium timing: {timing}"
+          + (f" (contracts written from {since})" if timing == "grant" and since else "")
+          + (f"; filed-year locks: {', '.join(str(y) for y in sorted(filed_years))}" if filed_years else "; no filed-year locks (run `taxjson close-year` after filing)"))
+    print()
+    if not rows:
+        print("No written option straddles a year boundary and none is open at year end. Nothing to amend.")
+        return
+    out = ["ACCOUNT SYMBOL WRITTEN UNITS PREMIUM CLOSED KIND PAID"]
+    for r in rows:
+        out.append(" ".join([r["account"], r["symbol"], r["written"], f"{r['units']:g}",
+                             fmt_money(r["premium"]), r["closed"] or "-", r["close_kind"],
+                             fmt_money(r["paid"]) if r["paid"] else "-"]))
+    _print_report_table(out)
+    print()
+    for i, r in enumerate(rows, 1):
+        print(f"{i:>3}. {r['symbol']} ({r['account']}, written {r['written']}): {r['where']}")
+        print(f"     -> {r['action']}")
+    amend = [r for r in rows if r["action"].startswith("T1-ADJ")]
+    print()
+    if amend:
+        print(f"{len(amend)} item(s) require an amended return (T1-ADJ) — listed above with the year and amount.")
+    else:
+        print("No amended return is required by these contracts under the timing in force.")
+
+
 def cmd_sanity(args: argparse.Namespace) -> None:
     """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
@@ -7075,6 +7173,7 @@ def _explain_wash_sales(root: Path, cache: Path,
     phantoms = root / "phantoms.json"
     if phantoms.exists():
         common += ["--incomplete-history", str(phantoms)]
+    common += option_timing_flags(settings)
 
     rc = 0
     for base in bases:
@@ -8409,6 +8508,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl += ["--incomplete-history", str(phantoms)]
         if settings.get("cross_asset"):
             fl.append("--cross-asset")
+        fl += option_timing_flags(settings)
         for sym in getattr(args, "symbol", None) or []:
             fl += ["--symbol", sym]
         if getattr(args, "gain_id", None):
@@ -9167,6 +9267,15 @@ def main() -> None:
     p_red.add_argument("--check", action="store_true",
                        help="Report only; write nothing")
     p_red.set_defaults(func=cmd_redact)
+
+    p_ob = sub.add_parser(
+        "option-boundary",
+        help="Written options that straddle a tax-year boundary: where the "
+             "premium and any later amount land under ITA s.49, and whether "
+             "a filed year needs a T1-ADJ")
+    p_ob.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text")
+    p_ob.set_defaults(func=cmd_option_boundary)
 
     p_san = sub.add_parser(
         "sanity",

@@ -358,9 +358,11 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     rules = get_tax_rules(ctx.country)
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
+        from taxjson.lib.pipeline import option_timing_from_settings
         after = rules.compute_gains(
             txs + [synth], sheltered_transactions=sheltered,
-            detect_wash_sales=detect_wash)
+            detect_wash_sales=detect_wash,
+            **option_timing_from_settings(ctx.settings))
     except AmbiguousTransferDateError as e:
         # Surface as a structured error instead of a 500.
         raise ValueError(str(e))

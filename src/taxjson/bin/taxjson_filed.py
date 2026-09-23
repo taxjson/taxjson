@@ -23,6 +23,7 @@ the filing basis recorded at close time): realized total (non-tainted),
 total disallowed, disposition count, dividend+PIL income, tainted count.
 """
 
+from taxjson.lib.pipeline import option_timing_flags
 import json
 import sys
 import tempfile
@@ -166,6 +167,7 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
         cmd += ["--sheltered", str(sheltered)]
     if settings.get("cross_asset"):
         cmd.append("--cross-asset")
+    cmd += option_timing_flags(settings)
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
     # phantom openings and check-filed recompute WITHOUT them: a
@@ -210,6 +212,7 @@ def recompute_year(cache: Path, account: str, year: int,
         cmd += ["--sheltered", str(sheltered)]
     if settings.get("cross_asset"):
         cmd.append("--cross-asset")
+    cmd += option_timing_flags(settings)
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
     # phantom openings and check-filed recompute WITHOUT them: a

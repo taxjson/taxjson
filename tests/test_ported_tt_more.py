@@ -149,16 +149,24 @@ class TestShortPositionACB(unittest.TestCase):
         self.assertAlmostEqual(inv['SHORT.US']['qty'], -100.0)
 
     def test_short_replacement_partial_match(self):
-        """test_short_position_acb.t: oversized replacement only partially triggers wash."""
+        """test_short_position_acb.t, re-premised (2026-09 Canada audit):
+        a NEW short is not an acquisition under ITA s.54, so a re-short
+        never denies a cover loss; a 150-share LONG rebuy held at day 30
+        denies the 100-share loss in full (min of sold/acquired/held)."""
         content = """
         BUYSELL 2025-01-01 09:30:00 SHORT.US -100 USD 100.00 10000.00 0.00
         BUYSELL 2025-01-10 09:30:00 SHORT.US 100 USD 120.00 12000.00 0.00
         BUYSELL 2025-01-15 09:30:00 SHORT.US -150 USD 130.00 19500.00 0.00
         """
-        txs = parse_tt_lines(content)
-        result = self.rules.compute_gains(txs)
+        result = self.rules.compute_gains(parse_tt_lines(content))
+        self.assertEqual(len(result['wash_sales']), 0)
+        content = """
+        BUYSELL 2025-01-01 09:30:00 SHORT.US -100 USD 100.00 10000.00 0.00
+        BUYSELL 2025-01-10 09:30:00 SHORT.US 100 USD 120.00 12000.00 0.00
+        BUYSELL 2025-01-15 09:30:00 SHORT.US 150 USD 130.00 19500.00 0.00
+        """
+        result = self.rules.compute_gains(parse_tt_lines(content))
         self.assertEqual(len(result['wash_sales']), 1)
-        # Only 100 shares of the loss can be matched by the 150-share new short.
         self.assertAlmostEqual(result['wash_sales'][0]['disallowed_qty'], 100.0, places=4)
 
     def test_short_acb_resets_after_full_close(self):

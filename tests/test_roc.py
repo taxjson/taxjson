@@ -209,12 +209,14 @@ class TestNegativeAcbWarning(unittest.TestCase):
 
     def test_negative_acb_flags_s40_3(self):
         err = self._run(-1200.0)          # ROC exceeds the $1000 ACB
-        self.assertIn("NEGATIVE", err)
+        # 2026-09: booked, not just flagged — a deemed gain of the excess
+        # in the distribution year, ACB reset to nil.
+        self.assertIn("exceeded the ACB by 200.00", err)
         self.assertIn("s.40(3)", err)
 
     def test_normal_roc_is_quiet(self):
         err = self._run(-200.0)
-        self.assertNotIn("NEGATIVE", err)
+        self.assertNotIn("s.40(3)", err)
 
 
 class TestRocSumView(unittest.TestCase):

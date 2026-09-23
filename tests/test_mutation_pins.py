@@ -188,35 +188,42 @@ class TestPlainSplitDoesNotMergeAliasClasses(unittest.TestCase):
 
 
 class TestShortDirectionTriggerSign(unittest.TestCase):
-    """M3 — the Canada trigger scan's SHORT branch
-    (`loss['direction'] == 'SHORT' and t.quantity < 0`): a short
-    covered at a loss is superficial only when a NEW short OPENING
-    (sell-to-open) lands in the window. A sign-flip mutant either
-    misses the sheltered sell-to-open (no denial) or invents triggers
-    from buys."""
+    """M3 (re-premised 2026-09 Canada audit) — ITA s.54 needs an
+    ACQUISITION of identical property still OWNED at day 30. A loss on
+    covering a short is therefore superficial when a LONG purchase lands
+    in the window and is held — and NOT when a new short is written
+    (a sell-to-open acquires nothing; the old SHORT-direction branch was
+    US §1091(e) logic). A sign-flip mutant on the acquisition test
+    either denies on the re-short or misses the long rebuy."""
 
     MAIN = [dict(date="2025-01-06", quantity=-100, net_amount=10000.0),
             dict(date="2025-03-03", quantity=100, net_amount=12000.0)]
 
-    def _run(self, with_replacement):
+    def _run(self, replacement_qty):
         txs = [T(**kw) for kw in self.MAIN]
-        shel = ([T(date="2025-03-10", quantity=-100, net_amount=8000.0,
-                   account="rrsp")]
-                if with_replacement else [])
+        shel = ([T(date="2025-03-10", quantity=replacement_qty,
+                   net_amount=8000.0, account="rrsp")]
+                if replacement_qty else [])
         return run_engine("canada", txs, shel)
 
-    def test_sheltered_sell_to_open_denies_short_loss(self):
-        r = self._run(True)
+    def test_sheltered_sell_to_open_does_not_deny_short_loss(self):
+        r = self._run(-100)                       # rrsp WRITES/shorts: no acquisition
+        loss = gain_rec(r, "2025-03-03")
+        self.assertAlmostEqual(
+            float(loss.get("disallowed_amount") or 0), 0.0, places=2)
+        self.assertAlmostEqual(float(loss["gain"]), -2000.0, places=2)
+
+    def test_sheltered_long_buy_denies_short_loss_permanently(self):
+        r = self._run(100)                        # rrsp BUYS and holds
         loss = gain_rec(r, "2025-03-03")
         self.assertAlmostEqual(
             float(loss["disallowed_amount"]), 2000.0, places=2)
-        # Sheltered trigger: the denial is PERMANENT, not deferred.
         self.assertAlmostEqual(
             float(loss["permanently_disallowed"]), 2000.0, places=2)
         self.assertAlmostEqual(float(loss["gain"]), 0.0, places=2)
 
     def test_no_replacement_no_denial(self):
-        r = self._run(False)
+        r = self._run(0)
         loss = gain_rec(r, "2025-03-03")
         self.assertAlmostEqual(
             float(loss.get("disallowed_amount") or 0), 0.0, places=2)

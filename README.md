@@ -235,6 +235,16 @@ tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
 # cross_asset = true           # WARN-ONLY option-as-replacement wash triggers
+# option_premium_timing = "grant"   # Canada (default): a written option's premium is a gain in
+#                                   # the year WRITTEN (ITA s.49(1)); a buy-back is a loss in its
+#                                   # own year; assignment folds into the shares. "close" nets
+#                                   # premium and close together at the close instead.
+# option_grant_timing_since = 2025  # contracts written before this year keep close timing —
+#                                   # the transition from books filed the old way (default: year)
+# option_buyback_loss_superficial = false # grant timing: treat the loss on buying back a written
+#                                   # option as superficial when identical options are bought
+#                                   # within 30 days and held (strict reading; default off — a
+#                                   # closing purchase is not a disposition s.54 reaches)
 # fx_cash_gains = true         # end-of-run s.39(1.1) FX-on-cash report (off by default)
 
 # Optional — Canadian tax instalments (`taxjson instalments`, and a
@@ -319,6 +329,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses` (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
 | `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (books recomputed via the engine's `--as-of` cutoff: full ACB + deferred-wash fidelity; pre-wash, pre-ticker.map); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`. |
+| `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
 | `taxjson redact FILE... [--out DIR] [--also REGEX] [--check]` | Strip account numbers and identity from broker exports while keeping every row shape (same-length placeholders, consistent across the file; the private denylist applies) so a real statement can be shared as a parser sample or bug report. Writes `NAME.redacted.EXT`; never touches the input. |
 | `taxjson sell-check SYMBOL ...` | Sell-side wash check: is selling this ticker **at a loss** today safe? **UNSAFE** when a recent affiliated buy would deny it (LOCKED — permanently for the registered-matched portion); **ACTION** when a rescueable violation is open (sell the full position before the deadline); **SAFE\*/SAFE** with the applicable caveats. Whether it *is* a loss at today's price is `harvest`'s job. `--json` for machines; exit 1 on unsafe. |
 | `taxjson buy-check SYMBOL ...` | Buy-side wash check: is buying this ticker today safe? **UNSAFE** when a loss was sold within the past 30 days (the rebuy cancels it — permanently if bought sheltered), with the safe-from date when one is determinable (violations defer to `wash-radar` rather than print a date that would invite an early rebuy); **SAFE\*** when buying merely extends an open wash window. Root-matched (`buy-check NU` covers `NU.US` and cross-listings, folding in `ticker.map` pairs); `--json` for machines; exit 1 on unsafe. |
@@ -683,6 +694,30 @@ supports; record what you actually claimed on filed returns in a
 — auto-detected, or pass `--claimed FILE`) and it's folded into the running
 balance. If the history's first year has dispositions, the ledger warns
 that pre-history balances aren't reflected. `--json` for machine output.
+
+### Option premiums across a year end (`option_premium_timing`)
+
+Under ITA s.49(1) writing an option is a disposition: the premium is a
+capital gain **in the year the option is written**. A later buy-back is a
+capital loss in its own year (IT-479R para 24); expiry adds nothing; an
+exercise or assignment folds the premium into the share leg instead and
+the grant year is amended (s.49(2)–(4)). Contracts written and closed in
+the same year give the same total either way — only year-straddling
+contracts differ. Canada projects use this timing by default; `"close"`
+nets at the closing transaction (the US §1234 convention, which the US
+engine always uses). `option_grant_timing_since` keeps contracts written
+before that year on close timing, so a premium that was open at a prior
+year end is not taxed nowhere when you switch. `taxjson option-boundary`
+lists every straddling contract and says whether a filed year needs a
+T1-ADJ. Positions, `harvest` and the holdings export keep the economic
+book cost of an open written option; only the year attribution moves.
+
+Whether the loss on buying back a written option can be *superficial* —
+denied because identical options were bought within 30 days and held,
+permanently if a registered account holds them — is not settled: s.54
+needs "a loss from the disposition of a property" and a closing purchase
+disposes of nothing. The default does not apply the rule to buy-backs;
+`option_buyback_loss_superficial = true` takes the strict reading.
 
 ### Return of capital (ROC)
 

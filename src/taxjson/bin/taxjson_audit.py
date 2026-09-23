@@ -360,7 +360,8 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
     out: List[str] = []
 
     qty = float(ev.get("qty") or 0.0)
-    verb = "COVER" if (ev.get("direction") == "SHORT") else "SELL"
+    verb = ("WRITE" if ev.get("grant") else "DEEMED GAIN" if ev.get("deemed")
+            else "COVER" if (ev.get("direction") == "SHORT") else "SELL")
     settle = (f" (settle {ev['date_settle']})"
               if ev.get("date_settle")
               and ev["date_settle"] != ev["date"] else "")
@@ -588,6 +589,9 @@ def parse_args(argv=None):
     p.add_argument("--incomplete-history", metavar="FILE")
     p.add_argument("--per-account-basis", action="store_true")
     p.add_argument("--cross-asset", action="store_true")
+    p.add_argument("--option-premium-timing", choices=["grant", "close"], default="close")
+    p.add_argument("--option-grant-since", type=int, default=None)
+    p.add_argument("--option-buyback-wash", action="store_true")
     p.add_argument("--no-wash", action="store_true",
                    help="Disable wash detection (US crypto: digital "
                         "assets are property, not securities — §1091 "
@@ -696,6 +700,10 @@ def main(argv=None) -> int:
         detect_wash_sales=not args.no_wash)
     if country == "usa":
         kwargs["per_account_basis"] = args.per_account_basis
+    else:
+        kwargs["option_premium_timing"] = args.option_premium_timing
+        kwargs["option_grant_since"] = args.option_grant_since
+        kwargs["option_buyback_loss_superficial"] = args.option_buyback_wash
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
         results = rules.compute_gains(transactions, **kwargs)
