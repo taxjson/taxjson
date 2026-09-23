@@ -223,6 +223,18 @@ These are real bugs in code paths the standard `taxjson run` flow never exercise
 
 ---
 
+### `taxjson audit` reports phantom-backed dispositions as "not found"
+
+A disposition that drains a `phantoms.json` opening is, by design, pulled
+out of the gains file into `manual_reporting_required`. The audit's
+pipeline tie-out does not consult that list, so each such sale prints
+"disposition not found in the pipeline gains file(s) — cannot tie out
+(books changed since the last run?)" and the tie-out line ends with ✗
+even though nothing is stale. Seen on the 2024 reconstruction (two BK.TO
+sales against a pre-history position). Reading fix: the audit should
+recognise the manual-reporting rows and tie them out as "phantom basis —
+reported manually" instead of counting them as missing.
+
 ## Conventions
 
 - **Severity ranking:** items above are loosely ordered: gaps that drop tax-relevant data first, cosmetic / latent items last.
