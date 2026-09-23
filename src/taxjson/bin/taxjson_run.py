@@ -2274,37 +2274,50 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 _TEMPLATE_CONFIG = """\
-# taxjson configuration. See https://github.com/taxjson/taxjson
+# taxjson configuration — https://github.com/taxjson/taxjson
+#
+# Keys are grouped and column-aligned so year-over-year projects diff
+# cleanly:  diff ~/taxes/2025/taxjson.toml ~/taxes/2026/taxjson.toml
+# Every commented key shows its default; uncomment a line to change it.
 
 [settings]
-year = {year}
-country = "{country}"           # canada | ca | usa | us
-base_currency = "{base_currency}"        # report currency; foreign income converted
-tax_date = "{tax_date}"          # settle | trade (default: settle for canada — CRA; trade for usa — IRS)
-# Currencies you hold that aren't base_currency. Used to fetch FX rates.
-source_currencies = ["{source_currency}"]
-{province_line}# cross_asset = true    # WARN-ONLY: flag option-as-replacement wash triggers
-# option_premium_timing = "grant"      # Canada: written-option premium is a gain in the year WRITTEN (ITA s.49(1));
-#                                      #   "close" nets it at the closing transaction instead
-# option_grant_timing_since = 2025      # contracts written before this year keep close timing (default: year)
-# option_buyback_loss_superficial = false  # grant timing: treat a buy-back loss as superficial when identical
-#                                          #   options are bought within 30 days and held (strict reading; default off)
-#                       # (long call vs share loss / long put vs short loss);
-#                       # computed numbers never change.
-# fx_cash_gains = true  # end-of-run FX-on-cash report ({fx_rule})
+year              = {year}
+country           = "{country}"{country_pad}# canada | ca | usa | us
+{province_line}base_currency     = "{base_currency}"{base_pad}# report currency; foreign income converted at BoC/IRS rates
+source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besides base_currency (FX rates fetched)
+tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
 
+# cross_asset   = false               # true: WARN-ONLY, flag option-as-replacement wash triggers
+#                                     #   (long call vs share loss / long put vs short loss); numbers never change
+# fx_cash_gains = false               # true: end-of-run FX-on-cash report ({fx_rule})
+{option_lines}
 # One [accounts.NAME] section per folder under inputs/. The folder name
-# is the account name. Required: type. Optional: crypto, transfers,
-# plan, and — to pull activity straight from the broker with
+# is the account name. Required: type. Optional: transfers, crypto,
+# plan, holdings, and — to pull activity straight from the broker with
 # `taxjson fetch` — brokerage + account (Questrade) or query_id (IBKR):
 #
 #   [accounts.margin]
-#   type = "taxable"
+#   type      = "taxable"
 #   brokerage = "questrade"      # questrade | ibkr_flex
-#   account = "12345678"         # Questrade account number
+#   account   = "12345678"       # Questrade account number
 #   # query_id = "123456"        # ibkr_flex: the Flex query id instead
+#   holdings  = ["~/broker/12345678_holdings.toml"]   # `taxjson sanity` pairs the account with these files
 
 {account_sections}{instalments_section}"""
+
+# Canada only. ITA s.49(1) written-option premium timing is a Canadian
+# rule (the US engine always nets at close), so the US scaffold omits
+# the block rather than showing switches that do nothing there.
+_TEMPLATE_OPTION_LINES = """\
+
+# Written-option premiums (ITA s.49(1)) — see `taxjson option-boundary`:
+# option_premium_timing           = "grant"   # gain in the year WRITTEN; "close" nets the premium at the
+#                                             #   closing transaction instead (the pre-s.49 behaviour = feature off)
+# option_grant_timing_since       = {year}      # contracts written before this year keep close timing — set it to
+#                                             #   the first year you FILE under grant timing and keep it every year after
+# option_buyback_loss_superficial = false     # true: strict s.54 reading — a buy-back loss is superficial when
+#                                             #   identical options are bought within 30 days and still held
+"""
 
 
 # Canada only: instalments are a distinct regime (US filers use
@@ -2321,16 +2334,16 @@ _TEMPLATE_INSTALMENTS = """
 # `taxjson estimate`). Uncomment and fill in YOUR figures.
 #
 # [instalments]
-# basis = "current_year"       # current_year | prior_year | cra_reminder
-# withheld = 0                 # tax withheld at source this year
+# basis                = "current_year"   # current_year | prior_year | cra_reminder
+# withheld             = 0                # tax withheld at source this year
 # # Last two years' net tax owing (line 48500 minus withholding, from
 # # each Notice of Assessment). Supply BOTH even on current_year: CRA
 # # assesses interest on the least of the methods your figures support,
 # # and they decide whether instalments are owed at all. Leaving a 0
 # # here reads as "I owed nothing" and suppresses both.
-# prior_year_net_tax = 55000
+# prior_year_net_tax   = 55000
 # second_prior_net_tax = 41000
-# prescribed_rate = 0.08       # CRA's overdue-tax rate; or a dated
+# prescribed_rate      = 0.08             # CRA's overdue-tax rate; or a dated
 # # schedule, since CRA resets it quarterly and charges each day at the
 # # rate then in force:
 # # prescribed_rates = [
@@ -2355,6 +2368,16 @@ _INIT_BY_COUNTRY = {
                "accounts": ("margin", "crypto", "roth", "401k")},
 }
 
+# Comment column for the [settings] values: every value is padded to
+# this width so the trailing comments line up (and so two projects'
+# files differ only where their values differ).
+_INIT_COMMENT_COL = 22
+
+
+def _pad(value: str) -> str:
+    """Spaces that carry a rendered value out to the comment column."""
+    return " " * max(1, _INIT_COMMENT_COL - len(value))
+
 
 def _render_init_config(country_canon: str,
                         year: Optional[int] = None
@@ -2367,30 +2390,40 @@ def _render_init_config(country_canon: str,
     for name in spec["accounts"]:
         if name == "margin":
             sections.append(f"[accounts.{name}]\n"
-                            f'type = "taxable"             # taxable | sheltered\n')
+                            f'type      = "taxable"          # taxable | sheltered\n'
+                            f'# holdings  = ["~/broker/{name}_holdings.toml"]'
+                            f"   # `taxjson sanity` reconciles against these\n")
         elif name == "crypto":
             sections.append(f"[accounts.{name}]\n"
-                            f'type = "taxable"\n'
-                            f"crypto = true                # splices "
+                            f'type      = "taxable"\n'
+                            f"crypto    = true               # splices "
                             f"fill-crypto-prices into the pipeline\n")
         else:
             sections.append(f"[accounts.{name}]\n"
-                            f'type = "sheltered"\n'
-                            f"transfers = true             # keep TRANSFER "
+                            f'type      = "sheltered"\n'
+                            f"transfers = true               # keep TRANSFER "
                             f"rows (contributions/withdrawals)\n")
     is_ca = country_canon == "canada"
+    yr = int(year) if year is not None else date_cls.today().year
     toml_text = _TEMPLATE_CONFIG.format(
-        year=int(year) if year is not None else date_cls.today().year,
+        year=yr,
         country=country_canon,
+        country_pad=_pad(f'"{country_canon}"'),
         base_currency=spec["base_currency"],
+        base_pad=_pad(f'"{spec["base_currency"]}"'),
         source_currency=spec["source_currency"],
+        source_pad=_pad(f'["{spec["source_currency"]}"]'),
         tax_date=spec["tax_date"],
+        tax_pad=_pad(f'"{spec["tax_date"]}"'),
         # `taxjson estimate` REQUIRES a province for canada, so the key
         # is present (commented) rather than discovered at first run.
-        province_line=('# province = "ON"       # ON | BC | AB — '
-                       '`taxjson estimate` needs it\n' if is_ca else ""),
+        province_line=('# province          = "ON"'
+                       '                # ON | BC | AB — `taxjson estimate` needs it\n'
+                       if is_ca else ""),
         fx_rule=("s.39(1.1), $200 de minimis" if is_ca
                  else "§988, ordinary income"),
+        option_lines=(_TEMPLATE_OPTION_LINES.format(year=yr) if is_ca
+                      else ""),
         account_sections="\n".join(sections),
         instalments_section=_TEMPLATE_INSTALMENTS if is_ca else "",
     )

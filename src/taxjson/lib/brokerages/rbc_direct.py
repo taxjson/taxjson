@@ -14,7 +14,11 @@ from taxjson.lib.corp_actions import is_rbc_merger_row, is_rbc_cil_row
 # returned None and the builders fell back to the RAW string, leaking a
 # " 00:00:00" suffix that the gains engine's `strptime(date, '%Y-%m-%d')`
 # later choked on. Datetime form first so it fully consumes the time part.
-_DATE_FMTS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%B %d, %Y", "%m/%d/%Y")
+# The 2022-vintage export wrote Date as 1/6/2022 and Settlement Date as
+# 10-Jan-22; without the last format every 2022 settle date silently
+# fell back to the trade date.
+_DATE_FMTS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%B %d, %Y", "%m/%d/%Y",
+              "%d-%b-%y")
 
 # Word-boundary match for dividend-class descriptions. `\b` keeps
 # "Distribution" / "Dividend" while rejecting "Redistribution" etc.
@@ -24,6 +28,9 @@ _DIV_DESC_RE = re.compile(r'\b(?:Dividend|Distribution|Dist\.)', re.IGNORECASE)
 # the net shares received (or removed) in Quantity and "...STK SPLIT ON <base>
 # SHS..." in the description, e.g.:
 #   "DIS - VANGUARD ... GROWTH ETF STK SPLIT ON 14 SHS REC 04/17/26 ..."
+# Trade-class description tokens (RBC's EXP/ASN codes and the spelled-out
+# forms), as whole words only.
+_TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell|EXP|ASN|Expired|EXPIRED|Assignment)\b')
 _RBC_STK_SPLIT_RE = re.compile(r'\b(?:STK|STOCK|FORWARD|REVERSE)\s+SPLIT\b', re.I)
 _RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SHS\b', re.I)
 
@@ -212,8 +219,12 @@ class RbcBrokerage(BaseBrokerage):
 
     @staticmethod
     def _is_trade_like(activity, desc):
+        # The description tokens are matched as WHOLE WORDS: the bare
+        # substring test turned every PEYTO EXPLORATION dividend into a
+        # 0-quantity BUYSELL (EXP inside EXPLORATION), dropping the income
+        # and failing schema validation.
         return any(x in activity for x in ('Buy', 'Sell', 'Reorganization', 'Exercise', 'Assignment')) or \
-               any(x in desc for x in ('Buy', 'Sell', 'EXP', 'ASN', 'Expired', 'Assignment', 'EXPIRED'))
+               bool(_TRADE_DESC_RE.search(desc or ''))
 
     @staticmethod
     def _is_stock_split(activity, desc):

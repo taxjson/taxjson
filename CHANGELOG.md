@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`taxjson init` scaffold**: every switch in one canonical, column-aligned
+  layout (`year`, `country`, `province`, `base_currency`,
+  `source_currencies`, `tax_date`, then the commented defaults for
+  `cross_asset`, `fx_cash_gains` and — Canada only — the three
+  `option_*` keys, each with its default and a one-line meaning), and
+  `holdings = [...]` shown on the margin account. Two projects' files now
+  diff only where their values differ.
+- **RBC Direct**: the 2022-vintage export's `10-Jan-22` settlement dates
+  parse (they silently fell back to the trade date); a dividend from a
+  company with EXP in its name (PEYTO EXPLORATION) is no longer classed
+  as a 0-quantity trade — the trade-code tokens match as whole words.
+- **`taxjson estimate`**: 2024 rate vintage (federal 15% first bracket,
+  BPA 15,705; ON/BC/AB and IRS 2024 tables) so a 2024 project no longer
+  runs on the 2025 tables.
+
 Canada rules, from a design + impact study and an adversarial audit of
 the engine against the Act (docs/design/canada-rules-2026-09.md):
 

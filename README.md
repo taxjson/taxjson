@@ -224,7 +224,10 @@ machines), resolve each with `taxjson elect <account> --set
 ### Project layout and configuration
 
 The full `taxjson.toml` schema (unknown keys warn at run start, with
-did-you-mean suggestions):
+did-you-mean suggestions). `taxjson init` writes the same keys in a
+canonical, column-aligned layout with every optional switch present as a
+commented default, so two years' files diff only where their values
+differ (`diff ~/taxes/2025/taxjson.toml ~/taxes/2026/taxjson.toml`):
 
 ```toml
 [settings]

@@ -937,7 +937,9 @@ class TestRoundSixPins(unittest.TestCase):
         from taxjson.lib.tax_estimate import (apply_vintage,
                                               estimate_canada,
                                               ca_amt_exemption)
-        self.assertEqual(apply_vintage(2024), "2025")
+        self.assertEqual(apply_vintage(2023), "2024")   # pre-earliest
+        self.assertEqual(apply_vintage(2024), "2024")
+        self.assertEqual(ca_amt_exemption(), 173205.0)
         r26 = estimate_canada(realized=10000.0, year=2026,
                               eligible_div=0.0, foreign_div=0.0,
                               pil=0.0, other_income=100000.0,

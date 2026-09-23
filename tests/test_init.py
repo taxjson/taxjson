@@ -141,8 +141,27 @@ class TestScaffoldCoversCurrentFeatures(unittest.TestCase):
         t = self._toml("canada")
         for key in ("province", "fx_cash_gains",
                     "brokerage", "query_id", "[instalments]",
-                    "prior_year_net_tax"):
+                    "prior_year_net_tax", "holdings",
+                    "option_premium_timing", "option_grant_timing_since",
+                    "option_buyback_loss_superficial"):
             self.assertIn(key, t, key)
+
+    def test_us_scaffold_omits_the_canadian_option_switches(self):
+        # ITA s.49(1) timing is Canada-only; the US engine always nets
+        # at close, so the US scaffold must not advertise the switches.
+        t = self._toml("usa")
+        self.assertNotIn("option_premium_timing", t)
+        self.assertIn("holdings", t)
+
+    def test_scaffold_keys_are_column_aligned(self):
+        # The point of the layout: two projects' files diff only where
+        # their values differ, so every [settings] comment starts in
+        # the same column.
+        t = self._toml("canada")
+        block = t.split("[settings]")[1].split("\n\n")[0]
+        cols = {line.index("#") for line in block.splitlines()
+                if "#" in line and not line.startswith("#")}
+        self.assertEqual(len(cols), 1, block)
 
     def test_scaffold_activates_nothing_new(self):
         # Every addition is a COMMENT: the parsed config is unchanged,

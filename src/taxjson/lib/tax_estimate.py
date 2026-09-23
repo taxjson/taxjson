@@ -29,7 +29,7 @@ RATE_VINTAGE = "2025"
 
 _INF = float("inf")
 
-# Two published vintages; `apply_vintage(year)` selects one (exact
+# Three published vintages; `apply_vintage(year)` selects one (exact
 # year, else the LATEST table at or before it — a 2027 project runs on
 # the 2026 tables until the annual refresh lands, and the printed
 # vintage says so). Figures verified 2026-09-09 against the CRA 2026
@@ -40,6 +40,41 @@ _INF = float("inf")
 # the official rate cards before relying on an estimate near a
 # threshold.
 _VINTAGES: Dict[str, Dict[str, Any]] = {
+    "2024": {
+        # CRA 2024 indexation (x1.047). Lowest federal rate still 15%
+        # (Bill C-4's cut starts in 2025). The AMT regime is already the
+        # post-2024 one (20.5%, exemption at the fourth-bracket floor
+        # 173,205), so the shared AMT model applies unchanged.
+        "CA_FED_BRACKETS": [(55867, .15), (111733, .205),
+                            (173205, .26), (246752, .29), (_INF, .33)],
+        "CA_FED_BPA": 15705.0,
+        "CA_PROVINCES": {
+            # ON x1.045; surtax thresholds 5,554 / 7,108.
+            "ON": {"brackets": [(51446, .0505), (102894, .0915),
+                                (150000, .1116), (220000, .1216),
+                                (_INF, .1316)],
+                   "bpa": 12399.0, "dtc_eligible": .10,
+                   "surtax": [(5554, .20), (7108, .36)],
+                   "amt_factor": .3367},
+            "BC": {"brackets": [(47937, .0506), (95875, .077),
+                                (110076, .105), (133664, .1229),
+                                (181232, .147), (252752, .168),
+                                (_INF, .205)],
+                   "bpa": 12580.0, "dtc_eligible": .12, "surtax": [],
+                   "amt_factor": .337},
+            "AB": {"brackets": [(148269, .10), (177922, .12),
+                                (237230, .13), (355845, .14),
+                                (_INF, .15)],
+                   "bpa": 21885.0, "dtc_eligible": .0812, "surtax": [],
+                   "amt_factor": .35},
+        },
+        # IRS Rev. Proc. 2023-34 (single).
+        "US_STD_DEDUCTION": 14600.0,
+        "US_ORD_BRACKETS": [(11600, .10), (47150, .12), (100525, .22),
+                            (191950, .24), (243725, .32),
+                            (609350, .35), (_INF, .37)],
+        "US_LTCG_BRACKETS": [(47025, .00), (518900, .15), (_INF, .20)],
+    },
     "2025": {
         # Bill C-4 cut the lowest federal rate mid-2025: CRA applies a
         # 14.5% BLENDED rate for the 2025 tax year.
