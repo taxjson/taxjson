@@ -13,7 +13,11 @@
   (or `--skip`, `--undo`, `--reset`; marks in `checklist.json`) and a
   mark never hides a later detector finding; `--walk` steps through the
   open items interactively; `--quick` skips the slow detectors; `--json`
-  for machines. Exit 1 while anything is open.
+  for machines. Exit 1 while anything is open. The report prints a
+  `checking ID (command) ...` line on stderr before each slow detector,
+  and `--walk` checks one step at a time so the first open step appears
+  at once instead of after the whole list (which took a silent minute
+  on a big book).
 - **`docs/filing.md`**: the filing checklist — freeze inputs, build and
   clean, reconcile to the slips, produce the numbers, file and lock,
   after assessment — each step with the command that proves it. Linked

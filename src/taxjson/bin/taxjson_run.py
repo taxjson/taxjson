@@ -6005,16 +6005,21 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     only = [args.only] if args.only else None
     if only and args.only not in {s[0] for s in cl.STEPS}:
         sys.exit(f"taxjson checklist: unknown step {args.only!r}")
+    if only and args.quick:
+        print("taxjson checklist: --only names one step; ignoring --quick.",
+              file=sys.stderr)
+        args.quick = False
 
     if args.walk:
         if not sys.stdin.isatty():
             sys.exit("taxjson checklist --walk needs a terminal (use "
                      "`taxjson checklist` for the report, --done/--skip to "
                      "record steps).")
-        _checklist_walk(ctx, cl, only)
+        _checklist_walk(ctx, cl, only, quick=args.quick)
         return
 
-    results = cl.evaluate(ctx, only=only, quick=args.quick)
+    results = cl.evaluate(ctx, only=only, quick=args.quick,
+                          progress=cl.stderr_progress)
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
     else:
@@ -6023,55 +6028,61 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _checklist_walk(ctx, cl, only) -> None:
-    """Interactive pass over the open steps: show why the step matters and
-    what the detector found, then record the user's decision."""
+def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
+    """Interactive pass over the open steps, one detector at a time: each
+    step is shown as soon as its own check finishes (the whole list can
+    take a minute on a big book), with why it matters and what was found,
+    then the user's decision is recorded."""
     meta = {s[0]: s for s in cl.STEPS}
-    results = cl.evaluate(ctx, only=only)
-    open_steps = [r for r in results if not r.passed]
-    if not open_steps:
-        print(cl.render(results, ctx.year, ctx.settings.get("country", "canada")))
-        print("\nEvery step is done.")
-        return
-    print(f"{len(open_steps)} open step(s). For each: [d]one  [s]kip  "
-          f"[r]e-check  [n]ext  [q]uit\n")
-    i = 0
-    while i < len(open_steps):
-        r = open_steps[i]
-        sid, stage, title, cmd, why = meta[r.id]
+    ids = [s[0] for s in cl.STEPS if not only or s[0] in only]
+    print("Filing checklist walk. For each open step: [d]one  [s]kip  "
+          "[r]e-check  [n]ext  [q]uit  (Enter = next)\n")
+    seen = 0
+    for sid in ids:
+        r = cl.evaluate(ctx, only=[sid], quick=quick,
+                        progress=cl.stderr_progress)[0]
+        if r.passed:
+            print(f"    {cl.SYMBOL[r.effective]} {sid}: {r.detail}"
+                  + (f" (marked {r.override})" if r.override else ""))
+            continue
+        seen += 1
+        _, stage, title, cmd, why = meta[sid]
         stage_name = dict(cl.STAGES)[stage]
-        print(f"--- {i + 1}/{len(open_steps)}  [{stage}. {stage_name}]  {sid}")
-        print(f"    {title}")
-        print(f"    why:     {why}")
-        print(f"    proves:  {cmd}")
-        print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}")
-        try:
-            ans = input("    > ").strip().lower()
-        except EOFError:
-            print()
-            return
-        if ans in ("q", "quit"):
-            return
-        if ans in ("d", "done"):
-            note = input("    note (optional): ").strip()
-            cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
-            print(f"    recorded: {sid} done\n")
-            i += 1
-        elif ans in ("s", "skip"):
-            note = input("    reason (optional): ").strip()
-            cl.set_override(ctx.root, ctx.year, sid, "skipped", note=note)
-            print(f"    recorded: {sid} skipped\n")
-            i += 1
-        elif ans in ("r", "recheck", "re-check"):
-            fresh = cl.evaluate(ctx, only=[sid])[0]
-            open_steps[i] = fresh
-            if fresh.passed:
-                print(f"    now: {cl.SYMBOL[fresh.effective]} {fresh.detail}\n")
-                i += 1
-        else:
-            i += 1
-    results = cl.evaluate(ctx, only=only)
-    print(cl.render(results, ctx.year, ctx.settings.get("country", "canada")))
+        while True:
+            print(f"\n--- [{stage}. {stage_name}]  {sid}")
+            print(f"    {title}")
+            print(f"    why:     {why}")
+            print(f"    proves:  {cmd}")
+            print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}")
+            try:
+                ans = input("    > ").strip().lower()
+            except EOFError:
+                print()
+                return
+            if ans in ("q", "quit"):
+                return
+            if ans in ("d", "done"):
+                note = input("    note (optional): ").strip()
+                cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
+                print(f"    recorded: {sid} done")
+                break
+            if ans in ("s", "skip"):
+                note = input("    reason (optional): ").strip()
+                cl.set_override(ctx.root, ctx.year, sid, "skipped", note=note)
+                print(f"    recorded: {sid} skipped")
+                break
+            if ans in ("r", "recheck", "re-check"):
+                r = cl.evaluate(ctx, only=[sid], progress=cl.stderr_progress)[0]
+                if r.passed:
+                    print(f"    now: {cl.SYMBOL[r.effective]} {r.detail}")
+                    break
+                continue
+            break                                   # next
+    print(f"\n{seen} open step(s) visited. Summary "
+          f"(`taxjson checklist` re-checks everything):")
+    results = cl.evaluate(ctx, only=only, quick=True)
+    print(cl.render(results, ctx.year, ctx.settings.get("country", "canada"),
+                    quick=True))
 
 
 def cmd_sanity(args: argparse.Namespace) -> None:

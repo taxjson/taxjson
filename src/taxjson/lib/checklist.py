@@ -632,7 +632,11 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
 
 # ----------------------------------------------------------------- evaluate
 def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
-             quick: bool = False) -> List[Result]:
+             quick: bool = False,
+             progress: Optional[Callable[[str, str], None]] = None) -> List[Result]:
+    """Run the detectors (all, or `only` these ids). `progress(id, command)`
+    is called before each slow detector so a caller can say what it is
+    waiting on — the audit alone can take a minute on a big book."""
     state = load_state(ctx.root)
     overrides = state.get("overrides") or {}
     if state.get("year") not in (None, ctx.year) and overrides:
@@ -643,9 +647,11 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
         if only and sid not in only:
             continue
         ov = overrides.get(sid) or {}
-        if quick and sid in SLOW and sid not in (only or []):
+        if quick and sid in SLOW:
             r = Result(sid, "todo", "skipped by --quick (run without it to check)")
         else:
+            if progress and sid in SLOW:
+                progress(sid, cmd)
             try:
                 r = DETECTORS[sid](ctx)
             except Exception as e:      # a detector must never take the list down
@@ -657,6 +663,12 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
                 r.finding = r.detail
         results.append(r)
     return results
+
+
+def stderr_progress(sid: str, cmd: str) -> None:
+    """Default progress line: what is being checked, on stderr so that
+    `--json` stdout stays machine-readable."""
+    print(f"  checking {sid} ({cmd}) ...", file=sys.stderr, flush=True)
 
 
 def render(results: List[Result], year: int, country: str,
