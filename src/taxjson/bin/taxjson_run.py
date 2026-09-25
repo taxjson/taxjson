@@ -5007,6 +5007,32 @@ def cmd_summary(args: argparse.Namespace) -> None:
     ]
     group_defs = [(g, rows) for g, rows in group_defs if rows]
     grouped = len(acct_rows) > 1 and len(group_defs) > 1
+
+    # What the return's capital-gains entry asks for (Schedule 3 lines
+    # 13199/13200; TurboTax's proceeds / ACB / outlays boxes): taxable
+    # accounts only, on form-export's convention, so these can never
+    # disagree with the export.
+    from taxjson.bin.taxjson_form_export import (filing_totals,
+                                                 load_dispositions)
+    _settings = cfg.get("settings") or {}
+    _fyear = year or _settings.get("year")
+    _is_us = _normalize_country(str(_settings.get("country", "canada"))) \
+        in ("us", "usa")
+    _date_key = "date" if _is_us else "date_settle"
+    filing_rows: List[Dict[str, Any]] = []
+    for acct, p in files.items():
+        if acct not in taxable_accounts:
+            continue
+        try:
+            _ents, _ = load_dispositions([p], _fyear, _date_key)
+        except (OSError, ValueError) as e:
+            print(f"taxjson sum: warning: {acct}: could not read "
+                  f"dispositions: {e}", file=sys.stderr)
+            continue
+        filing_rows.append({"account": acct, **filing_totals(_ents)})
+    filing_total = {k: round(sum(r[k] for r in filing_rows), 2)
+                    for k in ("proceeds", "acb", "outlays", "gain",
+                              "denied")}
     # Base currency is just a label here — soft-read, no hard config
     # dependency (the command works from the work/ gains files).
     base = _base_currency(root)
@@ -5050,6 +5076,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
             # consumers (the unrounded accumulation drifted by a cent).
             "totals": _sum_rows(acct_rows),
             "basis": basis, "year": year, "currency": base,
+            "filing": {"accounts": filing_rows, "totals": filing_total,
+                       "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "subtotals": {g.lower(): _sum_rows(rows)
                           for g, rows in group_defs}}
@@ -5089,6 +5117,29 @@ def cmd_summary(args: argparse.Namespace) -> None:
         print("ALL ACCOUNTS")
     _print_report_table(_table_lines(acct_rows, "TOTAL"),
                         rule_before_last=True)
+
+    if filing_rows:
+        _form = ("Form 8949 / Schedule D" if _is_us
+                 else "Schedule 3: line 13199 proceeds, 13200 gain")
+        print()
+        print(f"FOR THE RETURN — taxable accounts, {base} ({_form})")
+        _fl = [" ".join(["ACCOUNT", "PROCEEDS", "COST(ACB)", "OUTLAYS",
+                         "GAIN", "DENIED"])]
+        for r in filing_rows:
+            _fl.append(" ".join([r["account"], money(r["proceeds"]),
+                                 money(r["acb"]), money(r["outlays"]),
+                                 money(r["gain"]), money(r["denied"])]))
+        _fl.append(" ".join(["TOTAL", money(filing_total["proceeds"]),
+                             money(filing_total["acb"]),
+                             money(filing_total["outlays"]),
+                             money(filing_total["gain"]),
+                             money(filing_total["denied"])]))
+        _print_report_table(_fl, rule_before_last=True)
+        print("PROCEEDS − COST − OUTLAYS = GAIN. Short sales are shown as "
+              "|amounts| and sell-side commissions as outlays, as on the "
+              "form; COST includes the superficial losses DENIED, so the "
+              "gain is the allowed one. Per-security rows: `taxjson "
+              "form-export`.")
 
     if want_estimate:
         _print_tax_estimate(

@@ -342,6 +342,25 @@ def build_schedule3(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+
+def filing_totals(entries: List[Dict[str, Any]]) -> Dict[str, float]:
+    """The three amounts a return's capital-gains entry asks for, summed
+    over `entries` on the Schedule 3 convention (short sales as |amounts|,
+    sell-side commissions split out as outlays), with the ACB chosen so
+    that PROCEEDS − ACB − OUTLAYS equals the ALLOWED gain: a superficial
+    loss the engine denied is folded into the ACB, exactly as it is in the
+    per-account .sum report. `denied` reports how much that is."""
+    rep = build_schedule3(entries)
+    proceeds = round(sum(r["proceeds"] for r in rep["rows"]), 2)
+    outlays = round(sum(r["outlays"] for r in rep["rows"]), 2)
+    gain = round(sum(r["gain"] for r in rep["rows"]), 2)
+    denied = round(sum(float(e.get("disallowed_amount") or 0.0)
+                       for e in entries), 2)
+    return {"proceeds": proceeds,
+            "acb": round(proceeds - outlays - gain, 2),
+            "outlays": outlays, "gain": gain, "denied": denied,
+            "dispositions": len(entries)}
+
 # ---------------------------------------------------------------- render
 
 def _table(header: Tuple[str, ...], rows: List[Tuple[str, ...]],

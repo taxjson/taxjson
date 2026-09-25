@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`taxjson sum`: FOR THE RETURN block** — per taxable account, the
+  proceeds, cost (ACB), outlays, gain and denied superficial losses a
+  return's capital-gains entry asks for (TurboTax: proceeds / ACB /
+  outlays), on form-export's Schedule 3 convention; proceeds − ACB −
+  outlays equals the allowed gain. Also under `filing` in `--json`.
 - Docs: deck and website refreshed for s.49 option timing, `option-boundary`
   and `checklist`; the site's FAQ named a `taxjson filed` command that does
   not exist (it is `close-year` / `check-filed`).
