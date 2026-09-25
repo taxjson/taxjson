@@ -5129,7 +5129,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             _fl.append(" ".join([r["account"], money(r["proceeds"]),
                                  money(r["acb"]), money(r["outlays"]),
                                  money(r["gain"]), money(r["denied"])]))
-        _fl.append(" ".join(["TOTAL", money(filing_total["proceeds"]),
+        _fl.append(" ".join(["RETURN", money(filing_total["proceeds"]),
                              money(filing_total["acb"]),
                              money(filing_total["outlays"]),
                              money(filing_total["gain"]),

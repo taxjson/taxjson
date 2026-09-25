@@ -157,9 +157,19 @@ class TestRootMatcherClasses(unittest.TestCase):
             '[accounts.margin]\ntype = "taxable"\n')
         (root / "ticker.map").write_text("DISTINCT UNH.US UNH.TO\n")
 
+        # Dates are written as of 2026-09-05 and shifted to today, so the
+        # OLD.TO loss (settled 2026-08-25) is always 11 days old and its
+        # 30-day window still open. Hard-coded, the verdict flipped from
+        # VIOLATION to EXITABLE the day the window closed (2026-09-25).
+        from datetime import date as _d, timedelta as _td
+        _shift = _d.today() - _d(2026, 9, 5)
+
+        def _mv(s):
+            return (_d.fromisoformat(s) + _shift).isoformat()
+
         def tx(action, date, settle, sym, qty, price, **kw):
-            d = dict(action=action, date=date, time="09:30:00",
-                     date_settle=settle, symbol=sym, quantity=qty,
+            d = dict(action=action, date=_mv(date), time="09:30:00",
+                     date_settle=_mv(settle), symbol=sym, quantity=qty,
                      currency="CAD", price=price, net_amount=abs(qty) * price,
                      fee=0.0, account="margin")
             d.update(kw)
@@ -170,8 +180,8 @@ class TestRootMatcherClasses(unittest.TestCase):
             tx("BUYSELL", "2026-01-05", "2026-01-06", "UNH.TO", 300, 30.0),
             tx("BUYSELL", "2026-06-01", "2026-06-02", "OLD.TO", 100, 50.0),
             tx("BUYSELL", "2026-08-24", "2026-08-25", "OLD.TO", -100, 40.0),
-            {"action": "SPLIT", "date": "2026-08-27", "time": "00:00:00",
-             "date_settle": "2026-08-27", "symbol": "OLD.TO",
+            {"action": "SPLIT", "date": _mv("2026-08-27"), "time": "00:00:00",
+             "date_settle": _mv("2026-08-27"), "symbol": "OLD.TO",
              "symbol_new": "NEW.TO", "quantity": 1.0, "currency": "CAD",
              "account": "margin"},
             tx("BUYSELL", "2026-09-01", "2026-09-02", "NEW.TO", 100, 41.0),

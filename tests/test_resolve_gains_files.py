@@ -173,9 +173,14 @@ class TestSummaryGroupedTables(unittest.TestCase):
         self.assertIn("ALL ACCOUNTS", out)
         self.assertEqual(out.count("SUBTOTAL"), 2)
         self.assertEqual(out.count("\nTOTAL"), 1)
-        # Each account appears once in its group table, once in ALL.
-        self.assertEqual(out.count("margin"), 2)
-        self.assertEqual(out.count("rrsp"), 3)   # +1: the NOTE line
+        # Each account appears once in its group table, once in ALL —
+        # counted above the FOR THE RETURN block, which lists taxable
+        # accounts only (margin yes, the sheltered rrsp never).
+        tables, _, ret = out.partition("FOR THE RETURN")
+        self.assertEqual(tables.count("margin"), 2)
+        self.assertEqual(tables.count("rrsp"), 3)   # +1: the NOTE line
+        self.assertIn("margin", ret)
+        self.assertNotIn("rrsp", ret)
         # margin ties wash-adjusted 0.00; rrsp only has pre-wash
         # -1,500.00 — the ALL total is their sum.
         self.assertIn("-1,500.00", out)
