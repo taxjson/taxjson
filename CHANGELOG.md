@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+
+## v0.16.0 (2026-09-25)
+
 - **`taxjson sum`: FOR THE RETURN block** — per taxable account, the
   proceeds, cost (ACB), outlays, gain and denied superficial losses a
   return's capital-gains entry asks for (TurboTax: proceeds / ACB /
