@@ -349,8 +349,12 @@ class TestCraGoldenExamples(unittest.TestCase):
 
     def test_cra_least_of_three_formula(self):
         # CRA's published partial formula: denied = loss x
-        # min(S, P, B) / S.  S=40 sold, P=20 bought in window, B=10
-        # held at +30 (an old sheltered holding) -> 10/40 denied.
+        # min(S, P, B) / S.  S=40 sold, B=10 substituted shares held
+        # at +30. Re-premised (2026-09 engine audit): s.54 "superficial
+        # loss" needs identical property ACQUIRED in the window and
+        # the SUBSTITUTED property (what was acquired) still owned at
+        # its end — so B counts only shares acquired inside the window
+        # and still held. Here the RESP buys its 10 inside the window.
         txs = [self._T(date="2025-01-06", quantity=20,
                        net_amount=44000.0),
                self._T(date="2025-01-16", quantity=10,
@@ -359,12 +363,21 @@ class TestCraGoldenExamples(unittest.TestCase):
                        net_amount=23000.0),
                self._T(date="2025-01-30", quantity=-40,
                        net_amount=87000.0)]   # loss 4,000 = 100/sh
-        shel = [self._T(date="2024-09-26", quantity=10,
+        shel = [self._T(date="2025-02-10", quantity=10,
                         net_amount=23000.0, account="resp")]
         r = self._run(txs, shel)
         denied = sum(float(w.get("disallowed_amount") or 0)
                      for w in r.get("wash_sales") or [])
         self.assertAlmostEqual(denied, 10 * 100.0, places=2)
+        # The same 10 held by the RESP since BEFORE the window are not
+        # substituted property: the taxable buys are all gone at +30,
+        # so nothing acquired in the window is still owned — allowed.
+        # (The old class-wide balance denied 1,000 here, permanently.)
+        shel_old = [self._T(date="2024-09-26", quantity=10,
+                            net_amount=23000.0, account="resp")]
+        r = self._run(txs, shel_old)
+        self.assertEqual(sum(float(w.get("disallowed_amount") or 0)
+                             for w in r.get("wash_sales") or []), 0)
 
     def test_cra_no_acquisition_no_denial(self):
         # s.54(a): mere affiliated OWNERSHIP is not an acquisition —

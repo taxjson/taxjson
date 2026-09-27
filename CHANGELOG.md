@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Superficial loss (s.54): only substituted property backs a denial.**
+  A denial now needs units acquired inside the 61-day window that the
+  same holder (the taxable pool, or one registered / affiliated account)
+  still owns at its end. Units a registered account held before the
+  window no longer back one: a taxable rebuy sold again inside the
+  window, with an RRSP holding shares bought years earlier, was denied
+  PERMANENTLY (-1,000 → now allowed); a partly-sold taxable rebuy now
+  defers only what is still held instead of turning the rest permanent.
+  (A short taxable balance at day 30 also no longer offsets a registered
+  account's still-held acquisition.)
 - **Superficial loss: a trigger's side of the loss follows the pool's
   own ordering.** A rebuy that settles on the loss sale's settlement
   date but traded the day before (a later clock time) is in the pool

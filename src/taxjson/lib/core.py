@@ -2091,11 +2091,45 @@ class CanadaTaxRules(TaxRules):
                 # nothing, so the US §1091(e) "re-short" branch does not
                 # apply here: every loss uses the LONG criteria — opening
                 # long acquisitions, positive balance at day 30.
-                if bal_at_end > 1e-6:
-                    acquired_qty = sum(
-                        _row_loss_units(t, _opening_qty(t, 'LONG'))
-                        for t in potential_triggers)
-                    disallowed_qty = min(loss['qty'], acquired_qty, abs(bal_at_end))
+                #
+                # "Owns the SUBSTITUTED property" — the property acquired
+                # in the window — is measured PER HOLDER: the taxable
+                # book (one s.47 pool across the taxpayer's taxable
+                # accounts) and each registered / affiliated account on
+                # its own. A holder backs a denial only with units it
+                # ACQUIRED inside the window and still holds at its end:
+                # min(acquired in window, balance at end) — FIFO, since
+                # a later sale disposes of the oldest units first. Units
+                # a registered account held BEFORE the window neither
+                # create nor back a denial: a class-wide balance let an
+                # RRSP's 2020 shares turn a taxable rebuy that was sold
+                # again inside the window into a PERMANENT denial (2026-09
+                # engine and real-data audits: AMD, ENPH, XTD shapes).
+                def _holder(t):
+                    if t.id in sheltered_ids or t.id in affiliated_ids:
+                        return ('other', t.account)
+                    return ('taxable',)
+                _bal_end_h: Dict[Any, float] = {}
+                for t in current_tx_list:
+                    if (alias_of(t.symbol) == loss_alias
+                            and get_sort_date(t) <= end_window_date
+                            and t.action in ('BUYSELL', 'ASSIGN',
+                                             'TRANSFER',
+                                             'OPENING_BALANCE')):
+                        _h = _holder(t)
+                        _bal_end_h[_h] = (_bal_end_h.get(_h, 0.0)
+                                          + _row_loss_units(t, t.quantity))
+                _acq_h: Dict[Any, float] = {}
+                for t in potential_triggers:
+                    _h = _holder(t)
+                    _acq_h[_h] = (_acq_h.get(_h, 0.0)
+                                  + _row_loss_units(
+                                      t, _opening_qty(t, 'LONG')))
+                _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0)))
+                           for h, a in _acq_h.items()}
+                held_substituted = sum(_held_h.values())
+                if held_substituted > 1e-6:
+                    disallowed_qty = min(loss['qty'], held_substituted)
                     disallowed_amt = disallowed_qty * (loss['loss_amount'] / loss['qty'])
 
                     # --- Allocation across ALL in-window triggers ---
@@ -2108,9 +2142,12 @@ class CanadaTaxRules(TaxRules):
                     # order — post-loss buys first (primary
                     # replacements), then pre-loss buys latest-first —
                     # each capped at its OPENING quantity in loss-date
+                    # units AND at its holder's still-held substituted
                     # units. Sheltered/affiliated portions are
                     # PERMANENT (their ADJUST is scoped out of the
-                    # taxable pool); taxable portions defer as ACB.
+                    # taxable pool); taxable portions defer as ACB
+                    # (s.53(1)(f): the taxable holder's cap is its
+                    # still-held balance, so every deferral is backed).
                     # Pre/post-loss is decided by the SAME key the
                     # pool replays with (ca_main phase ladder), not by
                     # (settle date, clock time): a trigger traded the
@@ -2135,57 +2172,22 @@ class CanadaTaxRules(TaxRules):
                     allocations = []      # (trigger, qty, amount)
                     perm_amt = 0.0
                     _rem = disallowed_qty
+                    _cap_left = dict(_held_h)
                     for trg in ordered:
-                        cap = _row_loss_units(
-                            trg, _opening_qty(trg, 'LONG'))
+                        _h = _holder(trg)
+                        cap = min(_row_loss_units(
+                            trg, _opening_qty(trg, 'LONG')),
+                            _cap_left.get(_h, 0.0))
                         take = min(_rem, cap)
                         if take > 1e-9:
                             amt = take * per_share_loss
                             allocations.append((trg, take, amt))
-                            if (trg.id in sheltered_ids
-                                    or trg.id in affiliated_ids):
+                            if _h != ('taxable',):
                                 perm_amt += amt
                             _rem -= take
+                            _cap_left[_h] = _cap_left.get(_h, 0.0) - take
                         if _rem <= 1e-9:
                             break
-
-                    # A deferral is only real to the extent TAXABLE
-                    # still-held shares back it at the window's end —
-                    # s.53(1)(f) bumps the basis of the substituted
-                    # property STILL OWNED, and a bump inside a
-                    # registered account is moot. Allocating purely by
-                    # trigger let a taxable trigger whose own shares
-                    # were gone by +30 collect a deferral ADJUST that
-                    # parked on an empty pool and never recovered
-                    # (found by the conservation fuzzer; the FFH.TO
-                    # shape): denied-but-sheltered-backed portions are
-                    # PERMANENT, not deferred.
-                    _bal_tax = sum(
-                        _row_loss_units(t, t.quantity)
-                        for t in current_tx_list
-                        if alias_of(t.symbol) == loss_alias
-                        and get_sort_date(t) <= end_window_date
-                        and t.id not in sheltered_ids
-                        and t.id not in affiliated_ids
-                        and t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
-                                         'OPENING_BALANCE'))
-                    _backed = max(0.0, _bal_tax)     # replacement is always a LONG holding (s.54)
-                    _defer_room = min(disallowed_qty, _backed)
-                    _trimmed = []
-                    for trg, take, amt in allocations:
-                        if (trg.id in sheltered_ids
-                                or trg.id in affiliated_ids):
-                            _trimmed.append((trg, take, amt))
-                            continue
-                        _keep = min(take, max(0.0, _defer_room))
-                        _defer_room -= _keep
-                        if _keep > 1e-9:
-                            _trimmed.append(
-                                (trg, _keep, _keep * per_share_loss))
-                        _excess = take - _keep
-                        if _excess > 1e-9:
-                            perm_amt += _excess * per_share_loss
-                    allocations = _trimmed
 
                     # Route each kept (deferred) bump onto a pool that
                     # actually HOLDS substituted property at +30. The
