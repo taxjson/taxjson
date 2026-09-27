@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- **Security/privacy audit (2026-09).**
+  - `taxjson redact` also strips names in free text (`Initiated by`,
+    `Payee:`, honorifics, `wire from`, the RBC `Account: …,` holder,
+    Webull preamble name/street/city lines), account numbers after
+    `acct` / `a/c` / `transfer from|to` and alphanumeric ids, IB Flex
+    `AcctAlias`, phone numbers, Canadian postal codes, street
+    addresses, SIN/SSN-shaped numbers, and crypto wallet addresses and
+    exchange transaction ids (stable same-shape pseudonyms). It refuses
+    `.xlsx`/binary input (it used to write a corrupt, unredacted copy),
+    fails closed on an invalid `--also`/denylist pattern (exit 2,
+    nothing written), `--check` exits 1 when it finds something, and
+    the report lists (by line number) free text still worth reading.
+    It strips what it recognises — review the output before sharing.
+  - Owner-only files: `taxjson` and every `taxjson-*` tool add 077 to
+    the umask, so `work/`, `reports/`, `filed/`, `export/`,
+    `checklist.json` and a new project's `inputs/<account>/` are
+    0600/0700. `fetch` writes statements 0600 and tightens an existing
+    `inputs/<account>/` to 0700. Existing projects: `chmod -R go-rwx`.
+  - `taxjson serve --host <non-loopback>` requires a random per-run
+    token (printed URL `?token=…`, then an HttpOnly cookie); `/healthz`
+    no longer returns the project path.
+  - `fetch`: the Questrade token is only sent to
+    `https://*.questrade.com`; `~/.questrade_token.part` is created
+    fresh (O_EXCL, never through a symlink); the live-holdings TOML
+    escapes broker-supplied strings.
+  - `python-multipart >= 0.0.18` (CVE-2024-53981); Dependabot for pip
+    and GitHub Actions; the dev repo ignores run outputs (`work/`,
+    `filed/`, `export/`, `checklist.json`, `*.xlsx`, `*.pdf`).
+  - `scripts/check-pii.sh` / pre-push: scans the identities of new
+    commits and annotated tags (your own configured identity only
+    warns), tag messages, the new path of a pure rename; denylist
+    matching is case-insensitive and separator-tolerant and never
+    echoes the private string; 8-digit file-name tokens are exempt only
+    when they are real dates; `pii-ok` must be a comment marker
+    (`# pii-ok` / `pii-ok:`).
+  - SECURITY.md: keep a tax project repository private; FX comes from
+    the Bank of Canada Valet with Yahoo Finance as a fallback; what
+    Yahoo lookups reveal (held tickers and dates).
+  - Test fixtures copied from real statements replaced with synthetic
+    values.
+
 
 ## v0.16.0 (2026-09-25)
 
