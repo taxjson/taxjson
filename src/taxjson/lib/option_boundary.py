@@ -8,13 +8,22 @@ the write, or that is still open at the end of the project year. Each
 row says where the premium and any later amount land under the timing
 in force, and what — if anything — the filer has to do about a year
 that was already filed (ITA s.49(1)–(4); IT-479R paras 21–27).
+
+Two findings are ATTENTION rather than information (`attention: True`):
+  * a lot written in a year that is LOCKED (filed/<year>.json) but that
+    this project keeps on transition close timing (written before
+    `option_grant_timing_since`) — if that year was filed under grant
+    timing the premium is taxed twice, once there and again at the close;
+  * a lot still open although its expiry date passed within the year —
+    the export is missing the expiry/assignment row.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.core import TaxTransaction, is_option_symbol
+from taxjson.lib.core import (TaxTransaction, is_option_symbol,
+                              parse_option_expiry)
 from taxjson.lib.corporate_timeline import event_sort_key
 
 
@@ -84,12 +93,30 @@ def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
     return out
 
 
+def _filed_on_close(wy: int, filed_timing: Optional[Dict[int, Dict[str, Any]]]) -> Optional[bool]:
+    """True/False when the filed/<wy>.json lock RECORDS the timing its
+    return used (close-year writes it) — True if a lot written in `wy`
+    was on close timing there; None when the lock predates the record."""
+    rec = (filed_timing or {}).get(wy) or {}
+    if not rec or "option_premium_timing" not in rec:
+        return None
+    if str(rec.get("option_premium_timing") or "close").lower() != "grant":
+        return True
+    since = rec.get("option_grant_since")
+    return since is not None and wy < int(since)
+
+
 def straddling(transactions: List[TaxTransaction], year: int, timing: str,
-               since: Optional[int], filed_years: Optional[set] = None) -> List[Dict[str, Any]]:
+               since: Optional[int], filed_years: Optional[set] = None,
+               filed_timing: Optional[Dict[int, Dict[str, Any]]] = None
+               ) -> List[Dict[str, Any]]:
     """Rows for `taxjson option-boundary`: every write lot with a close in a
-    later year than the write, or still open at the end of `year`."""
-    filed_years = filed_years or set()
+    later year than the write, or still open at the end of `year`.
+    `filed_timing` maps a locked year to the option timing its lock
+    recorded (`option_premium_timing`, `option_grant_since`)."""
+    filed_years = set(filed_years or set()) | set((filed_timing or {}).keys())
     grant_mode = (timing or "close").lower() == "grant"
+    year_end = f"{year}-12-31"
     rows: List[Dict[str, Any]] = []
     for lot in write_lots(transactions):
         later = [c for c in lot.closes if int(c.date[:4]) > lot.write_year]
@@ -102,6 +129,33 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         # left on close timing (the transition) — say so instead of
         # suggesting the switch that is already on.
         transition = grant_mode and since is not None and wy < since
+        # ...unless the transition year is itself LOCKED: a year filed
+        # under grant timing (a project's default `since` is its own
+        # year) already taxed the premium, and close timing here taxes
+        # it again at the close (2026-09 audit: consecutive default
+        # projects reported +399 then +298 for a 298 economic gain).
+        filed_close = _filed_on_close(wy, filed_timing)
+        double = transition and wy in filed_years and filed_close is not True
+
+        def _double_text(prem_text: str, cy: Optional[int]) -> str:
+            known = filed_close is False
+            where_now = f"again in {cy}" if cy else "again when it closes"
+            return (f"ATTENTION: {wy} is locked (filed/{wy}.json) and "
+                    + (f"its lock records grant timing, so the {wy} return "
+                       f"reported the {prem_text} premium; " if known else
+                       f"a {wy} project on grant timing (the default, "
+                       f"since = its own year) reported the {prem_text} "
+                       f"premium there; ")
+                    + f"this project keeps the contract on close timing "
+                      f"(option_grant_timing_since = {since}) and taxes it "
+                    + where_now
+                    + f". Set option_grant_timing_since = {wy} (the first "
+                      f"year filed under grant timing) and keep it in "
+                      f"every later project"
+                    + ("" if known else
+                       f" (if {wy} was in fact filed on close timing the "
+                       f"transition is right and this can be ignored)"))
+
         def _switch(prem_text: str) -> str:
             if transition:
                 return (f"kept on close timing by option_grant_timing_since = {since} (transition): "
@@ -119,34 +173,57 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 else:
                     where = f"folded into the share leg in {cy}; nothing in {wy} (close timing)"
                     action = f"same as the Act's post-amendment state; if {wy} was filed with the premium as a gain, amend {wy} (s.49(4))"
+                    if double:
+                        action = (f"ATTENTION: {wy} is locked (filed/{wy}.json); if it was filed under grant timing "
+                                  f"with the {prem:,.2f} premium as a gain, T1-ADJ {wy} to remove it (s.49(4))")
             elif c.kind == "expiry":
                 if grant:
                     where = f"premium {prem:,.2f} recognised in {wy}; nothing in {cy}"; action = "no amendment"
                 else:
                     where = f"premium {prem:,.2f} recognised in {cy} (close timing)"
-                    action = f"the Act puts it in {wy} (s.49(1)) — " + _switch(f"{prem:,.2f}") + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else "")
+                    action = (_double_text(f"{prem:,.2f}", cy) if double else
+                              f"the Act puts it in {wy} (s.49(1)) — " + _switch(f"{prem:,.2f}") + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else ""))
             else:
                 if grant:
                     where = f"premium {prem:,.2f} in {wy}; buy-back loss {c.paid:,.2f} in {cy}"; action = "no amendment (IT-479R para 24)"
                 else:
                     where = f"net {prem - c.paid:,.2f} in {cy} (close timing)"
-                    action = (f"the Act puts +{prem:,.2f} in {wy} and -{c.paid:,.2f} in {cy} — " + _switch(f"{prem:,.2f}")
+                    action = (_double_text(f"{prem:,.2f}", cy) if double else
+                              f"the Act puts +{prem:,.2f} in {wy} and -{c.paid:,.2f} in {cy} — " + _switch(f"{prem:,.2f}")
                               + (f"; {wy} was filed: T1-ADJ {wy}" if wy in filed_years and not transition else ""))
             rows.append({"symbol": lot.symbol, "account": lot.account, "written": lot.write_date, "write_year": wy,
                          "units": c.units, "premium": round(prem, 2), "closed": c.date, "close_kind": c.kind,
                          "close_year": cy, "paid": round(c.paid, 2), "timing": "grant" if grant else "close",
-                         "where": where, "action": action})
+                         "where": where, "action": action,
+                         "attention": action.startswith("ATTENTION")})
         if still_open:
             prem = lot.per_unit * lot.open_units
+            expiry = parse_option_expiry(lot.symbol)
+            if expiry and expiry <= year_end:
+                # Past its expiry date within (or before) the tax year yet
+                # never closed in the books: the export dropped the
+                # expiry / assignment row. Not "open" — unknown.
+                rows.append({"symbol": lot.symbol, "account": lot.account, "written": lot.write_date,
+                             "write_year": wy, "units": lot.open_units, "premium": round(prem, 2),
+                             "closed": "", "close_kind": "expired?", "close_year": None, "paid": 0.0,
+                             "timing": "grant" if grant else "close",
+                             "where": f"expired {expiry} but no expiry/assignment row — check the export",
+                             "action": (f"ATTENTION: import the expiry, assignment or buy-back row for "
+                                        f"{lot.open_units:g} unit(s) (the broker export is missing it); "
+                                        f"until then the {prem:,.2f} premium's year is unknown"),
+                             "attention": True})
+                continue
             if grant:
                 where = f"premium {prem:,.2f} recognised in {wy}; open"
                 action = f"if assigned in a later year after {wy} is filed: T1-ADJ {wy} to remove it (s.49(4)); if bought back: loss in that year; if it expires: nothing"
             else:
                 where = f"nothing in {wy} while open (close timing)"
-                action = f"the Act puts {prem:,.2f} in {wy} (s.49(1)) — " + _switch(f"{prem:,.2f}")
+                action = (_double_text(f"{prem:,.2f}", None) if double else
+                          f"the Act puts {prem:,.2f} in {wy} (s.49(1)) — " + _switch(f"{prem:,.2f}"))
             rows.append({"symbol": lot.symbol, "account": lot.account, "written": lot.write_date, "write_year": wy,
                          "units": lot.open_units, "premium": round(prem, 2), "closed": "", "close_kind": "open",
                          "close_year": None, "paid": 0.0, "timing": "grant" if grant else "close",
-                         "where": where, "action": action})
+                         "where": where, "action": action,
+                         "attention": action.startswith("ATTENTION")})
     rows.sort(key=lambda r: (r["write_year"], r["symbol"], r["written"]))
     return rows

@@ -198,6 +198,82 @@
   with a "check where held" note instead of the unclassified `??` —
   crypto on a foreign exchange is generally specified foreign
   property; map it in `t1135.map`.
+- **`taxjson checklist`**: detectors no longer say "done" on nothing —
+  missing-history with no base files and option-boundary with no taxable
+  book are blocked; option-boundary reads `--json` and reports ATTENTION
+  rows and an unset `option_grant_timing_since`; form-export now compares
+  its totals with `sum`'s FOR THE RETURN block and the taxable accounts'
+  realized gain (it compared nothing); a T5008 finding names the actual
+  mismatch counts and symbols instead of the report's last note line. A
+  step marked `--done` whose detector says attention now shows `[!]` with
+  the mark and note beside the finding and keeps the list open (it
+  counted as done). `--undo` with no mark and `--reset` with no file say
+  so; `--note` without `--done`/`--skip` is an error; mark commands honour
+  `--json`; `--only` with an unknown id lists the ids; `--walk` re-prompts
+  on an unknown key with the key list and exits 1 (after the summary)
+  when quit or left with open steps. US projects get the US step names
+  (1099-B, Form 8949 / Schedule D, 1099-DIV, Form 1116, §988) and `n/a`
+  for option-boundary, T1135 and the NOA; a project with no taxable
+  account gets `n/a` rather than blocked for the taxable-only steps.
+
+- **Crypto accounts blend across exchanges** (Canada): with two or more
+  taxable `crypto = true` accounts, `taxjson run` now runs ONE blended
+  crypto pass (like the equity blend) producing each account's
+  `<account>_gains_wash.json` — ITA s.47 averaging and the superficial-
+  loss rule reach identical crypto held on different exchanges. Each
+  exchange's book was computed alone, while the run printed a note
+  claiming the blended pass covered them (a sale at a blended-ACB loss
+  replaced on the other exchange filed -10,000 allowed instead of 0).
+  `audit` and `check-filed` recompute the same way; a single crypto
+  account and US crypto (no §1091) are unchanged, and the overlap note
+  now only names accounts a blend actually spans.
+
+- **`taxjson carryover` ignored the option-timing settings**: the ledger
+  ran every year on close timing while the returns were filed on grant
+  timing (a filed 2025 of -601 showed as -1,000). The wrapper now passes
+  `option_premium_timing` / `option_grant_timing_since` /
+  `option_buyback_loss_superficial` (new `--option-*` flags on
+  `taxjson-carryover`), as do the `list --date` as-of recompute and the
+  raw base-currency holdings pass.
+- **`option_grant_timing_since` no longer drifts with `year`**: unset, it
+  defaults to the project year, so consecutive default projects taxed a
+  year-straddling premium twice (+399 in 2025, +298 in 2026 for a 298
+  economic gain). `taxjson init` now writes the key uncommented; `taxjson
+  run` and `option-boundary` warn on every run while a Canadian grant-
+  timing project leaves it unset; `close-year` records the timing in
+  `filed/<year>.json`; and `option-boundary` flags ATTENTION on a
+  contract written in a locked year but kept on transition close timing
+  here (definite when the lock records grant timing).
+- **`taxjson option-boundary`**: a contract past its expiry date within
+  the tax year with no expiry/assignment row is flagged "expired but no
+  expiry/assignment row — check the export" instead of listed as open;
+  with no taxable book in work/ the command exits 1 ("NOT CHECKED")
+  instead of printing the all-clear; `--json` adds `attention`, `amend`,
+  `since_explicit` and `missing_books`.
+
+- **Schedule 3 line routing** (`form-export --form schedule3`, `taxjson
+  sum`): every disposition went on line 13199/13200 ("section 3, publicly
+  traded shares"). Rows are now routed by property type to the 2025 form's
+  Part 3 lines — line 4 shares and fund units (13199/13200), line 6
+  options, futures and other properties (15199/15300; T4037 lists options
+  there), line 7 crypto-assets from `crypto = true` accounts (15200/15301;
+  15199/15300 for 2024 and earlier) — with per-line totals in the text,
+  CSV (`line`, `proceeds_line`, `gain_line`, `property`, `denied` columns)
+  and JSON (`lines`, per-code `totals`). Standalone `taxjson-form-export`
+  takes crypto books with `--crypto FILE`.
+- **FOR THE RETURN block**: one row per Schedule 3 line (was per
+  account; the per-account split stays in `--json`), each with its line
+  number and codes. The footer said COST *includes* the denied
+  superficial losses — backwards: the ACB shown is REDUCED by the denial
+  so proceeds − ACB − outlays is the allowed gain, and the denied amount
+  goes onto the replacement's ACB. form-export's per-row ACB now uses the
+  same convention, so every row foots (a fully denied row used to show
+  proceeds 1,955.52 − ACB 11,536.54 − outlays 1.40 against a gain of
+  0.00). US projects show Form 8949's own Part I/II (d) proceeds, (e)
+  cost, (g) adjustment and (h) gain — the block used to show Schedule 3
+  style proceeds and a cost net of the wash adjustment that matched
+  neither 8949 column. A line under the block gives the `fx-cash`
+  s.39(1.1) estimate (line 15300), or a pointer when it cannot be built.
 
 
 ## v0.16.0 (2026-09-25)

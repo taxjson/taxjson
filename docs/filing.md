@@ -64,8 +64,13 @@ the open steps one at a time; `--quick` skips the slow detectors.
 
 ## 4. Produce the filing numbers
 
-- [ ] `taxjson form-export` — Schedule 3 rows; its total must equal the
-      realized gain in `reports/<account>.sum` (wash-adjusted).
+- [ ] `taxjson form-export` — Schedule 3 rows by property type: Part 3
+      line 4 shares and fund units (13199/13200), line 6 options, futures
+      and other properties (15199/15300), line 7 crypto-assets
+      (15200/15301; 15199/15300 before 2025). Each line's totals equal
+      the matching row of `taxjson sum`'s FOR THE RETURN block, and all
+      lines together equal the wash-adjusted realized gain in
+      `reports/<account>_wash.sum`.
 - [ ] `taxjson t1135` — required when the cost of foreign property
       exceeded CAD 100,000 at any time in the year.
 - [ ] `taxjson carryover` — net capital losses of other years (line

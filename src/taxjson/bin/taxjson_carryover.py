@@ -395,6 +395,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Label for amounts (default: CAD)")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    # The written-option premium timing the filing pipeline uses (the
+    # `taxjson carryover` wrapper passes the project's settings): without
+    # them the ledger computed every year on close timing while the
+    # returns were filed on grant timing (2026-09 audit: filed 2025 -601
+    # vs ledger -1,000 on the same book).
+    parser.add_argument("--option-premium-timing", choices=["grant", "close"],
+                        default="close",
+                        help="Canada: written-option premium timing (grant "
+                             "— ITA s.49(1) — or close). Ignored for the US.")
+    parser.add_argument("--option-grant-since", type=int, default=None,
+                        metavar="YEAR",
+                        help="With grant timing: contracts written before "
+                             "YEAR keep close timing.")
+    parser.add_argument("--option-buyback-wash", action="store_true",
+                        help="Canada, grant timing: buy-back loss of a "
+                             "written option can be superficial.")
     args = parser.parse_args(argv)
 
     if args.country is None:
@@ -434,11 +450,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ledger computed on a different basis than the return — US
     # multi-account books need per-account FIFO lots, and US crypto
     # loses §1091 entirely).
+    _opt = dict(option_premium_timing=args.option_premium_timing,
+                option_grant_since=args.option_grant_since,
+                option_buyback_loss_superficial=args.option_buyback_wash)
     req = GainsRequest(country=country, year=None, taxable=True,
                        tax_date=args.tax_date,
                        incomplete_history=args.incomplete_history,
                        phantom_hint=False,
-                       per_account_basis=(country == 'usa'))
+                       per_account_basis=(country == 'usa'), **_opt)
     try:
         results = run_gains(transactions, sheltered, (), req)
     except (TransferValidationError, _AmbiguousXferErr) as exc:
@@ -450,7 +469,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                              tax_date=args.tax_date,
                              incomplete_history=args.incomplete_history,
                              phantom_hint=False, no_wash=True,
-                             per_account_basis=True)
+                             per_account_basis=True, **_opt)
         try:
             res_c = run_gains(crypto_txs, sheltered, (), req_c)
         except (TransferValidationError, _AmbiguousXferErr) as exc:

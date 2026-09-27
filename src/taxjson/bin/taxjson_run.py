@@ -1446,8 +1446,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             if force or needs_rebuild(raw_base_gains, raw_base_json):
                 print("  raw base gains")
                 run_to_file(_cmd("taxjson-gains") + [
-                    "--country", country, str(raw_base_json),
-                ], raw_base_gains, capture_diag=False)
+                    "--country", country,
+                ] + option_timing_flags(settings) + [str(raw_base_json)],
+                            raw_base_gains, capture_diag=False)
             # Machine-readable holdings handoff (TOML) for live-pricing /
             # trading tools. ticker.map's JOURNAL lines net offsetting
             # cross-currency legs (Norbert's Gambit) during aggregation.
@@ -1632,10 +1633,15 @@ def stage_blended_wash_pass(names: List[str],
                             settings: Dict[str, Any], cache: Path,
                             reports_dir: Path,
                             sheltered_base: Optional[Path],
-                            incomplete_history: Optional[Path] = None
+                            incomplete_history: Optional[Path] = None,
+                            tag: str = "blend"
                             ) -> None:
     """ONE combined gains run over every taxable equity account, split
     back into the per-account `<name>_gains_wash.json` artifacts.
+    `tag="cryptoblend"` runs the same pass over a Canadian project's
+    crypto accounts (ITA s.47 averaging and the superficial-loss rule
+    reach identical crypto held on different exchanges) with its own
+    dot-prefixed intermediates.
 
     This is what makes the canonical (filed-from) numbers correct for
     multi-account books: Canada's ACB blends across all non-registered
@@ -1645,7 +1651,8 @@ def stage_blended_wash_pass(names: List[str],
     Single-account projects produce identical numbers by construction.
     The per-account `<name>.sum` stays the isolated pre-blend baseline —
     comparing the pair shows exactly what blending changed."""
-    print(f"==> blended taxable pass ({', '.join(names)})")
+    print(f"==> blended taxable {'crypto ' if tag != 'blend' else ''}"
+          f"pass ({', '.join(names)})")
     # Dot-prefixed intermediates: pathlib globs DO match leading dots
     # (`*_base.json` matches `.blend_base.json`), so every discovery
     # site — resolve_gains_files and the radar/missing-history fallback
@@ -1653,11 +1660,11 @@ def stage_blended_wash_pass(names: List[str],
     # name here (or a glob site without the dot filter) would be
     # discovered as a phantom account and every aggregate would
     # double-count.
-    combined_base = cache / ".blend_base.json"
+    combined_base = cache / f".{tag}_base.json"
     run_to_file(_cmd("taxjson-merge") + [
         str(cache / f"{n}_base.json") for n in names], combined_base)
-    combined_wash = cache / ".blend_gains_wash.json"
-    wash_traces = cache / ".blend_gains_wash.traces"
+    combined_wash = cache / f".{tag}_gains_wash.json"
+    wash_traces = cache / f".{tag}_gains_wash.traces"
     country = _normalize_country(settings["country"])
     cmd = _cmd("taxjson-gains") + [
         "--taxable",
@@ -1687,7 +1694,7 @@ def stage_blended_wash_pass(names: List[str],
     # (2026-09 audit).
     _blend_diag = combined_wash.with_name(combined_wash.name + ".diag")
     for name in names:
-        _mirror = cache / f"{name}_blend.diag"
+        _mirror = cache / f"{name}_{tag}.diag"
         if _blend_diag.exists() and _blend_diag.stat().st_size:
             _mirror.write_text(_blend_diag.read_text(errors="replace"),
                                encoding="utf-8")
@@ -1928,6 +1935,11 @@ def cmd_run(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts", {})
     if _normalize_country(str(settings.get("country", "canada"))) == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
+    _since_warn = _grant_since_warning(settings)
+    if _since_warn and any(_c.get("type") == "taxable" and not _c.get("crypto")
+                           for _c in accounts.values()):
+        # (a crypto-only project writes no options — nothing to warn about)
+        print(f"taxjson: warning: {_since_warn}", file=sys.stderr)
 
     # Orphaned artifacts from RENAMED/REMOVED accounts: work/ files
     # keep matching the discovery globs (resolve_gains_files, fees
@@ -2126,6 +2138,16 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     taxable_outputs: List[Tuple[str, Dict[str, Path], bool]] = []
     _blend_names: List[str] = []
+    # Canada: crypto accounts blend with each other when the project
+    # CONFIGURES two or more (decided on the config, not on this run's
+    # --account subset, so a single-account rerun never rewrites a
+    # blended wash file with a one-exchange one).
+    _crypto_blend_names: List[str] = []
+    _crypto_blend = (
+        _normalize_country(settings.get("country", "canada"))
+        not in ("us", "usa")
+        and sum(1 for _c in accounts.values()
+                if _c.get("type") == "taxable" and _c.get("crypto")) >= 2)
     for name, acfg in taxable_items:
         try:
             out = stage_account(name, acfg, settings, inputs_dir, cache,
@@ -2158,6 +2180,11 @@ def cmd_run(args: argparse.Namespace) -> None:
             # after this loop (Canada ACB blending / US cross-account
             # §1091 — the multi-account fix). Collected here.
             _blend_names.append(name)
+        elif _crypto_wash_covered and _crypto_blend:
+            # Two or more Canadian crypto accounts: ONE blended crypto
+            # pass after this loop (s.47 averaging and superficial loss
+            # across exchanges — each exchange's book alone missed both).
+            _crypto_blend_names.append(name)
         elif _crypto_wash_covered and sheltered_base is not None:
             stage_wash_pass(name, settings, cache, reports_dir, sheltered_base,
                             incomplete_history=phantoms_arg)
@@ -2188,6 +2215,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         stage_blended_wash_pass(_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
                                 incomplete_history=phantoms_arg)
+    if _crypto_blend_names and not args.account and not pending_accounts:
+        stage_blended_wash_pass(_crypto_blend_names, settings, cache,
+                                reports_dir, sheltered_base,
+                                incomplete_history=phantoms_arg,
+                                tag="cryptoblend")
 
     if pending_accounts:
         # Some account(s) stopped at unresolved corp-action elections.
@@ -2277,9 +2309,17 @@ def cmd_run(args: argparse.Namespace) -> None:
             if not is_crypto or _crypto_wash_covered]
         stage_cross_reports(all_gains, taxable_equity_base, sheltered_base, reports_dir,
                             ticker_map_arg)
+        # Overlap notes per blended group — the note says the blended
+        # pass covers the symbol, so it must only name accounts a blend
+        # actually spans (crypto blends only in Canada; equity and
+        # crypto never blend with each other).
         _warn_cross_taxable_overlap(
-            [(n, o["base"]) for n, o, _ in taxable_outputs],
+            [(n, o["base"]) for n, o, c in taxable_outputs if not c],
             settings)
+        if _crypto_blend:
+            _warn_cross_taxable_overlap(
+                [(n, o["base"]) for n, o, c in taxable_outputs if c],
+                settings)
     stage_fees(cache, settings, rates, reports_dir)
 
     # Filed-year lock: recompute every closed year from the fresh books
@@ -2436,8 +2476,9 @@ _TEMPLATE_OPTION_LINES = """\
 # Written-option premiums (ITA s.49(1)) — see `taxjson option-boundary`:
 # option_premium_timing           = "grant"   # gain in the year WRITTEN; "close" nets the premium at the
 #                                             #   closing transaction instead (the pre-s.49 behaviour = feature off)
-# option_grant_timing_since       = {year}      # contracts written before this year keep close timing — set it to
-#                                             #   the first year you FILE under grant timing and keep it every year after
+option_grant_timing_since         = {year}      # contracts written before this year keep close timing. SET ONCE to
+#                                             #   the first year you FILE under grant timing and keep it UNCHANGED
+#                                             #   in every later year's project (do not bump it with `year`)
 # option_buyback_loss_superficial = false     # true: strict s.54 reading — a buy-back loss is superficial when
 #                                             #   identical options are bought within 30 days and still held
 """
@@ -5219,18 +5260,24 @@ def cmd_summary(args: argparse.Namespace) -> None:
     group_defs = [(g, rows) for g, rows in group_defs if rows]
     grouped = len(acct_rows) > 1 and len(group_defs) > 1
 
-    # What the return's capital-gains entry asks for (Schedule 3 lines
-    # 13199/13200; TurboTax's proceeds / ACB / outlays boxes): taxable
-    # accounts only, on form-export's convention, so these can never
-    # disagree with the export.
-    from taxjson.bin.taxjson_form_export import (filing_totals,
-                                                 load_dispositions)
+    # What the return's capital-gains entry asks for: taxable accounts
+    # only, on form-export's convention, so these can never disagree with
+    # the export. Canada: one row per Schedule 3 line (shares 13199/13200,
+    # options & other properties 15199/15300, crypto-assets 15200/15301).
+    # USA: Form 8949's own part totals — (d) proceeds, (e) cost, (g)
+    # adjustment, (h) gain.
+    from taxjson.bin.taxjson_form_export import (filing_lines,
+                                                 filing_parts_8949,
+                                                 filing_totals,
+                                                 load_dispositions,
+                                                 mark_crypto)
     _settings = cfg.get("settings") or {}
     _fyear = year or _settings.get("year")
     _is_us = _normalize_country(str(_settings.get("country", "canada"))) \
         in ("us", "usa")
     _date_key = "date" if _is_us else "date_settle"
     filing_rows: List[Dict[str, Any]] = []
+    _filing_ents: List[Dict[str, Any]] = []
     for acct, p in files.items():
         if acct not in taxable_accounts:
             continue
@@ -5240,10 +5287,49 @@ def cmd_summary(args: argparse.Namespace) -> None:
             print(f"taxjson sum: warning: {acct}: could not read "
                   f"dispositions: {e}", file=sys.stderr)
             continue
-        filing_rows.append({"account": acct, **filing_totals(_ents)})
-    filing_total = {k: round(sum(r[k] for r in filing_rows), 2)
-                    for k in ("proceeds", "acb", "outlays", "gain",
-                              "denied")}
+        if ((cfg.get("accounts") or {}).get(acct) or {}).get("crypto"):
+            _ents = mark_crypto(_ents)
+        _filing_ents += _ents
+        if _is_us:
+            try:
+                _parts = filing_parts_8949(_ents)
+            except SystemExit as e:
+                print(f"taxjson sum: warning: {acct}: {e}", file=sys.stderr)
+                continue
+            filing_rows.append({"account": acct, **{
+                k: round(sum(x[k] for x in _parts), 2)
+                for k in ("proceeds", "cost", "adjustment", "gain")},
+                "dispositions": len(_ents)})
+        else:
+            filing_rows.append({"account": acct,
+                                **filing_totals(_ents, _fyear)})
+    filing_line_rows: List[Dict[str, Any]] = []
+    if _is_us:
+        try:
+            filing_line_rows = filing_parts_8949(_filing_ents)
+        except SystemExit:
+            filing_line_rows = []           # warned per account above
+        _fkeys = ("proceeds", "cost", "adjustment", "gain")
+    else:
+        filing_line_rows = filing_lines(_filing_ents, _fyear)
+        _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
+    filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
+                    for k in _fkeys}
+    # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
+    # (T4037) but lives outside the engine's dispositions; show the
+    # estimate beside the block when the ledger builds, else a pointer.
+    _fx_note: Optional[Dict[str, Any]] = None
+    if filing_rows and not _is_us:
+        try:
+            import contextlib as _ctx
+            import io as _io
+            with _ctx.redirect_stderr(_io.StringIO()):
+                _fxl, _fxv, _, _, _ = _fx_cash_doc(root, cache)
+            _fx_note = {"net_gain": round(float(_fxl["net_gain"]), 2),
+                        "reportable": round(float(_fxv["reportable"]), 2),
+                        "estimate": True, "line": "15300"}
+        except (SystemExit, Exception):             # noqa: BLE001
+            _fx_note = None
     # Base currency is just a label here — soft-read, no hard config
     # dependency (the command works from the work/ gains files).
     base = _base_currency(root)
@@ -5288,6 +5374,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
             "totals": _sum_rows(acct_rows),
             "basis": basis, "year": year, "currency": base,
             "filing": {"accounts": filing_rows, "totals": filing_total,
+                       ("parts_8949" if _is_us else "lines"):
+                           filing_line_rows,
+                       "fx_cash": _fx_note,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "subtotals": {g.lower(): _sum_rows(rows)
@@ -5330,27 +5419,67 @@ def cmd_summary(args: argparse.Namespace) -> None:
                         rule_before_last=True)
 
     if filing_rows:
-        _form = ("Form 8949 / Schedule D" if _is_us
-                 else "Schedule 3: line 13199 proceeds, 13200 gain")
+        from taxjson.lib.report_model import render_table as _rt
+        _names = ", ".join(r["account"] for r in filing_rows)
         print()
-        print(f"FOR THE RETURN — taxable accounts, {base} ({_form})")
-        _fl = [" ".join(["ACCOUNT", "PROCEEDS", "COST(ACB)", "OUTLAYS",
-                         "GAIN", "DENIED"])]
-        for r in filing_rows:
-            _fl.append(" ".join([r["account"], money(r["proceeds"]),
-                                 money(r["acb"]), money(r["outlays"]),
-                                 money(r["gain"]), money(r["denied"])]))
-        _fl.append(" ".join(["RETURN", money(filing_total["proceeds"]),
-                             money(filing_total["acb"]),
-                             money(filing_total["outlays"]),
-                             money(filing_total["gain"]),
-                             money(filing_total["denied"])]))
-        _print_report_table(_fl, rule_before_last=True)
-        print("PROCEEDS − COST − OUTLAYS = GAIN. Short sales are shown as "
-              "|amounts| and sell-side commissions as outlays, as on the "
-              "form; COST includes the superficial losses DENIED, so the "
-              "gain is the allowed one. Per-security rows: `taxjson "
-              "form-export`.")
+        if _is_us:
+            print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
+                  f"(Form 8949 → Schedule D, tax year {_fyear})")
+            _body = [[f"{r['label']} → {r['schedule_d']}",
+                      money(r["proceeds"]), money(r["cost"]),
+                      money(r["adjustment"]), money(r["gain"])]
+                     for r in filing_line_rows]
+            _foot = [["RETURN", money(filing_total["proceeds"]),
+                      money(filing_total["cost"]),
+                      money(filing_total["adjustment"]),
+                      money(filing_total["gain"])]]
+            for _ln in _rt(["FORM 8949", "(d) PROCEEDS", "(e) COST",
+                            "(g) ADJUSTMENT", "(h) GAIN"],
+                           ["<", ">", ">", ">", ">"], _body, _foot):
+                print(_ln)
+            print("(d) − (e) + (g) = (h). Column (g) is the code-W wash-"
+                  "sale loss disallowed and added back, so (h) is the "
+                  "allowed gain; the disallowed loss moves to the "
+                  "replacement shares' basis. Per-sale rows: `taxjson "
+                  "form-export`.")
+        else:
+            print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
+                  f"(Schedule 3, tax year {_fyear})")
+            _body = [[f"Line {r['line']} {r['short']} "
+                      f"({r['proceeds_code']}/{r['gain_code']})"
+                      if r["line"] else
+                      f"{r['short']} ({r['proceeds_code']}/"
+                      f"{r['gain_code']})",
+                      money(r["proceeds"]), money(r["acb"]),
+                      money(r["outlays"]), money(r["gain"]),
+                      money(r["denied"])] for r in filing_line_rows]
+            _foot = [["RETURN", money(filing_total["proceeds"]),
+                      money(filing_total["acb"]),
+                      money(filing_total["outlays"]),
+                      money(filing_total["gain"]),
+                      money(filing_total["denied"])]]
+            for _ln in _rt(["SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)",
+                            "OUTLAYS", "GAIN", "DENIED"],
+                           ["<", ">", ">", ">", ">", ">"], _body, _foot):
+                print(_ln)
+            print("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed gain. "
+                  "Short sales are shown as |amounts| and sell-side "
+                  "commissions as outlays, as on the form. Where a "
+                  "superficial loss was DENIED the ACB is REDUCED by it, "
+                  "so the gain stays the allowed one; the denied amount "
+                  "is added to the ACB of the replacement property "
+                  "instead. Per-security rows: `taxjson form-export`; "
+                  "per account: `taxjson sum --json`.")
+            if _fx_note is not None:
+                print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
+                      f"the rows above): net {money(_fx_note['net_gain'])}, "
+                      f"reportable {money(_fx_note['reportable'])} after "
+                      f"the $200 exemption; T4037 puts it on line 15300. "
+                      f"Review with `taxjson fx-cash`.")
+            else:
+                print("FX on foreign cash (s.39(1.1)) is not in the rows "
+                      "above — T4037 puts it on line 15300; see `taxjson "
+                      "fx-cash`.")
 
     if want_estimate:
         _print_tax_estimate(
@@ -6155,13 +6284,41 @@ def cmd_redact(args: argparse.Namespace) -> None:
     raise SystemExit(redact_main(argv))
 
 
+def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
+    """The warning for a Canada project on grant timing with no explicit
+    `option_grant_timing_since`: the default is the PROJECT year, which
+    moves every year — consecutive default projects tax a year-straddling
+    premium twice (2026-09 audit: +399 in 2025, +298 in 2026, for a 298
+    economic gain). None when the key is set or does not apply."""
+    if _normalize_country(str(settings.get("country", "canada"))) in (
+            "us", "usa"):
+        return None
+    if str(settings.get("option_premium_timing", "grant")).strip().lower() \
+            != "grant":
+        return None
+    if settings.get("option_grant_timing_since") not in (None, ""):
+        return None
+    yr = settings.get("year")
+    return (f"[settings] option_grant_timing_since is not set, so grant "
+            f"timing (ITA s.49(1)) starts at the project year ({yr}) — a "
+            f"default that MOVES when you bump `year`: next year's project "
+            f"would put this year's year-straddling written options back "
+            f"on close timing and tax their premium a second time. Add "
+            f"`option_grant_timing_since = <first year you file under "
+            f"grant timing>` (e.g. {yr}) to [settings] once and keep it "
+            f"unchanged in every later year's project.")
+
+
 def cmd_option_boundary(args: argparse.Namespace) -> None:
     """`taxjson option-boundary [--json]`: every written option in the
     taxable accounts whose write and close straddle a tax-year boundary
     (or that is still open at the project year's end) — where each
     amount lands under the timing in force (ITA s.49), and whether a
     filed year needs a T1-ADJ. A `filed/<year>.json` lock is what turns
-    "if that year was filed" into a fact."""
+    "if that year was filed" into a fact; ATTENTION rows (a locked year
+    kept on transition close timing, an expired contract with no
+    expiry row) need action. Exit 1 when no taxable book exists (nothing
+    was checked), 0 otherwise."""
     import json
     from taxjson.lib.core import TaxTransaction
     from taxjson.lib.option_boundary import straddling
@@ -6174,21 +6331,37 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     kw = option_timing_from_settings(settings)
     timing = kw.get("option_premium_timing", "close") if kw else "close"
     since = kw.get("option_grant_since") if kw else None
+    _w = _grant_since_warning(settings)
+    if _w:
+        print(f"taxjson option-boundary: warning: {_w}", file=sys.stderr)
     filed_years = set()
+    filed_timing: Dict[int, Dict[str, Any]] = {}
     for f in (root / "filed").glob("*.json"):
         try:
-            filed_years.add(int(f.stem))
+            fy = int(f.stem)
         except ValueError:
-            pass
+            continue
+        filed_years.add(fy)
+        try:
+            _ot = (json.loads(f.read_text(encoding="utf-8")) or {}).get(
+                "option_timing")
+        except (OSError, ValueError, AttributeError):
+            _ot = None
+        if isinstance(_ot, dict):
+            filed_timing[fy] = _ot
     rows = []
+    books = 0
+    missing = []
     for name, acfg in sorted((cfg.get("accounts") or {}).items()):
         if not isinstance(acfg, dict) or acfg.get("type", "sheltered") != "taxable":
             continue
         base = cache / f"{name}_base.json"
         if not base.exists():
+            missing.append(name)
             print(f"taxjson option-boundary: warning: no {base.name} — run `taxjson run` first",
                   file=sys.stderr)
             continue
+        books += 1
         doc = json.loads(base.read_text(encoding="utf-8"))
         txs = []
         for r in (doc.get("transactions", doc) if isinstance(doc, dict) else doc):
@@ -6197,12 +6370,24 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                                              if k in TaxTransaction.__dataclass_fields__}))
             except TypeError:
                 continue
-        for r in straddling(txs, year, timing, since, filed_years):
+        for r in straddling(txs, year, timing, since, filed_years,
+                            filed_timing=filed_timing):
             r["account"] = r["account"] or name
             rows.append(r)
+    if not books:
+        # Nothing was checked: printing the all-clear here let the
+        # checklist mark the step done on a project that never ran.
+        sys.exit("taxjson option-boundary: NOT CHECKED — no taxable "
+                 "base files in work/ (run `taxjson run` first).")
+    amend = [r for r in rows if r["action"].startswith("T1-ADJ")]
+    attention = [r for r in rows if r.get("attention")]
     if getattr(args, "json", False):
         _json_out({"year": year, "timing": timing, "since": since,
-                   "filed_years": sorted(filed_years), "rows": rows})
+                   "since_explicit": settings.get(
+                       "option_grant_timing_since") not in (None, ""),
+                   "filed_years": sorted(filed_years), "rows": rows,
+                   "amend": len(amend), "attention": len(attention),
+                   "missing_books": missing})
         return
     print(f"OPTION YEAR-BOUNDARY REVIEW — tax year {year}; premium timing: {timing}"
           + (f" (contracts written from {since})" if timing == "grant" and since else "")
@@ -6221,11 +6406,12 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     for i, r in enumerate(rows, 1):
         print(f"{i:>3}. {r['symbol']} ({r['account']}, written {r['written']}): {r['where']}")
         print(f"     -> {r['action']}")
-    amend = [r for r in rows if r["action"].startswith("T1-ADJ")]
     print()
+    if attention:
+        print(f"{len(attention)} item(s) need ATTENTION (review; a locked year may need a T1-ADJ) — marked above.")
     if amend:
         print(f"{len(amend)} item(s) require an amended return (T1-ADJ) — listed above with the year and amount.")
-    else:
+    elif not attention:
         print("No amended return is required by these contracts under the timing in force.")
 
 
@@ -6248,30 +6434,52 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         sys.exit("taxjson checklist: [settings] year is required")
     country = _normalize_country(str(settings.get("country", "canada")))
 
+    ids = [s[0] for s in cl.STEPS]
+    if args.note and not (args.done or args.skip):
+        sys.exit("taxjson checklist: --note goes with --done or --skip "
+                 "(it is stored with the mark).")
     marks = [(args.done, "done"), (args.skip, "skipped"), (args.undo, None)]
+    recorded: List[Dict[str, Any]] = []
     for step, mark in marks:
         if step:
             try:
-                cl.set_override(root, year, step, mark, note=args.note or "")
+                changed = cl.set_override(root, year, step, mark,
+                                          note=args.note or "")
             except KeyError:
                 sys.exit(f"taxjson checklist: unknown step {step!r} "
-                         f"(ids: {', '.join(s[0] for s in cl.STEPS)})")
+                         f"(ids: {', '.join(ids)})")
             verb = {"done": "marked done", "skipped": "marked skipped",
                     None: "mark removed"}[mark]
-            print(f"taxjson checklist: {step} {verb} "
-                  f"(recorded in {cl.STATE_FILE}).")
+            if not changed:
+                verb = "had no mark — nothing to undo"
+            recorded.append({"step": step, "mark": mark or "undo",
+                             "changed": changed, "note": args.note or ""})
+            if not args.json:
+                print(f"taxjson checklist: {step} {verb}"
+                      + (f" (recorded in {cl.STATE_FILE})." if changed
+                         else "."))
     if args.reset:
-        (root / cl.STATE_FILE).unlink(missing_ok=True)
-        print(f"taxjson checklist: {cl.STATE_FILE} removed.")
+        _state = root / cl.STATE_FILE
+        existed = _state.exists()
+        _state.unlink(missing_ok=True)
+        recorded.append({"step": None, "mark": "reset", "changed": existed})
+        if not args.json:
+            print(f"taxjson checklist: {cl.STATE_FILE} removed." if existed
+                  else f"taxjson checklist: no {cl.STATE_FILE} — nothing to "
+                       f"reset.")
     if (args.done or args.skip or args.undo or args.reset) and not args.walk \
             and not args.show:
+        if args.json:
+            print(_json.dumps({"year": year, "state_file": cl.STATE_FILE,
+                               "recorded": recorded}, indent=2))
         return
 
     ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=_date.today(),
                  run_sub=cl.default_run_sub(root))
     only = [args.only] if args.only else None
-    if only and args.only not in {s[0] for s in cl.STEPS}:
-        sys.exit(f"taxjson checklist: unknown step {args.only!r}")
+    if only and args.only not in ids:
+        sys.exit(f"taxjson checklist: unknown step {args.only!r} "
+                 f"(ids: {', '.join(ids)})")
     if only and args.quick:
         print("taxjson checklist: --only names one step; ignoring --quick.",
               file=sys.stderr)
@@ -6299,12 +6507,15 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     """Interactive pass over the open steps, one detector at a time: each
     step is shown as soon as its own check finishes (the whole list can
     take a minute on a big book), with why it matters and what was found,
-    then the user's decision is recorded."""
-    meta = {s[0]: s for s in cl.STEPS}
+    then the user's decision is recorded. Ends with the summary; exit 1
+    while anything is still open (also after [q]uit)."""
+    country = ctx.settings.get("country", "canada")
     ids = [s[0] for s in cl.STEPS if not only or s[0] in only]
-    print("Filing checklist walk. For each open step: [d]one  [s]kip  "
-          "[r]e-check  [n]ext  [q]uit  (Enter = next)\n")
+    keys = "[d]one  [s]kip  [r]e-check  [n]ext  [q]uit  (Enter = next)"
+    print(f"Filing checklist walk. For each open step: {keys}\n")
     seen = 0
+    quit_early = False
+    left_open = 0
     for sid in ids:
         r = cl.evaluate(ctx, only=[sid], quick=quick,
                         progress=cl.stderr_progress)[0]
@@ -6313,21 +6524,29 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                   + (f" (marked {r.override})" if r.override else ""))
             continue
         seen += 1
-        _, stage, title, cmd, why = meta[sid]
+        _, stage, title, cmd, why = cl.step_meta(sid, country)
         stage_name = dict(cl.STAGES)[stage]
+        show = True
         while True:
-            print(f"\n--- [{stage}. {stage_name}]  {sid}")
-            print(f"    {title}")
-            print(f"    why:     {why}")
-            print(f"    proves:  {cmd}")
-            print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}")
+            if show:
+                print(f"\n--- [{stage}. {stage_name}]  {sid}")
+                print(f"    {title}")
+                print(f"    why:     {why}")
+                print(f"    proves:  {cmd}")
+                print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}"
+                      + (f" (marked {r.override}"
+                         + (f": {r.note}" if r.note else "") + ")"
+                         if r.override else ""))
+            show = False
             try:
                 ans = input("    > ").strip().lower()
             except EOFError:
                 print()
-                return
+                quit_early = True
+                break
             if ans in ("q", "quit"):
-                return
+                quit_early = True
+                break
             if ans in ("d", "done"):
                 note = input("    note (optional): ").strip()
                 cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
@@ -6343,13 +6562,21 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                 if r.passed:
                     print(f"    now: {cl.SYMBOL[r.effective]} {r.detail}")
                     break
+                show = True
                 continue
-            break                                   # next
+            if ans in ("", "n", "next"):
+                left_open += 1
+                break
+            print(f"    unknown key {ans!r} — {keys}")
+        if quit_early:
+            break
     print(f"\n{seen} open step(s) visited. Summary "
           f"(`taxjson checklist` re-checks everything):")
     results = cl.evaluate(ctx, only=only, quick=True)
-    print(cl.render(results, ctx.year, ctx.settings.get("country", "canada"),
-                    quick=True))
+    print(cl.render(results, ctx.year, country, quick=True))
+    if quit_early or left_open:
+        # Open steps remain (the one quit on, the ones passed over).
+        sys.exit(1)
 
 
 def cmd_sanity(args: argparse.Namespace) -> None:
@@ -6814,7 +7041,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 continue
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
-                   "--as-of", as_of, "--no-wash"]
+                   "--as-of", as_of, "--no-wash"] + option_timing_flags(
+                       settings)
             if accounts_cfg.get(n, {}).get("type") == "taxable":
                 cmd.append("--taxable")
             res = _run_cmd(cmd + [str(b)], capture_output=True)
@@ -7179,7 +7407,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     argv = base_argv + crypto_argv + [
         "--country", _normalize_country(str(settings.get("country", "canada"))),
         "--base-currency", str(settings.get("base_currency", "CAD")),
-    ]
+    ] + option_timing_flags(settings)       # same timing as the returns
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
@@ -7248,7 +7476,8 @@ def cmd_form_export(args: argparse.Namespace) -> None:
 
     root = Path(args.dir).resolve()
     cache = root / "work"
-    settings = load_config(root).get("settings", {})
+    _cfg = load_config(root)
+    settings = _cfg.get("settings", {})
     country = _normalize_country(settings.get("country", ""))
     form = args.form or ("8949" if country == "usa" else "schedule3")
     year = settings.get("year")
@@ -7268,7 +7497,15 @@ def cmd_form_export(args: argparse.Namespace) -> None:
     files = [gains_argv[i + 1] for i in range(0, len(gains_argv), 2)]
     _warn_artifact_year({Path(f).name.rsplit("_gains", 1)[0]: Path(f)
                          for f in files}, year)
-    argv = files + ["--form", form,
+    # Crypto books go on Schedule 3's crypto-assets line: name them.
+    from taxjson.lib.report_model import resolve_gains_files
+    _crypto_files = []
+    for _n, _c in sorted((_cfg.get("accounts") or {}).items()):
+        if (_c or {}).get("type") == "taxable" and (_c or {}).get("crypto"):
+            _g = resolve_gains_files(cache, _n).get(_n)
+            if _g is not None:
+                _crypto_files += ["--crypto", str(_g)]
+    argv = files + _crypto_files + ["--form", form,
                     "--base-currency",
                     str(settings.get("base_currency", ""))]
     if year is not None:
@@ -7492,9 +7729,11 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         doc = _json.loads(Path(pth).read_text(encoding="utf-8"))
         accounts[acct] = taxjson_filed.aggregates_from_gains(doc)
     basis = gains_basis_label(files)
+    from taxjson.lib.pipeline import option_timing_from_settings
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
-        accounts, force=args.force)
+        accounts, force=args.force,
+        option_timing=option_timing_from_settings(settings) or None)
     tot = _json.loads(path.read_text())["totals"]
     print(f"closed {year} ({basis}): realized {tot['realized']:,.2f}, "
           f"disallowed {tot['disallowed']:,.2f}, income "
@@ -7512,7 +7751,8 @@ def _check_filed_years(root: Path, cache: Path,
     import json as _json
     snaps = taxjson_filed.list_snapshots(root)
     drifting = 0
-    # Which snapshot accounts are crypto (their books never blend);
+    # Which snapshot accounts are crypto (they blend only with each
+    # other, and only in a Canadian project with two or more);
     # equity accounts recompute via ONE blended combined run — exactly
     # how close-year's numbers were produced — or the check would
     # falsely drift every multi-account book.
@@ -9034,23 +9274,29 @@ def cmd_audit(args: argparse.Namespace) -> None:
 
     # (flags, cleanup_path|None) per engine computation, mirroring the
     # pipeline: ONE blended pass over the equity taxable accounts, then
-    # each crypto account on its own books.
+    # the crypto accounts — ONE blended pass too for a Canadian project
+    # with two or more of them (the pipeline's crypto blend), else each
+    # on its own books.
     invocations: List[Tuple[List[str], Optional[Path]]] = []
+    crypto_blend = country not in ("us", "usa") and len(crypto) >= 2
 
-    eq_bases = [cache / f"{n}_base.json" for n in equity
-                if (cache / f"{n}_base.json").exists()]
     _no_input = _accounts_skipped_for_no_inputs(root)
-    missing = [n for n in equity
-               if not (cache / f"{n}_base.json").exists()
-               and n not in _no_input]
-    if missing:
-        print(f"taxjson audit: note: no books yet for "
-              f"{', '.join(missing)} — run `taxjson run` to include "
-              f"them.", file=sys.stderr)
-    if eq_bases:
+
+    def _blended_invocation(names: List[str], *, is_crypto: bool) -> None:
+        bases = [cache / f"{n}_base.json" for n in names
+                 if (cache / f"{n}_base.json").exists()]
+        missing = [n for n in names
+                   if not (cache / f"{n}_base.json").exists()
+                   and n not in _no_input]
+        if missing:
+            print(f"taxjson audit: note: no books yet for "
+                  f"{', '.join(missing)} — run `taxjson run` to include "
+                  f"them.", file=sys.stderr)
+        if not bases:
+            return
         cleanup: Optional[Path] = None
-        if len(eq_bases) == 1:
-            base_arg = eq_bases[0]
+        if len(bases) == 1:
+            base_arg = bases[0]
         else:
             # Merge the CURRENT per-account base books — the same
             # inputs the pipeline's blended pass merged, rebuilt fresh
@@ -9061,7 +9307,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             _os.close(fd)
             cleanup = Path(tmp)
             res = _run(_cmd("taxjson-merge")
-                       + [str(b) for b in eq_bases],
+                       + [str(b) for b in bases],
                        capture_output=True)
             if res.returncode != 0:
                 cleanup.unlink(missing_ok=True)
@@ -9072,9 +9318,9 @@ def cmd_audit(args: argparse.Namespace) -> None:
         fl = common_flags() + ["--base", str(base_arg)]
         if sheltered_base.exists():
             fl += ["--sheltered", str(sheltered_base)]
-        if country in ("us", "usa"):
+        if country in ("us", "usa") and not is_crypto:
             fl.append("--per-account-basis")
-        for n in equity:
+        for n in names:
             for src in _audit_source_files(cache, n):
                 fl += ["--source", str(src)]
             chk = cache / f"{n}_gains_wash.json"
@@ -9084,7 +9330,12 @@ def cmd_audit(args: argparse.Namespace) -> None:
                 fl += ["--check", str(chk)]
         invocations.append((fl, cleanup))
 
-    for n in crypto:
+    if equity:
+        _blended_invocation(equity, is_crypto=False)
+    if crypto_blend:
+        _blended_invocation(crypto, is_crypto=True)
+
+    for n in ([] if crypto_blend else crypto):
         base = cache / f"{n}_base.json"
         if not base.exists():
             if n not in _no_input:

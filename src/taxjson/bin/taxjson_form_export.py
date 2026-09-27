@@ -15,11 +15,15 @@ Render computed gains into filing-shaped artifacts:
                     --box picks the 8949 checkbox pairing (A/D default);
                     --out writes the .txf file.
 
-  --form schedule3  CRA Schedule 3 (section 3, publicly traded shares)
-                    per-property rows: units, acquisition year, proceeds of
-                    disposition, ACB, outlays, gain(loss) — with
-                    superficial-loss denial notes — plus the line
-                    13199/13200 totals.
+  --form schedule3  CRA Schedule 3 per-property rows, routed by property
+                    type to the Part 3 line they belong on (2025 form):
+                    line 4 publicly traded shares / fund units
+                    (13199/13200), line 6 options, futures and other
+                    properties (15199/15300, per T4037), line 7
+                    crypto-assets (15200/15301; before 2025 crypto went
+                    on 15199/15300). Per row: units, acquisition year,
+                    proceeds of disposition, ACB, outlays, gain(loss)
+                    with superficial-loss notes; per-line totals.
 
 Input is the pipeline's year-scoped `<account>_gains.json` (prefer the
 wash-adjusted `<account>_gains_wash.json` — those are the allowed numbers a
@@ -38,6 +42,10 @@ return reports). Column conventions:
          net + outlays, outlays column = commission + fee, leaving the gain
          identical. Short-position rows show absolute amounts with a SHORT
          marker (gain is exact; the column split is presentational).
+         Every row foots — proceeds − ACB − outlays = the allowed gain —
+         so a denied superficial loss shows as an ACB REDUCED by the
+         denial (the denied amount goes onto the replacement's ACB).
+         Crypto is known by account: pass crypto books with --crypto.
 
 Tainted dispositions (phantom cost basis) are SKIPPED with a warning — they
 are routed to `manual_reporting_required` by the pipeline and must be
@@ -57,6 +65,7 @@ import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from taxjson.lib.core import is_option_symbol
 from taxjson.lib.report_model import load_report_json
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -257,15 +266,110 @@ def build_txf(rep_8949: Dict[str, Any], box: str) -> str:
 
 # ---------------------------------------------------------------- schedule 3
 
-def build_schedule3(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
-    by_symbol: Dict[str, Dict[str, Any]] = {}
+# Schedule 3 routes each disposition by PROPERTY TYPE (2025 form, Part 3;
+# T4037 "Capital Gains" chapter 4):
+#   line 4  publicly traded shares, mutual fund units, ...   13199 / 13200
+#   line 6  bonds, debentures, promissory notes and other     15199 / 15300
+#           similar properties — T4037: "Other properties
+#           include bad debts, foreign currencies and options"
+#   line 7  crypto-assets (new for 2025)                      15200 / 15301
+# For 2024 and earlier returns crypto-assets were reported with the
+# other properties on 15199 / 15300 (there was no separate line).
+_FUTURES_PREFIXES = ("F:", "/", "\\")
+_LINE_ORDER = ("shares", "other", "crypto")
+
+
+def schedule3_line(key: str, year: Optional[int]) -> Dict[str, str]:
+    """The Schedule 3 line a property class lands on for `year`.
+    `key` is shares | other | crypto; crypto folds into `other` before
+    2025 (the separate crypto-assets line starts with the 2025 form)."""
+    new_form = year is None or int(year) >= 2025
+    if key == "crypto" and not new_form:
+        key = "other"
+    if key == "shares":
+        return {"key": "shares", "line": "4" if new_form else "",
+                "label": "Publicly traded shares, mutual fund units, "
+                         "deferral of eligible small business "
+                         "corporation shares, and other shares",
+                "short": "shares & fund units",
+                "proceeds_code": "13199", "gain_code": "13200"}
+    if key == "crypto":
+        return {"key": "crypto", "line": "7",
+                "label": "Crypto-assets", "short": "crypto-assets",
+                "proceeds_code": "15200", "gain_code": "15301"}
+    return {"key": "other", "line": "6" if new_form else "",
+            "label": ("Bonds, debentures, promissory notes, and other "
+                      "similar properties (options, futures, foreign "
+                      "currency)" if new_form else
+                      "Bonds, debentures, promissory notes, crypto-"
+                      "assets, and other similar properties (options, "
+                      "futures, foreign currency)"),
+            "short": ("options & other properties" if new_form else
+                      "options, crypto & other properties"),
+            "proceeds_code": "15199", "gain_code": "15300"}
+
+
+def line_title(spec: Dict[str, str]) -> str:
+    """'Part 3, line 4 (13199/13200)' — or, for pre-2025 forms whose
+    line numbering this tool does not pin, just the line codes."""
+    codes = f"lines {spec['proceeds_code']}/{spec['gain_code']}"
+    return (f"Part 3, line {spec['line']} ({codes})" if spec["line"]
+            else codes)
+
+
+def property_class(e: Dict[str, Any]) -> str:
+    """shares | option | futures | crypto for one disposition. Crypto
+    comes from the account (`crypto = true` books, flagged `_crypto` by
+    the loader); futures carry the F:/ prefix the parsers give them
+    (options on futures too); options are OCC-style symbols."""
+    if e.get("_crypto"):
+        return "crypto"
+    sym = str(e.get("symbol") or "")
+    if sym.startswith(_FUTURES_PREFIXES):
+        return "futures"
+    if e.get("is_option") or is_option_symbol(sym):
+        return "option"
+    return "shares"
+
+
+def _line_key(pclass: str) -> str:
+    return {"shares": "shares", "crypto": "crypto"}.get(pclass, "other")
+
+
+def mark_crypto(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Copies of `entries` flagged as crypto-asset dispositions (the
+    gains rows themselves carry no asset class; the account does)."""
+    return [{**e, "_crypto": True} for e in entries]
+
+
+def _infer_year(entries: List[Dict[str, Any]]) -> Optional[int]:
+    ys = [str(e.get("date_settle") or e.get("date") or "")[:4]
+          for e in entries]
+    ys = [int(y) for y in ys if y.isdigit()]
+    return max(ys) if ys else None
+
+
+def build_schedule3(entries: List[Dict[str, Any]],
+                    year: Optional[int] = None) -> Dict[str, Any]:
+    """Per-property rows grouped by Schedule 3 line. Every row FOOTS:
+    PROCEEDS − ACB − OUTLAYS = GAIN (the allowed gain), so a denied
+    superficial loss shows as an ACB reduced by the denial — the denied
+    amount is what gets added to the replacement property's ACB."""
+    if year is None:
+        year = _infer_year(entries)
+    recs: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for e in entries:
         symbol = e.get("symbol") or "?"
-        rec = by_symbol.setdefault(symbol, {
+        pclass = property_class(e)
+        lkey = schedule3_line(_line_key(pclass), year)["key"]
+        rec = recs.setdefault((lkey, symbol), {
             "symbol": symbol, "units": 0.0, "acq_year": None,
-            "proceeds": 0.0, "acb": 0.0, "outlays": 0.0, "gain": 0.0,
-            "denied": 0.0, "short": False,
+            "proceeds": 0.0, "outlays": 0.0, "gain": 0.0,
+            "denied": 0.0, "perm_denied": 0.0, "short": False,
+            "classes": set(), "n": 0,
         })
+        rec["classes"].add(pclass)
+        rec["n"] += 1
         qty = abs(float(e.get("qty") or 0.0))
         proceeds = float(e.get("proceeds") or 0.0)
         cost = float(e.get("cost") or 0.0)
@@ -278,40 +382,37 @@ def build_schedule3(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             # NEGATED buy-to-cover cost. Filing wants the real-world
             # mapping — disposition PROCEEDS = what the short sale
             # brought in, ACB = what covering cost — so the fields swap
-            # as they un-negate. (abs() alone fixed the sign but kept
-            # the swap: line 13199 was wrong and the row read
-            # internally contradictory, proceeds − ACB ≠ gain.)
+            # as they un-negate (the ACB itself is derived below).
             rec["short"] = True
             rec["proceeds"] += abs(cost)
-            rec["acb"] += abs(proceeds)
         else:
             # taxjson proceeds are net of sell-side costs; Schedule 3 wants
             # them split back out. gain = (net + outlays) - acb - outlays
             # stays identical.
             rec["proceeds"] += proceeds + outlays
-            rec["acb"] += cost
             rec["outlays"] += outlays
         rec["units"] += qty
         rec["gain"] += gain
         rec["denied"] += float(e.get("disallowed_amount") or 0.0)
-        rec["perm_denied"] = (rec.get("perm_denied", 0.0)
-                              + float(e.get("permanently_disallowed")
-                                      or 0.0))
+        rec["perm_denied"] += float(e.get("permanently_disallowed") or 0.0)
         acq = _acquired_date(e)
         if acq:
             y = acq[:4]
             if rec["acq_year"] is None or y < rec["acq_year"]:
                 rec["acq_year"] = y
 
-    rows = []
-    for symbol in sorted(by_symbol):
-        r = by_symbol[symbol]
+    rows: List[Dict[str, Any]] = []
+    for (lkey, symbol) in sorted(recs, key=lambda k: (
+            _LINE_ORDER.index(k[0]), k[1])):
+        r = recs[(lkey, symbol)]
+        spec = schedule3_line(lkey, year)
         notes = []
-        _perm = float(r.get("perm_denied") or 0.0)
+        _perm = r["perm_denied"]
         _defer = r["denied"] - _perm
         if _defer > _EPS:
-            notes.append(f"superficial loss {_defer:,.2f} denied "
-                         f"(added to repurchased ACB)")
+            notes.append(f"superficial loss {_defer:,.2f} denied: ACB "
+                         f"shown reduced by it; add it to the ACB of "
+                         f"the replacement property")
         if _perm > _EPS:
             # A registered-account acquisition denies for GOOD — there
             # is no ACB anywhere to bump; the old single note told
@@ -319,47 +420,106 @@ def build_schedule3(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             notes.append(f"superficial loss {_perm:,.2f} PERMANENTLY "
                          f"denied (registered-account acquisition — "
                          f"no ACB addition)")
+        if "futures" in r["classes"]:
+            notes.append("futures / option on futures — reported with "
+                         "the other properties (options, T4037)")
         if r["short"]:
             notes.append("includes short position(s) — |amounts| shown")
+        # `+ 0.0` turns a rounded -0.0 into 0.0 (no "-0.00" cells).
+        proceeds = round(r["proceeds"], 2) + 0.0
+        outlays = round(r["outlays"], 2) + 0.0
+        gain = round(r["gain"], 2) + 0.0
+        pclass = sorted(r["classes"])[0] if len(r["classes"]) == 1 \
+            else "mixed"
         rows.append({
             "symbol": symbol,
+            "line": spec["line"], "line_key": spec["key"],
+            "proceeds_line": spec["proceeds_code"],
+            "gain_line": spec["gain_code"],
+            "property": pclass,
             "units": round(r["units"], 4),
             "acq_year": r["acq_year"] or "",
-            "proceeds": round(r["proceeds"], 2),
-            "acb": round(r["acb"], 2),
-            "outlays": round(r["outlays"], 2),
-            "gain": round(r["gain"], 2),
+            "proceeds": proceeds,
+            # The footing ACB: proceeds − outlays − allowed gain. For a
+            # plain sale this IS the ACB; a superficial-loss row shows
+            # it reduced by the denied amount.
+            "acb": round(proceeds - outlays - gain, 2) + 0.0,
+            "outlays": outlays,
+            "gain": gain,
+            "denied": round(r["denied"], 2),
+            "dispositions": r["n"],
             "notes": "; ".join(notes),
         })
-    return {
-        "form": "schedule3",
-        "rows": rows,
-        "totals": {
-            # Line 13199: total proceeds; line 13200: total gain(loss).
-            "proceeds_13199": round(sum(r["proceeds"] for r in rows), 2),
-            "gain_13200": round(sum(r["gain"] for r in rows), 2),
-        },
-    }
+
+    lines: List[Dict[str, Any]] = []
+    totals: Dict[str, float] = {}
+    for lkey in _LINE_ORDER:
+        lrows = [r for r in rows if r["line_key"] == lkey]
+        if not lrows:
+            continue
+        spec = schedule3_line(lkey, year)
+        agg = {k: round(sum(r[k] for r in lrows), 2) + 0.0
+               for k in ("proceeds", "acb", "outlays", "gain", "denied")}
+        lines.append({**spec, "title": line_title(spec), **agg,
+                      "dispositions": sum(r["dispositions"] for r in lrows),
+                      "rows": len(lrows)})
+        totals[f"proceeds_{spec['proceeds_code']}"] = agg["proceeds"]
+        totals[f"gain_{spec['gain_code']}"] = agg["gain"]
+    # Line 4's pair is always present (0.00 when nothing was sold), so a
+    # consumer keyed on 13199/13200 never KeyErrors.
+    totals.setdefault("proceeds_13199", 0.0)
+    totals.setdefault("gain_13200", 0.0)
+    totals["proceeds_all"] = round(sum(r["proceeds"] for r in rows), 2)
+    totals["gain_all"] = round(sum(r["gain"] for r in rows), 2)
+    return {"form": "schedule3", "year": year, "rows": rows,
+            "lines": lines, "totals": totals}
 
 
+def filing_lines(entries: List[Dict[str, Any]],
+                 year: Optional[int] = None) -> List[Dict[str, Any]]:
+    """One dict per Schedule 3 line that has dispositions: the line
+    number / codes / label plus PROCEEDS, ACB, OUTLAYS, GAIN, DENIED and
+    the disposition count — the rows of `taxjson sum`'s FOR THE RETURN
+    block, identical to form-export's line totals by construction."""
+    return build_schedule3(entries, year)["lines"]
 
-def filing_totals(entries: List[Dict[str, Any]]) -> Dict[str, float]:
-    """The three amounts a return's capital-gains entry asks for, summed
-    over `entries` on the Schedule 3 convention (short sales as |amounts|,
-    sell-side commissions split out as outlays), with the ACB chosen so
-    that PROCEEDS − ACB − OUTLAYS equals the ALLOWED gain: a superficial
-    loss the engine denied is folded into the ACB, exactly as it is in the
-    per-account .sum report. `denied` reports how much that is."""
-    rep = build_schedule3(entries)
-    proceeds = round(sum(r["proceeds"] for r in rep["rows"]), 2)
-    outlays = round(sum(r["outlays"] for r in rep["rows"]), 2)
-    gain = round(sum(r["gain"] for r in rep["rows"]), 2)
-    denied = round(sum(float(e.get("disallowed_amount") or 0.0)
-                       for e in entries), 2)
-    return {"proceeds": proceeds,
-            "acb": round(proceeds - outlays - gain, 2),
-            "outlays": outlays, "gain": gain, "denied": denied,
+
+def filing_totals(entries: List[Dict[str, Any]],
+                  year: Optional[int] = None) -> Dict[str, float]:
+    """The amounts a return's capital-gains entry asks for, summed over
+    `entries` (all Schedule 3 lines) on the Schedule 3 convention (short
+    sales as |amounts|, sell-side commissions split out as outlays), with
+    the ACB chosen so that PROCEEDS − ACB − OUTLAYS equals the ALLOWED
+    gain: a denied superficial loss REDUCES the ACB shown here (the
+    denied amount is added to the replacement property's ACB instead).
+    `denied` reports how much that is."""
+    rep = build_schedule3(entries, year)
+    agg = {k: round(sum(r[k] for r in rep["rows"]), 2)
+           for k in ("proceeds", "outlays", "gain", "denied")}
+    return {"proceeds": agg["proceeds"],
+            "acb": round(agg["proceeds"] - agg["outlays"] - agg["gain"], 2),
+            "outlays": agg["outlays"], "gain": agg["gain"],
+            "denied": agg["denied"],
             "dispositions": len(entries)}
+
+
+def filing_parts_8949(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Form 8949's own part totals — (d) proceeds, (e) cost, (g)
+    adjustment, (h) gain — for `taxjson sum`'s US FOR THE RETURN block,
+    so it shows exactly what the 8949 export carries to Schedule D."""
+    rep = build_8949(entries)
+    out = []
+    for part, label, sched_d in (("I", "Part I — short-term", "Schedule D Part I"),
+                                 ("II", "Part II — long-term", "Schedule D Part II")):
+        rows = rep[f"part_{part}"]
+        if not rows:
+            continue
+        t = rep[f"part_{part}_totals"]
+        out.append({"part": part, "label": label, "schedule_d": sched_d,
+                    "proceeds": t["proceeds"], "cost": t["cost"],
+                    "adjustment": t["adjustment"], "gain": t["gain"],
+                    "dispositions": len(rows)})
+    return out
 
 # ---------------------------------------------------------------- render
 
@@ -413,28 +573,51 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
 
 def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                      cur: str) -> str:
-    lines = [f"SCHEDULE 3 — Capital Gains (section 3: publicly traded "
-             f"shares) (tax year {year or '?'}, amounts in {cur})",
+    year = year or rep.get("year")
+    lines = [f"SCHEDULE 3 — Capital Gains (or Losses) (tax year "
+             f"{year or '?'}, amounts in {cur})",
              ""]
     header = ("UNITS", "SYMBOL", "ACQ. YEAR", "PROCEEDS", "ACB",
               "OUTLAYS", "GAIN(LOSS)", "NOTES")
-    table = [(f"{r['units']:,.4f}".rstrip("0").rstrip("."), r["symbol"],
-              str(r["acq_year"]), f"{r['proceeds']:,.2f}",
-              f"{r['acb']:,.2f}", f"{r['outlays']:,.2f}",
-              f"{r['gain']:,.2f}", r["notes"]) for r in rep["rows"]]
-    lines += _table(header, table, right={0, 3, 4, 5, 6})
-    t = rep["totals"]
-    lines.append("")
-    lines.append(f"  Line 13199 (total proceeds): {t['proceeds_13199']:,.2f}")
-    lines.append(f"  Line 13200 (total gain/loss): {t['gain_13200']:,.2f}")
-    lines.append("")
+    by_line = rep.get("lines") or []
+    if not by_line:
+        spec = schedule3_line("shares", year)
+        lines.append(f"{line_title(spec).upper()} — {spec['label']}")
+        lines += _table(header, [], right=set())
+        lines.append("")
+    for ln in by_line:
+        lines.append(f"{ln['title'].upper()} — {ln['label']}")
+        table = [(f"{r['units']:,.4f}".rstrip("0").rstrip("."), r["symbol"],
+                  str(r["acq_year"]), f"{r['proceeds']:,.2f}",
+                  f"{r['acb']:,.2f}", f"{r['outlays']:,.2f}",
+                  f"{r['gain']:,.2f}", r["notes"])
+                 for r in rep["rows"] if r["line_key"] == ln["key"]]
+        lines += _table(header, table, right={0, 3, 4, 5, 6})
+        lines.append(f"  Line {ln['proceeds_code']} (proceeds of "
+                     f"disposition): {ln['proceeds']:,.2f}")
+        lines.append(f"  Line {ln['gain_code']} (gain/loss): "
+                     f"{ln['gain']:,.2f}")
+        lines.append("")
     lines.append("Notes:")
-    lines.append("  - GAIN(LOSS) is the ALLOWED amount — superficial losses "
-                 "are already denied and noted per row.")
+    lines.append("  - Each disposition is on the line for its property "
+                 "type: shares and fund units on 13199/13200; options, "
+                 "futures and other properties on 15199/15300 (T4037); "
+                 + ("crypto-assets on 15200/15301."
+                    if (year or 2025) >= 2025 else
+                    "crypto-assets with the other properties "
+                    "(15199/15300) for this year."))
+    lines.append("  - GAIN(LOSS) is the ALLOWED amount. Every row foots: "
+                 "PROCEEDS − ACB − OUTLAYS = GAIN(LOSS); where a "
+                 "superficial loss was denied the ACB shown is reduced "
+                 "by the denied amount, which is added to the ACB of "
+                 "the replacement property instead (noted per row).")
     lines.append("  - Apply the inclusion rate on Schedule 3 itself; these "
                  "are 100% amounts.")
     lines.append("  - PROCEEDS re-adds sell-side commissions so OUTLAYS can "
                  "be shown separately; the gain is unchanged.")
+    lines.append("  - FX gains on foreign cash (s.39(1.1), `taxjson "
+                 "fx-cash`) are not in these rows; T4037 puts them on "
+                 "line 15300.")
     lines.append("  - Not tax advice; reconcile against your T5008 slips "
                  "before filing (see taxjson-reconcile-slips).")
     return "\n".join(lines)
@@ -454,12 +637,15 @@ def write_csv(rep: Dict[str, Any], path: Path) -> None:
                                 r["code"], r["adjustment"], r["gain"],
                                 r["account"]])
         else:
-            w.writerow(["units", "symbol", "acq_year", "proceeds", "acb",
-                        "outlays", "gain", "notes"])
+            w.writerow(["line", "proceeds_line", "gain_line", "property",
+                        "units", "symbol", "acq_year", "proceeds", "acb",
+                        "outlays", "gain", "denied", "notes"])
             for r in rep["rows"]:
-                w.writerow([r["units"], r["symbol"], r["acq_year"],
-                            r["proceeds"], r["acb"], r["outlays"],
-                            r["gain"], r["notes"]])
+                w.writerow([r["line"], r["proceeds_line"], r["gain_line"],
+                            r["property"], r["units"], r["symbol"],
+                            r["acq_year"], r["proceeds"], r["acb"],
+                            r["outlays"], r["gain"], r["denied"],
+                            r["notes"]])
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -469,6 +655,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("files", nargs="+", type=Path, metavar="FILE",
                         help="Year-scoped <account>_gains.json files "
                              "(prefer the wash-adjusted variants)")
+    parser.add_argument("--crypto", action="append", type=Path,
+                        default=[], metavar="FILE",
+                        help="Schedule 3: a gains file whose dispositions "
+                             "are crypto-assets (repeatable; line 7 — "
+                             "15200/15301 — from 2025, 15199/15300 "
+                             "before). The `taxjson form-export` wrapper "
+                             "passes the crypto = true accounts here.")
     parser.add_argument("--form", required=True,
                         choices=["8949", "schedule3", "txf"])
     parser.add_argument("--box", default="A", choices=["A", "B", "C"],
@@ -490,15 +683,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Emit the report as JSON instead of text")
     args = parser.parse_args(argv)
 
-    for p in args.files:
+    for p in args.files + args.crypto:
         if not p.exists():
             print(f"taxjson-form-export: no such file: {p}", file=sys.stderr)
             return 2
 
     # IRS attributes the year by TRADE date; CRA by SETTLEMENT date.
     date_key = "date" if args.form in ("8949", "txf") else "date_settle"
-    entries, tainted = load_dispositions(args.files, args.year,
-                                         date_key)
+    _crypto = {p.resolve() for p in args.crypto}
+    entries, tainted = load_dispositions(
+        [p for p in args.files if p.resolve() not in _crypto],
+        args.year, date_key)
+    if args.crypto:
+        c_entries, c_tainted = load_dispositions(
+            sorted(_crypto), args.year, date_key)
+        entries += mark_crypto(c_entries)
+        tainted += c_tainted
     if tainted:
         print(f"warning: skipped {tainted} tainted disposition(s) with "
               f"phantom cost basis — resolve via find-missing-history "
@@ -534,7 +734,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         rep["currency"] = args.base_currency or "USD"
         text = render_8949(rep, args.year, rep["currency"])
     else:
-        rep = build_schedule3(entries)
+        rep = build_schedule3(entries, args.year)
         rep["currency"] = args.base_currency or "CAD"
         text = render_schedule3(rep, args.year, rep["currency"])
 

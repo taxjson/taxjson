@@ -58,7 +58,7 @@ class TestSumCommand(unittest.TestCase):
             self.assertEqual(f["totals"]["proceeds"], 1700.0)
             self.assertEqual(f["totals"]["acb"], 1490.0)
             t = cli(); self.assertEqual(t.returncode, 0, t.stderr)
-            self.assertIn("FOR THE RETURN — taxable accounts, CAD", t.stdout)
+            self.assertIn("FOR THE RETURN — taxable accounts (margin), CAD", t.stdout)
             self.assertIn("1,490.00", t.stdout)
 
 

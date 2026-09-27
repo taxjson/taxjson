@@ -106,19 +106,27 @@ class TestDetectors(unittest.TestCase):
                               "find-missing-history": (0, fmh, ""),
                               "elect": (0, "No pending elections (...)\n", ""),
                               "audit": (0, audit_bad, ""),
-                              "option-boundary": (0, "2 item(s) require an amended return (T1-ADJ)\n", ""),
+                              "option-boundary": (0, json.dumps({"rows": [
+                                  {"action": "T1-ADJ 2025: remove the 399.00 premium"},
+                                  {"action": "T1-ADJ 2025: remove the 1.00 premium"}],
+                                  "timing": "grant", "since_explicit": True}), ""),
                               "t1135": (0, json.dumps({"filing_required": True}), ""),
-                              "form-export": (0, "a\nb\n", "")})
+                              "form-export": (0, json.dumps({"form": "schedule3", "rows": [{}],
+                                                             "totals": {"proceeds_all": 100.0, "gain_all": 10.0}}), ""),
+                              "sum": (0, json.dumps({"accounts": [{"account": "margin", "realized": 10.0}],
+                                                     "filing": {"totals": {"proceeds": 100.0, "gain": 10.0}}}), "")})
             self.assertEqual((cl.d_sanity(ctx).status, cl.d_sanity(ctx).detail), ("attention", "7 discrepancy(ies)."))
             r = cl.d_missing_history(ctx)
             self.assertEqual(r.status, "attention"); self.assertIn("AMZN.US (margin)", r.detail); self.assertNotIn("ZZZ", r.detail)
             self.assertEqual(cl.d_elections(ctx).status, "done")
             self.assertEqual(cl.d_audit(ctx).status, "attention")
-            self.assertEqual(cl.d_option_boundary(ctx).status, "attention")
+            r = cl.d_option_boundary(ctx)
+            self.assertEqual(r.status, "attention"); self.assertIn("2 contract(s) require a T1-ADJ", r.detail)
             self.assertEqual(cl.d_t1135(ctx).status, "manual")
             self.assertEqual(cl.d_form_export(ctx).status, "done")
             ctx2 = _ctx(root, {"audit": (0, audit_ok, ""),
-                               "option-boundary": (0, "No amended return is required by these contracts\n", "")})
+                               "option-boundary": (0, json.dumps({"rows": [], "timing": "grant",
+                                                                  "since_explicit": True}), "")})
             self.assertEqual(cl.d_audit(ctx2).detail, "10 disposition(s) tied")
             self.assertEqual(cl.d_option_boundary(ctx2).status, "done")
             self.assertEqual(cl.d_t5008(ctx2).status, "todo")                     # no slip file
@@ -159,9 +167,13 @@ class TestOverridesAndRender(unittest.TestCase):
             self.assertEqual(res["sanity"].effective, "done")
             self.assertEqual(res["sanity"].status, "todo")                # --quick skipped the detector
             res = {r.id: r for r in cl.evaluate(ctx, only=["sanity", "fees"])}
-            self.assertEqual((res["sanity"].effective, res["sanity"].finding), ("done", "7 discrepancy(ies)."))
+            # A DONE mark never outranks the finding: shown [!] with the
+            # mark and its note beside it, and not counted as passed.
+            self.assertEqual((res["sanity"].effective, res["sanity"].finding), ("attention", "7 discrepancy(ies)."))
+            self.assertFalse(res["sanity"].passed)
             self.assertTrue(res["fees"].passed)
             text = cl.render(list(res.values()), 2025, "canada")
+            self.assertIn("[!] sanity", text)
             self.assertIn("marked done: trades after the export  !! detector: 7 discrepancy(ies).", text)
             self.assertIn("[~] fees", text)
             cl.set_override(root, 2025, "sanity", None)

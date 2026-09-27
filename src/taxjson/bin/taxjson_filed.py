@@ -90,7 +90,12 @@ def snapshot_path(root: Path, year) -> Path:
 
 def write_snapshot(root: Path, year, country: str, basis: str,
                    accounts: Dict[str, Dict[str, Any]], *,
-                   force: bool) -> Path:
+                   force: bool,
+                   option_timing: Optional[Dict[str, Any]] = None) -> Path:
+    """Write filed/<year>.json. `option_timing` records the written-option
+    premium timing the return used (Canada), so a later project's
+    `option-boundary` can tell a year filed under grant timing from one
+    filed under close timing."""
     path = snapshot_path(root, year)
     if path.exists() and not force:
         sys.exit(f"taxjson close-year: {path} already exists — the "
@@ -114,6 +119,8 @@ def write_snapshot(root: Path, year, country: str, basis: str,
         "accounts": accounts,
         "totals": totals,
     }
+    if option_timing:
+        doc["option_timing"] = dict(option_timing)
     tmp = path.with_name(path.name + ".part")
     tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
                    encoding="utf-8")
@@ -129,18 +136,37 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
     computed them at close time: equity accounts via ONE blended
     combined run (Canada s.47 ACB blending; US --per-account-basis) —
     recomputing each in isolation falsely drifted every multi-account
-    book — and crypto accounts per-account (their books never blend)."""
+    book — and crypto accounts per-account, except a Canadian project's
+    two or more crypto accounts, which the pipeline blends too."""
     out: Dict[str, Optional[Dict[str, Any]]] = {}
     # US crypto runs --taxable --no-wash in the pipeline (§1091 does
     # not reach digital assets) — the recompute must match or every US
     # crypto account with a wash-window loss drifts on every check.
     crypto_no_wash = (str(settings.get("country", "")).strip().lower()
                       in ("us", "usa"))
-    for a in crypto_accounts:
-        out[a] = recompute_year(cache, a, year, settings, basis,
-                                run_gains_cmd,
-                                no_wash=crypto_no_wash)
-    present = [(a, cache / f"{a}_base.json") for a in equity_accounts]
+    if not crypto_no_wash and len(crypto_accounts) >= 2:
+        out.update(_recompute_blended(cache, crypto_accounts, year,
+                                      settings, basis, run_gains_cmd,
+                                      per_account_basis=False))
+    else:
+        for a in crypto_accounts:
+            out[a] = recompute_year(cache, a, year, settings, basis,
+                                    run_gains_cmd,
+                                    no_wash=crypto_no_wash)
+    out.update(_recompute_blended(cache, equity_accounts, year, settings,
+                                  basis, run_gains_cmd))
+    return out
+
+
+def _recompute_blended(cache: Path, accounts: List[str], year: int,
+                       settings: Dict[str, Any], basis: str,
+                       run_gains_cmd, *,
+                       per_account_basis: Optional[bool] = None
+                       ) -> Dict[str, Optional[Dict[str, Any]]]:
+    """ONE combined gains run over `accounts`' base books, split back
+    into per-account aggregates (the pipeline's blended pass)."""
+    out: Dict[str, Optional[Dict[str, Any]]] = {}
+    present = [(a, cache / f"{a}_base.json") for a in accounts]
     for a, b in present:
         if not b.exists():
             cli_diag.warn(PROG, f"{a}: no {b.name} in {cache} — cannot "
@@ -160,7 +186,9 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
         "trade" if str(country).lower() in ("us", "usa") else "settle")
     cmd = ["--country", str(country), "--year", str(year),
            "--tax-date", tax_date, "--taxable"]
-    if str(country).strip().lower() in ("us", "usa"):
+    if per_account_basis is None:
+        per_account_basis = str(country).strip().lower() in ("us", "usa")
+    if per_account_basis:
         cmd.append("--per-account-basis")
     sheltered = cache / "sheltered_base.json"
     if basis == "wash-adjusted" and sheltered.exists():

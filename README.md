@@ -250,8 +250,10 @@ source_currencies = ["USD"]    # currencies you hold besides base_currency (FX r
 #                                   # the year WRITTEN (ITA s.49(1)); a buy-back is a loss in its
 #                                   # own year; assignment folds into the shares. "close" nets
 #                                   # premium and close together at the close instead.
-# option_grant_timing_since = 2025  # contracts written before this year keep close timing —
-#                                   # the transition from books filed the old way (default: year)
+option_grant_timing_since = 2025    # contracts written before this year keep close timing — the
+#                                   # transition from books filed the old way. `taxjson init` writes
+#                                   # it; set it ONCE (first year filed under grant timing) and keep
+#                                   # it in every later project (unset, it follows `year` — warned)
 # option_buyback_loss_superficial = false # grant timing: treat the loss on buying back a written
 #                                   # option as superficial when identical options are bought
 #                                   # within 30 days and held (strict reading; default off — a
@@ -346,10 +348,10 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year). |
 | `taxjson instalments` | Canadian tax instalments: what each of the four dates (Mar/Jun/Sep/Dec 15) calls for under your chosen basis, what you have paid, and the **offset interest** plus **s.163.1 penalty** that follow from any gap. The current-year basis is driven by `taxjson estimate` itself (AMT included). Interest uses CRA's published quarterly rates (built in; `prescribed_rate(s)` overrides), credit interest runs from the later of the payment date and January 1, and net interest of $25 or less is not charged; CRA charges instalment interest only if it sent you a reminder for the year, which the report says. Configure `[instalments]` in `taxjson.toml`; `--json` for machines. |
 | `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses` (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
-| `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (books recomputed via the engine's `--as-of` cutoff: full ACB + deferred-wash fidelity; pre-wash, pre-ticker.map); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block — one row per taxable account with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (short sales as |amounts|, sell commissions as outlays, denials folded into the ACB so proceeds − ACB − outlays is the allowed gain): the numbers TurboTax's capital-gains boxes ask for. Totals equal `form-export` lines 13199/13200. |
+| `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (books recomputed via the engine's `--as-of` cutoff: full ACB + deferred-wash fidelity; pre-wash, pre-ticker.map); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block over the taxable accounts — Canada: one row per Schedule 3 line (line 4 shares & fund units 13199/13200; line 6 options, futures & other properties 15199/15300; line 7 crypto-assets 15200/15301 — 15199/15300 before 2025) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (short sales as |amounts|, sell commissions as outlays; a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the allowed gain, the denial going onto the replacement's ACB), plus the `fx-cash` estimate for line 15300; USA: Form 8949's own Part I/II (d) proceeds, (e) cost, (g) adjustment, (h) gain. Rows equal `form-export`'s line totals; `--json` adds the per-account split. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
-| `taxjson checklist [--walk] [--done ID] [--skip ID] [--undo ID] [--quick] [--json]` | The filing checklist ([`docs/filing.md`](./docs/filing.md)) as a command: every step is auto-detected by running the command that proves it (run, sanity, find-missing-history, elect, audit, option-boundary, reconcile-slips, form-export, t1135, check-filed, git status); the steps no command can prove are confirmed with `--done` (marks live in `checklist.json`, commit it) and never hide a later finding; `--walk` visits the open steps one at a time. Exit 1 while anything is open. |
+| `taxjson checklist [--walk] [--done ID] [--skip ID] [--undo ID] [--quick] [--json]` | The filing checklist ([`docs/filing.md`](./docs/filing.md)) as a command: every step is auto-detected by running the command that proves it (run, sanity, find-missing-history, elect, audit, option-boundary, reconcile-slips, form-export, t1135, check-filed, git status); the steps no command can prove are confirmed with `--done` (marks live in `checklist.json`, commit it) and never hide a later finding — a step marked done whose detector finds a problem shows `[!]` with the mark beside it and keeps the list open (`--skip` is the explicit "reviewed, accepted"); form-export is checked against `sum`'s FOR THE RETURN totals and the taxable realized gain. US projects get the US names (1099-B, Form 8949 / Schedule D) and `n/a` for Canada-only steps; a project with no taxable account gets `n/a` for the taxable-only steps. `--walk` visits the open steps one at a time. Exit 1 while anything is open. |
 | `taxjson redact FILE... [--out DIR] [--also REGEX] [--check]` | Strip account numbers and identity from broker exports while keeping every row shape (same-length placeholders, consistent across the file; the private denylist applies) so a real statement can be shared as a parser sample or bug report. Writes `NAME.redacted.EXT`; never touches the input. |
 | `taxjson sell-check SYMBOL ...` | Sell-side wash check: is selling this ticker **at a loss** today safe? **UNSAFE** when a recent affiliated buy would deny it (LOCKED — permanently for the registered-matched portion); **ACTION** when a rescueable violation is open (sell the full position before the deadline); **SAFE\*/SAFE** with the applicable caveats. Whether it *is* a loss at today's price is `harvest`'s job. `--json` for machines; exit 1 on unsafe. |
 | `taxjson buy-check SYMBOL ...` | Buy-side wash check: is buying this ticker today safe? **UNSAFE** when a loss was sold within the past 30 days (the rebuy cancels it — permanently if bought sheltered), with the safe-from date when one is determinable (violations defer to `wash-radar` rather than print a date that would invite an early rebuy); **SAFE\*** when buying merely extends an open wash window. Root-matched (`buy-check NU` covers `NU.US` and cross-listings, folding in `ticker.map` pairs); `--json` for machines; exit 1 on unsafe. |
@@ -689,9 +691,17 @@ FILE` writes importable rows, `--json` the raw report.
   (long-term) with the Schedule D totals per part. Pick the 8949 box (A–F)
   yourself from whether the broker reported basis on your 1099-B.
 - **`--form schedule3`** (Canada): per-security rows — units, acquisition
-  year, proceeds of disposition, ACB, outlays, gain(loss) — with sell-side
-  commissions re-split into the outlays column (gain unchanged), superficial
-  losses already denied and noted per row, and the line 13199 / 13200 totals.
+  year, proceeds of disposition, ACB, outlays, gain(loss) — routed to the
+  Part 3 line for the property type: **line 4** publicly traded shares and
+  fund units (13199 / 13200), **line 6** options, futures and other
+  properties (15199 / 15300 — T4037 lists options there), **line 7**
+  crypto-assets from the `crypto = true` accounts (15200 / 15301; for 2024
+  and earlier returns crypto goes on 15199 / 15300), with per-line totals.
+  Sell-side commissions are re-split into the outlays column (gain
+  unchanged), and every row foots — proceeds − ACB − outlays = the allowed
+  gain: a superficial loss denied on the row shows as an ACB reduced by the
+  denial, noted per row (the denied amount goes onto the replacement
+  property's ACB; a registered-account denial is noted as permanent).
 
 Both read the wash-adjusted gains (the allowed numbers a return reports) and
 **skip tainted dispositions with a warning** — phantom-basis rows are routed
@@ -746,9 +756,16 @@ contracts differ. Canada projects use this timing by default; `"close"`
 nets at the closing transaction (the US §1234 convention, which the US
 engine always uses). `option_grant_timing_since` keeps contracts written
 before that year on close timing, so a premium that was open at a prior
-year end is not taxed nowhere when you switch. `taxjson option-boundary`
+year end is not taxed nowhere when you switch. Set it once and never bump
+it with `year`: left unset it defaults to the project year, which moves —
+a 2026 project would put a contract the 2025 project taxed on grant timing
+back on close timing and tax its premium again — so `taxjson run` warns
+until it is set, and `taxjson init` writes it. `taxjson option-boundary`
 lists every straddling contract and says whether a filed year needs a
-T1-ADJ. Positions, `harvest` and the holdings export keep the economic
+T1-ADJ; a contract written in a LOCKED year (`filed/<year>.json`, which
+now records the timing that return used) but kept on transition close
+timing here is flagged ATTENTION, as is a contract past its expiry date
+with no expiry/assignment row in the export. Positions, `harvest` and the holdings export keep the economic
 book cost of an open written option; only the year attribution moves.
 
 Whether the loss on buying back a written option can be *superficial* —
