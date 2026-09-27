@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Mergers with per-account delivered ratios (Canada).** A merger whose
+  accounts received different whole-share counts (15 → 15 in one, 40 → 41
+  in another) emitted one rename per account at its own ratio; the
+  symbol-wide pool was renamed at the first account's ratio and the
+  second found no pool (1,100 booked for 1,220, a phantom short share).
+  The rows now fold into one event at the holdings-weighted ratio, so
+  the pool lands on the shares actually delivered.
 - **Superficial loss (s.54): only substituted property backs a denial.**
   A denial now needs units acquired inside the 61-day window that the
   same holder (the taxable pool, or one registered / affiliated account)

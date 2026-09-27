@@ -7,7 +7,8 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from taxjson.lib.corporate_timeline import SplitTimeline, event_sort_key
+from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
+                                            normalize_symbol_new, split_event_key)
 from decimal import Decimal
 
 from taxjson.lib.numeric import D
@@ -687,6 +688,100 @@ def _dedupe_corporate_splits(txs: List[TaxTransaction], seen: set) -> List[TaxTr
     return SplitTimeline.dedupe(txs, seen)
 
 
+def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
+                                    sheltered: List[TaxTransaction],
+                                    affiliated: List[TaxTransaction]):
+    """One merger, per-account EMPIRICAL ratios -> one corporate event.
+
+    corp_actions emits a rename-SPLIT per account with the ratio the
+    broker actually delivered (qty_received / qty_disposed, so a snapped
+    fractional entitlement leaves no dust). Two accounts of one merger
+    can therefore carry different ratios (15 HES -> 15 CVX, 40 -> 41).
+    Canada pools are symbol-global (s.47), so those rows neither dedupe
+    (the ratio is part of the event key) nor scale their own account:
+    the first renamed the WHOLE pool at its account's ratio and the
+    second found no pool — shares went missing and the gain moved
+    (2026-09 engine audit, r10: 1,100 booked for 1,220).
+
+    Rows of one event (same symbol, date and rename target) with more
+    than one ratio are folded into ONE row whose ratio is the
+    balance-weighted mean sum(q_a * r_a) / sum(q_a) over the TAXABLE
+    accounts' holdings just before the event (all scopes when the
+    taxable book holds none) — the pool lands on exactly the shares the
+    broker delivered in total, cost preserved. Accounts holding the
+    symbol without a row of their own keep the first row's ratio, as
+    before. Per-account balances in the wash walks become the weighted
+    share of that total (a fraction of a share off per account)."""
+    lists = (taxable, sheltered, affiliated)
+    groups: Dict[tuple, list] = {}
+    for li, lst in enumerate(lists):
+        for i, t in enumerate(lst):
+            if t.action != 'SPLIT' or not t.date:
+                continue
+            new = normalize_symbol_new(t.symbol, getattr(t, 'symbol_new', ''))
+            if not new:
+                continue
+            groups.setdefault((t.symbol, t.date, new), []).append((li, i, t))
+    todo = {k: rows for k, rows in groups.items()
+            if len({round(float(r[2].quantity or 0), 9) for r in rows}) > 1}
+    if not todo:
+        return taxable, sheltered, affiliated
+
+    def _sd(t):
+        return t.date_settle or t.date
+
+    drop = set()
+    replace: Dict[tuple, TaxTransaction] = {}
+    for (sym, d, new), rows in todo.items():
+        first = rows[0][2]
+        split_key = event_sort_key(first, profile='ca_balance', date_of=_sd)
+        ratio_of = {}
+        for _li, _i, t in rows:
+            ratio_of.setdefault(t.account, float(t.quantity or 0))
+        r0 = float(first.quantity or 0)
+
+        def _weights(scopes):
+            bal: Dict[str, float] = {}
+            seen_plain = set()
+            src = [t for li in scopes for t in lists[li]
+                   if t.symbol == sym
+                   and event_sort_key(t, profile='ca_balance',
+                                      date_of=_sd) < split_key]
+            src.sort(key=lambda t: event_sort_key(
+                t, profile='ca_balance', date_of=_sd))
+            for t in src:
+                if t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE'):
+                    bal[t.account] = bal.get(t.account, 0.0) + float(t.quantity or 0)
+                elif (t.action == 'SPLIT'
+                      and not normalize_symbol_new(t.symbol, t.symbol_new)):
+                    k = split_event_key(t.symbol, t.date, t.quantity, '')
+                    if k in seen_plain:
+                        continue
+                    seen_plain.add(k)
+                    for a in bal:
+                        bal[a] *= float(t.quantity or 0)
+            return {a: q for a, q in bal.items() if q > 1e-9}
+
+        w = _weights((0,)) or _weights((0, 1, 2))
+        tot = sum(w.values())
+        if tot <= 1e-9:
+            continue
+        r_eff = sum(q * ratio_of.get(a, r0) for a, q in w.items()) / tot
+        replace[(rows[0][0], rows[0][1])] = TaxTransaction(
+            **{**first.to_dict(), 'quantity': r_eff, 'id': first.id})
+        for li, i, _t in rows[1:]:
+            drop.add((li, i))
+        print(f"NOTE: {sym} -> {new} on {d}: per-account merger ratios "
+              f"{sorted(set(round(v, 6) for v in ratio_of.values()))} "
+              f"applied to the symbol-wide pool as one event at the "
+              f"holdings-weighted ratio {r_eff:.6g}.", file=sys.stderr)
+    out = []
+    for li, lst in enumerate(lists):
+        out.append([replace.get((li, i), t) for i, t in enumerate(lst)
+                    if (li, i) not in drop])
+    return out[0], out[1], out[2]
+
+
 class TaxRules:
     def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True) -> Dict[str, Any]:
         raise NotImplementedError()
@@ -720,6 +815,10 @@ class CanadaTaxRules(TaxRules):
         # duplicates across all three lists (shared `seen`) before any
         # symbol-global pool or window walk sees them.
         _seen_splits: set = set()
+        transactions, sheltered_transactions, affiliated_transactions = \
+            _fold_per_account_rename_ratios(
+                list(transactions), list(sheltered_transactions or []),
+                list(affiliated_transactions or []))
         transactions = _dedupe_corporate_splits(transactions, _seen_splits)
         sheltered_transactions = _dedupe_corporate_splits(
             sheltered_transactions or [], _seen_splits)
