@@ -10,7 +10,7 @@ from taxjson.lib.core import TaxTransaction, get_tax_rules
 
 
 def T(action="BUYSELL", date="", symbol="", quantity=0.0, net_amount=0.0,
-      currency="USD", time="10:00:00", settle="", account="55500001", **kw):
+      currency="USD", time="10:00:00", settle="", account="55500001", **kw):  # pii-ok (synthetic id)
     return TaxTransaction(action=action, date=date, symbol=symbol,
                           quantity=quantity, net_amount=net_amount,
                           currency=currency, time=time,
@@ -231,11 +231,11 @@ class TestMergerPerAccountRatio(unittest.TestCase):
             for r in _emit_basis_carryover_rename(ev, {}, statute_note="s.85.1", cil_note="x"):
                 rows.append(TaxTransaction(**r))
         self.assertEqual(sorted(r.quantity for r in rows), [1.0, 1.025])
-        return ([T(date="2025-01-06", symbol="HHH.US", quantity=15, net_amount=1500.0, account="55500001"),
-                 T(date="2025-01-06", symbol="HHH.US", quantity=40, net_amount=4000.0, account="55500002")]
+        return ([T(date="2025-01-06", symbol="HHH.US", quantity=15, net_amount=1500.0, account="55500001"),  # pii-ok (synthetic id)
+                 T(date="2025-01-06", symbol="HHH.US", quantity=40, net_amount=4000.0, account="55500002")]  # pii-ok (synthetic id)
                 + rows
-                + [T(date="2025-09-02", symbol="CCC.US", quantity=-15, net_amount=1800.0, account="55500001"),
-                   T(date="2025-09-02", symbol="CCC.US", quantity=-41, net_amount=4920.0, account="55500002")])
+                + [T(date="2025-09-02", symbol="CCC.US", quantity=-15, net_amount=1800.0, account="55500001"),  # pii-ok (synthetic id)
+                   T(date="2025-09-02", symbol="CCC.US", quantity=-41, net_amount=4920.0, account="55500002")])  # pii-ok (synthetic id)
 
     def test_blended_pool_scales_by_the_delivered_total(self):
         r = ca(self._book())
