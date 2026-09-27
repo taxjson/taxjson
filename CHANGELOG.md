@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Schedule 3 line routing** (`form-export --form schedule3`, `taxjson
+  sum`): every disposition went on line 13199/13200 ("section 3, publicly
+  traded shares"). Rows are now routed by property type to the 2025 form's
+  Part 3 lines — line 4 shares and fund units (13199/13200), line 6
+  options, futures and other properties (15199/15300; T4037 lists options
+  there), line 7 crypto-assets from `crypto = true` accounts (15200/15301;
+  15199/15300 for 2024 and earlier) — with per-line totals in the text,
+  CSV (`line`, `proceeds_line`, `gain_line`, `property`, `denied` columns)
+  and JSON (`lines`, per-code `totals`). Standalone `taxjson-form-export`
+  takes crypto books with `--crypto FILE`.
+- **FOR THE RETURN block**: one row per Schedule 3 line (was per
+  account; the per-account split stays in `--json`), each with its line
+  number and codes. The footer said COST *includes* the denied
+  superficial losses — backwards: the ACB shown is REDUCED by the denial
+  so proceeds − ACB − outlays is the allowed gain, and the denied amount
+  goes onto the replacement's ACB. form-export's per-row ACB now uses the
+  same convention, so every row foots (a fully denied row used to show
+  proceeds 1,955.52 − ACB 11,536.54 − outlays 1.40 against a gain of
+  0.00). US projects show Form 8949's own Part I/II (d) proceeds, (e)
+  cost, (g) adjustment and (h) gain — the block used to show Schedule 3
+  style proceeds and a cost net of the wash adjustment that matched
+  neither 8949 column. A line under the block gives the `fx-cash`
+  s.39(1.1) estimate (line 15300), or a pointer when it cannot be built.
+
 
 ## v0.16.0 (2026-09-25)
 

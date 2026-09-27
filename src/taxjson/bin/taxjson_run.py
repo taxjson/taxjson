@@ -5008,18 +5008,24 @@ def cmd_summary(args: argparse.Namespace) -> None:
     group_defs = [(g, rows) for g, rows in group_defs if rows]
     grouped = len(acct_rows) > 1 and len(group_defs) > 1
 
-    # What the return's capital-gains entry asks for (Schedule 3 lines
-    # 13199/13200; TurboTax's proceeds / ACB / outlays boxes): taxable
-    # accounts only, on form-export's convention, so these can never
-    # disagree with the export.
-    from taxjson.bin.taxjson_form_export import (filing_totals,
-                                                 load_dispositions)
+    # What the return's capital-gains entry asks for: taxable accounts
+    # only, on form-export's convention, so these can never disagree with
+    # the export. Canada: one row per Schedule 3 line (shares 13199/13200,
+    # options & other properties 15199/15300, crypto-assets 15200/15301).
+    # USA: Form 8949's own part totals — (d) proceeds, (e) cost, (g)
+    # adjustment, (h) gain.
+    from taxjson.bin.taxjson_form_export import (filing_lines,
+                                                 filing_parts_8949,
+                                                 filing_totals,
+                                                 load_dispositions,
+                                                 mark_crypto)
     _settings = cfg.get("settings") or {}
     _fyear = year or _settings.get("year")
     _is_us = _normalize_country(str(_settings.get("country", "canada"))) \
         in ("us", "usa")
     _date_key = "date" if _is_us else "date_settle"
     filing_rows: List[Dict[str, Any]] = []
+    _filing_ents: List[Dict[str, Any]] = []
     for acct, p in files.items():
         if acct not in taxable_accounts:
             continue
@@ -5029,10 +5035,49 @@ def cmd_summary(args: argparse.Namespace) -> None:
             print(f"taxjson sum: warning: {acct}: could not read "
                   f"dispositions: {e}", file=sys.stderr)
             continue
-        filing_rows.append({"account": acct, **filing_totals(_ents)})
-    filing_total = {k: round(sum(r[k] for r in filing_rows), 2)
-                    for k in ("proceeds", "acb", "outlays", "gain",
-                              "denied")}
+        if ((cfg.get("accounts") or {}).get(acct) or {}).get("crypto"):
+            _ents = mark_crypto(_ents)
+        _filing_ents += _ents
+        if _is_us:
+            try:
+                _parts = filing_parts_8949(_ents)
+            except SystemExit as e:
+                print(f"taxjson sum: warning: {acct}: {e}", file=sys.stderr)
+                continue
+            filing_rows.append({"account": acct, **{
+                k: round(sum(x[k] for x in _parts), 2)
+                for k in ("proceeds", "cost", "adjustment", "gain")},
+                "dispositions": len(_ents)})
+        else:
+            filing_rows.append({"account": acct,
+                                **filing_totals(_ents, _fyear)})
+    filing_line_rows: List[Dict[str, Any]] = []
+    if _is_us:
+        try:
+            filing_line_rows = filing_parts_8949(_filing_ents)
+        except SystemExit:
+            filing_line_rows = []           # warned per account above
+        _fkeys = ("proceeds", "cost", "adjustment", "gain")
+    else:
+        filing_line_rows = filing_lines(_filing_ents, _fyear)
+        _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
+    filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
+                    for k in _fkeys}
+    # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
+    # (T4037) but lives outside the engine's dispositions; show the
+    # estimate beside the block when the ledger builds, else a pointer.
+    _fx_note: Optional[Dict[str, Any]] = None
+    if filing_rows and not _is_us:
+        try:
+            import contextlib as _ctx
+            import io as _io
+            with _ctx.redirect_stderr(_io.StringIO()):
+                _fxl, _fxv, _, _, _ = _fx_cash_doc(root, cache)
+            _fx_note = {"net_gain": round(float(_fxl["net_gain"]), 2),
+                        "reportable": round(float(_fxv["reportable"]), 2),
+                        "estimate": True, "line": "15300"}
+        except (SystemExit, Exception):             # noqa: BLE001
+            _fx_note = None
     # Base currency is just a label here — soft-read, no hard config
     # dependency (the command works from the work/ gains files).
     base = _base_currency(root)
@@ -5077,6 +5122,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
             "totals": _sum_rows(acct_rows),
             "basis": basis, "year": year, "currency": base,
             "filing": {"accounts": filing_rows, "totals": filing_total,
+                       ("parts_8949" if _is_us else "lines"):
+                           filing_line_rows,
+                       "fx_cash": _fx_note,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "subtotals": {g.lower(): _sum_rows(rows)
@@ -5119,27 +5167,67 @@ def cmd_summary(args: argparse.Namespace) -> None:
                         rule_before_last=True)
 
     if filing_rows:
-        _form = ("Form 8949 / Schedule D" if _is_us
-                 else "Schedule 3: line 13199 proceeds, 13200 gain")
+        from taxjson.lib.report_model import render_table as _rt
+        _names = ", ".join(r["account"] for r in filing_rows)
         print()
-        print(f"FOR THE RETURN — taxable accounts, {base} ({_form})")
-        _fl = [" ".join(["ACCOUNT", "PROCEEDS", "COST(ACB)", "OUTLAYS",
-                         "GAIN", "DENIED"])]
-        for r in filing_rows:
-            _fl.append(" ".join([r["account"], money(r["proceeds"]),
-                                 money(r["acb"]), money(r["outlays"]),
-                                 money(r["gain"]), money(r["denied"])]))
-        _fl.append(" ".join(["RETURN", money(filing_total["proceeds"]),
-                             money(filing_total["acb"]),
-                             money(filing_total["outlays"]),
-                             money(filing_total["gain"]),
-                             money(filing_total["denied"])]))
-        _print_report_table(_fl, rule_before_last=True)
-        print("PROCEEDS − COST − OUTLAYS = GAIN. Short sales are shown as "
-              "|amounts| and sell-side commissions as outlays, as on the "
-              "form; COST includes the superficial losses DENIED, so the "
-              "gain is the allowed one. Per-security rows: `taxjson "
-              "form-export`.")
+        if _is_us:
+            print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
+                  f"(Form 8949 → Schedule D, tax year {_fyear})")
+            _body = [[f"{r['label']} → {r['schedule_d']}",
+                      money(r["proceeds"]), money(r["cost"]),
+                      money(r["adjustment"]), money(r["gain"])]
+                     for r in filing_line_rows]
+            _foot = [["RETURN", money(filing_total["proceeds"]),
+                      money(filing_total["cost"]),
+                      money(filing_total["adjustment"]),
+                      money(filing_total["gain"])]]
+            for _ln in _rt(["FORM 8949", "(d) PROCEEDS", "(e) COST",
+                            "(g) ADJUSTMENT", "(h) GAIN"],
+                           ["<", ">", ">", ">", ">"], _body, _foot):
+                print(_ln)
+            print("(d) − (e) + (g) = (h). Column (g) is the code-W wash-"
+                  "sale loss disallowed and added back, so (h) is the "
+                  "allowed gain; the disallowed loss moves to the "
+                  "replacement shares' basis. Per-sale rows: `taxjson "
+                  "form-export`.")
+        else:
+            print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
+                  f"(Schedule 3, tax year {_fyear})")
+            _body = [[f"Line {r['line']} {r['short']} "
+                      f"({r['proceeds_code']}/{r['gain_code']})"
+                      if r["line"] else
+                      f"{r['short']} ({r['proceeds_code']}/"
+                      f"{r['gain_code']})",
+                      money(r["proceeds"]), money(r["acb"]),
+                      money(r["outlays"]), money(r["gain"]),
+                      money(r["denied"])] for r in filing_line_rows]
+            _foot = [["RETURN", money(filing_total["proceeds"]),
+                      money(filing_total["acb"]),
+                      money(filing_total["outlays"]),
+                      money(filing_total["gain"]),
+                      money(filing_total["denied"])]]
+            for _ln in _rt(["SCHEDULE 3 LINE", "PROCEEDS", "COST(ACB)",
+                            "OUTLAYS", "GAIN", "DENIED"],
+                           ["<", ">", ">", ">", ">", ">"], _body, _foot):
+                print(_ln)
+            print("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed gain. "
+                  "Short sales are shown as |amounts| and sell-side "
+                  "commissions as outlays, as on the form. Where a "
+                  "superficial loss was DENIED the ACB is REDUCED by it, "
+                  "so the gain stays the allowed one; the denied amount "
+                  "is added to the ACB of the replacement property "
+                  "instead. Per-security rows: `taxjson form-export`; "
+                  "per account: `taxjson sum --json`.")
+            if _fx_note is not None:
+                print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
+                      f"the rows above): net {money(_fx_note['net_gain'])}, "
+                      f"reportable {money(_fx_note['reportable'])} after "
+                      f"the $200 exemption; T4037 puts it on line 15300. "
+                      f"Review with `taxjson fx-cash`.")
+            else:
+                print("FX on foreign cash (s.39(1.1)) is not in the rows "
+                      "above — T4037 puts it on line 15300; see `taxjson "
+                      "fx-cash`.")
 
     if want_estimate:
         _print_tax_estimate(
@@ -7022,7 +7110,8 @@ def cmd_form_export(args: argparse.Namespace) -> None:
 
     root = Path(args.dir).resolve()
     cache = root / "work"
-    settings = load_config(root).get("settings", {})
+    _cfg = load_config(root)
+    settings = _cfg.get("settings", {})
     country = _normalize_country(settings.get("country", ""))
     form = args.form or ("8949" if country == "usa" else "schedule3")
     year = settings.get("year")
@@ -7030,7 +7119,15 @@ def cmd_form_export(args: argparse.Namespace) -> None:
     gains_argv = _taxable_gains_argv(root, cache)
     # form-export takes gains files positionally.
     files = [gains_argv[i + 1] for i in range(0, len(gains_argv), 2)]
-    argv = files + ["--form", form,
+    # Crypto books go on Schedule 3's crypto-assets line: name them.
+    from taxjson.lib.report_model import resolve_gains_files
+    _crypto_files = []
+    for _n, _c in sorted((_cfg.get("accounts") or {}).items()):
+        if (_c or {}).get("type") == "taxable" and (_c or {}).get("crypto"):
+            _g = resolve_gains_files(cache, _n).get(_n)
+            if _g is not None:
+                _crypto_files += ["--crypto", str(_g)]
+    argv = files + _crypto_files + ["--form", form,
                     "--base-currency",
                     str(settings.get("base_currency", ""))]
     if year is not None:
