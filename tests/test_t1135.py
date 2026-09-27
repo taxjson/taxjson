@@ -15,6 +15,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
 from taxjson.bin.taxjson_t1135 import (
+    CRYPTO,
     REVIEW,
     build_report,
     classify_country,
@@ -48,8 +49,12 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(classify_country("AAPL250117C00150000.US", {}), "USA")
         self.assertIsNone(classify_country("MDA251219P00029000.TO", {}))
 
-    def test_no_suffix_is_review(self):
-        self.assertEqual(classify_country("BTC", {}), REVIEW)
+    def test_no_suffix_is_crypto_bucket(self):
+        # Suffix-less = crypto: its own "check where held" bucket
+        # (counted toward the threshold), not the unclassified "??".
+        self.assertEqual(classify_country("BTC", {}), CRYPTO)
+        self.assertEqual(classify_country("BTC", {"BTC": "USA"}), "USA")
+        self.assertIsNone(classify_country("BTC", {"BTC": None}))
 
     def test_unknown_suffix_is_review(self):
         self.assertEqual(classify_country("SAP.DE", {}), REVIEW)
@@ -130,6 +135,26 @@ class TestWalkCosts(unittest.TestCase):
         w = walk_costs(txs, 2025, {})
         s = w["per_symbol"]["AAPL.US"]
         self.assertAlmostEqual(s["year_end_cost"], 10000.0, places=2)
+
+    def test_split_in_two_accounts_applies_once(self):
+        # Each account's parser emits its own SPLIT row for one
+        # corporate event; the symbol-global walk applied it per row
+        # (2026-09 audit r09: year-end cost 60,000 instead of 0).
+        def r(action, date, qty, net, acct):
+            return dict(action=action, date=date, date_settle=date,
+                        time="10:00:00", symbol="XYZ.US", quantity=qty,
+                        net_amount=net, account=acct, currency="CAD",
+                        symbol_new="")
+        txs = [r("BUYSELL", "2025-01-10", 500, 60000.0, "A1"),
+               r("SPLIT", "2025-03-01", 2.0, 0, "A1"),
+               r("BUYSELL", "2025-01-12", 500, 60000.0, "A2"),
+               r("SPLIT", "2025-03-01", 2.0, 0, "A2"),
+               r("BUYSELL", "2025-06-01", -1000, 70000.0, "A1"),
+               r("BUYSELL", "2025-06-01", -1000, 70000.0, "A2")]
+        w = walk_costs(txs, 2025, {})
+        s = w["per_symbol"]["XYZ.US"]
+        self.assertAlmostEqual(s["year_end_cost"], 0.0, places=2)
+        self.assertAlmostEqual(w["max_total_cost"], 120000.0, places=2)
 
     def test_rename_carries_cost_and_max(self):
         txs = [
@@ -306,6 +331,7 @@ class TestCli(unittest.TestCase):
             rep = json.loads(out.getvalue())
             self.assertTrue(rep["filing_required"])
             self.assertIn("BTC", rep["review_symbols"])
+            self.assertEqual(rep["crypto_symbols"], ["BTC"])
 
     def test_missing_file_is_error(self):
         err = io.StringIO()
