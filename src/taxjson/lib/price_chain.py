@@ -490,7 +490,8 @@ def fetch_prices(pairs: Dict[str, str], *,
     # Yahoo Finance) are skipped; the cache still serves, and a miss
     # fails loudly below, naming what was needed. Injected `fetchers`
     # (tests) are not network tiers and stay as given.
-    offline = bool(os.environ.get("TAXJSON_OFFLINE")) and fetchers is None
+    from taxjson.lib.offline import offline_enabled
+    offline = offline_enabled() and fetchers is None
     if offline:
         fetchers = []
     if fetchers is None:

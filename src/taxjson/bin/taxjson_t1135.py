@@ -37,8 +37,9 @@ Caveats printed with every report (also see --help):
     detailed method wants month-end FAIR MARKET VALUE, which needs price
     data this tool does not fetch.
   - Symbols with no market suffix (typically exchange-held crypto) are
-    flagged country `??` for manual review — CRA generally treats
-    foreign-exchange-held crypto as SFP.
+    bucketed as country `CRYPTO` and counted toward the threshold —
+    crypto held on a foreign exchange is generally SFP; check where it
+    is held and map it (`SYMBOL <ISO3>` or `SYMBOL CA`) in t1135.map.
 
 Usage:
     taxjson-t1135 --year 2025 margin_base.json crypto_base.json \\
@@ -85,9 +86,15 @@ _NON_CAPITAL = ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST", "FEE",
 
 _QTY_EPS = 1e-6
 
-# Sentinel country code for symbols we cannot classify (no market suffix —
-# typically crypto). Deliberately ugly so it reads as "review me".
+# Sentinel country code for symbols we cannot classify (an unknown market
+# suffix). Deliberately ugly so it reads as "review me".
 REVIEW = "??"
+# Bucket for suffix-less symbols — equity parsers always stamp a market
+# suffix, so these are crypto. Crypto held on a foreign exchange is
+# generally specified foreign property (funds/intangibles held outside
+# Canada); where it is held decides the country, which the books don't
+# carry — so it is counted toward the threshold and flagged for review.
+CRYPTO = "CRYPTO"
 
 
 # ---------------------------------------------------------------- loading
@@ -148,7 +155,7 @@ def classify_country(symbol: str,
         return REVIEW
     # No suffix: equities parsers always stamp one, so this is almost
     # certainly crypto (exchange-held crypto is generally SFP per CRA).
-    return REVIEW
+    return CRYPTO
 
 
 # ---------------------------------------------------------------- cost walk
@@ -205,10 +212,23 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         if tot > max_total:
             max_total, max_total_date = tot, date
 
+    # One corporate split = one application. Every taxable account's
+    # parser emits its own SPLIT row for the same event, and this walk
+    # pools symbol-globally across all of them — undeduped, two
+    # accounts through a 2:1 split scaled the pool 4x (the engines
+    # dedupe the same way, core._dedupe_corporate_splits).
+    from taxjson.lib.corporate_timeline import split_event_key
+    seen_splits: set = set()
     for tx in sorted(transactions, key=_sort_key):
         date = tx.get("date_settle") or tx.get("date") or ""
         if date > year_end:
             break
+        if (tx.get("action") or "").upper() == "SPLIT":
+            key = split_event_key(tx.get("symbol") or "", tx.get("date") or "",
+                                  tx.get("quantity"), tx.get("symbol_new") or "")
+            if key in seen_splits:
+                continue
+            seen_splits.add(key)
         # First event inside the year: the Jan-1 state (built from all
         # prior events) itself counts toward the in-year maximum.
         if date >= year_start and not baseline_taken:
@@ -450,7 +470,10 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "simplified_method_available": max_total < detailed_threshold,
         "properties": rows,
         "by_country": by_country,
-        "review_symbols": [r["symbol"] for r in rows if r["country"] == REVIEW],
+        "review_symbols": [r["symbol"] for r in rows
+                           if r["country"] in (REVIEW, CRYPTO)],
+        "crypto_symbols": [r["symbol"] for r in rows
+                           if r["country"] == CRYPTO],
         "unknown_acb_symbols": [r["symbol"] for r in rows if r["unknown_acb"]],
     }
 
@@ -493,6 +516,8 @@ def render_report(rep: Dict[str, Any]) -> str:
                 notes.append("unknown ACB (phantom opening) — cost understated")
             if r["country"] == REVIEW:
                 notes.append("unclassified — review / add to t1135.map")
+            elif r["country"] == CRYPTO:
+                notes.append("crypto — check where held (see notes)")
             table.append((r["symbol"], r["country"], _money(r["max_cost"]),
                           _money(r["year_end_cost"]), _money(r["income"]),
                           _money(r["gain"]), "; ".join(notes)))
@@ -546,6 +571,14 @@ def render_report(rep: Dict[str, Any]) -> str:
                  "exchange IS still SFP — add `SYMBOL <ISO3>` to t1135.map. "
                  "Conversely a Canadian corp held on a US exchange is NOT "
                  "SFP — add `SYMBOL CA`.")
+    if rep.get("crypto_symbols"):
+        lines.append("  - CRYPTO rows (symbols with no market suffix): crypto "
+                     "held on a FOREIGN exchange or platform is generally "
+                     "specified foreign property — report it under that "
+                     "exchange's country (add `SYMBOL <ISO3>` to t1135.map). "
+                     "Crypto held with a Canadian platform may not be; add "
+                     "`SYMBOL CA` once you have checked. Until then it is "
+                     "counted toward the threshold (the conservative side).")
     lines.append("  - Registered accounts (RRSP/TFSA/...) are excluded by "
                  "law and were not read.")
     lines.append("  - US-situs property inside T1135 does not include US "

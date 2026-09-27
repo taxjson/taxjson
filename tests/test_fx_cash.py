@@ -53,6 +53,36 @@ class TestLedger(unittest.TestCase):
         doc = build_ledger(txs, "CAD", {}, 2026, rate_of=_rate_of)
         self.assertAlmostEqual(doc["net_gain"], 150 * 0.10, places=2)
 
+    def test_withholding_leaves_the_pool_once_rbc_implied_tax(self):
+        # RBC: DIVIDEND net 85 (cash received), gross 100, plus an
+        # "(Implied Tax)" TAX row of 15. Net-in + TAX-out took the 15
+        # out twice: a phantom overdraft and gain -7.00 instead of
+        # 85 x (1.30 - 1.40) = -8.50 (2026-09 audit r12).
+        rate = {"2025-03-01": 1.40, "2025-06-02": 1.30}
+        txs = [_tx("DIVIDEND", "2025-03-01", "USD", 85.0,
+                   gross_amount=100.0),
+               _tx("TAX", "2025-03-01", "USD", 15.0,
+                   description="AAA NON-RES TAX WITHHELD (Implied Tax)"),
+               dict(_tx("BUYSELL", "2025-06-01", "USD", 85.0, qty=1),
+                    date_settle="2025-06-02")]
+        doc = build_ledger(txs, "CAD", {}, 2025,
+                           rate_of=lambda c, d: rate[d])
+        self.assertEqual(doc["overdrafts"], {})
+        self.assertAlmostEqual(doc["net_gain"], -8.50, places=2)
+        self.assertEqual(doc["pools"], {})
+
+    def test_withholding_ib_paired_and_unpaired(self):
+        # IB: DIVIDEND gross=net=100 and a separate withholding TAX row;
+        # merge2's reconcile_dividend_tax rewrites a PAIRED dividend's
+        # net to 85. Either shape leaves 85 in the pool.
+        for net in (100.0, 85.0):
+            txs = [_tx("DIVIDEND", "2026-01-10", "USD", net,
+                       gross_amount=100.0),
+                   _tx("TAX", "2026-01-10", "USD", 15.0)]
+            doc = build_ledger(txs, "CAD", {}, 2026, rate_of=_rate_of)
+            self.assertAlmostEqual(doc["pools"]["USD"]["units"], 85.0)
+            self.assertAlmostEqual(doc["net_gain"], 0.0, places=2)
+
     def test_loss_direction(self):
         txs = [_tx("BUYSELL", "2026-02-10", "USD", 10000.0, qty=-100),
                _tx("BUYSELL", "2026-06-10", "USD", 10000.0, qty=50)]

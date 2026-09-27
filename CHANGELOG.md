@@ -145,6 +145,59 @@
 - **Futures shorts are not "truncated history" candidates** — an IB
   futures sell-to-open is excluded from the go-short hint like an option
   write (`--include-options` still shows them).
+- **FX rates now come from the Bank of Canada.** For a CAD base,
+  `taxjson run` converts at the Bank of Canada daily average rate
+  (Valet API, series `FX<CUR>CAD`), the rate CRA expects (Folio
+  S5-F4-C1) and the one the docs always claimed — earlier releases
+  actually used Yahoo Finance closes. Yahoo is now only the fallback
+  for dates before 2017-01-03 (where the Valet series begin) and for
+  currencies the Bank does not publish. **Computed CAD amounts will
+  move by cents to dollars per trade versus earlier releases**: over
+  2021–2026 the Yahoo USD/CAD close differed from the Bank's rate by
+  0.17% on the median day (about $17 per US$10,000), 0.6% at the 95th
+  percentile and up to 1.7% on volatile days (GBP and AUD somewhat
+  more). Each rate
+  in `work/to_base.csv` carries its source in a new sixth column
+  (`boc` / `yahoo`; loaders still read the first five), the run
+  prints `FX USD→CAD: Bank of Canada Valet for N dates, Yahoo
+  fallback for M`, and each account's `.sum` DIAGNOSTICS gets the
+  same count for the rates its rows actually used. Weekends and
+  holidays take the most recent prior business-day rate, as before.
+  Non-CAD (US) projects still use Yahoo Finance.
+- **FX history no longer ends 5.5 years back.** Rates were fetched for
+  "today minus 2000 days", so any older transaction silently converted
+  at the 1.35 default rate (stderr only; the run exited 0 and the
+  checklist said clean). Rates now reach back to 2000-01-01
+  (`taxjson-to-base-curr --start`), and a row converted at the default
+  rate is a **validation ERROR** — counted in the `.sum` DIAGNOSTICS
+  `validation: N error(s)` line and `taxjson checklist`, fatal under
+  `run --strict` (crypto books too). An explicit `--default-rate`
+  still accepts the fallback.
+- **`TAXJSON_OFFLINE`**: the FX stage no longer demands a rate for
+  TODAY (a cache warm from yesterday failed offline every new day,
+  even for a past-year or all-CAD project). Offline it serves the
+  cache and never fails; only dates a transaction actually needs
+  matter, and a missing one is a validation error. `TAXJSON_OFFLINE=0`
+  (or `false`/`no`/`off`) now means off — it used to switch offline
+  mode ON; only `1`/`true`/`yes`/`on` turn it on.
+- `taxjson-to-base-curr` no longer imports pandas at start-up: a
+  core-only install (install.sh's silent fallback) crashed the first
+  run with `ModuleNotFoundError`. The Bank of Canada path needs no
+  extra; the Yahoo fallback asks for `taxjson[fx]` by name, and
+  install.sh now warns loudly when it falls back to the core package.
+- **`taxjson fx-cash`**: withheld tax left the foreign-cash pool twice
+  (the dividend was booked net of withholding AND its TAX row was
+  spent) — RBC's implied-tax rows and every IB dividend paired by
+  merge2. Dividends and interest now enter the pool GROSS; the TAX row
+  takes the withholding out once. Phantom overdrafts on withheld
+  dividends disappear and the gain changes accordingly.
+- **`taxjson t1135`**: a split held in two taxable accounts was applied
+  once per account (the pool doubled — cost at Dec 31 overstated);
+  the walk now dedupes split events like the gains engines. Crypto
+  (suffix-less symbols) is reported under a `CRYPTO` country bucket
+  with a "check where held" note instead of the unclassified `??` —
+  crypto on a foreign exchange is generally specified foreign
+  property; map it in `t1135.map`.
 
 
 ## v0.16.0 (2026-09-25)

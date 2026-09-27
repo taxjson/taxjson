@@ -42,6 +42,7 @@ from taxjson.bin.taxjson_ticker_map import (
 )
 from taxjson.bin.taxjson_convert_currency import (
     abort_if_currency_uncovered, emit_fallback_summary,
+    emit_source_summary, fallback_validation_issues, load_rate_sources,
     load_exchange_rates, process_transactions as convert_transactions,
     reset_fallback_tally, resolve_default_rate,
 )
@@ -328,6 +329,7 @@ def main():
 
     # --- Stage 4: currency conversion ---------------------------------
     target_currency = (args.target_currency or '').upper() or None
+    fx_issues = {}
     if target_currency:
         if not args.rates_file:
             # Mirror the standalone CLI's loud warning — running merge2's
@@ -359,6 +361,14 @@ def main():
                 rates_given=bool(args.rates_file),
                 default_rate_explicit=args.default_rate is not None):
             return 1
+        emit_source_summary(load_rate_sources(
+            Path(args.rates_file) if args.rates_file else None,
+            target_currency))
+        if args.default_rate is None:
+            # Each default-rate row is a validation ERROR (folded into
+            # Stage 5's count) unless --default-rate was explicit.
+            fx_issues = fallback_validation_issues(target_currency,
+                                                   default_rate)
         # Post-conversion INVARIANT: after --to, every row must carry
         # the target currency. A field-conversion failure deliberately
         # leaves the row native (loud stderr) — but letting it flow on
@@ -399,6 +409,8 @@ def main():
         # Adapt by capturing its output via the same defaultdict path.
         dict_txs = [t.to_dict() for t in txs]
         issues, warnings = _validate_dict_list(dict_txs, filename='<merged>')
+        for _ctx, _errs in fx_issues.items():
+            issues[_ctx].extend(_errs)
         error_count = sum(len(v) for v in issues.values())
         if error_count:
             print(

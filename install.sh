@@ -91,7 +91,8 @@ say "3/4 Python environment"
 "$DIR/venv/bin/python" -m pip install --quiet --upgrade pip
 if [ -n "$EXTRAS" ]; then
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR[$EXTRAS]" \
-    || { echo "   extras [$EXTRAS] failed to install — falling back to the core package"; \
+    || { echo "   WARNING: extras [$EXTRAS] failed to install — falling back to the core package."; \
+         echo "   WARNING: without [fx]: no FX rates before 2017-01-03 (Yahoo fallback) and none at all for a non-CAD base."; \
          "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR"; }
 else
   "$DIR/venv/bin/python" -m pip install --quiet -e "$DIR"
