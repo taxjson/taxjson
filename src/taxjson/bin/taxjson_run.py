@@ -6218,30 +6218,52 @@ def cmd_checklist(args: argparse.Namespace) -> None:
         sys.exit("taxjson checklist: [settings] year is required")
     country = _normalize_country(str(settings.get("country", "canada")))
 
+    ids = [s[0] for s in cl.STEPS]
+    if args.note and not (args.done or args.skip):
+        sys.exit("taxjson checklist: --note goes with --done or --skip "
+                 "(it is stored with the mark).")
     marks = [(args.done, "done"), (args.skip, "skipped"), (args.undo, None)]
+    recorded: List[Dict[str, Any]] = []
     for step, mark in marks:
         if step:
             try:
-                cl.set_override(root, year, step, mark, note=args.note or "")
+                changed = cl.set_override(root, year, step, mark,
+                                          note=args.note or "")
             except KeyError:
                 sys.exit(f"taxjson checklist: unknown step {step!r} "
-                         f"(ids: {', '.join(s[0] for s in cl.STEPS)})")
+                         f"(ids: {', '.join(ids)})")
             verb = {"done": "marked done", "skipped": "marked skipped",
                     None: "mark removed"}[mark]
-            print(f"taxjson checklist: {step} {verb} "
-                  f"(recorded in {cl.STATE_FILE}).")
+            if not changed:
+                verb = "had no mark — nothing to undo"
+            recorded.append({"step": step, "mark": mark or "undo",
+                             "changed": changed, "note": args.note or ""})
+            if not args.json:
+                print(f"taxjson checklist: {step} {verb}"
+                      + (f" (recorded in {cl.STATE_FILE})." if changed
+                         else "."))
     if args.reset:
-        (root / cl.STATE_FILE).unlink(missing_ok=True)
-        print(f"taxjson checklist: {cl.STATE_FILE} removed.")
+        _state = root / cl.STATE_FILE
+        existed = _state.exists()
+        _state.unlink(missing_ok=True)
+        recorded.append({"step": None, "mark": "reset", "changed": existed})
+        if not args.json:
+            print(f"taxjson checklist: {cl.STATE_FILE} removed." if existed
+                  else f"taxjson checklist: no {cl.STATE_FILE} — nothing to "
+                       f"reset.")
     if (args.done or args.skip or args.undo or args.reset) and not args.walk \
             and not args.show:
+        if args.json:
+            print(_json.dumps({"year": year, "state_file": cl.STATE_FILE,
+                               "recorded": recorded}, indent=2))
         return
 
     ctx = cl.Ctx(root=root, cfg=cfg, year=year, today=_date.today(),
                  run_sub=cl.default_run_sub(root))
     only = [args.only] if args.only else None
-    if only and args.only not in {s[0] for s in cl.STEPS}:
-        sys.exit(f"taxjson checklist: unknown step {args.only!r}")
+    if only and args.only not in ids:
+        sys.exit(f"taxjson checklist: unknown step {args.only!r} "
+                 f"(ids: {', '.join(ids)})")
     if only and args.quick:
         print("taxjson checklist: --only names one step; ignoring --quick.",
               file=sys.stderr)
@@ -6269,12 +6291,15 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     """Interactive pass over the open steps, one detector at a time: each
     step is shown as soon as its own check finishes (the whole list can
     take a minute on a big book), with why it matters and what was found,
-    then the user's decision is recorded."""
-    meta = {s[0]: s for s in cl.STEPS}
+    then the user's decision is recorded. Ends with the summary; exit 1
+    while anything is still open (also after [q]uit)."""
+    country = ctx.settings.get("country", "canada")
     ids = [s[0] for s in cl.STEPS if not only or s[0] in only]
-    print("Filing checklist walk. For each open step: [d]one  [s]kip  "
-          "[r]e-check  [n]ext  [q]uit  (Enter = next)\n")
+    keys = "[d]one  [s]kip  [r]e-check  [n]ext  [q]uit  (Enter = next)"
+    print(f"Filing checklist walk. For each open step: {keys}\n")
     seen = 0
+    quit_early = False
+    left_open = 0
     for sid in ids:
         r = cl.evaluate(ctx, only=[sid], quick=quick,
                         progress=cl.stderr_progress)[0]
@@ -6283,21 +6308,29 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                   + (f" (marked {r.override})" if r.override else ""))
             continue
         seen += 1
-        _, stage, title, cmd, why = meta[sid]
+        _, stage, title, cmd, why = cl.step_meta(sid, country)
         stage_name = dict(cl.STAGES)[stage]
+        show = True
         while True:
-            print(f"\n--- [{stage}. {stage_name}]  {sid}")
-            print(f"    {title}")
-            print(f"    why:     {why}")
-            print(f"    proves:  {cmd}")
-            print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}")
+            if show:
+                print(f"\n--- [{stage}. {stage_name}]  {sid}")
+                print(f"    {title}")
+                print(f"    why:     {why}")
+                print(f"    proves:  {cmd}")
+                print(f"    found:   {cl.SYMBOL[r.effective]} {r.detail}"
+                      + (f" (marked {r.override}"
+                         + (f": {r.note}" if r.note else "") + ")"
+                         if r.override else ""))
+            show = False
             try:
                 ans = input("    > ").strip().lower()
             except EOFError:
                 print()
-                return
+                quit_early = True
+                break
             if ans in ("q", "quit"):
-                return
+                quit_early = True
+                break
             if ans in ("d", "done"):
                 note = input("    note (optional): ").strip()
                 cl.set_override(ctx.root, ctx.year, sid, "done", note=note)
@@ -6313,13 +6346,21 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
                 if r.passed:
                     print(f"    now: {cl.SYMBOL[r.effective]} {r.detail}")
                     break
+                show = True
                 continue
-            break                                   # next
+            if ans in ("", "n", "next"):
+                left_open += 1
+                break
+            print(f"    unknown key {ans!r} — {keys}")
+        if quit_early:
+            break
     print(f"\n{seen} open step(s) visited. Summary "
           f"(`taxjson checklist` re-checks everything):")
     results = cl.evaluate(ctx, only=only, quick=True)
-    print(cl.render(results, ctx.year, ctx.settings.get("country", "canada"),
-                    quick=True))
+    print(cl.render(results, ctx.year, country, quick=True))
+    if quit_early or left_open:
+        # Open steps remain (the one quit on, the ones passed over).
+        sys.exit(1)
 
 
 def cmd_sanity(args: argparse.Namespace) -> None:

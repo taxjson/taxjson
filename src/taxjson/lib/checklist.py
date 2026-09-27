@@ -13,9 +13,17 @@ command (or inspects the project) and reports one of:
 
 Overrides live in `checklist.json` at the project root (commit it): a
 step the user marks done or skipped keeps that mark until `--undo` or
-`--reset`. An override never hides a detector's finding — a step marked
-done whose detector later says `attention` is shown as done with the
-finding beside it, so a stale mark is visible rather than silent.
+`--reset`. A mark never hides a detector's finding: a step marked DONE
+whose detector later says `attention` counts as attention (shown `[!]`
+with the mark and its note beside the finding), so a stale mark cannot
+turn the list green. `--skip` is the deliberate "reviewed, accepted"
+mark — the finding stays visible beside it.
+
+Country: the steps are written for a Canadian return. A US project gets
+the US names where an equivalent exists (1099-B for the T5008, Form
+8949 / Schedule D for Schedule 3, ...) and `n/a` for the Canada-only
+steps; a project with no taxable account gets `n/a` for every step that
+only concerns taxable accounts.
 """
 from __future__ import annotations
 
@@ -117,6 +125,66 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "CRA charges interest on the least of the methods your figures support."),
 ]
 
+# US projects: (title, command, why) replacements for steps with a US
+# equivalent, or a plain string = the reason the step is n/a.
+US_STEPS: Dict[str, Any] = {
+    "sheltered-inputs": ("Retirement accounts' activity present", "inputs/<sheltered>/",
+                         "An IRA/401(k) purchase within 30 days of a loss is a wash sale "
+                         "(Rev. Rul. 2008-5) — the loss is gone for good."),
+    "roc-entered": ("Nondividend distributions (1099-DIV box 3) entered before trusting any basis",
+                    "ADJUST lines / distributions.map",
+                    "Return of capital reduces basis; funds often reclassify after year end."),
+    "wash-reviewed": ("Every wash-sale disallowance reviewed", "taxjson wash-sales",
+                      "A wash sale triggered by an IRA purchase is permanently disallowed."),
+    "option-boundary": "US: written-option premiums are netted at the close (§1234) — no s.49 boundary",
+    "t5008": ("1099-B slips reconcile to the computed dispositions",
+              "taxjson reconcile-slips inputs/slips/*.csv",
+              "The IRS matches Form 8949 / Schedule D to the 1099-Bs — this step prevents a CP2000."),
+    "t5-t3": ("1099-DIV / 1099-INT slips agree with the dividend and ROC totals",
+              "taxjson divs-sum, taxjson roc-sum",
+              "Qualified vs ordinary dividends and nondividend distributions come from the slips."),
+    "foreign-tax": ("Foreign tax paid taken from the 1099-DIV (box 7) for the credit (Form 1116)",
+                    "1099-DIV box 7",
+                    "The credit is limited to what the slips show."),
+    "form-export": ("Form 8949 rows exported and their totals equal the report",
+                    "taxjson form-export",
+                    "The export is what goes on Form 8949 / Schedule D; the .sum is what the engine computed — they must agree."),
+    "t1135": "US project (T1135 is a Canadian form)",
+    "carryover": ("Capital loss carryover applied and recorded (Schedule D lines 6 / 14)",
+                  "taxjson carryover, claimed_losses.txt",
+                  "The ledger only knows what was claimed if you write it down."),
+    "fx-cash": ("FX gain on foreign cash reviewed (§988)", "taxjson fx-cash",
+                "Foreign currency gains on personal cash above $200 per transaction are income."),
+    "fees": ("Margin interest collected (Form 4952, if itemizing)", "taxjson fees",
+             "Investment interest is deductible only when itemizing; the tool reports it."),
+    "estimate": ("Tax estimate and estimated payments checked", "taxjson estimate",
+                 "A sanity check on the tax owed."),
+    "filed-lock": ("Return filed and the year locked", "taxjson close-year",
+                   "The lock is what check-filed uses to detect drift after filing."),
+    "noa": "US project (no Notice of Assessment)",
+}
+
+# Steps that only concern TAXABLE accounts: n/a for a sheltered-only
+# project instead of blocked by artifacts that can never exist.
+TAXABLE_ONLY = {"inputs-frozen", "roc-entered", "missing-history", "audit",
+                "wash-reviewed", "option-boundary", "t5008", "t5-t3",
+                "foreign-tax", "form-export", "t1135", "carryover",
+                "fx-cash", "fees", "filed-lock", "lock-committed"}
+
+
+def is_us(country: str) -> bool:
+    return str(country or "").strip().lower() in ("us", "usa")
+
+
+def step_meta(sid: str, country: str = "canada") -> Tuple[str, int, str, str, str]:
+    """(id, stage, title, command, why) for this project's country."""
+    base = next(s for s in STEPS if s[0] == sid)
+    if is_us(country) and isinstance(US_STEPS.get(sid), tuple):
+        title, cmd, why = US_STEPS[sid]
+        return (sid, base[1], title, cmd, why)
+    return base
+
+
 SYMBOL = {"done": "[x]", "attention": "[!]", "todo": "[ ]", "manual": "[m]",
           "blocked": "[b]", "n/a": "[-]", "skipped": "[~]"}
 
@@ -132,6 +200,10 @@ class Result:
 
     @property
     def effective(self) -> str:
+        # A DONE mark never outranks a detector finding (README: "a mark
+        # never hides a later finding"); --skip is the explicit accept.
+        if self.override == "done" and self.status == "attention":
+            return "attention"
         return self.override or self.status
 
     @property
@@ -363,8 +435,10 @@ def d_sanity(ctx: Ctx) -> Result:
 
 def d_missing_history(ctx: Ctx) -> Result:
     code, out, err = ctx.sub("find-missing-history")
-    if code not in (0, 1) and not out:
-        return Result("missing-history", "blocked", _last_line(err) or f"exit {code}")
+    if code != 0:
+        # Exit 1 is "no base files" / "no transactions loaded": nothing
+        # was checked, so it is never "nothing affects the year".
+        return Result("missing-history", "blocked", _last_line(err) or _last_line(out) or f"exit {code}")
     syms: List[str] = []
     in_affects = False
     for ln in out.splitlines():
@@ -448,13 +522,36 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
 
 
 def d_option_boundary(ctx: Ctx) -> Result:
-    code, out, err = ctx.sub("option-boundary")
-    if not out:
+    if not _accounts_of(ctx, "taxable"):
+        return Result("option-boundary", "n/a",
+                      "no non-crypto taxable account — no written options")
+    code, out, err = ctx.sub("option-boundary", "--json")
+    try:
+        doc = json.loads(out) if code == 0 else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict):
+        # Exit 1 = no taxable book was checked ("NOT CHECKED").
         return Result("option-boundary", "blocked", _last_line(err) or f"exit {code}")
-    if "T1-ADJ" in out and "require an amended return" in out:
-        m = re.search(r"(\d+) item\(s\) require an amended return", out)
+    rows = doc.get("rows") or []
+    amend = sum(1 for r in rows if str(r.get("action", "")).startswith("T1-ADJ"))
+    att = sum(1 for r in rows if r.get("attention"))
+    if amend or att:
+        parts = []
+        if amend:
+            parts.append(f"{amend} contract(s) require a T1-ADJ")
+        if att:
+            parts.append(f"{att} need attention (a locked year on transition close "
+                         f"timing, or an expired contract with no expiry row)")
         return Result("option-boundary", "attention",
-                      f"{m.group(1) if m else 'some'} contract(s) require a T1-ADJ")
+                      "; ".join(parts) + " — `taxjson option-boundary`")
+    if doc.get("missing_books"):
+        return Result("option-boundary", "blocked",
+                      f"no books for {', '.join(doc['missing_books'])} — run `taxjson run`")
+    if not doc.get("since_explicit", True) and str(doc.get("timing")) == "grant":
+        return Result("option-boundary", "attention",
+                      "option_grant_timing_since is not set in [settings] — the default "
+                      "follows `year`; set it once and keep it")
     return Result("option-boundary", "done", "no amendment required")
 
 
@@ -469,27 +566,90 @@ def slip_files(root: Path) -> List[Path]:
     return out
 
 
+def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
+    """The actual mismatch summary of a `reconcile-slips --json` run (the
+    last text line was a generic note, not the finding)."""
+    try:
+        rep = json.loads(out)
+    except ValueError:
+        rep = None
+    if isinstance(rep, dict):
+        c = rep.get("counts") or {}
+        parts = [f"{c.get('mismatch', 0)} mismatch",
+                 f"{c.get('missing_from_computed', 0)} missing from computed",
+                 f"{c.get('missing_from_slip', 0)} missing from slip"]
+        if rep.get("unreadable_rows"):
+            parts.append(f"{rep['unreadable_rows']} unreadable slip row(s)")
+        bad = [f"{r.get('symbol')} {r.get('status')}"
+               for r in (rep.get("rows") or []) if r.get("status") != "OK"]
+        if bad:
+            parts.append("e.g. " + ", ".join(bad[:3]) + (" ..." if len(bad) > 3 else ""))
+        return ", ".join(parts)
+    for ln in reversed(out.splitlines()):
+        if re.search(r"\d+ OK, \d+ mismatch", ln) or ln.startswith("NOT RECONCILED"):
+            return ln.strip()
+    return _last_line(err) or _last_line(out) or f"exit {code}"
+
+
 def d_t5008(ctx: Ctx) -> Result:
+    slip = "1099-B" if is_us(ctx.settings.get("country", "canada")) else "T5008"
     files = slip_files(ctx.root)
     if not files:
         return Result("t5008", "todo",
-                      "no slip file — put the broker T5008 CSVs in inputs/slips/")
+                      f"no slip file — put the broker {slip} CSVs in inputs/slips/")
     bad = []
     for f in files:
-        code, out, err = ctx.sub("reconcile-slips", str(f))
+        code, out, err = ctx.sub("reconcile-slips", str(f), "--json")
         if code != 0:
-            bad.append(f"{f.name}: {_last_line(out) or _last_line(err)}")
+            bad.append(f"{f.name}: {_slip_mismatch_summary(code, out, err)}")
     if bad:
         return Result("t5008", "attention", "; ".join(bad))
     return Result("t5008", "done", f"{len(files)} slip file(s) reconcile")
 
 
 def d_form_export(ctx: Ctx) -> Result:
-    code, out, err = ctx.sub("form-export")
+    """The export must equal what the engine computed: form-export's totals
+    against `taxjson sum`'s FOR THE RETURN block (same dispositions), and
+    that block's gain against the taxable accounts' realized gain."""
+    code, out, err = ctx.sub("form-export", "--json")
     if code != 0:
         return Result("form-export", "blocked", _last_line(err) or f"exit {code}")
-    rows = sum(1 for ln in out.splitlines() if ln.strip())
-    return Result("form-export", "done", f"export renders ({rows} line(s))")
+    scode, sout, serr = ctx.sub("sum", "--json")
+    try:
+        rep = json.loads(out)
+        summ = json.loads(sout)
+    except ValueError:
+        return Result("form-export", "blocked",
+                      _last_line(serr) or _last_line(err) or "could not read the reports")
+    if rep.get("form") == "8949":
+        t = {k: round(sum((rep.get(p) or {}).get(k, 0.0)
+                          for p in ("part_I_totals", "part_II_totals")), 2)
+             for k in ("proceeds", "gain")}
+        n = len(rep.get("part_I") or []) + len(rep.get("part_II") or [])
+        label = "Form 8949"
+    else:
+        tot = rep.get("totals") or {}
+        t = {"proceeds": round(float(tot.get("proceeds_all", 0.0)), 2),
+             "gain": round(float(tot.get("gain_all", 0.0)), 2)}
+        n = len(rep.get("rows") or [])
+        label = "Schedule 3"
+    filing = (summ.get("filing") or {}).get("totals") or {}
+    problems = []
+    for k in ("proceeds", "gain"):
+        want = round(float(filing.get(k, 0.0)), 2)
+        if abs(t[k] - want) > 0.01:
+            problems.append(f"{label} {k} {t[k]:,.2f} vs FOR THE RETURN {want:,.2f}")
+    taxable = {n_ for n_, a in ctx.accounts.items() if a.get("type") == "taxable"}
+    realized = round(sum(float(r.get("realized") or 0.0)
+                         for r in summ.get("accounts") or []
+                         if r.get("account") in taxable), 2)
+    if abs(t["gain"] - realized) > 0.05:
+        problems.append(f"{label} gain {t['gain']:,.2f} vs realized {realized:,.2f} "
+                        f"in the taxable accounts' .sum")
+    if problems:
+        return Result("form-export", "attention", "; ".join(problems))
+    return Result("form-export", "done",
+                  f"{n} row(s); gain {t['gain']:,.2f} equals FOR THE RETURN and the .sum")
 
 
 def d_t1135(ctx: Ctx) -> Result:
@@ -616,18 +776,23 @@ def save_state(root: Path, state: Dict[str, Any], year: int) -> None:
 
 
 def set_override(root: Path, year: int, step: str, mark: Optional[str],
-                 note: str = "", today: Optional[date] = None) -> None:
+                 note: str = "", today: Optional[date] = None) -> bool:
+    """Record (or with mark=None remove) a manual mark. Returns False when
+    removing a mark that was not there (nothing changed)."""
     ids = {s[0] for s in STEPS}
     if step not in ids:
         raise KeyError(step)
     state = load_state(root)
     if mark is None:
+        if step not in state["overrides"]:
+            return False
         state["overrides"].pop(step, None)
     else:
         state["overrides"][step] = {"status": mark,
                                     "date": (today or date.today()).isoformat(),
                                     "note": note}
     save_state(root, state, year)
+    return True
 
 
 # ----------------------------------------------------------------- evaluate
@@ -642,16 +807,24 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
     if state.get("year") not in (None, ctx.year) and overrides:
         # Marks from another year's project copied along — not this year's.
         overrides = {}
+    us = is_us(ctx.settings.get("country", "canada"))
+    has_taxable = any(a.get("type") == "taxable" for a in ctx.accounts.values())
     results: List[Result] = []
     for sid, stage, title, cmd, why in STEPS:
         if only and sid not in only:
             continue
         ov = overrides.get(sid) or {}
+        if us and isinstance(US_STEPS.get(sid), str):
+            results.append(Result(sid, "n/a", US_STEPS[sid]))
+            continue
+        if not has_taxable and sid in TAXABLE_ONLY:
+            results.append(Result(sid, "n/a", "no taxable account — nothing to report"))
+            continue
         if quick and sid in SLOW:
             r = Result(sid, "todo", "skipped by --quick (run without it to check)")
         else:
             if progress and sid in SLOW:
-                progress(sid, cmd)
+                progress(sid, step_meta(sid, ctx.settings.get("country", "canada"))[3])
             try:
                 r = DETECTORS[sid](ctx)
             except Exception as e:      # a detector must never take the list down
@@ -686,7 +859,6 @@ def render(results: List[Result], year: int, country: str,
              f"{' — quick' if quick else ''}: {done}/{total} done, "
              f"{att} need attention, {man} need your confirmation, {todo} to do",
              ""]
-    meta = {s[0]: s for s in STEPS}
     for num, name in STAGES:
         rows = by_stage.get(num)
         if not rows:
@@ -694,9 +866,7 @@ def render(results: List[Result], year: int, country: str,
         lines.append(f"{num}. {name}")
         for r in rows:
             sym = SYMBOL[r.effective]
-            if r.override == "done":
-                sym = "[x]"
-            title = meta[r.id][2]
+            title = step_meta(r.id, country)[2]
             tail = r.detail
             if r.override:
                 tail = f"marked {r.override}" + (f": {r.note}" if r.note else "")
@@ -713,7 +883,7 @@ def render(results: List[Result], year: int, country: str,
 
 
 def to_json(results: List[Result], year: int, country: str) -> Dict[str, Any]:
-    meta = {s[0]: s for s in STEPS}
+    meta = {s[0]: step_meta(s[0], country) for s in STEPS}
     return {
         "year": year, "country": country,
         "all_passed": all(r.passed for r in results),

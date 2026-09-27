@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **`taxjson checklist`**: detectors no longer say "done" on nothing —
+  missing-history with no base files and option-boundary with no taxable
+  book are blocked; option-boundary reads `--json` and reports ATTENTION
+  rows and an unset `option_grant_timing_since`; form-export now compares
+  its totals with `sum`'s FOR THE RETURN block and the taxable accounts'
+  realized gain (it compared nothing); a T5008 finding names the actual
+  mismatch counts and symbols instead of the report's last note line. A
+  step marked `--done` whose detector says attention now shows `[!]` with
+  the mark and note beside the finding and keeps the list open (it
+  counted as done). `--undo` with no mark and `--reset` with no file say
+  so; `--note` without `--done`/`--skip` is an error; mark commands honour
+  `--json`; `--only` with an unknown id lists the ids; `--walk` re-prompts
+  on an unknown key with the key list and exits 1 (after the summary)
+  when quit or left with open steps. US projects get the US step names
+  (1099-B, Form 8949 / Schedule D, 1099-DIV, Form 1116, §988) and `n/a`
+  for option-boundary, T1135 and the NOA; a project with no taxable
+  account gets `n/a` rather than blocked for the taxable-only steps.
+
 - **Crypto accounts blend across exchanges** (Canada): with two or more
   taxable `crypto = true` accounts, `taxjson run` now runs ONE blended
   crypto pass (like the equity blend) producing each account's
