@@ -78,11 +78,18 @@ class TestElectSetHints(unittest.TestCase):
             self.assertIn("already elected: taxable_disposition",
                           r2.stdout)
 
-    def test_bogus_id_warns_loudly(self):
+    def test_bogus_id_refused_and_not_saved(self):
+        # Was "saving anyway": a junk record in the committed manifest
+        # (2026-09 CLI audit).
         with tempfile.TemporaryDirectory() as tmp:
-            r = _run(_proj(tmp), "elect", "margin", "--set",
+            root = _proj(tmp)
+            r = _run(root, "elect", "margin", "--set",
                      "deadbeef=taxable_disposition")
-        self.assertIn("matches no pending event", r.stderr)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("matches no pending event", r.stderr)
+            self.assertIn("nothing was saved", r.stderr)
+            self.assertFalse(
+                (root / "inputs" / "margin" / "manifest.json").exists())
 
 
 class TestFilingReminder(unittest.TestCase):

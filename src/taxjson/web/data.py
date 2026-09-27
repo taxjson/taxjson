@@ -264,10 +264,12 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # the route (REVIEW #30); a negative price produced internally
     # contradictory ok-styled numbers (proceeds -150, gain +50 —
     # REVIEW #31).
-    if not (math.isfinite(qty) and abs(qty) > 0):
+    if not (math.isfinite(qty) and qty > 0):
+        # A negative qty was silently simulated as abs(qty) — the
+        # result page then echoed "Sell -10" over a 10-unit sale.
         return {"ok": False, "warnings": [],
-                "reason": f"qty must be a nonzero finite number, "
-                          f"got {qty!r}"}
+                "reason": f"qty must be a positive number of units to "
+                          f"sell, got {qty!r}"}
     if not (math.isfinite(price) and price > 0):
         return {"ok": False, "warnings": [],
                 "reason": f"price must be a positive finite number, "

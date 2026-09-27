@@ -173,10 +173,14 @@ class TestValidateConfig(unittest.TestCase):
         self.assertIn("taxdate", warnings[0])
         self.assertIn("tax_date", warnings[0])         # did-you-mean
 
-    def test_missing_type_warns(self):
+    def test_missing_type_is_fatal(self):
+        # Was a warning + silent "sheltered" default: an untyped taxable
+        # account vanished from the return (2026-09 CLI audit B3).
         cfg = self._cfg(accounts={"margin": {}})
-        warnings = validate_config(cfg)
-        self.assertTrue(any("no `type`" in w for w in warnings))
+        with self.assertRaises(SystemExit) as cm:
+            validate_config(cfg)
+        self.assertIn("no `type`", str(cm.exception))
+        self.assertIn("taxable | sheltered", str(cm.exception))
 
     def test_populated_unconfigured_inputs_dir_warns(self):
         with tempfile.TemporaryDirectory() as td:
