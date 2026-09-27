@@ -398,7 +398,7 @@ def toml_str(value: Any) -> str:
     return '"' + "".join(out) + '"'
 
 
-def write_private(path: "Path", text: str) -> None:
+def write_private(path: Any, text: str) -> None:
     """Write a fetched statement / snapshot atomically (.part + rename)
     as 0600 inside a 0700 directory. mkdir(mode=) does not tighten a
     directory that already exists, so the chmod is explicit; the .part
