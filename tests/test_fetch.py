@@ -32,7 +32,7 @@ class TestQuestradeSession(unittest.TestCase):
     def test_refresh_returns_rotated_token(self):
         def http(url):
             self.assertIn("refresh_token=OLD", url)
-            return json.dumps({"api_server": "https://api.q.com/",
+            return json.dumps({"api_server": "https://api01.iq.questrade.com/",
                                "access_token": "AT",
                                "refresh_token": "NEW"}).encode()
         sess = qt_refresh("OLD", http)
@@ -52,7 +52,7 @@ class TestQuestradeSession(unittest.TestCase):
             # cross-chunk-deduped, which is its own test below).
             return json.dumps({"activities": [
                 dict(_ACT, symbol=f"S{len(calls)}.TO")]}).encode()
-        sess = {"api_server": "https://api.q.com/", "access_token": "AT"}
+        sess = {"api_server": "https://api01.iq.questrade.com/", "access_token": "AT"}
         acts = qt_activities(sess, "123", date(2026, 1, 1),
                              date(2026, 3, 15), http)
         # 74 days -> 3 chunks, none longer than 31 days.
@@ -396,7 +396,7 @@ class TestHttpErrorDiagnostics(unittest.TestCase):
                 url, 400, "Bad Request", None,
                 _io.BytesIO(b'{"code":1002,"message":"Invalid or '
                             b'malformed argument: endTime"}'))
-        sess = {"api_server": "https://api.q.com/",
+        sess = {"api_server": "https://api01.iq.questrade.com/",
                 "access_token": "AT"}
         with self.assertRaises(RuntimeError) as cm:
             qt_activities(sess, "123", date(2026, 8, 1),
@@ -425,13 +425,13 @@ class TestTaxYearStampedFilename(unittest.TestCase):
 class TestCrossChunkDedup(unittest.TestCase):
     def test_boundary_activity_returned_by_two_chunks_kept_once(self):
         # Questrade re-emits boundary-day activities in both adjacent
-        # windows — 55 phantom duplicate trades in real data.
+        # windows — each one a phantom duplicate trade.
         calls = []
 
         def http(url):
             calls.append(url)
             return json.dumps({"activities": [dict(_ACT)]}).encode()
-        sess = {"api_server": "https://api.q.com/", "access_token": "AT"}
+        sess = {"api_server": "https://api01.iq.questrade.com/", "access_token": "AT"}
         acts = qt_activities(sess, "1", date(2026, 1, 1),
                              date(2026, 3, 15), http)
         self.assertEqual(len(calls), 3)
@@ -443,7 +443,7 @@ class TestCrossChunkDedup(unittest.TestCase):
         def http(url):
             return json.dumps(
                 {"activities": [dict(_ACT), dict(_ACT)]}).encode()
-        sess = {"api_server": "https://api.q.com/", "access_token": "AT"}
+        sess = {"api_server": "https://api01.iq.questrade.com/", "access_token": "AT"}
         acts = qt_activities(sess, "1", date(2026, 8, 1),
                              date(2026, 8, 10), http)
         self.assertEqual(len(acts), 2,
@@ -661,7 +661,7 @@ class TestLiveHoldings(unittest.TestCase):
             def http(url):
                 if "oauth2" in url:
                     return json.dumps(
-                        {"api_server": "https://api.q/",
+                        {"api_server": "https://api01.iq.questrade.com/",
                          "access_token": "AT",
                          "refresh_token": "NEW"}).encode()
                 return json.dumps({"positions": self._POS}).encode()

@@ -71,7 +71,7 @@ web = [
     "fastapi>=0.110",
     "uvicorn>=0.27",
     "jinja2>=3.1",
-    "python-multipart>=0.0.7",   # required by FastAPI for the /whatif POST form
+    "python-multipart>=0.0.18",  # required by FastAPI for the /whatif POST form
 ]
 # Test/CI dependencies beyond the runtime extras. fastapi.testclient
 # needs httpx; without it the web-route tests SILENTLY SKIP (the
@@ -95,49 +95,51 @@ all = [
     "fastapi>=0.110",
     "uvicorn>=0.27",
     "jinja2>=3.1",
-    "python-multipart>=0.0.7",
+    "python-multipart>=0.0.18",
 ]
 
 [project.scripts]
+# Stand-alone tools go through taxjson.bin._entry, which sets an
+# owner-only umask (files 0600, dirs 0700) before calling <module>.main().
 taxjson = "taxjson.bin.taxjson_run:main"
-taxjson-brokerage = "taxjson.bin.taxjson_brokerage:main"
-taxjson-convert-currency = "taxjson.bin.taxjson_convert_currency:main"
-taxjson-convert-tt = "taxjson.bin.taxjson_convert_tt:main"
-taxjson-corp-actions = "taxjson.bin.taxjson_corp_actions:main"
-taxjson-detect-brokerage = "taxjson.bin.taxjson_detect_brokerage:main"
-taxjson-extractors = "taxjson.bin.taxjson_extractors:main"
-taxjson-generate-parser = "taxjson.bin.taxjson_generate_parser:main"
-taxjson-gains = "taxjson.bin.taxjson_gains:main"
-taxjson-explain = "taxjson.bin.taxjson_explain:main"
-taxjson-audit = "taxjson.bin.taxjson_audit:main"
-taxjson-diff = "taxjson.bin.taxjson_diff:main"
-taxjson-merge = "taxjson.bin.taxjson_merge:main"
-taxjson-merge2 = "taxjson.bin.taxjson_merge2:main"
-taxjson-safe-to-sell = "taxjson.bin.taxjson_safe_to_sell:main"
-taxjson-sort = "taxjson.bin.taxjson_sort:main"
-taxjson-sum-gains = "taxjson.bin.taxjson_sum_gains:main"
-taxjson-sum-income = "taxjson.bin.taxjson_sum_income:main"
-taxjson-t1135 = "taxjson.bin.taxjson_t1135:main"
-taxjson-carryover = "taxjson.bin.taxjson_carryover:main"
-taxjson-form-export = "taxjson.bin.taxjson_form_export:main"
-taxjson-reconcile-slips = "taxjson.bin.taxjson_reconcile_slips:main"
-taxjson-harvest = "taxjson.bin.taxjson_harvest:main"
+taxjson-brokerage = "taxjson.bin._entry:taxjson_brokerage"
+taxjson-convert-currency = "taxjson.bin._entry:taxjson_convert_currency"
+taxjson-convert-tt = "taxjson.bin._entry:taxjson_convert_tt"
+taxjson-corp-actions = "taxjson.bin._entry:taxjson_corp_actions"
+taxjson-detect-brokerage = "taxjson.bin._entry:taxjson_detect_brokerage"
+taxjson-extractors = "taxjson.bin._entry:taxjson_extractors"
+taxjson-generate-parser = "taxjson.bin._entry:taxjson_generate_parser"
+taxjson-gains = "taxjson.bin._entry:taxjson_gains"
+taxjson-explain = "taxjson.bin._entry:taxjson_explain"
+taxjson-audit = "taxjson.bin._entry:taxjson_audit"
+taxjson-diff = "taxjson.bin._entry:taxjson_diff"
+taxjson-merge = "taxjson.bin._entry:taxjson_merge"
+taxjson-merge2 = "taxjson.bin._entry:taxjson_merge2"
+taxjson-safe-to-sell = "taxjson.bin._entry:taxjson_safe_to_sell"
+taxjson-sort = "taxjson.bin._entry:taxjson_sort"
+taxjson-sum-gains = "taxjson.bin._entry:taxjson_sum_gains"
+taxjson-sum-income = "taxjson.bin._entry:taxjson_sum_income"
+taxjson-t1135 = "taxjson.bin._entry:taxjson_t1135"
+taxjson-carryover = "taxjson.bin._entry:taxjson_carryover"
+taxjson-form-export = "taxjson.bin._entry:taxjson_form_export"
+taxjson-reconcile-slips = "taxjson.bin._entry:taxjson_reconcile_slips"
+taxjson-harvest = "taxjson.bin._entry:taxjson_harvest"
 # Canonical name: the tool is the brokerage fee ROLL-UP — `taxjson
 # fees-sum`'s standalone twin, not `taxjson fees`' (the per-trade view).
-taxjson-fees-sum = "taxjson.bin.taxjson_fees:main"
-taxjson-lint-crosslistings = "taxjson.bin.taxjson_lint_crosslistings:main"
-taxjson-ticker-map = "taxjson.bin.taxjson_ticker_map:main"
-taxjson-wash-radar = "taxjson.bin.taxjson_wash_radar:main"
-taxjson-to-base-curr = "taxjson.bin.to_base_curr:main"
-taxjson-fill-crypto = "taxjson.bin.fill_crypto_prices:main"
-taxjson-apply-distributions = "taxjson.bin.taxjson_apply_distributions:main"
-taxjson-split-gains = "taxjson.bin.taxjson_split_gains:main"
-taxjson-validate = "taxjson.bin.taxjson_validate:main"
-taxjson-leaps-gains = "taxjson.bin.taxjson_leaps_gains:main"
-taxjson-missing-history = "taxjson.bin.taxjson_missing_history:main"
-taxjson-ccd-gains = "taxjson.bin.taxjson_ccd_gains:main"
-taxjson-export = "taxjson.bin.taxjson_export:main"
-taxjson-xlsx-to-csv = "taxjson.bin.xlsx_to_csv:main"
+taxjson-fees-sum = "taxjson.bin._entry:taxjson_fees"
+taxjson-lint-crosslistings = "taxjson.bin._entry:taxjson_lint_crosslistings"
+taxjson-ticker-map = "taxjson.bin._entry:taxjson_ticker_map"
+taxjson-wash-radar = "taxjson.bin._entry:taxjson_wash_radar"
+taxjson-to-base-curr = "taxjson.bin._entry:to_base_curr"
+taxjson-fill-crypto = "taxjson.bin._entry:fill_crypto_prices"
+taxjson-apply-distributions = "taxjson.bin._entry:taxjson_apply_distributions"
+taxjson-split-gains = "taxjson.bin._entry:taxjson_split_gains"
+taxjson-validate = "taxjson.bin._entry:taxjson_validate"
+taxjson-leaps-gains = "taxjson.bin._entry:taxjson_leaps_gains"
+taxjson-missing-history = "taxjson.bin._entry:taxjson_missing_history"
+taxjson-ccd-gains = "taxjson.bin._entry:taxjson_ccd_gains"
+taxjson-export = "taxjson.bin._entry:taxjson_export"
+taxjson-xlsx-to-csv = "taxjson.bin._entry:xlsx_to_csv"
 
 [build-system]
 requires = ["setuptools>=61.0"]
