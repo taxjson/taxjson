@@ -70,7 +70,7 @@ ul { padding-left:18pt; margin:0 }
   <h2>Three steps, all on disk</h2>
   <div class="flow">
     <div class="box"><b>inputs/</b>Broker CSV exports per account: IBKR, Questrade, RBC, Webull, Kraken, Coinbase — plus plain-text <code>.tt</code> for anything else</div><div class="arr">→</div>
-    <div class="box"><b>taxjson run</b>Parse · convert at the Bank of Canada rate per trade date · pool identical securities · corporate actions with elections · superficial-loss pass across taxable and registered accounts</div><div class="arr">→</div>
+    <div class="box"><b>taxjson run</b>Parse · convert at the Bank of Canada rate per settlement date · pool identical securities · corporate actions with elections · superficial-loss pass across taxable and registered accounts</div><div class="arr">→</div>
     <div class="box"><b>reports/</b>Per-account summaries, the wash radar, harvest candidates, T1135, a tax estimate, Schedule 3 / Form 8949 rows — and the broker cross-check</div>
   </div>
   <div class="row">
@@ -90,7 +90,7 @@ ul { padding-left:18pt; margin:0 }
     <tr><td class="k">Identical properties</td><td>One average-cost pool per security across accounts; cross-listings merged, CDRs kept apart</td><td>s.47(1); IT-387R2; T4037</td></tr>
     <tr><td class="k">Superficial loss</td><td>Denied to the extent an affiliated account acquired in the 61-day window and still holds; the RRSP/TFSA is affiliated; denied-into-plan is permanent</td><td>s.54, s.40(2)(g)(i), s.53(1)(f), s.251.1(1)(g)</td></tr>
     <tr><td class="k">Disposition date</td><td>Settlement date, including at year end</td><td>T4037</td></tr>
-    <tr><td class="k">Foreign currency</td><td>Bank of Canada rate on each trade date, never an annual average</td><td>Folio S5-F4-C1</td></tr>
+    <tr><td class="k">Foreign currency</td><td>Bank of Canada rate on each settlement date, never an annual average</td><td>Folio S5-F4-C1</td></tr>
     <tr><td class="k">Options</td><td>A written option's premium is a gain in the year written; a buy-back is a loss in its own year; an assignment folds the premium into the shares. <code>option-boundary</code> says when a filed year needs a T1-ADJ</td><td>s.49(1)–(4); IT-479R</td></tr>
     <tr><td class="k">Corporate actions</td><td>Splits, spin-offs, mergers with the rollover election recorded and a filing reminder at every run; ROC reduces ACB</td><td>s.86.1, s.85.1, s.53(2)(h)</td></tr>
     <tr><td class="k">US (experimental)</td><td>FIFO, §1091 wash sales with basis and holding-period carry, IRA repurchases permanent, Form 8949 codes</td><td>§1091, Reg. 1.1091-1, Rev. Rul. 2008-5</td></tr>
@@ -104,12 +104,12 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Worked example</p>
   <h2>A loss you cannot claim</h2>
   <div class="row">
-    <div class="card"><h3>What happened</h3><p>Margin account buys 200 shares in January, sells 400 at a loss on February 3. The RRSP has held 800 of the same stock since the previous year.</p></div>
+    <div class="card"><h3>What happened</h3><p>The margin account sells 400 shares at a loss on February 3. On February 10 the RRSP buys 200 of the same stock, and still holds them on March 5.</p></div>
     <div class="card"><h3>What the slip says</h3><p>A capital loss on 400 shares. The spreadsheet agrees.</p></div>
-    <div class="card"><h3>What the Act says</h3><p>200 shares were acquired inside the window and the affiliated RRSP still owns the stock at its end: the loss on those 200 is superficial. The ACB bump goes to the RRSP — where it is worthless. Permanently denied.</p></div>
+    <div class="card"><h3>What the Act says</h3><p>An affiliated person acquired 200 identical shares inside the 61-day window and still owns them at its end: the loss on those 200 is superficial (s.54). The ACB bump goes to the RRSP — where it is worthless. Permanently denied. Shares the RRSP held before the window would not have counted.</p></div>
   </div>
   <pre class="term" style="margin-top:12pt"><span class="w">NOTE:</span> superficial loss — 200 sh denied <span class="g">(permanently: replacement property held in rrsp)</span>
-  loss sale 2026-02-03 · trigger lots 2026-01-08, 2026-01-13 · window end 2026-03-05</pre>
+  loss sale 2026-02-03 · trigger lot 2026-02-10 (rrsp) · window end 2026-03-05</pre>
   <div class="takeaway">Only a tool that sees every account at once can get this right. That is the whole design.</div>
   <div class="foot"><span>taxjson.com</span><span>5</span></div>
 </section>
@@ -147,9 +147,9 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Privacy and security</p>
   <h2>Nothing personal leaves the machine</h2>
   <div class="row">
-    <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer. The only network calls are FX rates (Bank of Canada) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
+    <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer. The pipeline's only network calls are FX rates (Bank of Canada; Yahoo before 2017) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
     <div class="card"><h3>No credentials stored</h3><p>Broker fetch uses your own token file; it is never written into a project or sent anywhere but that broker.</p></div>
-    <div class="card"><h3>The project guards itself</h3><p>A personal-data scan runs in every gate and as the pre-push hook, fails closed, and reads a private denylist kept outside the repository. Redacted exports keep every row shape and none of the identifiers.</p></div>
+    <div class="card"><h3>The project guards itself</h3><p>A personal-data scan runs in every gate and as the pre-push hook, fails closed, and reads a private denylist kept outside the repository. Redacted exports keep every row shape and drop the identifiers <code>redact</code> recognises — review before sharing.</p></div>
   </div>
   <div class="takeaway">Zero runtime dependencies in the core. A tax tool has to be trustworthy before it is clever.</div>
   <div class="foot"><span>taxjson.com</span><span>8</span></div>
