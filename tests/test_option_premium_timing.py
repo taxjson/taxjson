@@ -97,6 +97,117 @@ class TestGrantTiming(unittest.TestCase):
             a = sum(g for _, g in run(book, **GRANT)[0]); b = sum(g for _, g in run(book)[0])
             self.assertAlmostEqual(a, b, places=4, msg=f"seed {seed}")
 
+    def test_full_history_totals_invariant_with_assignments_and_since(self):
+        """Lifetime invariance with stock-settled ASSIGNs, cross-zero
+        sells and every `since` between (and around) the write years
+        (2026-09 engine audit: an ASSIGN consuming a pre-since lot or a
+        cross-zero leftover double-counted the premium). A `since`
+        after every write must also reproduce close timing YEAR BY
+        YEAR — the lot carve-out may not move close-timing premiums."""
+        def by_year(r):
+            out = {}
+            for g in r["transactions"]:
+                if "gain" in g:
+                    y = (g.get("date_settle") or g["date"])[:4]
+                    out[y] = out.get(y, 0.0) + float(g["gain"])
+            return out
+        rng = random.Random(49)
+        for seed in range(250):
+            book = []; pos = 0; shares = 0; seq = 0
+            days = sorted({(rng.choice([2024, 2025, 2026]), rng.randint(1, 12), rng.randint(1, 28)) for _ in range(rng.randint(3, 9))})
+            for (y, m, dd) in days:
+                d = f"{y}-{m:02d}-{dd:02d}"; seq += 1; tm = f"10:{seq:02d}:00"
+                u = rng.random()
+                if pos >= 0 and u < 0.15:                    # long leg (sets up a cross-zero sell)
+                    q = rng.choice([1, 2]); book.append(T(date=d, time=tm, date_settle=d, symbol=PUT, quantity=q, price=1, net_amount=101.0 * q)); pos += q
+                elif pos >= 0 or u < 0.55:                  # write (crosses zero when long)
+                    q = rng.choice([1, 2, 3]) + max(pos, 0)
+                    px = rng.choice([2.0, 3.0, 4.5])
+                    book.append(T(date=d, time=tm, date_settle=d, symbol=PUT, quantity=-q, price=px, net_amount=px * 100 * q - 1.0)); pos -= q
+                elif u < 0.8:                               # stock-settled assignment
+                    q = rng.randint(1, -pos)
+                    book.append(TaxTransaction(action="ASSIGN", date=d, time="16:00:00", date_settle=d, symbol=PUT, quantity=q, price=0, net_amount=0.0, currency="CAD", account="A0"))
+                    book.append(TaxTransaction(action="ASSIGN", date=d, time="16:00:00", date_settle=d, symbol="Q.TO", quantity=100 * q, price=50, net_amount=5000.0 * q, currency="CAD", account="A0"))
+                    pos += q; shares += 100 * q
+                else:                                       # buy-back / expiry
+                    q = rng.randint(1, -pos); px = rng.choice([0.0, 1.0, 5.0])
+                    book.append(T(date=d, time=tm, date_settle=d, symbol=PUT, quantity=q, price=px, net_amount=px * 100 * q + (1.0 if px else 0.0))); pos += q
+            if pos < 0:
+                book.append(T(date="2027-01-15", date_settle="2027-01-15", symbol=PUT, quantity=-pos, price=0, net_amount=0.0))
+            elif pos > 0:
+                book.append(T(date="2027-01-15", date_settle="2027-01-15", symbol=PUT, quantity=-pos, price=0.5, net_amount=50.0 * pos))
+            if shares:
+                book.append(T(date="2027-03-01", date_settle="2027-03-02", symbol="Q.TO", quantity=-shares, price=52, net_amount=5200.0 * shares / 100))
+            _, close_r = run(book)
+            cy = by_year(close_r); b = sum(cy.values())
+            for since in (None, 2024, 2025, 2026, 2027):
+                _, r = run(book, option_premium_timing="grant", option_grant_since=since)
+                self.assertAlmostEqual(sum(by_year(r).values()), b, places=3, msg=f"seed {seed} since {since}")
+            _, late = run(book, option_premium_timing="grant", option_grant_since=2030)
+            ly = by_year(late)
+            self.assertEqual(sorted(ly), sorted(cy), msg=f"seed {seed}")
+            for y in cy:
+                self.assertAlmostEqual(ly[y], cy[y], places=3, msg=f"seed {seed} {y}")
+
+    def test_assign_consuming_pre_since_lot_folds_it_once(self):
+        """Audit repro r01: a 2024 write (close timing under since=2025)
+        is assigned FIFO; the 2025 write is bought back. The ASSIGN
+        folds the 2024 premium (300) into the shares; the 2025 grant
+        (200) stands and its buy-back is the loss of the 50 paid.
+        Before: 650 in total under grant timing against 450 closed."""
+        P = "ZZZ250117P00010000.US"
+        book = [T(date="2024-11-01", date_settle="2024-11-01", symbol=P, quantity=-1, net_amount=300.0, currency="USD"),
+                T(date="2025-01-10", date_settle="2025-01-10", symbol=P, quantity=-1, net_amount=200.0, currency="USD"),
+                TaxTransaction(action="ASSIGN", date="2025-01-15", time="16:00:00", date_settle="2025-01-15", symbol=P, quantity=1, net_amount=0.0, currency="USD", account="A0"),
+                TaxTransaction(action="ASSIGN", date="2025-01-15", time="16:00:00", date_settle="2025-01-15", symbol="ZZZ.US", quantity=100, net_amount=1000.0, currency="USD", account="A0"),
+                T(date="2025-01-16", date_settle="2025-01-16", symbol=P, quantity=1, net_amount=50.0, currency="USD"),
+                T(date="2025-03-01", date_settle="2025-03-01", symbol="ZZZ.US", quantity=-100, net_amount=1000.0, currency="USD")]
+        self.assertEqual(sum(g for _, g in run(book)[0]), 450.0)
+        recs = run(book, option_premium_timing="grant", option_grant_since=2025)[0]
+        self.assertEqual(recs, [("2025-01-10", 200.0), ("2025-01-16", -50.0), ("2025-03-01", 300.0)])
+
+    def test_assign_consuming_cross_zero_leftover_folds_it_once(self):
+        """Audit repro r02: a sell that crosses zero opens a short
+        leftover; the ASSIGN consumes that leftover FIFO. Its grant
+        record is retracted (s.49(4)) and the premium folds once.
+        Before: 550 under grant timing against 400 closed."""
+        P = "ZZZ250117P00010000.US"
+        book = [T(date="2025-01-02", date_settle="2025-01-02", symbol=P, quantity=1, net_amount=100.0, currency="USD"),
+                T(date="2025-01-03", date_settle="2025-01-03", symbol=P, quantity=-2, net_amount=400.0, currency="USD"),
+                T(date="2025-01-06", date_settle="2025-01-06", symbol=P, quantity=-1, net_amount=150.0, currency="USD"),
+                TaxTransaction(action="ASSIGN", date="2025-01-15", time="16:00:00", date_settle="2025-01-15", symbol=P, quantity=1, net_amount=0.0, currency="USD", account="A0"),
+                TaxTransaction(action="ASSIGN", date="2025-01-15", time="16:00:00", date_settle="2025-01-15", symbol="ZZZ.US", quantity=100, net_amount=1000.0, currency="USD", account="A0"),
+                T(date="2025-01-16", date_settle="2025-01-16", symbol=P, quantity=1, net_amount=50.0, currency="USD"),
+                T(date="2025-03-01", date_settle="2025-03-01", symbol="ZZZ.US", quantity=-100, net_amount=1000.0, currency="USD")]
+        self.assertEqual(sum(g for _, g in run(book)[0]), 400.0)
+        recs = run(book, option_premium_timing="grant")[0]
+        self.assertAlmostEqual(sum(g for _, g in recs), 400.0, places=6)
+        self.assertEqual(recs, [("2025-01-03", 100.0), ("2025-01-06", 150.0), ("2025-01-16", -50.0), ("2025-03-01", 200.0)])
+
+    def test_close_timing_lot_is_consumed_first_by_write_date(self):
+        """Audit repro r03 / design doc: a close consumes lots FIFO by
+        write date, so the 2025 buy-back closes the 2024 close-timing
+        write (300 - 50 = 250 in 2025) and the 2026 expiry closes the
+        already-recognised 2025 write (nothing). Before: grant units
+        went first — 2025 = 200, 2026 = 250."""
+        P = "ZZZ260116C00050000.US"
+        book = [T(date="2024-11-01", date_settle="2024-11-01", symbol=P, quantity=-1, net_amount=300.0, currency="USD"),
+                T(date="2025-02-10", date_settle="2025-02-10", symbol=P, quantity=-1, net_amount=200.0, currency="USD"),
+                T(date="2025-03-16", date_settle="2025-03-16", symbol=P, quantity=1, net_amount=50.0, currency="USD"),
+                T(date="2026-01-16", date_settle="2026-01-16", symbol=P, quantity=1, net_amount=0.0, currency="USD")]
+        recs = run(book, option_premium_timing="grant", option_grant_since=2025)[0]
+        self.assertEqual(recs, [("2025-02-10", 200.0), ("2025-03-16", 250.0)])
+
+    def test_buy_back_of_a_grant_lot_is_the_amount_paid_whatever_other_lots_cost(self):
+        """Two grant lots at different premiums: the buy-back of the
+        first is a loss of what was paid, not of the pool average."""
+        book = [T(date="2025-03-01", date_settle="2025-03-01", symbol=OPT, quantity=-1, net_amount=300.0),
+                T(date="2025-04-01", date_settle="2025-04-01", symbol=OPT, quantity=-1, net_amount=100.0),
+                T(date="2026-01-05", date_settle="2026-01-05", symbol=OPT, quantity=1, net_amount=50.0),
+                T(date="2026-01-16", date_settle="2026-01-16", symbol=OPT, quantity=1, net_amount=0.0)]
+        recs = run(book, **GRANT)[0]
+        self.assertEqual(recs, [("2025-03-01", 300.0), ("2025-04-01", 100.0), ("2026-01-05", -50.0)])
+
 
 class TestBuybackLossSuperficialSwitch(unittest.TestCase):
     """A written option bought back within a minute while a registered

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **s.49 grant timing: an assignment folds each premium once.** Every
+  short opening — a write before `option_grant_since`, the short
+  leftover of a sell that crosses zero — is now a lot, consumed FIFO by
+  write date. An ASSIGN that consumed a lot with no grant record used to
+  fold the premium into the shares on top of the grant already
+  recognised (a book that totals 450 under close timing totalled 650
+  under grant timing with `since = 2025`); totals are now identical
+  under both settings (fuzzed with assignments and every `since`).
+  A close-timing (pre-`since`) lot now closes before a later grant lot
+  and at its own premium, and a buy-back of a grant lot is a loss of
+  exactly the amount paid even when other lots were written at other
+  premiums — both move amounts between years, never the total.
 
 ## v0.16.0 (2026-09-25)
 
