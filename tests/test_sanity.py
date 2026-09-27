@@ -95,9 +95,9 @@ class TestSanity(unittest.TestCase):
         self.assertIn(("NEW.TO", "MISSING_IN_TAXJSON"), issues)
 
     def test_duplicate_account_counted_once(self):
-        # Real data: `sanity margin rrsp rrsp2 tfsa rrsp2 ...` doubled
-        # every rrsp2 position (FNV 80-vs-40) while the header printed
-        # the deduplicated account list.
+        # A repeated account (`sanity margin rrsp rrsp margin ...`)
+        # doubled every position in it (80-vs-40) while the header
+        # printed the deduplicated account list.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             r = _run(root, "sanity", "margin", "rrsp", "rrsp", "margin",
@@ -281,8 +281,8 @@ class TestSanity(unittest.TestCase):
             self.assertIn("paired form is", r.stderr)
 
     def test_option_matched_via_underlying_root(self):
-        # Real case: IB names the Montréal contract on RCI.B
-        # `RCI.B 16JUL27 55 C` (taxjson keys RCI.B270716C00055000.TO)
+        # IB names a Montréal contract on a class-share root like RCI.B
+        # `RCI.B 18JUN27 60 C` (taxjson keys RCI.B270618C00060000.TO)
         # while the positions export keys it by the exchange option
         # root `RCI...` with underlying = "RCI.B.TO". Same contract:
         # the fallback re-keys the FILE's row to the underlying
@@ -293,17 +293,17 @@ class TestSanity(unittest.TestCase):
             e = root / "ext"
             _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
                                     "ANET.US": 50,
-                                    "RCI.B270716C00055000.TO": 20})
+                                    "RCI.B270618C00060000.TO": 15})
             (e / "U1_holdings.toml").write_text(
                 'schema_version = "1.0"\n[meta]\naccount = "U1"\n\n'
                 '[[holding]]\nsymbol = "ALK.TO"\nquantity = 30000\n'
                 'asset_type = "equity"\n\n'
                 '[[holding]]\nsymbol = "ANET.US"\nquantity = 50\n'
                 'asset_type = "equity"\n\n'
-                '[[holding]]\nsymbol = "RCI270716C00055000.TO"\n'
-                'quantity = 20\nasset_type = "option"\n'
+                '[[holding]]\nsymbol = "RCI270618C00060000.TO"\n'
+                'quantity = 15\nasset_type = "option"\n'
                 'underlying = "RCI.B.TO"\nright = "call"\n'
-                'strike = 55.0\n\n')
+                'strike = 60.0\n\n')
             r = _run(root, "sanity", f"margin={e / 'U1_holdings.toml'}"
                      f"+{e / 'U2_holdings.toml'}", "--json")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
@@ -311,8 +311,8 @@ class TestSanity(unittest.TestCase):
             self.assertTrue(doc["clean"])
             self.assertEqual(
                 doc["groups"][0]["matched_via_underlying"],
-                [{"file_symbol": "RCI270716C00055000.TO",
-                  "taxjson_symbol": "RCI.B270716C00055000.TO"}])
+                [{"file_symbol": "RCI270618C00060000.TO",
+                  "taxjson_symbol": "RCI.B270618C00060000.TO"}])
             text = _run(root, "sanity", "margin",
                         str(e / "U1_holdings.toml"),
                         str(e / "U2_holdings.toml"))
@@ -322,8 +322,8 @@ class TestSanity(unittest.TestCase):
             # the quantity difference is reported as a real mismatch.
             _gains(root, "margin", {"ALK.TO": 30000, "XIU.TO": 100,
                                     "ANET.US": 50,
-                                    "RCI.B270716C00055000.TO": 20,
-                                    "RCI270716C00055000.TO": 5})
+                                    "RCI.B270618C00060000.TO": 15,
+                                    "RCI270618C00060000.TO": 5})
             r = _run(root, "sanity", f"margin={e / 'U1_holdings.toml'}"
                      f"+{e / 'U2_holdings.toml'}", "--json")
             self.assertEqual(r.returncode, 1)
@@ -333,8 +333,8 @@ class TestSanity(unittest.TestCase):
             issues = {(d["symbol"], d["issue"])
                       for d in doc["discrepancies"]}
             self.assertEqual(issues, {
-                ("RCI270716C00055000.TO", "QTY_MISMATCH"),
-                ("RCI.B270716C00055000.TO", "MISSING_IN_HOLDINGS")})
+                ("RCI270618C00060000.TO", "QTY_MISMATCH"),
+                ("RCI.B270618C00060000.TO", "MISSING_IN_HOLDINGS")})
 
     # ---- pairings from taxjson.toml `holdings` -------------------------
 

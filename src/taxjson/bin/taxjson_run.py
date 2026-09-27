@@ -8156,11 +8156,12 @@ def _questrade_token_write(tok_cache: Path, token: str) -> None:
     import os as _os
     tok_cache.parent.mkdir(parents=True, exist_ok=True)
     tmp = tok_cache.with_name(tok_cache.name + ".part")
-    # 0600 from the first byte: write_text inherits the umask, which
-    # left the live credential world-readable between creation and the
-    # post-rename chmod.
-    fd = _os.open(str(tmp), _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC,
-                  0o600)
+    # 0600 from the first byte, and a FRESH file: a stale .part (or a
+    # symlink planted there) is unlinked, then O_EXCL|O_NOFOLLOW refuses
+    # to follow or reuse anything that reappears before the open.
+    tmp.unlink(missing_ok=True)
+    fd = _os.open(str(tmp), _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL
+                  | getattr(_os, "O_NOFOLLOW", 0), 0o600)
     try:
         with _os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(token + "\n")
@@ -8238,9 +8239,7 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
             extra_to_roots=_book_to_roots)
         toml_path = cache / f"{a}_live_holdings.toml"
-        tmp = toml_path.with_name(toml_path.name + ".part")
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(toml_path)
+        F.write_private(toml_path, text)
         n = sum(1 for pz in positions if pz.get("openQuantity"))
         say(f"  {a}: {n} live position(s) -> {toml_path.name}")
         out[a] = toml_path
@@ -8570,10 +8569,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                     say(f"  note: {sib.name} has {n} row(s) inside "
                         f"the window (see --trim-overlap)")
                 continue
-            acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-            _tmp_out = out.with_name(out.name + ".part")
-            _tmp_out.write_text(merged, encoding="utf-8")
-            _tmp_out.replace(out)
+            F.write_private(out, merged)
             say(f"  {out.name}: +{added} new row(s) "
                 f"({len(acts)} downloaded)")
             _restated = _qt_restatement_suspects(existing, new_csv)
@@ -8639,8 +8635,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                 bad = out.with_suffix(".csv.unrecognized")
                 saved = ""
                 if not getattr(args, "dry_run", False):
-                    acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    bad.write_text(text, encoding="utf-8")
+                    F.write_private(bad, text)
                     saved = f" — saved to {bad.name}"
                 sys.exit(f"taxjson fetch: {a}: the Flex download is "
                          f"not in the section,Header/Data CSV shape "
@@ -8654,12 +8649,9 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                 say(f"  would write {out.name} "
                     f"({len(text.splitlines())} lines)")
                 continue
-            acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             # Atomic like the Questrade path: a crash mid-write must
             # not leave a truncated statement for the next run.
-            _part = out.with_name(out.name + ".part")
-            _part.write_text(text, encoding="utf-8")
-            _part.replace(out)
+            F.write_private(out, text)
             say(f"  {out.name}: {len(text.splitlines())} lines "
                 f"(overwritten — a Flex query re-covers its whole "
                 f"configured period)")
@@ -9688,6 +9680,11 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Tax data is private: everything this process and its pipeline
+    # stages create is owner-only (files 0600, dirs 0700) whatever the
+    # shell umask — SECURITY.md promises it.
+    from taxjson.bin._entry import private_umask
+    private_umask()
     p = argparse.ArgumentParser(prog="taxjson",
                                 description=__doc__.splitlines()[0],
                                 formatter_class=_CappedHelpFormatter)
@@ -10055,9 +10052,10 @@ def main() -> None:
 
     p_red = sub.add_parser(
         "redact",
-        help="Strip account numbers and identity from broker exports "
-             "(row shapes kept) so a real statement can be shared as a "
-             "parser sample or bug report")
+        help="Strip the account numbers, names and contact details it "
+             "recognises from broker exports (row shapes kept) so a "
+             "statement can be shared as a parser sample or bug report "
+             "— review the output before sharing")
     p_red.add_argument("files", nargs="+", metavar="FILE")
     p_red.add_argument("--out", metavar="DIR",
                        help="Write redacted copies here (default: beside "
@@ -10071,7 +10069,8 @@ def main() -> None:
     p_red.add_argument("--force", action="store_true",
                        help="Overwrite an existing redacted copy")
     p_red.add_argument("--check", action="store_true",
-                       help="Report only; write nothing")
+                       help="Report only; write nothing; exit 1 if "
+                            "anything would be redacted")
     p_red.set_defaults(func=cmd_redact)
 
     p_ob = sub.add_parser(

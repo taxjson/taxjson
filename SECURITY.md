@@ -54,16 +54,62 @@ Everything else that touches the network is opt-in by command: `fetch`
 (your broker's API, with your credentials), `scan --online` (Yahoo
 Finance names), `verify` (Questrade positions), and
 `taxjson-generate-parser`, which sends the ENTIRE sample CSV you hand
-it to an LLM API — redact account numbers and names first.
+it to an LLM API — run `taxjson redact` on it first.
+
+**What Yahoo Finance learns.** Every Yahoo lookup (FX fallback, crypto
+prices, `harvest` / `watch --harvest` current prices, `scan --online`)
+is a plain request from your IP address naming a symbol and a date
+range — so Yahoo can see which tickers you hold or trade and roughly
+when, though never quantities, prices paid or account numbers. Use
+`TAXJSON_OFFLINE=1` (with a populated cache) if that matters to you.
 
 Credentials: `~/.questrade_token` is written 0600 and rotated
-atomically; tokens never appear in logs, `.diag` files or `work/`
+atomically (the temporary file is created fresh — never through a
+symlink); tokens never appear in logs, `.diag` files or `work/`
 artifacts. Prefer `$QUESTRADE_REFRESH_TOKEN` / `$IBKR_FLEX_TOKEN` over
 the `--refresh-token` / `--flex-token` flags, which are visible in
-`ps` and shell history. Credentialed requests refuse redirects and
-non-HTTPS API servers. Project directories (`work/`, `reports/`,
-`inputs/<account>/`) are created 0700; the fetched statements inside
-carry your account numbers.
+`ps` and shell history. Credentialed requests refuse redirects, and
+the Questrade access token is only ever sent to
+`https://*.questrade.com` — an `api_server` elsewhere in the login
+response is refused.
+
+## Files on disk
+
+`taxjson` and every `taxjson-*` tool set an owner-only umask (`077`)
+at startup, so everything they create — `work/`, `reports/`,
+`filed/`, `export/`, `checklist.json`, a new project's
+`inputs/<account>/` — is `0600` (files) / `0700` (directories)
+whatever your shell's umask. `taxjson fetch` also tightens an
+existing `inputs/<account>/` to `0700` and writes the fetched
+statements (which carry your account numbers) `0600`. Directories
+created by earlier versions keep their old mode; tighten a project
+once with `chmod -R go-rwx <project>`.
+
+**Keep a tax project repository PRIVATE.** A project is designed to be
+versioned — `taxjson init` writes a `.gitignore` that commits
+`inputs/` (your broker statements) and `taxjson.toml` (your accounts)
+so the books can be rebuilt. That makes the repository itself
+sensitive: host it only as a private repository (or not at all), never
+fork it publicly, and never push it to the public taxjson repo. The
+public repo's own `.gitignore` ignores `inputs/`, `work/`, `reports/`,
+`filed/`, `export/`, spreadsheets and PDFs so a run inside a dev clone
+cannot be staged by accident.
+
+`taxjson redact` strips the account numbers, names and contact details
+it recognises from an export so it can be shared as a parser sample —
+it is pattern-based, so review the output (the report lists the lines
+to read) before attaching it anywhere.
+
+## Local web UI
+
+`taxjson serve` binds `127.0.0.1` by default and refuses requests whose
+`Host` header is not a loopback name (DNS rebinding). Binding any other
+address (`--host 0.0.0.0`) exposes the books over plain HTTP, so it
+also requires a random per-run access token: the startup line prints
+`http://HOST:PORT/?token=…`; the first request with it sets an
+HttpOnly, SameSite=Strict cookie, and every request without either gets
+401. Prefer an SSH tunnel to the loopback server. `/healthz` reports no
+filesystem paths.
 
 ## Supported versions
 

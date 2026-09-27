@@ -33,23 +33,23 @@ class TestParseDivQtyRate(unittest.TestCase):
     def test_cash_dividend_no_per_share(self):
         # IB Canadian form — rate has no "per Share" suffix.
         qty, rate = _parse_div_qty_rate(
-            "ENB (CA29250N1050) Cash Dividend CAD 0.97 (Ordinary Dividend)",
-            873.0)
-        self.assertEqual(rate, 0.97)
-        self.assertEqual(qty, 900.0)
+            "MAPL (CA0000000201) Cash Dividend CAD 0.85 (Ordinary Dividend)",
+            510.0)
+        self.assertEqual(rate, 0.85)
+        self.assertEqual(qty, 600.0)
 
     def test_per_share_form_still_works(self):
         qty, rate = _parse_div_qty_rate(
-            "EMR(US2910111044) Cash Dividend USD 0.555 per Share (Ordinary Dividend)",
-            55.5)
-        self.assertEqual(rate, 0.555)
+            "EMRX(US0000000202) Cash Dividend USD 0.415 per Share (Ordinary Dividend)",
+            41.5)
+        self.assertEqual(rate, 0.415)
         self.assertEqual(qty, 100.0)
 
     def test_pil_has_no_rate(self):
         # Payment-in-Lieu rows carry no per-share figure.
         qty, rate = _parse_div_qty_rate(
-            "PPL(CA7063271034) Payment in Lieu of Dividend (Ordinary Dividend)",
-            84.14)
+            "PPLX(CA0000000203) Payment in Lieu of Dividend (Ordinary Dividend)",
+            61.2)
         self.assertEqual((qty, rate), (0.0, 0.0))
 
 
@@ -85,49 +85,49 @@ class TestMerge2DividendReconciliation(unittest.TestCase):
     def test_us_dividend_net_after_withholding(self):
         with tempfile.TemporaryDirectory() as tmp:
             f = self._write(tmp, 'a.json', [
-                _div('EMR.US', '2026-03-10', 75.40785, 100.0, 0.7540785,
-                     'EMR(US2910111044) Cash Dividend USD 0.555 per Share (Ordinary Dividend)'),
-                _tax('EMR.US', '2026-03-10', 11.317971,
-                     'EMR(US2910111044) Cash Dividend USD 0.555 per Share - US Tax'),
+                _div('EMRX.US', '2026-03-10', 56.2, 100.0, 0.562,
+                     'EMRX(US0000000202) Cash Dividend USD 0.415 per Share (Ordinary Dividend)'),
+                _tax('EMRX.US', '2026-03-10', 8.43,
+                     'EMRX(US0000000202) Cash Dividend USD 0.415 per Share - US Tax'),
             ])
             txs = _run_merge2(f)
             div = next(t for t in txs if t['action'] == 'DIVIDEND')
             tax = next(t for t in txs if t['action'] == 'TAX')
             # net = gross - withholding
-            self.assertAlmostEqual(div['net_amount'], 64.089879, places=6)
-            self.assertEqual(div['gross_amount'], 75.40785)
+            self.assertAlmostEqual(div['net_amount'], 47.77, places=6)
+            self.assertEqual(div['gross_amount'], 56.2)
             # TAX row inherits the share count + per-share rate.
             self.assertEqual(tax['quantity'], 100.0)
-            self.assertAlmostEqual(tax['price'], 0.11317971, places=6)
+            self.assertAlmostEqual(tax['price'], 0.0843, places=6)
 
     def test_canadian_dividend_no_withholding(self):
         with tempfile.TemporaryDirectory() as tmp:
             f = self._write(tmp, 'a.json', [
-                _div('ENB.TO', '2026-03-02', 873.0, 900.0, 0.97,
-                     'ENB (CA29250N1050) Cash Dividend CAD 0.97 (Ordinary Dividend)'),
+                _div('MAPL.TO', '2026-03-02', 510.0, 600.0, 0.85,
+                     'MAPL (CA0000000201) Cash Dividend CAD 0.85 (Ordinary Dividend)'),
             ])
             div = next(t for t in _run_merge2(f) if t['action'] == 'DIVIDEND')
             # No withholding row → net stays equal to gross.
-            self.assertEqual(div['net_amount'], 873.0)
-            self.assertEqual(div['gross_amount'], 873.0)
+            self.assertEqual(div['net_amount'], 510.0)
+            self.assertEqual(div['gross_amount'], 510.0)
 
     def test_dividend_and_pil_same_day_stay_separate(self):
-        # EDV pays a Cash Dividend and a Payment-in-Lieu on the same date,
+        # A bond ETF pays a Cash Dividend and a Payment-in-Lieu on the same date,
         # each with its own withholding. The cash dividend's net must
         # subtract only the cash withholding, not the PIL's.
         with tempfile.TemporaryDirectory() as tmp:
             f = self._write(tmp, 'a.json', [
-                _div('EDV.US', '2025-04-03', 117.84, 148.0, 0.7962,
-                     'EDV(US9219107094) Cash Dividend USD 0.7938 per Share (Ordinary Dividend)'),
-                _tax('EDV.US', '2025-04-03', 17.68,
-                     'EDV(US9219107094) Cash Dividend USD 0.7938 per Share - US Tax'),
-                _tax('EDV.US', '2025-04-03', 12.62,
-                     'EDV(US9219107094) Payment in Lieu of Dividend - US Tax'),
+                _div('ZBND.US', '2025-05-06', 90.12, 120.0, 0.751,
+                     'ZBND(US0000000204) Cash Dividend USD 0.751 per Share (Ordinary Dividend)'),
+                _tax('ZBND.US', '2025-05-06', 13.52,
+                     'ZBND(US0000000204) Cash Dividend USD 0.751 per Share - US Tax'),
+                _tax('ZBND.US', '2025-05-06', 9.85,
+                     'ZBND(US0000000204) Payment in Lieu of Dividend - US Tax'),
             ])
             txs = _run_merge2(f)
             div = next(t for t in txs if t['action'] == 'DIVIDEND')
-            # Only the cash-dividend withholding (17.68) is subtracted.
-            self.assertAlmostEqual(div['net_amount'], 117.84 - 17.68, places=6)
+            # Only the cash-dividend withholding (13.52) is subtracted.
+            self.assertAlmostEqual(div['net_amount'], 90.12 - 13.52, places=6)
 
 
 
@@ -136,72 +136,72 @@ class TestDerivedQtySnapsCentRounding(unittest.TestCase):
     """IB's Dividends section reports rate + TOTAL CASH (rounded to
     cents), no share count — deriving qty = amount/rate landed NEAR the
     true count, not on it, and `taxjson divs` showed phantom fractional
-    holdings (real rows: 25 sh x 0.271 = 6.775 paid as 6.77 ->
-    24.98154982 sh; 137 x 0.475 = 65.075 paid as 65.08 ->
-    137.01052632). Snap to the nearest integer when it explains the
+    holdings (e.g. 45 sh x 0.213 = 9.585 paid as 9.58 ->
+    44.97652582 sh; 83 x 0.315 = 26.145 paid as 26.15 ->
+    83.01587302). Snap to the nearest integer when it explains the
     paid amount within IB's half-cent rounding; keep genuine DRIP
     fractions."""
 
     def test_rounded_down_payment_snaps(self):
         from taxjson.lib.brokerages.base import _parse_div_qty_rate
         q, r = _parse_div_qty_rate(
-            "O(US7561091049) Cash Dividend USD 0.271 per Share "
-            "(Ordinary Dividend)", 6.77)
-        self.assertEqual(q, 25.0)
-        self.assertEqual(r, 0.271)
+            "ABC(US0000000301) Cash Dividend USD 0.213 per Share "
+            "(Ordinary Dividend)", 9.58)
+        self.assertEqual(q, 45.0)
+        self.assertEqual(r, 0.213)
 
     def test_rounded_up_payment_snaps(self):
         from taxjson.lib.brokerages.base import _parse_div_qty_rate
         q, _ = _parse_div_qty_rate(
-            "XYZ(US0000000002) Cash Dividend USD 0.475 per Share "
-            "(Ordinary Dividend)", 65.08)
-        self.assertEqual(q, 137.0)
+            "XYZ(US0000000002) Cash Dividend USD 0.315 per Share "
+            "(Ordinary Dividend)", 26.15)
+        self.assertEqual(q, 83.0)
 
     def test_genuine_fractional_kept(self):
         from taxjson.lib.brokerages.base import _parse_div_qty_rate
-        # DRIP 24.5 sh x 0.271 = 6.6395 -> paid 6.64: nearest integer
-        # (25) would imply 6.775 — off by 13 cents, NOT cent rounding.
+        # DRIP 44.5 sh x 0.213 = 9.4785 -> paid 9.48: nearest integer
+        # (45) would imply 9.585 — off by 10.5 cents, NOT cent rounding.
         q, _ = _parse_div_qty_rate(
-            "X Cash Dividend USD 0.271 per Share", 6.64)
-        self.assertNotEqual(q, 25.0)
-        self.assertAlmostEqual(q, 24.50184502, places=6)
+            "X Cash Dividend USD 0.213 per Share", 9.48)
+        self.assertNotEqual(q, 45.0)
+        self.assertAlmostEqual(q, 44.50704225, places=6)
 
 
 
 
 class TestDerivedRateSnapping(unittest.TestCase):
     """A DERIVED rate must not manufacture precision the reported cash
-    can't support. Motivating case: 37 shares paid $20.54 is a dividend
-    declared at 0.555, but back-computing gave 0.55513514 — while the
+    can't support. Motivating case: 43 shares paid $17.85 is a dividend
+    declared at 0.415, but back-computing gave 0.41511628 — while the
     SAME payment in another account, from a broker whose statement
-    states the rate, showed a clean 0.555. The two rows disagreed on
+    states the rate, showed a clean 0.415. The two rows disagreed on
     screen for one economic event."""
 
     def test_derived_rate_snaps_to_the_declared_value(self):
         from taxjson.lib.brokerages.base import _parse_div_qty_rate
         qty, rate = _parse_div_qty_rate(
-            "XYZ HOLDINGS INC COMMON STOCK CASH DIV ON 37 SHS "
-            "REC 08/10/26 PAY 08/18/26", 20.54)
-        self.assertEqual(qty, 37.0)
-        self.assertAlmostEqual(rate, 0.555, places=6)
+            "XYZ HOLDINGS INC COMMON STOCK CASH DIV ON 43 SHS "
+            "REC 05/11/26 PAY 05/19/26", 17.85)
+        self.assertEqual(qty, 43.0)
+        self.assertAlmostEqual(rate, 0.415, places=6)
         # Whatever is shown must still explain the paid cash to the
         # cent — that is the whole constraint the snap respects.
-        self.assertLessEqual(abs(20.54 - rate * qty), 0.005 + 1e-9)
+        self.assertLessEqual(abs(17.85 - rate * qty), 0.005 + 1e-9)
 
     def test_genuinely_fine_grained_rate_survives(self):
         # 0.3728 x 150 = 55.92 exactly; no shorter form reproduces it.
         from taxjson.lib.brokerages.base import _parse_div_qty_rate
         _qty, rate = _parse_div_qty_rate(
-            "OPEN TEXT CORP CASH DIV ON 150 SHS", 55.92)
+            "NORTHWIND SOFTWARE CORP CASH DIV ON 150 SHS", 55.92)
         self.assertAlmostEqual(rate, 0.3728, places=6)
 
     def test_stated_rate_is_never_touched(self):
         from taxjson.lib.brokerages.base import _parse_div_qty_rate
         qty, rate = _parse_div_qty_rate(
-            "LNG(US16411R2085) Cash Dividend USD 0.555 per Share",
-            26.09)
-        self.assertAlmostEqual(rate, 0.555, places=6)
-        self.assertEqual(qty, 47.0)
+            "LNGX(US0000000205) Cash Dividend USD 0.4125 per Share",
+            21.04)
+        self.assertAlmostEqual(rate, 0.4125, places=6)
+        self.assertEqual(qty, 51.0)
 
     def test_snap_never_moves_the_cash_amount(self):
         # Property check across a spread of counts and rates: the

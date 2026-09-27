@@ -355,13 +355,13 @@ class TestUsEngineRocAdjust(unittest.TestCase):
 
     def test_roc_reduces_basis_before_sale(self):
         res, err = self._run([
-            self._tx(action='BUYSELL', date='2025-01-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
-            self._tx(action='ADJUST', date='2025-06-30', symbol='STRC.US',
+            self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-500.0,
                      type='roc'),
-            self._tx(action='BUYSELL', date='2025-12-01', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-12-01', symbol='PRFD.US',
                      quantity=-100, currency='USD', price=10.0,
                      net_amount=1000.0),
         ])
@@ -398,10 +398,10 @@ class TestUsEngineRocAdjust(unittest.TestCase):
 
     def test_negative_lot_basis_flags_301c3(self):
         _, err = self._run([
-            self._tx(action='BUYSELL', date='2025-01-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
-            self._tx(action='ADJUST', date='2025-06-30', symbol='STRC.US',
+            self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-1200.0,
                      type='roc'),
         ])
@@ -410,13 +410,13 @@ class TestUsEngineRocAdjust(unittest.TestCase):
 
     def test_roc_after_full_exit_warns_and_skips(self):
         res, err = self._run([
-            self._tx(action='BUYSELL', date='2025-01-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
-            self._tx(action='BUYSELL', date='2025-03-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-03-10', symbol='PRFD.US',
                      quantity=-100, currency='USD', price=12.0,
                      net_amount=1200.0),
-            self._tx(action='ADJUST', date='2025-06-30', symbol='STRC.US',
+            self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-50.0,
                      type='roc'),
         ])

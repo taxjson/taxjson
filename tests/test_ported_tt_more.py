@@ -1,7 +1,7 @@
 """Tests ported from the legacy tt_gains.pl test corpus.
 
 Sources:
-- test_real_world.t           — VG/AAUC regressions
+- test_real_world.t           — put-snowball / covered-call regressions (synthetic tickers)
 - test_wash_edge_cases.t      — different tickers, grace period, multi-replacement
 - test_short_position_acb.t   — short-position ACB edge cases
 - wash_rollover.tt            — rolling wash-sale ACB carry-forward
@@ -27,40 +27,40 @@ class TestRealWorldRegressions(unittest.TestCase):
         applied exactly once.
         """
         content = """
-        ASSIGN  2025-11-21 16:00:00 VG251121P00012500.US 1.0 USD 0.00 0.00 0.00
-        BUYSELL 2025-11-21 16:00:01 VG.US                100.0 USD 12.50 1250.00 0.00
-        ASSIGN  2025-11-21 16:00:02 VG251121P00010000.US 1.0 USD 0.00 0.00 0.00
-        BUYSELL 2025-11-21 16:00:03 VG.US                100.0 USD 10.00 1000.00 0.00
-        BUYSELL 2025-12-22 13:00:00 VG.US               -200.0 USD 8.66 1732.00 0.00
+        ASSIGN  2025-10-17 16:00:00 VGX251017P00012500.US 1.0 USD 0.00 0.00 0.00
+        BUYSELL 2025-10-17 16:00:01 VGX.US                100.0 USD 12.50 1250.00 0.00
+        ASSIGN  2025-10-17 16:00:02 VGX251017P00010000.US 1.0 USD 0.00 0.00 0.00
+        BUYSELL 2025-10-17 16:00:03 VGX.US                100.0 USD 10.00 1000.00 0.00
+        BUYSELL 2025-11-19 13:00:00 VGX.US               -200.0 USD 8.41 1682.00 0.00
         """
         txs = parse_tt_lines(content)
         result = self.rules.compute_gains(txs)
-        sells = [g for g in result['transactions'] if g.get('symbol') == 'VG.US']
+        sells = [g for g in result['transactions'] if g.get('symbol') == 'VGX.US']
         self.assertEqual(len(sells), 1)
         self.assertAlmostEqual(sells[0]['qty'], 200.0)
         # Without snowball: cost = 1250 + 1000 = 2250 (each premium applied once),
-        # proceeds = 1732, gain = -518.
+        # proceeds = 1682, gain = -568.
         self.assertAlmostEqual(sells[0]['cost'], 2250.0, places=2)
-        self.assertAlmostEqual(sells[0]['gain'], -518.0, places=2)
+        self.assertAlmostEqual(sells[0]['gain'], -568.0, places=2)
 
     def test_aauc_covered_call_assignment(self):
-        """test_real_world.t: AAUC covered call.
+        """test_real_world.t: covered call (synthetic AUX).
 
-        Hold 500 shares, sell 5 calls (premium 793.75), get assigned, sell 500
-        at strike 30. Effective proceeds = 15000 + 793.75 = 15793.75.
-        Cost = 10000. Gain = 5793.75.
+        Hold 500 shares, sell 5 calls (premium 718.75), get assigned, sell 500
+        at strike 28. Effective proceeds = 14000 + 718.75 = 14718.75.
+        Cost = 10500. Gain = 4218.75.
         """
         content = """
-        BUYSELL 2025-12-01 10:00:00 AAUC251219C00030000.TO -5.0 CAD 1.60 793.75 6.25
-        BUYSELL 2025-12-01 10:00:00 AAUC.TO                 500.0 CAD 20.00 10000.00 0.00
-        ASSIGN  2025-12-22 16:00:00 AAUC251219C00030000.TO 5.0 CAD 0.00 0.00 0.00
-        BUYSELL 2025-12-22 16:00:01 AAUC.TO                -500.0 CAD 30.00 15000.00 0.00
+        BUYSELL 2025-10-06 10:00:00 AUX251114C00028000.TO -5.0 CAD 1.45 718.75 6.25
+        BUYSELL 2025-10-06 10:00:00 AUX.TO                 500.0 CAD 21.00 10500.00 0.00
+        ASSIGN  2025-11-17 16:00:00 AUX251114C00028000.TO 5.0 CAD 0.00 0.00 0.00
+        BUYSELL 2025-11-17 16:00:01 AUX.TO                -500.0 CAD 28.00 14000.00 0.00
         """
         txs = parse_tt_lines(content)
         result = self.rules.compute_gains(txs)
-        sells = [g for g in result['transactions'] if g.get('symbol') == 'AAUC.TO']
+        sells = [g for g in result['transactions'] if g.get('symbol') == 'AUX.TO']
         self.assertEqual(len(sells), 1)
-        self.assertAlmostEqual(sells[0]['gain'], 5793.75, places=2)
+        self.assertAlmostEqual(sells[0]['gain'], 4218.75, places=2)
 
 
 class TestWashEdgeCases(unittest.TestCase):

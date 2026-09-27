@@ -203,8 +203,8 @@ class TestFractionalDeliveryBrokers(unittest.TestCase):
     """IB DELIVERS real fractional shares: qty_received is the exact
     delivered quantity. Snapping a real 0.5-share delivery to whole +
     cash-in-lieu manufactured a phantom -0.5 short the moment the user
-    sold their actual fraction (Honeywell split-up, seen on a real IB
-    export 2026-07). fractional_delivery=True limits snapping to dust."""
+    sold their actual fraction (a 1-for-2 split-up of an odd lot).
+    fractional_delivery=True limits snapping to dust."""
 
     def test_real_fraction_kept_when_fractional_delivery(self):
         ev = _event(qty_received=7.5, fractional_delivery=True)

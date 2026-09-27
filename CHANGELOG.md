@@ -274,6 +274,46 @@
   style proceeds and a cost net of the wash adjustment that matched
   neither 8949 column. A line under the block gives the `fx-cash`
   s.39(1.1) estimate (line 15300), or a pointer when it cannot be built.
+- **Security/privacy audit (2026-09).**
+  - `taxjson redact` also strips names in free text (`Initiated by`,
+    `Payee:`, honorifics, `wire from`, the RBC `Account: …,` holder,
+    Webull preamble name/street/city lines), account numbers after
+    `acct` / `a/c` / `transfer from|to` and alphanumeric ids, IB Flex
+    `AcctAlias`, phone numbers, Canadian postal codes, street
+    addresses, SIN/SSN-shaped numbers, and crypto wallet addresses and
+    exchange transaction ids (stable same-shape pseudonyms). It refuses
+    `.xlsx`/binary input (it used to write a corrupt, unredacted copy),
+    fails closed on an invalid `--also`/denylist pattern (exit 2,
+    nothing written), `--check` exits 1 when it finds something, and
+    the report lists (by line number) free text still worth reading.
+    It strips what it recognises — review the output before sharing.
+  - Owner-only files: `taxjson` and every `taxjson-*` tool add 077 to
+    the umask, so `work/`, `reports/`, `filed/`, `export/`,
+    `checklist.json` and a new project's `inputs/<account>/` are
+    0600/0700. `fetch` writes statements 0600 and tightens an existing
+    `inputs/<account>/` to 0700. Existing projects: `chmod -R go-rwx`.
+  - `taxjson serve --host <non-loopback>` requires a random per-run
+    token (printed URL `?token=…`, then an HttpOnly cookie); `/healthz`
+    no longer returns the project path.
+  - `fetch`: the Questrade token is only sent to
+    `https://*.questrade.com`; `~/.questrade_token.part` is created
+    fresh (O_EXCL, never through a symlink); the live-holdings TOML
+    escapes broker-supplied strings.
+  - `python-multipart >= 0.0.18` (CVE-2024-53981); Dependabot for pip
+    and GitHub Actions; the dev repo ignores run outputs (`work/`,
+    `filed/`, `export/`, `checklist.json`, `*.xlsx`, `*.pdf`).
+  - `scripts/check-pii.sh` / pre-push: scans the identities of new
+    commits and annotated tags (your own configured identity only
+    warns), tag messages, the new path of a pure rename; denylist
+    matching is case-insensitive and separator-tolerant and never
+    echoes the private string; 8-digit file-name tokens are exempt only
+    when they are real dates; `pii-ok` must be a comment marker
+    (`# pii-ok` / `pii-ok:`).
+  - SECURITY.md: keep a tax project repository private; FX comes from
+    the Bank of Canada Valet with Yahoo Finance as a fallback; what
+    Yahoo lookups reveal (held tickers and dates).
+  - Test fixtures copied from real statements replaced with synthetic
+    values.
 
 
 ## v0.16.0 (2026-09-25)
@@ -500,8 +540,8 @@ fixed:
 - IB parser: a `Ca` (cancellation) row in the Transfers section
   consumes its original leg (same symbol, date, opposite quantity,
   same type). IB lists a reversed ACATS/ATON leg as original + Ca +
-  rebooked rows; a real RRSP move (IB -> Questrade) carried MDA five
-  times — arithmetically -383, but the two Ca legs read as +383
+  rebooked rows; an RRSP move (IB -> Questrade) could carry one
+  symbol five times — arithmetically -N, but the two Ca legs read as +N
   ACQUISITIONS to the superficial-loss walk and littered `taxjson
   events`/`transfers`. A Ca whose original sits in an earlier
   statement is kept as a reversing leg with a note.
@@ -631,7 +671,7 @@ git HISTORY still holds real account numbers and disclosing commit
 messages — see the release checklist: squash before going public.
 
 - Questrade DRIP (`REI` / "Dividend reinvestment") rows are booked as
-  purchases at the reinvestment price (`REINV@C$8.33966` in the
+  purchases at the reinvestment price (`REINV@C$7.12500` in the
   description; Price column is 0) — the DRIP shares never entered
   inventory before (counted skip). The cash dividend keeps its own
   Dividends row. Questrade `CIL` (cash in lieu of a fractional
@@ -1570,8 +1610,8 @@ called out below. 1,903 tests.
 - Dividends: a DERIVED per-share rate (broker states only the cash
   and the share count) snaps to the fewest decimals that still
   explain the paid amount to the cent. Back-computing manufactured
-  spurious precision — 37 shares paid $20.54 showed 0.55513514 for a
-  dividend declared at 0.555, disagreeing with the same payment in
+  spurious precision — 43 shares paid $17.85 showed 0.41511628 for a
+  dividend declared at 0.415, disagreeing with the same payment in
   another account whose statement states the rate. Genuinely
   fine-grained rates (0.3728) survive; stated rates are untouched;
   cash amounts never move.

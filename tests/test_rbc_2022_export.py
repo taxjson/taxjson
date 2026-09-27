@@ -3,7 +3,7 @@ Date as 1/6/2022 and Settlement Date as 10-Jan-22) parses with its own
 settlement dates. Before the `%d-%b-%y` format landed, every 2022 settle
 date silently fell back to the trade date.
 
-Synthetic account id 55500001 — pii-ok.
+Synthetic account id 55500001 (pii-ok: synthetic).
 """
 import tempfile
 import unittest

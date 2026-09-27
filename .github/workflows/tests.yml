@@ -1,9 +1,8 @@
 name: tests
 
-# NOTE: this private repo's Actions minutes are billing-gated; the
-# authoritative gate is scripts/ci.sh, run locally before every push.
-# macOS runners are excluded (10x minute multiplier) so the matrix fits
-# the free tier whenever Actions is enabled.
+# NOTE: the authoritative gate is scripts/ci.sh (tests plus the PII scan),
+# run locally before every push; this workflow repeats the tests for
+# pull requests. macOS runners are excluded to keep the matrix fast.
 on:
   push:
     branches: [main]
@@ -12,6 +11,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 6 * * *"     # nightly deep fuzz (UTC)
+
+# The workflow only reads the repository.
+permissions:
+  contents: read
 
 jobs:
   lint:

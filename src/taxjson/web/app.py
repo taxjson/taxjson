@@ -24,11 +24,38 @@ _HERE = Path(__file__).parent
 _DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1", "testserver")
 
 
-def create_app(ctx: ProjectContext, allowed_hosts=None) -> FastAPI:
+AUTH_COOKIE = "taxjson_token"
+
+
+def create_app(ctx: ProjectContext, allowed_hosts=None,
+               auth_token: str = None) -> FastAPI:
+    """`auth_token` (set by `taxjson serve` for any non-loopback bind):
+    every request must carry it as `?token=` or the cookie that a
+    first valid `?token=` sets — anyone else on the network gets 401."""
     # No Swagger UI: it loads assets from a third-party CDN in the
     # viewer's browser — the only external fetch a local-only tool
     # would make. The JSON schema stays at /openapi.json.
     app = FastAPI(title="taxjson", docs_url=None, redoc_url=None)
+    if auth_token:
+        import hmac
+
+        @app.middleware("http")
+        async def _require_token(request: Request, call_next):
+            given = request.query_params.get("token")
+            ok_query = given is not None and hmac.compare_digest(
+                given.encode(), auth_token.encode())
+            cookie = request.cookies.get(AUTH_COOKIE) or ""
+            if not (ok_query or hmac.compare_digest(
+                    cookie.encode(), auth_token.encode())):
+                return JSONResponse(
+                    {"ok": False, "reason": "missing or wrong access token "
+                     "(open the URL `taxjson serve` printed)"},
+                    status_code=401)
+            response = await call_next(request)
+            if ok_query:
+                response.set_cookie(AUTH_COOKIE, auth_token, httponly=True,
+                                    samesite="strict")
+            return response
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=list(dict.fromkeys(
@@ -191,7 +218,9 @@ def create_app(ctx: ProjectContext, allowed_hosts=None) -> FastAPI:
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "root": str(cur().root),
+        # No filesystem path: it names the user (home dir) and the
+        # project, and a health probe has no need for either.
+        return {"ok": True,
                 "accounts": [a.name for a in cur().accounts]}
 
     return app

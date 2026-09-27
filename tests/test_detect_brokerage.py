@@ -47,13 +47,12 @@ class TestDetectBrokerage(unittest.TestCase):
         'Activity Export'/'Account:' preamble entirely — the file starts
         at the column header with ISO datetimes. The distinctive header
         shape (bare Date + Activity + Symbol + Settlement Date) must
-        detect as rbc_direct; the parser already handles this variant.
-        Real-data regression (margin.csv, 2026-07-05)."""
+        detect as rbc_direct; the parser already handles this variant."""
         content = (
             "Date,Activity,Symbol,Symbol Description,Quantity,Price,"
             "Settlement Date,Account,Value,Currency,Description\n"
-            "2026-05-28 00:00:00,Deposits & Contributions,,,,,"
-            "2026-05-28 00:00:00,12345678,5649,USD,"
+            "2026-04-14 00:00:00,Deposits & Contributions,,,,,"
+            "2026-04-14 00:00:00,12345678,2500,USD,"
             "DEP - TRANSFER FUNDS FROM RBC\n"
         )
         self.assertEqual(_detect(content), "rbc_direct")

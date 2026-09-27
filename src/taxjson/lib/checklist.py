@@ -276,10 +276,16 @@ def _base_docs(ctx: Ctx, names: List[str]) -> Dict[str, Dict[str, Any]]:
 
 
 def _git(root: Path, *args: str) -> Tuple[int, str]:
+    """git in the user's project, hardened against a hostile .git/config:
+    core.fsmonitor and hooks can execute arbitrary commands, and a status
+    call must not take locks (2026-09 security audit)."""
     try:
-        p = subprocess.run(["git", "-C", str(root)] + list(args),
+        p = subprocess.run(["git", "-c", "core.fsmonitor=false",
+                            "-c", "core.hooksPath=/dev/null",
+                            "-C", str(root)] + list(args),
                            capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=60)
+                           stdin=subprocess.DEVNULL, timeout=60,
+                           env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
     except (OSError, subprocess.TimeoutExpired):
         return 127, ""
     return p.returncode, (p.stdout or "")

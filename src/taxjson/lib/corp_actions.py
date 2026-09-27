@@ -82,7 +82,7 @@ class CorporateAction:
     # qty_received is the exact delivered quantity, so emitters must
     # not snap a real 0.5-share delivery to whole+cash-in-lieu — that
     # manufactured a phantom -0.5 short the moment the user sold their
-    # actual fractional (Honeywell split-up, real data 2026-07).
+    # actual fractional (e.g. a 1-for-2 split-up of an odd lot).
     # False (default): unknown broker semantics — snap as before.
     fractional_delivery: bool = False
 
@@ -175,9 +175,9 @@ _IB_MERGER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Multi-counterparty variant — a SPLIT-UP / separation, e.g. Honeywell:
-#   HON(US4385161066) Merged(Acquisition) WITH HONAV 1 for 2,
-#   US4385162056 1 for 2 (HONA, HONEYWELL AEROSPACE, US43849R1059)
+# Multi-counterparty variant — a SPLIT-UP / separation, e.g. (synthetic):
+#   XYZ(US0000000101) Merged(Acquisition) WITH XYZAV 1 for 2,
+#   US0000000102 1 for 2 (XYZA, XYZ AEROSPACE, US0000000103)
 # One old share is exchanged for shares of TWO (or more) successor
 # companies. IB reports one out-leg (the old position) and one in-leg
 # per successor, all under the same description. The single-target

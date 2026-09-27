@@ -2,8 +2,8 @@
 
 Each broker has a canonical set of activities the parser MUST handle
 without dropping rows on the floor. This file pins one test per
-(broker, activity) pair against representative CSV data drawn from
-real exports.
+(broker, activity) pair against representative CSV data shaped like
+real exports (values synthetic).
 
 Goal: if functionality regresses (e.g. dividend parsing silently
 dropped, as happened with Questrade), one of these tests fails loudly
@@ -170,19 +170,19 @@ class TestQuestradeActivities(unittest.TestCase):
         self.assertAlmostEqual(t['net_amount'], 33060.0, places=2)
 
     def test_internal_code_dividend_resolves_via_trade(self):
-        """Real-world case where Questrade emits dividend with internal
-        code symbol. Resolution via desc-match against trade rows."""
+        """Questrade can emit a dividend with an internal-code symbol.
+        Resolution via desc-match against trade rows."""
         csv = QUESTRADE_HEADER + (
-            '2025-09-30 12:00:00 AM,2025-10-01 12:00:00 AM,Sell,SSL.TO,'
-            'SANDSTORM GOLD LTD COM WE ACTED AS AGENT,-1,17.39,17.39,0,17.39,'
+            '2025-06-13 12:00:00 AM,2025-06-16 12:00:00 AM,Sell,NWG.TO,'
+            'NORTHWIND GOLD LTD COM WE ACTED AS AGENT,-3,12.47,37.41,0,37.41,'
             'CAD,12345,Trades,Individual\n'
-            '2025-10-07 12:00:00 AM,2025-10-07 12:00:00 AM,DIV,S032771,'
-            'SANDSTORM GOLD LTD COM CASH DIV ON 1 SHS REC 09/26/25 PAY 10/07/25,'
-            '0,0,0,0,0.02,CAD,12345,Dividends,Individual\n'
+            '2025-07-02 12:00:00 AM,2025-07-02 12:00:00 AM,DIV,N041552,'
+            'NORTHWIND GOLD LTD COM CASH DIV ON 3 SHS REC 06/20/25 PAY 07/02/25,'
+            '0,0,0,0,0.06,CAD,12345,Dividends,Individual\n'
         )
         txs = _parse_csv(QuestradeBrokerage, csv)
         d = _find(txs, action='DIVIDEND')
-        self.assertEqual(d['symbol'], 'SSL.TO')
+        self.assertEqual(d['symbol'], 'NWG.TO')
 
     def test_split_fills_disambiguated(self):
         """Two byte-identical CSV rows from one order split into two
@@ -623,7 +623,7 @@ class TestCoinbaseActivities(unittest.TestCase):
     def test_staking_income(self):
         """Coinbase 'Staking Income' rows are the dominant source of
         crypto-asset dividend income for ADA/AVAX/DOT/ETH/SOL holders
-        (600+ rows in real data). Old cb_dividends.pl emitted a paired
+        (hundreds of rows a year). Old cb_dividends.pl emitted a paired
         DIVIDEND + zero-cost BUYSELL; the new parser must too, so the
         rewards land in inventory at FMV cost basis AND surface as
         per-ticker dividend income."""
@@ -653,8 +653,8 @@ class TestCoinbaseActivities(unittest.TestCase):
         label."""
         # 'Incentives Rewards Payout' is the referral/usage-incentive
         # variant — it was falling to the counted-skip bucket, leaving
-        # the rewarded coins off the books (surfaced as a real-data BTC
-        # phantom-short of 0.00001365 when the account was emptied).
+        # the rewarded coins off the books (surfaced as a tiny BTC
+        # phantom-short when the account was emptied).
         for label in ('Reward Income', 'Rewards Income', 'Inflation Reward',
                       'Coinbase Earn', 'Learning Reward',
                       'Incentives Rewards Payout', 'Rewards Payout'):
@@ -950,19 +950,19 @@ class TestKrakenActivities(unittest.TestCase):
 
 class TestQuestradeStockDividend(unittest.TestCase):
     """A DIS row with 'STK DIV' delivers NEW shares in kind (split-share
-    corps like TDb). The dividend branch's zero-cash guard silently
+    corps). The dividend branch's zero-cash guard silently
     discarded it — the position then went phantom-short by the
-    delivered count at the next full sale (real XTD.TO case: 208
-    shares on 1,390, sale of 2,098 vs book 1,890 → -208)."""
+    delivered count at the next full sale (e.g. 180 shares on 1,200:
+    a sale of 1,380 vs book 1,200 → -180)."""
 
     def test_stk_div_row_delivers_shares(self):
         csv = QUESTRADE_HEADER + (
-            '2026-01-19 09:30:00 AM,2026-01-20 12:00:00 AM,Buy,XTD.TO,'
-            'TDB SPLIT CORP SHS CL A NEW WE ACTED AS AGENT,1390,6.85,'
-            '9521.50,0.00,-9521.50,CAD,1,Trades,Individual\n'
-            '2026-07-29 12:00:00 AM,2026-07-29 12:00:00 AM,DIS,XTD,'
-            'TDB SPLIT CORP SHS CL A NEW STK DIV ON 1390 SHS REC '
-            '07/24/26 PAY 07/29/26,208.0,0.0,0.0,0.0,0.0,CAD,1,'
+            '2026-02-17 09:30:00 AM,2026-02-18 12:00:00 AM,Buy,QSC.TO,'
+            'QUILL SPLIT CORP SHS CL A NEW WE ACTED AS AGENT,1200,7.40,'
+            '8880.00,0.00,-8880.00,CAD,1,Trades,Individual\n'
+            '2026-06-26 12:00:00 AM,2026-06-26 12:00:00 AM,DIS,QSC,'
+            'QUILL SPLIT CORP SHS CL A NEW STK DIV ON 1200 SHS REC '
+            '06/19/26 PAY 06/26/26,180.0,0.0,0.0,0.0,0.0,CAD,1,'
             'Dividends,Individual\n')
         import io
         from contextlib import redirect_stderr
@@ -970,24 +970,24 @@ class TestQuestradeStockDividend(unittest.TestCase):
         with redirect_stderr(buf):
             txs = _parse_csv(QuestradeBrokerage, csv)
         stk = [t for t in txs if t['action'] == 'BUYSELL'
-               and t['quantity'] == 208.0]
+               and t['quantity'] == 180.0]
         self.assertEqual(len(stk), 1,
                          "the stock-dividend shares were dropped")
-        self.assertEqual(stk[0]['symbol'], 'XTD.TO')
+        self.assertEqual(stk[0]['symbol'], 'QSC.TO')
         self.assertEqual(stk[0]['price'], 0.0)
         self.assertIn("stock dividend", buf.getvalue())
-        # Total position: 1390 + 208.
+        # Total position: 1200 + 180.
         total = sum(t['quantity'] for t in txs
                     if t['action'] == 'BUYSELL')
-        self.assertAlmostEqual(total, 1598.0)
+        self.assertAlmostEqual(total, 1380.0)
 
     def test_cash_div_rows_still_informational(self):
         # Zero-cash DIST rows without share delivery keep the old
         # behavior (no transaction).
         csv = QUESTRADE_HEADER + (
-            '2026-02-10 12:00:00 AM,2026-02-10 12:00:00 AM,,XTD,'
-            'TDB SPLIT CORP SHS CL A NEW DIST ON 1000 SHS REC 01/30/26 '
-            'PAY 02/10/26,0.0,0.05,0.0,0.0,0.0,CAD,1,Dividends,'
+            '2026-04-10 12:00:00 AM,2026-04-10 12:00:00 AM,,QSC,'
+            'QUILL SPLIT CORP SHS CL A NEW DIST ON 800 SHS REC 03/31/26 '
+            'PAY 04/10/26,0.0,0.05,0.0,0.0,0.0,CAD,1,Dividends,'
             'Individual\n')
         txs = _parse_csv(QuestradeBrokerage, csv)
         self.assertEqual(txs, [])
@@ -998,18 +998,17 @@ if __name__ == "__main__":
 
 
 class TestQuestradeReinvestmentAndCashInLieu(unittest.TestCase):
-    """Two Questrade rows that were counted skips (2026-09, seen on a
-    real RESP export): REI (DRIP purchase) and CIL (cash in lieu of a fractional
-    stock-dividend share)."""
+    """Two Questrade rows that were counted skips: REI (DRIP purchase)
+    and CIL (cash in lieu of a fractional stock-dividend share)."""
 
     def test_rei_row_is_a_purchase_at_the_reinvest_price(self):
         csv = QUESTRADE_HEADER + (
-            '2026-09-10 12:00:00 AM,2026-09-10 12:00:00 AM,   ,ZZQ.TO,'
-            'ZZQ SPLIT CORP CL-A SHS DIST ON 1000 SHS REC 08/31/26 '
-            'PAY 09/10/26,0,0.1,0,0,100,CAD,99900001,Dividends,API\n'
-            '2026-09-10 12:00:00 AM,2026-09-10 12:00:00 AM,REI,ZZQ.TO,'
-            'ZZQ SPLIT CORP CL-A SHS REINV@C$8.33966 REC 08/31/26 '
-            'PAY 09/10/26,11,0,0,0,-91.74,CAD,99900001,'
+            '2026-05-11 12:00:00 AM,2026-05-11 12:00:00 AM,   ,ZZQ.TO,'
+            'ZZQ SPLIT CORP CL-A SHS DIST ON 800 SHS REC 04/30/26 '
+            'PAY 05/11/26,0,0.1,0,0,80,CAD,99900001,Dividends,API\n'
+            '2026-05-11 12:00:00 AM,2026-05-11 12:00:00 AM,REI,ZZQ.TO,'
+            'ZZQ SPLIT CORP CL-A SHS REINV@C$7.12500 REC 04/30/26 '
+            'PAY 05/11/26,11,0,0,0,-78.38,CAD,99900001,'
             'Dividend reinvestment,API\n'
         )
         txs = _parse_csv(QuestradeBrokerage, csv)
@@ -1018,23 +1017,23 @@ class TestQuestradeReinvestmentAndCashInLieu(unittest.TestCase):
         buy = _find(txs, symbol='ZZQ.TO', action='BUYSELL')
         self.assertIsNotNone(buy, "the DRIP shares enter inventory")
         self.assertEqual(buy['quantity'], 11)
-        self.assertAlmostEqual(buy['price'], 8.33966)
-        self.assertAlmostEqual(buy['net_amount'], 91.74)
-        self.assertEqual(buy['date_settle'], '2026-09-10')
+        self.assertAlmostEqual(buy['price'], 7.125)
+        self.assertAlmostEqual(buy['net_amount'], 78.38)
+        self.assertEqual(buy['date_settle'], '2026-05-11')
 
     def test_cil_row_disposes_the_fraction_for_the_cash(self):
         csv = QUESTRADE_HEADER + (
-            '2026-07-31 12:00:00 AM,2026-07-31 12:00:00 AM,CIL,XTD.TO,'
-            'TDB SPLIT CORP SHS CL A NEW CASH IN LIEU OF .50000 REC '
-            '07/24/26 PAY 07/29/26 87234Y308000,0,0,0,0,4.56,CAD,'
+            '2026-06-30 12:00:00 AM,2026-06-30 12:00:00 AM,CIL,QSC.TO,'
+            'QUILL SPLIT CORP SHS CL A NEW CASH IN LIEU OF .40000 REC '
+            '06/19/26 PAY 06/26/26 000000Q10000,0,0,0,0,3.10,CAD,'
             '99900001,Corporate actions,API\n'
         )
         txs = _parse_csv(QuestradeBrokerage, csv)
-        legs = [t for t in txs if t.get('symbol') == 'XTD.TO']
-        self.assertEqual([t['quantity'] for t in legs], [0.5, -0.5])
+        legs = [t for t in txs if t.get('symbol') == 'QSC.TO']
+        self.assertEqual([t['quantity'] for t in legs], [0.4, -0.4])
         self.assertAlmostEqual(legs[0]['net_amount'], 0.0)
-        self.assertAlmostEqual(legs[1]['net_amount'], 4.56)
-        self.assertAlmostEqual(legs[1]['price'], 9.12)
+        self.assertAlmostEqual(legs[1]['net_amount'], 3.10)
+        self.assertAlmostEqual(legs[1]['price'], 7.75)
         # Same-day, ordered: the acquisition precedes the sale.
         self.assertLess(legs[0]['time'], legs[1]['time'])
 

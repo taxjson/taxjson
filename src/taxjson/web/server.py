@@ -2,7 +2,18 @@
 of the toolkit works without the [web] extra installed."""
 from __future__ import annotations
 
+import ipaddress
+import secrets
 import sys
+
+
+def is_loopback(host: str) -> bool:
+    if host.strip("[]").lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 def serve(root=".", host: str = "127.0.0.1", port: int = 8765) -> int:
@@ -41,15 +52,23 @@ def serve(root=".", host: str = "127.0.0.1", port: int = 8765) -> int:
     # (warned below) — clients then arrive with Host: <the machine's
     # LAN name/IP>, never "0.0.0.0", so an allowlist of the bind
     # address rejected EVERY network request with 400 (REVIEW #17).
+    # Any non-loopback bind also requires a per-run random token (URL
+    # ?token= once, then an HttpOnly cookie): without it anyone on the
+    # network could read the books (2026-09 security audit).
+    token = None if is_loopback(host) else secrets.token_urlsafe(24)
     if host in ("0.0.0.0", "::", "*"):
-        app = create_app(ctx, allowed_hosts=["*"])
+        app = create_app(ctx, allowed_hosts=["*"], auth_token=token)
     else:
-        app = create_app(ctx, allowed_hosts=[host])
-    if host not in ("127.0.0.1", "localhost", "::1"):
+        app = create_app(ctx, allowed_hosts=[host], auth_token=token)
+    if token:
         print(f"warning: binding to {host} exposes your tax data on the "
-              f"network. Prefer 127.0.0.1 (reach it remotely via a tunnel).",
+              f"network (plain HTTP, token-protected). Prefer 127.0.0.1 "
+              f"and reach it remotely via an SSH tunnel.",
               file=sys.stderr)
-    print(f"taxjson serve → http://{host}:{port}   (project: {ctx.root})",
-          file=sys.stderr)
+        print(f"taxjson serve → http://{host}:{port}/?token={token}   "
+              f"(project: {ctx.root})", file=sys.stderr)
+    else:
+        print(f"taxjson serve → http://{host}:{port}   (project: {ctx.root})",
+              file=sys.stderr)
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0

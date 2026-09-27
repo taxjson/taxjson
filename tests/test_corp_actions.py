@@ -42,17 +42,17 @@ def _write_csv(content: str) -> Path:
     return Path(f.name)
 
 
-# The 2026 Honeywell separation: one old HON share exchanged for shares
-# of TWO successors (new HON "-WI" + HONA aerospace) in a single
+# A split-up / separation: one old XYZ share exchanged for shares of
+# TWO successors (new XYZ "-WI" + XYZA aerospace) in a single
 # Merged(Acquisition) description with a comma-separated WITH clause.
 # The single-target regex can't parse it, and dropping it left a
-# phantom short in HONA and a phantom long in HON (seen on a real IB
-# RRSP export, 2026-07).
-_HON_SPLITUP_CSV = '''\
+# phantom short in XYZA and a phantom long in XYZ. Synthetic tickers,
+# ISINs and values; the row layout is IB's.
+_SPLITUP_CSV = '''\
 Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
-Corporate Actions,Data,Stocks,USD,2026-06-29,"2026-06-26, 20:25:00","HON(US4385161066) Merged(Acquisition) WITH HONAV 1 for 2, US4385162056 1 for 2 (20260626175508HON, HONEYWELL INTERNATIONAL INC, US4385161066)",-15,0,-3483.15,0,
-Corporate Actions,Data,Stocks,USD,2026-06-29,"2026-06-26, 20:25:00","HON(US4385161066) Merged(Acquisition) WITH HONAV 1 for 2, US4385162056 1 for 2 (HON, HONEYWELL INTERNATIONAL -WI, US4385162056)",7.5,0,1708.5,0,
-Corporate Actions,Data,Stocks,USD,2026-06-29,"2026-06-26, 20:25:00","HON(US4385161066) Merged(Acquisition) WITH HONAV 1 for 2, US4385162056 1 for 2 (HONA, HONEYWELL AEROSPACE, US43849R1059)",7.5,0,1651.425,0,
+Corporate Actions,Data,Stocks,USD,2026-05-15,"2026-05-14, 20:25:00","XYZ(US0000000101) Merged(Acquisition) WITH XYZAV 1 for 2, US0000000102 1 for 2 (20260514173000XYZ, XYZ HOLDINGS INC, US0000000101)",-20,0,-4210.0,0,
+Corporate Actions,Data,Stocks,USD,2026-05-15,"2026-05-14, 20:25:00","XYZ(US0000000101) Merged(Acquisition) WITH XYZAV 1 for 2, US0000000102 1 for 2 (XYZ, XYZ HOLDINGS INC -WI, US0000000102)",10,0,2240.0,0,
+Corporate Actions,Data,Stocks,USD,2026-05-15,"2026-05-14, 20:25:00","XYZ(US0000000101) Merged(Acquisition) WITH XYZAV 1 for 2, US0000000102 1 for 2 (XYZA, XYZ AEROSPACE, US0000000103)",10,0,1970.0,0,
 '''
 
 
@@ -108,7 +108,7 @@ class TestIBSplitUp(unittest.TestCase):
     successor, so the rules layer needs no new event types."""
 
     def _events(self):
-        return parse_ib_corporate_actions(_write_csv(_HON_SPLITUP_CSV),
+        return parse_ib_corporate_actions(_write_csv(_SPLITUP_CSV),
                                           account='rrsp')
 
     def test_decomposes_into_merger_plus_spinoff(self):
@@ -118,20 +118,20 @@ class TestIBSplitUp(unittest.TestCase):
         merger = next(e for e in events if e.action_type == 'merger')
         spin = next(e for e in events if e.action_type == 'spinoff')
         # Continuing entity: the in-leg whose ticker matches the source.
-        self.assertEqual(merger.source_symbol, 'HON.US')
-        self.assertEqual(merger.target_symbol, 'HON.US')
-        self.assertEqual(merger.source_isin, 'US4385161066')
-        self.assertEqual(merger.target_isin, 'US4385162056')
-        self.assertEqual(merger.qty_disposed, 15.0)
-        self.assertEqual(merger.qty_received, 7.5)
-        self.assertAlmostEqual(merger.fmv, 3483.15)
-        self.assertAlmostEqual(merger.target_fmv, 1708.5)
+        self.assertEqual(merger.source_symbol, 'XYZ.US')
+        self.assertEqual(merger.target_symbol, 'XYZ.US')
+        self.assertEqual(merger.source_isin, 'US0000000101')
+        self.assertEqual(merger.target_isin, 'US0000000102')
+        self.assertEqual(merger.qty_disposed, 20.0)
+        self.assertEqual(merger.qty_received, 10.0)
+        self.assertAlmostEqual(merger.fmv, 4210.0)
+        self.assertAlmostEqual(merger.target_fmv, 2240.0)
         # The extra successor spins off FROM the continuing entity.
-        self.assertEqual(spin.source_symbol, 'HON.US')
-        self.assertEqual(spin.target_symbol, 'HONA.US')
-        self.assertEqual(spin.target_isin, 'US43849R1059')
-        self.assertEqual(spin.qty_received, 7.5)
-        self.assertAlmostEqual(spin.fmv, 1651.425)
+        self.assertEqual(spin.source_symbol, 'XYZ.US')
+        self.assertEqual(spin.target_symbol, 'XYZA.US')
+        self.assertEqual(spin.target_isin, 'US0000000103')
+        self.assertEqual(spin.qty_received, 10.0)
+        self.assertAlmostEqual(spin.fmv, 1970.0)
         # Spinoff rows must sort after the merger rename.
         self.assertGreater(spin.time, merger.time)
 
@@ -144,7 +144,7 @@ class TestIBSplitUp(unittest.TestCase):
     def test_half_event_not_emitted(self):
         # Only the out-leg present (statement split): emit nothing
         # rather than half an exchange.
-        lines = _HON_SPLITUP_CSV.strip().splitlines()
+        lines = _SPLITUP_CSV.strip().splitlines()
         path = _write_csv("\n".join(lines[:2]) + "\n")
         self.assertEqual(parse_ib_corporate_actions(path), [])
 
@@ -503,7 +503,7 @@ class TestManifest(unittest.TestCase):
 # Questrade — DIS rows for spinoffs (warrant→rights conversion bookkeeping)
 # ============================================================================
 
-# Mirrors a real Questrade LIRA export pattern: three DIS rows that net to +100 of
+# Mirrors the Questrade export pattern for a warrant spinoff: three DIS rows that net to +100 of
 # a Questrade-internal warrant code (D056068) spun off from DFDV parent
 # (parent reference J070589, Questrade's internal code for DEFI DEV CORP).
 # The Buy row is how the parent's TICKER is known: the DIS rows name it
@@ -788,7 +788,7 @@ if __name__ == '__main__':
 
 
 class TestQuestradeSpinoffChainGrouping(unittest.TestCase):
-    """Real DFDVW case (2026-08-24): Questrade books a warrant
+    """Warrant-distribution chain: Questrade books a warrant
     distribution as a symbol-less placeholder (+100), a reversal under
     the real symbol (-100), and the actual delivery (+100). Grouping
     by symbol split the chain — an event with an EMPTY target symbol

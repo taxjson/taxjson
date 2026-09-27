@@ -37,3 +37,15 @@ taxjson.toml
 *.tt
 tmp*/
 .ci/
+
+# Outputs of a run inside the dev clone (taxjson run / filing-kit /
+# form-export / checklist) — keep them out of the index so a test run
+# against real books can never be staged. Anchored at the repo root.
+/work/
+/filed/
+/export/
+/checklist.json
+*.xlsx
+*.xls
+*.pdf
+!/docs/deck/taxjson-deck.pdf

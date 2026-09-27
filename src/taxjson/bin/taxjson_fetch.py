@@ -123,13 +123,38 @@ def qt_refresh(refresh_token: str,
         raise RuntimeError(
             f"Questrade login returned a non-HTTPS api_server "
             f"({_api!r}); refusing to send the access token over it.")
+    if not qt_api_server_ok(_api):
+        raise RuntimeError(
+            f"Questrade login returned an api_server outside "
+            f"questrade.com ({_api!r}); refusing to send the access "
+            f"token to it.")
     return {"api_server": _api,
             "access_token": str(doc["access_token"]),
             "refresh_token": str(doc["refresh_token"])}
 
 
+def qt_api_server_ok(url: str) -> bool:
+    """The bearer token may only go to https://*.questrade.com (default
+    port, no userinfo) — the login response names the server, so a
+    tampered or spoofed response must not be able to redirect the
+    token anywhere else."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        port = u.port
+    except ValueError:
+        return False
+    host = (u.hostname or "").lower().rstrip(".")
+    return (u.scheme.lower() == "https" and not u.username
+            and not u.password and port in (None, 443)
+            and (host == "questrade.com" or host.endswith(".questrade.com")))
+
+
 def _qt_get(api_server: str, access_token: str, path: str,
             http_get: Callable[[str], bytes]) -> Any:
+    if not qt_api_server_ok(api_server):
+        raise RuntimeError(
+            f"refusing to send the Questrade access token to "
+            f"{api_server!r} (not https://*.questrade.com)")
     url = api_server.rstrip("/") + path
     def _authed(u: str) -> bytes:
         req = urllib.request.Request(
@@ -322,13 +347,14 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
         for p in positions
         if str(p.get("symbol") or "").endswith(".TO")) | frozenset(
             extra_to_roots)
+    q = toml_str
     lines = ["# Live Questrade holdings snapshot — taxjson fetch/verify.",
              "# Regenerated on every fetch; do not hand-edit.",
              "[meta]",
-             f'account = "{account}"',
-             f'broker_account = "{number}"',
-             f'source = "questrade-api"',
-             f'generated_at = "{generated_at}"',
+             f"account = {q(account)}",
+             f"broker_account = {q(number)}",
+             'source = "questrade-api"',
+             f"generated_at = {q(generated_at)}",
              f"holdings_count = "
              f"{sum(1 for p in positions if p.get('openQuantity'))}"]
     for p2 in sorted(positions,
@@ -338,7 +364,7 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
             continue
         sym = qt_position_symbol(str(p2.get("symbol") or ""), to_roots)
         lines += ["", "[[holding]]",
-                  f'symbol = "{sym}"',
+                  f"symbol = {q(sym)}",
                   f"quantity = {qty!r}"]
         aep = p2.get("averageEntryPrice")
         if aep is not None:
@@ -347,6 +373,59 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
         if cmv is not None:
             lines.append(f"market_value = {float(cmv)!r}")
     return "\n".join(lines) + "\n"
+
+
+def toml_str(value: Any) -> str:
+    """A TOML basic string: quotes, backslashes and every control
+    character (incl. DEL) escaped — a broker-supplied symbol holding a
+    quote and a newline must not be able to inject keys or tables."""
+    out = []
+    for ch in str(value):
+        if ch == '"':
+            out.append('\\"')
+        elif ch == "\\":
+            out.append("\\\\")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def write_private(path: Any, text: str) -> None:
+    """Write a fetched statement / snapshot atomically (.part + rename)
+    as 0600 inside a 0700 directory. mkdir(mode=) does not tighten a
+    directory that already exists, so the chmod is explicit; the .part
+    is created fresh (O_EXCL, never through a symlink)."""
+    import os
+    from pathlib import Path as _P
+    path = _P(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    tmp = path.with_name(path.name + ".part")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def activity_type_counts(activities: List[Dict[str, Any]]) -> Dict[str, int]:

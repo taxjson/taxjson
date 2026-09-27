@@ -263,13 +263,13 @@ class TestIbTier4(unittest.TestCase):
         csv_text = (
             'Corporate Actions,Header,Asset Category,Currency,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code\n'
             'Corporate Actions,Data,Stocks,USD,"2026-03-02, 20:25:00",'
-            '"GRTS(US40638K1016) Split 1 for 10 (GRTS, GRITSTONE BIO INC, US40638K1016)",-90,0,0,0,\n'
+            '"RVSX(US0000000403) Split 1 for 10 (RVSX, REVERSE BIO INC, US0000000403)",-120,0,0,0,\n'
             'Corporate Actions,Data,Stocks,USD,"2026-03-02, 20:25:00",'
-            '"GRTS(US40638K1016) Split 1 for 10 (GRTS, GRITSTONE BIO INC, US40638K1016)",9,0,0,0,\n'
+            '"RVSX(US0000000403) Split 1 for 10 (RVSX, REVERSE BIO INC, US0000000403)",12,0,0,0,\n'
         )
         txs = _parse_ib(csv_text)
         splits = [t for t in txs if t["action"] == "SPLIT"
-                  and t["symbol"].startswith("GRTS")]
+                  and t["symbol"].startswith("RVSX")]
         self.assertEqual(len(splits), 1,
                          "paired reverse-split legs must yield ONE SPLIT")
         self.assertAlmostEqual(splits[0]["quantity"], 0.1, places=9)
@@ -359,26 +359,26 @@ class TestKrakenIgnoredRowsWarn(unittest.TestCase):
 
 
 class TestIbSplitBrokerRounding(unittest.TestCase):
-    """IB books fractional split results to 4 dp: 5,000 shares 1-for-3
-    becomes 1666.6667, not 5000/3. The text ratio left the pool at the
+    """IB books fractional split results to 4 dp: 4,000 shares 1-for-3
+    becomes 1333.3333, not 4000/3. The text ratio left the pool at the
     exact-math quantity, so selling the broker's full position showed
-    -0.0000333 phantom dust (real AAUC.TO case)."""
+    phantom dust."""
 
     def test_ratio_snaps_to_broker_leg_quantities(self):
         csv_text = (
             'Corporate Actions,Header,Asset Category,Currency,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code\n'
-            'Corporate Actions,Data,Stocks,CAD,"2025-05-21, 20:25:00",'
-            '"AAUC(CA01921D1050) Split 1 for 3 (AAUC, ALLIED GOLD CORP, CA01921D2041)",1666.6667,0,0,0,\n'
-            'Corporate Actions,Data,Stocks,CAD,"2025-05-21, 20:25:00",'
-            '"AAUC(CA01921D1050) Split 1 for 3 (AAUC.OLD, ALLIED GOLD CORP, CA01921D1050)",-5000,0,0,0,\n'
+            'Corporate Actions,Data,Stocks,CAD,"2025-04-08, 20:25:00",'
+            '"AUX(CA0000000404) Split 1 for 3 (AUX, AURIX GOLD CORP, CA0000000405)",1333.3333,0,0,0,\n'
+            'Corporate Actions,Data,Stocks,CAD,"2025-04-08, 20:25:00",'
+            '"AUX(CA0000000404) Split 1 for 3 (AUX.OLD, AURIX GOLD CORP, CA0000000404)",-4000,0,0,0,\n'
         )
         txs = _parse_ib(csv_text)
         splits = [t for t in txs if t["action"] == "SPLIT"]
         self.assertEqual(len(splits), 1)
-        # 1666.6667/5000, NOT 1/3: 5000 shares must land on exactly
-        # the broker's 1666.6667.
-        self.assertEqual(splits[0]["quantity"], 1666.6667 / 5000)
-        self.assertAlmostEqual(5000 * splits[0]["quantity"], 1666.6667,
+        # 1333.3333/4000, NOT 1/3: 4000 shares must land on exactly
+        # the broker's 1333.3333.
+        self.assertEqual(splits[0]["quantity"], 1333.3333 / 4000)
+        self.assertAlmostEqual(4000 * splits[0]["quantity"], 1333.3333,
                                places=10)
 
     def test_single_leg_keeps_text_ratio(self):
@@ -387,7 +387,7 @@ class TestIbSplitBrokerRounding(unittest.TestCase):
         csv_text = (
             'Corporate Actions,Header,Asset Category,Currency,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code\n'
             'Corporate Actions,Data,Stocks,USD,"2026-03-02, 20:25:00",'
-            '"GRTS(US40638K1016) Split 1 for 10 (GRTS, GRITSTONE BIO INC, US40638K1016)",-90,0,0,0,\n'
+            '"RVSX(US0000000403) Split 1 for 10 (RVSX, REVERSE BIO INC, US0000000403)",-120,0,0,0,\n'
         )
         txs = _parse_ib(csv_text)
         splits = [t for t in txs if t["action"] == "SPLIT"]
