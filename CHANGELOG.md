@@ -227,8 +227,8 @@ fixed:
 - IB parser: a `Ca` (cancellation) row in the Transfers section
   consumes its original leg (same symbol, date, opposite quantity,
   same type). IB lists a reversed ACATS/ATON leg as original + Ca +
-  rebooked rows; a real RRSP move (IB -> Questrade) carried MDA five
-  times — arithmetically -383, but the two Ca legs read as +383
+  rebooked rows; an RRSP move (IB -> Questrade) could carry one
+  symbol five times — arithmetically -N, but the two Ca legs read as +N
   ACQUISITIONS to the superficial-loss walk and littered `taxjson
   events`/`transfers`. A Ca whose original sits in an earlier
   statement is kept as a reversing leg with a note.
@@ -358,7 +358,7 @@ git HISTORY still holds real account numbers and disclosing commit
 messages — see the release checklist: squash before going public.
 
 - Questrade DRIP (`REI` / "Dividend reinvestment") rows are booked as
-  purchases at the reinvestment price (`REINV@C$8.33966` in the
+  purchases at the reinvestment price (`REINV@C$7.12500` in the
   description; Price column is 0) — the DRIP shares never entered
   inventory before (counted skip). The cash dividend keeps its own
   Dividends row. Questrade `CIL` (cash in lieu of a fractional
@@ -1297,8 +1297,8 @@ called out below. 1,903 tests.
 - Dividends: a DERIVED per-share rate (broker states only the cash
   and the share count) snaps to the fewest decimals that still
   explain the paid amount to the cent. Back-computing manufactured
-  spurious precision — 37 shares paid $20.54 showed 0.55513514 for a
-  dividend declared at 0.555, disagreeing with the same payment in
+  spurious precision — 43 shares paid $17.85 showed 0.41511628 for a
+  dividend declared at 0.415, disagreeing with the same payment in
   another account whose statement states the rate. Genuinely
   fine-grained rates (0.3728) survive; stated rates are untouched;
   cash amounts never move.

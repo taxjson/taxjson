@@ -40,7 +40,7 @@ def _run(root, *args):
 
 
 class TestAsOfShelteredAndDerivatives(unittest.TestCase):
-    """Regression (real-data report): sheltered accounts hold TRANSFER
+    """Regression: sheltered accounts hold TRANSFER
     rows (legal there) — --taxable must not be passed for them; and
     work/ derivative files (lira_raw_base.json) must never masquerade
     as accounts."""

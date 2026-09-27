@@ -4,12 +4,12 @@ dual-listed name held on a non-domicile exchange, orphaning the income onto a
 phantom symbol. `_reattribute_income_to_holdings` binds each income row to the
 listing actually held for its ticker in the same statement.
 
-Cases pinned here (all observed in real IB data):
-  * B2Gold on the TSX (BTO.TO, CAD lots) pays SOME dividends in USD — the
-    suffix must stay .TO (currency alone would wrongly say .US).
-  * B2Gold on the NYSE (BTG.US) has its dividend stamped BTG.TO by the ISIN
-    ('CA...') — must be corrected to BTG.US.
-  * Seagate (Irish domicile, ISIN 'IE...') held as STX.US has its dividend and
+Cases pinned here (synthetic tickers of the shapes IB produces):
+  * A Canadian issuer on the TSX (GLT.TO, CAD lots) pays SOME dividends in
+    USD — the suffix must stay .TO (currency alone would wrongly say .US).
+  * The same issuer on the NYSE (GLN.US) has its dividend stamped GLN.TO by
+    the ISIN ('CA...') — must be corrected to GLN.US.
+  * An Irish-domiciled name (ISIN 'IE...') held as STX.US has its dividend and
     withholding tax stamped .L — must be corrected to STX.US.
 """
 import os
@@ -60,23 +60,23 @@ def _income_symbols(txs, root):
 
 class TestIbIncomeReattribution(unittest.TestCase):
     def test_tsx_holding_usd_dividend_stays_TO(self):
-        # BTO.TO held on the TSX; B2Gold pays this dividend in USD. The suffix
+        # GLT.TO held on the TSX; the issuer pays this dividend in USD. The suffix
         # must follow the holding (.TO), NOT the payment currency (.US).
-        csv = (_TRADES_HDR + _trade('CAD', 'BTO')
+        csv = (_TRADES_HDR + _trade('CAD', 'GLT')
                + _DIV_HDR
-               + _div('USD', 'BTO(CA11777Q2099) Cash Dividend USD 0.02 per Share'
-                             ' (Ordinary Dividend)', '200'))
+               + _div('USD', 'GLT(CA0000000501) Cash Dividend USD 0.03 per Share'
+                             ' (Ordinary Dividend)', '150'))
         txs = _parse(csv)
-        self.assertEqual(_income_symbols(txs, 'BTO'), {('DIVIDEND', 'BTO.TO')})
+        self.assertEqual(_income_symbols(txs, 'GLT'), {('DIVIDEND', 'GLT.TO')})
 
     def test_nyse_holding_dividend_isin_TO_corrected_to_US(self):
-        # BTG.US held on the NYSE; ISIN 'CA...' would stamp the dividend BTG.TO.
-        csv = (_TRADES_HDR + _trade('USD', 'BTG')
+        # GLN.US held on the NYSE; ISIN 'CA...' would stamp the dividend GLN.TO.
+        csv = (_TRADES_HDR + _trade('USD', 'GLN')
                + _DIV_HDR
-               + _div('USD', 'BTG(CA11777Q2099) Cash Dividend USD 0.02 per Share'
-                             ' (Ordinary Dividend)', '80'))
+               + _div('USD', 'GLN(CA0000000501) Cash Dividend USD 0.03 per Share'
+                             ' (Ordinary Dividend)', '60'))
         txs = _parse(csv)
-        self.assertEqual(_income_symbols(txs, 'BTG'), {('DIVIDEND', 'BTG.US')})
+        self.assertEqual(_income_symbols(txs, 'GLN'), {('DIVIDEND', 'GLN.US')})
 
     def test_irish_domicile_dividend_and_tax_L_corrected_to_US(self):
         # STX.US held; ISIN 'IE...' stamps both dividend and tax .L.
@@ -96,10 +96,10 @@ class TestIbIncomeReattribution(unittest.TestCase):
         # A dividend whose position isn't in this statement falls back to the
         # ISIN-derived suffix (dividend↔tax stay paired) — no phantom guess.
         csv = (_DIV_HDR
-               + _div('USD', 'BTG(CA11777Q2099) Cash Dividend USD 0.02 per Share'
-                             ' (Ordinary Dividend)', '80'))
+               + _div('USD', 'GLN(CA0000000501) Cash Dividend USD 0.03 per Share'
+                             ' (Ordinary Dividend)', '60'))
         txs = _parse(csv)
-        self.assertEqual(_income_symbols(txs, 'BTG'), {('DIVIDEND', 'BTG.TO')})
+        self.assertEqual(_income_symbols(txs, 'GLN'), {('DIVIDEND', 'GLN.TO')})
 
 
 if __name__ == '__main__':

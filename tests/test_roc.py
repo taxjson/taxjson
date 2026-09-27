@@ -147,24 +147,24 @@ class TestIbRoc(unittest.TestCase):
         self.assertEqual(len(adjusts), 1)
         self.assertAlmostEqual(adjusts[0]['net_amount'], 24.00, places=2)
 
-    def test_strc_style_split_posting_both_legs_reclassified(self):
-        # Real-data shape: a distribution split between "Cash Dividend ...
+    def test_split_posting_both_legs_reclassified(self):
+        # IB shape: a distribution split between "Cash Dividend ...
         # (Return of Capital)" and "Payment in Lieu of Dividend (Return of
         # Capital)" because part of the position was lent out. IB's ROC
         # marker on BOTH legs means the whole distribution is capital
         # returned — both become ADJUSTs, no income is booked.
         body = (self.DIV_HDR +
-                'Dividends,Data,USD,U1,2026-06-30,'
-                'STRC(US5949728530) Cash Dividend USD 0.958333 per Share '
-                '(Return of Capital),886.46\n'
-                'Dividends,Data,USD,U1,2026-06-30,'
-                'STRC(US5949728530) Payment in Lieu of Dividend '
-                '(Return of Capital),551.04\n')
+                'Dividends,Data,USD,U1,2026-05-29,'
+                'PRFD(US0000000601) Cash Dividend USD 0.916667 per Share '
+                '(Return of Capital),660.00\n'
+                'Dividends,Data,USD,U1,2026-05-29,'
+                'PRFD(US0000000601) Payment in Lieu of Dividend '
+                '(Return of Capital),440.00\n')
         txs = self._parse(body)
         adjusts = [t for t in txs if t['action'] == 'ADJUST']
         self.assertEqual(len(adjusts), 2)
         self.assertAlmostEqual(sum(t['net_amount'] for t in adjusts),
-                               -1437.50, places=2)
+                               -1100.00, places=2)
         self.assertFalse([t for t in txs
                           if t['action'] in ('DIVIDEND',
                                              'DIVIDEND_IN_LIEU')])
@@ -286,13 +286,13 @@ class TestUsEngineRocAdjust(unittest.TestCase):
 
     def test_roc_reduces_basis_before_sale(self):
         res, err = self._run([
-            self._tx(action='BUYSELL', date='2025-01-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
-            self._tx(action='ADJUST', date='2025-06-30', symbol='STRC.US',
+            self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-500.0,
                      type='roc'),
-            self._tx(action='BUYSELL', date='2025-12-01', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-12-01', symbol='PRFD.US',
                      quantity=-100, currency='USD', price=10.0,
                      net_amount=1000.0),
         ])
@@ -329,10 +329,10 @@ class TestUsEngineRocAdjust(unittest.TestCase):
 
     def test_negative_lot_basis_flags_301c3(self):
         _, err = self._run([
-            self._tx(action='BUYSELL', date='2025-01-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
-            self._tx(action='ADJUST', date='2025-06-30', symbol='STRC.US',
+            self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-1200.0,
                      type='roc'),
         ])
@@ -341,13 +341,13 @@ class TestUsEngineRocAdjust(unittest.TestCase):
 
     def test_roc_after_full_exit_warns_and_skips(self):
         res, err = self._run([
-            self._tx(action='BUYSELL', date='2025-01-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
-            self._tx(action='BUYSELL', date='2025-03-10', symbol='STRC.US',
+            self._tx(action='BUYSELL', date='2025-03-10', symbol='PRFD.US',
                      quantity=-100, currency='USD', price=12.0,
                      net_amount=1200.0),
-            self._tx(action='ADJUST', date='2025-06-30', symbol='STRC.US',
+            self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-50.0,
                      type='roc'),
         ])

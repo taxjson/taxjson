@@ -268,8 +268,8 @@ class TestSummaryTotalColumn(unittest.TestCase):
 
 class TestListNegativeFilter(unittest.TestCase):
     """`taxjson list --negative` — only qty < 0 rows (shorts, or missed
-    corporate actions in accounts that can't short, like the real
-    XTD.TO stock-dividend case)."""
+    corporate actions in accounts that can't short, like a missed
+    split-share stock dividend)."""
 
     def _run(self, root, **kw):
         from taxjson.bin.taxjson_run import cmd_positions
@@ -288,9 +288,9 @@ class TestListNegativeFilter(unittest.TestCase):
         inv = [{"symbol": "AAA.TO", "qty": 100, "total_cost": 1000.0,
                 "position_start_date": "2026-01-02"}]
         if negatives:
-            inv.append({"symbol": "XTD.TO", "qty": -208,
-                        "total_cost": -1800.0,
-                        "position_start_date": "2026-08-19"})
+            inv.append({"symbol": "QSC.TO", "qty": -180,
+                        "total_cost": -1332.0,
+                        "position_start_date": "2026-07-20"})
         (work / "resp_gains.json").write_text(json.dumps(
             {"summary": {"year": 2026, "total_gain": 0.0},
              "transactions": [], "inventory": inv, "wash_sales": []}))
@@ -300,7 +300,7 @@ class TestListNegativeFilter(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out = self._run(self._project(td), account=None, negative=True)
         self.assertIn("NEGATIVE POSITIONS", out)
-        self.assertIn("XTD.TO", out)
+        self.assertIn("QSC.TO", out)
         self.assertNotIn("AAA.TO", out)
         self.assertIn("1 position(s)", out)
 
@@ -309,7 +309,7 @@ class TestListNegativeFilter(unittest.TestCase):
             out = self._run(self._project(td), account=None)
         self.assertIn("OPEN POSITIONS", out)
         self.assertIn("AAA.TO", out)
-        self.assertIn("XTD.TO", out)
+        self.assertIn("QSC.TO", out)
 
     def test_no_negatives_says_so(self):
         with tempfile.TemporaryDirectory() as td:
@@ -323,7 +323,7 @@ class TestListNegativeFilter(unittest.TestCase):
                             negative=True, json=True)
         doc = json.loads(out)
         self.assertEqual(doc.get("filter"), "negative")
-        self.assertEqual([r["symbol"] for r in doc["rows"]], ["XTD.TO"])
+        self.assertEqual([r["symbol"] for r in doc["rows"]], ["QSC.TO"])
         self.assertEqual(doc["totals"]["positions"], 1)
 
 

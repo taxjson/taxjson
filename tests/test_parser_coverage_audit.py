@@ -754,37 +754,37 @@ IB_XFER_H = ('Transfers,Header,Asset Category,Currency,Symbol,Date,Type,'
 
 class TestIbTransferCancellations(unittest.TestCase):
     def test_ca_leg_consumes_its_original(self):
-        # Real RRSP move IB -> Questrade: MDA listed Out, Ca, Out, Ca,
-        # Out. Arithmetically -383, but the Ca legs read as +383
-        # acquisitions to the superficial-loss walk. One -383 survives.
+        # An ATON move out of IB: MDX listed Out, Ca, Out, Ca,
+        # Out. Arithmetically -250, but the Ca legs read as +250
+        # acquisitions to the superficial-loss walk. One -250 survives.
         csv = IB_HEAD + IB_XFER_H + (
-            'Transfers,Data,Stocks,USD,MDA,2026-08-28,ATON,Out,--,5,'
-            '-383,--,"-11,627.88",0.00,0.00,\n'
-            'Transfers,Data,Stocks,USD,MDA,2026-08-28,ATON,Out,--,5,'
-            '383,--,"11,627.88",0.00,0.00,Ca\n'
-            'Transfers,Data,Stocks,USD,MDA,2026-09-01,ATON,Out,--,5,'
-            '-383,--,"-11,064.87",0.00,0.00,\n'
-            'Transfers,Data,Stocks,USD,MDA,2026-09-01,ATON,Out,--,5,'
-            '383,--,"11,064.87",0.00,0.00,Ca\n'
-            'Transfers,Data,Stocks,USD,MDA,2026-09-01,ATON,Out,--,5,'
-            '-383,--,"-11,064.87",0.00,0.00,\n'
+            'Transfers,Data,Stocks,USD,MDX,2026-05-20,ATON,Out,--,5,'
+            '-250,--,"-7,412.50",0.00,0.00,\n'
+            'Transfers,Data,Stocks,USD,MDX,2026-05-20,ATON,Out,--,5,'
+            '250,--,"7,412.50",0.00,0.00,Ca\n'
+            'Transfers,Data,Stocks,USD,MDX,2026-05-22,ATON,Out,--,5,'
+            '-250,--,"-7,188.25",0.00,0.00,\n'
+            'Transfers,Data,Stocks,USD,MDX,2026-05-22,ATON,Out,--,5,'
+            '250,--,"7,188.25",0.00,0.00,Ca\n'
+            'Transfers,Data,Stocks,USD,MDX,2026-05-22,ATON,Out,--,5,'
+            '-250,--,"-7,188.25",0.00,0.00,\n'
         )
         parser, txs, _ = _parse(IbBrokerage, csv)
         self.assertEqual([(t["action"], t["date"], t["quantity"])
                           for t in txs],
-                         [("TRANSFER", "2026-09-01", -383.0)])
+                         [("TRANSFER", "2026-05-22", -250.0)])
         self.assertEqual(_unaccounted(parser), 0)
 
     def test_ca_without_original_stays_as_reversing_leg(self):
         # The original sits in an earlier statement: keep the reversal
         # so the two files still net, and say so.
         csv = IB_HEAD + IB_XFER_H + (
-            'Transfers,Data,Stocks,USD,MDA,2026-09-01,ATON,Out,--,5,'
-            '383,--,"11,064.87",0.00,0.00,Ca\n'
+            'Transfers,Data,Stocks,USD,MDX,2026-05-22,ATON,Out,--,5,'
+            '250,--,"7,188.25",0.00,0.00,Ca\n'
         )
         parser, txs, err = _parse(IbBrokerage, csv)
         self.assertEqual([(t["action"], t["quantity"], t["description"])
                           for t in txs],
-                         [("TRANSFER", 383.0, "ATON (Ca)")])
+                         [("TRANSFER", 250.0, "ATON (Ca)")])
         self.assertIn("cancelled", err)
         self.assertEqual(_unaccounted(parser), 0)

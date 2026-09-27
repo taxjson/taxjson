@@ -306,14 +306,14 @@ class TestIbCancellations(unittest.TestCase):
             'Report Date,Date/Time,Description,Quantity,Proceeds,'
             'Value,Realized P/L,Code\n'
             'Corporate Actions,Data,Stocks,USD,2025-06-02,'
-            '"2025-06-01, 20:25:00","WBD(US9344231041) Spinoff  1 for '
-            '10 (VNT, VONTIER CORP, US92917K1043)",10,0,250.0,0,\n'
+            '"2025-06-01, 20:25:00","PARN(US0000000401) Spinoff  1 for '
+            '10 (SPNC, SPINCO CORP, US0000000402)",10,0,250.0,0,\n'
             'Corporate Actions,Data,Stocks,USD,2025-06-03,'
-            '"2025-06-01, 20:25:00","WBD(US9344231041) Spinoff  1 for '
-            '10 (VNT, VONTIER CORP, US92917K1043)",-10,0,-250.0,0,Ca\n'
+            '"2025-06-01, 20:25:00","PARN(US0000000401) Spinoff  1 for '
+            '10 (SPNC, SPINCO CORP, US0000000402)",-10,0,-250.0,0,Ca\n'
             'Corporate Actions,Data,Stocks,USD,2025-06-03,'
-            '"2025-06-01, 20:25:00","WBD(US9344231041) Spinoff  1 for '
-            '10 (VNT, VONTIER CORP, US92917K1043)",10,0,250.0,0,\n')
+            '"2025-06-01, 20:25:00","PARN(US0000000401) Spinoff  1 for '
+            '10 (SPNC, SPINCO CORP, US0000000402)",10,0,250.0,0,\n')
         self.assertEqual(
             sum(1 for t in txs if t['action'] == 'DIVIDEND'), 1)
         self.assertEqual(

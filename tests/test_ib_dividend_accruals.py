@@ -3,8 +3,8 @@
 IB accrues a declared dividend ('Po' code in Change in Dividend Accruals)
 and reverses it ('Re') once the cash posts into the Dividends section.
 A statement downloaded before the cash is booked shows the accrual but
-not the posted dividend — which once surprised a user whose 2025 report
-was missing ~$634 of dividends that only appeared in a later statement.
+not the posted dividend — a report built from it silently misses
+dividends that only appear in a later statement.
 
 The extractor does NOT treat accruals as income (they're estimates, often
 in the account base currency rather than the dividend's native currency,
@@ -40,33 +40,33 @@ _DIV_HEADER = 'Dividends,Header,Currency,Account,Date,Description,Amount\n'
 # An accrual posted (Po) with pay date inside the statement period and
 # never reversed — the surprising case the diagnostic exists for.
 _OPEN_ACCRUAL = _HEADER + _ACCRUAL_HEADER + (
-    'Change in Dividend Accruals,Data,Stocks,CAD,U111,TOU,2025-12-12,'
-    '2025-12-15,2025-12-31,700,0,0,0.5,350,350,Po\n'
+    'Change in Dividend Accruals,Data,Stocks,CAD,U111,OILX,2025-12-12,'
+    '2025-12-15,2025-12-31,600,0,0,0.45,270,270,Po\n'
 )
 
 # Po and matching Re — the dividend was booked; nets to zero.
 _REVERSED_ACCRUAL = _HEADER + _ACCRUAL_HEADER + (
-    'Change in Dividend Accruals,Data,Stocks,CAD,U111,TOU,2025-12-12,'
-    '2025-12-15,2025-12-31,700,0,0,0.5,350,350,Po\n'
-    'Change in Dividend Accruals,Data,Stocks,CAD,U111,TOU,2025-12-31,'
-    '2025-12-15,2025-12-31,700,0,0,0.5,-350,-350,Re\n'
+    'Change in Dividend Accruals,Data,Stocks,CAD,U111,OILX,2025-12-12,'
+    '2025-12-15,2025-12-31,600,0,0,0.45,270,270,Po\n'
+    'Change in Dividend Accruals,Data,Stocks,CAD,U111,OILX,2025-12-31,'
+    '2025-12-15,2025-12-31,600,0,0,0.45,-270,-270,Re\n'
 )
 
 # Open accrual, but the posted Dividends row for the same security and
 # pay date is present in the file — income is already captured.
 _ACCRUAL_WITH_POSTED_DIVIDEND = _HEADER + _DIV_HEADER + (
     'Dividends,Data,CAD,U111,2025-12-31,'
-    'TOU(CA89156V1067) Cash Dividend CAD 0.50 per Share (Ordinary Dividend),350\n'
+    'OILX(CA0000000602) Cash Dividend CAD 0.45 per Share (Ordinary Dividend),270\n'
 ) + _ACCRUAL_HEADER + (
-    'Change in Dividend Accruals,Data,Stocks,CAD,U111,TOU,2025-12-12,'
-    '2025-12-15,2025-12-31,700,0,0,0.5,350,350,Po\n'
+    'Change in Dividend Accruals,Data,Stocks,CAD,U111,OILX,2025-12-12,'
+    '2025-12-15,2025-12-31,600,0,0,0.45,270,270,Po\n'
 )
 
 # Open accrual whose pay date is AFTER the statement period — a normal
 # pending dividend (January income), not a missed one.
 _FUTURE_DATED_ACCRUAL = _HEADER + _ACCRUAL_HEADER + (
-    'Change in Dividend Accruals,Data,Stocks,CAD,U111,ARX,2025-12-20,'
-    '2025-12-31,2026-01-15,1000,0,0,0.63,630,630,Po\n'
+    'Change in Dividend Accruals,Data,Stocks,CAD,U111,GASX,2025-12-20,'
+    '2025-12-31,2026-01-15,800,0,0,0.55,440,440,Po\n'
 )
 
 
@@ -87,7 +87,7 @@ class TestDividendAccrualDiagnostic(unittest.TestCase):
     def test_open_accrual_warns(self):
         txs, stderr = _run(_OPEN_ACCRUAL)
         self.assertIn('accrued but not yet booked', stderr)
-        self.assertIn('TOU', stderr)
+        self.assertIn('OILX', stderr)
         self.assertIn('2025-12-31', stderr)
         # Accruals are never emitted as transactions.
         self.assertEqual(txs, [])
@@ -113,18 +113,18 @@ class TestDividendAccrualDiagnostic(unittest.TestCase):
 # A dividend split between an actual Cash Dividend and a Payment-in-Lieu
 # (shares lent out). The PIL row carries no per-share rate in its own
 # description, but the accrual for the same (symbol, pay date) does.
-# NOTE: the real STRC rows this was modeled on carry a "(Return of
-# Capital)" marker — those now reclassify to ADJUST (ACB reduction) and
-# are pinned in test_roc.py. This fixture drops the marker to keep
+# NOTE: rows of this shape can carry a "(Return of Capital)" marker —
+# those reclassify to ADJUST (ACB reduction) and are pinned in
+# test_roc.py. This fixture drops the marker to keep
 # testing the PIL rate-backfill machinery on income-classified rows.
 _PIL_CASE = _HEADER + _ACCRUAL_HEADER + (
-    'Change in Dividend Accruals,Data,Stocks,USD,U111,STRC,2026-06-12,'
-    '2026-06-15,2026-06-30,1500,0,0,0.958333,1437.5,1437.5,Po\n'
+    'Change in Dividend Accruals,Data,Stocks,USD,U111,PRFD,2026-05-13,'
+    '2026-05-15,2026-05-29,1200,0,0,0.916667,1100,1100,Po\n'
 ) + _DIV_HEADER + (
-    'Dividends,Data,USD,U111,2026-06-30,STRC(US5949728530) Cash Dividend '
-    'USD 0.958333 per Share,886.46\n'
-    'Dividends,Data,USD,U111,2026-06-30,STRC(US5949728530) Payment in Lieu '
-    'of Dividend,551.04\n'
+    'Dividends,Data,USD,U111,2026-05-29,PRFD(US0000000601) Cash Dividend '
+    'USD 0.916667 per Share,660.00\n'
+    'Dividends,Data,USD,U111,2026-05-29,PRFD(US0000000601) Payment in Lieu '
+    'of Dividend,440.00\n'
 )
 
 _PIL_NO_ACCRUAL = _HEADER + _DIV_HEADER + (
@@ -137,37 +137,37 @@ class TestPaymentInLieuReconcile(unittest.TestCase):
     def test_pil_qty_price_backfilled_from_accrual_rate(self):
         txs, _ = _run(_PIL_CASE)
         pil = [t for t in txs if t['action'] == 'DIVIDEND_IN_LIEU'
-               and t['symbol'] == 'STRC.US']
+               and t['symbol'] == 'PRFD.US']
         self.assertEqual(len(pil), 1)
-        self.assertAlmostEqual(pil[0]['price'], 0.958333, places=6)
-        # Snapped to the true share count (551.04 is 575 x 0.958333
-        # within cent rounding) — was pinned to the raw 574.9985.
-        self.assertEqual(pil[0]['quantity'], 575.0)
-        self.assertAlmostEqual(pil[0]['net_amount'], 551.04, places=2)  # income unchanged
+        self.assertAlmostEqual(pil[0]['price'], 0.916667, places=6)
+        # Snapped to the true share count (440.00 is 480 x 0.916667
+        # within cent rounding) — not the raw 479.99983.
+        self.assertEqual(pil[0]['quantity'], 480.0)
+        self.assertAlmostEqual(pil[0]['net_amount'], 440.00, places=2)  # income unchanged
         # Regular cash dividend still parsed from its own description, and the
         # two share counts sum to the accrual's 1500 shares.
         div = [t for t in txs if t['action'] == 'DIVIDEND'
-               and t['symbol'] == 'STRC.US'][0]
-        self.assertAlmostEqual(div['quantity'] + pil[0]['quantity'], 1500.0, places=2)
+               and t['symbol'] == 'PRFD.US'][0]
+        self.assertAlmostEqual(div['quantity'] + pil[0]['quantity'], 1200.0, places=2)
 
     def test_pil_dotted_ticker_backfill(self):
-        # A dotted ticker (preferred share "FTN PR A" → symbol FTN.PR.A.TO):
-        # the accrual is keyed on "FTN.PR.A" and the emitted symbol strips only
+        # A dotted ticker (preferred share "PFX PR A" → symbol PFX.PR.A.TO):
+        # the accrual is keyed on "PFX.PR.A" and the emitted symbol strips only
         # the exchange ext, so they must still match for the back-fill.
-        # Real IB format uses a dotted ticker (FTN.PR.A), CA ISIN → .TO ext.
+        # IB's format uses a dotted ticker (PFX.PR.A), CA ISIN → .TO ext.
         content = _HEADER + _ACCRUAL_HEADER + (
-            'Change in Dividend Accruals,Data,Stocks,CAD,U111,FTN.PR.A,'
-            '2025-10-01,2025-10-05,2025-10-10,1000,0,0,0.06,60,60,Po\n'
+            'Change in Dividend Accruals,Data,Stocks,CAD,U111,PFX.PR.A,'
+            '2025-09-02,2025-09-05,2025-09-15,800,0,0,0.0625,50,50,Po\n'
         ) + _DIV_HEADER + (
-            'Dividends,Data,CAD,U111,2025-10-10,FTN.PR.A(CA3175041084) '
-            'Payment in Lieu of Dividend (Ordinary Dividend),36.00\n'
+            'Dividends,Data,CAD,U111,2025-09-15,PFX.PR.A(CA0000000603) '
+            'Payment in Lieu of Dividend (Ordinary Dividend),25.00\n'
         )
         txs, _ = _run(content)
         pil = [t for t in txs if t['action'] == 'DIVIDEND_IN_LIEU'
-               and t['symbol'] == 'FTN.PR.A.TO']
+               and t['symbol'] == 'PFX.PR.A.TO']
         self.assertEqual(len(pil), 1)
-        self.assertAlmostEqual(pil[0]['price'], 0.06, places=6)
-        self.assertAlmostEqual(pil[0]['quantity'], 36.0 / 0.06, places=2)  # 600
+        self.assertAlmostEqual(pil[0]['price'], 0.0625, places=6)
+        self.assertAlmostEqual(pil[0]['quantity'], 25.0 / 0.0625, places=2)  # 400
 
     def test_pil_without_accrual_stays_zero(self):
         txs, _ = _run(_PIL_NO_ACCRUAL)

@@ -260,7 +260,7 @@ class TestHoldingsTomlPositionStart(unittest.TestCase):
 
     def test_emits_bare_toml_date(self):
         doc, stdout = self._export([
-            {'symbol': 'AAPL.US', 'qty': 35.0, 'total_cost': 6793.45,
+            {'symbol': 'AAPL.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD', 'position_start_date': '2024-01-15'},
         ])
         h = doc['holding'][0]
@@ -271,7 +271,7 @@ class TestHoldingsTomlPositionStart(unittest.TestCase):
 
     def test_omits_field_when_missing(self):
         doc, stdout = self._export([
-            {'symbol': 'AAPL.US', 'qty': 35.0, 'total_cost': 6793.45,
+            {'symbol': 'AAPL.US', 'qty': 40.0, 'total_cost': 7200.0,
              'currency': 'USD'},
         ])
         h = doc['holding'][0]

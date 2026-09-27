@@ -83,8 +83,8 @@ class TestWebullFindHeader(unittest.TestCase):
 class TestWebullParser(unittest.TestCase):
     """Webull CSV has a multi-line preamble, currency in column 0, and a
     proceeds column that shifted between 2024 and 2025 formats. The parser
-    should back-compute fees that aren't broken out — that's the fix that
-    recovered thousands of dollars of missing fees on a real export."""
+    should back-compute fees that aren't broken out — without that, every
+    option trade's fee silently went missing."""
 
     def _parse(self, content):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
@@ -99,16 +99,16 @@ class TestWebullParser(unittest.TestCase):
     _CSV_2024 = (
         '"Currency","Date","Action Code","Symbol","Security Description",'
         '"Type Code","Quantity","Price","Proceeds"\n'
-        'USD,25-11-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,10,1.60,"(1,609.92)"\n'
-        'USD,15-12-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,2.50,"2490.00"\n'
+        'USD,18-11-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,10,1.45,"(1,459.92)"\n'
+        'USD,09-12-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,2.30,"2290.00"\n'
     )
 
     # 2025 format: empty column 8, proceeds in column 9.
     _CSV_2025 = (
         '"Currency","Date","Action Code","Symbol","Security Description",'
         '"Type Code","Quantity","Price","_","Proceeds"\n'
-        'USD,25-11-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,10,1.60,,"(1,609.92)"\n'
-        'USD,15-12-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,2.50,,"2490.00"\n'
+        'USD,18-11-2024,BUY,@ABBV,CALL ABBV01/17/25 190,OPC,10,1.45,,"(1,459.92)"\n'
+        'USD,09-12-2024,SELL,@ABBV,CALL ABBV01/17/25 190,OPC,10,2.30,,"2290.00"\n'
     )
 
     def test_option_symbol_reconstruction(self):
@@ -132,19 +132,19 @@ class TestWebullParser(unittest.TestCase):
 
     def test_2024_format_proceeds_column_8(self):
         txs = self._parse(self._CSV_2024)
-        # |Buy net| ≈ 1609.92; |Sell net| ≈ 2490
-        self.assertAlmostEqual(txs[0]['net_amount'], 1609.92, places=2)
-        self.assertAlmostEqual(txs[1]['net_amount'], 2490.00, places=2)
+        # |Buy net| ≈ 1459.92; |Sell net| ≈ 2290
+        self.assertAlmostEqual(txs[0]['net_amount'], 1459.92, places=2)
+        self.assertAlmostEqual(txs[1]['net_amount'], 2290.00, places=2)
 
     def test_2025_format_proceeds_column_9(self):
         txs = self._parse(self._CSV_2025)
-        self.assertAlmostEqual(txs[0]['net_amount'], 1609.92, places=2)
-        self.assertAlmostEqual(txs[1]['net_amount'], 2490.00, places=2)
+        self.assertAlmostEqual(txs[0]['net_amount'], 1459.92, places=2)
+        self.assertAlmostEqual(txs[1]['net_amount'], 2290.00, places=2)
 
     def test_option_fee_back_compute(self):
         """For an option, theoretical_gross = qty × price × 100.
-        Buy 10 @ $1.60: theoretical = 1600; net = 1609.92 → implicit fee $9.92.
-        Sell 10 @ $2.50: theoretical = 2500; net = 2490 → implicit fee $10.00.
+        Buy 10 @ $1.45: theoretical = 1450; net = 1459.92 → implicit fee $9.92.
+        Sell 10 @ $2.30: theoretical = 2300; net = 2290 → implicit fee $10.00.
         """
         txs = self._parse(self._CSV_2024)
         buy_fee = float(txs[0].get('fee', 0))
@@ -365,28 +365,28 @@ class TestQuestradeParser(unittest.TestCase):
 
     def test_dividend_internal_code_resolved_via_trade_description(self):
         """Questrade sometimes emits dividends with internal codes like
-        'S032771' instead of the real ticker. The parser resolves them
+        'N041552' instead of the real ticker. The parser resolves them
         by matching the dividend's cleaned description against trade
         rows in the same CSV (after stripping the row-type-specific
-        noise). The SSL/SANDSTORM case from real RESP data."""
+        noise). Synthetic NWG/NORTHWIND values."""
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
             'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
             'Account #,Activity Type,Account Type\n'
-            # Trade row establishes the desc → SSL mapping.
-            '2025-09-30 12:00:00 AM,2025-10-01 12:00:00 AM,Sell,SSL.TO,'
-            'SANDSTORM GOLD LTD COM WE ACTED AS AGENT,-1,17.39,17.39,0,17.39,'
+            # Trade row establishes the desc → NWG mapping.
+            '2025-06-13 12:00:00 AM,2025-06-16 12:00:00 AM,Sell,NWG.TO,'
+            'NORTHWIND GOLD LTD COM WE ACTED AS AGENT,-3,12.47,37.41,0,37.41,'
             'CAD,12345,Trades,Individual\n'
-            # Dividend row with internal code — should resolve to SSL.TO.
-            '2025-10-07 12:00:00 AM,2025-10-07 12:00:00 AM,DIV,S032771,'
-            'SANDSTORM GOLD LTD COM CASH DIV ON 1 SHS REC 09/26/25 PAY 10/07/25,'
-            '0,0,0,0,0.02,CAD,12345,Dividends,Individual\n'
+            # Dividend row with internal code — should resolve to NWG.TO.
+            '2025-07-02 12:00:00 AM,2025-07-02 12:00:00 AM,DIV,N041552,'
+            'NORTHWIND GOLD LTD COM CASH DIV ON 3 SHS REC 06/20/25 PAY 07/02/25,'
+            '0,0,0,0,0.06,CAD,12345,Dividends,Individual\n'
         )
         txs = self._parse(csv)
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertEqual(len(divs), 1)
-        # Resolved back to SSL.TO instead of leaking 'S032771'.
-        self.assertEqual(divs[0]['symbol'], 'SSL.TO')
+        # Resolved back to NWG.TO instead of leaking 'N041552'.
+        self.assertEqual(divs[0]['symbol'], 'NWG.TO')
 
     def test_dividend_internal_code_unresolved_when_no_trade(self):
         """If no matching trade row exists in the CSV, the internal code
