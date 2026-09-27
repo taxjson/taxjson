@@ -44,5 +44,22 @@ class TestRbc2022Export(unittest.TestCase):
         self.assertNotIn("BUYSELL", {r["action"] for r in pey})
 
 
+class TestRbcSellBelowCommission(unittest.TestCase):
+    def test_negative_value_sell_keeps_its_sign(self):
+        # Closing a worthless option at $0.01: gross 1.00, commission
+        # 10.95 -> RBC Value -9.95. The proceeds are negative; abs() used
+        # to book +9.95 and understate the loss by 19.90.
+        csv = ("Date,Activity,Symbol,Symbol Description,Quantity,Price,Settlement Date,Account,Value,Currency,Description\n"
+               "12/15/2025,Sell,ZZQ,,-1,0.01,16-Dec-25,55500001,-9.95,USD,"  # pii-ok: synthetic id
+               "CALL ZZQ    06/20/26    50 ZZQ CORP UNSOLICITED CA CLOSE CONTRACT\n")
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "rbc.csv"
+            f.write_text(csv)
+            rows = [r for r in RbcBrokerage().parse_file(f) if r["action"] == "BUYSELL"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["quantity"], -1.0)
+        self.assertAlmostEqual(rows[0]["net_amount"], -9.95)
+
+
 if __name__ == "__main__":
     unittest.main()

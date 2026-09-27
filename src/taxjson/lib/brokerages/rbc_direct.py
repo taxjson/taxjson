@@ -392,7 +392,11 @@ class RbcBrokerage(BaseBrokerage):
             'currency': currency,
             'price': price,
             'fee': fee,
-            'net_amount': abs(net),
+            # RBC's Value is signed cash flow: a sell is normally positive,
+            # but a sell whose commission exceeds its gross (closing a
+            # worthless option at $0.01) is NEGATIVE, and the engine books
+            # it as negative proceeds. abs() turned that loss into a gain.
+            'net_amount': net if qty < 0 else abs(net),
             'gross_amount': self.theoretical_gross(qty, price, is_option=is_option_symbol),
             'account': self.DEFAULT_ACCOUNT,
             # Carry the security description so downstream tools (e.g. a
