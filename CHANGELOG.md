@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Superficial loss: a trigger's side of the loss follows the pool's
+  own ordering.** A rebuy that settles on the loss sale's settlement
+  date but traded the day before (a later clock time) is in the pool
+  the sale draws from; it was treated as bought after the loss, its
+  basis bump landed before the sale and inflated the loss it deferred
+  (-1,000 / 250 denied instead of -800 / 200), and some short-cover
+  books never converged. Pre/post-loss is now decided by the phase
+  ladder the pool replays with.
 - **Negative proceeds (Canada).** A sell whose commission exceeds its
   gross — closing a worthless option at $0.01, writing one for less
   than the fee — now books its proceeds signed (negative) instead of

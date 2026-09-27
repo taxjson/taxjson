@@ -975,6 +975,10 @@ class CanadaTaxRules(TaxRules):
         _grant_mode = (str(option_premium_timing or 'close').lower() == 'grant')
         _lot_seq = [0]
 
+        def _ev_key(t):
+            return event_sort_key(t, profile='ca_main',
+                                  date_of=get_sort_date)
+
         def _trade_money(tx) -> float:
             """The trade's money in pool terms: a BUY's cost (magnitude —
             parsers and .tt books spell it either sign), a SELL's
@@ -2107,18 +2111,25 @@ class CanadaTaxRules(TaxRules):
                     # units. Sheltered/affiliated portions are
                     # PERMANENT (their ADJUST is scoped out of the
                     # taxable pool); taxable portions defer as ACB.
+                    # Pre/post-loss is decided by the SAME key the
+                    # pool replays with (ca_main phase ladder), not by
+                    # (settle date, clock time): a trigger traded the
+                    # day before at a later clock time that settles on
+                    # the loss's settle date is PRE-EXISTING there and
+                    # sits in the pool the loss draws from. Classified
+                    # post-loss, its ADJUST landed before the loss sale
+                    # and inflated the very loss it deferred — a
+                    # feedback the solver amplified or never converged
+                    # on (2026-09 engine audit, r08 / r08b).
+                    _loss_key = _ev_key(tx)
                     post_loss = [t for t in potential_triggers
-                                 if get_sort_date(t) > get_sort_date(tx)
-                                 or (get_sort_date(t) == get_sort_date(tx)
-                                     and t.time > tx.time)]
+                                 if _ev_key(t) > _loss_key]
                     pre_loss = [t for t in potential_triggers
                                 if t not in post_loss]
                     ordered = (sorted(post_loss,
-                                      key=lambda x: (get_sort_date(x),
-                                                     x.time, x.id))
+                                      key=lambda x: (_ev_key(x), x.id))
                                + sorted(pre_loss,
-                                        key=lambda x: (get_sort_date(x),
-                                                       x.time, x.id),
+                                        key=lambda x: (_ev_key(x), x.id),
                                         reverse=True))
                     per_share_loss = loss['loss_amount'] / loss['qty']
                     allocations = []      # (trigger, qty, amount)
@@ -2233,9 +2244,10 @@ class CanadaTaxRules(TaxRules):
 
                     def _mk_adjust(trg, amt):
                         a_id = f"WASH_{tx.id}__{trg.id}"
-                        if get_sort_date(trg) < get_sort_date(tx) or \
-                           (get_sort_date(trg) == get_sort_date(tx)
-                                and trg.time <= tx.time):
+                        if _ev_key(trg) < _loss_key:
+                            # Pre-loss trigger: the bump lands just
+                            # after the loss sale — same settle date and
+                            # phase (same trade date), one second later.
                             a_date, a_settle = tx.date, tx.date_settle
                             # Loader accepts time='' — don't crash the
                             # engine on it (2026-09 audit).
