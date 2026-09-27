@@ -15,7 +15,8 @@ transaction books (cash flows in their own currency) priced with the
 pipeline's per-day FX history:
 
     acquire USD  — sell a USD security, receive a USD dividend or
-                   interest payment
+                   interest payment (GROSS — the withholding leaves
+                   through its own TAX row)
     dispose USD  — buy a USD security, pay USD withholding tax or a
                    USD fee
 
@@ -59,7 +60,16 @@ def _flows(tx: Dict[str, Any]) -> Optional[float]:
         # magnitudes with the direction on quantity.
         return -abs(net) if qty > 0 else abs(net)
     if action in _INFLOW:
-        return net                       # sign-preserving (reversals)
+        # GROSS in, withholding out (the TAX row below). Every parser
+        # books withholding as its own TAX row — RBC's "(Implied Tax)"
+        # row, IB's withholding section — and merge2's
+        # reconcile_dividend_tax rewrites a paired DIVIDEND's
+        # net_amount to gross − tax. Taking NET here and the TAX row as
+        # an outflow took the withholding out of the pool twice (a
+        # phantom overdraft and a wrong gain on every withheld
+        # dividend). Sign-preserving: a reversal's gross is negative.
+        gross = float(tx.get("gross_amount") or 0.0)
+        return gross if gross else net
     if action in _OUTFLOW:
         # Repo convention: TAX positive = withheld (cash out); FEE
         # positive = charged.
