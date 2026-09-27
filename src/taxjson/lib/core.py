@@ -7,7 +7,8 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from taxjson.lib.corporate_timeline import SplitTimeline, event_sort_key
+from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
+                                            normalize_symbol_new, split_event_key)
 from decimal import Decimal
 
 from taxjson.lib.numeric import D
@@ -687,6 +688,100 @@ def _dedupe_corporate_splits(txs: List[TaxTransaction], seen: set) -> List[TaxTr
     return SplitTimeline.dedupe(txs, seen)
 
 
+def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
+                                    sheltered: List[TaxTransaction],
+                                    affiliated: List[TaxTransaction]):
+    """One merger, per-account EMPIRICAL ratios -> one corporate event.
+
+    corp_actions emits a rename-SPLIT per account with the ratio the
+    broker actually delivered (qty_received / qty_disposed, so a snapped
+    fractional entitlement leaves no dust). Two accounts of one merger
+    can therefore carry different ratios (15 HES -> 15 CVX, 40 -> 41).
+    Canada pools are symbol-global (s.47), so those rows neither dedupe
+    (the ratio is part of the event key) nor scale their own account:
+    the first renamed the WHOLE pool at its account's ratio and the
+    second found no pool — shares went missing and the gain moved
+    (2026-09 engine audit, r10: 1,100 booked for 1,220).
+
+    Rows of one event (same symbol, date and rename target) with more
+    than one ratio are folded into ONE row whose ratio is the
+    balance-weighted mean sum(q_a * r_a) / sum(q_a) over the TAXABLE
+    accounts' holdings just before the event (all scopes when the
+    taxable book holds none) — the pool lands on exactly the shares the
+    broker delivered in total, cost preserved. Accounts holding the
+    symbol without a row of their own keep the first row's ratio, as
+    before. Per-account balances in the wash walks become the weighted
+    share of that total (a fraction of a share off per account)."""
+    lists = (taxable, sheltered, affiliated)
+    groups: Dict[tuple, list] = {}
+    for li, lst in enumerate(lists):
+        for i, t in enumerate(lst):
+            if t.action != 'SPLIT' or not t.date:
+                continue
+            new = normalize_symbol_new(t.symbol, getattr(t, 'symbol_new', ''))
+            if not new:
+                continue
+            groups.setdefault((t.symbol, t.date, new), []).append((li, i, t))
+    todo = {k: rows for k, rows in groups.items()
+            if len({round(float(r[2].quantity or 0), 9) for r in rows}) > 1}
+    if not todo:
+        return taxable, sheltered, affiliated
+
+    def _sd(t):
+        return t.date_settle or t.date
+
+    drop = set()
+    replace: Dict[tuple, TaxTransaction] = {}
+    for (sym, d, new), rows in todo.items():
+        first = rows[0][2]
+        split_key = event_sort_key(first, profile='ca_balance', date_of=_sd)
+        ratio_of = {}
+        for _li, _i, t in rows:
+            ratio_of.setdefault(t.account, float(t.quantity or 0))
+        r0 = float(first.quantity or 0)
+
+        def _weights(scopes):
+            bal: Dict[str, float] = {}
+            seen_plain = set()
+            src = [t for li in scopes for t in lists[li]
+                   if t.symbol == sym
+                   and event_sort_key(t, profile='ca_balance',
+                                      date_of=_sd) < split_key]
+            src.sort(key=lambda t: event_sort_key(
+                t, profile='ca_balance', date_of=_sd))
+            for t in src:
+                if t.action in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE'):
+                    bal[t.account] = bal.get(t.account, 0.0) + float(t.quantity or 0)
+                elif (t.action == 'SPLIT'
+                      and not normalize_symbol_new(t.symbol, t.symbol_new)):
+                    k = split_event_key(t.symbol, t.date, t.quantity, '')
+                    if k in seen_plain:
+                        continue
+                    seen_plain.add(k)
+                    for a in bal:
+                        bal[a] *= float(t.quantity or 0)
+            return {a: q for a, q in bal.items() if q > 1e-9}
+
+        w = _weights((0,)) or _weights((0, 1, 2))
+        tot = sum(w.values())
+        if tot <= 1e-9:
+            continue
+        r_eff = sum(q * ratio_of.get(a, r0) for a, q in w.items()) / tot
+        replace[(rows[0][0], rows[0][1])] = TaxTransaction(
+            **{**first.to_dict(), 'quantity': r_eff, 'id': first.id})
+        for li, i, _t in rows[1:]:
+            drop.add((li, i))
+        print(f"NOTE: {sym} -> {new} on {d}: per-account merger ratios "
+              f"{sorted(set(round(v, 6) for v in ratio_of.values()))} "
+              f"applied to the symbol-wide pool as one event at the "
+              f"holdings-weighted ratio {r_eff:.6g}.", file=sys.stderr)
+    out = []
+    for li, lst in enumerate(lists):
+        out.append([replace.get((li, i), t) for i, t in enumerate(lst)
+                    if (li, i) not in drop])
+    return out[0], out[1], out[2]
+
+
 class TaxRules:
     def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True) -> Dict[str, Any]:
         raise NotImplementedError()
@@ -720,6 +815,10 @@ class CanadaTaxRules(TaxRules):
         # duplicates across all three lists (shared `seen`) before any
         # symbol-global pool or window walk sees them.
         _seen_splits: set = set()
+        transactions, sheltered_transactions, affiliated_transactions = \
+            _fold_per_account_rename_ratios(
+                list(transactions), list(sheltered_transactions or []),
+                list(affiliated_transactions or []))
         transactions = _dedupe_corporate_splits(transactions, _seen_splits)
         sheltered_transactions = _dedupe_corporate_splits(
             sheltered_transactions or [], _seen_splits)
@@ -951,47 +1050,46 @@ class CanadaTaxRules(TaxRules):
         # 'grant': a written option's premium is a capital gain on the
         # write date; a buy-back is a loss on its own date; expiry adds
         # nothing; a stock-settled assignment folds the premium into the
-        # share leg and its grant record is never emitted (the s.49(4)
-        # post-amendment state). Pools still retain the premium as book
-        # cost — this is an EMISSION change, not a pool change.
-        # Contracts written before `option_grant_since` keep close timing.
-        # A pre-scan walks each option symbol's short side FIFO by write
-        # order (pools are symbol-global, so across accounts) and marks
-        # how many units of each write end up stock-assigned.
+        # share leg and its grant record is not emitted (the s.49(4)
+        # post-amendment state). Contracts written before
+        # `option_grant_since` keep close timing.
+        #
+        # Every short opening of a taxable option pool — pre-since
+        # writes, the short leftover of a sell that crosses zero, and a
+        # short OPENING_BALANCE included — is a LOT in the pool's
+        # `grants` list, in write order. A close consumes the lots
+        # strictly FIFO (the same order the pool walk sees the rows),
+        # so an ASSIGN consumes exactly the units the old pre-scan
+        # predicted. A recognised lot is carved out of the pool at its
+        # own per-unit premium (so a buy-back of it is a loss of the
+        # amount paid, whatever the other lots were written at); the
+        # rest of the pool (close-timing lots, wash residue) keeps
+        # average cost among itself. When an ASSIGN consumes a
+        # recognised lot its grant record is retracted for those units
+        # (s.49(4)) — the grant record is mutated in place within the
+        # same pass, which is what the old pre-scan approximated from
+        # outside the walk (it missed lots with no grant record: a
+        # pre-since write or a cross-zero leftover consumed by the
+        # ASSIGN double-counted the premium — 2026-09 engine audit).
         _grant_mode = (str(option_premium_timing or 'close').lower() == 'grant')
-        _assigned_by_write: Dict[str, float] = {}
-        if _grant_mode:
-            _scan = sorted(all_txs, key=lambda x: event_sort_key(
-                x, profile='ca_main', date_of=get_sort_date))
-            _pos: Dict[str, float] = {}
-            _lots: Dict[str, List[List[Any]]] = {}     # symbol -> [[tx_id, units]]
-            _other = sheltered_ids | affiliated_ids
-            for _t in _scan:
-                if (_t.action not in ('BUYSELL', 'ASSIGN')
-                        or not is_option_symbol(_t.symbol or '')
-                        or _t.id in _other):
-                    continue
-                _q = float(_t.quantity or 0.0)
-                _sym = _t.symbol
-                _p = _pos.get(_sym, 0.0)
-                if _q < 0:
-                    _close_long = min(-_q, max(_p, 0.0))
-                    _open = -_q - _close_long
-                    if _open > 1e-9:
-                        _lots.setdefault(_sym, []).append([_t.id, _open])
-                elif _q > 0 and _p < -1e-9:
-                    _rem = min(_q, -_p)
-                    for _lot in _lots.get(_sym, []):
-                        if _rem <= 1e-9:
-                            break
-                        _take = min(_rem, _lot[1])
-                        _lot[1] -= _take
-                        _rem -= _take
-                        if _t.action == 'ASSIGN':
-                            _assigned_by_write[_lot[0]] = (
-                                _assigned_by_write.get(_lot[0], 0.0) + _take)
-                    _lots[_sym] = [l for l in _lots.get(_sym, []) if l[1] > 1e-9]
-                _pos[_sym] = _p + _q
+        _lot_seq = [0]
+
+        def _ev_key(t):
+            return event_sort_key(t, profile='ca_main',
+                                  date_of=get_sort_date)
+
+        def _trade_money(tx) -> float:
+            """The trade's money in pool terms: a BUY's cost (magnitude —
+            parsers and .tt books spell it either sign), a SELL's
+            proceeds SIGNED. Schema: trade net_amount is positive and
+            direction lives in the quantity, so a negative SELL amount
+            only arises when the commission exceeds the gross (closing a
+            worthless option for $0.01, writing one for less than the
+            fee): the proceeds really are negative. abs() booked them
+            as positive proceeds (a -220.90 loss reported as -201.00;
+            2026-09 engine audit)."""
+            _n = float(tx.net_amount or 0.0)
+            return _n if float(tx.quantity or 0.0) < 0 else abs(_n)
 
         def _grant_applies(tx) -> bool:
             if not _grant_mode or not is_option_symbol(tx.symbol or ''):
@@ -1002,6 +1100,126 @@ class CanadaTaxRules(TaxRules):
                 return int(str(get_sort_date(tx))[:4]) >= int(option_grant_since)
             except (TypeError, ValueError):
                 return True
+
+        def _short_lot_open(pool, tx, units, premium, recognise):
+            """Append a short-option lot of `units` whose (signed, net
+            of commission) premium is `premium`; returns the lot."""
+            _lot_seq[0] += 1
+            lot = {'tx_id': tx.id, 'seq': _lot_seq[0], 'units': units,
+                   'per_unit': (premium / units) if units > 1e-12 else 0.0,
+                   'rec': bool(recognise), 'rec_ref': None,
+                   'loss_ref': None, 'date': tx.date}
+            pool.setdefault('grants', []).append(lot)
+            return lot
+
+        def _short_lot_close(pool, closing_qty, is_assign):
+            """Consume `closing_qty` units of a SHORT option pool's lots
+            FIFO. Returns (cost_removed, recognised, grant_units_closed)
+            where cost_removed is the premium leaving the pool (positive
+            = premium), recognised the part already booked at grant."""
+            lots = pool.get('grants') or []
+            qabs = abs(pool['qty'])
+            total = float(pool['total_cost'])
+            rq = sum(l['units'] for l in lots if l['rec'])
+            r_amt = sum(l['units'] * l['per_unit'] for l in lots if l['rec'])
+            n_other = qabs - rq
+            if n_other > 1e-9:
+                other_avg = (total - r_amt) / n_other
+                rec_extra = 0.0
+            else:
+                # Only recognised lots remain: any residue in the pool
+                # (a parked wash deferral) rides them pro rata so the
+                # pool still drains to exactly zero.
+                other_avg = 0.0
+                rec_extra = (total - r_amt) / rq if rq > 1e-9 else 0.0
+            cost = 0.0
+            recognised = 0.0
+            g_units = 0.0
+            rem = closing_qty
+            for lot in lots:
+                if rem <= 1e-9:
+                    break
+                take = min(rem, lot['units'])
+                if take <= 1e-12:
+                    continue
+                lot['units'] -= take
+                rem -= take
+                if not lot['rec']:
+                    cost += take * other_avg
+                    continue
+                cost += take * (lot['per_unit'] + rec_extra)
+                if is_assign:
+                    # s.49(4): the grant is deemed never to have been a
+                    # disposition — retract these units from the grant
+                    # record; the full premium folds into the share leg.
+                    _amt = take * lot['per_unit']
+                    ref = lot.get('rec_ref')
+                    if ref is not None:
+                        _q0 = ref['qty']
+                        _f = (take / _q0) if _q0 > 1e-12 else 1.0
+                        ref['qty'] = _q0 - take
+                        ref['gain'] -= _amt
+                        ref['taxable_gain'] -= _amt
+                        ref['cost'] -= _amt
+                        ref['commission'] *= max(0.0, 1.0 - _f)
+                        ref['fee'] *= max(0.0, 1.0 - _f)
+                        if ref['qty'] <= 1e-9:
+                            ref['_void'] = True
+                    lref = lot.get('loss_ref')
+                    if lref is not None:
+                        lref['qty'] -= take
+                        lref['loss_amount'] = max(
+                            0.0, lref['loss_amount'] + _amt)
+                        if lref['qty'] <= 1e-9 or lref['loss_amount'] <= 0.001:
+                            lref['_void'] = True
+                else:
+                    recognised += take * lot['per_unit']
+                    g_units += take
+            if rem > 1e-9:
+                cost += rem * other_avg
+            pool['grants'] = [l for l in lots if l['units'] > 1e-9]
+            return cost, recognised, g_units
+
+        def _open_short_option(pool, tx, units, premium, fee_share):
+            """A taxable short opening of `units` option contracts for a
+            (signed, net) `premium`: record the lot and, under grant
+            timing, emit the s.49(1) grant record on the write date."""
+            rec = _grant_applies(tx)
+            lot = _short_lot_open(pool, tx, units, premium, rec)
+            if not rec or units <= 1e-9 or tx.id not in taxable_ids:
+                return
+            symbol = tx.symbol
+            _g = float(premium)
+            _gt = []
+            if trace:
+                if symbol not in symbol_acb_traces:
+                    symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
+                symbol_acb_traces[symbol].append(
+                    f"# {tx.date} WRITE {units:10.4f} @ {tx.price:7.4f} | premium {_g:10.4f} recognised now (ITA s.49(1))")
+                _gt = list(symbol_acb_traces[symbol])
+            rec_d = {
+                'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
+                'date_settle': tx.date_settle or tx.date,
+                'gain': _g, 'qty': units,
+                'cost': _g, 'proceeds': 0.0,
+                'disallowed': 0.0, 'taxable_gain': _g,
+                'days_held': 0, 'account': tx.account,
+                'currency': tx.currency,
+                'commission': float(tx.commission or 0) * fee_share,
+                'fee': float(tx.fee or 0) * fee_share,
+                'direction': 'SHORT',
+                'tainted': pool.get('tainted', False),
+                'grant': True,
+                'note': 'WRITE — premium recognised on grant (ITA s.49(1))',
+                'trace': _gt,
+            }
+            iteration_realized_gains.append(rec_d)
+            lot['rec_ref'] = rec_d
+            if _g < -0.001:
+                loss_d = {'tx': tx, 'loss_amount': abs(_g),
+                          'qty': units, 'direction': 'SHORT'}
+                iteration_losses.append(loss_d)
+                lot['loss_ref'] = loss_d
 
         solver_converged = False
         solver_iterations_used = 0
@@ -1169,6 +1387,17 @@ class CanadaTaxRules(TaxRules):
                         # the user re-dates or hand-applies it. Wash
                         # virtual ADJUSTs (WASH_*) always target held
                         # pools by construction.
+                        # A return of capital (negative, non-wash
+                        # ADJUST) on a DRAINED pool has no ACB left to
+                        # reduce: it is a capital gain in the year it
+                        # is received — the s.40(3) outcome with an
+                        # ACB of nil — and must not touch total_cost
+                        # (it used to leak into the NEXT purchase's
+                        # ACB, understating that position's later
+                        # gain; seen on real 2026 data).
+                        _empty_roc = (abs(pool['qty']) <= 1e-6
+                                      and not str(tx.id or '').startswith('WASH_')
+                                      and float(tx.net_amount) < -0.005)
                         if (abs(pool['qty']) <= 1e-6
                                 and not str(tx.id or '').startswith('WASH_')
                                 and abs(float(tx.net_amount)) > 0.005
@@ -1177,18 +1406,50 @@ class CanadaTaxRules(TaxRules):
                             # whole book each pass, so an unconditional
                             # warning printed once PER ITERATION — one
                             # data problem masqueraded as several.
-                            print(
-                                f"warning: {symbol} ADJUST of "
-                                f"{float(tx.net_amount):.2f} on {tx.date} "
-                                f"hits an EMPTY pool — the position was "
-                                f"fully sold before this ROC posted, so "
-                                f"the amount would leak into the NEXT "
-                                f"position's ACB instead of the one that "
-                                f"earned it. Re-date the ADJUST before "
-                                f"the final sale (adjusting that "
-                                f"disposition's gain) or apply it "
-                                f"manually.", file=sys.stderr)
+                            if _empty_roc:
+                                print(
+                                    f"warning: {symbol} return of capital "
+                                    f"of {-float(tx.net_amount):.2f} on "
+                                    f"{tx.date} hits an EMPTY pool — the "
+                                    f"position was fully sold before it "
+                                    f"posted, so there is no ACB to "
+                                    f"reduce: booked as a capital gain in "
+                                    f"that year (ITA s.40(3), ACB nil). "
+                                    f"If it belongs to the sold position, "
+                                    f"re-date the ADJUST before the final "
+                                    f"sale instead.", file=sys.stderr)
+                            else:
+                                print(
+                                    f"warning: {symbol} ADJUST of "
+                                    f"{float(tx.net_amount):.2f} on {tx.date} "
+                                    f"hits an EMPTY pool — the position was "
+                                    f"fully sold before this ADJUST posted, so "
+                                    f"the amount would leak into the NEXT "
+                                    f"position's ACB instead of the one that "
+                                    f"earned it. Re-date the ADJUST before "
+                                    f"the final sale (adjusting that "
+                                    f"disposition's gain) or apply it "
+                                    f"manually.", file=sys.stderr)
                         _applied_adj = float(tx.net_amount)
+                        if _empty_roc:
+                            _applied_adj = 0.0
+                            _excess = -float(tx.net_amount)
+                            if tx.id in taxable_ids:
+                                iteration_realized_gains.append({
+                                    'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
+                                    'date_settle': tx.date_settle or tx.date,
+                                    'gain': _excess, 'qty': 0.0,
+                                    'cost': 0.0, 'proceeds': _excess,
+                                    'disallowed': 0.0, 'taxable_gain': _excess,
+                                    'days_held': 0, 'account': tx.account,
+                                    'currency': tx.currency,
+                                    'commission': 0.0, 'fee': 0.0,
+                                    'direction': 'LONG',
+                                    'tainted': pool.get('tainted', False),
+                                    'deemed': True,
+                                    'note': 'DEEMED GAIN — return of capital received with no shares held (ITA s.40(3), ACB nil)',
+                                    'trace': [],
+                                })
                         if str(tx.id or '').startswith('WASH_'):
                             # Superficial-loss deferral: the invariant is
                             # "reduce future gains by the denied loss".
@@ -1285,6 +1546,12 @@ class CanadaTaxRules(TaxRules):
                 elif action == 'SPLIT':
                     if not is_other_scope:
                         pool['qty'] *= qty
+                        if qty and pool.get('grants'):
+                            # Short-option lots follow the contract
+                            # re-denomination (same premium per lot).
+                            for _l in pool['grants']:
+                                _l['units'] *= qty
+                                _l['per_unit'] /= qty
                     # Rename the pool when symbol_new is set and differs
                     # from the source symbol — that's how mergers and
                     # corporate reorganizations move ACB onto a new
@@ -1337,9 +1604,10 @@ class CanadaTaxRules(TaxRules):
                                 existing['deferred_wash'] = (
                                     existing.get('deferred_wash', 0.0)
                                     + pool.get('deferred_wash', 0.0))
-                                existing['grants'] = (
+                                existing['grants'] = sorted(
                                     existing.get('grants', [])
-                                    + pool.get('grants', []))
+                                    + pool.get('grants', []),
+                                    key=lambda _l: _l.get('seq', 0))
                                 # Parked flat-pool deferral dollars ride
                                 # the rename too — dropping them here
                                 # silently erased the denied loss's
@@ -1422,6 +1690,12 @@ class CanadaTaxRules(TaxRules):
                         pool['qty'] += qty
                         # No cost added — taint flag tracks the unknown.
                         pool['tainted'] = True
+                        if (qty < 0 and _grant_mode
+                                and is_option_symbol(symbol)):
+                            # Phantom short contracts hold a FIFO place
+                            # (never recognised — their write predates
+                            # the data).
+                            _short_lot_open(pool, tx, abs(qty), 0.0, False)
                     if trace:
                         if symbol not in symbol_acb_traces:
                             symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
@@ -1446,7 +1720,7 @@ class CanadaTaxRules(TaxRules):
                     else:
                         if is_opening:
                             # BUY (or Short opening)
-                            effective_cost = abs(tx.net_amount) + (internal_adj if qty > 0 else -internal_adj)
+                            effective_cost = _trade_money(tx) + (internal_adj if qty > 0 else -internal_adj)
                             pool['total_cost'] += D(effective_cost)
                             _pw = pool.pop('pending_wash', 0.0)
                             if _pw > 1e-9:
@@ -1468,49 +1742,9 @@ class CanadaTaxRules(TaxRules):
                             pool['qty'] += qty
                             pool['last_acq_date'] = tx.date
 
-                            if qty < 0 and _grant_applies(tx):
-                                # Sell-to-open under grant timing: the
-                                # premium (net of commission) is the
-                                # disposition proceeds of the option
-                                # granted — a gain now for every unit
-                                # that will NOT be stock-assigned later.
-                                _units = abs(qty)
-                                _per_unit = abs(float(tx.net_amount or 0.0)) / _units
-                                _asg = min(_units, _assigned_by_write.get(tx.id, 0.0))
-                                _rec_units = _units - _asg
-                                pool.setdefault('grants', []).append({
-                                    'tx_id': tx.id, 'per_unit': _per_unit,
-                                    'rec_units': _rec_units, 'asg_units': _asg,
-                                    'date': tx.date})
-                                if _rec_units > 1e-9 and tx.id in taxable_ids:
-                                    _g = _rec_units * _per_unit
-                                    _gt = []
-                                    if trace:
-                                        if symbol not in symbol_acb_traces:
-                                            symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
-                                        symbol_acb_traces[symbol].append(
-                                            f"# {tx.date} WRITE {_rec_units:10.4f} @ {tx.price:7.4f} | premium {_g:10.4f} recognised now (ITA s.49(1))")
-                                        _gt = list(symbol_acb_traces[symbol])
-                                    iteration_realized_gains.append({
-                                        'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
-                                        'date_settle': tx.date_settle or tx.date,
-                                        'gain': _g, 'qty': _rec_units,
-                                        'cost': _g, 'proceeds': 0.0,
-                                        'disallowed': 0.0, 'taxable_gain': _g,
-                                        'days_held': 0, 'account': account,
-                                        'currency': tx.currency,
-                                        'commission': float(tx.commission or 0),
-                                        'fee': float(tx.fee or 0),
-                                        'direction': 'SHORT',
-                                        'tainted': pool.get('tainted', False),
-                                        'grant': True,
-                                        'note': 'WRITE — premium recognised on grant (ITA s.49(1))',
-                                        'trace': _gt,
-                                    })
-                                    if _g < -0.001:
-                                        iteration_losses.append({
-                                            'tx': tx, 'loss_amount': abs(_g),
-                                            'qty': _rec_units, 'direction': 'SHORT'})
+                            if qty < 0 and _grant_mode and is_option_symbol(symbol):
+                                _open_short_option(pool, tx, abs(qty),
+                                                   effective_cost, 1.0)
 
                             if trace:
                                 if symbol not in symbol_acb_traces:
@@ -1536,11 +1770,21 @@ class CanadaTaxRules(TaxRules):
                             else:
                                 avg_cost_unit_d = Decimal(0)
                             closing_qty = min(abs(qty), abs(pool['qty']))
-                            cost_basis = float(D(closing_qty) * avg_cost_unit_d)
+                            _recognized = 0.0
+                            _grant_units_closed = 0.0
+                            if pool['qty'] < 0 and pool.get('grants'):
+                                # Short option lots (grant timing): FIFO
+                                # by write; recognised lots leave at
+                                # their own premium (see _short_lot_close).
+                                cost_basis, _recognized, _grant_units_closed = \
+                                    _short_lot_close(pool, closing_qty,
+                                                     is_option_assign)
+                            else:
+                                cost_basis = float(D(closing_qty) * avg_cost_unit_d)
                             
                             # Apportion adjustment
                             chunk_adj = internal_adj * (closing_qty / abs(qty))
-                            proceeds = abs(tx.net_amount) * (closing_qty / abs(qty))
+                            proceeds = _trade_money(tx) * (closing_qty / abs(qty))
                             effective_proceeds = proceeds + (chunk_adj if pool['qty'] < 0 else -chunk_adj)
                             
                             gain = (effective_proceeds - cost_basis) if pool['qty'] > 0 else (cost_basis - effective_proceeds)
@@ -1549,28 +1793,9 @@ class CanadaTaxRules(TaxRules):
                             # already recognised on the write date comes
                             # out of this record, so a buy-back is the
                             # loss of the amount paid and an expiry is
-                            # zero. A stock-settled ASSIGN consumes the
-                            # units the pre-scan marked (never recognised)
-                            # and folds the full premium as before.
-                            _recognized = 0.0
-                            _grant_units_closed = 0.0
-                            if pool['qty'] < 0 and pool.get('grants'):
-                                _rem = closing_qty
-                                for _lot in pool['grants']:
-                                    if _rem <= 1e-9:
-                                        break
-                                    if is_option_assign:
-                                        _ta = min(_rem, _lot['asg_units']); _lot['asg_units'] -= _ta; _rem -= _ta
-                                        _tr = min(_rem, _lot['rec_units']); _lot['rec_units'] -= _tr; _rem -= _tr
-                                        _recognized += _tr * _lot['per_unit']
-                                        _grant_units_closed += _ta + _tr
-                                    else:
-                                        _tr = min(_rem, _lot['rec_units']); _lot['rec_units'] -= _tr; _rem -= _tr
-                                        _recognized += _tr * _lot['per_unit']
-                                        _ta = min(_rem, _lot['asg_units']); _lot['asg_units'] -= _ta; _rem -= _ta
-                                        _grant_units_closed += _ta + _tr
-                                pool['grants'] = [l for l in pool['grants']
-                                                  if l['rec_units'] + l['asg_units'] > 1e-9]
+                            # zero. A stock-settled ASSIGN retracted the
+                            # grant record instead (_short_lot_close) and
+                            # folds the full premium into the share leg.
                             _rec_gain = gain - _recognized
                             _rec_cost = cost_basis - _recognized
                             _suppress_record = (_grant_units_closed >= closing_qty - 1e-9
@@ -1708,7 +1933,7 @@ class CanadaTaxRules(TaxRules):
                                 leftover_ratio = leftover / abs(qty)
                                 leftover_adj = internal_adj * leftover_ratio
                                 eff_cost_leftover = (
-                                    abs(tx.net_amount) * leftover_ratio
+                                    _trade_money(tx) * leftover_ratio
                                     + (leftover_adj if qty > 0 else -leftover_adj)
                                 )
                                 pool['qty'] = (leftover if qty > 0 else -leftover)
@@ -1719,6 +1944,16 @@ class CanadaTaxRules(TaxRules):
                                 # or vice versa via a cross-zero SELL).
                                 # New position begins at this trade.
                                 pool['position_start_date'] = tx.date
+                                pool['grants'] = []
+                                if (qty < 0 and _grant_mode
+                                        and is_option_symbol(symbol)):
+                                    # The short leftover of a sell that
+                                    # crosses zero is a write like any
+                                    # other: a lot (and, under grant
+                                    # timing, a grant record) of its own.
+                                    _open_short_option(
+                                        pool, tx, leftover,
+                                        eff_cost_leftover, leftover_ratio)
 
 
                                 if trace:
@@ -1768,6 +2003,17 @@ class CanadaTaxRules(TaxRules):
                     'pool_qty': pool['qty'],
                     'pool_acb': float(pool['total_cost']),
                 }
+
+            # Grant records fully retracted by an assignment (s.49(4))
+            # leave the record list; their losses leave the solver.
+            if _grant_mode:
+                iteration_realized_gains = [
+                    g for g in iteration_realized_gains
+                    if not g.get('_void')]
+                iteration_losses = [
+                    l for l in iteration_losses if not l.get('_void')]
+                for g in iteration_realized_gains:
+                    g.pop('_void', None)
 
             # --- Detection ---
             found_new_wash_sale = False
@@ -1987,11 +2233,45 @@ class CanadaTaxRules(TaxRules):
                 # nothing, so the US §1091(e) "re-short" branch does not
                 # apply here: every loss uses the LONG criteria — opening
                 # long acquisitions, positive balance at day 30.
-                if bal_at_end > 1e-6:
-                    acquired_qty = sum(
-                        _row_loss_units(t, _opening_qty(t, 'LONG'))
-                        for t in potential_triggers)
-                    disallowed_qty = min(loss['qty'], acquired_qty, abs(bal_at_end))
+                #
+                # "Owns the SUBSTITUTED property" — the property acquired
+                # in the window — is measured PER HOLDER: the taxable
+                # book (one s.47 pool across the taxpayer's taxable
+                # accounts) and each registered / affiliated account on
+                # its own. A holder backs a denial only with units it
+                # ACQUIRED inside the window and still holds at its end:
+                # min(acquired in window, balance at end) — FIFO, since
+                # a later sale disposes of the oldest units first. Units
+                # a registered account held BEFORE the window neither
+                # create nor back a denial: a class-wide balance let an
+                # RRSP's 2020 shares turn a taxable rebuy that was sold
+                # again inside the window into a PERMANENT denial (2026-09
+                # engine and real-data audits: AMD, ENPH, XTD shapes).
+                def _holder(t):
+                    if t.id in sheltered_ids or t.id in affiliated_ids:
+                        return ('other', t.account)
+                    return ('taxable',)
+                _bal_end_h: Dict[Any, float] = {}
+                for t in current_tx_list:
+                    if (alias_of(t.symbol) == loss_alias
+                            and get_sort_date(t) <= end_window_date
+                            and t.action in ('BUYSELL', 'ASSIGN',
+                                             'TRANSFER',
+                                             'OPENING_BALANCE')):
+                        _h = _holder(t)
+                        _bal_end_h[_h] = (_bal_end_h.get(_h, 0.0)
+                                          + _row_loss_units(t, t.quantity))
+                _acq_h: Dict[Any, float] = {}
+                for t in potential_triggers:
+                    _h = _holder(t)
+                    _acq_h[_h] = (_acq_h.get(_h, 0.0)
+                                  + _row_loss_units(
+                                      t, _opening_qty(t, 'LONG')))
+                _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0)))
+                           for h, a in _acq_h.items()}
+                held_substituted = sum(_held_h.values())
+                if held_substituted > 1e-6:
+                    disallowed_qty = min(loss['qty'], held_substituted)
                     disallowed_amt = disallowed_qty * (loss['loss_amount'] / loss['qty'])
 
                     # --- Allocation across ALL in-window triggers ---
@@ -2004,77 +2284,52 @@ class CanadaTaxRules(TaxRules):
                     # order — post-loss buys first (primary
                     # replacements), then pre-loss buys latest-first —
                     # each capped at its OPENING quantity in loss-date
+                    # units AND at its holder's still-held substituted
                     # units. Sheltered/affiliated portions are
                     # PERMANENT (their ADJUST is scoped out of the
-                    # taxable pool); taxable portions defer as ACB.
+                    # taxable pool); taxable portions defer as ACB
+                    # (s.53(1)(f): the taxable holder's cap is its
+                    # still-held balance, so every deferral is backed).
+                    # Pre/post-loss is decided by the SAME key the
+                    # pool replays with (ca_main phase ladder), not by
+                    # (settle date, clock time): a trigger traded the
+                    # day before at a later clock time that settles on
+                    # the loss's settle date is PRE-EXISTING there and
+                    # sits in the pool the loss draws from. Classified
+                    # post-loss, its ADJUST landed before the loss sale
+                    # and inflated the very loss it deferred — a
+                    # feedback the solver amplified or never converged
+                    # on (2026-09 engine audit, r08 / r08b).
+                    _loss_key = _ev_key(tx)
                     post_loss = [t for t in potential_triggers
-                                 if get_sort_date(t) > get_sort_date(tx)
-                                 or (get_sort_date(t) == get_sort_date(tx)
-                                     and t.time > tx.time)]
+                                 if _ev_key(t) > _loss_key]
                     pre_loss = [t for t in potential_triggers
                                 if t not in post_loss]
                     ordered = (sorted(post_loss,
-                                      key=lambda x: (get_sort_date(x),
-                                                     x.time, x.id))
+                                      key=lambda x: (_ev_key(x), x.id))
                                + sorted(pre_loss,
-                                        key=lambda x: (get_sort_date(x),
-                                                       x.time, x.id),
+                                        key=lambda x: (_ev_key(x), x.id),
                                         reverse=True))
                     per_share_loss = loss['loss_amount'] / loss['qty']
                     allocations = []      # (trigger, qty, amount)
                     perm_amt = 0.0
                     _rem = disallowed_qty
+                    _cap_left = dict(_held_h)
                     for trg in ordered:
-                        cap = _row_loss_units(
-                            trg, _opening_qty(trg, 'LONG'))
+                        _h = _holder(trg)
+                        cap = min(_row_loss_units(
+                            trg, _opening_qty(trg, 'LONG')),
+                            _cap_left.get(_h, 0.0))
                         take = min(_rem, cap)
                         if take > 1e-9:
                             amt = take * per_share_loss
                             allocations.append((trg, take, amt))
-                            if (trg.id in sheltered_ids
-                                    or trg.id in affiliated_ids):
+                            if _h != ('taxable',):
                                 perm_amt += amt
                             _rem -= take
+                            _cap_left[_h] = _cap_left.get(_h, 0.0) - take
                         if _rem <= 1e-9:
                             break
-
-                    # A deferral is only real to the extent TAXABLE
-                    # still-held shares back it at the window's end —
-                    # s.53(1)(f) bumps the basis of the substituted
-                    # property STILL OWNED, and a bump inside a
-                    # registered account is moot. Allocating purely by
-                    # trigger let a taxable trigger whose own shares
-                    # were gone by +30 collect a deferral ADJUST that
-                    # parked on an empty pool and never recovered
-                    # (found by the conservation fuzzer; the FFH.TO
-                    # shape): denied-but-sheltered-backed portions are
-                    # PERMANENT, not deferred.
-                    _bal_tax = sum(
-                        _row_loss_units(t, t.quantity)
-                        for t in current_tx_list
-                        if alias_of(t.symbol) == loss_alias
-                        and get_sort_date(t) <= end_window_date
-                        and t.id not in sheltered_ids
-                        and t.id not in affiliated_ids
-                        and t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
-                                         'OPENING_BALANCE'))
-                    _backed = max(0.0, _bal_tax)     # replacement is always a LONG holding (s.54)
-                    _defer_room = min(disallowed_qty, _backed)
-                    _trimmed = []
-                    for trg, take, amt in allocations:
-                        if (trg.id in sheltered_ids
-                                or trg.id in affiliated_ids):
-                            _trimmed.append((trg, take, amt))
-                            continue
-                        _keep = min(take, max(0.0, _defer_room))
-                        _defer_room -= _keep
-                        if _keep > 1e-9:
-                            _trimmed.append(
-                                (trg, _keep, _keep * per_share_loss))
-                        _excess = take - _keep
-                        if _excess > 1e-9:
-                            perm_amt += _excess * per_share_loss
-                    allocations = _trimmed
 
                     # Route each kept (deferred) bump onto a pool that
                     # actually HOLDS substituted property at +30. The
@@ -2133,9 +2388,10 @@ class CanadaTaxRules(TaxRules):
 
                     def _mk_adjust(trg, amt):
                         a_id = f"WASH_{tx.id}__{trg.id}"
-                        if get_sort_date(trg) < get_sort_date(tx) or \
-                           (get_sort_date(trg) == get_sort_date(tx)
-                                and trg.time <= tx.time):
+                        if _ev_key(trg) < _loss_key:
+                            # Pre-loss trigger: the bump lands just
+                            # after the loss sale — same settle date and
+                            # phase (same trade date), one second later.
                             a_date, a_settle = tx.date, tx.date_settle
                             # Loader accepts time='' — don't crash the
                             # engine on it (2026-09 audit).

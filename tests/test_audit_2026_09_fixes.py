@@ -173,12 +173,17 @@ class TestShelteredContributionIsATrigger(unittest.TestCase):
         self.assertIn('ARRIVAL', str(cm.exception))
         self.assertIn('custody', str(cm.exception))
 
-    def test_transfer_outside_window_counts_only_as_balance(self):
+    def test_transfer_outside_window_neither_triggers_nor_backs(self):
         # An OLD sheltered transfer-in never triggers (s.54(a) needs an
-        # in-window acquisition), but it DOES satisfy the still-held
-        # limb: with an in-window taxable rebuy that is itself gone by
-        # day +30, the sheltered balance is the only thing keeping the
-        # denial alive — the old strip zeroed it.
+        # in-window acquisition), and — re-premised by the 2026-09
+        # engine audit — it does not satisfy the still-held limb
+        # either: s.54 asks whether the taxpayer or an affiliated
+        # person owns the SUBSTITUTED property (the property acquired
+        # in the window) at its end. The in-window taxable rebuy is
+        # gone by day +30 and the RRSP's shares predate the window, so
+        # the loss is allowed. (This test used to pin a 600 denial
+        # backed by the RRSP's old balance — permanent, since the
+        # taxable pool held nothing to bump.)
         from taxjson.lib.pipeline import prepare_books
         main = [_t(account='margin', date='2024-05-01', quantity=100,
                    net_amount=10000.0),
@@ -201,9 +206,7 @@ class TestShelteredContributionIsATrigger(unittest.TestCase):
                 affiliated_transactions=af)
         denied = sum(float(w.get('disallowed_amount') or 0)
                      for w in r.get('wash_sales') or [])
-        # min(100 sold, 30 acquired in window, 100 still held) = 30
-        # shares x 20/sh = 600.
-        self.assertAlmostEqual(denied, 600.0, places=2)
+        self.assertAlmostEqual(denied, 0.0, places=2)
 
     def test_old_sheltered_balance_alone_denies_nothing(self):
         # The user's rule, pinned: no acquisition in the +/-30 window

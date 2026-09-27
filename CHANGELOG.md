@@ -315,6 +315,53 @@
   - Test fixtures copied from real statements replaced with synthetic
     values.
 
+- **Return of capital after the position is sold (Canada).** A ROC that
+  posts when the pool is empty has no ACB to reduce; it is now a capital
+  gain in the year received (s.40(3) with a nil ACB, noted on the row)
+  instead of silently lowering the NEXT purchase's ACB (which moved the
+  gain to a later year). Positive ADJUSTs on an empty pool are unchanged.
+- **Mergers with per-account delivered ratios (Canada).** A merger whose
+  accounts received different whole-share counts (15 → 15 in one, 40 → 41
+  in another) emitted one rename per account at its own ratio; the
+  symbol-wide pool was renamed at the first account's ratio and the
+  second found no pool (1,100 booked for 1,220, a phantom short share).
+  The rows now fold into one event at the holdings-weighted ratio, so
+  the pool lands on the shares actually delivered.
+- **Superficial loss (s.54): only substituted property backs a denial.**
+  A denial now needs units acquired inside the 61-day window that the
+  same holder (the taxable pool, or one registered / affiliated account)
+  still owns at its end. Units a registered account held before the
+  window no longer back one: a taxable rebuy sold again inside the
+  window, with an RRSP holding shares bought years earlier, was denied
+  PERMANENTLY (-1,000 → now allowed); a partly-sold taxable rebuy now
+  defers only what is still held instead of turning the rest permanent.
+  (A short taxable balance at day 30 also no longer offsets a registered
+  account's still-held acquisition.)
+- **Superficial loss: a trigger's side of the loss follows the pool's
+  own ordering.** A rebuy that settles on the loss sale's settlement
+  date but traded the day before (a later clock time) is in the pool
+  the sale draws from; it was treated as bought after the loss, its
+  basis bump landed before the sale and inflated the loss it deferred
+  (-1,000 / 250 denied instead of -800 / 200), and some short-cover
+  books never converged. Pre/post-loss is now decided by the phase
+  ladder the pool replays with.
+- **Negative proceeds (Canada).** A sell whose commission exceeds its
+  gross — closing a worthless option at $0.01, writing one for less
+  than the fee — now books its proceeds signed (negative) instead of
+  as a positive amount: the loss grows by twice the shortfall (-201.00
+  was booked for a -220.90 loss). Buys are unchanged.
+- **s.49 grant timing: an assignment folds each premium once.** Every
+  short opening — a write before `option_grant_since`, the short
+  leftover of a sell that crosses zero — is now a lot, consumed FIFO by
+  write date. An ASSIGN that consumed a lot with no grant record used to
+  fold the premium into the shares on top of the grant already
+  recognised (a book that totals 450 under close timing totalled 650
+  under grant timing with `since = 2025`); totals are now identical
+  under both settings (fuzzed with assignments and every `since`).
+  A close-timing (pre-`since`) lot now closes before a later grant lot
+  and at its own premium, and a buy-back of a grant lot is a loss of
+  exactly the amount paid even when other lots were written at other
+  premiums — both move amounts between years, never the total.
 
 ## v0.16.0 (2026-09-25)
 
