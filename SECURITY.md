@@ -33,15 +33,20 @@ The core pipeline reaches the network in exactly two places, both
 during `taxjson run`, and only when a cache miss requires it:
 
 - **FX rates** — `taxjson-to-base-curr` downloads the base-currency
-  pairs listed under `source_currencies` from Yahoo Finance into
-  `work/to_base.csv`. Only currency-pair symbols and date ranges are
-  sent.
+  pairs listed under `source_currencies` into `work/to_base.csv`: from
+  the Bank of Canada Valet API (www.bankofcanada.ca) for a CAD base,
+  and from Yahoo Finance for dates before 2017-01-03, currencies the
+  Bank does not publish, and non-CAD bases. Only currency-pair symbols
+  and date ranges are sent.
 - **Crypto prices** — `taxjson-fill-crypto` looks up any crypto row
   that carries no price (Kraken staking rewards) from Yahoo Finance:
   the symbol and trade date are sent, nothing else.
 
-Set `TAXJSON_OFFLINE=1` to forbid both; a cache miss then fails the
-stage with a message naming what it needed. The same switch covers the
+Set `TAXJSON_OFFLINE=1` (or `true`/`yes`/`on`; `0`/`false`/`no`/`off`
+leave it off) to forbid both. A crypto-price cache miss then fails the
+stage with a message naming what it needed; the FX stage serves cached
+rates only, and a transaction whose date has no cached rate is a
+validation error at the conversion stage. The same switch covers the
 current-price chain behind `harvest`, `watch --harvest` and the GUI's
 Harvest tab (IBKR gateway / Yahoo Finance): they serve
 `work/.price_cache.json` only and refuse the lookup on a miss.

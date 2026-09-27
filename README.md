@@ -163,12 +163,14 @@ pip install -e .
 ```
 
 Core pipeline has no third-party runtime dependencies. Note that a full
-`taxjson run` does reach Yahoo Finance for FX rates and un-priced crypto
-rows on a cache miss (`TAXJSON_OFFLINE=1` forbids it — see SECURITY.md
-for the complete egress list). Optional extras:
+`taxjson run` does reach the Bank of Canada (Valet API) for FX rates —
+Yahoo Finance only for pre-2017 dates and currencies the Bank does not
+publish — and Yahoo Finance for un-priced crypto rows, on a cache miss
+(`TAXJSON_OFFLINE=1` forbids it — see SECURITY.md for the complete
+egress list). Optional extras:
 
 ```bash
-pip install -e ".[fx]"          # FX rate fetcher (yfinance + pandas) — needed whenever source_currencies is non-empty (the default scaffold converts USD)
+pip install -e ".[fx]"          # yfinance + pandas: the FX fallback for dates before 2017-01-03 and currencies the Bank of Canada doesn't publish, and every rate for a non-CAD base (the Bank of Canada path itself needs no extra)
 pip install -e ".[web]"         # local web UI (`taxjson serve`) — included in [all]
 pip install -e ".[xlsx]"        # taxjson-xlsx-to-csv, for brokers that only ship Excel
 pip install -e ".[all]"         # everything

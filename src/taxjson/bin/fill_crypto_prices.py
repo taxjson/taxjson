@@ -9,6 +9,7 @@ import os
 
 from taxjson.lib.core import TaxTransaction, load_transactions
 from taxjson.lib import cli_diag
+from taxjson.lib.offline import offline_enabled
 
 PROG = "taxjson-fill-crypto"
 
@@ -95,7 +96,7 @@ def get_crypto_price(symbol, date_str):
         # UTC, booking the adjacent day's close as FMV.
         dt = int(calendar.timegm(time.strptime(date_str, "%Y-%m-%d")))
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{y_symbol}-USD?period1={dt}&period2={dt+86400}&interval=1d"
-        if os.environ.get("TAXJSON_OFFLINE"):
+        if offline_enabled():
             raise SystemExit(
                 f"taxjson-fill-crypto: TAXJSON_OFFLINE is set but a "
                 f"crypto price for {symbol} on {date_str} is not in "

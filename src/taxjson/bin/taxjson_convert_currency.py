@@ -133,11 +133,43 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
         )
     return history
 
+def load_rate_sources(rates_file: Path, target_curr: str = None) -> Dict[str, Dict[str, str]]:
+    """{currency: {date: source}} from the optional SIXTH column of a
+    rates file (`boc` / `yahoo`, written by taxjson-to-base-curr). Same
+    first-row-wins keying as load_exchange_rates; rows without the
+    column (a hand-made or pre-0.17 file) are simply absent. Never
+    raises on a malformed line — load_exchange_rates owns that."""
+    out: Dict[str, Dict[str, str]] = {}
+    target_norm = norm_currency(target_curr)
+    if not rates_file or not Path(rates_file).exists():
+        return out
+    try:
+        with Path(rates_file).open("r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 6 or parts[0].startswith("#") \
+                        or not _RATE_DATE_RE.match(parts[0]):
+                    continue
+                if target_norm and norm_currency(parts[3]) != target_norm:
+                    continue
+                out.setdefault(norm_currency(parts[2]), {}).setdefault(
+                    parts[0], parts[5].lower())
+    except OSError:
+        return {}
+    return out
+
+
 # Module-level tally of default-rate fallbacks so we can emit a single
 # summary line at the end of a run rather than spamming once per row.
 # Reset by main(); never read by anyone except the warn-summary path.
 _DEFAULT_RATE_FALLBACKS: Dict[tuple, int] = {}
 NO_RATES_REASON = "no rates for currency"
+# Per-ROW record of the same fallbacks (id, date, currency, symbol,
+# action, reason) — the conversion stage turns each into a validation
+# ERROR — and the (currency, rate-date) pairs actually applied, for the
+# "which FX source" summary. Both reset with reset_fallback_tally().
+_FALLBACK_ROWS: list = []
+_RATES_USED: set = set()
 
 
 def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal) -> Decimal:
@@ -164,22 +196,23 @@ def get_rate_for_date(currency: str, date_str: str, history: Dict[str, Dict[str,
     except ValueError:
         return _record_fallback("unparseable date")
 
+    # Weekends/holidays: the most recent PRIOR business-day rate (the
+    # usual CRA practice; to_base_curr forward-fills the same way).
     # Look back up to 5 days for a rate (e.g. over long weekends)
     for i in range(6):
         test_date = (dt - timedelta(days=i)).strftime("%Y-%m-%d")
         if test_date in curr_history:
+            _RATES_USED.add((currency, test_date))
             return curr_history[test_date]
 
     # Distinguish "before the rates file even starts" from an interior gap:
-    # the fetch window is ~5.5 years back from today, so a transaction older
-    # than that (early trades, phantom openings) silently converts at the
-    # default. Naming the file's start date makes the fix actionable
-    # (extend the fetch window) instead of a generic gap message.
+    # a transaction older than the first rate (early trades, phantom
+    # openings) would convert at the default. Naming the file's start
+    # date makes the fix actionable instead of a generic gap message.
     if curr_history:
         first = min(curr_history)
         if date_str < first:
-            return _record_fallback(f"date predates rates file start {first} "
-                                    f"— extend the fetch window")
+            return _record_fallback(f"date predates rates file start {first}")
     return _record_fallback("no rate within 5-day lookback")
 
 def convert_transaction(
@@ -197,7 +230,15 @@ def convert_transaction(
     elif src_curr:
         # Resolve rate for this transaction's date
         tx_date = tx.date_settle if tx.date_settle else tx.date
+        before = dict(_DEFAULT_RATE_FALLBACKS)
         rate = get_rate_for_date(src_curr, tx_date, history, default_rate)
+        if _DEFAULT_RATE_FALLBACKS != before:
+            reason = next(r for (c, r), n in _DEFAULT_RATE_FALLBACKS.items()
+                          if n != before.get((c, r), 0))
+            _FALLBACK_ROWS.append({
+                "id": tx.id, "date": tx_date, "currency": src_curr,
+                "symbol": tx.symbol, "action": tx.action,
+                "reason": reason})
         rates_map = {(src_curr, target_curr): rate}
 
         # Stage all converted values before mutating `converted`. The
@@ -250,7 +291,7 @@ def uncovered_currencies():
 
 def abort_if_currency_uncovered(*, rates_given: bool,
                                 default_rate_explicit: bool,
-                                stream=sys.stderr) -> bool:
+                                stream=None) -> bool:
     """A currency entirely absent from a supplied --rates file is a
     hard error unless the user opted into the fallback with an explicit
     --default-rate: every one of its rows would otherwise be booked at
@@ -270,7 +311,7 @@ def abort_if_currency_uncovered(*, rates_given: bool,
         f"currency to the rates file (in a `taxjson run` project: list it "
         f"in [settings] source_currencies in taxjson.toml), or pass "
         f"--default-rate explicitly to accept the fallback.",
-        file=stream,
+        file=(stream or sys.stderr),
     )
     return True
 
@@ -281,9 +322,76 @@ def reset_fallback_tally() -> None:
     this before starting a conversion so stale counts from an earlier
     invocation don't leak into the summary."""
     _DEFAULT_RATE_FALLBACKS.clear()
+    _FALLBACK_ROWS.clear()
+    _RATES_USED.clear()
 
 
-def emit_fallback_summary(default_rate, *, stream=sys.stderr) -> None:
+def fallback_rows() -> list:
+    """Rows converted at the default rate since the last reset."""
+    return list(_FALLBACK_ROWS)
+
+
+def fallback_validation_issues(target_curr: str,
+                               default_rate) -> Dict[str, list]:
+    """{context: [message]} — one validation ERROR per row that fell
+    back to the default rate, shaped like taxjson-validate's issues so
+    merge2 folds them into its `validation: N error(s)` count (the
+    number the .sum DIAGNOSTICS, `taxjson checklist` and `run --strict`
+    read). A default-rate conversion is a wrong number in the books,
+    not a style warning: before, it was a stderr line and the run
+    exited 0 with a clean checklist."""
+    out: Dict[str, list] = {}
+    for r in _FALLBACK_ROWS:
+        ctx = f"TX {r['id']} ({r['action']} {r['symbol']} {r['date']})"
+        out.setdefault(ctx, []).append(
+            f"FX: no {r['currency']}->{norm_currency(target_curr)} rate "
+            f"for {r['date']} ({r['reason']}); converted at the default "
+            f"rate {default_rate}. Refresh the rates (`taxjson run` "
+            f"online) or pass --default-rate explicitly to accept it.")
+    return out
+
+
+def emit_fallback_validation(target_curr: str, default_rate, *,
+                             stream=None) -> int:
+    """Print the default-rate rows as a `validation: N error(s)` block
+    (the form every .diag reader counts). Returns N."""
+    issues = fallback_validation_issues(target_curr, default_rate)
+    n = sum(len(v) for v in issues.values())
+    if n:
+        print(f"validation: {n} error(s) across {len(issues)} "
+              f"transaction(s):", file=(stream or sys.stderr))
+        for ctx, errs in sorted(issues.items()):
+            for err in errs:
+                print(f"  {ctx}: {err}", file=(stream or sys.stderr))
+    return n
+
+
+def rate_source_summary(sources: Dict[str, Dict[str, str]]) -> str:
+    """'FX: Bank of Canada Valet for N dates, Yahoo fallback for M' over
+    the (currency, date) rates actually applied since the last reset.
+    Empty when no conversion used a rate."""
+    if not _RATES_USED:
+        return ""
+    counts: Dict[str, int] = {}
+    for cur, d in _RATES_USED:
+        src = (sources.get(cur) or {}).get(d) or "unlabelled"
+        counts[src] = counts.get(src, 0) + 1
+    text = (f"FX: Bank of Canada Valet for {counts.pop('boc', 0)} dates, "
+            f"Yahoo fallback for {counts.pop('yahoo', 0)}")
+    for src, n in sorted(counts.items()):
+        text += (f", {n} from a rates file without a source column"
+                 if src == "unlabelled" else f", {src} for {n}")
+    return text
+
+
+def emit_source_summary(sources: Dict[str, Dict[str, str]], *,
+                        stream=None) -> None:
+    text = rate_source_summary(sources)
+    if text:
+        print(f"note: {text}", file=(stream or sys.stderr))
+
+
+def emit_fallback_summary(default_rate, *, stream=None) -> None:
     """Emit a one-line stderr summary of how many rows fell back to
     `default_rate`. Quiet when zero. Both the standalone CLI's main()
     and taxjson-merge2 call this after process_transactions so the
@@ -300,7 +408,7 @@ def emit_fallback_summary(default_rate, *, stream=sys.stderr) -> None:
     print(
         f"warning: applied --default-rate ({default_rate}) to {total} "
         f"row(s) that had no rate match: {breakdown}",
-        file=stream,
+        file=(stream or sys.stderr),
     )
 
 def main():
@@ -363,13 +471,23 @@ def main():
             rates_given=bool(args.rates),
             default_rate_explicit=args.default_rate is not None):
         sys.exit(1)
+    emit_source_summary(load_rate_sources(
+        Path(args.rates) if args.rates else None, target_curr))
+    metadata = {
+        "converted_to": target_curr,
+        "default_rate": str(default_rate),
+    }
+    if args.default_rate is None and fallback_rows():
+        # Default-rate rows are validation ERRORS unless the fallback
+        # was accepted with an explicit --default-rate: the stderr
+        # block feeds the .diag counters, the metadata lets a later
+        # taxjson-validate on this file (the crypto path) fail too.
+        emit_fallback_validation(target_curr, default_rate)
+        metadata["fx_default_rate_rows"] = fallback_rows()
 
     output_data = {
         "transactions": [tx.to_dict() for tx in converted_transactions],
-        "metadata": {
-            "converted_to": target_curr,
-            "default_rate": str(default_rate),
-        },
+        "metadata": metadata,
     }
     
     json.dump(output_data, sys.stdout, indent=2, sort_keys=True)

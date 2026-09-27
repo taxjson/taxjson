@@ -192,7 +192,15 @@ def main():
             global_total_issues += 1
             continue
             
+        fx_fallback = []
         if isinstance(data, dict) and "transactions" in data:
+            # taxjson-convert-currency records rows it converted at the
+            # default FX rate; each is an ERROR here (the crypto path
+            # validates the converted file, so --strict sees them).
+            meta = data.get("metadata")
+            if isinstance(meta, dict) and isinstance(
+                    meta.get("fx_default_rate_rows"), list):
+                fx_fallback = meta["fx_default_rate_rows"]
             data = data["transactions"]
             
         if not isinstance(data, list):
@@ -201,6 +209,12 @@ def main():
             continue
             
         issues, warnings = validate_transactions(data, filename=filename)
+        for r in fx_fallback:
+            if isinstance(r, dict):
+                issues[f"TX {r.get('id')} ({r.get('action')} "
+                       f"{r.get('symbol')} {r.get('date')})"].append(
+                    f"FX: no {r.get('currency')} rate for {r.get('date')} "
+                    f"({r.get('reason')}); converted at the default rate")
         
         num_tx = len(data)
         total_issues = sum(len(v) for v in issues.values())
