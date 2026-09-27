@@ -248,8 +248,10 @@ source_currencies = ["USD"]    # currencies you hold besides base_currency (FX r
 #                                   # the year WRITTEN (ITA s.49(1)); a buy-back is a loss in its
 #                                   # own year; assignment folds into the shares. "close" nets
 #                                   # premium and close together at the close instead.
-# option_grant_timing_since = 2025  # contracts written before this year keep close timing —
-#                                   # the transition from books filed the old way (default: year)
+option_grant_timing_since = 2025    # contracts written before this year keep close timing — the
+#                                   # transition from books filed the old way. `taxjson init` writes
+#                                   # it; set it ONCE (first year filed under grant timing) and keep
+#                                   # it in every later project (unset, it follows `year` — warned)
 # option_buyback_loss_superficial = false # grant timing: treat the loss on buying back a written
 #                                   # option as superficial when identical options are bought
 #                                   # within 30 days and held (strict reading; default off — a
@@ -725,9 +727,16 @@ contracts differ. Canada projects use this timing by default; `"close"`
 nets at the closing transaction (the US §1234 convention, which the US
 engine always uses). `option_grant_timing_since` keeps contracts written
 before that year on close timing, so a premium that was open at a prior
-year end is not taxed nowhere when you switch. `taxjson option-boundary`
+year end is not taxed nowhere when you switch. Set it once and never bump
+it with `year`: left unset it defaults to the project year, which moves —
+a 2026 project would put a contract the 2025 project taxed on grant timing
+back on close timing and tax its premium again — so `taxjson run` warns
+until it is set, and `taxjson init` writes it. `taxjson option-boundary`
 lists every straddling contract and says whether a filed year needs a
-T1-ADJ. Positions, `harvest` and the holdings export keep the economic
+T1-ADJ; a contract written in a LOCKED year (`filed/<year>.json`, which
+now records the timing that return used) but kept on transition close
+timing here is flagged ATTENTION, as is a contract past its expiry date
+with no expiry/assignment row in the export. Positions, `harvest` and the holdings export keep the economic
 book cost of an open written option; only the year attribution moves.
 
 Whether the loss on buying back a written option can be *superficial* —

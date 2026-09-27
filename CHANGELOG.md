@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **`taxjson carryover` ignored the option-timing settings**: the ledger
+  ran every year on close timing while the returns were filed on grant
+  timing (a filed 2025 of -601 showed as -1,000). The wrapper now passes
+  `option_premium_timing` / `option_grant_timing_since` /
+  `option_buyback_loss_superficial` (new `--option-*` flags on
+  `taxjson-carryover`), as do the `list --date` as-of recompute and the
+  raw base-currency holdings pass.
+- **`option_grant_timing_since` no longer drifts with `year`**: unset, it
+  defaults to the project year, so consecutive default projects taxed a
+  year-straddling premium twice (+399 in 2025, +298 in 2026 for a 298
+  economic gain). `taxjson init` now writes the key uncommented; `taxjson
+  run` and `option-boundary` warn on every run while a Canadian grant-
+  timing project leaves it unset; `close-year` records the timing in
+  `filed/<year>.json`; and `option-boundary` flags ATTENTION on a
+  contract written in a locked year but kept on transition close timing
+  here (definite when the lock records grant timing).
+- **`taxjson option-boundary`**: a contract past its expiry date within
+  the tax year with no expiry/assignment row is flagged "expired but no
+  expiry/assignment row — check the export" instead of listed as open;
+  with no taxable book in work/ the command exits 1 ("NOT CHECKED")
+  instead of printing the all-clear; `--json` adds `attention`, `amend`,
+  `since_explicit` and `missing_books`.
+
 - **Schedule 3 line routing** (`form-export --form schedule3`, `taxjson
   sum`): every disposition went on line 13199/13200 ("section 3, publicly
   traded shares"). Rows are now routed by property type to the 2025 form's

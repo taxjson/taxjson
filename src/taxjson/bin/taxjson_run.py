@@ -1345,8 +1345,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             if force or needs_rebuild(raw_base_gains, raw_base_json):
                 print("  raw base gains")
                 run_to_file(_cmd("taxjson-gains") + [
-                    "--country", country, str(raw_base_json),
-                ], raw_base_gains, capture_diag=False)
+                    "--country", country,
+                ] + option_timing_flags(settings) + [str(raw_base_json)],
+                            raw_base_gains, capture_diag=False)
             # Machine-readable holdings handoff (TOML) for live-pricing /
             # trading tools. ticker.map's JOURNAL lines net offsetting
             # cross-currency legs (Norbert's Gambit) during aggregation.
@@ -1827,6 +1828,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts", {})
     if _normalize_country(str(settings.get("country", "canada"))) == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
+    _since_warn = _grant_since_warning(settings)
+    if _since_warn:
+        print(f"taxjson: warning: {_since_warn}", file=sys.stderr)
 
     # Orphaned artifacts from RENAMED/REMOVED accounts: work/ files
     # keep matching the discovery globs (resolve_gains_files, fees
@@ -2313,8 +2317,9 @@ _TEMPLATE_OPTION_LINES = """\
 # Written-option premiums (ITA s.49(1)) — see `taxjson option-boundary`:
 # option_premium_timing           = "grant"   # gain in the year WRITTEN; "close" nets the premium at the
 #                                             #   closing transaction instead (the pre-s.49 behaviour = feature off)
-# option_grant_timing_since       = {year}      # contracts written before this year keep close timing — set it to
-#                                             #   the first year you FILE under grant timing and keep it every year after
+option_grant_timing_since         = {year}      # contracts written before this year keep close timing. SET ONCE to
+#                                             #   the first year you FILE under grant timing and keep it UNCHANGED
+#                                             #   in every later year's project (do not bump it with `year`)
 # option_buyback_loss_superficial = false     # true: strict s.54 reading — a buy-back loss is superficial when
 #                                             #   identical options are bought within 30 days and still held
 """
@@ -6027,13 +6032,41 @@ def cmd_redact(args: argparse.Namespace) -> None:
     raise SystemExit(redact_main(argv))
 
 
+def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
+    """The warning for a Canada project on grant timing with no explicit
+    `option_grant_timing_since`: the default is the PROJECT year, which
+    moves every year — consecutive default projects tax a year-straddling
+    premium twice (2026-09 audit: +399 in 2025, +298 in 2026, for a 298
+    economic gain). None when the key is set or does not apply."""
+    if _normalize_country(str(settings.get("country", "canada"))) in (
+            "us", "usa"):
+        return None
+    if str(settings.get("option_premium_timing", "grant")).strip().lower() \
+            != "grant":
+        return None
+    if settings.get("option_grant_timing_since") not in (None, ""):
+        return None
+    yr = settings.get("year")
+    return (f"[settings] option_grant_timing_since is not set, so grant "
+            f"timing (ITA s.49(1)) starts at the project year ({yr}) — a "
+            f"default that MOVES when you bump `year`: next year's project "
+            f"would put this year's year-straddling written options back "
+            f"on close timing and tax their premium a second time. Add "
+            f"`option_grant_timing_since = <first year you file under "
+            f"grant timing>` (e.g. {yr}) to [settings] once and keep it "
+            f"unchanged in every later year's project.")
+
+
 def cmd_option_boundary(args: argparse.Namespace) -> None:
     """`taxjson option-boundary [--json]`: every written option in the
     taxable accounts whose write and close straddle a tax-year boundary
     (or that is still open at the project year's end) — where each
     amount lands under the timing in force (ITA s.49), and whether a
     filed year needs a T1-ADJ. A `filed/<year>.json` lock is what turns
-    "if that year was filed" into a fact."""
+    "if that year was filed" into a fact; ATTENTION rows (a locked year
+    kept on transition close timing, an expired contract with no
+    expiry row) need action. Exit 1 when no taxable book exists (nothing
+    was checked), 0 otherwise."""
     import json
     from taxjson.lib.core import TaxTransaction
     from taxjson.lib.option_boundary import straddling
@@ -6046,21 +6079,37 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     kw = option_timing_from_settings(settings)
     timing = kw.get("option_premium_timing", "close") if kw else "close"
     since = kw.get("option_grant_since") if kw else None
+    _w = _grant_since_warning(settings)
+    if _w:
+        print(f"taxjson option-boundary: warning: {_w}", file=sys.stderr)
     filed_years = set()
+    filed_timing: Dict[int, Dict[str, Any]] = {}
     for f in (root / "filed").glob("*.json"):
         try:
-            filed_years.add(int(f.stem))
+            fy = int(f.stem)
         except ValueError:
-            pass
+            continue
+        filed_years.add(fy)
+        try:
+            _ot = (json.loads(f.read_text(encoding="utf-8")) or {}).get(
+                "option_timing")
+        except (OSError, ValueError, AttributeError):
+            _ot = None
+        if isinstance(_ot, dict):
+            filed_timing[fy] = _ot
     rows = []
+    books = 0
+    missing = []
     for name, acfg in sorted((cfg.get("accounts") or {}).items()):
         if not isinstance(acfg, dict) or acfg.get("type", "sheltered") != "taxable":
             continue
         base = cache / f"{name}_base.json"
         if not base.exists():
+            missing.append(name)
             print(f"taxjson option-boundary: warning: no {base.name} — run `taxjson run` first",
                   file=sys.stderr)
             continue
+        books += 1
         doc = json.loads(base.read_text(encoding="utf-8"))
         txs = []
         for r in (doc.get("transactions", doc) if isinstance(doc, dict) else doc):
@@ -6069,12 +6118,24 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                                              if k in TaxTransaction.__dataclass_fields__}))
             except TypeError:
                 continue
-        for r in straddling(txs, year, timing, since, filed_years):
+        for r in straddling(txs, year, timing, since, filed_years,
+                            filed_timing=filed_timing):
             r["account"] = r["account"] or name
             rows.append(r)
+    if not books:
+        # Nothing was checked: printing the all-clear here let the
+        # checklist mark the step done on a project that never ran.
+        sys.exit("taxjson option-boundary: NOT CHECKED — no taxable "
+                 "base files in work/ (run `taxjson run` first).")
+    amend = [r for r in rows if r["action"].startswith("T1-ADJ")]
+    attention = [r for r in rows if r.get("attention")]
     if getattr(args, "json", False):
         _json_out({"year": year, "timing": timing, "since": since,
-                   "filed_years": sorted(filed_years), "rows": rows})
+                   "since_explicit": settings.get(
+                       "option_grant_timing_since") not in (None, ""),
+                   "filed_years": sorted(filed_years), "rows": rows,
+                   "amend": len(amend), "attention": len(attention),
+                   "missing_books": missing})
         return
     print(f"OPTION YEAR-BOUNDARY REVIEW — tax year {year}; premium timing: {timing}"
           + (f" (contracts written from {since})" if timing == "grant" and since else "")
@@ -6093,11 +6154,12 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     for i, r in enumerate(rows, 1):
         print(f"{i:>3}. {r['symbol']} ({r['account']}, written {r['written']}): {r['where']}")
         print(f"     -> {r['action']}")
-    amend = [r for r in rows if r["action"].startswith("T1-ADJ")]
     print()
+    if attention:
+        print(f"{len(attention)} item(s) need ATTENTION (review; a locked year may need a T1-ADJ) — marked above.")
     if amend:
         print(f"{len(amend)} item(s) require an amended return (T1-ADJ) — listed above with the year and amount.")
-    else:
+    elif not attention:
         print("No amended return is required by these contracts under the timing in force.")
 
 
@@ -6679,7 +6741,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 continue
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
-                   "--as-of", as_of, "--no-wash"]
+                   "--as-of", as_of, "--no-wash"] + option_timing_flags(
+                       settings)
             if accounts_cfg.get(n, {}).get("type") == "taxable":
                 cmd.append("--taxable")
             res = _run_cmd(cmd + [str(b)], capture_output=True)
@@ -7042,7 +7105,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     argv = base_argv + crypto_argv + [
         "--country", _normalize_country(str(settings.get("country", "canada"))),
         "--base-currency", str(settings.get("base_currency", "CAD")),
-    ]
+    ] + option_timing_flags(settings)       # same timing as the returns
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
@@ -7303,9 +7366,11 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         doc = _json.loads(Path(pth).read_text(encoding="utf-8"))
         accounts[acct] = taxjson_filed.aggregates_from_gains(doc)
     basis = gains_basis_label(files)
+    from taxjson.lib.pipeline import option_timing_from_settings
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
-        accounts, force=args.force)
+        accounts, force=args.force,
+        option_timing=option_timing_from_settings(settings) or None)
     tot = _json.loads(path.read_text())["totals"]
     print(f"closed {year} ({basis}): realized {tot['realized']:,.2f}, "
           f"disallowed {tot['disallowed']:,.2f}, income "
