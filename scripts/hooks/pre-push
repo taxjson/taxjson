@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # Installed into .git/hooks/pre-push by scripts/dev-setup.sh. On a public
 # repository a push IS publication, so this is the last check: scan the
-# net diff the push would add (merge resolutions included) and the commit
-# messages, against the generic patterns and your private denylist.
-# Refuses on any hit or scanner error. Bypass knowingly: git push --no-verify
+# net diff the push would add (merge resolutions included), the commit
+# messages, annotated-tag messages, and the author / committer / tagger
+# identities of the NEW commits and tags, against the generic patterns and
+# your private denylist. Refuses on any hit or scanner error — except an
+# identity that equals this repo's configured user.name <user.email>: that
+# one is only WARNED about (history already carries it, and blocking it
+# would block every push; switch to a pseudonym to stop publishing it).
+# Bypass knowingly: git push --no-verify
 set -uo pipefail
 root="$(git rev-parse --show-toplevel)"
 remote="$1"
+check="$root/scripts/check-pii.sh"
 z=0000000000000000000000000000000000000000
+me="$(git config user.name || true) <$(git config user.email || true)>"
+refuse() { echo "pre-push: refusing to publish $1 — $2" >&2; exit 1; }
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$z" ] && continue                  # branch delete
   if [ "$remote_sha" != "$z" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
@@ -19,11 +27,34 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     diff_cmd=(git log -p --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
     log_range=("$local_sha" --not --remotes="$remote/*")
   fi
-  if ! "${diff_cmd[@]}" | "$root/scripts/check-pii.sh" --diff; then
-    echo "pre-push: refusing to publish $local_ref — see above." >&2; exit 1
+  if ! "${diff_cmd[@]}" | "$check" --diff; then
+    refuse "$local_ref" "see above."
   fi
-  if ! git log --format=%B "${log_range[@]}" | "$root/scripts/check-pii.sh" --text; then
-    echo "pre-push: refusing to publish $local_ref — a commit MESSAGE hit the scan." >&2; exit 1
+  if ! git log --format=%B "${log_range[@]}" | "$check" --text; then
+    refuse "$local_ref" "a commit MESSAGE hit the scan."
+  fi
+  # Identities of the commits this push adds (not of existing history).
+  ids="$(git log --format='%an <%ae>%n%cn <%ce>' "${log_range[@]}")"
+  if [ "$(git cat-file -t "$local_sha" 2>/dev/null)" = tag ]; then
+    tagobj="$(git cat-file tag "$local_sha")"
+    ids="$ids
+$(printf '%s\n' "$tagobj" | sed -nE 's/^tagger (.*) <([^>]*)> [0-9]+ [+-][0-9]{4}$/\1 <\2>/p')"
+    if ! printf '%s\n' "$tagobj" | sed '1,/^$/d' | "$check" --text; then
+      refuse "$local_ref" "the annotated TAG message hit the scan."
+    fi
+  fi
+  ids="$(printf '%s\n' "$ids" | grep -v '^$' | sort -u)"
+  others="$(printf '%s\n' "$ids" | grep -vxF -e "$me" || true)"
+  mine="$(printf '%s\n' "$ids" | grep -xF -e "$me" || true)"
+  if [ -n "$others" ] && ! printf '%s\n' "$others" | "$check" --identity; then
+    refuse "$local_ref" "an author/committer/tagger IDENTITY hit the scan."
+  fi
+  if [ -n "$mine" ] && ! printf '%s\n' "$mine" | "$check" --identity >/dev/null; then
+    echo "pre-push: WARNING: your configured git identity (user.name /" \
+         "user.email) matches the private denylist and is published in every" \
+         "commit and tag you push. Not blocking (it is this repo's configured" \
+         "user); set a pseudonym to stop: git config user.name <pseudonym>;" \
+         "git config user.email <id>+<login>@users.noreply.github.com" >&2
   fi
 done
 exit 0

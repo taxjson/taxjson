@@ -45,8 +45,10 @@ at `~/.config/taxjson/pii-denylist` (one regex per line: your real account
 numbers, name, addresses; it lives outside every repository, so the strings
 it guards are never themselves committed). It runs in every `scripts/ci.sh`
 mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs, which
-scans only the lines a push would add and refuses on any hit. Mark a genuine
-false positive with the word `pii-ok` on that line; bypass knowingly with
+scans only the lines, messages and author/committer/tagger identities a push
+would add and refuses on any hit (your own configured identity only warns).
+Mark a genuine false positive with a `# pii-ok` (or `pii-ok:`) comment on that
+line — the bare word does not count; bypass knowingly with
 `git push --no-verify`. Fixtures must be synthetic: fake account ids
 (`U1234567`, `99900001`), made-up ISINs, no real statements.
 
