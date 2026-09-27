@@ -581,7 +581,8 @@ class TestInterestGoldenValues(unittest.TestCase):
     against an independently derived closed form."""
 
     def test_single_shortfall_matches_closed_form(self):
-        start, end = date(2026, 3, 16), date(2026, 3, 26)
+        # 41 days: comfortably above CRA's $25 charging floor.
+        start, end = date(2026, 3, 16), date(2026, 4, 25)
         req = [{"date": start.isoformat(), "amount": 10000.0}]
         ip = interest_and_penalty(required=req, payments=[],
                                   annual_rate=0.08, end=end)

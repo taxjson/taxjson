@@ -264,11 +264,13 @@ source_currencies = ["USD"]    # currencies you hold besides base_currency (FX r
 # other_income = 120000        # instalments current-year basis) uses
 # other_losses = 0             # when the flags aren't given
 # basis = "current_year"       # current_year | prior_year | cra_reminder
-# prescribed_rate = 0.08       # CRA's overdue-tax rate — or, since CRA
-#                              # resets it quarterly and charges each day
-#                              # at the rate then in force:
-# prescribed_rates = [{ from = "2026-01-01", rate = 0.08 },
-#                     { from = "2026-07-01", rate = 0.09 }]
+# prescribed_rate = 0.07       # CRA's overdue-tax rate (optional: CRA's
+#                              # published quarterly rates are built in
+#                              # and used when neither key is set) — or,
+#                              # since CRA resets it quarterly and charges
+#                              # each day at the rate then in force:
+# prescribed_rates = [{ from = "2025-04-01", rate = 0.08 },
+#                     { from = "2025-07-01", rate = 0.07 }]
 # withheld = 0                 # tax already withheld at source this year
 # prior_year_net_tax = 55000   # last year's net tax owing (line 48500
 # second_prior_net_tax = 41000 #   minus withholding, per the NOA).
@@ -334,7 +336,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson winners [PERIOD] [--top N]` | Per-ticker realized gains RANKED — biggest winners and losers over a window (default: tax year); options grouped under their underlying. |
 | `taxjson ccd-sum` | Covered-call (short call) realized-gain summary per underlying over a window (default: tax year) — the windowed query twin of `reports/ccd.rpt`. |
 | `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year). |
-| `taxjson instalments` | Canadian tax instalments: what each of the four dates (Mar/Jun/Sep/Dec 15) calls for under your chosen basis, what you have paid, and the **offset interest** plus **s.163.1 penalty** that follow from any gap. The current-year basis is driven by `taxjson estimate` itself (AMT included). Configure `[instalments]` in `taxjson.toml`; `--json` for machines. |
+| `taxjson instalments` | Canadian tax instalments: what each of the four dates (Mar/Jun/Sep/Dec 15) calls for under your chosen basis, what you have paid, and the **offset interest** plus **s.163.1 penalty** that follow from any gap. The current-year basis is driven by `taxjson estimate` itself (AMT included). Interest uses CRA's published quarterly rates (built in; `prescribed_rate(s)` overrides), credit interest runs from the later of the payment date and January 1, and net interest of $25 or less is not charged; CRA charges instalment interest only if it sent you a reminder for the year, which the report says. Configure `[instalments]` in `taxjson.toml`; `--json` for machines. |
 | `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses` (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
 | `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (books recomputed via the engine's `--as-of` cutoff: full ACB + deferred-wash fidelity; pre-wash, pre-ticker.map); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block — one row per taxable account with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (short sales as |amounts|, sell commissions as outlays, denials folded into the ACB so proceeds − ACB − outlays is the allowed gain): the numbers TurboTax's capital-gains boxes ask for. Totals equal `form-export` lines 13199/13200. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`. |
@@ -460,26 +462,42 @@ bracketed on top of what you already earn. Taxable accounts only.
 both amounts — pure investment-income bracketing).
 
 ```
-TAX ESTIMATE — canada/ON, rates vintage 2025 (ESTIMATE ONLY, not filing numbers; taxable accounts only)
+TAX ESTIMATE — canada/ON, rates vintage 2026 (ESTIMATE ONLY, not filing numbers; taxable accounts only)
 
-  Other income                     200,000.00
-  Capital gains (taxable)           15,000.00  [30,000.00 realized - 0.00 other losses, x50%]
-  Eligible dividends (grossed)       1,380.00  [1,000.00 x1.38, Canadian-listed]
-  Foreign dividends                    500.00  [FTC assumed 75.00]
-  Payments in lieu                       0.00
+  Other income                      200,000.00
+  Capital gains (taxable)            15,000.00  [30,000.00 realized - 0.00 other losses, x50%]
+  Eligible dividends (grossed)        1,380.00  [1,000.00 x1.38, Canadian-listed]
+  Foreign dividends                     500.00  [FTC 75.00 — assumed 15% of foreign dividends]
+  Payments in lieu                        0.00
 
-  Tax with investments: 72,371.28 (federal 45,184.01 + ON 27,187.27)
-  Tax on other income alone: 64,694.29
-  => ESTIMATED TAX ON INVESTMENT INCOME: 7,677.00 CAD  (24.4% of 31,500.00)
+  Tax with investments: 72,598.76 (federal 44,729.50 + ON 27,869.26)
+  Tax on other income alone: 64,721.98
+  => ESTIMATED TAX ON INVESTMENT INCOME: 7,876.78 CAD  (25.0% of 31,500.00)
 ```
+
+The block ends with NOTE lines naming what the provincial figure
+included (ON: the surtax and the Ontario Health Premium, base vs with
+investments), the phased federal BPA when it applies, the provincial
+AMT arithmetic when AMT binds, and — when the project year has no
+built-in rate table — which year's tables ran instead (a year before
+the earliest table also says the post-2024 AMT shown did not apply).
 
 - **Canada** (`--province` or `province` under `[settings]`; ON/BC/AB):
   `--other-losses` are prior-year capital losses in **full dollars**,
-  netted against gains before the 50% inclusion. Canadian-listed
-  dividends are treated as eligible (38% gross-up + DTC); foreign
-  dividends as ordinary income with the 15% treaty withholding assumed
-  creditable. Ontario's surtax is modelled; the BPA phase-out and QC
-  are not.
+  netted against gains before the 50% inclusion (deducted below net
+  income, so they do not restore a phased BPA). Canadian-listed
+  dividends are treated as eligible (38% gross-up + DTC) — non-eligible
+  dividends are not modelled; foreign dividends as ordinary income with
+  the 15% treaty withholding assumed creditable (the books' actual TAX
+  rows when present). A crypto account's dividends are staking rewards:
+  ordinary income, no withholding, no foreign tax credit. Modelled: the
+  federal enhanced BPA phase-down (full amount up to the 29% bracket,
+  the minimum from the 33% bracket, linear between, on net income),
+  Ontario's surtax and Health Premium (up to $900), and the provincial
+  AMT — ON 24.63% of the federal excess plus ON surtax on it (2024+;
+  2026 assumed until the form is out), BC 33.7% / 34.9% / 40.0% for
+  2024 / 2025 / 2026, AB 35%. Not modelled: QC, low-income reductions,
+  non-eligible dividends.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
   brackets; losses net ST first, then LT, then up to $3,000 of ordinary

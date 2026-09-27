@@ -2343,12 +2343,12 @@ _TEMPLATE_INSTALMENTS = """
 # # here reads as "I owed nothing" and suppresses both.
 # prior_year_net_tax   = 55000
 # second_prior_net_tax = 41000
-# prescribed_rate      = 0.08             # CRA's overdue-tax rate; or a dated
+# prescribed_rate      = 0.07             # CRA's overdue-tax rate; or a dated
 # # schedule, since CRA resets it quarterly and charges each day at the
 # # rate then in force:
 # # prescribed_rates = [
-# #   { from = "2026-01-01", rate = 0.08 },
-# #   { from = "2026-07-01", rate = 0.09 },
+# #   { from = "2025-04-01", rate = 0.08 },
+# #   { from = "2025-07-01", rate = 0.07 },
 # # ]
 # paid = [
 #   { date = "2026-03-16", amount = 15000 },
@@ -4868,7 +4868,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
     taxable_accounts = {n for n, c in cfg.get("accounts", {}).items()
                         if c.get("type") == "taxable"}
     est = dict(realized=0.0, st=0.0, lt=0.0, div_ca=0.0,
-               div_foreign=0.0, pil=0.0)
+               div_foreign=0.0, pil=0.0, staking=0.0)
     if want_estimate and not cfg:
         sys.exit("taxjson sum: the tax estimate needs taxjson.toml "
                  "(country and account types).")
@@ -4955,8 +4955,16 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     est["st"] += float(s.get("st_gain", 0) or 0)
                     est["lt"] += float(s.get("lt_gain", 0) or 0)
                     d = float(s.get("div", 0) or 0)
-                    est["div_ca" if is_ca_listed else "div_foreign"] += d
-                    if not is_ca_listed:
+                    # A crypto account's DIVIDEND rows are staking
+                    # rewards: ordinary income, nothing withheld — not
+                    # foreign dividends with an assumed 15% FTC.
+                    if (cfg.get("accounts", {}).get(acct)
+                            or {}).get("crypto"):
+                        est["staking"] += d
+                    elif is_ca_listed:
+                        est["div_ca"] += d
+                    else:
+                        est["div_foreign"] += d
                         _foreign_by_acct[acct] = (
                             _foreign_by_acct.get(acct, 0.0) + d)
                     est["pil"] += float(s.get("pil", 0) or 0)
@@ -5296,9 +5304,10 @@ def _instalments_doc(root: Path, r: Dict[str, Any], year,
             not in ("canada", "ca"):
         return None
     net = _net_tax_owing(r, float(icfg.get("withheld") or 0.0))
+    # None (no rate configured) -> CRA's published quarterly rates.
     rate = (icfg.get("prescribed_rates")
             if icfg.get("prescribed_rates")
-            else float(icfg.get("prescribed_rate") or 0.0))
+            else icfg.get("prescribed_rate"))
     doc = INST.build(
         year=int(year), basis=icfg["basis"], current_net_tax=net,
         payments=icfg.get("paid") or [], annual_rate=rate,
@@ -5325,8 +5334,8 @@ def cmd_instalments(args: argparse.Namespace) -> None:
              "  [instalments]\n"
              "  basis = \"current_year\"      "
              "# current_year | prior_year | cra_reminder\n"
-             "  prescribed_rate = 0.08      "
-             "# CRA's quarterly overdue-tax rate\n"
+             "  prescribed_rate = 0.07      "
+             "# optional: CRA's published rates are built in\n"
              "  withheld = 0                "
              "# tax already withheld at source\n"
              "  paid = [{ date = \"2026-03-15\", amount = 15000 }]")
@@ -5360,12 +5369,6 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         _json_out(doc)
         return
     print(INST.render(doc, base))
-    if not doc.get("rate_configured"):
-        print()
-        print(_wrap_note(
-            "NOTE: no [instalments] prescribed_rate set — interest "
-            "shown as 0. CRA posts the overdue-tax rate quarterly; "
-            "set it to price the shortfall."))
 
 
 def cmd_estimate(args: argparse.Namespace) -> None:
@@ -5483,7 +5486,8 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                                    other_income=other_income,
                                    other_losses=other_losses,
                                    province=prov,
-                                   actual_withheld=actual_withheld)
+                                   actual_withheld=actual_withheld,
+                                   staking=est.get("staking", 0.0))
         except ValueError as e:
             _die(str(e))
     unterm = est["realized"] - est["st"] - est["lt"]
@@ -5495,7 +5499,8 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
               f"re-run `taxjson run` to refresh.", file=sys.stderr)
     r = estimate_usa(st=st_in, lt=est["lt"], year=_est_year,
                      qualified_div=est["div_ca"] + est["div_foreign"],
-                     pil=est["pil"], other_income=other_income,
+                     pil=est["pil"] + est.get("staking", 0.0),
+                     other_income=other_income,
                      other_losses=other_losses)
     r["st_input"] = round(st_in, 2)
     return r
@@ -5538,7 +5543,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
              f"[FTC {money(r['ftc_assumed'])} — "
              f"{r.get('ftc_source', 'assumed 15%')}]"),
             ("Payments in lieu", est["pil"], ""),
-        ]
+        ] + ([("Crypto staking (ordinary)", r["staking"],
+               "[no withholding, no FTC]")]
+             if r.get("staking") else [])
         for label, amt, note in rows:
             print(f"  {label:<30}{money(amt):>14}"
                   + (f"  {note}" if note else ""))
@@ -5601,7 +5608,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             print(f"\n  CALCULATION TRACE — BASE (other income only) "
                   f"vs WITH investments")
             print(f"  Taxable income: BASE {money(tb['ti'])} | WITH "
-                  f"{money(tw['ti'])} = {money(other_income + est['pil'])}"
+                  f"{money(tw['ti'])} = "
+                  f"{money(other_income + est['pil'] + r.get('staking', 0.0))}"
                   f" ordinary + {money(r['taxable_gain'])} taxable gains"
                   f" + {money(r['grossed_eligible'])} grossed dividends"
                   f" + {money(est['div_foreign'])} foreign")
@@ -5610,7 +5618,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 _trace_bracket_rows(CA_FED_BRACKETS, tb["ti"], tw["ti"]),
                 money)
             _print_trace_table([
-                (f"BPA credit ({CA_FED_BPA:,.0f} @ "
+                (f"BPA credit ({CA_FED_BPA:,.0f} max @ "
                  f"{CA_FED_BRACKETS[0][1] * 100:.0f}%)",
                  -tb["fed_bpa"], -tw["fed_bpa"]),
                 (f"DTC 15.0198% x {money(r['grossed_eligible'])}",
@@ -5635,8 +5643,11 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                    in zip(tb["surtax_parts"], tw["surtax_parts"])]
                 + [(f"DTC {provt['dtc_eligible'] * 100:.2f}% x "
                     f"{money(r['grossed_eligible'])}",
-                    -tb["prov_dtc"], -tw["prov_dtc"]),
-                   (f"= {r['province']}", r["tax_base"]["provincial"],
+                    -tb["prov_dtc"], -tw["prov_dtc"])]
+                + ([("Ontario Health Premium", tb["prov_ohp"],
+                     tw["prov_ohp"])] if provt.get("health_premium")
+                   else [])
+                + [(f"= {r['province']}", r["tax_base"]["provincial"],
                     r["tax_with"]["provincial"])], money)
             _print_trace_table(
                 [("TOTAL", r["tax_base"]["total"],
@@ -5668,10 +5679,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                           f"{money(_idoc['shortfall']):>14}"
                           f"  [taxjson instalments]")
         print()
-        print(_wrap_note(
-            "Assumes: Canadian-listed dividends are all ELIGIBLE; "
-            "foreign withholding fully creditable; no BPA phase-out; "
-            "interest income not included — see divs/fees views."))
+        for _n in r.get("notes") or []:
+            print(_wrap_note("NOTE: " + _n))
+        print(_wrap_note(r["assumptions"]))
     else:
         st_in = r["st_input"]
         print(f"TAX ESTIMATE — usa (single, standard deduction), rates "
@@ -5687,7 +5697,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             ("Qualified dividends",
              est["div_ca"] + est["div_foreign"], ""),
             ("Payments in lieu", est["pil"], "[ordinary]"),
-        ]
+        ] + ([("Crypto staking", est["staking"], "[ordinary]")]
+             if est.get("staking") else [])
         for label, amt, note in rows:
             print(f"  {label:<30}{money(amt):>14}"
                   + (f"  {note}" if note else ""))
@@ -5746,6 +5757,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             print(f"    => WITH - BASE + NIIT = "
                   f"{money(r['estimated_tax'])} estimated tax on "
                   f"investment income")
+        for _n in r.get("notes") or []:
+            print(_wrap_note("NOTE: " + _n, indent=""))
         print("Assumes: single filer, standard deduction, all dividends "
               "QUALIFIED, no state tax; interest income not included.")
 

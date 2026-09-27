@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- **Estimate: Ontario AMT corrected** — the Ontario additional tax for
+  minimum tax is 24.63% of the federal AMT excess from 2024 (it was a
+  flat 33.67%, the pre-2024 factor), and the Ontario surtax is now
+  recomputed on basic ON tax plus that amount (5006-D "Line 72"). The
+  2026 factor is marked assumed until the 2026 form is published.
+  Gains-only $400k, ON 2026: provincial AMT 1,216.75 → 1,388.50.
+- **Estimate: BC AMT factor by year** — 33.7% (2024), 34.9% (2025),
+  40.0% (2026), per BC Income Tax Act s.4.8 (was 33.7% for all years).
+- **Estimate: Alberta 2026 eligible dividend credit** is 8.12% (the
+  table had 8%); **BC 2026 BPA** 13,216 (was 13,217).
+- **Estimate: federal BPA phase-down** — the enhanced basic personal
+  amount now falls linearly on net income between the 29% and 33%
+  bracket thresholds (2026: 16,452 → 14,829), in regular tax and in
+  the AMT's 50% credit. ON, 250k other income + 300k gains, 2026:
+  estimate 79,955.12 → 79,980.14.
+- **Estimate: Ontario Health Premium** (up to $900) is modelled for ON
+  and shown in the `--verbose` trace.
+- **Estimate: crypto staking** rewards (a crypto account's dividends)
+  are ordinary income with no withholding — they were counted as
+  foreign dividends with an assumed 15% foreign tax credit.
+- **Estimate notes**: the block now says which surtax/health premium
+  applied, the phased BPA, the provincial AMT arithmetic, and — when
+  the project year has no built-in rate table — which year's tables
+  ran (a year before 2024 also says the post-2024 AMT did not apply).
+  The assumptions line keeps disclosing that non-eligible dividends are
+  treated as eligible.
+- **Instalments**: credit interest runs from the later of the payment
+  date and January 1; net interest of $25 or less is not charged; the
+  report says CRA charges instalment interest only after a reminder.
+  With no `prescribed_rate(s)` set, CRA's published quarterly rates
+  (2024–2026, built in) are used instead of 0%. Scaffold and README
+  rate examples corrected (2025 Q3 onward: 7%).
+
 
 ## v0.16.0 (2026-09-25)
 

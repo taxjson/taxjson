@@ -27,9 +27,14 @@ class TestBracketMath(unittest.TestCase):
 
 
 class TestCanadaEstimate(unittest.TestCase):
-    """other_income = 200,000 puts every increment in flat regions:
-    federal 29% (177,882-253,414), ON 12.16% (150,000-220,000) with the
-    full 56% surtax factor (basic tax far above both thresholds)."""
+    """No year -> the earliest (2024) vintage. other_income = 200,000
+    puts every increment in the federal 29% band (173,205-246,752) and
+    ON 12.16% (150,000-220,000) with the full 56% surtax factor (basic
+    tax far above both thresholds). Two non-flat pieces are added by
+    hand: the federal BPA phase-down over that same 29% band (2024:
+    15,705 -> 14,156, so each $1 of net income costs
+    0.15 x 1,549/73,547 = 0.0031592 of credit) and the Ontario Health
+    Premium (750 at 200,000, +25% of the excess up to 900 at 200,600)."""
 
     def _run(self, **kw):
         base = dict(realized=0.0, eligible_div=0.0, foreign_div=0.0,
@@ -39,27 +44,33 @@ class TestCanadaEstimate(unittest.TestCase):
         return estimate_canada(**base)
 
     def test_capital_gain_marginal(self):
-        # 1,000 gain -> 500 taxable. fed 500*.29 = 145;
-        # ON 500*.1216*1.56 = 94.85 -> 239.85 total.
+        # 1,000 gain -> 500 taxable. fed 500*.29 = 145
+        #   + BPA phase-down 500*.0031592 = 1.58;
+        # ON 500*.1216*1.56 = 94.85; OHP 750 -> 750+.25*500 = 875: +125
+        # -> 145 + 1.58 + 94.85 + 125 = 366.43.
         r = self._run(realized=1000.0)
         self.assertEqual(r["taxable_gain"], 500.0)
-        self.assertAlmostEqual(r["estimated_tax"], 239.85, delta=0.5)
-        self.assertAlmostEqual(r["avg_rate_pct"], 23.98, delta=0.1)
+        self.assertAlmostEqual(r["estimated_tax"], 366.43, delta=0.02)
+        self.assertAlmostEqual(r["avg_rate_pct"], 36.64, delta=0.01)
 
     def test_eligible_dividend_marginal(self):
         # 1,000 eligible -> grossed 1,380.
-        # fed: 1380*.29 - 1380*.150198 = 192.93
-        # ON:  1380*.1216*1.56 - 1380*.10 = 264.79 - 138 = 123.78
+        # fed: 1380*.29 - 1380*.150198 = 192.93; BPA 1380*.0031592 = 4.36
+        # ON:  1380*.1216*1.56 - 1380*.10 = 261.78 - 138 = 123.78
+        # OHP: taxable 201,380 >= 200,600 -> 900 - 750 = 150
+        # -> 192.93 + 4.36 + 123.78 + 150 = 471.07
         r = self._run(eligible_div=1000.0)
         self.assertEqual(r["grossed_eligible"], 1380.0)
-        self.assertAlmostEqual(r["estimated_tax"], 316.71, delta=0.5)
+        self.assertAlmostEqual(r["estimated_tax"], 471.07, delta=0.02)
 
     def test_foreign_dividend_ftc(self):
-        # 1,000 foreign: fed 290 - 150 FTC; ON 121.6*1.56 = 189.70
+        # 1,000 foreign: fed 290 - 150 FTC + BPA 1000*.0031592 = 3.16;
+        # ON 121.6*1.56 = 189.70; OHP +150 (taxable 201,000)
         r = self._run(foreign_div=1000.0)
         self.assertEqual(r["ftc_assumed"], 150.0)
         self.assertAlmostEqual(r["estimated_tax"],
-                               290 - 150 + 189.70, delta=0.5)
+                               290 - 150 + 3.16 + 189.70 + 150,
+                               delta=0.02)
 
     def test_other_losses_net_before_inclusion(self):
         r = self._run(realized=10000.0, other_losses=4000.0)
@@ -71,7 +82,11 @@ class TestCanadaEstimate(unittest.TestCase):
         r = self._run(realized=1000.0, other_losses=5000.0)
         self.assertEqual(r["taxable_gain"], 0.0)
         self.assertEqual(r["losses_unused"], 4000.0)
-        self.assertEqual(r["estimated_tax"], 0.0)
+        # Taxable income is unchanged, but the carryforward is
+        # deducted BELOW net income (line 25300): the 500 taxable gain
+        # still lifts net income, so the phased BPA shrinks —
+        # 500 x 0.15 x 1,549/73,547 = 1.58. Nothing else moves.
+        self.assertAlmostEqual(r["estimated_tax"], 1.58, delta=0.01)
 
     def test_unsupported_province(self):
         with self.assertRaises(ValueError):
@@ -165,6 +180,7 @@ class TestSumEstimateCli(unittest.TestCase):
         # by the unit tests above).
         from taxjson.lib.tax_estimate import estimate_canada
         exp = estimate_canada(realized=30000.0, eligible_div=1000.0,
+                              year=2026,
                               foreign_div=500.0, pil=0.0,
                               other_income=200000.0, other_losses=0.0,
                               province="ON")
@@ -184,13 +200,21 @@ class TestSumEstimateCli(unittest.TestCase):
         # year=2026 project -> 2026 vintage: indexed brackets, 14%.
         self.assertIn("0-58,523 @ 14.00%", out)
         self.assertIn("150,000-216,880 @ 12.16%", out)     # ON slice
-        self.assertIn("BPA credit (16,452 @ 14%)", out)
+        self.assertIn("BPA credit (16,452 max @ 14%)", out)
         self.assertIn("surtax 20% of basic over 5,818", out)
         self.assertIn("surtax 36% of basic over 7,446", out)
         self.assertIn("DTC 15.0198% x 1,380.00", out)
         self.assertIn("FTC 15% x 500.00", out)
         self.assertIn("= basic tax", out)
-        self.assertIn("WITH - BASE = 7,677.00", out)
+        self.assertIn("Ontario Health Premium", out)
+        # 2026, other income 200,000 -> WITH taxable 216,880:
+        # fed: 16,880 x .29 = 4,895.20; BPA phase-down (1,623/77,042
+        #   per $ over 181,440): 16,061.01 -> 15,705.41, x .14 = +49.78;
+        #   DTC -207.27; FTC -75.00 -> 4,662.71
+        # ON: 16,880 x .1216 = 2,052.61; surtax x .56 = 1,149.46;
+        #   DTC -138.00; OHP 750 -> 900 = +150 -> 3,214.07
+        # total 4,662.71 + 3,214.07 = 7,876.78
+        self.assertIn("WITH - BASE = 7,876.78", out)
 
     def test_verbose_usa_trace(self):
         with tempfile.TemporaryDirectory() as tmp:
