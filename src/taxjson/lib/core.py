@@ -1387,6 +1387,17 @@ class CanadaTaxRules(TaxRules):
                         # the user re-dates or hand-applies it. Wash
                         # virtual ADJUSTs (WASH_*) always target held
                         # pools by construction.
+                        # A return of capital (negative, non-wash
+                        # ADJUST) on a DRAINED pool has no ACB left to
+                        # reduce: it is a capital gain in the year it
+                        # is received — the s.40(3) outcome with an
+                        # ACB of nil — and must not touch total_cost
+                        # (it used to leak into the NEXT purchase's
+                        # ACB, understating that position's later
+                        # gain; seen on real 2026 data).
+                        _empty_roc = (abs(pool['qty']) <= 1e-6
+                                      and not str(tx.id or '').startswith('WASH_')
+                                      and float(tx.net_amount) < -0.005)
                         if (abs(pool['qty']) <= 1e-6
                                 and not str(tx.id or '').startswith('WASH_')
                                 and abs(float(tx.net_amount)) > 0.005
@@ -1395,18 +1406,50 @@ class CanadaTaxRules(TaxRules):
                             # whole book each pass, so an unconditional
                             # warning printed once PER ITERATION — one
                             # data problem masqueraded as several.
-                            print(
-                                f"warning: {symbol} ADJUST of "
-                                f"{float(tx.net_amount):.2f} on {tx.date} "
-                                f"hits an EMPTY pool — the position was "
-                                f"fully sold before this ROC posted, so "
-                                f"the amount would leak into the NEXT "
-                                f"position's ACB instead of the one that "
-                                f"earned it. Re-date the ADJUST before "
-                                f"the final sale (adjusting that "
-                                f"disposition's gain) or apply it "
-                                f"manually.", file=sys.stderr)
+                            if _empty_roc:
+                                print(
+                                    f"warning: {symbol} return of capital "
+                                    f"of {-float(tx.net_amount):.2f} on "
+                                    f"{tx.date} hits an EMPTY pool — the "
+                                    f"position was fully sold before it "
+                                    f"posted, so there is no ACB to "
+                                    f"reduce: booked as a capital gain in "
+                                    f"that year (ITA s.40(3), ACB nil). "
+                                    f"If it belongs to the sold position, "
+                                    f"re-date the ADJUST before the final "
+                                    f"sale instead.", file=sys.stderr)
+                            else:
+                                print(
+                                    f"warning: {symbol} ADJUST of "
+                                    f"{float(tx.net_amount):.2f} on {tx.date} "
+                                    f"hits an EMPTY pool — the position was "
+                                    f"fully sold before this ADJUST posted, so "
+                                    f"the amount would leak into the NEXT "
+                                    f"position's ACB instead of the one that "
+                                    f"earned it. Re-date the ADJUST before "
+                                    f"the final sale (adjusting that "
+                                    f"disposition's gain) or apply it "
+                                    f"manually.", file=sys.stderr)
                         _applied_adj = float(tx.net_amount)
+                        if _empty_roc:
+                            _applied_adj = 0.0
+                            _excess = -float(tx.net_amount)
+                            if tx.id in taxable_ids:
+                                iteration_realized_gains.append({
+                                    'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
+                                    'date_settle': tx.date_settle or tx.date,
+                                    'gain': _excess, 'qty': 0.0,
+                                    'cost': 0.0, 'proceeds': _excess,
+                                    'disallowed': 0.0, 'taxable_gain': _excess,
+                                    'days_held': 0, 'account': tx.account,
+                                    'currency': tx.currency,
+                                    'commission': 0.0, 'fee': 0.0,
+                                    'direction': 'LONG',
+                                    'tainted': pool.get('tainted', False),
+                                    'deemed': True,
+                                    'note': 'DEEMED GAIN — return of capital received with no shares held (ITA s.40(3), ACB nil)',
+                                    'trace': [],
+                                })
                         if str(tx.id or '').startswith('WASH_'):
                             # Superficial-loss deferral: the invariant is
                             # "reduce future gains by the denied loss".

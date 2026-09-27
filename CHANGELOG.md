@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Return of capital after the position is sold (Canada).** A ROC that
+  posts when the pool is empty has no ACB to reduce; it is now a capital
+  gain in the year received (s.40(3) with a nil ACB, noted on the row)
+  instead of silently lowering the NEXT purchase's ACB (which moved the
+  gain to a later year). Positive ADJUSTs on an empty pool are unchanged.
 - **Mergers with per-account delivered ratios (Canada).** A merger whose
   accounts received different whole-share counts (15 → 15 in one, 40 → 41
   in another) emitted one rename per account at its own ratio; the
