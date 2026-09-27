@@ -1,0 +1,14 @@
+# Weekly dependency update PRs: the pip extras declared in pyproject.toml
+# (fastapi, python-multipart, yfinance, ...) and the pinned GitHub Actions.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
