@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Negative proceeds (Canada).** A sell whose commission exceeds its
+  gross — closing a worthless option at $0.01, writing one for less
+  than the fee — now books its proceeds signed (negative) instead of
+  as a positive amount: the loss grows by twice the shortfall (-201.00
+  was booked for a -220.90 loss). Buys are unchanged.
 - **s.49 grant timing: an assignment folds each premium once.** Every
   short opening — a write before `option_grant_since`, the short
   leftover of a sell that crosses zero — is now a lot, consumed FIFO by

@@ -975,6 +975,19 @@ class CanadaTaxRules(TaxRules):
         _grant_mode = (str(option_premium_timing or 'close').lower() == 'grant')
         _lot_seq = [0]
 
+        def _trade_money(tx) -> float:
+            """The trade's money in pool terms: a BUY's cost (magnitude —
+            parsers and .tt books spell it either sign), a SELL's
+            proceeds SIGNED. Schema: trade net_amount is positive and
+            direction lives in the quantity, so a negative SELL amount
+            only arises when the commission exceeds the gross (closing a
+            worthless option for $0.01, writing one for less than the
+            fee): the proceeds really are negative. abs() booked them
+            as positive proceeds (a -220.90 loss reported as -201.00;
+            2026-09 engine audit)."""
+            _n = float(tx.net_amount or 0.0)
+            return _n if float(tx.quantity or 0.0) < 0 else abs(_n)
+
         def _grant_applies(tx) -> bool:
             if not _grant_mode or not is_option_symbol(tx.symbol or ''):
                 return False
@@ -1561,7 +1574,7 @@ class CanadaTaxRules(TaxRules):
                     else:
                         if is_opening:
                             # BUY (or Short opening)
-                            effective_cost = abs(tx.net_amount) + (internal_adj if qty > 0 else -internal_adj)
+                            effective_cost = _trade_money(tx) + (internal_adj if qty > 0 else -internal_adj)
                             pool['total_cost'] += D(effective_cost)
                             _pw = pool.pop('pending_wash', 0.0)
                             if _pw > 1e-9:
@@ -1625,7 +1638,7 @@ class CanadaTaxRules(TaxRules):
                             
                             # Apportion adjustment
                             chunk_adj = internal_adj * (closing_qty / abs(qty))
-                            proceeds = abs(tx.net_amount) * (closing_qty / abs(qty))
+                            proceeds = _trade_money(tx) * (closing_qty / abs(qty))
                             effective_proceeds = proceeds + (chunk_adj if pool['qty'] < 0 else -chunk_adj)
                             
                             gain = (effective_proceeds - cost_basis) if pool['qty'] > 0 else (cost_basis - effective_proceeds)
@@ -1774,7 +1787,7 @@ class CanadaTaxRules(TaxRules):
                                 leftover_ratio = leftover / abs(qty)
                                 leftover_adj = internal_adj * leftover_ratio
                                 eff_cost_leftover = (
-                                    abs(tx.net_amount) * leftover_ratio
+                                    _trade_money(tx) * leftover_ratio
                                     + (leftover_adj if qty > 0 else -leftover_adj)
                                 )
                                 pool['qty'] = (leftover if qty > 0 else -leftover)
