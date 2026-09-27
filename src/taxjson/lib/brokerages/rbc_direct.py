@@ -87,6 +87,7 @@ class RbcBrokerage(BaseBrokerage):
             symbol_currency.setdefault(sym, cur)
 
         transactions: List[Dict[str, Any]] = []
+        expiries: List[Dict[str, Any]] = []     # option expiry rows
         merger_rows = 0
         self._rows_seen = 0
         for row in rows:
@@ -142,6 +143,8 @@ class RbcBrokerage(BaseBrokerage):
                 tx = self._build_trade(row, activity, desc, symbol, currency, date, date_raw, net)
                 if tx:
                     transactions.append(tx)
+                    if tx.pop('_expiry', False):
+                        expiries.append(tx)
             elif is_roc_description(desc):
                 self.note_row_consumed()
                 # BEFORE the dividend branch: ROC rows arrive with
@@ -185,6 +188,7 @@ class RbcBrokerage(BaseBrokerage):
                 # new RBC activity/description variant lost the row with
                 # zero signal. Count it instead.
                 self.count_skip(f"activity {activity.strip() or '?'!s}")
+        self.clamp_settlement_to_expiry(transactions, expiries)
         # Parser-level disambiguation so a downstream `taxjson-sort --dedup`
         # can't collapse byte-identical split-fill rows. RBC's CSV rarely
         # collides at second precision but the protection is defensive
@@ -330,15 +334,29 @@ class RbcBrokerage(BaseBrokerage):
 
         settle_raw = row.get('Settlement Date') or ''
         settle_dt = self.parse_date(settle_raw, *_DATE_FMTS)
+        # Blank-settle fallbacks compute from the already-normalized ISO
+        # `date`: the raw cell is often "January 19, 2026", which the
+        # old "%m/%d/%Y"-only parse could not read — the raw string
+        # came back verbatim as a non-ISO date_settle.
         if settle_dt:
             date_settle = settle_dt.strftime("%Y-%m-%d")
         elif opt:
             # Options settle T+1 in all eras.
-            date_settle = self.settlement_date_t1(date_raw, "%m/%d/%Y")
+            date_settle = self.settlement_date_t1(date, "%Y-%m-%d")
         else:
             # Era- and market-aware fallback (T+2 pre-cutover equities).
-            date_settle = self.equity_settlement_date(date_raw, currency,
-                                                      "%m/%d/%Y")
+            date_settle = self.equity_settlement_date(date, currency,
+                                                      "%Y-%m-%d")
+        # An option EXPIRY has no settlement cycle, and RBC posts it
+        # the next business day (a Friday 01/16/26 expiry arrives dated
+        # Monday 01/19/26): book it on the contract's own expiry date
+        # with settle == date, so a Dec-31 expiry stays in its year.
+        du = (desc or '').upper()
+        is_expiry = bool(opt) and (bool(re.match(r'^\s*EXP\s*-', du))
+                                   or 'EXPIRED' in du)
+        if is_expiry:
+            date = self.option_expiry_booking_date(date, opt['expiry'])
+            date_settle = date
 
         qty = self.clean_number(row.get('Quantity'))
         if 'Sell' in activity or 'Sell' in desc:
@@ -367,7 +385,7 @@ class RbcBrokerage(BaseBrokerage):
         return {
             'action': action,
             'date': date,
-            'time': '09:30:00',
+            'time': '16:00:00' if is_expiry else '09:30:00',
             'date_settle': date_settle,
             'symbol': symbol,
             'quantity': qty,
@@ -381,6 +399,8 @@ class RbcBrokerage(BaseBrokerage):
             # description-keyed --security-overrides rule) can correct a
             # mislabeled ticker. Dividend/tax/interest rows already do.
             'description': desc,
+            # Popped by parse_file (feeds clamp_settlement_to_expiry).
+            '_expiry': is_expiry,
         }
 
     def _build_dividend(self, symbol, currency, date, desc, net, *, suffix_currency=None):

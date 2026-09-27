@@ -1052,7 +1052,9 @@ class TestKnownIssuesGraduated(unittest.TestCase):
         self.assertEqual(len(txs), 2)
         by_sym = {t['symbol']: t for t in txs}
         self.assertAlmostEqual(by_sym['BTC']['quantity'], 0.10)
-        self.assertAlmostEqual(by_sym['ETH']['quantity'], -1.85)
+        # cost 1.85 ETH + the 0.003 ETH fee (trades-CSV fee is in QUOTE
+        # units): the fee coins left the balance too.
+        self.assertAlmostEqual(by_sym['ETH']['quantity'], -1.853)
         for t in txs:
             self.assertEqual(t['currency'], 'USD')
             self.assertEqual(t['price'], 0.0)   # fill-crypto backfills

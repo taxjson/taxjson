@@ -109,21 +109,25 @@ class TestIbRoc(unittest.TestCase):
         'Realized P/L,MTM P/L,Code\n')
     DIV_HDR = 'Dividends,Header,Currency,Account,Date,Description,Amount\n'
 
-    def _parse(self, body):
+    def _parse(self, body, foreign_roc=None):
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv',
                                          delete=False) as f:
             f.write(self.STMT + body)
             fname = f.name
         try:
-            return IbBrokerage().parse_file(Path(fname))
+            ib = IbBrokerage()
+            if foreign_roc is not None:
+                ib.foreign_return_of_capital = foreign_roc
+            return ib.parse_file(Path(fname))
         finally:
             os.remove(fname)
 
-    def test_roc_row_becomes_negative_adjust(self):
+    def test_canadian_issuer_roc_becomes_negative_adjust(self):
+        # Canadian ISIN (T3 box 42 style): an ACB reduction, as before.
         body = (self.DIV_HDR +
-                'Dividends,Data,USD,U1,2026-06-30,'
-                'HR(US1234567890) Return of Capital USD 0.12 per Share,'
+                'Dividends,Data,CAD,U1,2026-06-30,'
+                'QZRT(CA0000000011) Return of Capital CAD 0.12 per Share,'
                 '24.00\n')
         txs = self._parse(body)
         adjusts = [t for t in txs if t['action'] == 'ADJUST']
@@ -131,59 +135,124 @@ class TestIbRoc(unittest.TestCase):
         t = adjusts[0]
         self.assertEqual(t['type'], 'roc')
         self.assertAlmostEqual(t['net_amount'], -24.00, places=2)
-        self.assertEqual(t['symbol'], 'HR.US')
+        self.assertEqual(t['symbol'], 'QZRT.TO')
         self.assertFalse([x for x in txs if x['action'] == 'DIVIDEND'])
 
-    def test_roc_reversal_row_nets_positive_adjust(self):
+    def test_canadian_roc_reversal_row_nets_positive_adjust(self):
         # IB posts re-characterizations as a negative reversal plus a
         # corrected row; the reversal must become a POSITIVE adjust so
         # the pair nets out.
         body = (self.DIV_HDR +
-                'Dividends,Data,USD,U1,2026-06-30,'
-                'HR(US1234567890) Return of Capital USD 0.12 per Share,'
+                'Dividends,Data,CAD,U1,2026-06-30,'
+                'QZRT(CA0000000011) Return of Capital CAD 0.12 per Share,'
                 '-24.00\n')
         txs = self._parse(body)
         adjusts = [t for t in txs if t['action'] == 'ADJUST']
         self.assertEqual(len(adjusts), 1)
         self.assertAlmostEqual(adjusts[0]['net_amount'], 24.00, places=2)
 
-    def test_strc_style_split_posting_both_legs_reclassified(self):
-        # Real-data shape: a distribution split between "Cash Dividend ...
-        # (Return of Capital)" and "Payment in Lieu of Dividend (Return of
-        # Capital)" because part of the position was lent out. IB's ROC
-        # marker on BOTH legs means the whole distribution is capital
-        # returned — both become ADJUSTs, no income is booked.
+    def test_foreign_issuer_roc_is_a_dividend_s90_2(self):
+        # A US corporation's "(Return of Capital)" distribution: ITA
+        # s.90(2) deems it a dividend for Canadian purposes (s.90(3) is
+        # for foreign affiliates only) — foreign dividend income, no ACB
+        # reduction. Reversal rows stay signed.
         body = (self.DIV_HDR +
                 'Dividends,Data,USD,U1,2026-06-30,'
-                'STRC(US5949728530) Cash Dividend USD 0.958333 per Share '
-                '(Return of Capital),886.46\n'
-                'Dividends,Data,USD,U1,2026-06-30,'
-                'STRC(US5949728530) Payment in Lieu of Dividend '
-                '(Return of Capital),551.04\n')
+                'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
+                '24.00\n'
+                'Dividends,Data,USD,U1,2026-07-02,'
+                'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
+                '-24.00\n')
         txs = self._parse(body)
-        adjusts = [t for t in txs if t['action'] == 'ADJUST']
-        self.assertEqual(len(adjusts), 2)
-        self.assertAlmostEqual(sum(t['net_amount'] for t in adjusts),
-                               -1437.50, places=2)
-        self.assertFalse([t for t in txs
-                          if t['action'] in ('DIVIDEND',
-                                             'DIVIDEND_IN_LIEU')])
+        self.assertFalse([t for t in txs if t['action'] == 'ADJUST'])
+        divs = [t for t in txs if t['action'] == 'DIVIDEND']
+        self.assertEqual(len(divs), 2)
+        self.assertEqual(divs[0]['type'], 'dividend')
+        self.assertEqual(divs[0]['symbol'], 'QZRX.US')
+        self.assertAlmostEqual(divs[0]['net_amount'], 24.00, places=2)
+        self.assertAlmostEqual(sum(t['net_amount'] for t in divs), 0.0)
+        self.assertIn("IB-designated return of capital, treated as a "
+                      "dividend under ITA s.90(2)", divs[0]['description'])
+        # The per-share rate still reconciles the row.
+        self.assertAlmostEqual(divs[0]['price'], 0.12)
 
-    def test_roc_adjust_rebinds_to_held_listing(self):
-        # Irish-domiciled name held as .US: the ISIN stamps the ROC .L,
+    def test_foreign_roc_acb_opt_out(self):
+        # [settings] foreign_return_of_capital = "acb" (taxjson-brokerage
+        # --foreign-roc acb): the earlier ACB-reduction treatment.
+        body = (self.DIV_HDR +
+                'Dividends,Data,USD,U1,2026-06-30,'
+                'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
+                '24.00\n')
+        txs = self._parse(body, foreign_roc='acb')
+        adjusts = [t for t in txs if t['action'] == 'ADJUST']
+        self.assertEqual(len(adjusts), 1)
+        self.assertAlmostEqual(adjusts[0]['net_amount'], -24.00, places=2)
+        self.assertFalse([t for t in txs if t['action'] == 'DIVIDEND'])
+
+    def test_strc_style_split_posting_pil_is_income(self):
+        # Real-data shape (synthetic amounts): a distribution split
+        # between "Cash Dividend ... (Return of Capital)" and "Payment in
+        # Lieu of Dividend (Return of Capital)" because part of the
+        # position was lent out. The PIL leg is paid by the share
+        # BORROWER — it can never reduce ACB: DIVIDEND_IN_LIEU income.
+        # The issuer's leg is a US corporation's distribution → foreign
+        # dividend (s.90(2)). Nothing becomes an ADJUST.
+        body = (self.DIV_HDR +
+                'Dividends,Data,USD,U1,2026-06-30,'
+                'QZRX(US0000000017) Cash Dividend USD 0.50 per Share '
+                '(Return of Capital),600.00\n'
+                'Dividends,Data,USD,U1,2026-06-30,'
+                'QZRX(US0000000017) Payment in Lieu of Dividend '
+                '(Return of Capital),400.00\n')
+        for mode in (None, 'acb'):
+            txs = self._parse(body, foreign_roc=mode)
+            pil = [t for t in txs if t['action'] == 'DIVIDEND_IN_LIEU']
+            self.assertEqual(len(pil), 1, mode)
+            self.assertEqual(pil[0]['type'], 'dividend_in_lieu')
+            self.assertAlmostEqual(pil[0]['net_amount'], 400.00, places=2)
+            self.assertIn("share borrower", pil[0]['description'])
+        # Default mode: the issuer leg is a dividend, no ADJUST at all.
+        txs = self._parse(body)
+        self.assertFalse([t for t in txs if t['action'] == 'ADJUST'])
+        divs = [t for t in txs if t['action'] == 'DIVIDEND']
+        self.assertAlmostEqual(sum(t['net_amount'] for t in divs), 600.00)
+
+    def test_canadian_issuer_pil_roc_is_still_income(self):
+        # Even for a Canadian issuer, a payment in lieu is income.
+        body = (self.DIV_HDR +
+                'Dividends,Data,CAD,U1,2026-06-30,'
+                'QZRT(CA0000000011) Payment in Lieu of Dividend '
+                '(Return of Capital),30.00\n')
+        txs = self._parse(body)
+        self.assertEqual([t['action'] for t in txs], ['DIVIDEND_IN_LIEU'])
+
+    def test_roc_rebinds_to_held_listing(self):
+        # Irish-domiciled name held as .US: the ISIN stamps the row .L,
         # the reattribution pass must rebind it to the held listing —
-        # otherwise the ADJUST would reduce the ACB of a phantom symbol.
+        # for the default foreign-dividend booking AND the acb opt-out's
+        # ADJUST (which would otherwise reduce a phantom symbol's ACB).
         body = (self.TRADES_HDR +
-                'Trades,Data,Order,Stocks,USD,STX,"2026-01-05, 09:30:00",'
+                'Trades,Data,Order,Stocks,USD,QZIE,"2026-01-05, 09:30:00",'
                 '100,10.00,0,1000,1,0,0,0,O\n' +
                 self.DIV_HDR +
                 'Dividends,Data,USD,U1,2026-06-30,'
-                'STX(IE00B58JVZ52) Return of Capital USD 0.20 per Share,'
+                'QZIE(IE0000000018) Return of Capital USD 0.20 per Share,'
                 '20.00\n')
         txs = self._parse(body)
+        divs = [t for t in txs if t['action'] == 'DIVIDEND']
+        self.assertEqual([t['symbol'] for t in divs], ['QZIE.US'])
+        txs = self._parse(body, foreign_roc='acb')
         adjusts = [t for t in txs if t['action'] == 'ADJUST']
         self.assertEqual(len(adjusts), 1)
-        self.assertEqual(adjusts[0]['symbol'], 'STX.US')
+        self.assertEqual(adjusts[0]['symbol'], 'QZIE.US')
+
+    def test_no_isin_keeps_adjust(self):
+        # Issuer country unknown → no reclassification (kept as before).
+        body = (self.DIV_HDR +
+                'Dividends,Data,USD,U1,2026-06-30,'
+                'QZNO Return of Capital USD 0.20 per Share,20.00\n')
+        txs = self._parse(body)
+        self.assertEqual([t['action'] for t in txs], ['ADJUST'])
 
 
 class TestNegativeAcbWarning(unittest.TestCase):

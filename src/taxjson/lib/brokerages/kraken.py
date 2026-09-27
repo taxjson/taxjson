@@ -166,9 +166,11 @@ class KrakenBrokerage(BaseBrokerage):
                     # the base-asset quantity, `cost` the quote-asset
                     # quantity; both legs ship price=0 so
                     # taxjson-fill-crypto backfills the FMV. The fee is
-                    # quote-crypto-denominated and unconvertible here —
-                    # zeroed for the same reason as the ledgers path
-                    # (typically pennies; convert manually if material).
+                    # quote-crypto-denominated and unconvertible to USD
+                    # here, so the USD fee field stays 0 — but the fee
+                    # COINS moved, so they are folded into the quote
+                    # leg's quantity (below) rather than left as
+                    # phantom units.
                     date_s = dt.strftime("%Y-%m-%d")
                     time_s = dt.strftime("%H:%M:%S")
                     base_leg = {
@@ -189,8 +191,13 @@ class KrakenBrokerage(BaseBrokerage):
                         'date': date_s, 'time': time_s,
                         'date_settle': date_s,
                         'symbol': quote,
+                        # The trades-export fee is in QUOTE units: a
+                        # buy spends cost + fee of the quote coin, a
+                        # sell receives cost − fee of it.
                         'quantity': self.signed_quantity(
-                            abs(cost), action_is_sell=(type_ == 'buy')),
+                            (abs(cost) + fee) if type_ == 'buy'
+                            else max(abs(cost) - fee, 0.0),
+                            action_is_sell=(type_ == 'buy')),
                         'currency': 'USD', 'price': 0.0,
                         'net_amount': 0.0, 'gross_amount': 0.0,
                         'fee': 0.0, 'account': self.DEFAULT_ACCOUNT,
@@ -282,14 +289,40 @@ class KrakenBrokerage(BaseBrokerage):
                     # coins are acquired at. Used when present; older
                     # exports still ship price=0 for the fill step
                     # (which has no quote for some coins, e.g. HYPE).
+                    # The ledger `fee` is in the REWARD's own coin
+                    # units (2026 exports say so: feecurrency == asset),
+                    # and Kraken's balance moves by amount − fee: a
+                    # 0.19842 SOL reward with a 0.04961 SOL commission
+                    # credits 0.14882 SOL. Booking the gross amount
+                    # minted phantom units and overstated the income by
+                    # the commission, while the coin-denominated fee
+                    # landed in a USD fee field. Both the income and
+                    # the acquired quantity are the NET coins; the USD
+                    # value is net likewise (amountusd − feeusd).
+                    gross_qty = abs(amount)
+                    fee_qty = abs(fee)
+                    net_qty = gross_qty - fee_qty
+                    if net_qty <= 1e-12:
+                        self.count_nonevent(
+                            "Kraken Earn reward fully consumed by its fee")
+                        continue
                     usd_value = self.clean_number(row.get('amountusd'))
+                    net_usd = None
+                    if usd_value:
+                        fee_usd = self.clean_number(row.get('feeusd'))
+                        if fee_qty and not fee_usd:
+                            # No feeusd column: scale the gross value.
+                            fee_usd = abs(usd_value) * fee_qty / gross_qty
+                        net_usd = abs(usd_value) - abs(fee_usd)
                     transactions.extend(self._build_staking_reward(
                         _normalize_asset(asset_raw, fold_stable=False),
-                        date, time, abs(amount), abs(fee), txid,
-                        usd_value=(abs(usd_value) if usd_value else None)))
+                        date, time, net_qty, txid,
+                        usd_value=net_usd, gross_qty=gross_qty,
+                        fee_qty=fee_qty))
                 elif (type_raw == 'earn' and subtype in (
                         'allocation', 'deallocation', 'autoallocation')
-                      ) or type_raw.startswith('hybridearn'):
+                      ) or (type_raw.startswith('hybridearn')
+                            and type_raw != 'hybridearnwithdrawal'):
                     # Moves between the spot and Earn wallets (and the
                     # Hybrid Earn product): the coins never leave your
                     # ownership, so no acquisition, disposition or
@@ -297,7 +330,18 @@ class KrakenBrokerage(BaseBrokerage):
                     # rather than listed as "unhandled".
                     self.count_nonevent("Kraken Earn wallet move "
                                         "(allocation/deallocation)")
-                elif ((type_raw in ('withdrawal', 'deposit')
+                elif ((type_raw in ('withdrawal', 'deposit',
+                                    # NOT an Earn-wallet shuffle: in
+                                    # real exports it carries a funding
+                                    # (FT…) refid like a withdrawal, has
+                                    # NO counter-leg in any earn wallet
+                                    # (real allocations are paired rows),
+                                    # and sweeps the spot balance to
+                                    # dust — the coins left this ledger.
+                                    # Kept as custody evidence, same as
+                                    # a withdrawal, instead of vanishing
+                                    # as a non-event.
+                                    'hybridearnwithdrawal')
                        # Peer-to-peer transfers (Kraken "send to a
                        # Kraken user") leave custody exactly like a
                        # withdrawal: same evidence row, same send NOTE.
@@ -321,9 +365,8 @@ class KrakenBrokerage(BaseBrokerage):
                     # the parse-time note downstream says so; the
                     # ledger carries no fiat value, so price/net stay
                     # 0 (declare the disposition as a .tt BUYSELL).
-                    # Kraken Earn shuffles keep their own type string
-                    # (e.g. 'hybridearnwithdrawal' does NOT land here
-                    # — internal moves, position unchanged).
+                    # Kraken Earn allocation shuffles keep their own
+                    # type/subtype (paired rows) and do NOT land here.
                     tx = {
                         'action': 'TRANSFER',
                         'date': date, 'time': time,
@@ -399,28 +442,37 @@ class KrakenBrokerage(BaseBrokerage):
         self.emit_skip_summary(path.name)
         return transactions
 
-    def _build_staking_reward(self, asset, date, time, qty, fee, txid='',
-                              usd_value=None):
+    def _build_staking_reward(self, asset, date, time, qty, txid='',
+                              usd_value=None, gross_qty=None, fee_qty=0.0):
         # Carry the reward qty on the DIVIDEND record so fill_crypto_prices
         # computes income as qty*FMV. Without it the prices-filler defaults
         # qty to 1.0 and a $4k ETH reward of 0.001 ETH ends up as $4k income.
         # `usd_value` (the ledger's amountusd) prices BOTH legs here — the
         # income and the acquisition cost are the same FMV — and the fill
         # step leaves a priced row alone.
+        # `qty` is the NET coins credited (gross reward − Kraken's in-kind
+        # commission); the commission is recorded in the description,
+        # never in the USD `fee` field (it is coin-denominated and
+        # already out of the quantity).
+        desc = 'Staking Reward'
+        if fee_qty and gross_qty:
+            desc = (f"Staking Reward (net of Kraken commission: gross "
+                    f"{gross_qty:.10g} - fee {fee_qty:.10g} {asset})")
         div = {
             'action': 'DIVIDEND',
             'date': date, 'time': time, 'date_settle': date,
             'symbol': asset, 'quantity': qty, 'currency': 'USD',
             'net_amount': 0.0, 'gross_amount': 0.0,
             'type': 'dividend', 'account': self.DEFAULT_ACCOUNT,
-            'description': 'Staking Reward',
+            'description': desc,
         }
         buy = {
             'action': 'BUYSELL',
             'date': date, 'time': time, 'date_settle': date,
             'symbol': asset, 'quantity': qty, 'currency': 'USD',
-            'price': 0.0, 'net_amount': 0.0, 'fee': fee,
+            'price': 0.0, 'net_amount': 0.0, 'fee': 0.0,
             'account': self.DEFAULT_ACCOUNT,
+            'description': desc,
         }
         if txid:
             # Suffix distinguishes the paired emissions so the sort-stage
@@ -474,7 +526,18 @@ class KrakenBrokerage(BaseBrokerage):
             return []
         spend = trade['spend']
         recv = trade['receive']
-        total_fee = spend['fee'] + recv['fee']
+        # Kraken ledger fees are in the ROW's asset units and the balance
+        # moves by amount − fee: a crypto leg's fee changes how many
+        # coins actually moved — a receive credits amount − fee, a spend
+        # debits |amount| + fee. Fold it into the CRYPTO leg's quantity
+        # (the fee coins are part of what was given up / never arrived)
+        # instead of dropping it, which left phantom units in the book.
+        # Fiat-leg fees stay money (see fiat_fee below).
+        def _coins(leg, received):
+            if leg['asset'] in _FIAT_ASSETS:
+                return leg['amount']
+            return (leg['amount'] - leg['fee'] if received
+                    else leg['amount'] + leg['fee'])
 
         if (spend['asset'] in _FIAT_CURRENCIES
                 and recv['asset'] in _FIAT_CURRENCIES):
@@ -492,11 +555,11 @@ class KrakenBrokerage(BaseBrokerage):
         if spend['asset'] in _FIAT_ASSETS:
             is_buy = True
             quote_asset, quote_amt = spend['asset'], spend['amount']
-            base_asset, base_amt = recv['asset'], recv['amount']
+            base_asset, base_amt = recv['asset'], _coins(recv, True)
         elif recv['asset'] in _FIAT_ASSETS:
             is_buy = False
             quote_asset, quote_amt = recv['asset'], recv['amount']
-            base_asset, base_amt = spend['asset'], spend['amount']
+            base_asset, base_amt = spend['asset'], _coins(spend, False)
         else:
             # Crypto-to-crypto: emit TWO transactions — a SELL of the
             # spent asset and a BUY of the received asset — both priced
@@ -512,17 +575,17 @@ class KrakenBrokerage(BaseBrokerage):
             # units (e.g. a few thousandths of an ETH on an ETH→BTC swap),
             # while the emitted legs are USD-denominated. The parser has
             # no FMV at this stage (taxjson-fill-crypto fills it later),
-            # so we can't faithfully convert the crypto-denominated fee
-            # to USD here. We zero it out rather than stamp a wrong-
-            # denominated value onto the gain entry — Kraken instant-
-            # trade fees are typically pennies, so the dropped deduction
-            # is negligible. Convert manually if material.
+            # so the USD `fee` field stays 0; the fee COINS are instead
+            # folded into each leg's quantity via _coins() (sold |amount|
+            # + fee, received amount − fee) so the book's unit count
+            # matches Kraken's balance.
             sell_leg = {
                 'action': 'BUYSELL',
                 'date': spend['date'], 'time': spend['time'],
                 'date_settle': spend['date'],
                 'symbol': spend['asset'],
-                'quantity': self.signed_quantity(spend['amount'], action_is_sell=True),
+                'quantity': self.signed_quantity(_coins(spend, False),
+                                                 action_is_sell=True),
                 'currency': 'USD', 'price': 0.0,
                 'net_amount': 0.0, 'gross_amount': 0.0,
                 'fee': 0.0, 'account': self.DEFAULT_ACCOUNT,
@@ -533,7 +596,8 @@ class KrakenBrokerage(BaseBrokerage):
                 'date': recv['date'], 'time': recv['time'],
                 'date_settle': recv['date'],
                 'symbol': recv['asset'],
-                'quantity': self.signed_quantity(recv['amount'], action_is_sell=False),
+                'quantity': self.signed_quantity(_coins(recv, True),
+                                                 action_is_sell=False),
                 'currency': 'USD', 'price': 0.0,
                 'net_amount': 0.0, 'gross_amount': 0.0,
                 'fee': 0.0, 'account': self.DEFAULT_ACCOUNT,

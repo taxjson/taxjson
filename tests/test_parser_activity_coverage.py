@@ -813,18 +813,17 @@ class TestKrakenActivities(unittest.TestCase):
 
     def test_ledgers_earn_allocations_are_recognised_non_events(self):
         """Allocation / deallocation / autoallocation pairs move coins
-        between the spot and Earn wallets; hybridearnwithdrawal rows
-        move them out of the Hybrid Earn product. Ownership never
-        changes: counted non-events, not 'unhandled' types, and no
-        transaction is emitted."""
+        between the spot and Earn wallets. Ownership never changes:
+        counted non-events, not 'unhandled' types, and no transaction
+        is emitted. (hybridearnwithdrawal is NOT one of these — it has
+        no counter-leg; see TestKrakenCoinUnitFees.)"""
         head = ("txid,refid,time,type,subtype,aclass,subclass,asset,wallet,"
                 "amount,fee,balance,amountusd,feeusd,balanceusd,feecurrency\n")
         csv = head + (
             "L1,,2026-01-14 09:00:00,earn,allocation,currency,,SOL,spot / main,-83.36,0,0,-12225.83,0,0,USD\n"
             "L2,,2026-01-14 09:00:00,earn,allocation,currency,,SOL,earn / bonded,83.36,0,83.36,12225.83,0,12225.83,USD\n"
             "L3,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,earn / bonded,-9.08,0,0,-20577.75,0,0,USD\n"
-            "L4,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,spot / main,9.08,0,9.08,20577.75,0,20577.75,USD\n"
-            "L5,,2026-05-10 09:00:00,hybridearnwithdrawal,,currency,,USDC,spot / main,-852.38,0,0,-852.19,0,0,USD\n")
+            "L4,,2026-04-19 09:00:00,earn,deallocation,currency,,ETH,spot / main,9.08,0,9.08,20577.75,0,20577.75,USD\n")
         parser = KrakenBrokerage()
         import io, contextlib, tempfile, os
         from pathlib import Path as _P
@@ -839,7 +838,7 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertEqual(txs, [])
         self.assertNotIn("unhandled", err.getvalue())
         moves = {k: v for k, v in parser._skip_counts.items() if "Earn wallet move" in k}
-        self.assertEqual(sum(moves.values()), 5)
+        self.assertEqual(sum(moves.values()), 4)
         self.assertTrue(all(k.startswith(KrakenBrokerage.KNOWN_NONEVENT_PREFIX) for k in moves))
 
     def test_ledgers_instant_trade(self):
@@ -900,9 +899,11 @@ class TestKrakenActivities(unittest.TestCase):
                          "Crypto-to-crypto swap must emit a SELL + BUY pair")
         sell = next(t for t in swap_legs if t['quantity'] < 0)
         buy = next(t for t in swap_legs if t['quantity'] > 0)
-        # Sell leg: spent 1 ETH → quantity = -1.0, symbol=ETH, USD-priced.
+        # Sell leg: spent 1 ETH + the 0.0005 ETH fee (the ledger fee is
+        # in the row's coin units and the balance moves by amount − fee)
+        # → quantity = -1.0005, symbol=ETH, USD-priced.
         self.assertEqual(sell['symbol'], 'ETH')
-        self.assertAlmostEqual(sell['quantity'], -1.0)
+        self.assertAlmostEqual(sell['quantity'], -1.0005)
         self.assertEqual(sell['currency'], 'USD')
         self.assertAlmostEqual(sell['price'], 0.0)
         self.assertAlmostEqual(sell['net_amount'], 0.0)
@@ -937,7 +938,8 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertEqual(len(txs), 2)
         by_sym = {t['symbol']: t for t in txs}
         self.assertAlmostEqual(by_sym['ETH']['quantity'], 12.5)
-        self.assertAlmostEqual(by_sym['BTC']['quantity'], -0.5)
+        # 0.5 BTC cost + 0.0001 BTC fee (trades-CSV fee is in QUOTE units).
+        self.assertAlmostEqual(by_sym['BTC']['quantity'], -0.5001)
         for t in txs:
             self.assertEqual(t['currency'], 'USD')
             self.assertEqual(t['price'], 0.0)

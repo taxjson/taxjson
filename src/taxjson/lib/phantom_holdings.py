@@ -87,8 +87,9 @@ def detect_phantoms(
 
     Option symbols (OCC format like AAPL250620C00150000) are skipped by
     default — negative option positions are normal (sell-to-open) and
-    rarely indicate truncated history. Pass include_options=True to
-    include them anyway.
+    rarely indicate truncated history. Futures (`F:`-prefixed) are
+    skipped likewise — a short future is an ordinary opening position.
+    Pass include_options=True to include both anyway.
     """
     # state[(symbol, account, currency)] -> running, peak_short, first_neg, count
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
@@ -108,7 +109,13 @@ def detect_phantoms(
         # TRANSFER-in + sell pair would falsely register as a phantom.
         if tx.action not in ('BUYSELL', 'ASSIGN', 'SPLIT', 'OPENING_BALANCE', 'TRANSFER'):
             continue
-        if not include_options and is_option_symbol(tx.symbol):
+        if not include_options and (is_option_symbol(tx.symbol)
+                                    # Futures (IB `F:` prefix): a short
+                                    # is an ordinary opening position
+                                    # (IB codes it `O`), exactly like
+                                    # an option sell-to-open.
+                                    or (tx.symbol or '').startswith(
+                                        ('F:', '/', '\\'))):
             continue
         # One pool per (symbol, account) — NOT per currency: the engine
         # pools identical property regardless of the leg's native

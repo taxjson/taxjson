@@ -431,6 +431,63 @@ class BaseBrokerage:
                 existing = tx.get('description') or ''
                 tx['description'] = f"{existing} [fill #{seen[key]}]".strip()
 
+    @staticmethod
+    def option_expiry_booking_date(posting_iso: str,
+                                   expiry_mmddyy: str) -> str:
+        """The date an EXPIRED-option row belongs on. Questrade and RBC
+        post the expiry on the next business day (a Friday 07/18/25
+        expiry arrives dated Monday 07/21), but the contract ceased to
+        exist — the disposition happened — on its expiry date; a Dec-31
+        expiry posted Jan 2 would otherwise land in the next tax year.
+        Returns the contract's own expiry (from the description's
+        MM/DD/YY) when it is at most a week before the posting date;
+        otherwise the posting date unchanged (a garbled description
+        must not relocate the row arbitrarily)."""
+        try:
+            exp = datetime.strptime(expiry_mmddyy.strip(), "%m/%d/%y")
+            post = datetime.strptime(posting_iso, "%Y-%m-%d")
+        except (ValueError, AttributeError):
+            return posting_iso
+        if timedelta(0) < post - exp <= timedelta(days=7):
+            return exp.strftime("%Y-%m-%d")
+        return posting_iso
+
+    @staticmethod
+    def clamp_settlement_to_expiry(transactions: List[Dict[str, Any]],
+                                   expiries: List[Dict[str, Any]]) -> None:
+        """An option expiry has no settlement cycle: the contract ceases
+        to exist on its expiry date, so the expiry row is booked with
+        date_settle == date (parsers set that themselves). A trade in
+        the SAME contract executed on the expiry day (a 0DTE buy or
+        sell-to-open) still carries a T+1 settle that lands AFTER the
+        expiry — and Canada orders the book by settle date, so the
+        expiry would close a position that doesn't exist yet: a long
+        0DTE call that expired worthless read as a $0 short WRITE
+        followed by a buy-to-close, and a Dec-31 0DTE trade's settle
+        crossed the tax year while its expiry did not. Clamp such a
+        trade's settle to the expiry date (never before its own trade
+        date). Only contracts with an expiry row in this file are
+        touched; everything else keeps its broker/computed settle.
+
+        Mutates `transactions` in place."""
+        by_key: Dict[tuple, str] = {}
+        for e in expiries:
+            key = (e.get('symbol'), e.get('account'))
+            d = e.get('date_settle') or e.get('date') or ''
+            if d and (key not in by_key or d > by_key[key]):
+                by_key[key] = d
+        if not by_key:
+            return
+        for tx in transactions:
+            if tx.get('action') not in ('BUYSELL', 'ASSIGN'):
+                continue
+            exp = by_key.get((tx.get('symbol'), tx.get('account')))
+            if not exp:
+                continue
+            d, s = tx.get('date') or '', tx.get('date_settle') or ''
+            if d and s and d <= exp < s:
+                tx['date_settle'] = exp
+
     def settlement_date_t1(self, date_str: str, *formats: str) -> str:
         """Add one business day to the given trade date. Used by brokerages
         whose CSV doesn't carry a settlement-date column.

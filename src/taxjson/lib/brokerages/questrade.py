@@ -135,6 +135,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 _record_ticker(row)
 
         transactions: List[Dict[str, Any]] = []
+        expiries: List[Dict[str, Any]] = []     # EXP rows (settle == date)
         self._rows_seen = 0
         for row in rows:
             if not row:
@@ -362,7 +363,20 @@ class QuestradeBrokerage(BaseBrokerage):
                 symbol = row.get('Symbol') or ''
             symbol = self.apply_currency_suffix(symbol, listing_currency)
 
-            transactions.append({
+            if is_expired and not is_assigned:
+                # An expiry has no settlement cycle, and Questrade posts
+                # it the NEXT business day (a Friday expiry arrives
+                # dated Monday): book it on the contract's own expiry
+                # date, settle == date. The blank-settle fallback above
+                # also added T+1 on top — a Dec-31 expiry crossed into
+                # the next tax year either way.
+                if opt:
+                    date = self.option_expiry_booking_date(
+                        date, opt['expiry'])
+                    time = '16:00:00'
+                date_settle = date
+
+            _tx = {
                 'action': 'ASSIGN' if is_assigned else 'BUYSELL',
                 'date': date,
                 'time': time,
@@ -384,7 +398,11 @@ class QuestradeBrokerage(BaseBrokerage):
                 # --security-overrides rule can correct a mislabeled ticker —
                 # IB/RBC/Webull trade rows already do; Questrade's was the gap.
                 'description': desc,
-            })
+            }
+            transactions.append(_tx)
+            if is_expired and not is_assigned:
+                expiries.append(_tx)
+        self.clamp_settlement_to_expiry(transactions, expiries)
         self.disambiguate_split_fills(transactions)
         self.emit_skip_summary(path.name)
         return transactions
