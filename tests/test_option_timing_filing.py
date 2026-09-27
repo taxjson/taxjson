@@ -23,7 +23,7 @@ OPT = "ZZZ260116C00050000.US"
 def T(action, date, sym, qty, net, settle=None, price=None):
     return TaxTransaction(action=action, date=date, symbol=sym, quantity=qty,
                           net_amount=net, currency="CAD", time="10:00:00",
-                          date_settle=settle or date, account="55500001",
+                          date_settle=settle or date, account="55500001",  # pii-ok: synthetic id
                           price=abs(net / qty) if price is None else price)
 
 
