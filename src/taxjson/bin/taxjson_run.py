@@ -1532,10 +1532,15 @@ def stage_blended_wash_pass(names: List[str],
                             settings: Dict[str, Any], cache: Path,
                             reports_dir: Path,
                             sheltered_base: Optional[Path],
-                            incomplete_history: Optional[Path] = None
+                            incomplete_history: Optional[Path] = None,
+                            tag: str = "blend"
                             ) -> None:
     """ONE combined gains run over every taxable equity account, split
     back into the per-account `<name>_gains_wash.json` artifacts.
+    `tag="cryptoblend"` runs the same pass over a Canadian project's
+    crypto accounts (ITA s.47 averaging and the superficial-loss rule
+    reach identical crypto held on different exchanges) with its own
+    dot-prefixed intermediates.
 
     This is what makes the canonical (filed-from) numbers correct for
     multi-account books: Canada's ACB blends across all non-registered
@@ -1545,7 +1550,8 @@ def stage_blended_wash_pass(names: List[str],
     Single-account projects produce identical numbers by construction.
     The per-account `<name>.sum` stays the isolated pre-blend baseline —
     comparing the pair shows exactly what blending changed."""
-    print(f"==> blended taxable pass ({', '.join(names)})")
+    print(f"==> blended taxable {'crypto ' if tag != 'blend' else ''}"
+          f"pass ({', '.join(names)})")
     # Dot-prefixed intermediates: pathlib globs DO match leading dots
     # (`*_base.json` matches `.blend_base.json`), so every discovery
     # site — resolve_gains_files and the radar/missing-history fallback
@@ -1553,11 +1559,11 @@ def stage_blended_wash_pass(names: List[str],
     # name here (or a glob site without the dot filter) would be
     # discovered as a phantom account and every aggregate would
     # double-count.
-    combined_base = cache / ".blend_base.json"
+    combined_base = cache / f".{tag}_base.json"
     run_to_file(_cmd("taxjson-merge") + [
         str(cache / f"{n}_base.json") for n in names], combined_base)
-    combined_wash = cache / ".blend_gains_wash.json"
-    wash_traces = cache / ".blend_gains_wash.traces"
+    combined_wash = cache / f".{tag}_gains_wash.json"
+    wash_traces = cache / f".{tag}_gains_wash.traces"
     country = _normalize_country(settings["country"])
     cmd = _cmd("taxjson-gains") + [
         "--taxable",
@@ -1587,7 +1593,7 @@ def stage_blended_wash_pass(names: List[str],
     # (2026-09 audit).
     _blend_diag = combined_wash.with_name(combined_wash.name + ".diag")
     for name in names:
-        _mirror = cache / f"{name}_blend.diag"
+        _mirror = cache / f"{name}_{tag}.diag"
         if _blend_diag.exists() and _blend_diag.stat().st_size:
             _mirror.write_text(_blend_diag.read_text(errors="replace"),
                                encoding="utf-8")
@@ -1829,7 +1835,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     if _normalize_country(str(settings.get("country", "canada"))) == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
     _since_warn = _grant_since_warning(settings)
-    if _since_warn:
+    if _since_warn and any(_c.get("type") == "taxable" and not _c.get("crypto")
+                           for _c in accounts.values()):
+        # (a crypto-only project writes no options — nothing to warn about)
         print(f"taxjson: warning: {_since_warn}", file=sys.stderr)
 
     # Orphaned artifacts from RENAMED/REMOVED accounts: work/ files
@@ -2026,6 +2034,16 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     taxable_outputs: List[Tuple[str, Dict[str, Path], bool]] = []
     _blend_names: List[str] = []
+    # Canada: crypto accounts blend with each other when the project
+    # CONFIGURES two or more (decided on the config, not on this run's
+    # --account subset, so a single-account rerun never rewrites a
+    # blended wash file with a one-exchange one).
+    _crypto_blend_names: List[str] = []
+    _crypto_blend = (
+        _normalize_country(settings.get("country", "canada"))
+        not in ("us", "usa")
+        and sum(1 for _c in accounts.values()
+                if _c.get("type") == "taxable" and _c.get("crypto")) >= 2)
     for name, acfg in taxable_items:
         try:
             out = stage_account(name, acfg, settings, inputs_dir, cache,
@@ -2057,6 +2075,11 @@ def cmd_run(args: argparse.Namespace) -> None:
             # after this loop (Canada ACB blending / US cross-account
             # §1091 — the multi-account fix). Collected here.
             _blend_names.append(name)
+        elif _crypto_wash_covered and _crypto_blend:
+            # Two or more Canadian crypto accounts: ONE blended crypto
+            # pass after this loop (s.47 averaging and superficial loss
+            # across exchanges — each exchange's book alone missed both).
+            _crypto_blend_names.append(name)
         elif _crypto_wash_covered and sheltered_base is not None:
             stage_wash_pass(name, settings, cache, reports_dir, sheltered_base,
                             incomplete_history=phantoms_arg)
@@ -2075,6 +2098,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         stage_blended_wash_pass(_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
                                 incomplete_history=phantoms_arg)
+    if _crypto_blend_names and not args.account and not pending_accounts:
+        stage_blended_wash_pass(_crypto_blend_names, settings, cache,
+                                reports_dir, sheltered_base,
+                                incomplete_history=phantoms_arg,
+                                tag="cryptoblend")
 
     if pending_accounts:
         # Some account(s) stopped at unresolved corp-action elections.
@@ -2164,9 +2192,17 @@ def cmd_run(args: argparse.Namespace) -> None:
             if not is_crypto or _crypto_wash_covered]
         stage_cross_reports(all_gains, taxable_equity_base, sheltered_base, reports_dir,
                             ticker_map_arg)
+        # Overlap notes per blended group — the note says the blended
+        # pass covers the symbol, so it must only name accounts a blend
+        # actually spans (crypto blends only in Canada; equity and
+        # crypto never blend with each other).
         _warn_cross_taxable_overlap(
-            [(n, o["base"]) for n, o, _ in taxable_outputs],
+            [(n, o["base"]) for n, o, c in taxable_outputs if not c],
             settings)
+        if _crypto_blend:
+            _warn_cross_taxable_overlap(
+                [(n, o["base"]) for n, o, c in taxable_outputs if c],
+                settings)
     stage_fees(cache, settings, rates, reports_dir)
 
     # Filed-year lock: recompute every closed year from the fresh books
@@ -7388,7 +7424,8 @@ def _check_filed_years(root: Path, cache: Path,
     import json as _json
     snaps = taxjson_filed.list_snapshots(root)
     drifting = 0
-    # Which snapshot accounts are crypto (their books never blend);
+    # Which snapshot accounts are crypto (they blend only with each
+    # other, and only in a Canadian project with two or more);
     # equity accounts recompute via ONE blended combined run — exactly
     # how close-year's numbers were produced — or the check would
     # falsely drift every multi-account book.
@@ -8896,21 +8933,26 @@ def cmd_audit(args: argparse.Namespace) -> None:
 
     # (flags, cleanup_path|None) per engine computation, mirroring the
     # pipeline: ONE blended pass over the equity taxable accounts, then
-    # each crypto account on its own books.
+    # the crypto accounts — ONE blended pass too for a Canadian project
+    # with two or more of them (the pipeline's crypto blend), else each
+    # on its own books.
     invocations: List[Tuple[List[str], Optional[Path]]] = []
+    crypto_blend = country not in ("us", "usa") and len(crypto) >= 2
 
-    eq_bases = [cache / f"{n}_base.json" for n in equity
-                if (cache / f"{n}_base.json").exists()]
-    missing = [n for n in equity
-               if not (cache / f"{n}_base.json").exists()]
-    if missing:
-        print(f"taxjson audit: note: no books yet for "
-              f"{', '.join(missing)} — run `taxjson run` to include "
-              f"them.", file=sys.stderr)
-    if eq_bases:
+    def _blended_invocation(names: List[str], *, is_crypto: bool) -> None:
+        bases = [cache / f"{n}_base.json" for n in names
+                 if (cache / f"{n}_base.json").exists()]
+        missing = [n for n in names
+                   if not (cache / f"{n}_base.json").exists()]
+        if missing:
+            print(f"taxjson audit: note: no books yet for "
+                  f"{', '.join(missing)} — run `taxjson run` to include "
+                  f"them.", file=sys.stderr)
+        if not bases:
+            return
         cleanup: Optional[Path] = None
-        if len(eq_bases) == 1:
-            base_arg = eq_bases[0]
+        if len(bases) == 1:
+            base_arg = bases[0]
         else:
             # Merge the CURRENT per-account base books — the same
             # inputs the pipeline's blended pass merged, rebuilt fresh
@@ -8921,7 +8963,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             _os.close(fd)
             cleanup = Path(tmp)
             res = _run(_cmd("taxjson-merge")
-                       + [str(b) for b in eq_bases],
+                       + [str(b) for b in bases],
                        capture_output=True)
             if res.returncode != 0:
                 cleanup.unlink(missing_ok=True)
@@ -8932,9 +8974,9 @@ def cmd_audit(args: argparse.Namespace) -> None:
         fl = common_flags() + ["--base", str(base_arg)]
         if sheltered_base.exists():
             fl += ["--sheltered", str(sheltered_base)]
-        if country in ("us", "usa"):
+        if country in ("us", "usa") and not is_crypto:
             fl.append("--per-account-basis")
-        for n in equity:
+        for n in names:
             for src in _audit_source_files(cache, n):
                 fl += ["--source", str(src)]
             chk = cache / f"{n}_gains_wash.json"
@@ -8944,7 +8986,12 @@ def cmd_audit(args: argparse.Namespace) -> None:
                 fl += ["--check", str(chk)]
         invocations.append((fl, cleanup))
 
-    for n in crypto:
+    if equity:
+        _blended_invocation(equity, is_crypto=False)
+    if crypto_blend:
+        _blended_invocation(crypto, is_crypto=True)
+
+    for n in ([] if crypto_blend else crypto):
         base = cache / f"{n}_base.json"
         if not base.exists():
             print(f"taxjson audit: note: no books yet for {n} — run "

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Crypto accounts blend across exchanges** (Canada): with two or more
+  taxable `crypto = true` accounts, `taxjson run` now runs ONE blended
+  crypto pass (like the equity blend) producing each account's
+  `<account>_gains_wash.json` — ITA s.47 averaging and the superficial-
+  loss rule reach identical crypto held on different exchanges. Each
+  exchange's book was computed alone, while the run printed a note
+  claiming the blended pass covered them (a sale at a blended-ACB loss
+  replaced on the other exchange filed -10,000 allowed instead of 0).
+  `audit` and `check-filed` recompute the same way; a single crypto
+  account and US crypto (no §1091) are unchanged, and the overlap note
+  now only names accounts a blend actually spans.
+
 - **`taxjson carryover` ignored the option-timing settings**: the ledger
   ran every year on close timing while the returns were filed on grant
   timing (a filed 2025 of -601 showed as -1,000). The wrapper now passes
