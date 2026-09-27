@@ -28,7 +28,7 @@ _REINV_PRICE_RE = re.compile(r'REINV@(?:[A-Z]{1,3}\$)?\s*([0-9]+(?:\.[0-9]+)?)',
 _STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b',
                          re.IGNORECASE)
 
-# Questrade emits internal codes like "S032771" or "A12345" for some
+# Questrade emits internal codes like "S098765" or "A12345" for some
 # dividend rows (typically post-transfer-in, before the security is
 # linked to its real ticker). Pattern: one letter followed by digits.
 _INTERNAL_CODE_RE = re.compile(r'^[A-Z]\d+$')
@@ -97,7 +97,7 @@ class QuestradeBrokerage(BaseBrokerage):
         # description→(ticker, market-currency) map from trade rows,
         # second to emit transactions. This resolves two distinct
         # dividend symbol problems:
-        #   - Internal codes like S032771 mapping back to the real ticker
+        #   - Internal codes like S098765 mapping back to the real ticker
         #     (e.g. SSL) when the trade describes the same security.
         #   - Cross-listing weirdness: Canadian companies dual-listed in
         #     the US sometimes emit dividends under one ticker (e.g.
@@ -276,7 +276,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 # its own Dividends row (booked above) and the
                 # reinvestment as REI: Quantity = shares bought, Net
                 # Amount = −cost, Price column 0 with the unit price
-                # only in the description ("REINV@C$8.33966"). A plain
+                # only in the description ("REINV@C$7.12345"). A plain
                 # BUYSELL at that cost; the residual dividend cash
                 # (dividend − cost) stays as cash. Was a counted skip —
                 # DRIP shares never entered inventory.
@@ -550,7 +550,7 @@ class QuestradeBrokerage(BaseBrokerage):
 
         Symbol resolution is delicate. Questrade emits the dividend's
         symbol independently of the trade rows, which causes two issues:
-          1. Internal codes like 'S032771' for securities that were
+          1. Internal codes like 'S098765' for securities that were
              transferred in (no native Questrade trade history).
           2. Cross-listing weirdness: e.g. a US-listed B2Gold (BTG) holding
              whose dividend rows reference the Canadian listing (.BTO)
@@ -580,7 +580,7 @@ class QuestradeBrokerage(BaseBrokerage):
         suffix_currency = currency
 
         # Always consult the desc map when we have any of:
-        #   - internal-code symbol (e.g. S032771)
+        #   - internal-code symbol (e.g. S098765)
         #   - bare symbol that mismatches the trades' identifier (e.g. .BTO
         #     vs trades' BTG)
         # We can't tell at parse time whether the symbol mismatches, so we

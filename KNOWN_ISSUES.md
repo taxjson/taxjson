@@ -235,6 +235,20 @@ sales against a pre-history position). Reading fix: the audit should
 recognise the manual-reporting rows and tie them out as "phantom basis —
 reported manually" instead of counting them as missing.
 
+### RESP accounts are treated as affiliated for the superficial-loss rule
+- **Where:** every account with `type = "sheltered"` is an affiliated person in `lib/core.py`'s wash pass.
+- **Question:** s.251.1(1)(g) affiliates a trust with its majority-interest beneficiary. CRA's T4037 treats an RRSP or TFSA as affiliated with its annuitant/holder, but an RESP subscriber is usually not a beneficiary, so whether an RESP purchase can deny the subscriber's loss is not settled.
+- **Current behaviour:** conservative — an RESP purchase inside the window that is still held at its end denies the loss (permanently, as for any registered account). A filer who takes the other position has to adjust by hand; the 2026-09 audit found one such case on real books.
+
+### Foreign return of capital is only reclassified for IBKR
+- **Where:** `lib/brokerages/ib_extractor.py` treats a "(Return of Capital)" distribution from a non-Canadian ISIN as a dividend (ITA s.90(2)) and a payment in lieu as income. Questrade and RBC exports carry no ISIN, and a `.US` listing does not prove a foreign issuer, so their ROC rows stay ACB reductions — check US-issuer ROC on those brokers by hand.
+
+### A merger's per-account empirical ratios are blended
+- **Where:** `lib/core.py` folds one merger's rename SPLITs with different per-account ratios into a single holdings-weighted ratio (2026-09). Totals and the shared ACB pool are right; each account's wash-walk balance can be a fraction of a share off.
+
+### `wash-sales --explain` traces each account on its own
+- The explain trace predates the blended passes; the numbers in the table are the blended ones.
+
 ## Conventions
 
 - **Severity ranking:** items above are loosely ordered: gaps that drop tax-relevant data first, cosmetic / latent items last.
@@ -246,7 +260,7 @@ reported manually" instead of counting them as missing.
 
 ## Graduated (fixed)
 
-- **Option premium timing across a year end (ITA s.49(1); IT-479R paras 21–25)** — 2026-09: a written option's premium is now a gain in the year written under `option_premium_timing = "grant"` (Canada default), a buy-back a loss in its own year, an assignment folded with no grant record; `taxjson option-boundary` names any filed year to amend. Previously the premium was recognised at the close (the US §1234 convention).
+- **Option premium timing across a year end (ITA s.49(1); IT-479R paras 23–32)** — 2026-09: a written option's premium is now a gain in the year written under `option_premium_timing = "grant"` (Canada default), a buy-back a loss in its own year, an assignment folded with no grant record; `taxjson option-boundary` names any filed year to amend. Previously the premium was recognised at the close (the US §1234 convention).
 - **Negative ACB after a return of capital (s.40(3))** — 2026-09: booked as a deemed gain in the distribution year with the ACB reset to nil; previously only a warning, with the whole amount landing in the sale year.
 - **Re-short "superficial loss" (s.54)** — 2026-09: a new short sale or written option no longer triggers a denial of a cover loss (it acquires nothing); a long purchase held at day 30 still does. Previously the US §1091(e) re-short branch applied.
 

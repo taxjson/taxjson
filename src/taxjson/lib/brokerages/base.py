@@ -105,8 +105,8 @@ def _parse_div_qty_rate(description: str, amount: float):
     if qty > 0 and rate == 0 and amount:
         rate = round(amount / qty, 8)
         # The paid amount is rounded to CENTS, so back-computing
-        # manufactures spurious precision: 37 sh paid $20.54 yields
-        # 0.55516129 for a dividend actually declared at 0.555 — and
+        # manufactures spurious precision: 41 sh paid $22.76 yields
+        # 0.55512195 for a dividend actually declared at 0.555 — and
         # the SAME payment in another account, from a broker whose
         # statement states the rate, showed a clean 0.555. Snap to
         # the FEWEST decimals that still explain the paid amount
@@ -141,8 +141,8 @@ def _parse_div_qty_rate(description: str, amount: float):
     elif rate > 0 and qty == 0 and amount:
         qty = round(amount / rate, 8)
         # The statement's amount is rounded to CENTS, so the division
-        # lands NEAR the true share count, not on it (25 sh x 0.271 =
-        # 6.775 -> paid 6.77 -> derived 24.98154982). When the nearest
+        # lands NEAR the true share count, not on it (35 sh x 0.313 =
+        # 10.955 -> paid 10.95 -> derived 34.98402556). When the nearest
         # integer count explains the paid amount to within the
         # half-cent rounding IB applies, snap to it. A genuinely
         # fractional DRIP position differs by more than the tolerance

@@ -1495,9 +1495,9 @@ class IbBrokerage(BaseBrokerage):
                     # Cancel/rebook: IB lists a reversed ACATS/ATON leg
                     # as original + `Ca` cancellation (opposite qty,
                     # same date) + rebooked rows. A real RRSP move
-                    # (IB -> Questrade) carried MDA five times: Out,
-                    # Ca, Out, Ca, Out — arithmetically -383, but the
-                    # two Ca legs read as +383 ACQUISITIONS to the
+                    # (IB -> Questrade) carried one symbol five times: Out,
+                    # Ca, Out, Ca, Out — arithmetically -N, but the
+                    # two Ca legs read as +N ACQUISITIONS to the
                     # superficial-loss walk. The Ca row consumes its
                     # original; only when the original sits in an
                     # earlier statement does the reversal stay as a

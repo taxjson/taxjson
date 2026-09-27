@@ -10,7 +10,7 @@ written; the impact list is at the end.
 **Rule.** Granting an option is a disposition of property with a nil
 cost: the premium is a capital gain in the year the option is written
 (s.49(1)). A later closing purchase is a capital loss in the year it is
-made (IT-479R para 24). If the option is exercised or assigned, s.49(1)
+made (IT-479R para 29 for calls, para 32 for puts). If the option is exercised or assigned, s.49(1)
 is deemed never to have applied: the premium is folded into the share
 leg (s.49(2)–(3)) and the grant year is amended (s.49(4)). Expiry adds
 nothing — the grant-year gain stands.
@@ -83,7 +83,7 @@ of the window; writing an option or selling short acquires nothing. The
 Canada pass now applies the LONG criteria to every loss: triggers are
 opening long acquisitions, the held test is a positive balance. (A
 long re-purchase within the window after a cover loss still denies.)
-Short-sale character (IT-479R para 18: income unless s.39(4)) is a
+Short-sale character (IT-479R para 18: income account) is a
 filing position the tool does not take; it is documented, and short
 records carry `direction = SHORT` so they can be moved.
 
