@@ -95,6 +95,56 @@
   duplicate example and check-filed's nonexistent `--strict` fixed,
   fetch windows described as the code does them, `inputs/slips/` in
   the file table, the estimate sample shows the real FTC label.
+- **IB: option expiries settle on the expiry date.** Rows coded `Ep`,
+  rows of the Options Expirations section and zero-price closes of an
+  option were given T+1 like every trade, so a Dec-31 expiry landed in
+  the NEXT tax year on the settle basis; now `date_settle = date` (also
+  futures final settlement). A same-contract trade executed on the
+  expiry day (0DTE) has its T+1 settle clamped to the expiry so the
+  expiry closes the position it opened. Assignment/exercise option legs
+  keep T+1 (they must share the stock leg's settle date).
+- **Questrade, RBC: expired options are booked on the contract's expiry
+  date**, settle = date. Both brokers post the expiry on the next
+  business day (Friday expiry dated Monday), which moved a Dec-31 expiry
+  into the next year; a blank settle column also added T+1 on top. RBC's
+  blank-settle fallback no longer returns the raw "January 5, 2028" cell
+  as `date_settle` (it now computes an ISO T+1 / era-aware settle).
+- **Webull: expiry rows are no longer shifted a business day earlier.**
+  The Date column is the settlement date for trades but the EXPIRY date
+  for zero-price expiry rows; walking it back put a 0DTE long's expiry
+  before its buy, booking a phantom $0 short WRITE. The expiry now
+  closes the long (direction LONG, loss = premium); gain totals are
+  unchanged.
+- **Kraken: staking rewards book the coins actually credited** — amount
+  − fee, where the ledger fee is in the reward's own coin units (the
+  balance moves by amount − fee in both the pre-2026 and 2026 formats).
+  Income and acquired quantity drop by Kraken's commission (typically
+  20–30% of the gross reward), the phantom units are gone, and the coin
+  fee no longer lands in the USD fee field. Instant trades and
+  crypto/crypto trades-CSV fills fold their coin-unit fees into the
+  crypto leg's quantity the same way.
+- **Kraken: `hybridearnwithdrawal` rows are custody evidence**, like a
+  withdrawal (kept aside, never in the book). They were non-events on
+  the assumption of an internal Earn move, but the rows carry a funding
+  refid, have no counter-leg in any earn wallet and sweep the spot
+  balance to dust — the coins left the ledger.
+- **IB: "(Return of Capital)" is no longer an ACB reduction when it
+  can't be one.** A payment in lieu labeled ROC is income from the share
+  borrower (`DIVIDEND_IN_LIEU`); ROC from a non-Canadian issuer (ISIN
+  country ≠ CA) is a foreign dividend under ITA s.90(2), noted in the
+  description. Canadian-issuer ROC stays an ACB reduction. New
+  `[settings] foreign_return_of_capital = "dividend" | "acb"` (default
+  `dividend`; `taxjson-brokerage --foreign-roc`) restores the ACB
+  treatment for foreign issuers. Income rises, later gains fall, for
+  affected holdings.
+- **.tt validation: option lines are checked against qty × price × 100**
+  — every option row used to warn "differs from qty*price".
+- **IB: no false "accrued but not booked" warning when IB revises a
+  dividend's pay date** between the accrual and its reversal (Po/Re now
+  net per ex-date; a posting within a week in any currency matches).
+- **Futures shorts are not "truncated history" candidates** — an IB
+  futures sell-to-open is excluded from the go-short hint like an option
+  write (`--include-options` still shows them).
 
 
 ## v0.16.0 (2026-09-25)

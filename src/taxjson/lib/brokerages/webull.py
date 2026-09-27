@@ -44,6 +44,8 @@ class WebullBrokerage(BaseBrokerage):
         # silently, leaving a phantom open position. Count those so the loss
         # is surfaced rather than invisible.
         skipped_actions: Dict[str, int] = {}
+        # Option expiry rows (see is_expiry below).
+        expiries: List[Dict[str, Any]] = []
 
         for row in reader:
             if not row or len(row) < 3:
@@ -109,12 +111,26 @@ class WebullBrokerage(BaseBrokerage):
             # acquisition order, and the §1091 window. (An earlier fix
             # wrongly assumed the CSV date was the TRADE date and added the
             # settlement lag ON TOP of an already-settled date.)
-            trade_date = self.trade_date_from_settlement(
-                date_str, currency, is_option, "%Y-%m-%d")
-            transactions.append({
+            # EXCEPT an option expiry row (no price, no proceeds): its
+            # Date is the EXPIRY date itself — there is no settlement
+            # cycle to walk back. Shifting it a business day earlier
+            # made a 0DTE long that expired worthless close BEFORE the
+            # buy that opened it: a phantom $0 short WRITE. Kept on the
+            # expiry date, stamped at the close (after every same-day
+            # 09:30 trade), and the same-day opening trade's settle is
+            # clamped to the expiry (clamp_settlement_to_expiry below).
+            is_expiry = (is_option and abs(price) < 1e-9
+                         and abs(net_amount) < 1e-9)
+            if is_expiry:
+                trade_date, row_time = date_str, '16:00:00'
+            else:
+                trade_date = self.trade_date_from_settlement(
+                    date_str, currency, is_option, "%Y-%m-%d")
+                row_time = '09:30:00'
+            _tx = {
                 'action': 'BUYSELL',
                 'date': trade_date,
-                'time': '09:30:00',
+                'time': row_time,
                 'date_settle': date_str,
                 'symbol': symbol,
                 'quantity': qty,
@@ -125,7 +141,11 @@ class WebullBrokerage(BaseBrokerage):
                 'gross_amount': self.theoretical_gross(qty, price, is_option),
                 'account': self.DEFAULT_ACCOUNT,
                 'description': current_description,
-            })
+            }
+            transactions.append(_tx)
+            if is_expiry:
+                expiries.append(_tx)
+        self.clamp_settlement_to_expiry(transactions, expiries)
         # Parser-level disambiguation so a downstream `taxjson-sort --dedup`
         # can't collapse byte-identical split-fill rows.
         self.disambiguate_split_fills(transactions)

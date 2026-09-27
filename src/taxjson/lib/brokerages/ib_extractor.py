@@ -162,6 +162,14 @@ _IB_COMM_ADJ_TICKER_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .\-]*?)\s*,')
 
 
 class IbBrokerage(BaseBrokerage):
+    # How an IB "(Return of Capital)" distribution from a NON-Canadian
+    # issuer (ISIN country != CA) is booked: "dividend" (default — ITA
+    # s.90(2) deems a non-resident corporation's pro-rata distribution a
+    # dividend) or "acb" (the earlier ACB-reduction treatment). Set by
+    # taxjson-brokerage --foreign-roc, which `taxjson run` passes from
+    # [settings] foreign_return_of_capital.
+    foreign_return_of_capital = 'dividend'
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions = []
         # Corporate Actions rows that aren't SPLIT or Spinoff (e.g.
@@ -233,6 +241,11 @@ class IbBrokerage(BaseBrokerage):
         # asset would corrupt the position book, so they get one
         # explicit note instead of vanishing into the asset filter.
         forex_rows = 0
+
+        # Expiry rows (settle == date), for the end-of-parse clamp of
+        # same-contract trades whose T+1 settle falls after the expiry
+        # (BaseBrokerage.clamp_settlement_to_expiry).
+        expiry_txs: List[Dict[str, Any]] = []
 
         # `Transaction Fees` rows (UK Stamp Tax and the like): a
         # per-trade levy IB books OUTSIDE the trade's Comm/Fee column.
@@ -441,7 +454,32 @@ class IbBrokerage(BaseBrokerage):
                     if (('A' in code_tokens or 'Ex' in code_tokens)
                             and abs(price) < 1e-5):
                         action = 'ASSIGN'
-                    
+
+                    # Expiry: the `Ep` code, a row of the Options
+                    # Expirations section, or a zero-price zero-proceeds
+                    # CLOSE of an option that isn't an assignment/
+                    # exercise. An expiry has no settlement cycle — the
+                    # contract ceases to exist on its expiry date — so
+                    # date_settle == date. The T+1 applied to every
+                    # Trades row pushed a Dec-31 expiry into the NEXT
+                    # tax year on the (Canadian) settle-date basis.
+                    # Assignment/exercise option legs keep T+1: their
+                    # premium rolls into the stock leg, which really
+                    # settles T+1, and the pair must share a settle
+                    # date so no unrelated same-underlying trade can
+                    # consume the staged premium in between.
+                    is_expiry = (
+                        section == 'Options Expirations'
+                        or 'Ep' in code_tokens
+                        or (asset_cat in ('Equity and Index Options',
+                                          'Options On Futures')
+                            and action != 'ASSIGN'
+                            and 'C' in code_tokens
+                            and abs(price) < 1e-9
+                            and gross_proceeds < 1e-9))
+                    if is_expiry and date:
+                        date_settle = date
+
                     if asset_cat in ('Equity and Index Options', 'Options On Futures'):
                         # Format 1: Equity Options (Standard) or Futures Options (e.g. "XSP 16JAN26 68.5 P")
                         opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+([\d\.]+)\s+([PC])$', symbol)
@@ -492,7 +530,7 @@ class IbBrokerage(BaseBrokerage):
                     ext = _ib_currency_ext(currency)
                     full_symbol = f"{symbol}.{ext}"
 
-                    transactions.append({
+                    _trade_tx = {
                         'action': action,
                         'date': date,
                         'time': time,
@@ -506,7 +544,10 @@ class IbBrokerage(BaseBrokerage):
                         'gross_amount': gross_proceeds,
                         'account': 'IB',
                         'description': description,
-                    })
+                    }
+                    transactions.append(_trade_tx)
+                    if is_expiry:
+                        expiry_txs.append(_trade_tx)
                     self.note_row_consumed()
 
                 elif section == 'Dividends':
@@ -571,19 +612,51 @@ class IbBrokerage(BaseBrokerage):
                     # capital 'I' and silently missed every PIL row. Match
                     # case-insensitively against both phrasings used by IB.
                     desc_lower = description.lower()
-                    if is_roc_description(description):
-                        # Return of capital arrives in the Dividends
-                        # section but is an ACB reduction, not income.
-                        # `amount` stays signed so IB's negative reversal
-                        # rows net out (they become positive ADJUSTs).
-                        transactions.append(self.tx_roc_adjust(
-                            symbol=f"{ticker}.{ext}", currency=currency,
-                            date=date, desc=description, amount=amount,
-                            account='IB'))
-                        self.note_row_consumed()
-                        continue
                     is_pil = ('payment in lieu of dividend' in desc_lower
                               or 'in lieu of dividend' in desc_lower)
+                    if is_roc_description(description):
+                        # IB's "(Return of Capital)" label is the ISSUER's
+                        # designation, which is only an ACB reduction for
+                        # Canadian purposes in the Canadian-issuer case.
+                        #  * A PAYMENT IN LIEU is paid by the share
+                        #    borrower, not the issuer: it can never reduce
+                        #    ACB, whatever the underlying distribution was
+                        #    — income (falls through to the PIL branch).
+                        #  * A non-resident corporation's pro-rata
+                        #    distribution is deemed a DIVIDEND by ITA
+                        #    s.90(2); a US "return of capital" (no E&P)
+                        #    doesn't make it a PUC reduction (the s.90(3)
+                        #    qualifying-return-of-capital exception is for
+                        #    foreign affiliates only). Default: foreign
+                        #    dividend; [settings] foreign_return_of_capital
+                        #    = "acb" restores the ACB treatment.
+                        #  * Canadian issuer (T3 box 42 style): ACB
+                        #    reduction, as before.
+                        # No ISIN → issuer unknown → kept as ADJUST.
+                        _issuer_cc = isin[:2].upper() if len(isin) >= 2 else ''
+                        _foreign = bool(_issuer_cc) and _issuer_cc != 'CA'
+                        if is_pil:
+                            description = (
+                                f"{description} [payment in lieu of an "
+                                f"IB-designated return of capital: paid by "
+                                f"the share borrower — income, never an ACB "
+                                f"reduction]")
+                        elif (_foreign and self.foreign_return_of_capital
+                              != 'acb'):
+                            description = (
+                                f"{description} [IB-designated return of "
+                                f"capital, treated as a dividend under ITA "
+                                f"s.90(2)]")
+                        else:
+                            # `amount` stays signed so IB's negative
+                            # reversal rows net out (they become positive
+                            # ADJUSTs).
+                            transactions.append(self.tx_roc_adjust(
+                                symbol=f"{ticker}.{ext}", currency=currency,
+                                date=date, desc=description, amount=amount,
+                                account='IB'))
+                            self.note_row_consumed()
+                            continue
                     action = 'DIVIDEND_IN_LIEU' if is_pil else 'DIVIDEND'
                     # Type 'dividend' makes downstream tools skip ACB; PIL
                     # uses a different type so dividend gain-entry emission
@@ -712,13 +785,25 @@ class IbBrokerage(BaseBrokerage):
                               file=sys.stderr)
                         self.count_skip(f"malformed {section} row")
                         continue
-                    key = (account, symbol, ex_date, pay_date)
+                    # Keyed on the EX date, not the pay date: IB revises
+                    # a dividend's pay date between the Po and the Re row
+                    # (a real ENB accrual posted pay 03-01, reversed pay
+                    # 03-02), and a pay-date key split the pair into two
+                    # half-open accruals — a false "accrued but not
+                    # booked" warning for a dividend already paid. The
+                    # pay date is only a fallback key when IB omits the
+                    # ex date. Latest row's pay date wins for display.
+                    key = ((account, symbol, 'ex', ex_date) if ex_date
+                           else (account, symbol, 'pay', pay_date))
                     accrual_net[key] = accrual_net.get(key, 0.0) + gross
                     self.note_row_consumed()      # read into parser state
-                    accrual_meta[key] = {
+                    _meta = accrual_meta.setdefault(key, {
                         'symbol': symbol, 'pay_date': pay_date,
-                        'currency': currency,
-                    }
+                        'currency': currency, 'pay_dates': set(),
+                    })
+                    if pay_date:
+                        _meta['pay_date'] = pay_date
+                        _meta['pay_dates'].add(pay_date)
                     # Capture the per-share rate (same for the Po and Re
                     # rows of a dividend) keyed by (symbol, pay date), so a
                     # Payment-in-Lieu row — which has no rate in its own
@@ -1616,12 +1701,35 @@ class IbBrokerage(BaseBrokerage):
         # and whose pay date falls on or before the statement period end
         # (a future-dated accrual is a normal pending dividend, not a
         # missed one). When the period end is unknown, don't filter on it.
+        def _posted_near(sym: str, pay: str) -> bool:
+            if (sym, pay) in posted_dividend_keys:
+                return True
+            try:
+                _pd = datetime.strptime(pay, "%Y-%m-%d")
+            except (TypeError, ValueError):
+                return False
+            for _sym, _d in posted_dividend_keys:
+                if _sym != sym:
+                    continue
+                try:
+                    if abs((datetime.strptime(_d, "%Y-%m-%d")
+                            - _pd).days) <= 7:
+                        return True
+                except ValueError:
+                    continue
+            return False
+
         open_accruals = []
         for key, net in accrual_net.items():
             if net <= 0.01:
                 continue
             meta = accrual_meta[key]
-            if (meta['symbol'], meta['pay_date']) in posted_dividend_keys:
+            # Posted within a week of ANY pay date the accrual carried
+            # (revised pay dates; the cash may post in another currency
+            # — an accrual in USD for a dividend IB pays in CAD — so the
+            # match is on ticker + date only).
+            if any(_posted_near(meta['symbol'], pd)
+                   for pd in (meta['pay_dates'] or {meta['pay_date']})):
                 continue
             if (statement_period_end and meta['pay_date']
                     and meta['pay_date'] > statement_period_end):
@@ -1650,6 +1758,8 @@ class IbBrokerage(BaseBrokerage):
         # every position regardless of section order.
         _reattribute_income_to_holdings(transactions,
                                         extra_held=open_position_syms)
+
+        self.clamp_settlement_to_expiry(transactions, expiry_txs)
 
         # Parser-level disambiguation so a downstream `taxjson-sort --dedup`
         # can't collapse byte-identical split-fill rows. IB occasionally

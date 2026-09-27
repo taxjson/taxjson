@@ -255,6 +255,8 @@ source_currencies = ["USD"]    # currencies you hold besides base_currency (FX r
 #                                   # within 30 days and held (strict reading; default off — a
 #                                   # closing purchase is not a disposition s.54 reaches)
 # fx_cash_gains = true         # end-of-run s.39(1.1) FX-on-cash report (off by default)
+# foreign_return_of_capital = "dividend" # IB "(Return of Capital)" from a NON-Canadian
+#                                   # issuer: "dividend" (default — ITA s.90(2)) or "acb"
 
 # Optional — inputs `taxjson estimate` (and the instalments
 # current-year basis) uses when the flags aren't given. Only these
@@ -765,7 +767,15 @@ cases differently:
    as an `ADJUST` that reduces ACB by the cash received (tagged `roc`),
    instead of a dividend. IB reversal rows net out sign-correctly. Note this
    changes regenerated history: income totals drop and later gains rise
-   relative to the old (incorrect) dividend treatment.
+   relative to the old (incorrect) dividend treatment. Two IB exceptions:
+   a **payment in lieu** labeled "(Return of Capital)" is paid by the share
+   borrower and is always income (`DIVIDEND_IN_LIEU`), never an ACB
+   reduction; and ROC from a **non-Canadian issuer** (ISIN country not
+   `CA`) is booked as a foreign dividend — ITA s.90(2) deems a non-resident
+   corporation's pro-rata distribution a dividend whatever the US label
+   says (the s.90(3) exception is for foreign affiliates). Set
+   `foreign_return_of_capital = "acb"` in `[settings]` to keep the ACB
+   treatment instead.
 2. **Fund/ETF distribution ROC needs one manual entry per fund per year.**
    Most Canadian ETF/REIT ROC is not labeled in any broker CSV — the split
    only arrives months later on your T3 (box 42). Enter it as a `.tt` ADJUST

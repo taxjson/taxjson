@@ -85,16 +85,22 @@ def parse_tt_line(line: str, account_name: str = 'default'):
                 # keystroke typo here is silent wrong money. Warn, don't
                 # fail: odd lots / rounding / FX-inclusive totals can differ
                 # legitimately by a little — 1% + $0.05 tolerance.
+                # Option rows: price is per SHARE, the contract covers
+                # 100 — without the ×100 every option line warned.
+                from taxjson.lib.core import is_option_symbol
+                _mult = 100.0 if is_option_symbol(tx['symbol']) else 1.0
                 _q = tx['quantity']
                 _fee = tx.get('fee', 0.0)
-                _expected = abs(_q) * tx['price'] + (_fee if _q > 0 else -_fee)
+                _expected = (abs(_q) * tx['price'] * _mult
+                             + (_fee if _q > 0 else -_fee))
                 _total = abs(tx['net_amount'])
                 if (tx['price'] > 0 and abs(_q) > 0
                         and abs(_total - _expected) >
                         max(0.05, 0.01 * max(_expected, 1.0))):
                     print(
                         f"warning: .tt line total {_total:.2f} differs from "
-                        f"qty*price{'+' if _q > 0 else '-'}fee = "
+                        f"qty*price{'*100' if _mult > 1 else ''}"
+                        f"{'+' if _q > 0 else '-'}fee = "
                         f"{_expected:.2f} by more than 1%: {line.strip()!r} "
                         f"— check for a typo (the total IS what the engine "
                         f"books as cost/proceeds).",

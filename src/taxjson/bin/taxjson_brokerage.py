@@ -170,6 +170,17 @@ Examples:
             "clobbered the meaningful label."
         ),
     )
+    parser.add_argument(
+        "--foreign-roc", dest="foreign_roc", choices=("dividend", "acb"),
+        default="dividend",
+        help=(
+            "IB only: how a '(Return of Capital)' distribution from a "
+            "NON-Canadian issuer is booked — 'dividend' (default; ITA "
+            "s.90(2) deems a non-resident corporation's distribution a "
+            "dividend) or 'acb' (ACB reduction). Canadian-issuer ROC is "
+            "always an ACB reduction; a payment in lieu is always income."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -196,6 +207,8 @@ Examples:
         # IB's `unhandled_ca_tickers` warning bucket) doesn't bleed
         # across files and emit confused diagnostics.
         extractor = extractor_class()
+        if hasattr(extractor, 'foreign_return_of_capital'):
+            extractor.foreign_return_of_capital = args.foreign_roc
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
         try:
             transactions = extractor.parse_file(input_path)

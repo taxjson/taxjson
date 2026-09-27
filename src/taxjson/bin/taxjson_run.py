@@ -446,7 +446,8 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
 _SETTINGS_KEYS = ("year", "country", "base_currency", "tax_date",
                   "source_currencies", "cross_asset", "province",
                   "fx_cash_gains", "option_premium_timing",
-                  "option_grant_timing_since", "option_buyback_loss_superficial")
+                  "option_grant_timing_since", "option_buyback_loss_superficial",
+                  "foreign_return_of_capital")
 _ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                  "brokerage", "account", "query_id", "holdings")
 _ACCOUNT_TYPES = ("taxable", "sheltered")
@@ -497,6 +498,9 @@ def validate_config(cfg: Dict[str, Any],
     _bb = settings.get("option_buyback_loss_superficial")
     if _bb is not None and not isinstance(_bb, bool):
         _die(f"[settings] option_buyback_loss_superficial must be true/false (got {_bb!r}).")
+    _froc = settings.get("foreign_return_of_capital")
+    if _froc is not None and _froc not in ("dividend", "acb"):
+        _die(f"[settings] foreign_return_of_capital must be \"dividend\" or \"acb\" (got {_froc!r}).")
     ca_flag = settings.get("cross_asset")
     if ca_flag is not None and not isinstance(ca_flag, bool):
         _die(f"[settings] cross_asset must be true/false, "
@@ -1006,6 +1010,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # parse + merge. Content-compare first so an unchanged listing
     # never dirties the cache.
     src_manifest = cache / f"{name}_sources.list"
+    # Parser option (IB foreign ROC): in the manifest so a toggle re-parses.
+    _froc_acb = settings.get("foreign_return_of_capital") == "acb"
     # Membership covers EVERY input kind that feeds the merge — CSVs and
     # .tt files alike. Listing only CSVs left a deleted .tt's
     # transactions in the cached books under --fast (its converted JSON
@@ -1025,7 +1031,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         [f"{broker}/{p.name}" for broker, csvs in grouped.items()
          for p in csvs]
         + [f"tt/{p.name}" for p in input_files(acct_dir, ".tt")]
-        + _map_entries)) + "\n"
+        + _map_entries
+        + (["setting/foreign_return_of_capital=acb"] if _froc_acb else []))) + "\n"
     if (not src_manifest.exists()
             or src_manifest.read_text(encoding="utf-8") != src_txt):
         src_manifest.write_text(src_txt, encoding="utf-8")
@@ -1047,6 +1054,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             print(f"  parse {broker}: {len(csvs)} file(s)")
             cmd = _cmd("taxjson-brokerage") + ["--account", name,
                                                "--brokerage", broker]
+            if _froc_acb:
+                cmd += ["--foreign-roc", "acb"]
             _sidecar = out.with_name(out.stem + "_transfers.json")
             if include_transfers:
                 cmd.append("--transfers")

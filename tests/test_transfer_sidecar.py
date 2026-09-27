@@ -326,8 +326,12 @@ class TestCryptoSendsBecomeEvidence(unittest.TestCase):
         self.assertEqual(w["fee"], 1.0)
         d = by_sym[("BTC", "deposit")]
         self.assertEqual(d["quantity"], 0.5)
-        # Earn shuffles are internal — still ignored, never evidence.
-        self.assertNotIn(("USDC", "hybridearnwithdrawal"), by_sym)
+        # hybridearnwithdrawal has no counter-leg in any earn wallet (a
+        # funding-style row that sweeps the spot balance): the coins
+        # left this ledger, so it is custody evidence like a withdrawal
+        # — kept aside in the sidecar, never in the book.
+        h = by_sym[("USDC", "hybridearnwithdrawal")]
+        self.assertLess(h["quantity"], 0)
         # Books stay clean of TRANSFERs.
         self.assertNotIn("TRANSFER",
                          {t["action"] for t in book["transactions"]})
