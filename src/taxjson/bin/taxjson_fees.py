@@ -20,9 +20,9 @@ transaction `id` (the same key taxjson-sort --dedup uses) so a re-downloaded,
 overlapping statement isn't double-counted.
 
 Usage:
-    taxjson-fees --cache work --year 2026
-    taxjson-fees --cache work --year 2026 --to CAD --rates work/to_base.csv
-    taxjson-fees --cache work --year 2026 --to CAD --rates work/to_base.csv --json
+    taxjson-fees-sum --cache work --year 2026
+    taxjson-fees-sum --cache work --year 2026 --to CAD --rates work/to_base.csv
+    taxjson-fees-sum --cache work --year 2026 --to CAD --rates work/to_base.csv --json
 """
 
 import argparse

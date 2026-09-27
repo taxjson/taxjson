@@ -62,11 +62,11 @@ def create_app(ctx: ProjectContext, allowed_hosts=None) -> FastAPI:
                 pass
         return st.ctx
 
-    def page(name, request, **ctx_vars):
+    def page(name, request, status_code: int = 200, **ctx_vars):
         # Starlette ≥0.29 signature: request first, then name, then context
         # (the old TemplateResponse(name, {"request": ...}) form is gone).
         return templates.TemplateResponse(
-            request=request, name=name,
+            request=request, name=name, status_code=status_code,
             context={"ctx": cur(), "accounts": cur().accounts,
                      "holdings_accounts": data.holdings_accounts(cur()),
                      "freshness": data.freshness(cur()),
@@ -91,24 +91,32 @@ def create_app(ctx: ProjectContext, allowed_hosts=None) -> FastAPI:
     def holdings(request: Request, account: str = ""):
         accts = data.holdings_accounts(cur())
         account = account or (accts[0] if accts else "")
-        rows, error = [], None
+        rows, error, status = [], None, 200
         if account:
             try:
                 rows = data.load_holdings(cur(), account)
-            except (UnknownAccountError, ReportArtifactError) as e:
+            except UnknownAccountError as e:
+                # An error page for a name that doesn't exist is a 404,
+                # not a 200 (scripts/link checkers read the status).
+                error, status = str(e), 404
+            except ReportArtifactError as e:
                 error = str(e)
-        return page("holdings.html", request, account=account,
-                    rows=rows, error=error)
+        return page("holdings.html", request, status_code=status,
+                    account=account, rows=rows, error=error)
 
     @app.get("/holdings/{account}/{symbol}", response_class=HTMLResponse)
     def holding_detail(request: Request, account: str, symbol: str):
+        status = 200
         try:
             holding = data.find_holding(cur(), account, symbol)
             error = None
-        except (UnknownAccountError, ReportArtifactError) as e:
+        except UnknownAccountError as e:
+            holding, error, status = None, str(e), 404
+        except ReportArtifactError as e:
             holding, error = None, str(e)
-        return page("holding_detail.html", request, account=account,
-                    symbol=symbol, holding=holding, error=error)
+        return page("holding_detail.html", request, status_code=status,
+                    account=account, symbol=symbol, holding=holding,
+                    error=error)
 
     @app.get("/wash-radar", response_class=HTMLResponse)
     def wash_radar(request: Request, account: str = ""):
@@ -135,13 +143,16 @@ def create_app(ctx: ProjectContext, allowed_hosts=None) -> FastAPI:
                         if (cur().reports / f"wash_radar_{a}.rpt").exists()]
         acct = account or (with_reports[0] if with_reports
                            else (candidates[0] if candidates else ""))
-        sections, error = [], None
+        sections, error, status = [], None, 200
         if acct:
             try:
                 sections = data.wash_radar_sections(cur(), acct)
-            except (UnknownAccountError, ReportArtifactError) as e:
+            except UnknownAccountError as e:
+                error, status = str(e), 404
+            except ReportArtifactError as e:
                 error = str(e)
-        return page("wash_radar.html", request, account=acct,
+        return page("wash_radar.html", request, status_code=status,
+                    account=acct,
                     radar_accounts=(with_reports or candidates),
                     sections=sections, error=error)
 

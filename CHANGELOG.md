@@ -34,6 +34,67 @@
   With no `prescribed_rate(s)` set, CRA's published quarterly rates
   (2024–2026, built in) are used instead of 0%. Scaffold and README
   rate examples corrected (2025 Q3 onward: 7%).
+- **`close-year` no longer locks the wrong year**: after bumping
+  `[settings].year` without a rebuild, it wrote LAST year's books into
+  `filed/<new year>.json`. It now compares the year recorded in each
+  work/ gains file with `[settings].year` and refuses on a mismatch
+  ("rebuild with `taxjson run` first"); `sum`, `estimate` and
+  `form-export` print a loud WARNING instead.
+- **An account without `type` is now fatal** (it silently defaulted to
+  sheltered, so an untyped taxable account dropped out of the return);
+  the message lists `taxable | sheltered`.
+- **No more false "run `taxjson run` first"** after a successful run:
+  `run` records accounts it skipped for having no inputs
+  (`work/skipped_accounts.json`), and t1135, form-export,
+  reconcile-slips, harvest, audit, `list --date`, wash-radar and
+  buy/sell-check stay quiet about them (helper
+  `_accounts_skipped_for_no_inputs`).
+- `inputs/slips/` (the T5008/1099-B CSVs the checklist asks for) no
+  longer triggers the "has no [accounts.slips] section" warning; CSVs
+  in a SUBfolder of an account's inputs now warn that they are not read.
+- `run` on a project where no account has any input says so; with
+  `--strict` it exits 1 instead of "Done". A typo'd settings key's
+  did-you-mean now prints before the "missing year" error it causes.
+  `-C DIR` naming a missing directory says so; `sum` in a non-project
+  says there is no taxjson.toml.
+- `run`'s holdings check tells a config problem (missing holdings file)
+  apart from real position differences.
+- `init`: the next-steps line is `taxjson -C '<dir>' run` (the old
+  `taxjson run -C <dir>` failed); `--year` is capped at next year;
+  `--force` keeps the previous config as `taxjson.toml.bak` and lists
+  input folders the new config no longer covers.
+- `serve`: malformed taxjson.toml is reported like every other command
+  (no traceback); `--port` must be 1-65535. Web UI: error pages for an
+  unknown account return 404; the what-if rejects a negative quantity
+  (it was simulated as positive).
+- `elect`: `--pending --json` emits JSON when nothing is pending;
+  `elect ACCOUNT --json` lists that account's elections as JSON (and
+  `--json` with `--set/--redo/--reset` is refused); `--hint` without
+  `--set` is an error; `--set` with an event id that matches nothing is
+  refused instead of saving a junk record into manifest.json.
+- `audit`: `--date` matches the trade OR settlement date (and says
+  which); `--summary` shows ids long enough to be unique; an unknown
+  `--account`, or a symbol/`--id`/`--date` filter that matches nothing,
+  exits 1 with a message instead of an empty "0/0 ✓" block;
+  `--account` runs only the computation holding that account.
+- `find-missing-history --gen-phantoms` passes the project country
+  (no more "--country not given; assuming canada" per account).
+- `form-export`: `--out`/`--box` without `--form txf` are refused
+  instead of silently ignored.
+- `estimate`/`sum --estimate`: a missing or unsupported province fails
+  BEFORE the table prints, and errors name the invoking command;
+  `sum --province` without the estimate warns that it is ignored.
+- `scan` before any run exits 1 instead of reporting a clean scan;
+  `leaps`/`leaps-sum` with no books say so and exit 1.
+- Help/docs: `fetch --positions` no longer cites the removed
+  `taxjson verify`; the module docstring no longer lists `taxjson
+  show`; `taxjson-fees-sum` usage examples; futures filter help;
+  `reconcile-slips --json`, `serve --port` and `harvest --ibkr-port`
+  document themselves/their defaults. README: `[estimate]` vs
+  `[instalments]` keys split into their own blocks, the chaining row's
+  duplicate example and check-filed's nonexistent `--strict` fixed,
+  fetch windows described as the code does them, `inputs/slips/` in
+  the file table, the estimate sample shows the real FTC label.
 
 
 ## v0.16.0 (2026-09-25)

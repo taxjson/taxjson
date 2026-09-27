@@ -256,13 +256,16 @@ source_currencies = ["USD"]    # currencies you hold besides base_currency (FX r
 #                                   # closing purchase is not a disposition s.54 reaches)
 # fx_cash_gains = true         # end-of-run s.39(1.1) FX-on-cash report (off by default)
 
+# Optional — inputs `taxjson estimate` (and the instalments
+# current-year basis) uses when the flags aren't given. Only these
+# two keys belong here:
+# [estimate]
+# other_income = 120000
+# other_losses = 0
+
 # Optional — Canadian tax instalments (`taxjson instalments`, and a
 # compact block inside `taxjson estimate`):
 # [instalments]
-
-# [estimate]                   # inputs `taxjson estimate` (and the
-# other_income = 120000        # instalments current-year basis) uses
-# other_losses = 0             # when the flags aren't given
 # basis = "current_year"       # current_year | prior_year | cra_reminder
 # prescribed_rate = 0.07       # CRA's overdue-tax rate (optional: CRA's
 #                              # published quarterly rates are built in
@@ -309,6 +312,7 @@ Files the pipeline reads and writes (all map files are optional):
 | --- | --- |
 | `inputs/<account>/` | Drop broker CSV exports here; any `*.tt` manual-history files too. |
 | `inputs/<account>/manifest.json` | Saved corp-action elections — **commit this**. |
+| `inputs/slips/` | Broker T5008 / 1099-B slip CSVs for `taxjson reconcile-slips` (the checklist looks here). Not an account folder — needs no `[accounts.slips]`. |
 | `ticker.map` | Symbol rules, one per line: `GLOBAL from to` (plain rename, every stage), `TOBASE from to` (cross-listing consolidated in the base pipeline only), `JOURNAL from to` (Norbert's Gambit pair — consolidated AND netted in holdings), `DELETE from` (drop a pure artifact), `DISTINCT a b` (records that two look-alike listings are deliberately separate securities — a CDR vs its US underlying — and silences the scan's MAP-GAP nag; changes no symbol). For TOBASE pairs the holdings view keeps the listings separate **except** where the broker's own transfer rows prove a depot flip — the holdings export applies those evidenced quantities from the transfer sidecars (see `taxjson transfers`), so `JOURNAL` is only for intrinsically fungible classes like DLR's gambit units. `taxjson init` writes a commented stub. |
 | `distributions.map` | Non-cash fund distributions: `SYMBOL RECORD_DATE PER_SHARE` (negative = ROC). |
 | `t1135.map`, `yf_ticker.map`, `sector.map`, `crypto_ticker.map` | Per-symbol overrides: T1135 domicile, yfinance spelling, timeline sectors, crypto Yahoo-collision fixes. |
@@ -326,9 +330,9 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson run --account NAME` | Re-run a single account. ⚠️ Skips cross-account wash-sale and cross-listing detection — those need a full run. |
 | `taxjson sanity ACCOUNT\|FILE.toml\|ACCOUNT=FILE ...` | Cross-check open positions against externally produced holdings `.toml` files (portoml-style `[[holding]]`), per symbol (`--tolerance`, `--json`; exit 1 on any discrepancy). Bare items form one aggregate group (combined positions vs combined holdings — quick, but blind to a position sitting in the wrong account). `ACCOUNT[+ACCOUNT]=FILE[+FILE]` pairs specific accounts with specific files and is checked as its own group — many-to-many because a taxjson account can span several broker accounts (`margin=ibkr.toml+webull.toml`, or repeat `margin=…`) and one broker export can cover several accounts (`rrsp+lira=flex.toml`). Both forms mix freely. With no arguments the pairings come from `taxjson.toml` — each account's `holdings = [...]` — and `taxjson run` finishes with the same check as a warning. Option rows whose root the file spells differently (`RCI…` vs taxjson's `RCI.B…`) are matched through the row's `underlying` field. |
 | `taxjson run --strict` | Promote per-account validation ERRORs (oversold positions, malformed rows) to fatal instead of publishing reports with a DIAGNOSTICS banner. Recommended for CI/cron. |
-| `taxjson run sum` (chaining) | Subcommands chain in one invocation, each with its own flags: `taxjson run close-year check-filed`. Note a chained `--json` command's stdout follows the earlier commands' progress output — pipe consumers should run the JSON command standalone. Also: `taxjson run close-year check-filed`. A failing command stops the chain and its exit code propagates. Option values that collide with command names are handled (`--account sum`); for the rare ambiguous positional, separate with `--`. |
+| `taxjson run sum` (chaining) | Subcommands chain in one invocation, each with its own flags: `taxjson run close-year check-filed`. Note a chained `--json` command's stdout follows the earlier commands' progress output — pipe consumers should run the JSON command standalone. A failing command stops the chain and its exit code propagates. Option values that collide with command names are handled (`--account sum`); for the rare ambiguous positional, separate with `--`. |
 | `taxjson close-year` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. |
-| `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks (every full run also auto-checks; `--strict` aborts on drift). |
+| `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks; exit 1 on drift. Every full run also auto-checks (`taxjson run --strict` aborts on drift). |
 | `taxjson events` / `divs` / `dil` / `trades` / `gains` / `fees` / `roc` / `leaps` | Per-transaction views over a look-back window — see below. |
 | `taxjson transfers [ACCOUNT]` | Custody-transfer **evidence** view: depot flips, listing journals, broker migrations, and crypto withdrawals/sends (matched send/arrival pairs read as self-custody moves; unmatched out-legs are the gift/payment candidates — FMV dispositions if they left your ownership) — the TRANSFER rows the books deliberately exclude (basis comes from buy/sell history). Reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`) plus in-book TRANSFERs from `transfers = true` accounts, with the broker's transfer type (InterDepot / Internal / ATON). `--json` for machines. |
 | `taxjson roc-sum` | Return-of-capital / ACB-adjustment total per ticker (default: tax year). |
@@ -349,7 +353,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson wash-radar` / `wash-sales` | Wash-sale radar (forward) and denied-loss report (backward). |
 | `taxjson fx-cash` | FX capital gains on foreign-currency **cash** — foreign cash is property, so spending USD realizes the rate move since it was acquired. Canada: ITA s.39(1.1) with the $200/year de minimis; US: the §988 ordinary-income figure. A standalone report reconstructed from the taxable accounts' native books (`--events` for the per-disposal detail, `--json` for machines); changes NO other number. Set `fx_cash_gains = true` under `[settings]` to also print it (and write `reports/fx_cash.rpt`) at the end of every run — off by default. |
 | `taxjson watch` | Cron-able change detector: reports only what CHANGED since the last watch run — new/changed/cleared radar advisories, moved clear dates, and (with `--harvest`) the harvestable-now loss total moving more than `--threshold` (default 100). Silent with exit 0 when nothing changed, so a cron line mails only on news; `--exit-code` exits 1 on changes for scripting, `--json` for machines. State: `work/.watch_state.json`; `--state PATH` gives a cron cadence its own baseline (daily and weekly lines can coexist). |
-| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` — Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Defaults to year-to-date (`--year`/`--from`/`--days` to widen, `--trim-overlap` to drop rows your manual exports already cover, `--dry-run` to preview). Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` fetches live holdings instead of activity. Chain it: `taxjson fetch run`. |
+| `taxjson fetch [ACCOUNT ...]` | Download broker activity straight into `inputs/` — Questrade REST API and IBKR Flex Web Service, configured on the account (`brokerage` + `account`/`query_id` under `[accounts.<name>]`). Writes files the existing parsers already read; hand-exported CSVs keep working side by side. Questrade defaults to the whole tax-year window (from Dec 15 of the prior year; `--year N` backfills a past year, `--from`/`--days` override the window); IBKR re-covers the Flex query's configured period. `--trim-overlap` drops rows your manual exports already cover, `--dry-run` previews. Credentials: `--refresh-token` (Questrade) / `--flex-token` (IBKR); `--positions` ALSO snapshots live Questrade holdings to `work/<account>_live_holdings.toml` (for `taxjson sanity`). Chain it: `taxjson fetch run`. |
 | `taxjson scan` | Lint the project for common tax-efficiency mistakes: cross-listed Canadian dividend payers held via the US line in taxable/TFSA, US payers in a TFSA (unrecoverable 15% withholding), and ticker.map cross-listing gaps. `--online` probes yfinance for unmapped .TO twins. Exit 1 on findings. |
 | `taxjson t1135` | CRA T1135 foreign-property helper: filing-threshold test + per-property/per-country tables. |
 | `taxjson carryover` | Multi-year capital-loss carryforward/carryback ledger (Canada balance + T1A carryback candidates; US ST/LT worksheet). |
@@ -426,8 +430,10 @@ config tax year) and optional `ACCOUNT`; a lone non-period argument is read as t
 one row per account (stock / option / realized / dividend / PIL / fees). When
 `taxjson.toml` declares both account types, the summary prints a **TAXABLE
 ACCOUNTS** table and a **SHELTERED ACCOUNTS** table (each with its own
-SUBTOTAL) followed by the **ALL ACCOUNTS** grand total; an account missing a
-`type` gets its own UNTYPED table rather than silently joining a bucket.
+SUBTOTAL) followed by the **ALL ACCOUNTS** grand total. Every account must
+declare its `type` — `taxjson run` refuses a config with an untyped account
+(it would otherwise drop out of the return); gains files whose account is no
+longer in `taxjson.toml` are shown in their own UNTYPED table.
 Single-type projects and `taxjson sum <account>` keep the one-table layout.
 Every table's total row is the exact sum of the rows above it, and the
 numbers match each `reports/<account>.sum`. `--json` carries a per-account
@@ -464,11 +470,11 @@ both amounts — pure investment-income bracketing).
 ```
 TAX ESTIMATE — canada/ON, rates vintage 2026 (ESTIMATE ONLY, not filing numbers; taxable accounts only)
 
-  Other income                      200,000.00
-  Capital gains (taxable)            15,000.00  [30,000.00 realized - 0.00 other losses, x50%]
-  Eligible dividends (grossed)        1,380.00  [1,000.00 x1.38, Canadian-listed]
-  Foreign dividends                     500.00  [FTC 75.00 — assumed 15% of foreign dividends]
-  Payments in lieu                        0.00
+  Other income                     200,000.00
+  Capital gains (taxable)           15,000.00  [30,000.00 realized - 0.00 other losses, x50%]
+  Eligible dividends (grossed)       1,380.00  [1,000.00 x1.38, Canadian-listed]
+  Foreign dividends                    500.00  [FTC 75.00 — actual TAX rows (capped at 15% of foreign divs)]
+  Payments in lieu                       0.00
 
   Tax with investments: 72,598.76 (federal 44,729.50 + ON 27,869.26)
   Tax on other income alone: 64,721.98
@@ -487,9 +493,10 @@ the earliest table also says the post-2024 AMT shown did not apply).
   netted against gains before the 50% inclusion (deducted below net
   income, so they do not restore a phased BPA). Canadian-listed
   dividends are treated as eligible (38% gross-up + DTC) — non-eligible
-  dividends are not modelled; foreign dividends as ordinary income with
-  the 15% treaty withholding assumed creditable (the books' actual TAX
-  rows when present). A crypto account's dividends are staking rewards:
+  dividends are not modelled; foreign dividends as ordinary income, credited (FTC) with the foreign
+  tax the books actually withheld (TAX rows, capped at 15% of the
+  dividends; the treaty 15% is assumed for an account whose books carry
+  no TAX rows). A crypto account's dividends are staking rewards:
   ordinary income, no withholding, no foreign tax credit. Modelled: the
   federal enhanced BPA phase-down (full amount up to the 29% bracket,
   the minimum from the 33% bracket, linear between, on net income),

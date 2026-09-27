@@ -613,17 +613,35 @@ def parse_args(argv=None):
     p.add_argument("--symbol", action="append", default=[],
                    help="Filter: symbol prefix (repeatable).")
     p.add_argument("--id", dest="gain_id", help="Filter: tx id prefix.")
-    p.add_argument("--date", help="Filter: disposition date.")
+    p.add_argument("--date", help="Filter: disposition date — matches "
+                                  "the trade date OR the settlement date.")
     p.add_argument("--account", help="Filter: account name.")
     p.add_argument("--summary", action="store_true",
                    help="One line per event instead of full blocks.")
+    # Wrapper plumbing (`taxjson audit` runs one invocation per book and
+    # decides itself whether "nothing matched" is an error overall).
+    p.add_argument("--no-match-rc", type=int, default=1,
+                   help=argparse.SUPPRESS)
     p.add_argument("--no-trace", action="store_true",
                    help="Omit the engine pool traces.")
     p.add_argument("--no-color", action="store_true",
                    help="Disable ANSI color (auto-on for terminals; "
                         "NO_COLOR is honored).")
-    p.add_argument("--json", action="store_true")
+    p.add_argument("--json", action="store_true",
+                   help="Emit the full audit as JSON.")
     return p.parse_args(argv)
+
+
+def unique_prefix_len(ids, minimum: int = 10) -> int:
+    """Shortest prefix length (>= minimum) that keeps every id in `ids`
+    distinct — the --summary column is meant to be pasted into --id,
+    and a fixed 10 characters collided for ids sharing a stem."""
+    ids = [str(i or "") for i in ids]
+    n = minimum
+    longest = max((len(i) for i in ids), default=minimum)
+    while n < longest and len({i[:n] for i in ids}) < len(set(ids)):
+        n += 1
+    return n
 
 
 def _norm_country(c: str) -> str:
@@ -719,7 +737,11 @@ def main(argv=None) -> int:
         eff = g.get(date_key) or g.get("date") or ""
         if args.year and not eff.startswith(str(args.year)):
             return False
-        if args.date and eff != args.date:
+        # --date matches EITHER date: the display leads with the trade
+        # date while the Canadian filing basis is the settle date, so
+        # a date copied from the block used to match nothing.
+        if args.date and args.date not in (g.get("date"),
+                                           g.get("date_settle")):
             return False
         if args.symbol and not any(
                 str(g.get("symbol") or "").upper().startswith(s.upper())
@@ -821,6 +843,26 @@ def main(argv=None) -> int:
     failed = any(e["failures"] for e in events) \
         or bool(reconciliation_failures)
 
+    _filters = [f"{k} {v}" for k, v in (
+        ("symbol", " ".join(args.symbol or [])), ("--id", args.gain_id),
+        ("--date", args.date), ("--account", args.account)) if v]
+    if _filters and not events:
+        # An empty "0/0 ✓" reconciliation block read as a clean audit of
+        # a typo (2026-09 CLI audit B15).
+        if args.no_match_rc == 1:
+            print(f"taxjson-audit: no disposition matches "
+                  f"{', '.join(_filters)}"
+                  + (f" in {args.year}" if args.year else "")
+                  + " — check the filter (`--summary` lists every "
+                    "event).", file=sys.stderr)
+        return args.no_match_rc
+    if args.date and events:
+        _by_trade = sum(1 for e in events if e.get("date") == args.date)
+        print(f"taxjson-audit: note: --date {args.date} matched "
+              f"{len(events)} disposition(s) — {_by_trade} by trade "
+              f"date, {len(events) - _by_trade} by settlement date "
+              f"only.", file=sys.stderr)
+
     if args.json:
         slim = []
         for e in events:
@@ -845,6 +887,7 @@ def main(argv=None) -> int:
     paint = _mk_paint(use_color)
 
     if args.summary:
+        _idw = unique_prefix_len([e["id"] for e in events])
         for i, e in enumerate(events, 1):
             flags = ""
             if e["failures"]:
@@ -855,7 +898,7 @@ def main(argv=None) -> int:
                 flags += "  " + paint(
                     f"WASH+{float(e['disallowed_amount']):.2f}",
                     "warn")
-            print(f"{paint((e['id'] or '')[:10], 'dim')}  "
+            print(f"{paint((e['id'] or '')[:_idw].ljust(_idw), 'dim')}  "
                   f"{e['date']}  "
                   f"{e['symbol']:<22} qty={float(e['qty'] or 0):>12,.4f} "
                   f"gain={float(e['gain'] or 0):>+14,.2f}{flags}")

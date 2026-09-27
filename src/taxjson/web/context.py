@@ -59,7 +59,7 @@ class ProjectContext:
         if not toml_path.exists():
             raise FileNotFoundError(
                 f"no taxjson.toml in {root} — run `taxjson serve` from a "
-                f"project directory (or pass --dir).")
+                f"project directory (or pass `taxjson -C DIR serve`).")
         cfg = tomllib.loads(toml_path.read_text(encoding="utf-8"))
         settings = cfg.get("settings", {})
         accounts = [
