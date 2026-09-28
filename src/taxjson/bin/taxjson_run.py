@@ -8778,18 +8778,13 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
         _die(f"radar failed: {(res.stderr or '').strip()[:400]}")
     radar = flatten_radar(_json.loads(res.stdout))
 
-    from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
-    # 'VN' too: Questrade spells TSX Venture that way, and a root
-    # must fold the same either way.
-    _EXCH = set(KNOWN_SUFFIXES) | {"VN"}
-
-    # DISTINCT pairs from ticker.map: symbols the user declared SEPARATE
-    # securities despite a shared root (a CDR vs its US underlying —
-    # the engine pools them separately). The suffix strip below merged
-    # them before any union ran, so `DISTINCT UNH.US UNH.TO` still
-    # made buy-check UNH.TO UNSAFE after a UNH.US loss (2026-09 audit).
-    # A declared member keeps its FULL symbol as its root, and no union
-    # may ever join the two sides of a pair.
+    # Identity comes ONLY from ticker.map (GLOBAL/TOBASE/JOURNAL), SPLIT
+    # renames in the books, and an option's own underlying. Two listings
+    # that merely share a root (XYZ.TO / XYZ.US) are NOT assumed to be the
+    # same security: a CDR, a different issuer (DLR.US Digital Realty vs
+    # DLR.TO the Global X ETF) or a share class would all be merged
+    # wrongly by suffix stripping. The engine pools by exact mapped symbol,
+    # and this matcher must agree with it.
     _distinct_pairs: set = set()
     _tm = None
     _map_path = root / "ticker.map"
@@ -8801,24 +8796,17 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
                                for p in _tm.distinct}
         except Exception as e:
             print(f"{prog}: warning: could not read ticker.map ({e}) "
-                  f"— mapped cross-listings with different roots will "
-                  f"not match.", file=sys.stderr)
-    _protected = set().union(*_distinct_pairs) if _distinct_pairs else set()
+                  f"— mapped cross-listings will not match.",
+                  file=sys.stderr)
 
     def _root(t: str) -> str:
         t = t.strip().upper()
-        # An option is a right to acquire the underlying — identical
-        # property for s.40(2)(g)/§1091 purposes. Fold OCC symbols to
-        # the underlying's root so `buy-check AAPL...C00150000` sees
-        # AAPL's wash state instead of "no exposure" (2026-09 audit).
+        # An option is a right to acquire ITS underlying — identical
+        # property for s.40(2)(g)/§1091 purposes — so it folds to the
+        # underlying symbol exactly as parsed (suffix kept).
         from taxjson.lib.core import parse_option_underlying
         _u = parse_option_underlying(t)
-        if _u:
-            t = _u.upper()
-        if t in _protected:
-            return t
-        base, _, ext = t.rpartition(".")
-        return base if ext in _EXCH else t
+        return _u.upper() if _u else t
 
     _parent: Dict[str, str] = {}
 
@@ -8901,29 +8889,44 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
 
 
 def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
-    """(class root, {ticker: row}, note) for one queried symbol. A
-    BARE query (no exchange suffix) whose root is shared by members of
-    a DISTINCT pair matches none of them by root — those members keep
-    their full symbol as root (a share class like BRK.B keeps its dot
-    the same way) — so it falls back to EVERY such member (worst
-    verdict wins; the per-ticker lines name each) with a note asking
-    for an explicit spelling. Never merges the members with each
-    other: an explicit `UNH.TO` still sees only UNH.TO's class."""
-    wroot = canon(want)
-    matches = {t: r for t, r in radar.items() if canon(t) == wroot}
+    """(class root, {ticker: row}, note) for one queried symbol.
+
+    A query WITH an exchange suffix (XYZ.TO) names one listing and sees
+    exactly that listing's class — the listings ticker.map joins to it,
+    its split renames and its options. A BARE query (XYZ, BRK.B) names
+    no listing: it is resolved to every listing that carries that
+    ticker, and each of those keeps its own class. Nothing is ever
+    merged by stripping a suffix — only ticker.map makes two listings
+    one security. When the bare ticker resolves to more than one class
+    the worst verdict is shown with a note asking for an explicit
+    spelling."""
+    from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
+    q = want.strip().upper()
+    base, _, ext = q.rpartition(".")
+    if base and ext in (set(KNOWN_SUFFIXES) | {"VN"}):
+        wroot = canon(q)
+        return wroot, {t: r for t, r in radar.items()
+                       if canon(t) == wroot}, None
+    # Bare ticker: the listings that carry it — in the books, or as
+    # q.<exchange> joined to the books by a ticker.map rule — then their
+    # classes. Each listing keeps its own class.
+    booked = {canon(t) for t in radar}
+    listings = [t for t in radar
+                if t.strip().upper().rpartition(".")[0] == q
+                or t.strip().upper() == q]
+    listings += [f"{q}.{sx}" for sx in sorted(KNOWN_SUFFIXES)
+                 if f"{q}.{sx}" not in listings
+                 and canon(f"{q}.{sx}") != f"{q}.{sx}"
+                 and canon(f"{q}.{sx}") in booked]
+    classes = sorted({canon(t) for t in listings}) or [canon(q)]
+    matches = {t: r for t, r in radar.items() if canon(t) in classes}
     note = None
-    if not matches and "." not in want.strip():
-        amb = {t: r for t, r in radar.items()
-               if canon(t) != wroot
-               and canon(t).rpartition(".")[0] == wroot}
-        if amb:
-            matches = amb
-            note = (f"{want.strip().upper()}: ambiguous — "
-                    f"{', '.join(sorted(amb))} are kept separate "
-                    f"(DISTINCT in ticker.map, or a share class); "
-                    f"this is the worst verdict across them. Query "
-                    f"one explicitly.")
-    return wroot, matches, note
+    if len(classes) > 1:
+        note = (f"{q}: ambiguous — {', '.join(sorted(listings))} are "
+                f"separate listings (only ticker.map makes two listings "
+                f"one security); this is the worst verdict across them. "
+                f"Query one explicitly.")
+    return classes[0], matches, note
 
 
 def _last_loss_line(ll) -> Optional[str]:

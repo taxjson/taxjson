@@ -200,7 +200,9 @@ class TestRootMatcherClasses(unittest.TestCase):
                     root, root / "work", "t")
         self.assertNotEqual(canon("UNH.TO"), canon("UNH.US"))
         self.assertEqual(canon("OLD.TO"), canon("NEW.TO"))
-        self.assertEqual(canon("XYZ.TO"), canon("XYZ.US"))   # untouched
+        # Same root, no ticker.map rule: two listings, never assumed
+        # to be one security (only ticker.map joins listings).
+        self.assertNotEqual(canon("XYZ.TO"), canon("XYZ.US"))
         # And the verdicts that follow from it.
         _, m_to, _ = R._class_matches(radar, canon, "UNH.TO")
         self.assertEqual(set(m_to), {"UNH.TO"})
@@ -219,7 +221,7 @@ class TestRootMatcherClasses(unittest.TestCase):
                            else t.strip().upper().rsplit(".", 1)[0])
         _, m, note = R._class_matches(radar, canon, "UNH")
         self.assertEqual(set(m), prot)
-        self.assertIn("DISTINCT", note)
+        self.assertIn("separate listings", note)
         _, m, note = R._class_matches(radar, canon, "UNH.TO")
         self.assertEqual(set(m), {"UNH.TO"})
         self.assertIsNone(note)

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **No security identity by suffix stripping.** `buy-check`, `sell-check`,
+  `harvest` and `scan` matched listings by root, so `XYZ.TO` and `XYZ.US`
+  were one security unless ticker.map said `DISTINCT` (it merged Digital
+  Realty DLR.US with the Global X DLR.TO currency ETF on real books). Two
+  listings are now the same security ONLY through a ticker.map rule
+  (GLOBAL/TOBASE/JOURNAL), a split rename, or an option's own underlying,
+  exactly as the engine pools them. A bare query (`buy-check XYZ`) still
+  finds every listing of that ticker, each with its own verdict.
+  `DISTINCT` now only records a settled pair for the scan's MAP-GAP check.
 - **Estimate: Ontario AMT corrected** — the Ontario additional tax for
   minimum tax is 24.63% of the federal AMT excess from 2024 (it was a
   flat 33.67%, the pre-2024 factor), and the Ontario surtax is now

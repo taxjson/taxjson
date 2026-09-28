@@ -573,14 +573,20 @@ class TestBuyCheckClassShares(unittest.TestCase):
                 '[actions]\n"BUY" = "buy"\n"SELL" = "sell"\n')
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-            # Loss sold 10 days ago: UNSAFE under BOTH spellings —
+            # Loss sold 10 days ago on the CAD row (booked BRK.B.TO):
+            # UNSAFE under the bare class ticker and the exact listing —
             # the naive last-dot root turned BRK.B into "BRK" and
             # reported a false SAFE.
-            for spelling in ("BRK.B", "BRK.B.US"):
+            for spelling in ("BRK.B", "BRK.B.TO"):
                 r = _cli(root, "buy-check", spelling)
                 self.assertEqual(r.returncode, 1,
                                  f"{spelling}: {r.stdout}")
                 self.assertIn("UNSAFE", r.stdout, spelling)
+            # BRK.B.US is a different listing: only a ticker.map rule
+            # could make it the same security, and there is none.
+            r = _cli(root, "buy-check", "BRK.B.US")
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("SAFE", r.stdout)
 
 
 class TestBuyCheckMappedCrossListings(unittest.TestCase):
