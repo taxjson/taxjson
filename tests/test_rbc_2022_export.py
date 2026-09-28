@@ -61,5 +61,24 @@ class TestRbcSellBelowCommission(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["net_amount"], -9.95)
 
 
+class TestRbcRetraction(unittest.TestCase):
+    def test_split_corp_retraction_is_a_disposition(self):
+        # RBC books an issuer retraction as Activity "Other", code TEN,
+        # blank price, negative quantity, Value = proceeds. It was an
+        # unclassified skip, so the shares never left the books.
+        csv = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price","Settlement Date","Account","Value","Currency","Description"\n'
+               '"January 12, 2024","Other","ZQS","ZQ SPLIT CORP CL-A SHS","-1000","","January 12, 2024","55500001","5360.70","CAD",'  # pii-ok: synthetic id
+               '"TEN - ZQ SPLIT CORP CL-A SHS RETRACTION AT C$5.3607 PER SHARE 000000000000"\n')
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "rbc.csv"
+            f.write_text(csv)
+            rows = [r for r in RbcBrokerage().parse_file(f) if r["action"] == "BUYSELL"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["quantity"], -1000.0)
+        self.assertAlmostEqual(rows[0]["net_amount"], 5360.70)
+        self.assertAlmostEqual(rows[0]["price"], 5.3607)
+        self.assertEqual(rows[0]["symbol"], "ZQS.TO")
+
+
 if __name__ == "__main__":
     unittest.main()

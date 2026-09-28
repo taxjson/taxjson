@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **RBC: split-corp retractions are dispositions.** RBC books an issuer
+  retraction as an `Other` row coded `TEN` ("... RETRACTION AT C$x PER
+  SHARE") with a blank price; it was skipped as unclassified, so the
+  shares never left the books and the proceeds and gain were missing
+  (seen on real 2023/2024 exports). Filed numbers change for any year
+  with a retraction.
 - **No security identity by suffix stripping.** `buy-check`, `sell-check`,
   `harvest` and `scan` matched listings by root, so `XYZ.TO` and `XYZ.US`
   were one security unless ticker.map said `DISTINCT` (it merged Digital

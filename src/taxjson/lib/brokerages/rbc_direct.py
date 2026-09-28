@@ -31,6 +31,13 @@ _DIV_DESC_RE = re.compile(r'\b(?:Dividend|Distribution|Dist\.)', re.IGNORECASE)
 # Trade-class description tokens (RBC's EXP/ASN codes and the spelled-out
 # forms), as whole words only.
 _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell|EXP|ASN|Expired|EXPIRED|Assignment)\b')
+# A retraction/redemption of shares by the issuer (split-share corps'
+# monthly and annual retractions): Activity 'Other', description
+# 'TEN - ... RETRACTION AT C$5.3607 PER SHARE', negative Quantity, Value =
+# the proceeds. A disposition like a sale (redemption below paid-up
+# capital: no s.84(3) deemed dividend). It used to fall through as an
+# unclassified 'Other' skip, so the shares never left the books.
+_RBC_RETRACTION_RE = re.compile(r'^\s*TEN\s*-\s*.*\b(?:RETRACTION|REDEMPTION|REDEEMED)\b', re.I)
 _RBC_STK_SPLIT_RE = re.compile(r'\b(?:STK|STOCK|FORWARD|REVERSE)\s+SPLIT\b', re.I)
 _RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SHS\b', re.I)
 
@@ -228,7 +235,8 @@ class RbcBrokerage(BaseBrokerage):
         # 0-quantity BUYSELL (EXP inside EXPLORATION), dropping the income
         # and failing schema validation.
         return any(x in activity for x in ('Buy', 'Sell', 'Reorganization', 'Exercise', 'Assignment')) or \
-               bool(_TRADE_DESC_RE.search(desc or ''))
+               bool(_TRADE_DESC_RE.search(desc or '')) or \
+               bool(_RBC_RETRACTION_RE.search(desc or ''))
 
     @staticmethod
     def _is_stock_split(activity, desc):
@@ -359,9 +367,15 @@ class RbcBrokerage(BaseBrokerage):
             date_settle = date
 
         qty = self.clean_number(row.get('Quantity'))
-        if 'Sell' in activity or 'Sell' in desc:
+        is_retraction = bool(_RBC_RETRACTION_RE.search(desc or ''))
+        if 'Sell' in activity or 'Sell' in desc or is_retraction:
             qty = -abs(qty)
         price = self.clean_number(row.get('Price'))
+        if is_retraction and not price and qty:
+            # RBC leaves Price blank on retractions; the per-share
+            # amount is Value / Quantity (the description's "AT C$x"
+            # agrees).
+            price = round(abs(net) / abs(qty), 6)
 
         # Detect option ASSIGNMENT (NOT expiry). ASSIGN means the option leg
         # gets folded into an underlying stock event downstream; EXPIRY
