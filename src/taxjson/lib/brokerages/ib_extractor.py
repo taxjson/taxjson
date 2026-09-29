@@ -202,6 +202,23 @@ _MON_MAP = {
     'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05',
     'JUN': '06', 'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10',
     'NOV': '11', 'DEC': '12'}
+# Income rows take their exchange suffix from the security's ISIN
+# country until _reattribute_income_to_holdings rebinds them to the
+# listing actually held. An ISIN country outside this map falls back to
+# .US — and is reported when no held position confirms it.
+_ISIN_EXT = {'CA': 'TO', 'AU': 'AX', 'GB': 'L', 'IE': 'L', 'US': 'US'}
+
+
+def _isin_ext(isin: str, ticker: str, fallback: set) -> str:
+    if not isin or len(isin) < 2:
+        return 'US'
+    cc = isin[:2].upper()
+    if cc in _ISIN_EXT:
+        return _ISIN_EXT[cc]
+    fallback.add((f"{ticker}.US", cc))
+    return 'US'
+
+
 # Statement titles that are NOT an Activity Statement but share its CSV
 # shape (a Realized Summary lists closed lots, not the trades — parsing
 # it as activity invents or drops events).
@@ -752,6 +769,9 @@ class IbBrokerage(BaseBrokerage):
         # (cancellation) row can find and undo its original — a
         # cancelled split/merger/cash-in-lieu used to stay booked.
         ca_effects: List[Dict[str, Any]] = []
+        # (symbol, ISIN country) of income rows whose country has no
+        # suffix mapping (fell back to .US).
+        isin_fallback: set = set()
         pending_ca: List[Dict[str, Any]] = []
         # Unknown (non-allowlisted) sections already warned about.
         unknown_sections: set = set()
@@ -1181,11 +1201,7 @@ class IbBrokerage(BaseBrokerage):
                 # below can tell whether this dividend's cash has
                 # already been booked in this file.
                 posted_dividend_keys.add((ticker, date))
-                ext = 'US'
-                if isin:
-                    isin_map = {'CA': 'TO', 'AU': 'AX', 'GB': 'L', 'IE': 'L', 'US': 'US'}
-                    if len(isin) >= 2:
-                        ext = isin_map.get(isin[:2].upper(), 'US')
+                ext = _isin_ext(isin, ticker, isin_fallback)
 
                 # IB's PIL marker is "Payment in Lieu of Dividend" (note
                 # the lowercase 'in'); the previous match string had a
@@ -1447,11 +1463,7 @@ class IbBrokerage(BaseBrokerage):
                     if m: ticker = m.group(1)
                 ticker = ticker.replace(' ', '.')
 
-                ext = 'US'
-                if isin:
-                    isin_map = {'CA': 'TO', 'AU': 'AX', 'GB': 'L', 'IE': 'L', 'US': 'US'}
-                    if len(isin) >= 2:
-                        ext = isin_map.get(isin[:2].upper(), 'US')
+                ext = _isin_ext(isin, ticker, isin_fallback)
 
                 transactions.append({
                     'action': 'TAX',
@@ -2241,6 +2253,24 @@ class IbBrokerage(BaseBrokerage):
         # every position regardless of section order.
         _reattribute_income_to_holdings(transactions,
                                         extra_held=open_position_syms)
+        if isin_fallback:
+            _held = set(open_position_syms) | {
+                t.get('symbol') for t in transactions
+                if t.get('action') in _POSITION_ACTIONS}
+            _still = sorted(
+                (sym, cc) for sym, cc in isin_fallback
+                if sym not in _held and any(
+                    t.get('symbol') == sym for t in transactions
+                    if t.get('action') in _INCOME_ACTIONS
+                    or t.get('action') == 'ADJUST'))
+            if _still:
+                print(f"warning: {path.name}: income booked on "
+                      f"{', '.join(f'{s} (ISIN {c})' for s, c in _still)}"
+                      f" — the ISIN country has no exchange-suffix "
+                      f"mapping, so .US was assumed and no position in "
+                      f"this statement confirms that listing. Check the "
+                      f"symbol (a ticker.map rule fixes it).",
+                      file=sys.stderr)
 
         self.clamp_settlement_to_expiry(transactions, expiry_txs)
 

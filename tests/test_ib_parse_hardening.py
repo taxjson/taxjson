@@ -433,5 +433,23 @@ class TestAccrualCodeTokens(unittest.TestCase):
                          "ADR;Po / ADR;Re were read as subtotals")
 
 
+
+class TestIsinCountryFallback(unittest.TestCase):
+    DIV = ('Dividends,Header,Currency,Date,Description,Amount\n'
+           'Dividends,Data,USD,2026-01-02,QZN(NL9990000501) Cash Dividend '
+           'USD 0.10 per Share,10\n')
+
+    def test_unmapped_country_without_a_position_warns(self):
+        _, txs, err = _parse(HEAD + self.DIV)
+        self.assertEqual(txs[0]['symbol'], 'QZN.US')
+        self.assertIn('QZN.US (ISIN NL)', err)
+
+    def test_position_on_the_listing_confirms_it_quietly(self):
+        _, _, err = _parse(HEAD + TRADES_H + _trade(
+            'QZN', '2025-12-01, 10:00:00', 100, 5, -500, -1) + self.DIV)
+        self.assertNotIn('ISIN NL', err)
+
+
+
 if __name__ == '__main__':
     unittest.main()
