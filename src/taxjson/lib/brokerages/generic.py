@@ -26,7 +26,10 @@ one shared `generic.toml` in the same folder. Example:
     "JNL"  = "skip"             # explicit ignore (still counted)
 
     [defaults]
-    currency = "CAD"
+    currency = "CAD"            # required unless [columns].currency
+
+    [options]
+    allow_large_fees = false    # fee > 5% of gross refused unless true
 
 Conventions match the hand-written parsers: quantity is stored
 magnitude-signed by direction (buys positive, sells negative), amounts
@@ -35,6 +38,20 @@ and the currency-of-listing suffix (.TO/.US) is applied from the row's
 currency. Unmapped action values are counted and summarized, never
 silently dropped; a mapping that references columns the CSV doesn't
 have refuses loudly.
+
+Mis-mapped columns are the importer's worst failure mode — amounts in
+the fee column once inflated a filed return by ~$41k without a word.
+So every BUY/SELL row is cross-checked and the import REFUSES when:
+
+* two logical fields name the same CSV header (e.g. fee = amount);
+* |amount| is not |qty| × price × multiplier ± fee within 1% (+$0.05)
+  — the multiplier is 100 for an OCC option symbol;
+* fee is more than 5% of the gross (qty × price × multiplier), unless
+  `[options] allow_large_fees = true`;
+
+and WARNS when amount equals qty × price to the cent while the fee is
+nonzero (the GROSS column is probably mapped as `amount`). The
+currency must be mapped or set in [defaults] — there is no silent USD.
 """
 
 import csv
@@ -45,6 +62,16 @@ from typing import Any, Dict, List
 from taxjson.lib.tomlcompat import tomllib
 
 from taxjson.lib.brokerages.base import BaseBrokerage
+from taxjson.lib.core import is_option_symbol
+
+# Row-level cross-check tolerance — the same 1% + $0.05 the .tt
+# converter uses for hand-entered totals.
+_REL_TOL = 0.01
+_ABS_TOL = 0.05
+# A fee above this share of the gross is almost always a column mix-up
+# (the amount or the gross in the fee column).
+_MAX_FEE_SHARE = 0.05
+_OPTIONS = ("allow_large_fees",)
 
 _VALID_TARGETS = ("buy", "sell", "dividend", "tax", "interest", "fee",
                   "skip")
@@ -75,6 +102,37 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 f"generic importer: {path.name}: [columns].{k} must be "
                 f"a quoted header NAME, got {v!r}")
     defaults = mapping.get("defaults") or {}
+    # Two logical fields on ONE header: fee = "Net" next to amount =
+    # "Net" booked the whole trade value as commission.
+    by_header: Dict[str, List[str]] = {}
+    for k, v in cols.items():
+        by_header.setdefault(v.strip().lower(), []).append(k)
+    shared = {h: ks for h, ks in by_header.items() if len(ks) > 1}
+    if shared:
+        detail = "; ".join(f"{', '.join(ks)} -> {h!r}"
+                           for h, ks in sorted(shared.items()))
+        raise ValueError(
+            f"generic importer: {path.name}: several [columns] fields "
+            f"map to the SAME CSV header ({detail}) — each logical field "
+            f"needs its own column. A fee/amount mix-up books wrong "
+            f"money silently; fix the mapping.")
+    if "currency" not in cols and not str(
+            defaults.get("currency", "")).strip():
+        raise ValueError(
+            f"generic importer: {path.name}: no currency — map "
+            f"[columns].currency or set [defaults].currency (e.g. "
+            f"\"CAD\"). There is no implicit USD default: a CAD account "
+            f"read as USD is converted at the wrong rate.")
+    options = mapping.get("options") or {}
+    for k, v in options.items():
+        if k not in _OPTIONS:
+            raise ValueError(
+                f"generic importer: {path.name}: unknown [options].{k} "
+                f"(valid: {', '.join(_OPTIONS)})")
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"generic importer: {path.name}: [options].{k} must be "
+                f"true or false, got {v!r}")
     if "date" not in cols:
         raise ValueError(f"generic importer: {path.name}: "
                          f"[columns].date is required")
@@ -94,8 +152,44 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     return mapping
 
 
+def _check_trade_row(where: str, target: str, qty: float, price: float,
+                     amount: float, fee: float, mult: float,
+                     allow_large_fees: bool) -> None:
+    """Refuse a BUY/SELL row whose numbers don't hang together — the
+    signature of a mis-mapped column. See the module docstring."""
+    gross = abs(qty) * abs(price) * mult
+    fee = abs(fee)
+    hint = ("check the [columns] mapping — is the fee, gross or amount "
+            "column mapped to the wrong field?")
+    if fee and gross > 0 and fee > _MAX_FEE_SHARE * gross \
+            and not allow_large_fees:
+        raise ValueError(
+            f"generic importer: {where}: fee {fee:.2f} is "
+            f"{fee / gross:.0%} of the gross {gross:.2f} "
+            f"(qty {abs(qty):g} x price {abs(price):g}"
+            f"{' x 100' if mult > 1 else ''}) — {hint} If the fee really "
+            f"is that large (tiny odd-lot trades), set "
+            f"`[options] allow_large_fees = true` in the mapping.")
+    if amount and gross > 0:
+        expected = gross + fee if target == "buy" else gross - fee
+        if abs(abs(amount) - expected) > max(_ABS_TOL,
+                                             _REL_TOL * max(expected, 1.0)):
+            raise ValueError(
+                f"generic importer: {where}: amount {abs(amount):.2f} "
+                f"differs from qty x price{' x 100' if mult > 1 else ''} "
+                f"{'+' if target == 'buy' else '-'} fee = {expected:.2f} "
+                f"(qty {abs(qty):g}, price {abs(price):g}, fee "
+                f"{fee:g}) by more than 1% — {hint}")
+        if fee and abs(abs(amount) - gross) < 0.005:
+            print(f"warning: generic importer: {where}: amount "
+                  f"{abs(amount):.2f} equals qty x price exactly while the "
+                  f"fee is {fee:.2f} — `amount` must be the fee-INCLUSIVE "
+                  f"net; is the GROSS column mapped as amount?",
+                  file=sys.stderr)
+
+
 def _trade_net(fname: str, target: str, qty: float, price: float,
-               amount: float, fee: float) -> float:
+               amount: float, fee: float, mult: float = 1.0) -> float:
     """Fee-inclusive trade total: the amount column when present, else
     derived. A derived SELL net that goes NEGATIVE (fee > gross —
     worthless-position cleanup sells) is clamped to 0 with a warning:
@@ -103,12 +197,12 @@ def _trade_net(fname: str, target: str, qty: float, price: float,
     would silently UNDERSTATE the loss."""
     if amount:
         return abs(amount)
-    derived = (abs(qty) * abs(price)
+    derived = (abs(qty) * abs(price) * mult
                + (abs(fee) if target == "buy" else -abs(fee)))
     if derived < 0:
         print(f"warning: generic importer: {fname}: sell fee "
               f"({abs(fee):.2f}) exceeds gross proceeds "
-              f"({abs(qty) * abs(price):.2f}) — net proceeds clamped "
+              f"({abs(qty) * abs(price) * mult:.2f}) — net proceeds clamped "
               f"to 0; hand-check this disposition (the excess fee is "
               f"not deducted from the basis).", file=sys.stderr)
         return 0.0
@@ -126,6 +220,8 @@ class GenericBrokerage(BaseBrokerage):
             str(k).upper(): v for k, v in
             (mapping.get("actions") or {}).items()}
         defaults = mapping.get("defaults") or {}
+        allow_large_fees = bool((mapping.get("options") or {})
+                                .get("allow_large_fees", False))
         date_fmt = (mapping.get("formats") or {}).get("date", "%Y-%m-%d")
         tax_sign = (mapping.get("formats") or {}).get("tax_sign", "cash")
         if tax_sign not in ("cash", "withheld"):
@@ -182,7 +278,7 @@ class GenericBrokerage(BaseBrokerage):
                 if not raw:
                     return 0.0
                 s = raw.replace(",", "")
-                for pre in ("C$", "US$", "A$", "$", "€", "£"):
+                for pre in ("CA$", "C$", "US$", "A$", "$", "€", "£"):
                     s = s.replace(pre, "")
                 s = s.strip()
                 # Accounting-negative: "(138.00)" means -138.00. The
@@ -236,9 +332,15 @@ class GenericBrokerage(BaseBrokerage):
                         f"date {date_raw!r} with [formats].date="
                         f"{date_fmt!r}")
                 date = dt.strftime("%Y-%m-%d")
+                where = f"{path.name} line {reader.line_num}"
                 currency = (str(cell(row, "currency")).strip()
-                            or str(defaults.get("currency", "USD"))
+                            or str(defaults.get("currency", ""))
                             ).strip().upper()
+                if not currency:
+                    raise ValueError(
+                        f"generic importer: {where}: empty currency cell "
+                        f"and no [defaults].currency in "
+                        f"{mapping['_path']} — refusing to assume USD.")
                 symbol_raw = (str(cell(row, "symbol")).strip()
                               or str(defaults.get("symbol", "")))
                 symbol = (self.apply_currency_suffix(symbol_raw, currency)
@@ -249,6 +351,11 @@ class GenericBrokerage(BaseBrokerage):
                 fee = num(row, "fee")
 
                 if target in ("buy", "sell"):
+                    mult = (float(self.OPTION_MULTIPLIER)
+                            if is_option_symbol(symbol_raw)
+                            or is_option_symbol(symbol) else 1.0)
+                    _check_trade_row(where, target, qty, price, amount,
+                                     fee, mult, allow_large_fees)
                     transactions.append({
                         "action": "BUYSELL",
                         "date": date, "time": "09:30:00",
@@ -261,9 +368,10 @@ class GenericBrokerage(BaseBrokerage):
                         # Amount column when present (fee-inclusive,
                         # magnitude); else derive from qty*price±fee.
                         "net_amount": _trade_net(
-                            path.name, target, qty, price, amount, fee),
+                            path.name, target, qty, price, amount, fee,
+                            mult),
                         "gross_amount": self.theoretical_gross(
-                            qty, abs(price), is_option=False),
+                            qty, abs(price), is_option=(mult > 1)),
                         "fee": abs(fee),
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
