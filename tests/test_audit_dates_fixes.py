@@ -73,7 +73,7 @@ class TestCanadaSplitSettlePhase(unittest.TestCase):
 
 
 class TestWebullSettlement(unittest.TestCase):
-    _HDR = "Currency,Date,Action Code,Symbol,Name,X,Quantity,Price,Y,Proceeds\n"
+    _HDR = "Currency,Date,Action Code,Symbol,Security Description,X,Quantity,Price,Y,Proceeds\n"
 
     def _parse(self, rows):
         from taxjson.lib.brokerages.webull import WebullBrokerage

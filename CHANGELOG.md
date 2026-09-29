@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Webull: columns by header label, both export layouts pinned.** The
+  Trading Summary's 2024 layout has 9 columns (Proceeds in column 8), the
+  2025 layout 10 (an empty column 8). The parser read by position with a
+  column-9-then-8 fallback; it now resolves every column from the header
+  labels, refuses an unrecognised layout instead of guessing, and fails
+  on any row-accounting mismatch. Tests pin the amounts of both layouts.
+  (A different, older flow read the 2024 layout by position and booked
+  15 Webull purchases at $0 cost on a filed return.)
+- **Webull: option assignment and exercise detected.** The Trading
+  Summary shows an assignment or exercise only as a $0 option close plus
+  a stock trade at the strike. Both legs are now marked ASSIGN when the
+  stock trade matches in quantity, direction and price within a few
+  days, so the premium folds into the shares' cost (s.49(3)) instead of
+  being realized as an expiry; seen on real 2025 exports (LULU and DOCU
+  put assignments, a DELL call exercise).
 - **RBC: split-corp retractions are dispositions.** RBC books an issuer
   retraction as an `Other` row coded `TEN` ("... RETRACTION AT C$x PER
   SHARE") with a blank price; it was skipped as unclassified, so the

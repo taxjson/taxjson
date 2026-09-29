@@ -51,7 +51,7 @@ class TestCryptoCacheNotPoisoned(unittest.TestCase):
 
 
 class TestWebullSkipWarning(unittest.TestCase):
-    HEADER = "Currency,Date,Action Code,Symbol,Name,X,Quantity,Price,Y,Proceeds"
+    HEADER = "Currency,Date,Action Code,Symbol,Security Description,X,Quantity,Price,Y,Proceeds"
 
     def _parse(self, rows, tmp):
         from taxjson.lib.brokerages.webull import WebullBrokerage
