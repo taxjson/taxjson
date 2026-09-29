@@ -273,8 +273,11 @@ leg. IB exercise code `Ex` (`C;Ex` option leg at T. Price 0) is an
 ASSIGN like `A`, so the premium rolls into the stock leg exactly as an
 assignment's does (verified in both engines: call exercise cost =
 strike + premium; put exercise proceeds = strike − premium). IB
-`Transaction Fees` (UK Stamp Tax) fold into the same-day BUYSELL on
-the symbol, else a symbol-bound FEE; `Commission Adjustments` refunds
+`Transaction Fees` (UK Stamp Tax) are a breakdown of the trade's
+Comm/Fee, which already includes them (the Cash Report shows
+Commissions + Transaction Fees = the Comm/Fee sum) — the fold this
+item first shipped charged them twice and was removed in the 2026-09
+parse hardening; `Commission Adjustments` refunds
 are negative FEE rows; tender / voluntary-offer journals are netted
 (zero-proceeds round trip = recognized no-op, cash settlement = a
 booked sale with a NOTE). Kraken `transfer/transferpeertopeer` is
