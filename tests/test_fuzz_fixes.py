@@ -107,7 +107,12 @@ class TestFuzzM_ValidationErrorsSurface(unittest.TestCase):
     its indented TX lines) reaches the .sum banner AND the run prints a
     loud console pointer."""
 
-    def test_bad_quantity_row_is_loudly_reported(self):
+    def test_bad_quantity_row_fails_the_parse(self):
+        # RE-PREMISED (2026-09 parse hardening): 'NOTANUM' used to read
+        # as quantity 0 and surface only as a validation banner in the
+        # .sum while the run exited 0. A required numeric cell that is
+        # not a number now FAILS the parse (and the run), naming the
+        # line and the cell.
         qt = ("Transaction Date,Settlement Date,Action,Symbol,"
               "Description,Quantity,Price,Gross Amount,Commission,"
               "Net Amount,Currency,Account #,Activity Type,Account Type\n"
@@ -129,11 +134,9 @@ class TestFuzzM_ValidationErrorsSurface(unittest.TestCase):
                 [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
                  str(root), "run", "--no-input"],
                 cwd=REPO_ROOT, capture_output=True, text=True)
-            sum_txt = (root / "reports" / "margin.sum").read_text()
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("validation ERROR(s)", r.stderr)     # console
-        self.assertIn("validation:", sum_txt)              # banner header
-        self.assertIn("Quantity is 0", sum_txt)            # detail line
+        self.assertNotEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Quantity 'NOTANUM'", r.stderr)
+        self.assertIn("questrade.csv line 2", r.stderr)
 
 
 class TestFuzzC_WashAcrossRename(unittest.TestCase):

@@ -40,7 +40,7 @@ class TestRocDescription(unittest.TestCase):
 
 class TestQuestradeRoc(unittest.TestCase):
     HDR = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
-           'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n')
+           'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n')
 
     def test_roc_row_becomes_negative_adjust(self):
         csv = (self.HDR +
