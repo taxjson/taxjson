@@ -136,8 +136,9 @@ def _canada(s: Dict[str, Any]) -> List[Section]:
             "Only purchases count: writing an option or shorting again "
             "never replaces, including after a loss on covering a short.",
             "Only units acquired in the window and still held count, per "
-            "holder. The denied part is loss x (those units / units "
-            "sold), capped at the whole loss.",
+            "holder, and each one backs a single denial (a sale split "
+            "into fills, or two losses, share it). The denied part is "
+            "loss x (those units / units sold), capped at the whole loss.",
             "The denied amount is added to the replacement's ACB and "
             "comes back when it is sold. If the replacement is in a "
             "sheltered account, that part is lost for good.",

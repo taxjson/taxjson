@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **One replacement backs one denial.** A 100-share rebuy (or one call)
+  inside the window of a sale split into ten fills denied every fill's
+  loss in full: ten times the loss it could back. Replacement units are
+  now claimed in a fixed order, each by one denied unit, across fills
+  and across losses; a call that expires before day 30 is not held on
+  day 30. Owner books: 2025 -28.41, 2026 -86.53.
 - **Year-to-year hand-off (`taxjson handoff`).** `close-year` now also
   records every sale, the positions and cost at Dec 31 (with the
   superficial-loss deferrals the full history decided), and the trades

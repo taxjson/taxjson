@@ -1891,7 +1891,10 @@ class CanadaTaxRules(TaxRules):
                                 # cost 18.5k that way on a real book).
                                 _wash_eligible = (option_buyback_loss_superficial
                                                   or _grant_units_closed <= 1e-9)
-                                if (_rec_gain + disallowed_amt) < -0.001 and not is_tainted and _wash_eligible:
+                                # Every RAW loss re-enters the solver on every
+                                # pass (a fully denied one too), so each pass
+                                # shares the replacements out from scratch.
+                                if _rec_gain < -0.001 and not is_tainted and _wash_eligible:
                                     iteration_losses.append({
                                         'tx': tx, 'loss_amount': abs(_rec_gain),
                                         'qty': closing_qty, 'direction': 'LONG' if pool['qty'] > 0 else 'SHORT'
@@ -2100,7 +2103,16 @@ class CanadaTaxRules(TaxRules):
             # has already produced realized gains assuming no disallowance,
             # so converging on iteration 1 with no virtual txs is correct.
             iteration_losses_to_check = [] if not detect_wash_sales else iteration_losses
-            for loss in iteration_losses_to_check:
+            # A replacement unit backs at most ONE denied unit across all
+            # the losses of a pass (a sale split into fills, or two losses
+            # sharing one rebuy or one call): audit #23/#48/#293,
+            # S069-17/S070-01. Claims are kept in the TRIGGER's own units
+            # (two losses can see it through different split factors) and
+            # taken in a fixed order, so every pass agrees.
+            _trg_used: Dict[str, float] = {}
+            for loss in sorted(iteration_losses_to_check,
+                               key=lambda l: (_ev_key(l['tx']),
+                                              l['tx'].id or '')):
                 tx = loss['tx']
                 # SETTLEMENT-date basis for the whole ±30-day window (CRA's
                 # disposition timing; matches get_sort_date and the config's
@@ -2259,6 +2271,10 @@ class CanadaTaxRules(TaxRules):
                         parse_option_underlying(t.symbol), d, tx.symbol,
                         loss_sort, from_inclusive=pre, ref_inclusive=loss_pre)
 
+                def _avail_native(t) -> float:
+                    return max(0.0, _opening_qty(t, 'LONG')
+                               - _trg_used.get(t.id, 0.0))
+
                 bal_at_end = sum(
                     _row_loss_units(t, t.quantity)
                     for t in current_tx_list
@@ -2309,8 +2325,16 @@ class CanadaTaxRules(TaxRules):
                         continue
                     _h = _holder(t)
                     _acq_h[_h] = (_acq_h.get(_h, 0.0)
-                                  + _row_loss_units(
-                                      t, _opening_qty(t, 'LONG')))
+                                  + _row_loss_units(t, _avail_native(t)))
+                    # Units an earlier loss claimed that are bought AFTER this
+                    # sale are still in the day-30 balance but cannot back
+                    # this loss too. (A claimed purchase made before this
+                    # sale is what this sale disposes of: already out of
+                    # the balance.)
+                    if _trg_used.get(t.id) and _ev_key(t) > _ev_key(tx):
+                        _bal_end_h[_h] = _bal_end_h.get(_h, 0.0) - \
+                            _row_loss_units(t, min(_trg_used[t.id],
+                                                   _opening_qty(t, 'LONG')))
                 _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0)))
                            for h, a in _acq_h.items()}
                 # Calls back a denial per (holder, contract): units of
@@ -2321,11 +2345,16 @@ class CanadaTaxRules(TaxRules):
                     for t in call_triggers:
                         _k = ('call', _holder(t), t.symbol)
                         _call_acq[_k] = (_call_acq.get(_k, 0.0)
-                                         + _call_units(
-                                             t, _opening_qty(t, 'LONG')))
+                                         + _call_units(t, _avail_native(t)))
                     _call_end: Dict[Any, float] = {}
+                    # A call that expires before day 30 is not held at
+                    # day 30, with or without an expiry row (S071-15).
+                    _expired = {sym for sym in _call_syms
+                                if (parse_option_expiry(sym) or '9999')
+                                < end_window_date}
                     for t in current_tx_list:
                         if (t.symbol in _call_syms
+                                and t.symbol not in _expired
                                 and get_sort_date(t) <= end_window_date
                                 and t.action in ('BUYSELL', 'ASSIGN',
                                                  'TRANSFER',
@@ -2385,16 +2414,19 @@ class CanadaTaxRules(TaxRules):
                         _hh = _holder(trg)
                         if trg.id in _call_ids:
                             _h = ('call', _hh, trg.symbol)
-                            _units = _call_units(trg, _opening_qty(trg, 'LONG'))
+                            _per = _call_units(trg, 1.0)
                         else:
                             _h = _hh
-                            _units = _row_loss_units(
-                                trg, _opening_qty(trg, 'LONG'))
-                        cap = min(_units, _cap_left.get(_h, 0.0))
+                            _per = _row_loss_units(trg, 1.0)
+                        cap = min(_per * _avail_native(trg),
+                                  _cap_left.get(_h, 0.0))
                         take = min(_rem, cap)
                         if take > 1e-9:
                             amt = take * per_share_loss
                             allocations.append((trg, take, amt))
+                            _trg_used[trg.id] = (_trg_used.get(trg.id, 0.0)
+                                                 + (take / _per if _per
+                                                    else 0.0))
                             if _hh != ('taxable',):
                                 perm_amt += amt
                             _rem -= take
@@ -2608,6 +2640,23 @@ class CanadaTaxRules(TaxRules):
                     }
                     final_virtual_txs.extend([disallow_vtx] + adjust_vtxs)
                     found_new_wash_sale = True
+                else:
+                    # Nothing left to back this loss (an earlier loss took
+                    # the replacement): withdraw a denial an earlier pass
+                    # attached.
+                    _stale = next((v for v in final_virtual_txs
+                                   if v.id == tx.id and v.action == 'DISALLOW'
+                                   and abs(float(v.net_amount)) > 0.001),
+                                  None)
+                    if _stale is not None:
+                        _stale.net_amount = 0.0
+                        _stale.quantity = 0.0
+                        for v in final_virtual_txs:
+                            if (v.action == 'ADJUST'
+                                    and v.id.startswith(f"WASH_{tx.id}__")):
+                                v.net_amount = 0.0
+                        permanent_by_loss[tx.id] = 0.0
+                        found_new_wash_sale = True
 
             if detect_wash_sales:
                 # Retract STALE disallowances: basis adjustments from a

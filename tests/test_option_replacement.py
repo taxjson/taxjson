@@ -188,6 +188,52 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
                        self._txs(option='AAPL250620C00150000.TO'))
         self.assertEqual(res['wash_sales'], [])
 
+class TestReplacementCapacity(unittest.TestCase):
+    """One replacement unit backs at most one denied unit, across the
+    fills of a sale and across separate losses."""
+
+    def test_one_call_ten_fills(self):
+        txs = [tx(date='2025-01-06', qty=1000, price=20.0, net=20000.0)]
+        for i in range(10):
+            txs.append(tx(date='2025-03-03', qty=-100, price=10.0,
+                          net=1000.0, time=f'10:{i:02d}:00'))
+        txs.append(tx(date='2025-03-20', symbol=CALL, qty=1, price=3.0,
+                      net=300.0))
+        res, _ = gains(CanadaTaxRules(), txs)
+        denied = sum(w['amount'] for w in res['wash_sales'])
+        self.assertAlmostEqual(denied, 1000.0, places=2)
+        self.assertAlmostEqual(res['summary']['total_gain'], -9000.0,
+                               places=2)
+
+    def test_one_call_two_losses(self):
+        txs = [
+            tx(date='2025-01-06', qty=200, price=20.0, net=4000.0),
+            tx(date='2025-03-03', qty=-100, price=10.0, net=1000.0),
+            tx(date='2025-03-05', qty=-100, price=10.0, net=1000.0),
+            tx(date='2025-03-20', symbol=CALL, qty=1, price=3.0, net=300.0)]
+        res, _ = gains(CanadaTaxRules(), txs)
+        denied = sum(w['amount'] for w in res['wash_sales'])
+        self.assertAlmostEqual(denied, 1000.0, places=2)
+
+    def test_one_share_rebuy_two_fills(self):
+        txs = [
+            tx(date='2025-01-06', qty=200, price=20.0, net=4000.0),
+            tx(date='2025-03-03', qty=-100, price=10.0, net=1000.0),
+            tx(date='2025-03-03', qty=-100, price=10.0, net=1000.0,
+               time='10:01:00'),
+            tx(date='2025-03-20', qty=100, price=10.0, net=1000.0)]
+        res, _ = gains(CanadaTaxRules(), txs)
+        denied = sum(w['amount'] for w in res['wash_sales'])
+        self.assertAlmostEqual(denied, 1000.0, places=2)
+
+    def test_call_expiring_before_day_30_is_not_held(self):
+        short = 'AAPL250321C00150000.US'          # expires 03-21
+        res, _ = gains(CanadaTaxRules(), long_loss() + [
+            tx(date='2025-03-10', symbol=short, qty=1, price=3.0,
+               net=300.0)])
+        self.assertEqual(res['wash_sales'], [])
+
+
 class TestPutsNeverReplace(unittest.TestCase):
     """A put is a right to SELL: never replacement property, for shares
     or for a short-cover loss."""
