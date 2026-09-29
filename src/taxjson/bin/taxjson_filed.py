@@ -91,7 +91,8 @@ def snapshot_path(root: Path, year) -> Path:
 def write_snapshot(root: Path, year, country: str, basis: str,
                    accounts: Dict[str, Dict[str, Any]], *,
                    force: bool,
-                   option_timing: Optional[Dict[str, Any]] = None) -> Path:
+                   option_timing: Optional[Dict[str, Any]] = None,
+                   extra: Optional[Dict[str, Any]] = None) -> Path:
     """Write filed/<year>.json. `option_timing` records the written-option
     premium timing the return used (Canada), so a later project's
     `option-boundary` can tell a year filed under grant timing from one
@@ -121,6 +122,9 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     }
     if option_timing:
         doc["option_timing"] = dict(option_timing)
+    if extra:
+        doc.update(extra)
+        doc["schema_version"] = 2
     tmp = path.with_name(path.name + ".part")
     tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
                    encoding="utf-8")

@@ -791,4 +791,7 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
     if doc.get("missing_books"):
         L.append(f"No work files for: {', '.join(doc['missing_books'])} "
                  f"(run `taxjson run`).")
+    L.append("Whether last year's closing positions, January settlements "
+             "and corrections are carried into this year exactly once: "
+             "`taxjson handoff`.")
     return L

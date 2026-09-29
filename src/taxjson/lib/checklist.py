@@ -87,6 +87,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("option-boundary", 2, "Year-straddling written options need no prior-year amendment",
      "taxjson option-boundary",
      "Under ITA s.49 an assignment in a later year moves the premium; a filed year may need a T1-ADJ."),
+    ("handoff", 2, "Last year's closing positions carried in exactly once",
+     "taxjson handoff",
+     "A Dec 31 trade settling in January, a dropped lot, or a correction applied to one year only makes a gain vanish or count twice."),
     ("t5008", 3, "T5008 slips reconcile to the computed dispositions",
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
@@ -167,7 +170,7 @@ US_STEPS: Dict[str, Any] = {
 # Steps that only concern TAXABLE accounts: n/a for a sheltered-only
 # project instead of blocked by artifacts that can never exist.
 TAXABLE_ONLY = {"inputs-frozen", "roc-entered", "missing-history", "audit",
-                "wash-reviewed", "option-boundary", "t5008", "t5-t3",
+                "wash-reviewed", "option-boundary", "handoff", "t5008", "t5-t3",
                 "foreign-tax", "form-export", "t1135", "carryover",
                 "fx-cash", "fees", "filed-lock", "lock-committed"}
 
@@ -561,6 +564,34 @@ def d_option_boundary(ctx: Ctx) -> Result:
     return Result("option-boundary", "done", "no amendment required")
 
 
+def d_handoff(ctx: Ctx) -> Result:
+    y = ctx.year
+    configured = ctx.settings.get("prior_year_record")
+    local = ctx.root / "filed" / f"{y - 1}.json"
+    if not configured and not local.exists():
+        return Result("handoff", "manual",
+                      f"no {y - 1} record: run `taxjson close-year` in the "
+                      f"{y - 1} project and set [settings] prior_year_record "
+                      f"to it (mark done if {y} is the first year)")
+    code, out, err = ctx.sub("handoff", "--json")
+    try:
+        doc = json.loads(out) if out.strip() else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict):
+        return Result("handoff", "blocked", _last_line(err) or f"exit {code}")
+    if doc.get("problems"):
+        parts = []
+        for k, label in (("positions", "opening position(s) differ"),
+                         ("missed", "trade(s) settling in January missing"),
+                         ("double", "sale(s) reported in both years")):
+            if doc.get(k):
+                parts.append(f"{len(doc[k])} {label}")
+        return Result("handoff", "attention",
+                      "; ".join(parts) + " — `taxjson handoff`")
+    return Result("handoff", "done", f"{y - 1} carried forward once")
+
+
 def slip_files(root: Path) -> List[Path]:
     out: List[Path] = []
     slips = root / "inputs" / "slips"
@@ -743,6 +774,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "audit": d_audit,
     "wash-reviewed": d_wash_reviewed,
     "option-boundary": d_option_boundary,
+    "handoff": d_handoff,
     "t5008": d_t5008,
     "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with `taxjson divs-sum` / `roc-sum`"),
     "foreign-tax": lambda ctx: Result("foreign-tax", "manual", "from the slips"),
@@ -759,6 +791,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
 
 # Detectors that shell out to a slow sub-command; `--quick` skips them.
 SLOW = {"sanity", "missing-history", "elections", "audit", "option-boundary",
+        "handoff",
         "t5008", "form-export", "t1135", "carryover", "fx-cash", "filed-lock"}
 
 

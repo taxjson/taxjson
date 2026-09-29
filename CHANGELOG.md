@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Year-to-year hand-off (`taxjson handoff`).** `close-year` now also
+  records every sale, the positions and cost at Dec 31 (with the
+  superficial-loss deferrals the full history decided), and the trades
+  that settle in January; `--filed-dispositions` stores what a return
+  prepared elsewhere actually reported. `taxjson handoff`, run in the
+  next year's project (`[settings] prior_year_record`), checks the
+  opening positions and cost, that every January settlement is booked
+  here once, and that no sale is reported in both years; a cost
+  difference is listed with its two consistent choices (keep the year as
+  filed, or amend it). It is a `checklist` step and `edge-cases` points
+  to it. Found on the owner's books: four RBC sales traded 2024-12-31
+  that were reported in no year.
 - **`taxjson tax-logic`.** A one-screen statement of every rule taxjson
   applies for the project's country (or `--country`), one line per rule
   (citing the Act where the rule comes from it), with the project's settings filled in

@@ -202,6 +202,10 @@ def _canada(s: Dict[str, Any]) -> List[Section]:
             "withholding credited up to 15%; interest is left out.",
             "`taxjson edge-cases`: every trade whose year or superficial-"
             "loss verdict turns on a boundary.",
+            "`taxjson close-year` records each closed year's sales, "
+            "year-end positions and cost, and trades settling in January; "
+            "`taxjson handoff` checks the next year starts from exactly "
+            "that, so no sale is reported twice or never.",
         ]),
     ]
 

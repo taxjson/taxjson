@@ -54,6 +54,9 @@ the open steps one at a time; `--quick` skips the slow detectors.
       window. Read the items marked THE DATE BASIS DECIDES THIS ONE.
 - [ ] `taxjson option-boundary` — confirms whether a written option that
       straddles the year end requires a prior-year amendment.
+- [ ] `taxjson handoff` — last year's closing positions, the trades
+      that settled in January, and any prior-year correction are carried
+      into this year exactly once (needs last year's `close-year` record).
 
 ## 3. Reconcile to what the CRA already has
 

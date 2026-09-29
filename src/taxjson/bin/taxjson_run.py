@@ -447,7 +447,8 @@ _SETTINGS_KEYS = ("year", "country", "base_currency", "tax_date",
                   "source_currencies", "cross_asset", "province",
                   "fx_cash_gains", "option_premium_timing",
                   "option_grant_timing_since", "option_buyback_loss_superficial",
-                  "foreign_return_of_capital", "futures_settle")
+                  "foreign_return_of_capital", "futures_settle",
+                  "prior_year_record")
 _ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                  "brokerage", "account", "query_id", "holdings")
 _ACCOUNT_TYPES = ("taxable", "sheltered")
@@ -501,6 +502,10 @@ def validate_config(cfg: Dict[str, Any],
     _froc = settings.get("foreign_return_of_capital")
     if _froc is not None and _froc not in ("dividend", "acb"):
         _die(f"[settings] foreign_return_of_capital must be \"dividend\" or \"acb\" (got {_froc!r}).")
+    _pyr = settings.get("prior_year_record")
+    if _pyr is not None and not isinstance(_pyr, str):
+        _die(f"[settings] prior_year_record must be a path string "
+             f"(got {_pyr!r}).")
     _fs = settings.get("futures_settle")
     if _fs is not None and _fs not in ("trade", "next_day"):
         _die(f"[settings] futures_settle must be \"trade\" or \"next_day\" (got {_fs!r}).")
@@ -2462,6 +2467,8 @@ source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besid
 tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
 # futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
 #                                     #   (daily variation margin); next_day = the clearing premium date
+# prior_year_record = "../{prev_year}/filed/{prev_year}.json"
+#                                     # last year's close-year record, checked by `taxjson handoff`
 
 # fx_cash_gains = false               # true: end-of-run FX-on-cash report ({fx_rule})
 {option_lines}
@@ -2590,6 +2597,7 @@ def _render_init_config(country_canon: str,
         source_pad=_pad(f'["{spec["source_currency"]}"]'),
         tax_date=spec["tax_date"],
         tax_pad=_pad(f'"{spec["tax_date"]}"'),
+        prev_year=yr - 1,
         # `taxjson estimate` REQUIRES a province for canada, so the key
         # is present (commented) rather than discovered at first run.
         province_line=('# province          = "ON"'
@@ -7782,16 +7790,112 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         accounts[acct] = taxjson_filed.aggregates_from_gains(doc)
     basis = gains_basis_label(files)
     from taxjson.lib.pipeline import option_timing_from_settings
+    from taxjson.lib import handoff as _handoff
+    filed_csv = (Path(args.filed_dispositions).expanduser()
+                 if getattr(args, "filed_dispositions", None) else None)
+    if filed_csv is not None and not filed_csv.exists():
+        sys.exit(f"taxjson close-year: {filed_csv} not found.")
+    if taxjson_filed.snapshot_path(root, year).exists() and not args.force:
+        sys.exit(f"taxjson close-year: {taxjson_filed.snapshot_path(root, year)}"
+                 f" already exists — the lock protects a filed year. "
+                 f"Re-run with --force to replace it (only if you "
+                 f"re-filed/amended).")
+    print(f"  recording year-end positions and the {year} dispositions "
+          f"for the {int(year) + 1} hand-off ...")
+    try:
+        extra = _handoff.record_fields(
+            root, cfg, int(year), files, _filed_run_gains,
+            _handoff_gains_flags(settings), filed_csv)
+    except ValueError as e:
+        sys.exit(f"taxjson close-year: {e}")
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
         accounts, force=args.force,
-        option_timing=option_timing_from_settings(settings) or None)
+        option_timing=option_timing_from_settings(settings) or None,
+        extra=extra)
     tot = _json.loads(path.read_text())["totals"]
     print(f"closed {year} ({basis}): realized {tot['realized']:,.2f}, "
           f"disallowed {tot['disallowed']:,.2f}, income "
           f"{tot['income']:,.2f} across {len(accounts)} account(s)")
     print(f"  -> {path}  (commit this with your records; "
           f"`taxjson check-filed` now guards it)")
+    _ft = extra.get("filed_totals")
+    if _ft:
+        print(f"  as filed ({_ft['source']}): {_ft['dispositions']} "
+              f"dispositions, gain {_ft['gain']:,.2f} — the {int(year) + 1}"
+              f" project's `taxjson handoff` checks against these.")
+    _ye = extra.get("year_end") or {}
+    print(f"  year-end positions: "
+          + ", ".join(f"{g} {len(v)}" for g, v in _ye.items())
+          + f"; trades settling in {int(year) + 1}: "
+          f"{len(extra.get('settle_next_year') or [])}")
+
+
+def _handoff_gains_flags(settings: Dict[str, Any]) -> List[str]:
+    """The taxjson-gains flags a full-history run of this project uses
+    (no --year: the hand-off needs every year's pools)."""
+    from taxjson.lib.pipeline import option_timing_flags
+    country = _normalize_country(settings.get("country", "canada"))
+    flags = ["--country", country, "--tax-date",
+             settings.get("tax_date") or (
+                 "trade" if country in ("us", "usa") else "settle")]
+    if country in ("us", "usa"):
+        flags.append("--per-account-basis")
+    return flags + option_timing_flags(settings)
+
+
+def _prior_record_path(root: Path, settings: Dict[str, Any],
+                       override: Optional[str]) -> Path:
+    if override:
+        return Path(override).expanduser()
+    configured = settings.get("prior_year_record")
+    if configured:
+        p = Path(str(configured)).expanduser()
+        return p if p.is_absolute() else (root / p)
+    return root / "filed" / f"{int(settings.get('year') or 0) - 1}.json"
+
+
+def cmd_handoff(args: argparse.Namespace) -> None:
+    """`taxjson handoff`: check this project against the previous year's
+    close-year record — opening positions and cost at Dec 31, trades
+    that settle across Dec 31, and sales reported in both years
+    (lib/handoff). Exit 1 on any problem."""
+    import json as _json
+    from taxjson.lib import handoff as _handoff
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    settings = cfg["settings"]
+    rp = _prior_record_path(root, settings, args.prior)
+    if not rp.exists():
+        sys.exit(f"taxjson handoff: no prior-year record at {rp}. Run "
+                 f"`taxjson close-year` in the previous year's project, "
+                 f"then set [settings] prior_year_record to its "
+                 f"filed/<year>.json (or pass --prior).")
+    record = _json.loads(rp.read_text(encoding="utf-8"))
+    if int(record.get("schema_version") or 1) < 2 \
+            or "year_end" not in record:
+        sys.exit(f"taxjson handoff: {rp} is a version-1 lock (totals "
+                 f"only). Re-close that year with the current taxjson "
+                 f"(`taxjson close-year --force`) to record positions.")
+    ry = int(record["year"])
+    if int(settings.get("year") or 0) != ry + 1:
+        print(f"taxjson handoff: note: the record is for {ry}; this "
+              f"project's year is {settings.get('year')}.",
+              file=sys.stderr)
+    if not (root / "work").is_dir():
+        sys.exit("taxjson handoff: no work/ — run `taxjson run` first.")
+    opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
+                                _filed_run_gains,
+                                _handoff_gains_flags(settings),
+                                root / "phantoms.json")
+    rep = _handoff.check(root, cfg, record, opening)
+    if getattr(args, "json", False):
+        _json_out(dict(rep, record=str(rp)))
+    else:
+        for ln in _handoff.render(rep, str(rp)):
+            print(ln)
+    if rep["problems"]:
+        raise SystemExit(1)
 
 
 def _check_filed_years(root: Path, cache: Path,
@@ -10528,7 +10632,26 @@ def main() -> None:
     p_close.add_argument("--force", action="store_true",
                          help="Replace an existing lock (re-filed/"
                               "amended years only)")
+    p_close.add_argument("--filed-dispositions", metavar="CSV",
+                         help="The dispositions the return actually "
+                              "reported, when it was prepared with another "
+                              "tool (CSV: symbol,date,qty,proceeds,cost,gain"
+                              "[,account]); the next year's `taxjson "
+                              "handoff` checks doubles against these")
     p_close.set_defaults(func=cmd_close_year)
+
+    p_hand = sub.add_parser(
+        "handoff",
+        help="Check this project against the previous year's close-year "
+             "record: opening positions and cost, trades settling across "
+             "Dec 31, sales reported in both years (exit 1 on a problem)")
+    p_hand.add_argument("--prior", metavar="PATH",
+                        help="The previous year's filed/<year>.json "
+                             "(default: [settings] prior_year_record, else "
+                             "filed/<year-1>.json here)")
+    p_hand.add_argument("--json", action="store_true",
+                        help="Emit JSON instead of text")
+    p_hand.set_defaults(func=cmd_handoff)
 
     p_chk = sub.add_parser(
         "check-filed",
