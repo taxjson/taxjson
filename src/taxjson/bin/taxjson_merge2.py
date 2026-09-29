@@ -47,6 +47,46 @@ from taxjson.bin.taxjson_convert_currency import (
     reset_fallback_tally, resolve_default_rate,
 )
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
+from taxjson.lib.corporate_timeline import normalize_symbol_new
+
+
+def warn_duplicate_splits(txs) -> int:
+    """Say so when ONE account carries the same split twice — typically a
+    broker parser that now books the event itself AND a manual .tt SPLIT
+    line written as a workaround before it did. Identical rows (same
+    symbol, date, ratio and rename target) are applied ONCE by the engines'
+    split dedup, so this is a cleanup warning; rows for the same event with
+    DIFFERENT ratios are all applied and would scale the pool twice.
+    Returns the number of duplicated events."""
+    groups = {}
+    for t in txs:
+        if t.action != 'SPLIT':
+            continue
+        key = (t.account, t.symbol, t.date,
+               normalize_symbol_new(t.symbol, t.symbol_new))
+        groups.setdefault(key, []).append(t)
+    n = 0
+    for (acct, sym, date, new), rows in sorted(groups.items()):
+        if len(rows) < 2:
+            continue
+        n += 1
+        ratios = sorted({round(float(r.quantity or 0), 9) for r in rows})
+        tgt = f" -> {new}" if new else ""
+        if len(ratios) == 1:
+            print(f"warning: duplicate split: {sym}{tgt} x{ratios[0]:g} on "
+                  f"{date} appears {len(rows)} times in account {acct} "
+                  f"(e.g. the broker parser books it AND a manual .tt SPLIT "
+                  f"line) — applied ONCE; delete the manual line.",
+                  file=sys.stderr)
+        else:
+            prod = 1.0
+            for r in ratios:
+                prod *= r
+            print(f"warning: conflicting splits: {sym}{tgt} on {date} in "
+                  f"account {acct} has {len(rows)} SPLIT rows with different "
+                  f"ratios {ratios} — EACH is applied (x{prod:g} in total); "
+                  f"keep only the right one.", file=sys.stderr)
+    return n
 
 
 def _pairing_core(description: str) -> str:
@@ -326,6 +366,10 @@ def main():
         # apply_mapping mutates and returns the same tx; that's fine here
         # because we built fresh TaxTransaction instances above.
         txs = [apply_mapping(t, renames) for t in txs]
+
+    # Post-mapping (a DELETE'd or renamed row is judged as the engine will
+    # see it): one account carrying the same split twice.
+    warn_duplicate_splits(txs)
 
     # --- Stage 4: currency conversion ---------------------------------
     target_currency = (args.target_currency or '').upper() or None

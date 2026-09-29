@@ -3474,7 +3474,10 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "symbol": t.get("symbol") or "",
                          "quantity": float(t.get("quantity") or 0),
                          "type": t.get("description") or "",
-                         "value": float(t.get("net_amount") or 0),
+                         # RBC ships Value 0 on in-kind transfers; its
+                         # "BOOK VALUE nnn" rides along as evidence.
+                         "value": float(t.get("net_amount")
+                                        or t.get("book_value") or 0),
                          "currency": t.get("currency") or "",
                          "where": "sidecar"})
     cfg = _soft_config(root)

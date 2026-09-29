@@ -56,6 +56,50 @@
   stripped (a `# DECLARED` remark no longer grants attestation); stray
   trailing tokens are errors; warnings and errors name `file.tt:line`.
   All real `.tt` files convert byte-identically.
+- **RBC: every reorganization booked as one event.** RBC books name
+  changes (NAC), reverse splits (REV), 1-for-1 exchanges and blank "MGR -"
+  splits (MGR), MER reorganizations and option adjustments (XCH) as a
+  removal under a temporary code plus a receipt. Only "MERGER TO" pairs
+  were handled; the rest became $0 buys and sells on RBC's internal codes,
+  and "SHRS RECEIVED THRU MERGER" receipts vanished. Each removal is now
+  paired with its receipt (same company, within 7 days) and booked as ONE
+  SPLIT (renaming when the ticker changed; a 1-for-1 on the same ticker
+  books nothing), with MER's "ROC OF C$x" as a return-of-capital ADJUST
+  and cash in lieu as the sale of the fractional share. An option XCH
+  keeps the same contract (and its ACB). "REVERSE ENTRY" corrections
+  cancel their leg. Unmatched legs, and any emitted symbol that is an RBC
+  internal code, are warned about (a lint failure). Real mergers still go
+  to the election prompt; spin-offs ("DIS - ... SPINOFF") now do too
+  (s.86.1 or an FMV dividend in kind) instead of becoming $0 buys; rights
+  issued to all shareholders stay a nil-cost acquisition, now noted.
+- **RBC: income by code, never by security name.** Rows are classified
+  by Activity and the RBC code ("DIV - ", "CASH DIV ON", "DIST ON"); the
+  word DIVIDEND inside a name ("DIVIDEND 15 SPLIT CORP", "HIGH DIVIDEND
+  ETF") turned in-kind transfers into $0 dividends and dropped their
+  shares. An income row that carries shares is refused. Reinvestments
+  (REI) are purchases of the units, not negative dividends; "ADJUSTMENT
+  TO BOOK COST $x" rows are signed ACB adjustments (notional distribution
+  up, return of capital down); ADR fees (FCH) are FEE rows; in-kind
+  transfers carry RBC's "BOOK VALUE" as evidence (`book_value`, shown by
+  `taxjson transfers`), booked exactly as before.
+- **RBC: strict reading.** The header row must carry the real columns
+  (a preamble line mentioning "Date" no longer passes); numbers must
+  parse ("39 043" and garbage raise, "(12.50)" is negative); each date
+  column gets ONE format for the whole file and a file that reads as
+  both day/month and month/day raises; currencies are upper-cased; an
+  unquoted comma is re-joined only inside the last (Description) column.
+  Options described only in "Symbol Description" are recognised, one RBC
+  option code is one contract (the first description wins, with a
+  warning), known cash rows and footers count as non-events, and an
+  unclassified row that moves shares or cash is a loud warning and fails
+  `--lint`. Same-day rows keep the export's order (it lists newest
+  first; an option assignment's two rows share one time so the premium
+  still folds into the stock leg), and the older "HORIZONS U S DLR" line maps to DLR.U.TO like
+  "GLOBAL X US DLR".
+- **Duplicate split rows warned.** When one account carries the same
+  split twice (a parser that now books it plus a manual .tt SPLIT line),
+  merge2 warns "duplicate split" (it is applied once); the same event
+  with different ratios warns "conflicting splits".
 - **Webull: columns by header label, both export layouts pinned.** The
   Trading Summary's 2024 layout has 9 columns (Proceeds in column 8), the
   2025 layout 10 (an empty column 8). The parser read by position with a

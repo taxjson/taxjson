@@ -54,6 +54,12 @@ register_brokerage("cb", coinbase.CoinbaseBrokerage)
 register_brokerage("generic", generic.GenericBrokerage)
 
 
+# Parser fields that are evidence only (not TaxTransaction fields): kept
+# on the raw rows (the --transfers-out sidecar carries them) and dropped
+# quietly from the book rows. 'qty' is the legacy alias of 'quantity'.
+_EVIDENCE_KEYS = frozenset({'qty', 'book_value'})
+
+
 def load_security_overrides(path: Path):
     """Parse a security-overrides file.
 
@@ -294,6 +300,14 @@ Examples:
                 # A row neither classified nor counted: the parser has a
                 # code path that drops data with no accounting at all.
                 lint_problems += 1
+        # Parser-reported findings (e.g. RBC: an unclassified row that
+        # moves shares or cash, an unmatched reorganization leg): already
+        # warned about on stderr; under --lint each one is a failure.
+        _findings = getattr(extractor, 'lint_findings', None) or []
+        if args.lint and _findings:
+            for _f in _findings:
+                print(f"lint: {input_path.name}: {_f}", file=sys.stderr)
+            lint_problems += len(_findings)
 
         for t in transactions:
             if 'qty' in t and 'quantity' not in t:
@@ -305,7 +319,7 @@ Examples:
             # or newly-invented parser field would otherwise vanish here
             # with zero signal ('qty' is exempt: aliased above).
             for k in t:
-                if k not in valid_keys and k != 'qty':
+                if k not in valid_keys and k not in _EVIDENCE_KEYS:
                     dropped_keys[k] = dropped_keys.get(k, 0) + 1
             clean = {k: v for k, v in t.items() if k in valid_keys}
             # Only override the parser's account label when --account

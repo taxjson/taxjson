@@ -144,16 +144,33 @@ class TestRbcParser(unittest.TestCase):
 
 
 class TestRbcDividendClassifier(unittest.TestCase):
-    """`_is_dividend` keys on whole-word matches of Dividend /
-    Distribution. The earlier bare-substring match (`'Dist' in desc`)
-    treated "Redistribution" / "Redistributed" as a dividend row,
-    routing unrelated rows through the dividend builder."""
+    """`_is_dividend` keys on the Activity label or on RBC's code/verb part
+    of the description ("DIV - ", "CASH DIV ON", "DIST ON") — never on a
+    word anywhere in the text. Re-premised (parse audit 2026-09): the
+    whole-description word match ("Dividend"/"Distribution"/"Dist.")
+    turned in-kind transfers of "DIVIDEND 15 SPLIT CORP" / "... HIGH
+    DIVIDEND INDEX ETF" into $0 dividends and dropped their shares."""
 
-    def test_recognizes_dividend_and_distribution_words(self):
+    def test_recognizes_activity_and_code_verbs(self):
         rbc = RbcBrokerage()
+        self.assertTrue(rbc._is_dividend('Dividends', 'anything'))
+        self.assertTrue(rbc._is_dividend('Distribution', 'anything'))
+        self.assertTrue(rbc._is_dividend(
+            'Other', 'DIV - LABRADOR IRON ORE CASH DIV  ON 500 SHS'))
         self.assertTrue(rbc._is_dividend('Other', 'CASH DIVIDEND ON 100 SHS'))
-        self.assertTrue(rbc._is_dividend('Other', 'ETF DISTRIBUTION REINVESTED'))
-        self.assertTrue(rbc._is_dividend('Other', 'Year-end Dist. payment'))
+        self.assertTrue(rbc._is_dividend(
+            'Other', 'COMMERCE SPLIT CORP COM DIST      ON       1 SHS'))
+
+    def test_rejects_words_in_security_names(self):
+        rbc = RbcBrokerage()
+        self.assertFalse(rbc._is_dividend(
+            'Transfers', 'TFI - DIVIDEND 15 SPLIT CORP CL-A SHS ACCOUNT '
+                         'TRANSFER BOOK VALUE 16506.95'))
+        self.assertFalse(rbc._is_dividend(
+            'Transfers', 'TFO - ISHARES S&P/TSX COMPOSITE HIGH DIVIDEND '
+                         'INDEX ETF ACCOUNT TRANSFER'))
+        self.assertFalse(rbc._is_dividend('Other', 'ETF DISTRIBUTION REINVESTED'))
+        self.assertFalse(rbc._is_dividend('Other', 'Year-end Dist. payment'))
 
     def test_rejects_redistribution(self):
         rbc = RbcBrokerage()

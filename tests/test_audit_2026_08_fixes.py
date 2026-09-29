@@ -196,10 +196,10 @@ class TestRbcSignPreserved(unittest.TestCase):
 
     def test_dividend_reversal_nets_to_zero(self):
         txs = self._parse(
-            '03/01/2024,Dividends,RY,ROYAL BANK CASH DIV ON 100 SHS,'
-            '0,0.00,03/01/2024,CAD,0.00,138.00\n'
-            '03/05/2024,Dividends,RY,ROYAL BANK CASH DIV REVERSAL ON 100 '
-            'SHS,0,0.00,03/05/2024,CAD,0.00,-138.00\n')
+            '03/13/2024,Dividends,RY,ROYAL BANK CASH DIV ON 100 SHS,'
+            '0,0.00,03/13/2024,CAD,0.00,138.00\n'
+            '03/15/2024,Dividends,RY,ROYAL BANK CASH DIV REVERSAL ON 100 '
+            'SHS,0,0.00,03/15/2024,CAD,0.00,-138.00\n')
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertEqual(len(divs), 2)
         self.assertEqual(sorted(t['net_amount'] for t in divs),
@@ -212,11 +212,11 @@ class TestRbcSignPreserved(unittest.TestCase):
     def test_withholding_charge_positive_refund_negative(self):
         txs = self._parse(
             # Charge: cash out, negative Amount → +4.05 tax withheld.
-            '04/01/2024,Taxes,AAPL,NON-RESIDENT TAX PAID,'
-            '0,0.00,04/01/2024,USD,0.00,-4.05\n'
+            '04/15/2024,Taxes,AAPL,NON-RESIDENT TAX PAID,'
+            '0,0.00,04/15/2024,USD,0.00,-4.05\n'
             # Refund: cash in, positive Amount → NETS NEGATIVE.
-            '05/01/2024,Taxes,AAPL,NON-RESIDENT TAX ADJUSTMENT REFUND,'
-            '0,0.00,05/01/2024,USD,0.00,4.05\n')
+            '05/15/2024,Taxes,AAPL,NON-RESIDENT TAX ADJUSTMENT REFUND,'
+            '0,0.00,05/15/2024,USD,0.00,4.05\n')
         taxes = [t for t in txs if t['action'] == 'TAX']
         self.assertEqual(len(taxes), 2)
         self.assertEqual(sorted(t['net_amount'] for t in taxes),
@@ -227,8 +227,8 @@ class TestRbcSignPreserved(unittest.TestCase):
     def test_net_withholding_reversal_scales_gross_up(self):
         """A reversed net-of-withholding dividend must reverse both the
         grossed-up DIVIDEND and its implied TAX row."""
-        row = ('06/01/2024,Dividends,MSFT,MICROSOFT NON-RES TAX WITHHELD '
-               'CASH DIV ON 100 SHS,0,0.00,06/01/2024,USD,0.00,{amt}\n')
+        row = ('06/14/2024,Dividends,MSFT,MICROSOFT NON-RES TAX WITHHELD '
+               'CASH DIV ON 100 SHS,0,0.00,06/14/2024,USD,0.00,{amt}\n')
         txs = self._parse(row.format(amt='85.00') +
                           row.format(amt='-85.00'))
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
@@ -2298,8 +2298,8 @@ class TestParserAudit202609Fixes(unittest.TestCase):
         # $85 Amount is net of 15% withholding. Deriving qty from NET
         # booked qty 85 for a 100-share position.
         txs = self._rbc(
-            '06/01/2024,Dividends,MSFT,MICROSOFT NON-RES TAX WITHHELD '
-            'CASH DIV $1.00 PER SHARE,0,0.00,06/01/2024,USD,0.00,85.00\n')
+            '06/14/2024,Dividends,MSFT,MICROSOFT NON-RES TAX WITHHELD '
+            'CASH DIV $1.00 PER SHARE,0,0.00,06/14/2024,USD,0.00,85.00\n')
         div = next(t for t in txs if t['action'] == 'DIVIDEND')
         tax = next(t for t in txs if t['action'] == 'TAX')
         self.assertAlmostEqual(div['quantity'], 100.0, places=6,
@@ -2316,8 +2316,8 @@ class TestParserAudit202609Fixes(unittest.TestCase):
         # net-of-withholding one (the old gross re-derivation branch
         # was dead: rate was already net-filled by the first call).
         txs = self._rbc(
-            '06/01/2024,Dividends,MSFT,MICROSOFT NON-RES TAX WITHHELD '
-            'CASH DIV ON 100 SHS,0,0.00,06/01/2024,USD,0.00,85.00\n')
+            '06/14/2024,Dividends,MSFT,MICROSOFT NON-RES TAX WITHHELD '
+            'CASH DIV ON 100 SHS,0,0.00,06/14/2024,USD,0.00,85.00\n')
         div = next(t for t in txs if t['action'] == 'DIVIDEND')
         self.assertAlmostEqual(div['quantity'], 100.0, places=6)
         self.assertAlmostEqual(div['price'], 1.0, places=6,
@@ -2328,8 +2328,8 @@ class TestParserAudit202609Fixes(unittest.TestCase):
     def test_rbc_plain_dividend_derivation_unchanged(self):
         # No withholding: gross == net, derivation identical to before.
         txs = self._rbc(
-            '03/01/2024,Dividends,RY,ROYAL BANK CASH DIV ON 100 SHS,'
-            '0,0.00,03/01/2024,CAD,0.00,138.00\n')
+            '03/13/2024,Dividends,RY,ROYAL BANK CASH DIV ON 100 SHS,'
+            '0,0.00,03/13/2024,CAD,0.00,138.00\n')
         div = next(t for t in txs if t['action'] == 'DIVIDEND')
         self.assertAlmostEqual(div['quantity'], 100.0, places=6)
         self.assertAlmostEqual(div['price'], 1.38, places=6)
