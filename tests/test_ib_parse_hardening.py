@@ -451,5 +451,52 @@ class TestIsinCountryFallback(unittest.TestCase):
 
 
 
+class TestRunParsesStrict(unittest.TestCase):
+    """`taxjson run` passes --strict to taxjson-brokerage: a schema
+    ERROR stops the run instead of scrolling past as a warning."""
+
+    def test_brokerage_stage_is_strict(self):
+        import taxjson.bin.taxjson_run as run_mod
+
+        class _Stop(Exception):
+            pass
+
+        seen = []
+
+        def fake_run_to_file(cmd, out, **kwargs):
+            if '--brokerage' in cmd:
+                seen.append(list(cmd))
+                raise _Stop()
+            Path(out).write_text('{"transactions": []}\n')
+
+        orig = run_mod.run_to_file
+        run_mod.run_to_file = fake_run_to_file
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                acct = root / 'inputs' / 'tfsa'
+                acct.mkdir(parents=True)
+                (acct / 'ib.csv').write_text(HEAD + TRADES_H + _trade(
+                    'MSFT', '2026-02-05, 09:31:00', 50, 400, -20000, -1))
+                (root / 'work').mkdir()
+                rates = root / 'work' / 'to_base.csv'
+                rates.write_text('')
+                settings = {'base_currency': 'CAD', 'country': 'canada',
+                            'year': 2026, 'tax_date': 'settle'}
+                with contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    try:
+                        run_mod.stage_account(
+                            'tfsa', {'type': 'sheltered'}, settings,
+                            root / 'inputs', root / 'work',
+                            root / 'reports', rates, None, None, True)
+                    except _Stop:
+                        pass
+        finally:
+            run_mod.run_to_file = orig
+        self.assertEqual(len(seen), 1)
+        self.assertIn('--strict', seen[0])
+
+
 if __name__ == '__main__':
     unittest.main()
