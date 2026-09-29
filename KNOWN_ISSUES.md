@@ -42,6 +42,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose BASE is fiat after stablecoin folding: `USD/CAD`, `USDC/USD`, `USDT/CAD`) and `_build_instant_trade` (a `spend`/`receive` pair whose both legs are fiat: USDC dust swept to USD, USD → CAD).
 - **Current behavior:** counted as recognized non-events (`forex conversion … not modeled — KNOWN_ISSUES`). Previously each emitted a BUYSELL of a phantom `USD` / `CAD` asset (the fiat base treated as the traded security), which put a fake position in the crypto book and a nonsense trade in the gains report.
 - **Why deferred:** same reason as the IB item above — foreign-cash gains live in `taxjson fx-cash`, which does not read conversion rows yet. Stablecoin↔USD swaps are additionally a wash by construction (folded 1:1 for pricing).
+- **Coinbase follows the same model:** `Buy USDC` / `Sell USDC` rows are counted as stablecoin conversions (non-events) and the USDC leg of an Advanced Trade on a `*-USDC` pair is cash, not a position. Strictly (CRA) a stablecoin is a crypto-asset, so the USD/CAD movement while USDC is held is an unbooked gain/loss — a few dollars a year on real data.
 
 ### Questrade `commission` vs everyone else `fee`
 - **Where:** `src/taxjson/lib/brokerages/questrade.py`.

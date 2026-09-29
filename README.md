@@ -32,7 +32,7 @@ Everything runs locally on your machine. Your transaction data never leaves your
 | Questrade             | Yes      | Yes     | —      | Account activity CSV                               |
 | RBC Direct Investing  | Yes      | Yes     | —      | Transaction history CSV                            |
 | Webull                | Yes      | Yes     | —      | Account statement CSV; option expiry/assignment rows not yet parsed (see KNOWN_ISSUES) |
-| Kraken                | —        | —       | Yes    | Ledgers CSV                                        |
+| Kraken                | —        | —       | Yes    | Trades + Ledgers CSV (same folder: the ledger says which coin paid each fee) |
 | Coinbase              | —        | —       | Yes    | Transaction history CSV                            |
 | **Any other broker**  | Yes      | —       | —      | `generic_*.csv` + a TOML column mapping (see `examples/generic_wealthsimple.toml`) |
 
@@ -102,7 +102,16 @@ each action value to one of `buy | sell | dividend | tax | interest | fee |
 skip` in `[actions]`. Conventions match the hand-written parsers: signed
 amounts are preserved, unmapped action values are counted and summarized (never
 silently dropped), and a mapping that references columns the CSV doesn't have
-refuses loudly. Equities/dividends only — no options.
+refuses loudly. Every buy/sell row is cross-checked — |amount| must equal
+qty × price (× 100 for an OCC option symbol) ± fee within 1%, a fee above 5% of
+the gross needs `[options] allow_large_fees = true`, two fields may not share
+one header, and the currency must be mapped or set in `[defaults]` (no implicit
+USD) — so a mis-mapped column stops the import instead of booking wrong money.
+
+Kraken and Coinbase timestamps are UTC; rows are dated in local time
+(America/Toronto by default, `TAXJSON_LOCAL_TZ=America/Vancouver` etc. to
+change it), so a fill at 03:00 UTC on January 1 belongs to the previous tax
+year. USDC/USDT/DAI are treated as US-dollar cash on both exchanges.
 
 Crypto accounts: in a US project the wash-sale rule is **not** applied to
 crypto — the IRS treats digital assets as property, not securities, so §1091

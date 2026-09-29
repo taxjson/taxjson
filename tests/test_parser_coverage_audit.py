@@ -724,9 +724,13 @@ class TestCoinbaseKnownNonEvents(unittest.TestCase):
 # ------------------------------------------------------------ hygiene (f)
 class TestBrokerageZeroTransactionsGuard(unittest.TestCase):
     def test_transfer_only_file_is_not_a_zero_tx_regression(self):
+        # Re-premised (crypto hardening): the withdrawal carries NO
+        # coin fee here. A coin-denominated withdrawal fee is now booked
+        # as a disposition of the fee coins (a real tax object), which
+        # would make this no longer a transfer-only file.
         csv = KR_LEDGER_H + (
             '"T2","R2","2026-01-06 10:00:00","withdrawal","","currency",'
-            '"XXBT","spot","-0.2","0.0002","0.3"\n'
+            '"XXBT","spot","-0.2","0","0.3"\n'
         )
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "kr_ledgers.csv"

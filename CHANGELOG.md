@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+- **Kraken: fees charged in the traded coin.** Kraken's trades CSV states
+  every fee in quote units, even when Kraken took it in the coin you
+  bought or sold, so the full `vol` was booked and phantom coins piled up
+  (seen on real exports in six coins). With the ledgers export in the
+  same folder,
+  each fill is joined to its ledger rows (refid = trade txid) and booked
+  from them: a coin fee reduces the coins received (buy) or adds to the
+  coins given (sell), with no quote-currency fee. Any disagreement
+  between the two exports raises. Without a ledger the parser warns that
+  the fee currency can't be verified. Every crypto asset's parsed units
+  now equal the ledger's amount − fee exactly. Crypto gains on real books
+  move by tens of dollars a year (mostly this fix); staking income is
+  unchanged.
+- **Kraken: legacy ledger rows, suffixes, fee currency, required
+  columns.** `staking` and `dividend` rows are income (they were
+  dropped); `.S`/`.M`/`.F`/`.B`/`.P`/`.HOLD` asset suffixes fold to the
+  bare coin, and `ETH2` to ETH; legacy spot-to-staking transfers are
+  wallet moves; `feecurrency` is honoured (a reward whose fee is charged
+  in another currency is credited in full, the fee reducing the income);
+  a coin-denominated withdrawal fee is booked as a disposition of the fee
+  coins; a missing `fee`/`vol`/`amount` column, or an unparseable number,
+  raises instead of reading as 0.
+- **Kraken: multi-asset dust sweeps book every swept coin.** One refid
+  spending several assets for one receipt kept only the last spend leg
+  (a warning, then the others stayed in the book forever). The receipt is
+  now split across the legs by `amountusd` (equally when absent).
+- **Coinbase: USDC is US-dollar cash, as on Kraken.** `Buy USDC` rows
+  are stablecoin conversions (not positions), and the USDC leg of an
+  Advanced Trade on a `*-USDC` pair is cash. Before, the USDC bought was a
+  position that the Advanced-Trade spends never reduced (a phantom USDC
+  long). Strictly a stablecoin is a crypto-asset for the CRA; what the
+  cash model leaves out is the USD/CAD movement while it is held — a few
+  dollars a year on real data.
+- **Kraken and Coinbase rows are dated in local time.** Both exchanges
+  stamp UTC; rows are now converted to America/Toronto (override with
+  `TAXJSON_LOCAL_TZ`), so a trade at 03:00 UTC on January 1 lands in
+  the previous tax year. None of the real 2025/2026 rows straddle a year
+  end; the shift moves some dates by a day (FX/price day). Coinbase and
+  Kraken amounts like `CA$4.00`, `US$-3` and `(12.00)` now parse;
+  anything unparseable raises (`CA$4.00` used to read as 0).
+- **Generic importer refuses mis-mapped columns.** Two fields on one
+  header, |amount| ≠ qty × price (× 100 for options) ± fee beyond 1%, and
+  a fee above 5% of the gross (unless `[options] allow_large_fees =
+  true`) now stop the import; an amount equal to qty × price while the
+  fee is nonzero warns that the GROSS column is probably mapped as
+  `amount`. The currency must be mapped or set in `[defaults]` — there is
+  no implicit USD any more (the shipped example already sets it).
+- **`.tt` files: unknown actions are errors.** A line starting with
+  `SELL`, `buysell`, `BUYSEL` or `Dividend` was skipped silently with
+  exit 0; it now fails with the valid actions and a did-you-mean. Dates
+  must be YYYY-MM-DD and times HH:MM:SS; inline `# …` comments are
+  stripped (a `# DECLARED` remark no longer grants attestation); stray
+  trailing tokens are errors; warnings and errors name `file.tt:line`.
+  All real `.tt` files convert byte-identically.
 - **Webull: columns by header label, both export layouts pinned.** The
   Trading Summary's 2024 layout has 9 columns (Proceeds in column 8), the
   2025 layout 10 (an empty column 8). The parser read by position with a

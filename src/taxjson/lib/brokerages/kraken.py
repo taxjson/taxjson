@@ -2,9 +2,10 @@ import csv
 import re
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import BaseBrokerage
+from taxjson.lib.brokerages._crypto_common import strict_money, utc_to_local
 
 
 _FIAT_ASSETS = ('USD', 'CAD', 'EUR', 'GBP', 'USDC', 'USDT', 'DAI')
@@ -22,6 +23,29 @@ _FIAT_CURRENCIES = ('USD', 'CAD', 'EUR', 'GBP')
 _STABLECOINS = ('USDC', 'USDT', 'DAI')
 
 
+# Kraken's wallet-flavour suffixes on ledger asset codes: `.S` staked,
+# `.M` bonded/staked (newer), `.F` opt-in/flexible rewards, `.B`/`.P`
+# (bonded / parachain variants), `.HOLD` (the USD rewards-holding
+# balance). They all name the SAME property as the bare code — a
+# `DOT.S` reward is DOT income and later-sold DOT. Left in place they
+# were separate "assets" (or, for the legacy `staking` rows, dropped
+# outright) and fill-crypto could never price `DOT.S-USD`.
+_ASSET_SUFFIX_RE = re.compile(r'\.(S|M|F|B|P|HOLD)$', re.IGNORECASE)
+
+# Required columns — a missing `fee`/`vol` used to read as 0 on every
+# row (DictReader.get), silently booking fee-free trades. Refuse.
+_TRADES_REQUIRED = ('txid', 'pair', 'time', 'type', 'price', 'cost',
+                    'fee', 'vol')
+_LEDGER_REQUIRED = ('txid', 'refid', 'time', 'type', 'asset', 'amount',
+                    'fee')
+
+# Legacy (pre-Earn) moves between the spot and staking wallets: the
+# coins never leave the account — a recognised non-event.
+_STAKING_WALLET_MOVES = ('spottostaking', 'stakingfromspot',
+                         'stakingtospot', 'spotfromstaking',
+                         'spottofutures', 'spotfromfutures')
+
+
 def _normalize_asset(asset: str, fold_stable: bool = True) -> str:
     """Kraken prefixes assets with Z (fiat) and X (crypto) for historical reasons.
     Strip those and treat USD-pegged stablecoins as their USD anchor.
@@ -29,6 +53,7 @@ def _normalize_asset(asset: str, fold_stable: bool = True) -> str:
     evidence rows must say WHAT was sent (a USDC gift is a disposition
     of USDC the property, not a USD cash movement), even though the
     trade books fold it for pricing."""
+    asset = _ASSET_SUFFIX_RE.sub('', (asset or '').strip())
     asset = re.sub(r'^Z(USD|CAD|EUR|GBP)$', r'\1', asset)
     # The X-prefix strip covers every classic X-prefixed Kraken asset
     # (KNOWN_ISSUES enumerated the missing ones: XLM, XMR, ZEC, XDG
@@ -40,6 +65,11 @@ def _normalize_asset(asset: str, fold_stable: bool = True) -> str:
         asset = 'BTC'
     if asset == 'XDG':
         asset = 'DOGE'      # Kraken's Dogecoin code; Yahoo wants DOGE
+    if asset == 'ETH2':
+        # Kraken's staked-ETH ledger code (`ETH2`, `ETH2.S`): a 1:1
+        # claim on ETH that Kraken converted back to ETH at the merge
+        # unlock — the same property for ACB purposes.
+        asset = 'ETH'
     # Fold USD-pegged stablecoins. DAI is included so that a `BTC/DAI`
     # row resolves consistently — otherwise DAI would be flagged as
     # fiat (via `_FIAT_ASSETS`) but pass through to the gain engine
@@ -92,17 +122,191 @@ def _split_pair(pair: str, time_raw: str = '') -> tuple:
         f"letting the row parse with a guessed quote currency.")
 
 
+def _classify_header(header_line: str) -> str:
+    """'trades' | 'ledgers' | '' for a Kraken CSV's first line."""
+    h = header_line.lower()
+    if 'ordertxid' in h or 'pair' in h:
+        return 'trades'
+    if 'refid' in h or 'subtype' in h:
+        return 'ledgers'
+    return ''
+
+
+def _lower_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {(k or '').strip().lower(): v for k, v in row.items()}
+
+
+def _require_columns(fieldnames, required, path: Path, kind: str) -> None:
+    have = {(h or '').strip().lower() for h in (fieldnames or [])}
+    missing = [c for c in required if c not in have]
+    if missing:
+        raise ValueError(
+            f"Kraken {kind} CSV {path.name}: required column(s) missing: "
+            f"{', '.join(missing)}. Header: {list(fieldnames or [])}. "
+            f"A missing fee/vol/amount column would read as 0 on every "
+            f"row — re-export the full {kind} CSV from Kraken.")
+
+
+def _fee_ccy(row: Dict[str, Any], asset_name: str) -> str:
+    """The currency the ledger `fee` is denominated in. Exports since
+    2026 carry `feecurrency`; older ones (and blank cells) mean the
+    row's own asset."""
+    fc = (row.get('feecurrency') or '').strip()
+    if not fc:
+        return asset_name
+    return _normalize_asset(fc, fold_stable=False)
+
+
 class KrakenBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Kraken"
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         with open(path, 'r', encoding='utf-8-sig') as f:
             header_line = f.readline()
-        if 'ordertxid' in header_line.lower() or 'pair' in header_line.lower():
+        kind = _classify_header(header_line)
+        if kind == 'trades':
             return self._parse_trades(path)
-        if 'refid' in header_line.lower() or 'subtype' in header_line.lower():
+        if kind == 'ledgers':
             return self._parse_ledgers(path)
         return []
+
+    # ------------------------------------------------------------ helpers
+    def _num(self, row, field, context, required=False) -> float:
+        raw = row.get(field)
+        if required and (raw is None or not str(raw).strip()):
+            raise ValueError(
+                f"Kraken {context}: empty {field!r} — refusing to read "
+                f"it as 0.")
+        return strict_money(raw, field, f"Kraken {context}")
+
+    def _local_dt(self, time_raw: str, what: str):
+        """Kraken timestamps are UTC (`2025-06-01 12:00:00.1234`).
+        Returned as America/Toronto local wall-clock time (see
+        _crypto_common): the taxpayer's local DATE decides the tax year
+        and the BoC rate day. Raises on an unparseable stamp — stamping
+        or skipping distorts holding periods / year filters invisibly;
+        a changed Kraken timestamp format must be added, not dropped."""
+        dt = self.parse_date((time_raw.split('.')[0] if time_raw else ''),
+                             "%Y-%m-%d %H:%M:%S")
+        if dt is None:
+            raise ValueError(
+                f"Kraken {what} has an unparseable timestamp: "
+                f"{time_raw!r}. Add the format to parse_date if this is "
+                f"a new Kraken export variant.")
+        return utc_to_local(dt)
+
+    @staticmethod
+    def _sibling_ledger_index(path: Path) -> Optional[Dict[str, list]]:
+        """refid -> ledger rows, from every Kraken LEDGER export in the
+        trades file's folder (kr_*.csv / *kraken*.csv). None when there
+        is none. Several ledgers (one per year) are all indexed: a
+        trades export and the ledger covering it need not share a
+        filename year."""
+        idx: Dict[str, list] = {}
+        found = False
+        try:
+            siblings = sorted(path.parent.iterdir())
+        except OSError:
+            return None
+        for p in siblings:
+            if p == path or not p.is_file() or p.suffix.lower() != '.csv':
+                continue
+            n = p.name.lower()
+            if not (n.startswith('kr_') or 'kraken' in n):
+                continue
+            try:
+                with open(p, 'r', encoding='utf-8-sig') as f:
+                    if _classify_header(f.readline()) != 'ledgers':
+                        continue
+                    f.seek(0)
+                    rdr = csv.DictReader(f)
+                    _require_columns(rdr.fieldnames, _LEDGER_REQUIRED, p,
+                                     'ledger')
+                    found = True
+                    for raw in rdr:
+                        row = _lower_row(raw)
+                        ref = (row.get('refid') or '').strip()
+                        if ref:
+                            idx.setdefault(ref, []).append(row)
+            except UnicodeDecodeError:
+                continue
+        return idx if found else None
+
+    def _ledger_trade_legs(self, row, legs, base, quote, type_, pair,
+                           vol, cost, trade_fee):
+        """Resolve one trades-CSV fill against its ledger rows (ledger
+        refid == trade txid). Returns (base_coins, base_fee_coins,
+        quote_fee): the ledger's base-coin amount (the balance
+        authority — it can differ from the trades `vol` in the 8th
+        decimal), the fee Kraken actually took in the BASE coin, and
+        the fee in QUOTE units. Kraken's trades export reports every fee in quote
+        units even when the fee was charged in the base coin (a SOL/CAD
+        buy that credited vol − 0.018 SOL still says fee=4.13 CAD) —
+        the ledger is the only record of which balance paid.
+
+        Any disagreement between the two exports (legs missing, amounts
+        not matching vol/cost, direction reversed, a third asset) raises:
+        a mis-joined ledger must never silently rewrite a trade."""
+        ctx = f"trade {row.get('txid')!r} ({pair}, {row.get('time')!r})"
+        by_asset: Dict[str, list] = {}
+        for lg in legs:
+            a = _normalize_asset(lg.get('asset') or '')
+            if a == 'KFEE':
+                # Legacy fee credits (promotional, no tax value): the
+                # fee was paid in credits, not in either leg.
+                continue
+            by_asset.setdefault(a, []).append(lg)
+        unknown = sorted(set(by_asset) - {base, quote})
+        b_rows, q_rows = by_asset.get(base, []), by_asset.get(quote, [])
+        if unknown or len(b_rows) != 1 or len(q_rows) != 1:
+            raise ValueError(
+                f"Kraken {ctx}: the ledger rows with refid == this txid "
+                f"do not match the pair (assets found: "
+                f"{sorted(by_asset)}; expected one {base} and one "
+                f"{quote} row). Refusing to guess which balance paid the "
+                f"fee — check that the ledger export belongs to this "
+                f"account.")
+        bl, ql = b_rows[0], q_rows[0]
+        b_amt = self._num(bl, 'amount', ctx, required=True)
+        q_amt = self._num(ql, 'amount', ctx, required=True)
+        b_fee = abs(self._num(bl, 'fee', ctx))
+        q_fee = abs(self._num(ql, 'fee', ctx))
+        for lg, a, fee in ((bl, base, b_fee), (ql, quote, q_fee)):
+            fc = _fee_ccy(lg, _normalize_asset(lg.get('asset') or '',
+                                               fold_stable=False))
+            if fee and _normalize_asset(fc) != a:
+                raise ValueError(
+                    f"Kraken {ctx}: ledger fee on the {a} leg is in "
+                    f"{fc} (feecurrency) — a trade fee charged in a third "
+                    f"currency is not supported; enter this fill via a "
+                    f".tt file.")
+        is_buy = (type_ == 'buy')
+        if (b_amt > 0) != is_buy or (q_amt < 0) != is_buy:
+            raise ValueError(
+                f"Kraken {ctx}: ledger direction disagrees with the "
+                f"trades export (type={type_!r}, ledger {base} "
+                f"{b_amt:+g}, {quote} {q_amt:+g}).")
+        if abs(abs(b_amt) - abs(vol)) > max(2e-7, 1e-6 * abs(vol)):
+            raise ValueError(
+                f"Kraken {ctx}: ledger {base} amount {abs(b_amt):.10g} "
+                f"!= trades vol {abs(vol):.10g}.")
+        if abs(abs(q_amt) - abs(cost)) > max(2e-4, 1e-6 * abs(cost)):
+            raise ValueError(
+                f"Kraken {ctx}: ledger {quote} amount {abs(q_amt):.10g} "
+                f"!= trades cost {abs(cost):.10g}.")
+        if b_fee > 0:
+            # Fee taken in the traded coin: the quote side paid/received
+            # exactly `cost` (plus any quote fee the ledger shows).
+            return abs(b_amt), b_fee, q_fee
+        # Fee in quote units: the trades export states it to more
+        # decimals than the ledger — keep that value, but only when the
+        # two agree (a disagreement means the columns are not what we
+        # think they are).
+        if abs(trade_fee - q_fee) > max(2e-4, 0.01 * trade_fee):
+            raise ValueError(
+                f"Kraken {ctx}: trades fee {trade_fee:.10g} {quote} but "
+                f"the ledger charged {q_fee:.10g} {quote} and 0 {base}.")
+        return abs(b_amt), 0.0, trade_fee
 
     # ---------------------------------------------------------------- trades
     # Kraken's *trades* CSV (the per-fill order log). Fiat-quoted pairs
@@ -114,11 +318,18 @@ class KrakenBrokerage(BaseBrokerage):
         # Zero-drop policy (base.py): rows we don't translate are
         # counted and summarized, never silently continued past.
         ignored_types: Dict[str, int] = {}
+        ledger_idx = self._sibling_ledger_index(path)
+        unverified = 0
+        coin_fee_fills = 0
         with open(path, 'r', encoding='utf-8-sig') as f:
-            for row in csv.DictReader(f):
-                if not row:
+            reader = csv.DictReader(f)
+            _require_columns(reader.fieldnames, _TRADES_REQUIRED, path,
+                             'trades')
+            for raw in reader:
+                if not raw:
                     continue
-                type_ = (row.get('type') or '').lower()
+                row = _lower_row(raw)
+                type_ = (row.get('type') or '').strip().lower()
                 if type_ not in ('buy', 'sell'):
                     ignored_types[type_ or '?'] = (
                         ignored_types.get(type_ or '?', 0) + 1)
@@ -126,22 +337,13 @@ class KrakenBrokerage(BaseBrokerage):
 
                 pair = row.get('pair') or ''
                 time_raw = row.get('time') or ''
-                dt = self.parse_date((time_raw.split('.')[0] if time_raw else ''), "%Y-%m-%d %H:%M:%S")
-                if dt is None:
-                    # Same policy as the Coinbase parser: stamping or
-                    # skipping distorts holding periods / year filters
-                    # invisibly; a changed Kraken timestamp format must
-                    # be added to the format list, not dropped.
-                    raise ValueError(
-                        f"Kraken trades row has an unparseable "
-                        f"timestamp: {time_raw!r} (pair={pair!r}). Add "
-                        f"the format to parse_date if this is a new "
-                        f"Kraken export variant.")
+                dt = self._local_dt(time_raw, f"trades row (pair={pair!r})")
+                ctx = f"trades {path.name} txid={row.get('txid')!r}"
 
-                price = self.clean_number(row.get('price'))
-                cost = abs(self.clean_number(row.get('cost')))
-                fee = abs(self.clean_number(row.get('fee')))
-                vol = self.clean_number(row.get('vol'))
+                price = self._num(row, 'price', ctx, required=True)
+                cost = abs(self._num(row, 'cost', ctx, required=True))
+                fee = abs(self._num(row, 'fee', ctx))
+                vol = self._num(row, 'vol', ctx, required=True)
 
                 base, quote = _split_pair(pair, time_raw)
                 base = _normalize_asset(base)
@@ -157,6 +359,27 @@ class KrakenBrokerage(BaseBrokerage):
                                         f"(not modeled — KNOWN_ISSUES)")
                     continue
 
+                # Which balance paid the fee (M3): join the ledger.
+                _txid = (row.get('txid') or '').strip()
+                legs = (ledger_idx.get(_txid)
+                        if ledger_idx is not None and _txid else None)
+                if legs:
+                    base_coins, base_fee, quote_fee = (
+                        self._ledger_trade_legs(
+                            row, legs, base, quote, type_, pair, vol,
+                            cost, fee))
+                else:
+                    base_coins, base_fee, quote_fee = abs(vol), 0.0, fee
+                    unverified += 1
+                if base_fee:
+                    coin_fee_fills += 1
+                # Coins that actually moved: a buy credits vol − coin
+                # fee, a sell debits vol + coin fee.
+                base_qty = (base_coins - base_fee if type_ == 'buy'
+                            else base_coins + base_fee)
+                fee_note = (f" (Kraken fee {base_fee:.10g} {base} taken "
+                            f"in coin, per ledger)" if base_fee else '')
+
                 if quote not in _FIAT_ASSETS:
                     # Crypto-to-crypto fill: two USD-denominated legs,
                     # the mirror of the ledgers path's
@@ -166,11 +389,11 @@ class KrakenBrokerage(BaseBrokerage):
                     # the base-asset quantity, `cost` the quote-asset
                     # quantity; both legs ship price=0 so
                     # taxjson-fill-crypto backfills the FMV. The fee is
-                    # quote-crypto-denominated and unconvertible to USD
-                    # here, so the USD fee field stays 0 — but the fee
-                    # COINS moved, so they are folded into the quote
-                    # leg's quantity (below) rather than left as
-                    # phantom units.
+                    # crypto-denominated and unconvertible to USD here,
+                    # so the USD fee field stays 0 — but the fee COINS
+                    # moved, so they are folded into the leg whose
+                    # balance paid them rather than left as phantom
+                    # units.
                     date_s = dt.strftime("%Y-%m-%d")
                     time_s = dt.strftime("%H:%M:%S")
                     base_leg = {
@@ -179,24 +402,24 @@ class KrakenBrokerage(BaseBrokerage):
                         'date_settle': date_s,
                         'symbol': base,
                         'quantity': self.signed_quantity(
-                            abs(vol), action_is_sell=(type_ == 'sell')),
+                            base_qty, action_is_sell=(type_ == 'sell')),
                         'currency': 'USD', 'price': 0.0,
                         'net_amount': 0.0, 'gross_amount': 0.0,
                         'fee': 0.0, 'account': self.DEFAULT_ACCOUNT,
                         'description': f'Trade {pair} '
-                                       f'({type_} leg of crypto-to-crypto)',
+                                       f'({type_} leg of crypto-to-crypto)'
+                                       f'{fee_note}',
                     }
                     quote_leg = {
                         'action': 'BUYSELL',
                         'date': date_s, 'time': time_s,
                         'date_settle': date_s,
                         'symbol': quote,
-                        # The trades-export fee is in QUOTE units: a
-                        # buy spends cost + fee of the quote coin, a
-                        # sell receives cost − fee of it.
+                        # A buy spends cost + quote fee of the quote
+                        # coin, a sell receives cost − quote fee.
                         'quantity': self.signed_quantity(
-                            (abs(cost) + fee) if type_ == 'buy'
-                            else max(abs(cost) - fee, 0.0),
+                            (abs(cost) + quote_fee) if type_ == 'buy'
+                            else max(abs(cost) - quote_fee, 0.0),
                             action_is_sell=(type_ == 'buy')),
                         'currency': 'USD', 'price': 0.0,
                         'net_amount': 0.0, 'gross_amount': 0.0,
@@ -204,15 +427,18 @@ class KrakenBrokerage(BaseBrokerage):
                         'description': f'Trade {pair} '
                                        f'(counter leg of crypto-to-crypto)',
                     }
-                    _txid = (row.get('txid') or '').strip()
                     if _txid:
                         base_leg['id'] = f'{_txid}-base'
                         quote_leg['id'] = f'{_txid}-quote'
                     transactions.extend([base_leg, quote_leg])
                     continue
 
-                qty = self.signed_quantity(abs(vol), action_is_sell=(type_ == 'sell'))
-                net = (cost + fee) if type_ == 'buy' else (cost - fee)
+                qty = self.signed_quantity(base_qty,
+                                           action_is_sell=(type_ == 'sell'))
+                # A coin-charged fee is already out of the quantity; the
+                # quote side moved exactly `cost` (quote_fee is then 0).
+                net = ((cost + quote_fee) if type_ == 'buy'
+                       else (cost - quote_fee))
 
                 tx = {
                     'action': 'BUYSELL',
@@ -221,17 +447,18 @@ class KrakenBrokerage(BaseBrokerage):
                     'date_settle': dt.strftime("%Y-%m-%d"),
                     'symbol': base, 'quantity': qty, 'currency': quote,
                     'price': price, 'net_amount': net,
-                    'gross_amount': cost, 'fee': fee,
+                    'gross_amount': cost, 'fee': quote_fee,
                     'account': self.DEFAULT_ACCOUNT,
                 }
+                if fee_note:
+                    tx['description'] = f'Trade {pair}{fee_note}'
                 # Preserve Kraken's per-fill txid as the transaction id. Split
                 # fills land in the same second with identical qty/price/cost,
                 # so without a unique id the sort-stage dedup collapses them
                 # into one and the inventory loses real fills (e.g. 8 BNB
                 # fills on 2025-10-17 within ~1.5s).
-                txid = (row.get('txid') or '').strip()
-                if txid:
-                    tx['id'] = txid
+                if _txid:
+                    tx['id'] = _txid
                 transactions.append(tx)
         if ignored_types:
             detail = ', '.join(f"{k} x{v}"
@@ -239,95 +466,92 @@ class KrakenBrokerage(BaseBrokerage):
             print(f"note: Kraken trades {path.name}: ignored "
                   f"{sum(ignored_types.values())} row(s) with unhandled "
                   f"type(s): {detail}.", file=sys.stderr)
+        if unverified:
+            where = ("no Kraken ledgers export (kr_ledgers*.csv) is in "
+                     "the same folder" if ledger_idx is None else
+                     "the ledgers export(s) beside it do not contain "
+                     "them")
+            print(f"warning: Kraken trades {path.name}: the fee currency "
+                  f"of {unverified} fill(s) can't be verified — {where}. "
+                  f"Kraken's trades CSV states every fee in quote units "
+                  f"even when Kraken took it in the traded coin, which "
+                  f"books phantom coins; add the ledgers export covering "
+                  f"these dates beside the trades file.",
+                  file=sys.stderr)
+        if coin_fee_fills:
+            print(f"note: Kraken trades {path.name}: {coin_fee_fills} "
+                  f"fill(s) had the fee taken in the traded coin (per the "
+                  f"ledger) — booked as fewer coins received / more "
+                  f"coins given, with no quote-currency fee.",
+                  file=sys.stderr)
         self.emit_skip_summary(path.name)
         return transactions
 
     # --------------------------------------------------------------- ledgers
     def _parse_ledgers(self, path: Path) -> List[Dict[str, Any]]:
         transactions: List[Dict[str, Any]] = []
-        instant_trades: Dict[str, Dict[str, Any]] = {}
+        # refid -> {'spend': {asset: leg}, 'receive': {asset: leg}}
+        instant_trades: Dict[str, Dict[str, Dict[str, Any]]] = {}
         # type -> count of ledger rows we don't translate (deposit,
-        # withdrawal, transfer, staking, margin, ...). Summarized once
-        # at end of parse — previously silently dropped.
+        # withdrawal, transfer, margin, ...). Summarized once at end of
+        # parse — previously silently dropped.
         ignored_types: Dict[str, int] = {}
 
         with open(path, 'r', encoding='utf-8-sig') as f:
-            for row in csv.DictReader(f):
-                if not row:
+            reader = csv.DictReader(f)
+            _require_columns(reader.fieldnames, _LEDGER_REQUIRED, path,
+                             'ledger')
+            for raw in reader:
+                if not raw:
                     continue
+                row = _lower_row(raw)
                 txid = (row.get('txid') or '').strip()
-                refid = row.get('refid') or ''
-                type_raw = (row.get('type') or '').lower()
-                subtype = (row.get('subtype') or '').lower()
+                refid = (row.get('refid') or '').strip()
+                type_raw = (row.get('type') or '').strip().lower()
+                subtype = (row.get('subtype') or '').strip().lower()
                 asset_raw = row.get('asset') or ''
                 time_raw = row.get('time') or ''
-                dt = self.parse_date((time_raw.split('.')[0] if time_raw else ''), "%Y-%m-%d %H:%M:%S")
-                if dt is None:
-                    # Mirror the trades path / Coinbase policy: never
-                    # silently drop a dated ledger row.
-                    raise ValueError(
-                        f"Kraken ledger row has an unparseable "
-                        f"timestamp: {time_raw!r} "
-                        f"(type={type_raw!r}, asset={asset_raw!r}). Add "
-                        f"the format to parse_date if this is a new "
-                        f"Kraken export variant.")
+                dt = self._local_dt(
+                    time_raw, f"ledger row (type={type_raw!r}, "
+                              f"asset={asset_raw!r})")
                 date = dt.strftime("%Y-%m-%d")
                 time = dt.strftime("%H:%M:%S")
-                amount = self.clean_number(row.get('amount'))
-                fee = self.clean_number(row.get('fee'))
+                ctx = f"ledger {path.name} txid={txid!r}"
+                amount = self._num(row, 'amount', ctx, required=True)
+                fee = self._num(row, 'fee', ctx)
                 asset = _normalize_asset(asset_raw)
+                asset_name = _normalize_asset(asset_raw, fold_stable=False)
+                fee_ccy = _fee_ccy(row, asset_name)
 
-                if type_raw == 'earn' and subtype == 'reward':
-                    # Stablecoin rewards keep their own name: folded to
-                    # `USD` they reached taxjson-fill-crypto as the one
-                    # symbol it refuses to price, so a USDC reward
-                    # booked $0 income. _build_staking_reward prices a
-                    # stablecoin at 1.0/unit itself (net = qty).
-                    # Ledgers exported since 2026 carry `amountusd` —
-                    # Kraken's own USD valuation at credit time, i.e.
-                    # the FMV the reward is income at and the cost the
-                    # coins are acquired at. Used when present; older
-                    # exports still ship price=0 for the fill step
-                    # (which has no quote for some coins, e.g. HYPE).
-                    # The ledger `fee` is in the REWARD's own coin
-                    # units (2026 exports say so: feecurrency == asset),
-                    # and Kraken's balance moves by amount − fee: a
-                    # 0.19842 SOL reward with a 0.04961 SOL commission
-                    # credits 0.14882 SOL. Booking the gross amount
-                    # minted phantom units and overstated the income by
-                    # the commission, while the coin-denominated fee
-                    # landed in a USD fee field. Both the income and
-                    # the acquired quantity are the NET coins; the USD
-                    # value is net likewise (amountusd − feeusd).
-                    gross_qty = abs(amount)
-                    fee_qty = abs(fee)
-                    net_qty = gross_qty - fee_qty
-                    if net_qty <= 1e-12:
-                        self.count_nonevent(
-                            "Kraken Earn reward fully consumed by its fee")
-                        continue
-                    usd_value = self.clean_number(row.get('amountusd'))
-                    net_usd = None
-                    if usd_value:
-                        fee_usd = self.clean_number(row.get('feeusd'))
-                        if fee_qty and not fee_usd:
-                            # No feeusd column: scale the gross value.
-                            fee_usd = abs(usd_value) * fee_qty / gross_qty
-                        net_usd = abs(usd_value) - abs(fee_usd)
-                    transactions.extend(self._build_staking_reward(
-                        _normalize_asset(asset_raw, fold_stable=False),
-                        date, time, net_qty, txid,
-                        usd_value=net_usd, gross_qty=gross_qty,
-                        fee_qty=fee_qty))
+                if ((type_raw == 'earn' and subtype == 'reward')
+                        or type_raw in ('staking', 'dividend')):
+                    # Earn rewards (2023+), the legacy `staking` reward
+                    # rows (asset `DOT.S`, `ETH2.S`, …) and `dividend`
+                    # rows (opt-in rewards, e.g. on `USD.HOLD`) are all
+                    # income at FMV when credited; the coins are
+                    # acquired at that FMV. The legacy types used to be
+                    # dropped into the "unhandled" note — income lost.
+                    if amount <= 0:
+                        raise ValueError(
+                            f"Kraken {ctx}: {type_raw}/{subtype} row "
+                            f"with a non-positive amount ({amount}) — a "
+                            f"reward reversal is not modeled; hand-check "
+                            f"it and enter the correction via .tt.")
+                    transactions.extend(self._income_row(
+                        row, ctx, asset_name, fee_ccy, amount, fee,
+                        date, time, txid))
                 elif (type_raw == 'earn' and subtype in (
                         'allocation', 'deallocation', 'autoallocation')
                       ) or (type_raw.startswith('hybridearn')
-                            and type_raw != 'hybridearnwithdrawal'):
-                    # Moves between the spot and Earn wallets (and the
-                    # Hybrid Earn product): the coins never leave your
-                    # ownership, so no acquisition, disposition or
-                    # custody event — a recognised non-event, counted
-                    # rather than listed as "unhandled".
+                            and type_raw != 'hybridearnwithdrawal'
+                      ) or (type_raw == 'transfer'
+                            and subtype in _STAKING_WALLET_MOVES):
+                    # Moves between the spot and Earn/staking wallets
+                    # (and the Hybrid Earn product): the coins never
+                    # leave your ownership, so no acquisition,
+                    # disposition or custody event — a recognised
+                    # non-event, counted rather than listed as
+                    # "unhandled".
                     self.count_nonevent("Kraken Earn wallet move "
                                         "(allocation/deallocation)")
                 elif ((type_raw in ('withdrawal', 'deposit',
@@ -347,8 +571,7 @@ class KrakenBrokerage(BaseBrokerage):
                        # withdrawal: same evidence row, same send NOTE.
                        or (type_raw == 'transfer'
                            and subtype == 'transferpeertopeer'))
-                      and _normalize_asset(asset_raw, fold_stable=False)
-                      not in _FIAT_CURRENCIES):
+                      and asset_name not in _FIAT_CURRENCIES):
                     # True FIAT movements (bank funding/cash-outs)
                     # fall through to the ignored-types note below —
                     # moving your own cash is neither custody evidence
@@ -367,50 +590,81 @@ class KrakenBrokerage(BaseBrokerage):
                     # 0 (declare the disposition as a .tt BUYSELL).
                     # Kraken Earn allocation shuffles keep their own
                     # type/subtype (paired rows) and do NOT land here.
+                    desc = (f"{type_raw}/{subtype}" if subtype
+                            else type_raw)
+                    if fee and fee_ccy != asset_name:
+                        desc += f" (fee {abs(fee):g} {fee_ccy})"
                     tx = {
                         'action': 'TRANSFER',
                         'date': date, 'time': time,
                         'date_settle': date,
-                        'symbol': _normalize_asset(asset_raw,
-                                                   fold_stable=False),
+                        'symbol': asset_name,
                         'quantity': amount,
                         'currency': 'USD', 'price': 0.0,
                         'net_amount': 0.0, 'fee': abs(fee),
                         'account': self.DEFAULT_ACCOUNT,
-                        'description': (f"{type_raw}/{subtype}" if subtype
-                                        else type_raw),
+                        'description': desc,
                     }
                     if txid:
                         tx['id'] = f'{txid}-xfer'
                     transactions.append(tx)
                     self.note_row_consumed()
+                    if (fee and fee_ccy == asset_name
+                            and asset not in _FIAT_ASSETS):
+                        # A network/withdrawal fee Kraken took IN THE
+                        # COIN (0.002 TAO on a 0.1 TAO withdrawal): the
+                        # fee coins left your ownership — a disposition
+                        # at FMV (price 0 -> taxjson-fill-crypto
+                        # backfills it). The TRANSFER above is custody
+                        # evidence kept OUT of the book, so without this
+                        # row the fee coins stayed in the book forever.
+                        # Stablecoin/fiat fees are cash (see
+                        # _normalize_asset) and need no row.
+                        fee_tx = {
+                            'action': 'BUYSELL',
+                            'date': date, 'time': time,
+                            'date_settle': date,
+                            'symbol': asset,
+                            'quantity': -abs(fee),
+                            'currency': 'USD', 'price': 0.0,
+                            'net_amount': 0.0, 'gross_amount': 0.0,
+                            'fee': 0.0, 'account': self.DEFAULT_ACCOUNT,
+                            'description': (f"Kraken {type_raw} fee paid "
+                                            f"in {asset_name} (disposed "
+                                            f"at FMV)"),
+                        }
+                        if txid:
+                            fee_tx['id'] = f'{txid}-fee'
+                        transactions.append(fee_tx)
                 elif type_raw in ('spend', 'receive') and refid:
-                    _legs = instant_trades.setdefault(refid, {})
-                    if type_raw in _legs and _legs[type_raw]['asset'] == asset:
-                        # Split settlement: a refid can carry two rows of
-                        # the same leg — assignment silently discarded
-                        # the earlier amount.
-                        _legs[type_raw]['amount'] += abs(amount)
-                        _legs[type_raw]['fee'] += abs(fee)
+                    if fee and _normalize_asset(fee_ccy) != asset:
+                        raise ValueError(
+                            f"Kraken {ctx}: instant-trade {type_raw} "
+                            f"leg in {asset_name} with its fee in "
+                            f"{fee_ccy} (feecurrency) — not supported; "
+                            f"enter this trade via a .tt file.")
+                    sides = instant_trades.setdefault(
+                        refid, {'spend': {}, 'receive': {}})
+                    side = sides[type_raw]
+                    usd = row.get('amountusd')
+                    usd_v = (abs(strict_money(usd, 'amountusd', ctx))
+                             if usd not in (None, '') else None)
+                    if asset in side:
+                        # Split settlement: a refid can carry two rows
+                        # of the same leg — assignment silently
+                        # discarded the earlier amount.
+                        leg = side[asset]
+                        leg['amount'] += abs(amount)
+                        leg['fee'] += abs(fee)
+                        if leg['usd'] is not None and usd_v is not None:
+                            leg['usd'] += usd_v
+                        else:
+                            leg['usd'] = None
                     else:
-                        if type_raw in _legs:
-                            # Same leg type, DIFFERENT asset under one
-                            # refid: the leg model can only carry one
-                            # asset per side, so the earlier amount is
-                            # replaced — say so loudly (zero-drop
-                            # policy) instead of silently understating
-                            # the basis/proceeds.
-                            _old = _legs[type_raw]
-                            print(f"warning: Kraken ledger refid "
-                                  f"{refid!r}: {type_raw} leg reported "
-                                  f"in TWO assets ({_old['asset']} "
-                                  f"{_old['amount']:g} then {asset} "
-                                  f"{abs(amount):g}) — keeping the "
-                                  f"latter; hand-check this instant "
-                                  f"trade's basis.", file=sys.stderr)
-                        _legs[type_raw] = {
+                        side[asset] = {
                             'date': date, 'time': time, 'asset': asset,
                             'amount': abs(amount), 'fee': abs(fee),
+                            'usd': usd_v,
                         }
                 else:
                     ignored_types[type_raw or '?'] = ignored_types.get(type_raw or '?', 0) + 1
@@ -437,19 +691,78 @@ class KrakenBrokerage(BaseBrokerage):
                 f"source platform's export.",
                 file=sys.stderr,
             )
-        for refid, trade in instant_trades.items():
-            transactions.extend(self._build_instant_trade(trade, refid))
+        for refid, sides in instant_trades.items():
+            transactions.extend(self._build_instant_trades(sides, refid))
         self.emit_skip_summary(path.name)
         return transactions
 
+    def _income_row(self, row, ctx, asset_name, fee_ccy, amount, fee,
+                    date, time, txid):
+        """DIVIDEND (+ acquisition) rows for one reward credit.
+
+        Same-currency fee (every real export so far: feecurrency ==
+        asset): Kraken's balance moves by amount − fee — a 0.19842 SOL
+        reward with a 0.04961 SOL commission credits 0.14882 SOL.
+        Booking the gross minted phantom units and overstated the
+        income by the commission; both the income and the acquired
+        quantity are the NET coins, the USD value net likewise
+        (amountusd − feeusd).
+
+        Fee in ANOTHER currency (`feecurrency` != asset): the coins are
+        credited in full (acquired at the full FMV) and the commission —
+        valued in USD from the fee itself when it is USD, else from
+        `feeusd` — reduces the income only. Without a USD value for the
+        fee we refuse rather than guess."""
+        gross_qty = abs(amount)
+        fee_qty = abs(fee)
+        usd_raw = row.get('amountusd')
+        usd_value = (abs(strict_money(usd_raw, 'amountusd', ctx))
+                     if usd_raw not in (None, '') else None)
+        feeusd_raw = row.get('feeusd')
+        fee_usd = (abs(strict_money(feeusd_raw, 'feeusd', ctx))
+                   if feeusd_raw not in (None, '') else None)
+        same_ccy = (not fee_qty) or (fee_ccy == asset_name)
+        if same_ccy:
+            net_qty = gross_qty - fee_qty
+            if net_qty <= 1e-12:
+                self.count_nonevent(
+                    "Kraken Earn reward fully consumed by its fee")
+                return []
+            net_usd = None
+            if usd_value:
+                f_usd = fee_usd or 0.0
+                if fee_qty and not f_usd:
+                    # No feeusd column: scale the gross value.
+                    f_usd = usd_value * fee_qty / gross_qty
+                net_usd = usd_value - f_usd
+            return self._build_staking_reward(
+                asset_name, date, time, net_qty, txid,
+                usd_value=net_usd, gross_qty=gross_qty, fee_qty=fee_qty)
+        # Fee charged in a different currency.
+        if _normalize_asset(fee_ccy) == 'USD' and fee_usd is None:
+            fee_usd = fee_qty
+        if usd_value is None or fee_usd is None:
+            raise ValueError(
+                f"Kraken {ctx}: reward in {asset_name} with its "
+                f"{fee_qty:g} fee charged in {fee_ccy} (feecurrency) and "
+                f"no amountusd/feeusd to value it — refusing to guess the "
+                f"net income. Enter this reward via a .tt file.")
+        return self._build_staking_reward(
+            asset_name, date, time, gross_qty, txid,
+            usd_value=usd_value, income_usd=usd_value - fee_usd,
+            fee_note=f"{fee_qty:.10g} {fee_ccy}")
+
     def _build_staking_reward(self, asset, date, time, qty, txid='',
-                              usd_value=None, gross_qty=None, fee_qty=0.0):
+                              usd_value=None, gross_qty=None, fee_qty=0.0,
+                              income_usd=None, fee_note=''):
         # Carry the reward qty on the DIVIDEND record so fill_crypto_prices
         # computes income as qty*FMV. Without it the prices-filler defaults
         # qty to 1.0 and a $4k ETH reward of 0.001 ETH ends up as $4k income.
         # `usd_value` (the ledger's amountusd) prices BOTH legs here — the
         # income and the acquisition cost are the same FMV — and the fill
-        # step leaves a priced row alone.
+        # step leaves a priced row alone. `income_usd` overrides the
+        # income side only (a commission charged in another currency
+        # reduces the income, not the coins' cost).
         # `qty` is the NET coins credited (gross reward − Kraken's in-kind
         # commission); the commission is recorded in the description,
         # never in the USD `fee` field (it is coin-denominated and
@@ -458,6 +771,8 @@ class KrakenBrokerage(BaseBrokerage):
         if fee_qty and gross_qty:
             desc = (f"Staking Reward (net of Kraken commission: gross "
                     f"{gross_qty:.10g} - fee {fee_qty:.10g} {asset})")
+        elif fee_note:
+            desc = f"Staking Reward (Kraken commission {fee_note})"
         div = {
             'action': 'DIVIDEND',
             'date': date, 'time': time, 'date_settle': date,
@@ -479,15 +794,20 @@ class KrakenBrokerage(BaseBrokerage):
             # dedup keeps both.
             div['id'] = f'{txid}-div'
             buy['id'] = f'{txid}-buy'
-        if asset in _STABLECOINS:
+        if asset in _STABLECOINS or asset in _FIAT_CURRENCIES:
             # Worth 1.0/unit by definition: income = qty, priced here.
             # NO acquisition leg: the trade books fold USDC/USDT/DAI to
             # USD (the coin is later SPENT as a fiat quote, never sold
             # as an asset), so a USDC position would sit in the book
-            # forever as a phantom long that nothing ever closes.
+            # forever as a phantom long that nothing ever closes. Fiat
+            # rewards (`dividend` on USD.HOLD) are cash income in their
+            # own currency.
+            inc = qty if income_usd is None else income_usd
+            if asset in _FIAT_CURRENCIES:
+                div['currency'] = asset
             div['price'] = 1.0
-            div['net_amount'] = qty
-            div['gross_amount'] = qty
+            div['net_amount'] = inc
+            div['gross_amount'] = inc
             return [div]
         if usd_value is not None and qty > 1e-12:
             price = round(usd_value / qty, 8)
@@ -495,7 +815,79 @@ class KrakenBrokerage(BaseBrokerage):
                 leg['price'] = price
                 leg['net_amount'] = round(usd_value, 8)
             div['gross_amount'] = round(usd_value, 8)
+            if income_usd is not None:
+                div['net_amount'] = round(income_usd, 8)
+                div['gross_amount'] = round(income_usd, 8)
         return [div, buy]
+
+    def _build_instant_trades(self, sides, refid=''):
+        """Instant trades / dust sweeps for one refid. One spend leg and
+        one receive leg is the normal shape. A DUST SWEEP spends several
+        assets for one receipt (e.g. CAD, ADA, AVAX and BNB dust swept
+        into a dollar or two of USD): the received value is split across the
+        spend legs by each leg's `amountusd` (equally when the export
+        has none) and every disposed asset is booked. The old model
+        kept one spend leg and dropped the rest, leaving the swept
+        coins in the book forever. Several legs on BOTH sides has no
+        defensible split and raises."""
+        spends = list(sides['spend'].values())
+        recvs = list(sides['receive'].values())
+        if not spends or not recvs:
+            for leg_type, legs in (('spend', spends), ('receive', recvs)):
+                for leg in legs:
+                    missing = 'receive' if leg_type == 'spend' else 'spend'
+                    print(f"warning: Kraken ledger refid {refid!r}: orphan "
+                          f"{leg_type} row ({leg['asset']} "
+                          f"{leg['amount']:g} on {leg['date']}) has no "
+                          f"matching {missing} leg — row SKIPPED. A lone "
+                          f"spend is a real taxable disposition (and a lone "
+                          f"receive an acquisition with basis); this event "
+                          f"is NOT in the output — find the missing "
+                          f"counter-leg (truncated export?) or enter the "
+                          f"trade manually via a .tt file.",
+                          file=sys.stderr)
+                    self.count_skip(f"orphan {leg_type} (refid {refid})")
+            return []
+        if len(spends) == 1 and len(recvs) == 1:
+            return self._build_instant_trade(
+                {'spend': spends[0], 'receive': recvs[0]}, refid)
+        if len(spends) > 1 and len(recvs) > 1:
+            raise ValueError(
+                f"Kraken ledger refid {refid!r}: {len(spends)} spend and "
+                f"{len(recvs)} receive legs — no defensible way to pair "
+                f"them. Enter this conversion via a .tt file.")
+        many, one, many_side = ((spends, recvs[0], 'spend')
+                                if len(spends) > 1
+                                else (recvs, spends[0], 'receive'))
+        weights = [leg['usd'] for leg in many]
+        if all(w is not None for w in weights) and sum(weights) > 0:
+            total = sum(weights)
+            shares = [w / total for w in weights]
+            basis = 'amountusd'
+        else:
+            shares = [1.0 / len(many)] * len(many)
+            basis = 'equal shares (no amountusd in this export)'
+        print(f"note: Kraken ledger refid {refid!r}: {len(many)} "
+              f"{many_side} legs ({', '.join(l['asset'] for l in many)}) "
+              f"share one {one['asset']} {'receipt' if many_side == 'spend' else 'payment'} "
+              f"— split by {basis}; each asset is booked separately.",
+              file=sys.stderr)
+        out = []
+        for leg, share in zip(many, shares):
+            part = dict(one, amount=one['amount'] * share,
+                        fee=one['fee'] * share,
+                        usd=(one['usd'] * share
+                             if one['usd'] is not None else None))
+            pair = ({'spend': leg, 'receive': part} if many_side == 'spend'
+                    else {'spend': part, 'receive': leg})
+            for tx in self._build_instant_trade(pair, refid):
+                if 'id' in tx:
+                    tx['id'] = f"{tx['id']}-{leg['asset']}"
+                tx['description'] = (tx.get('description', '')
+                                     + f" [split {share:.4f} of "
+                                       f"{one['asset']} {one['amount']:g}]")
+                out.append(tx)
+        return out
 
     def _build_instant_trade(self, trade, refid=''):
         """Build the BUYSELL transaction(s) for one Kraken instant trade.

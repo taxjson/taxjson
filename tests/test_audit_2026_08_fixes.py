@@ -2142,10 +2142,18 @@ class TestReAuditRegressions(unittest.TestCase):
                "L3,R3,2025-01-15 10:05:02,receive,,currency,XXBT,,0.001,0,0\n")
         buf = io.StringIO()
         with redirect_stderr(buf):
-            _parse_csv(KrakenBrokerage, csv)
-        self.assertIn("TWO assets", buf.getvalue(),
-                      "the USD leg was silently overwritten by the EUR "
-                      "leg with no signal")
+            txs = _parse_csv(KrakenBrokerage, csv)
+        # Re-premised (crypto hardening, dust-sweep fix): the legs are
+        # no longer overwritten-with-a-warning — EVERY spend leg is
+        # booked (the receipt split across them, equally here since the
+        # export has no amountusd), and the split is announced.
+        self.assertIn("2 spend legs", buf.getvalue())
+        buys = [t for t in txs if t['action'] == 'BUYSELL']
+        self.assertEqual(sorted(t['currency'] for t in buys),
+                         ['EUR', 'USD'],
+                         "the USD leg was silently overwritten by the "
+                         "EUR leg")
+        self.assertAlmostEqual(sum(t['quantity'] for t in buys), 0.001)
 
     def test_pending_elections_preserve_wash_artifacts(self):
         # A full run whose SHELTERED account defers on corp-action

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import BaseBrokerage
+from taxjson.lib.brokerages._crypto_common import strict_money, utc_to_local
 
 
 # Coinbase transaction types we recognize. Matched on substring (case-insensitive)
@@ -78,6 +79,26 @@ _KNOWN_NONEVENT_TYPES = frozenset({
     'retail staking transfer', 'retail unstaking transfer',
     'retail eth deprecation', 'deposit', 'subscription',
 })
+
+# USD-pegged stablecoins are treated as USD CASH — the same model the
+# Kraken parser uses (it folds USDC/USDT/DAI to USD, books a USDC-quoted
+# fill as a USD-quoted one, and counts USDC<->fiat trades as forex
+# non-events). One model across both exchanges; before this, Coinbase
+# booked "Buy USDC" as a USDC position and then never booked the USDC
+# leg of an Advanced Trade on ETH-USDC ("Bought X ETH for N USDC"), so
+# real exports carried a phantom USDC long forever.
+#
+# Strictly, CRA treats a stablecoin as a crypto-asset, so every
+# USDC<->ETH trade is also a disposition of USDC. Treating it as USD
+# cash is an approximation whose gain is ~0 in USD terms (USDC ~ 1.00
+# USD); what it leaves out is the USD/CAD movement while the coins are
+# held — exactly the FX on USD cash that the tool does not model for
+# Kraken's USD balances either (KNOWN_ISSUES "Kraken fiat conversions
+# are not modeled"). On real data that residual was a few dollars a
+# year (USDC bought and spent within days at ~the same BoC rate).
+# The crypto side of each Advanced Trade is still booked at the CAD
+# value Coinbase states for it (Subtotal / Total).
+_STABLECOINS = frozenset({'USDC', 'USDT', 'DAI', 'PYUSD', 'GUSD'})
 
 
 class CoinbaseBrokerage(BaseBrokerage):
@@ -173,25 +194,14 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # self-custody move.
                     _tl = type_raw.strip().lower()
                     if _tl in ('send', 'receive'):
-                        _q = abs(self.clean_number(self._col(
-                            row, header_map, 'quantity transacted')))
-                        _spot = abs(self.clean_number(self._col(
-                            row, header_map, 'price at transaction')))
-                        _ts = self._col(row, header_map, 'timestamp')
-                        _dt = self.parse_date(
-                            _ts.replace(' UTC', ''),
-                            "%Y-%m-%d %H:%M:%S",
-                            "%Y-%m-%dT%H:%M:%SZ")
-                        if _dt is None:
-                            # Same policy as every other dated row:
-                            # never silently mislabel a disposition
-                            # candidate as a type-skip (round-six
-                            # audit finding 9).
-                            raise ValueError(
-                                f"Coinbase {type_raw} row has an "
-                                f"unparseable timestamp: {_ts!r}. Add "
-                                f"the format to parse_date if this is "
-                                f"a new export variant.")
+                        _q = abs(self._num(row, header_map,
+                                           'quantity transacted'))
+                        _spot = abs(self._num(row, header_map,
+                                              'price at transaction'))
+                        # Same policy as every other dated row: never
+                        # silently mislabel a disposition candidate as
+                        # a type-skip (round-six audit finding 9).
+                        _dt = self._ts(row, header_map, type_raw)
                         if _q > 0:
                             transactions.append({
                                 'action': 'TRANSFER',
@@ -203,9 +213,8 @@ class CoinbaseBrokerage(BaseBrokerage):
                                     'asset').replace(' ', '.'),
                                 'quantity': (-_q if _tl == 'send'
                                              else _q),
-                                'currency': (self._col(
-                                    row, header_map, 'price currency')
-                                    or 'USD'),
+                                'currency': self._currency(
+                                    row, header_map),
                                 'price': _spot,
                                 'net_amount': round(_q * _spot, 2),
                                 'account': self.DEFAULT_ACCOUNT,
@@ -220,34 +229,30 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # semantics ASSUMED — but never silent.
                     self.count_skip(f"type {type_raw.strip() or '?'!s}")
                     continue
+
+                # Refusing to silently stamp the row as today — that
+                # would distort holding-period and year filters in ways
+                # the user wouldn't catch until tax time.
+                dt = self._ts(row, header_map, type_raw)
+
+                asset = self._col(row, header_map, 'asset').strip()
+                if (asset.upper() in _STABLECOINS
+                        and (is_buy or is_sell) and not is_staking):
+                    # "Bought 3495.67 USDC for 5000 CAD": fiat -> USD
+                    # cash under the stablecoin-as-cash model (see
+                    # _STABLECOINS) — a currency conversion, not an
+                    # acquisition of property. Counted, not booked.
+                    self.count_nonevent(
+                        f"stablecoin conversion {type_raw.strip()} "
+                        f"{asset.upper()} (USDC treated as USD cash, as "
+                        f"on Kraken)")
+                    continue
                 self.note_row_consumed()
-
-                time_raw = self._col(row, header_map, 'timestamp')
-                dt = self.parse_date(
-                    time_raw.replace(' UTC', ''),
-                    "%Y-%m-%d %H:%M:%S",
-                    "%Y-%m-%dT%H:%M:%SZ",
-                )
-                if dt is None:
-                    # Refusing to silently stamp the row as today — that
-                    # would distort holding-period and year filters in
-                    # ways the user wouldn't catch until tax time. If
-                    # Coinbase ever ships a new timestamp format, add it
-                    # to the format list above and re-run.
-                    raise ValueError(
-                        f"Coinbase row has an unparseable timestamp: "
-                        f"{time_raw!r} (type={type_raw!r}, asset="
-                        f"{self._col(row, header_map, 'asset')!r}). "
-                        f"Add the format to parse_date if this is a "
-                        f"new Coinbase export variant."
-                    )
-
-                asset = self._col(row, header_map, 'asset')
-                currency = self._col(row, header_map, 'price currency') or 'USD'
-                qty = self.clean_number(self._col(row, header_map, 'quantity transacted'))
-                price = self.clean_number(self._col(row, header_map, 'price at transaction'))
-                fee = self.clean_number(self._col(row, header_map, 'fees'))
-                total = self.clean_number(self._col(row, header_map, 'total'))
+                currency = self._currency(row, header_map)
+                qty = self._num(row, header_map, 'quantity transacted')
+                price = self._num(row, header_map, 'price at transaction')
+                fee = self._num(row, header_map, 'fees')
+                total = self._num(row, header_map, 'total')
 
                 date_str = dt.strftime("%Y-%m-%d")
                 time_str = dt.strftime("%H:%M:%S")
@@ -301,7 +306,12 @@ class CoinbaseBrokerage(BaseBrokerage):
                         div['id'] = f'{cb_id}-div'
                         buy['id'] = f'{cb_id}-buy'
                     transactions.append(div)
-                    transactions.append(buy)
+                    if asset.upper() not in _STABLECOINS:
+                        # A stablecoin reward is USD cash income (see
+                        # _STABLECOINS): no acquisition leg — the coin is
+                        # never sold as an asset, so a position would sit
+                        # in the book forever (same as Kraken).
+                        transactions.append(buy)
                     continue
 
                 qty = self.signed_quantity(qty, action_is_sell=is_sell)
@@ -352,9 +362,11 @@ class CoinbaseBrokerage(BaseBrokerage):
         m = _CONVERT_NOTES_RE.search(notes or '')
         if not m:
             return None
-        from_qty = self.clean_number(m.group(1))
+        from_qty = strict_money(m.group(1), 'Convert quantity',
+                                f"Coinbase notes {notes!r}")
         from_asset = m.group(2).upper()
-        to_qty = self.clean_number(m.group(3))
+        to_qty = strict_money(m.group(3), 'Convert quantity',
+                              f"Coinbase notes {notes!r}")
         to_asset = m.group(4).upper()
         if from_qty <= 0 or to_qty <= 0 or from_asset == to_asset:
             return None
@@ -363,24 +375,12 @@ class CoinbaseBrokerage(BaseBrokerage):
         asset_col = (self._col(row, header_map, 'asset') or '').strip().upper()
         if asset_col and asset_col not in (from_asset, to_asset):
             return None
-        time_raw = self._col(row, header_map, 'timestamp')
-        dt = self.parse_date(
-            time_raw.replace(' UTC', ''),
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%dT%H:%M:%SZ",
-        )
-        if dt is None:
-            raise ValueError(
-                f"Coinbase Convert row has an unparseable timestamp: "
-                f"{time_raw!r} (notes={notes!r}). Add the format to "
-                f"parse_date if this is a new Coinbase export variant."
-            )
+        dt = self._ts(row, header_map, 'Convert')
         date_str = dt.strftime("%Y-%m-%d")
         time_str = dt.strftime("%H:%M:%S")
-        currency = self._col(row, header_map, 'price currency') or 'USD'
-        subtotal = abs(self.clean_number(
-            self._col(row, header_map, 'subtotal')))
-        fee = abs(self.clean_number(self._col(row, header_map, 'fees')))
+        currency = self._currency(row, header_map)
+        subtotal = abs(self._num(row, header_map, 'subtotal'))
+        fee = abs(self._num(row, header_map, 'fees'))
         # Fee convention: Coinbase's Subtotal is the pre-fee FMV of the
         # conversion; Total = Subtotal + Fees. Booking Subtotal as BOTH
         # legs' net_amount excluded the fee entirely, overstating the
@@ -430,7 +430,59 @@ class CoinbaseBrokerage(BaseBrokerage):
         if cb_id:
             sell['id'] = f'{cb_id}-sell'
             buy['id'] = f'{cb_id}-buy'
+        # Stablecoin legs are USD cash (see _STABLECOINS): converting
+        # USDC into ETH is a cash purchase of ETH, ETH into USDC a cash
+        # sale. The fee then lands on the one crypto leg — capitalized
+        # into a purchase, netted from a sale's proceeds.
+        if from_asset in _STABLECOINS and to_asset in _STABLECOINS:
+            return []
+        if from_asset in _STABLECOINS:
+            return [buy]
+        if to_asset in _STABLECOINS:
+            if subtotal:
+                sell['net_amount'] = max(subtotal - fee, 0.0)
+                sell['fee'] = fee
+            return [sell]
         return [sell, buy]
+
+    # ------------------------------------------------------------ helpers
+    def _num(self, row, header_map, key) -> float:
+        """Strict numeric cell: `$1,234.50`, `CA$4.00`, `US$-3`,
+        `(12.00)` parse; anything else raises. clean_number turned
+        `CA$4.00` into 0.0 — a $0 basis/proceeds row, silently."""
+        return strict_money(
+            self._col(row, header_map, key), key,
+            f"Coinbase row {self._col(row, header_map, 'timestamp')!r} "
+            f"{self._col(row, header_map, 'transaction type')!r}")
+
+    def _currency(self, row, header_map) -> str:
+        """Price currency; a stablecoin quote is USD (cash model). Older
+        US-retail exports have no currency column and are USD."""
+        c = (self._col(row, header_map, 'price currency') or 'USD')
+        c = c.strip().upper() or 'USD'
+        return 'USD' if c in _STABLECOINS else c
+
+    def _ts(self, row, header_map, what):
+        """Coinbase stamps rows in UTC; converted to local wall-clock
+        time (America/Toronto by default — see _crypto_common) so the
+        tax year and the BoC rate day are the taxpayer's local date.
+        Raises on an unparseable stamp: silently stamping or skipping
+        a row distorts holding periods and year filters. If Coinbase
+        ships a new timestamp format, add it here."""
+        raw = self._col(row, header_map, 'timestamp')
+        dt = self.parse_date(
+            raw.replace(' UTC', ''),
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%SZ",
+        )
+        if dt is None:
+            raise ValueError(
+                f"Coinbase {str(what).strip()} row has an unparseable "
+                f"timestamp: {raw!r} (asset="
+                f"{self._col(row, header_map, 'asset')!r}). Add the "
+                f"format to parse_date if this is a new Coinbase export "
+                f"variant.")
+        return utc_to_local(dt)
 
     @staticmethod
     def _col(row, header_map, key, default=''):
