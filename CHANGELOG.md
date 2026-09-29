@@ -39,7 +39,8 @@
   warning), known cash rows and footers count as non-events, and an
   unclassified row that moves shares or cash is a loud warning and fails
   `--lint`. Same-day rows keep the export's order (it lists newest
-  first), and the older "HORIZONS U S DLR" line maps to DLR.U.TO like
+  first; an option assignment's two rows share one time so the premium
+  still folds into the stock leg), and the older "HORIZONS U S DLR" line maps to DLR.U.TO like
   "GLOBAL X US DLR".
 - **Duplicate split rows warned.** When one account carries the same
   split twice (a parser that now books it plus a manual .tt SPLIT line),

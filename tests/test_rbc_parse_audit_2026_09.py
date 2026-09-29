@@ -574,6 +574,23 @@ class TestLowItems(unittest.TestCase):
         self.assertLess(by[('2024-03-15', -10.0)], by[('2024-03-15', 10.0)])
         self.assertEqual(by[('2024-03-01', 10.0)], '09:30:00')
 
+    def test_assignment_rows_share_one_time(self):
+        # The ASN option leg is listed ABOVE its stock leg; file order would
+        # put the stock sale first and the engine would miss the s.49(3)
+        # premium fold (seen on real 2025 books: gains moved by ~1,950).
+        txs, _, _ = parse(
+            row("May 16, 2025", "Other", "9ZZCOI1", "", "1", "", "0", "USD",
+                "ASN - CALL COIX   05/16/25   197.50 COIX GLOBAL INC ASSIGNMENT "
+                "OF OPTION", settle="May 20, 2025")
+            + row("May 16, 2025", "Sell", "COIX", "COIX GLOBAL INC", "-100",
+                  "197.5", "19707", "USD", "COIX GLOBAL INC ASSIGNMENT OF OPTION "
+                  "AS OF 05/16/25", settle="May 20, 2025")
+            + row("May 16, 2025", "Buy", "ZZZ", "ZZZ CORP", "10", "5", "-59.95",
+                  "USD", "ZZZ UNSOLICITED DA", settle="May 19, 2025"))
+        t_opt = of(txs, action='ASSIGN')[0]['time']
+        t_stock = of(txs, symbol='COIX.US')[0]['time']
+        self.assertEqual(t_opt, t_stock)
+
     def test_adr_fee_is_a_fee_row(self):
         txs, _, _ = parse(row("October 8, 2024", "Fees", "SEX", "SEX LTD ADS", "", "",
                               "-8", "USD", "FCH - SEX LTD ADS DTCC ADR FEE 0.02"))

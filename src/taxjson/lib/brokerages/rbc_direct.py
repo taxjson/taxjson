@@ -451,6 +451,20 @@ def read_rbc_rows(path: Path) -> RbcExport:
             n = len(day_rows)
             for i, r in enumerate(day_rows):
                 r.k = (n - 1 - i) if newest_first else i
+            # An option assignment is ONE event booked as two rows — the
+            # ASN option leg and the stock leg at the strike ("...
+            # ASSIGNMENT OF OPTION AS OF ..."). They share one time, so the
+            # engine's same-timestamp ladder (option leg first) folds the
+            # premium into the stock leg (s.49(3)); the stock leg sorting
+            # first (it is listed below the ASN row) lost the fold.
+            grp = [r for r in day_rows
+                   if r.cls == 'assignment' or (
+                       r.cls == 'trade'
+                       and 'ASSIGNMENT OF OPTION' in r.desc.upper())]
+            if grp:
+                k0 = min(r.k for r in grp)
+                for r in grp:
+                    r.k = k0
     return RbcExport(path=path, rows=rows, n_footers=n_footers,
                      columns=[c for c in canon if c], date_fmt=date_fmt,
                      settle_fmt=settle_fmt, newest_first=newest_first,
