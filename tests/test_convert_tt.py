@@ -31,7 +31,13 @@ class TestParseTTLine(unittest.TestCase):
     def test_comments_skipped(self):
         self.assertIsNone(parse_tt_line("# this is a comment"))
         self.assertIsNone(parse_tt_line(""))
-        self.assertIsNone(parse_tt_line("GAIN 2025-01-15 ..."))  # not a tx action
+        # Re-premised (crypto/tt hardening): a non-comment line whose
+        # first token is not an action used to return None — silently
+        # dropping `SELL`/`buysell`/`Dividend` rows with exit 0. It now
+        # raises, naming the valid actions.
+        with self.assertRaises(ValueError) as cm:
+            parse_tt_line("GAIN 2025-01-15 09:30:00 X 1 USD 1 1")
+        self.assertIn("unknown .tt action 'GAIN'", str(cm.exception))
 
 
 class TestTxToTTLine(unittest.TestCase):

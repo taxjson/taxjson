@@ -16,25 +16,111 @@ Perl scripts (cb_trades.pl, kr_ledgers.pl) for the exact field order.
 """
 
 import argparse
+import difflib
 import hashlib
 import json
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 _VALID_ACTIONS = (
     'BUYSELL', 'TRANSFER', 'SPLIT', 'ASSIGN', 'ADJUST', 'DISALLOW',
     'DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE',
 )
+# Line-level sugar expanded by tt_to_json before parse_tt_line.
+_SUGAR_ACTIONS = ('ACQUIRED',)
+
+# Highest token count per action (fields + optional trailing columns).
+# A token past these used to be ignored without a word — a stray
+# column is a typo to fix (notes belong after `#`).
+_MAX_TOKENS = {
+    'BUYSELL': 9, 'ASSIGN': 9, 'SPLIT': 6,
+    'DIVIDEND': 9, 'DIVIDEND_IN_LIEU': 9, 'TAX': 9,
+    'INTEREST': 5, 'FEE': 5, 'ADJUST': 6, 'DISALLOW': 6,
+}
+_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+_TIME_RE = re.compile(r'^\d{2}:\d{2}:\d{2}$')
 
 
-def parse_tt_line(line: str, account_name: str = 'default'):
+def strip_tt_comment(line: str) -> str:
+    """Drop an inline `# ...` comment. Before, `BUYSELL ... # note`
+    tokenised the note as data, and a `# DECLARED` remark on a TRANSFER
+    silently granted the attestation token."""
+    i = line.find('#')
+    return line if i < 0 else line[:i]
+
+
+def _where(source: str) -> str:
+    return f"{source}: " if source else ''
+
+
+def _check_date(tok: str, what: str, line: str, source: str) -> None:
+    ok = bool(_DATE_RE.match(tok))
+    if ok:
+        try:
+            datetime.strptime(tok, '%Y-%m-%d')
+        except ValueError:
+            ok = False
+    if not ok:
+        raise ValueError(
+            f"{_where(source)}{what} {tok!r} is not a valid YYYY-MM-DD "
+            f"date: {line.strip()!r}")
+
+
+def _check_time(tok: str, line: str, source: str) -> None:
+    ok = bool(_TIME_RE.match(tok))
+    if ok:
+        try:
+            datetime.strptime(tok, '%H:%M:%S')
+        except ValueError:
+            ok = False
+    if not ok:
+        raise ValueError(
+            f"{_where(source)}time {tok!r} is not a valid HH:MM:SS time "
+            f"(the time column is required; use 09:30:00 when unknown): "
+            f"{line.strip()!r}")
+
+
+def _unknown_action(action: str, line: str, source: str) -> ValueError:
+    valid = _VALID_ACTIONS + _SUGAR_ACTIONS
+    guess = difflib.get_close_matches(action.upper(), valid, n=1,
+                                      cutoff=0.5)
+    hint = f" Did you mean {guess[0]}?" if guess else ''
+    return ValueError(
+        f"{_where(source)}unknown .tt action {action!r}.{hint} Valid "
+        f"actions: {', '.join(valid)} (case-sensitive). The row was "
+        f"NOT converted — a silently dropped line is a lost trade. "
+        f"Line: {line.strip()!r}")
+
+
+def parse_tt_line(line: str, account_name: str = 'default',
+                  source: str = ''):
+    """One `.tt` line -> taxjson transaction dict, or None for a blank /
+    comment-only line. Raises ValueError on anything else that is not a
+    well-formed row: unknown action, bad date/time, short row, bad
+    number, stray trailing token. `source` ("file.tt:12") prefixes
+    every error and warning."""
+    line = strip_tt_comment(line)
     parts = line.split()
-    if not parts or parts[0].startswith('#'):
+    if not parts:
         return None
 
     action = parts[0]
     if action not in _VALID_ACTIONS:
-        return None
+        raise _unknown_action(action, line, source)
+    if len(parts) < 3:
+        raise ValueError(
+            f"{_where(source)}malformed .tt line — {action} needs at "
+            f"least a date and a time: {line.strip()!r}")
+    _check_date(parts[1], 'date', line, source)
+    _check_time(parts[2], line, source)
+    _max = _MAX_TOKENS.get(action)
+    if _max is not None and len(parts) > _max:
+        raise ValueError(
+            f"{_where(source)}{action} row has {len(parts) - _max} "
+            f"unexpected trailing token(s) {parts[_max:]} — put notes "
+            f"after `#`: {line.strip()!r}")
 
     # Any short-row IndexError or bad-numeric ValueError below is a
     # malformed `.tt` row. Raise loudly with the offending line so the
@@ -43,7 +129,7 @@ def parse_tt_line(line: str, account_name: str = 'default'):
         tx = {
             'action': action,
             'date': parts[1],
-            'time': parts[2] if len(parts) > 2 and ':' in parts[2] else '09:30:00',
+            'time': parts[2],
             'date_settle': parts[1],
             'account': account_name,
         }
@@ -61,9 +147,20 @@ def parse_tt_line(line: str, account_name: str = 'default'):
                 tx['currency'] = parts[5]
                 tx['price'] = float(parts[6].replace(',', ''))
                 tx['net_amount'] = float(parts[7].replace(',', ''))
+                if action == 'TRANSFER':
+                    # Past the 8 core fields a TRANSFER may carry a
+                    # legacy fee-style number and/or the DECLARED token
+                    # — nothing else.
+                    for _tok in parts[8:]:
+                        if _tok == 'DECLARED':
+                            continue
+                        float(_tok.replace(',', ''))
                 if action != 'TRANSFER':
                     tx['fee'] = float(parts[8].replace(',', '')) if len(parts) > 8 else 0.0
                 elif 'DECLARED' in parts[8:]:
+                    # A real TOKEN only: inline comments are stripped
+                    # before tokenising, so `# DECLARED` in a remark no
+                    # longer grants attestation.
                     # Token accepted anywhere past the core 8 fields:
                     # legacy hand-written rows sometimes carry a
                     # trailing fee-style 0.00000 column before it.
@@ -98,7 +195,8 @@ def parse_tt_line(line: str, account_name: str = 'default'):
                         and abs(_total - _expected) >
                         max(0.05, 0.01 * max(_expected, 1.0))):
                     print(
-                        f"warning: .tt line total {_total:.2f} differs from "
+                        f"warning: {_where(source)}.tt line total "
+                        f"{_total:.2f} differs from "
                         f"qty*price{'*100' if _mult > 1 else ''}"
                         f"{'+' if _q > 0 else '-'}fee = "
                         f"{_expected:.2f} by more than 1%: {line.strip()!r} "
@@ -132,7 +230,8 @@ def parse_tt_line(line: str, account_name: str = 'default'):
             tx['net_amount'] = float(parts[5].replace(',', ''))
     except (ValueError, IndexError) as e:
         raise ValueError(
-            f"taxjson-convert-tt: malformed .tt line ({type(e).__name__}: "
+            f"{_where(source)}taxjson-convert-tt: malformed .tt line "
+            f"({type(e).__name__}: "
             f"{e}). Action={action!r}, line={line!r}. Hand-edit or remove "
             f"the row before re-running — silent skip would lose a "
             f"transaction the engine downstream needs."
@@ -259,10 +358,10 @@ def expand_acquired(line: str):
     the broker's arrival day (netting the arrival leg out). Returns
     None when the line is not an ACQUIRED line; raises loudly on a
     malformed one — silent skip would lose the declared history."""
-    parts = line.split()
+    parts = strip_tt_comment(line).split()
     if not parts or parts[0] != 'ACQUIRED':
         return None
-    if len(parts) < 10 or parts[8] != 'ARRIVED':
+    if len(parts) != 10 or parts[8] != 'ARRIVED':
         raise ValueError(
             f"taxjson-convert-tt: malformed ACQUIRED line — expected "
             f"`ACQUIRED <true-date> <time> <sym> <qty> <cur> <price> "
@@ -288,10 +387,15 @@ def expand_acquired(line: str):
 def tt_to_json(input_path: Path, account_name: str) -> dict:
     transactions = []
     with input_path.open('r', encoding='utf-8') as f:
-        for line in f:
-            expanded = expand_acquired(line)
+        for lineno, line in enumerate(f, 1):
+            source = f"{input_path.name}:{lineno}"
+            try:
+                expanded = expand_acquired(line)
+            except ValueError as e:
+                raise ValueError(f"{source}: {e}") from e
             for one in (expanded if expanded is not None else [line]):
-                tx = parse_tt_line(one, account_name=account_name)
+                tx = parse_tt_line(one, account_name=account_name,
+                                   source=source)
                 if tx:
                     transactions.append(tx)
     # Per-file split-fill disambiguation, exactly as every brokerage
