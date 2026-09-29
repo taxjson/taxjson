@@ -805,9 +805,28 @@ def parse_questrade_corporate_actions(
 # --- RBC Direct extractor --------------------------------------------------
 
 
-# RBC books a merger as two $0-value 'Reorganization' rows:
-#   removal:  "MGR - HESS CORPORATION MERGER TO CHEVRON CORPORATION 1.025 NEW = 1 OLD"
-#   receipt:  "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER"
+# RBC books every reorganization as a removal row (negative Quantity, often
+# under a TEMPORARY code like 'H015283') plus a receipt row (positive
+# Quantity, the listed ticker), both $0 'Reorganization' rows coded:
+#   MGR  merger / exchange     "MGR - HESS CORPORATION MERGER TO CHEVRON
+#                               CORPORATION 1.025 NEW = 1 OLD"
+#                              "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU
+#                               MERGER"
+#                              "MGR - BLACKROCK INC TO BLACKROCK INC COMMON
+#                               STOCK 1 FOR 1", "MGR - " (blank: Arista 4:1)
+#   NAC  name change           "NAC - ... NAME CHANGE TO ..." / "... RESULT OF
+#                               NAME CHANGE"
+#   REV  reverse split         "REV - ... REV SPLIT TO ...; 1 FOR 10" / "...
+#                               RESULT OF REVERSE SPLIT" (+ "REVERSE ENTRY"
+#                               corrections that cancel a leg)
+#   MER  reorganization w/ ROC "MER - THOMSON REUTERS CORP COM NEW DEFAULT: ROC
+#                               OF C$6.1585 + .963957 NEW SHS PER 1 OLD"
+#   XCH  option adjustment     "XCH - CALL .TOU 03/21/25 64 ... ADJ FOR
+#                               SPECIAL CASH DIV" (old code out, new code in)
+# `pair_rbc_reorganizations` pairs each removal with its receipt; only true
+# mergers ("MERGER TO") need a tax election and become CorporateActions here.
+# The brokerage parser books every other pair itself as ONE SPLIT.
+RBC_REORG_CODES = frozenset({'MGR', 'NAC', 'REV', 'MER', 'XCH'})
 _RBC_MERGER_TO_RE = re.compile(r'\bMERGER\s+TO\s+(.+?)(?:\s+[\d.]+\s+NEW|\s*$)', re.I)
 _RBC_RATIO_RE = re.compile(r'([\d.]+)\s+NEW\s*=\s*([\d.]+)\s+OLD', re.I)
 _RBC_OLDCO_RE = re.compile(r'^\s*MGR\s*[-:]?\s*(.+?)\s+MERGER\s+TO\b', re.I)
@@ -816,20 +835,35 @@ _RBC_RECVCO_RE = re.compile(
 _RBC_CO_SUFFIX_RE = re.compile(
     r'\b(CORPORATION|CORP|INCORPORATED|INC|LTD|LIMITED|COMPANY|CO|PLC|SA|NV|AG|'
     r'HOLDINGS|GROUP)\b', re.I)
-_RBC_CA_DATE_FMTS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%B %d, %Y", "%m/%d/%Y")
 # A temporary reorganization placeholder RBC assigns while a security is
-# mid-merger (e.g. 'H015283' for HESS). It is NOT the ticker the position
-# is actually held under — the removal leg must be resolved back to the
-# real ticker (via the shared company name) before the rollover SPLIT /
-# disposition can find the source lot.
+# mid-reorganization (e.g. 'H015283' for HESS, 'C049527' for CANOPY). It is
+# NOT the ticker the position is actually held under.
 _RBC_TEMP_SYMBOL_RE = re.compile(r'^[A-Z]\d{4,}$')
+# RBC's internal 7-character option code ('8DZQFW4', '9PKLPN0').
+_RBC_OPTION_CODE_RE = re.compile(r'^[89][A-Z0-9]{6}$')
+_RBC_LEG_OPTION_RE = re.compile(
+    r'\b(CALL|PUT)\s+\.?([A-Z0-9.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+([\d.]+)')
+_RBC_CODE_PREFIX_RE = re.compile(r'^\s*[A-Z]{2,4}\s*-\s*')
+_RBC_TO_RE = re.compile(
+    r'\b(?:NAME\s+(?:CHANGE|CHG)\s+TO|REV(?:ERSE)?\s+SPLIT\s+TO|MERGER\s+TO|'
+    r'XCH\s+TO|TO)\s+(.+?)(?:\s*;|\s+\d+(?:\.\d+)?\s+FOR\s+\d|'
+    r'\s+[\d.]+\s+NEW\s*=|$)')
+_RBC_RECEIPT_TAIL_RE = re.compile(
+    r'\s+(?:AS\s+OF\s+\d|RESULT\s+OF\b|SHRS\s+RECEIVED|SHARES\s+RECEIVED)')
+_RBC_ROC_RE = re.compile(r'\bROC\b|\bRETURN\s+OF\s+CAPITAL\b', re.I)
+_RBC_NAME_STOP = frozenset((
+    'CORPORATION CORP INCORPORATED INC LTD LIMITED COMPANY CO PLC SA NV AG '
+    'HOLDINGS HOLDING GROUP THE COM COMMON STOCK SHARES SHARE SHS SH NEW NO '
+    'PAR CL CLASS SUB SUBORD SUBORDINATE VTG VOTING EXCHANGEABLE EXCHANGBLE '
+    'UNIT UNITS TR TRUST ETF ORD DEFAULT OF AND').split())
 
 
 def is_rbc_merger_row(activity: str, description: str) -> bool:
-    """True for an RBC merger removal/receipt row — the ones taxjson-corp-actions
-    owns, so the brokerage parser must NOT also emit them as $0 trades. Option
-    expiries/assignments are also 'Reorganization' rows but never match these
-    merger phrases."""
+    """True for an RBC merger removal/receipt row phrase. Kept as a
+    phrase test for callers; the pairing (`pair_rbc_reorganizations`)
+    decides which rows are ONE merger — a "SHRS RECEIVED THRU MERGER"
+    receipt also closes 1-for-1 exchanges and MER reorganizations, which
+    are not elections."""
     d = (description or '').upper()
     if 'Reorganization' not in (activity or '') and 'MGR' not in d:
         return False
@@ -841,34 +875,38 @@ _RBC_CIL_WORD_RE = re.compile(r'\bCIL\b')
 
 
 def is_rbc_cil_row(activity: str, description: str) -> bool:
-    """True for an RBC cash-in-lieu-of-fractional-shares 'Reorganization'
-    row (`CIL - ... CASH IN LIEU OF FRAC SHARES`, and its `ADDITIONAL CIL
-    PAYMENT` follow-up). These are the cash settlement of the fractional
-    share a merger ratio leaves over — taxjson-corp-actions folds them
-    into the merger event, so the brokerage parser must skip them instead
-    of emitting a bogus 0-quantity trade.
+    """True for an RBC cash-in-lieu-of-fractional-shares row (`CIL - ...
+    CASH IN LIEU OF FRAC SHARES`, and its `ADDITIONAL CIL PAYMENT`
+    follow-up) — the cash settlement of the fractional share a
+    reorganization leaves over, folded into that event.
 
-    Matching is deliberately strict: 'CIL' must be a WHOLE WORD (the old
-    substring test matched FACILITIES/COUNCIL/CECIL — silently dropping
-    every buy/sell/dividend row of e.g. MEDICAL FACILITIES CORP into a
-    phantom cash-in-lieu bucket), and outside a Reorganization activity the
-    row must actually say CASH IN LIEU."""
+    Strict: 'CIL' must be a WHOLE WORD on a Reorganization row (the old
+    substring test matched FACILITIES/COUNCIL/CECIL), and outside a
+    Reorganization the row must say CASH IN LIEU *of a FRACTIONAL share*
+    — a "CASH IN LIEU OF DIVIDEND" is income, not a fraction."""
     d = (description or '').upper()
     is_reorg = 'Reorganization' in (activity or '')
-    if 'CASH IN LIEU' in d:
+    if 'CASH IN LIEU' in d and (is_reorg or re.search(r'\bFRAC', d)):
         return True
     if not is_reorg:
-        # A non-reorg row is only CIL when it explicitly says so (above).
         return False
     return bool(_RBC_CIL_WORD_RE.search(d)) and 'MERGER' not in d \
         and 'RECEIVED' not in d
 
 
+def rbc_is_temp_symbol(symbol: str) -> bool:
+    """RBC temporary reorganization placeholder ('H015283')."""
+    return bool(_RBC_TEMP_SYMBOL_RE.match((symbol or '').strip().upper()))
+
+
+def rbc_is_option_code(symbol: str) -> bool:
+    """RBC's internal 7-character option code ('8DZQFW4')."""
+    return bool(_RBC_OPTION_CODE_RE.match((symbol or '').strip().upper()))
+
+
 def _rbc_is_real_ticker(symbol: str) -> bool:
     """Whether `symbol` is a genuine exchange ticker rather than a
-    temporary reorg placeholder (`H015283`) or an empty/cash-row blank.
-    A real ticker carries letters and doesn't match the letter+digits
-    reorg-code shape."""
+    temporary reorg placeholder (`H015283`) or an empty/cash-row blank."""
     s = (symbol or '').strip().upper()
     if not s or _RBC_TEMP_SYMBOL_RE.match(s):
         return False
@@ -880,6 +918,268 @@ def _rbc_norm_company(name: str) -> str:
                   _RBC_CO_SUFFIX_RE.sub('', (name or '').upper()))
 
 
+def rbc_norm_company(name: str) -> str:
+    """Exact-match key for an RBC security name (legal-form words and
+    punctuation removed; '**FORTUNA' and 'FORTUNA' are one key)."""
+    return _rbc_norm_company((name or '').lstrip('*'))
+
+
+def rbc_rights_key(text: str) -> str:
+    """Identity of a rights/warrants issue across its rows: RBC books the
+    distribution under a real symbol (CSU.RT) and the expiry under a
+    temporary code, both described "RTS <ISSUER> EXP mm/dd/yyyy"."""
+    m = re.search(r'\b(RTS|WTS)\s+(.+?)\s+EXP\s+(\d\d/\d\d/\d{4})',
+                  (text or '').upper())
+    if not m:
+        return ''
+    return f"{m.group(1)}|{_rbc_norm_company(m.group(2))}|{m.group(3)}"
+
+
+def _rbc_name_tokens(name: str) -> List[str]:
+    toks = re.findall(r'[A-Z0-9]+', (name or '').upper())
+    out = []
+    for t in toks:
+        if len(t) > 1 and t not in _RBC_NAME_STOP and t not in out:
+            out.append(t)
+    return out
+
+
+def _rbc_tok_eq(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if min(len(a), len(b)) >= 5 and (a.startswith(b) or b.startswith(a)):
+        return True           # "ETHEREU M" (RBC's own typo) vs ETHEREUM
+    if min(len(a), len(b)) >= 6:
+        import difflib
+        return difflib.SequenceMatcher(None, a, b).ratio() >= 0.85
+    return False              # INSFRASTRUCTURE vs INFRASTRUCTURE ↑
+
+
+def rbc_name_similarity(a: str, b: str) -> float:
+    """Share of the shorter name's significant tokens found in the other
+    (0..1). Legal-form and share-class words don't count."""
+    ta, tb = _rbc_name_tokens(a), _rbc_name_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    hit = sum(1 for x in small if any(_rbc_tok_eq(x, y) for y in big))
+    return hit / len(small)
+
+
+def _rbc_body(desc: str) -> str:
+    return _RBC_CODE_PREFIX_RE.sub('', (desc or '').upper()).strip()
+
+
+def _rbc_removal_names(leg) -> Tuple[str, str]:
+    """(old company, new company) of a removal leg."""
+    body = _rbc_body(leg.desc)
+    m = _RBC_TO_RE.search(body)
+    new = m.group(1).strip() if m else ''
+    old = leg.symdesc or (body[:m.start()] if m
+                          else re.split(r'\s+(?:DEFAULT:|AS\s+OF\s)', body)[0])
+    return old.strip().lstrip('*'), new.lstrip('*')
+
+
+def _rbc_receipt_name(leg) -> str:
+    if leg.symdesc:
+        return leg.symdesc.lstrip('*')
+    return _RBC_RECEIPT_TAIL_RE.split(_rbc_body(leg.desc))[0].lstrip('*')
+
+
+def _rbc_stated_ratio(desc: str) -> Optional[float]:
+    """New shares per old share stated in a removal's description:
+    "1.025 NEW = 1 OLD", ".963957 NEW SHS PER 1 OLD", "; 1 FOR 10"."""
+    d = (desc or '').upper()
+    for pat in (r'(\d*\.?\d+)\s+NEW\s*=\s*(\d*\.?\d+)\s+OLD',
+                r'(\d*\.?\d+)\s+NEW\s+SH(?:S|ARES?)?\s+PER\s+(\d*\.?\d+)\s+OLD',
+                r'\b(\d+(?:\.\d+)?)\s+FOR\s+(\d+(?:\.\d+)?)\b'):
+        m = re.search(pat, d)
+        if m:
+            new, old = float(m.group(1)), float(m.group(2))
+            if new > 0 and old > 0:
+                return new / old
+    return None
+
+
+def _rbc_leg_option(leg):
+    for text in (leg.desc, leg.symdesc):
+        m = _RBC_LEG_OPTION_RE.search((text or '').upper())
+        if m:
+            return m.groups()
+    return None
+
+
+def _rbc_leg_is_option(leg) -> bool:
+    return rbc_is_option_code(leg.symbol) or bool(_rbc_leg_option(leg))
+
+
+def _rbc_days(d1: str, d2: str) -> int:
+    try:
+        return abs((datetime.strptime(d1, '%Y-%m-%d')
+                    - datetime.strptime(d2, '%Y-%m-%d')).days)
+    except ValueError:
+        return 9999
+
+
+@dataclass
+class RbcReorgEvent:
+    """One paired RBC reorganization.
+
+    kind: 'merger' (needs a tax election — taxjson-corp-actions),
+          'reorg' (name change / split / 1-for-1 exchange / MER: the
+          parser books ONE SPLIT), 'option_adjust' (XCH on an option:
+          the same contract continues), 'reversal' (a leg and its
+          REVERSE ENTRY correction: nets to nothing)."""
+    kind: str
+    removal: Any
+    receipt: Any
+    cil: List[Any] = field(default_factory=list)
+    ratio: Optional[float] = None          # stated new-per-old
+    roc_amount: float = 0.0                # MER "ROC OF C$x" cash (Value)
+
+    @property
+    def date(self) -> str:
+        return self.removal.date
+
+
+@dataclass
+class RbcReorgPairing:
+    events: List[RbcReorgEvent]
+    unmatched: List[Any]                   # reorg legs with no partner
+    unmatched_cil: List[Any]               # CIL rows with no event
+
+
+def _rbc_stock_score(rem, rc) -> Tuple[float, float]:
+    """(score, name similarity) of pairing removal `rem` with receipt `rc`."""
+    old, new = _rbc_removal_names(rem)
+    rname = _rbc_receipt_name(rc)
+    name = max(rbc_name_similarity(rname, new) if new else 0.0,
+               rbc_name_similarity(rname, old))
+    ratio = _rbc_stated_ratio(rem.desc)
+    qty_ok = ratio is None or abs(abs(rem.qty) * ratio - rc.qty) < 1.0
+    score = (2.0 * name + (1.0 if qty_ok else 0.0)
+             + (0.5 if rem.date == rc.date else 0.0)
+             + (0.25 if rc.code == rem.code else 0.0)
+             + (0.25 if rc.currency == rem.currency else 0.0))
+    return score, name
+
+
+def _rbc_option_score(rem, rc) -> float:
+    a, b = _rbc_leg_option(rem), _rbc_leg_option(rc)
+    if not a or not b:
+        return 0.0
+    if a[0] != b[0] or a[2] != b[2]:          # right, expiry
+        return 0.0
+    root = lambda s: re.sub(r'\d+$', '', re.sub(r'[^A-Z0-9]', '', s))
+    if root(a[1]) != root(b[1]) and rbc_name_similarity(
+            _rbc_body(rem.desc), _rbc_body(rc.desc)) < 0.5:
+        return 0.0
+    return (1.0 + (1.0 if abs(abs(rem.qty) - rc.qty) < 1e-9 else 0.0)
+            + (0.5 if rem.date == rc.date else 0.0))
+
+
+def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
+    """Pair RBC reorganization legs (rows classified 'reorg') into events
+    and fold cash-in-lieu rows ('cil') into them. `rows` are
+    rbc_direct.RbcRow objects (read_rbc_rows). Nothing is dropped: every
+    leg either joins an event or is returned in `unmatched`."""
+    legs = [r for r in rows if getattr(r, 'cls', '') == 'reorg']
+    chrono = lambda r: (r.date, getattr(r, 'k', 0), -r.order)
+    used: set = set()
+    events: List[RbcReorgEvent] = []
+
+    # 1) A booked leg and its "REVERSE ENTRY" correction cancel out.
+    for leg in sorted(legs, key=chrono):
+        if id(leg) in used or 'REVERSE ENTRY' not in leg.desc.upper():
+            continue
+        cands = [m for m in legs
+                 if m is not leg and id(m) not in used
+                 and m.symbol == leg.symbol and abs(m.qty + leg.qty) < 1e-9
+                 and _rbc_days(m.date, leg.date) <= 7]
+        if not cands:
+            continue
+        m = min(cands, key=lambda m: _rbc_days(m.date, leg.date))
+        used.update((id(m), id(leg)))
+        neg, pos = (leg, m) if leg.qty < 0 else (m, leg)
+        events.append(RbcReorgEvent('reversal', neg, pos))
+
+    # 2) Each removal with its best receipt within ±7 days.
+    removals = sorted((r for r in legs if id(r) not in used and r.qty < 0),
+                      key=chrono)
+    receipts = [r for r in legs if id(r) not in used and r.qty > 0]
+    for rem in removals:
+        is_opt = _rbc_leg_is_option(rem)
+        window = [rc for rc in receipts
+                  if id(rc) not in used
+                  and _rbc_days(rc.date, rem.date) <= 7
+                  and _rbc_leg_is_option(rc) == is_opt]
+        pick = None
+        if is_opt:
+            scored = [(_rbc_option_score(rem, rc), rc) for rc in window]
+            scored = [s for s in scored if s[0] > 0]
+            if scored:
+                pick = max(scored, key=lambda s: (
+                    s[0], -_rbc_days(s[1].date, rem.date)))[1]
+        else:
+            scored = [(_rbc_stock_score(rem, rc), rc) for rc in window]
+            named = [s for s in scored if s[0][1] >= 0.5]
+            if named:
+                pick = max(named, key=lambda s: (
+                    s[0][0], -_rbc_days(s[1].date, rem.date)))[1]
+            elif len(window) == 1:
+                # A lone candidate with an unrecognisable name: accept only
+                # when the stated ratio (if any) explains its quantity.
+                ratio = _rbc_stated_ratio(rem.desc)
+                rc = window[0]
+                if ratio is None or abs(abs(rem.qty) * ratio - rc.qty) < 1.0:
+                    pick = rc
+        if pick is None:
+            continue
+        used.update((id(rem), id(pick)))
+        if is_opt:
+            events.append(RbcReorgEvent('option_adjust', rem, pick))
+            continue
+        kind = 'merger' if _RBC_MERGER_TO_RE.search(rem.desc) else 'reorg'
+        roc = (rem.value if rem.value > 0.005 and _RBC_ROC_RE.search(rem.desc)
+               else 0.0)
+        events.append(RbcReorgEvent(kind, rem, pick,
+                                    ratio=_rbc_stated_ratio(rem.desc),
+                                    roc_amount=roc))
+    unmatched = [r for r in legs if id(r) not in used]
+
+    # 3) Cash in lieu of the fractional share, into its event: same
+    #    ticker as the receipt (or the same company), paid within 45 days.
+    unmatched_cil = []
+    stock_events = [e for e in events if e.kind in ('merger', 'reorg')]
+    for c in (r for r in rows if getattr(r, 'cls', '') == 'cil'):
+        best = None
+        for ev in stock_events:
+            try:
+                lag = (datetime.strptime(c.date, '%Y-%m-%d')
+                       - datetime.strptime(ev.date, '%Y-%m-%d')).days
+            except ValueError:
+                continue
+            if not -3 <= lag <= 45:
+                continue
+            if c.symbol and c.symbol == ev.receipt.symbol:
+                s = 2.0
+            else:
+                cname = c.symdesc or _rbc_body(c.desc)
+                _old, new = _rbc_removal_names(ev.removal)
+                s = max(rbc_name_similarity(cname, _rbc_receipt_name(ev.receipt)),
+                        rbc_name_similarity(cname, new) if new else 0.0)
+                if s < 0.5:
+                    continue
+            key = (s, -abs(lag))
+            if best is None or key > best[0]:
+                best = (key, ev)
+        if best is None:
+            unmatched_cil.append(c)
+        else:
+            best[1].cil.append(c)
+    return RbcReorgPairing(events, unmatched, unmatched_cil)
+
+
 def _rbc_ca_symbol(symbol: str, currency: str) -> str:
     """Match the brokerage parser's symbol shape: strip any market suffix,
     spaces→dots, append the currency-derived suffix (CVX/USD → CVX.US)."""
@@ -888,186 +1188,138 @@ def _rbc_ca_symbol(symbol: str, currency: str) -> str:
     return f"{sym}.{_CURRENCY_SUFFIX.get((currency or '').upper(), 'US')}"
 
 
-def _rbc_ca_date(s: str) -> str:
-    s = (s or '').strip()
-    for fmt in _RBC_CA_DATE_FMTS:
-        try:
-            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return s[:10]
+_RBC_SPINOFF_RE = re.compile(
+    r'\bSPIN\s?OFF\s+ON\s+([\d,]*\.?\d+)\s+SH(?:S|ARES?)?\s+FROM\s+SEC#\s*'
+    r'(\S+)\s+(.+?)(?:\s+REC\s+\d\d/|\s*$)', re.I)
 
 
 def parse_rbc_corporate_actions(
     csv_path: Path, account: str = 'RBC',
 ) -> List[CorporateAction]:
-    """Extract merger events from an RBC Direct Investing activity CSV.
+    """Extract election events from an RBC Direct Investing activity CSV:
+    mergers ("<OLDCO> MERGER TO <NEWCO> <ratio> NEW = <n> OLD" removal +
+    "<NEWCO> SHRS RECEIVED THRU MERGER" receipt, paired by
+    `pair_rbc_reorganizations`) and spin-offs ("DIS - <NEWCO> SPINOFF ON
+    <n> SHS FROM SEC# <code> <PARENT>"). Name changes, splits and 1-for-1
+    exchanges need no election; the brokerage parser books those.
 
-    RBC fragments a merger across two $0-value 'Reorganization' rows — the old
-    shares removed (often under a temporary symbol) with a "<OLDCO> MERGER TO
-    <NEWCO> <ratio> NEW = <n> OLD" description, and the acquirer's shares
-    received with "<NEWCO> SHRS RECEIVED THRU MERGER". This pairs them into one
-    `merger` CorporateAction so the election machinery (taxable vs s.85.1(5)
-    rollover, fractional-share snap) can resolve it correctly.
+    RBC reports no FMV and no ISIN; FMV comes from the election hint, and
+    the symbols stand in for the ISINs in the event-id hash."""
+    from taxjson.lib.brokerages.rbc_direct import read_rbc_rows
+    rows = read_rbc_rows(Path(csv_path)).rows
 
-    RBC reports no FMV and no ISIN; FMV comes from the election hint when the
-    user picks a taxable disposition, and the symbols stand in for the ISINs in
-    the event-id hash (stable + unique across re-runs)."""
-    lines = csv_path.read_text(encoding='utf-8-sig').splitlines()
-    start = 0
-    for i, line in enumerate(lines):
-        if 'Activity' in line and 'Date' in line:
-            start = i
-            break
-    rows = list(csv.DictReader(lines[start:]))
-
-    # Company name → the real ticker it trades under. RBC books a merger
-    # removal under a temporary reorg placeholder (e.g. 'H015283' for
-    # HESS); the same security's dividend / trade rows carry the real
-    # ticker ('HES'). Learning this from the shared 'Symbol Description'
-    # lets us resolve the removal back to the ticker the position is
-    # actually held under, so the rollover SPLIT / disposition lands on
-    # the real lot instead of an empty temp-symbol pool.
+    # Company name → the real ticker it trades under (a merger removal is
+    # booked under a temporary code; the same security's dividend / trade
+    # rows carry the real ticker under the same 'Symbol Description').
     name_to_symbol: Dict[str, str] = {}
-    for row in rows:
-        if not row:
-            continue
-        sym = (row.get('Symbol') or '').strip()
-        name = _rbc_norm_company(row.get('Symbol Description') or '')
-        if sym and name and _rbc_is_real_ticker(sym):
-            name_to_symbol.setdefault(name, sym)
+    for r in rows:
+        name = _rbc_norm_company(r.symdesc)
+        if r.symbol and name and _rbc_is_real_ticker(r.symbol):
+            name_to_symbol.setdefault(name, r.symbol)
 
-    # Cash-in-lieu of fractional shares, keyed by the acquirer company so
-    # each bucket can be folded into its merger event as the fractional
-    # disposition (see _canada_merger_taxable / _rollover).
-    cil_by_company: Dict[str, Dict[str, Any]] = {}
-    for row in rows:
-        if not row:
-            continue
-        if not is_rbc_cil_row(row.get('Activity') or '', row.get('Description') or ''):
-            continue
-        company = _rbc_norm_company(
-            row.get('Symbol Description') or row.get('Symbol') or '')
-        amount = abs(_f(row.get('Value') or row.get('Amount')))
-        if not company or amount <= 0:
-            continue
-        bucket = cil_by_company.setdefault(company, {
-            'amount': 0.0,
-            'currency': (row.get('Currency') or 'USD').strip(),
-            'descs': [],
-        })
-        bucket['amount'] += amount
-        bucket['descs'].append((row.get('Description') or '').strip())
-
-    removals, receipts = [], []
-    for row in rows:
-        if not row:
-            continue
-        activity = row.get('Activity') or ''
-        desc = row.get('Description') or ''
-        if not is_rbc_merger_row(activity, desc):
-            continue
-        rec = {
-            'symbol': (row.get('Symbol') or '').strip(),
-            'currency': (row.get('Currency') or 'USD').strip(),
-            'date': _rbc_ca_date(row.get('Date') or ''),
-            'qty': _f(row.get('Quantity')),
-            'desc': desc.strip(),
-        }
-        if rec['qty'] < 0 and _RBC_MERGER_TO_RE.search(desc):
-            removals.append(rec)
-        elif rec['qty'] > 0 and re.search(r'RECEIVED', desc, re.I):
-            receipts.append(rec)
-
-    def _days_apart(d1: str, d2: str) -> int:
-        try:
-            return abs((datetime.strptime(d1, '%Y-%m-%d')
-                        - datetime.strptime(d2, '%Y-%m-%d')).days)
-        except ValueError:
-            return 9999
-
+    pairing = pair_rbc_reorganizations(rows)
     events: List[CorporateAction] = []
-    used: set = set()
-    for rem in removals:
-        m = _RBC_MERGER_TO_RE.search(rem['desc'])
-        target = _rbc_norm_company(m.group(1)) if m else ''
-        # RBC books the removal and receipt of one reorg on DIFFERENT dates
-        # for some events, so exact-date matching silently vanished both
-        # legs (the raw rows were already claimed by is_rbc_merger_row).
-        # Allow a ±7-day window, preferring the closest date.
-        same = sorted(
-            ((i, rc) for i, rc in enumerate(receipts)
-             if i not in used and _days_apart(rc['date'], rem['date']) <= 7),
-            key=lambda ir: _days_apart(ir[1]['date'], rem['date']))
-        pick = None
-        for i, rc in same:                                  # 1) company match
-            rcm = _RBC_RECVCO_RE.search(rc['desc'])
-            rcco = _rbc_norm_company(rcm.group(1) if rcm else rc['symbol'])
-            if target and rcco and (target in rcco or rcco in target):
-                pick = (i, rc)
-                break
-        if pick is None and len(same) == 1:                 # 2) lone fallback
-            pick = same[0]
-        if pick is None:
-            # An unmatched removal means shares silently vanish from
-            # inventory — say so instead of a bare continue.
-            oldm = _RBC_OLDCO_RE.search(rem['desc'])
+    for leg in pairing.unmatched:
+        if leg.qty < 0 and _RBC_MERGER_TO_RE.search(leg.desc):
+            oldm = _RBC_OLDCO_RE.search(leg.desc)
             print(
-                f"warning: RBC merger removal on {rem['date']} "
-                f"({(oldm.group(1).strip() if oldm else rem['symbol'])!r}, "
-                f"qty {rem['qty']:g}) has NO matching share receipt within "
+                f"warning: RBC merger removal on {leg.date} "
+                f"({(oldm.group(1).strip() if oldm else leg.symbol)!r}, "
+                f"qty {leg.qty:g}) has NO matching share receipt within "
                 f"7 days — the event was skipped and these shares will "
                 f"disappear from inventory. Check the statement covers the "
                 f"receipt row, or add the event manually.",
                 file=sys.stderr,
             )
+    for ev in pairing.events:
+        if ev.kind != 'merger':
             continue
-        i, rc = pick
-        used.add(i)
-        rr = _RBC_RATIO_RE.search(rem['desc'])
+        rem, rc = ev.removal, ev.receipt
+        rr = _RBC_RATIO_RE.search(rem.desc)
         ratio_new = float(rr.group(1)) if rr else 1.0
         ratio_old = float(rr.group(2)) if rr and float(rr.group(2)) else 1.0
-        oldm = _RBC_OLDCO_RE.search(rem['desc'])
-        rcm = _RBC_RECVCO_RE.search(rc['desc'])
-        # Resolve a temporary reorg placeholder (H015283) back to the real
-        # ticker via the removal's company name; warn + keep the placeholder
-        # if nothing else in the statement trades under that company.
-        src_raw = rem['symbol']
+        oldm = _RBC_OLDCO_RE.search(rem.desc)
+        src_raw = rem.symbol
         if not _rbc_is_real_ticker(src_raw):
             oldco = _rbc_norm_company(oldm.group(1)) if oldm else ''
-            resolved = name_to_symbol.get(oldco)
+            resolved = name_to_symbol.get(oldco) or name_to_symbol.get(
+                _rbc_norm_company(rem.symdesc))
             if resolved:
                 src_raw = resolved
             else:
                 print(
                     f"warning: RBC merger removal for "
-                    f"{(oldm.group(1).strip() if oldm else rem['symbol'])!r} is "
-                    f"booked under temporary reorg symbol {rem['symbol']!r}, and "
+                    f"{(oldm.group(1).strip() if oldm else rem.symbol)!r} is "
+                    f"booked under temporary reorg symbol {rem.symbol!r}, and "
                     f"no other row in the statement trades under that company — "
                     f"the rollover / disposition has no source lot to act on. If "
                     f"this position isn't in the imported history, add a manual "
                     f"opening lot or a ticker.map GLOBAL line for "
-                    f"{_rbc_ca_symbol(rem['symbol'], rem['currency'])}.",
+                    f"{_rbc_ca_symbol(rem.symbol, rem.currency)}.",
                     file=sys.stderr,
                 )
-        src = _rbc_ca_symbol(src_raw, rem['currency'])
-        tgt = _rbc_ca_symbol(rc['symbol'], rc['currency'])
-        recv_co = _rbc_norm_company(rcm.group(1) if rcm else rc['symbol'])
-        cil = cil_by_company.get(target) or cil_by_company.get(recv_co) or {}
+        src = _rbc_ca_symbol(src_raw, rem.currency)
+        tgt = _rbc_ca_symbol(rc.symbol, rc.currency)
+        cil_amount = sum(abs(c.value) for c in ev.cil)
         events.append(CorporateAction(
-            date=rem['date'], time='09:30:00', action_type='merger',
+            date=rem.date, time='09:30:00', action_type='merger',
             source_symbol=src, source_isin=src,
             target_symbol=tgt, target_isin=tgt,
             ratio_new=ratio_new, ratio_old=ratio_old,
-            qty_disposed=abs(rem['qty']), qty_received=rc['qty'],
-            fmv=0.0, currency=rem['currency'], target_currency=rc['currency'],
+            qty_disposed=abs(rem.qty), qty_received=rc.qty,
+            fmv=0.0, currency=rem.currency or 'USD',
+            target_currency=rc.currency or 'USD',
             account=account,
-            cash_in_lieu=cil.get('amount', 0.0),
-            cash_in_lieu_currency=cil.get('currency', ''),
-            raw_descriptions=[rem['desc'], rc['desc']] + cil.get('descs', []),
+            cash_in_lieu=cil_amount,
+            cash_in_lieu_currency=(ev.cil[0].currency if ev.cil else ''),
+            raw_descriptions=[rem.desc, rc.desc] + [c.desc for c in ev.cil],
+        ))
+
+    # Spin-offs: a tax election (s.86.1 or an FMV dividend in kind).
+    for r in rows:
+        if getattr(r, 'cls', '') != 'spinoff':
+            continue
+        m = _RBC_SPINOFF_RE.search(r.desc)
+        parent_qty = float(m.group(1).replace(',', '')) if m else 0.0
+        parent_code = m.group(2).strip() if m else ''
+        parent_name = m.group(3).strip().lstrip('*') if m else ''
+        parent = name_to_symbol.get(_rbc_norm_company(parent_name)) \
+            if parent_name else None
+        if not parent and parent_name:
+            best = max(((rbc_name_similarity(parent_name, x.symdesc), x.symbol)
+                        for x in rows
+                        if x.symdesc and _rbc_is_real_ticker(x.symbol)
+                        and x.symbol != r.symbol and x.cls != 'spinoff'),
+                       default=(0.0, ''))
+            if best[0] >= 0.8:
+                parent = best[1]
+        if not parent:
+            print(f"warning: RBC spin-off parent {parent_name or parent_code!r} "
+                  f"(SEC# {parent_code}) is not traded in this statement, so "
+                  f"its ticker is unknown — a s.86.1 rollover's parent-ACB "
+                  f"reduction would land on an empty pool. Include the "
+                  f"statement that bought the parent.", file=sys.stderr)
+        src = _rbc_ca_symbol(parent, r.currency) if parent else (
+            parent_code or '(unknown parent)')
+        tgt = _rbc_ca_symbol(r.symbol, r.currency)
+        if rbc_is_temp_symbol(r.symbol):
+            print(f"warning: RBC spin-off on {r.date} is booked under the "
+                  f"temporary code {r.symbol} ({r.symdesc or r.desc[:60]!r}) "
+                  f"— map it to the listed ticker with a ticker.map GLOBAL "
+                  f"line once known.", file=sys.stderr)
+        events.append(CorporateAction(
+            date=r.date, time='09:30:00', action_type='spinoff',
+            source_symbol=src, source_isin=parent_code or src,
+            target_symbol=tgt, target_isin=tgt,
+            ratio_new=r.qty, ratio_old=parent_qty or 1.0,
+            qty_disposed=0.0, qty_received=r.qty,
+            fmv=0.0, currency=r.currency or 'USD',
+            target_currency=r.currency or 'USD',
+            account=account, raw_descriptions=[r.desc],
         ))
     events.sort(key=lambda e: (e.date, e.source_symbol))
     return events
+
 
 
 # --- Election manifest -----------------------------------------------------
