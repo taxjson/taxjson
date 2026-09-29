@@ -37,6 +37,11 @@ the open steps one at a time; `--quick` skips the slow detectors.
 
 - [ ] `taxjson run` with no account filter. The DIAGNOSTICS block at the
       top of every `reports/<account>.sum` shows **zero validation errors**.
+- [ ] `taxjson check-dates` — every trade and settlement date is possible
+      for what was traded (crypto any day, futures Sunday evening to Friday,
+      US stocks on exchange days plus the overnight session, options and
+      Canadian listings on exchange days); no settlement before a trade or
+      on a weekend.
 - [ ] `taxjson sanity` — every account ties to the broker holdings, or the
       only differences are trades after the last export.
 - [ ] `taxjson find-missing-history` — nothing marked **AFFECTS <year>**.

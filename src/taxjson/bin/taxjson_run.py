@@ -6348,6 +6348,30 @@ def cmd_tax_logic(args: argparse.Namespace) -> None:
     print(render(country, settings))
 
 
+def cmd_check_dates(args: argparse.Namespace) -> None:
+    """`taxjson check-dates`: every trade and settlement date the parsers
+    produced, checked against the trading calendar of what was traded
+    (crypto 24/7, futures 23/5, US stocks with the overnight session,
+    options and Canadian listings on exchange days) and the settlement
+    rules (lib/check_dates). Exit 1 on an impossible date."""
+    from taxjson.lib.check_dates import analyze, render
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    if not (root / "work").is_dir():
+        sys.exit("taxjson check-dates: no work/ — run `taxjson run` first.")
+    doc = analyze(root, cfg, account=args.account)
+    if not doc["sources"]:
+        sys.exit("taxjson check-dates: no parsed sources in work/ — run "
+                 "`taxjson run` first.")
+    if getattr(args, "json", False):
+        _json_out(doc)
+    else:
+        for ln in render(doc, show_all=args.all):
+            print(ln)
+    if doc["errors"]:
+        raise SystemExit(1)
+
+
 def cmd_edge_cases(args: argparse.Namespace) -> None:
     """`taxjson edge-cases`: transactions whose treatment turns on a
     boundary — trades that settle in a different year than they trade,
@@ -10274,6 +10298,19 @@ def main() -> None:
     p_edge.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
     p_edge.set_defaults(func=cmd_edge_cases)
+
+    p_cd = sub.add_parser(
+        "check-dates",
+        help="Check every trade and settlement date against its market's "
+             "calendar (crypto 24/7, futures 23/5, stocks incl. overnight, "
+             "options and Canadian listings on exchange days); exit 1 on "
+             "an impossible date")
+    p_cd.add_argument("account", nargs="?", help="Account (default: all)")
+    p_cd.add_argument("--all", action="store_true",
+                      help="List every row, not the first 10 per kind")
+    p_cd.add_argument("--json", action="store_true",
+                      help="Emit JSON instead of text")
+    p_cd.set_defaults(func=cmd_check_dates)
 
     p_logic = sub.add_parser(
         "tax-logic",

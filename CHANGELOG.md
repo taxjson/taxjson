@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`taxjson check-dates`.** Every trade and settlement date the parsers
+  produced, checked against the calendar of what was traded: crypto 24/7,
+  futures 23/5 (Sunday evening to Friday), US stocks on exchange days plus
+  the overnight session, options and Canadian listings on exchange days;
+  settlement never before the trade or on a weekend, and normally the
+  standard cycle on either market's calendar. On the owner's books it
+  found three option lots in the 2025 opening file dated Remembrance Day
+  2024, a day neither market settles (the file carries trade dates).
 - **One replacement backs one denial.** A 100-share rebuy (or one call)
   inside the window of a sale split into ten fills denied every fill's
   loss in full: ten times the loss it could back. Replacement units are

@@ -69,6 +69,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("run-clean", 2, "Full run with zero validation errors and nothing pending",
      "taxjson run",
      "A validation error means a row the engine could not book; a pending election means an account was skipped."),
+    ("check-dates", 2, "Every trade and settlement date is possible for its market",
+     "taxjson check-dates",
+     "A date on a closed day, or a settlement before the trade, moves a sale to the wrong day's rate or the wrong year."),
     ("sanity", 2, "Positions tie to the broker holdings",
      "taxjson sanity",
      "The only acceptable differences are trades after the last export."),
@@ -564,6 +567,24 @@ def d_option_boundary(ctx: Ctx) -> Result:
     return Result("option-boundary", "done", "no amendment required")
 
 
+def d_check_dates(ctx: Ctx) -> Result:
+    code, out, err = ctx.sub("check-dates", "--json")
+    try:
+        doc = json.loads(out) if out.strip() else None
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict):
+        return Result("check-dates", "blocked", _last_line(err) or f"exit {code}")
+    if doc.get("errors"):
+        return Result("check-dates", "attention",
+                      f"{doc['errors']} impossible date(s) — `taxjson check-dates`")
+    if doc.get("warnings"):
+        return Result("check-dates", "attention",
+                      f"{doc['warnings']} unusual date(s) to review — "
+                      f"`taxjson check-dates`")
+    return Result("check-dates", "done", f"{doc.get('checked', 0)} rows checked")
+
+
 def d_handoff(ctx: Ctx) -> Result:
     y = ctx.year
     configured = ctx.settings.get("prior_year_record")
@@ -768,6 +789,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "roc-entered": d_roc_entered,
     "inputs-committed": d_inputs_committed,
     "run-clean": d_run_clean,
+    "check-dates": d_check_dates,
     "sanity": d_sanity,
     "missing-history": d_missing_history,
     "elections": d_elections,
