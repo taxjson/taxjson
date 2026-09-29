@@ -3,7 +3,7 @@
 The failure class: a missing or renamed column read as 0, a rebate read
 as a charge, a levy counted twice, a cancelled corporate action left
 booked — each "parses fine" and files the wrong number. Every fixture
-here is SYNTHETIC (fake account ids U5550001 / U5550002, made-up ISINs
+here is SYNTHETIC (fake account ids — see _trade() — made-up ISINs
 and conids).
 """
 import contextlib
