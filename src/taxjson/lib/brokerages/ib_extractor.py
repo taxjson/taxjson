@@ -1056,7 +1056,7 @@ class IbBrokerage(BaseBrokerage):
                 # statement and 195 rows (624.94 USD) in 2026.
                 # Cash-true net: a buy costs -(Proceeds + Comm/Fee), a
                 # sell brings in Proceeds + Comm/Fee.
-                comm_fee = -comm_signed
+                comm_fee = 0.0 - comm_signed   # (no -0.0 for a zero charge)
                 net_amount = (gross_proceeds + comm_fee) if qty > 0 else (gross_proceeds - comm_fee)
                 action = 'BUYSELL'
                 # IB packs multiple per-trade codes into one cell
