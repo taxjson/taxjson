@@ -140,18 +140,27 @@ class TestCleanNumber(unittest.TestCase):
         self.assertEqual(BaseBrokerage.clean_number('€50.50'), 50.50)
         self.assertEqual(BaseBrokerage.clean_number('£25'), 25.0)
 
-    def test_parens_stripped_as_magnitude_not_negative(self):
-        """Webull and similar use accounting parens but engine wants magnitude;
-        sign comes from the action, not the CSV formatting."""
-        self.assertEqual(BaseBrokerage.clean_number('(1,000.50)'), 1000.50)
+    def test_parens_are_negative(self):
+        """RE-PREMISED (2026-09 parse hardening): accounting parentheses
+        are a NEGATIVE amount. The old magnitude reading flipped the
+        sign of every parenthesized cell whose parser did not abs() it;
+        Webull (the one real user of parens, "(1,352.97)" on buys) now
+        takes abs() itself, so its output is unchanged."""
+        self.assertEqual(BaseBrokerage.clean_number('(1,000.50)'), -1000.50)
+        self.assertEqual(BaseBrokerage.clean_number('\u22125'), -5.0)
 
     def test_empty_returns_default(self):
         self.assertEqual(BaseBrokerage.clean_number(''), 0.0)
         self.assertEqual(BaseBrokerage.clean_number(None), 0.0)
         self.assertEqual(BaseBrokerage.clean_number('', default=-1.0), -1.0)
 
-    def test_garbage_returns_default(self):
-        self.assertEqual(BaseBrokerage.clean_number('not a number'), 0.0)
+    def test_garbage_returns_default_with_warning(self):
+        import io
+        from contextlib import redirect_stderr
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(BaseBrokerage.clean_number('not a number'), 0.0)
+        self.assertIn("not a number", err.getvalue())
 
 
 class TestBackComputeFee(unittest.TestCase):

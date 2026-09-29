@@ -154,6 +154,77 @@ def _parse_div_qty_rate(description: str, amount: float):
     return qty, rate
 
 
+class BrokerageParseError(ValueError):
+    """A broker export the parser refuses to read rather than guess at:
+    a required column is missing, a required money/quantity/date cell
+    is unparseable, a row's money does not add up (|proceeds| far from
+    |qty| x price x multiplier), the file is a different report than the
+    parser reads, or the parsed rows disagree with the broker's own
+    totals. Reading a missing column as 0 once inflated a filed return
+    by ~41k — failing closed is the point. `taxjson-brokerage` turns it
+    into a one-line error and a nonzero exit."""
+
+
+# Strict number grammar for REQUIRED money/quantity cells. A leading
+# sign, then either a plain digit run or a comma-grouped integer part
+# whose groups are exactly three digits (1,234,567), then an optional
+# fraction. A decimal comma ("1234,56"), a space-grouped number
+# ("1 000"), a stray letter, or an empty cell is not guessed at.
+_STRICT_NUM_RE = re.compile(
+    r'^(?P<sign>[+-]?)'
+    r'(?P<int>\d{1,3}(?:,\d{3})+|\d*)'
+    r'(?P<frac>\.\d*)?'
+    r'(?P<exp>[eE][+-]?\d+)?$')
+# Unicode minus signs and dashes spreadsheets substitute for '-'.
+_MINUS_CHARS = ('−', '‒', '–', '—', '﹣', '－')
+_CURRENCY_SIGNS = ('$', '€', '£', '¥')
+
+
+def parse_strict_number(raw, *, field: str = 'value', where: str = '',
+                        allow_blank: bool = False,
+                        blank: Optional[float] = None) -> Optional[float]:
+    """Parse a REQUIRED numeric cell, raising BrokerageParseError on
+    anything ambiguous instead of returning 0.
+
+    Accepted: `1234.5`, `-1,234.50`, `+3`, `.5`, `1e-05`, a currency
+    sign (`$-12.00`, `-$12.00`), accounting parentheses as NEGATIVE
+    (`(1,234.56)` == -1234.56), and the unicode minus (U+2212) or a
+    dash as the sign. Rejected: a decimal comma (`1234,56`), thousands
+    separators outside valid three-digit groups (`12,34`, `1,2345`),
+    space-grouped digits (`1 000`), a trailing minus, and any other
+    text. A blank cell is an error unless `allow_blank`, in which case
+    `blank` is returned. `field`/`where` name the cell in the error."""
+    loc = f"{where}: " if where else ''
+    s = '' if raw is None else str(raw).strip()
+    if not s:
+        if allow_blank:
+            return blank
+        raise BrokerageParseError(f"{loc}required {field} is blank")
+    t = s
+    for ch in _MINUS_CHARS:
+        t = t.replace(ch, '-')
+    neg = False
+    if t.startswith('(') and t.endswith(')'):
+        neg = True
+        t = t[1:-1].strip()
+    # Currency sign on either side of the sign: $-12 / -$12.
+    for cs in _CURRENCY_SIGNS:
+        if t.startswith(cs):
+            t = t[len(cs):].lstrip()
+        elif t[:1] in '+-' and t[1:].startswith(cs):
+            t = t[0] + t[1 + len(cs):].lstrip()
+    m = _STRICT_NUM_RE.match(t)
+    if (not m or not (m.group('int') or (m.group('frac') or '')[1:])
+            or (m.group('exp') and ',' in m.group('int'))
+            or (neg and m.group('sign'))):
+        raise BrokerageParseError(
+            f"{loc}{field} {s!r} is not a number this parser accepts "
+            f"(decimal commas, space-grouped digits and text are refused "
+            f"rather than guessed)")
+    val = float(t.replace(',', ''))
+    return -val if neg else val
+
+
 class BaseBrokerage:
     # 100 for options (each contract = 100 shares); 1 for equities/crypto.
     OPTION_MULTIPLIER = 100
@@ -347,22 +418,62 @@ class BaseBrokerage:
 
     @staticmethod
     def clean_number(raw: str, default: float = 0.0) -> float:
-        """Parse a CSV numeric. Strips commas, currency symbols, and any
-        surrounding parentheses. Treats parenthesized values as magnitude,
-        not signed negatives — that matches the existing tax-output
-        convention (sign comes from the action/qty, not from CSV
-        formatting). Returns default on failure."""
+        """LEGACY lenient CSV numeric, for OPTIONAL cells. Strips commas
+        and currency symbols. Accounting parentheses are NEGATIVE
+        (`(1,352.97)` == -1352.97) — the old magnitude reading silently
+        flipped the sign of any parenthesized amount whose parser did
+        not abs() it; a caller that wants a magnitude (Webull's buy
+        proceeds) takes abs() itself. The unicode minus is a minus.
+
+        Returns `default` for a blank cell and, with a stderr warning,
+        for unparseable text. REQUIRED money/quantity cells must use
+        `parse_strict_number` instead: a garbage-to-0 read of a
+        required field is how a missing column once inflated a filed
+        return by ~41k."""
         if raw is None or raw == '':
             return default
         s = str(raw).strip()
         if not s:
             return default
+        for ch in _MINUS_CHARS:
+            s = s.replace(ch, '-')
+        neg = s.startswith('(') and s.endswith(')')
+        if neg:
+            s = s[1:-1]
         s = s.replace(',', '').replace('$', '').replace('€', '').replace('£', '')
-        s = s.replace('(', '').replace(')', '')
         try:
-            return float(s)
+            v = float(s)
         except ValueError:
+            import sys
+            print(f"warning: numeric cell {raw!r} is not a number — read "
+                  f"as {default!r}", file=sys.stderr)
             return default
+        return -v if neg else v
+
+    # Strict counterpart for REQUIRED cells (see module-level helper).
+    parse_strict_number = staticmethod(parse_strict_number)
+
+    @staticmethod
+    def require_columns(header_map: Dict[str, int], required, *,
+                        section: str, where: str = '') -> None:
+        """Raise BrokerageParseError naming the section and every
+        missing column when a required one is absent — the parser must
+        not fall back to 0 / a default for money, quantity, price, date
+        or currency columns. `required` items may be a tuple of
+        alternatives (any one present satisfies it)."""
+        missing = []
+        for col in required:
+            alts = col if isinstance(col, tuple) else (col,)
+            if not any(a in header_map for a in alts):
+                missing.append(' or '.join(repr(a) for a in alts))
+        if missing:
+            loc = f"{where}: " if where else ''
+            raise BrokerageParseError(
+                f"{loc}section {section!r} is missing required "
+                f"column(s) {', '.join(missing)} — refusing to guess "
+                f"(a missing money column read as 0 corrupts the "
+                f"return). Re-export the statement in the standard "
+                f"English layout.")
 
     # ------------------------------------------------------- fee back-compute
 
