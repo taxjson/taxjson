@@ -123,8 +123,7 @@ class EdgeCaseProject(unittest.TestCase):
         self.assertEqual([r["symbol"] for r in cw], ["ABC.TO"])
         it = cw[0]["items"][0]
         self.assertEqual(it["option"], "ABC260116C00010000.TO")
-        self.assertIn("still held on day 30", it["why"])
-        self.assertIn("does not deny", it["why"])
+        self.assertIn("still held on day 30, so it backs a denial", it["why"])
 
     def test_deferred_and_text(self):
         doc = analyze(self.root, self.CFG)

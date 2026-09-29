@@ -256,7 +256,7 @@ tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 #                              # margin settles the P/L) | next_day (clearing premium date)
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
-# cross_asset = true           # WARN-ONLY option-as-replacement wash triggers
+# cross_asset = true           # WARN-ONLY put-vs-short scan (long calls vs share losses are always enforced)
 # option_premium_timing = "grant"   # Canada (default): a written option's premium is a gain in
 #                                   # the year WRITTEN (ITA s.49(1)); a buy-back is a loss in its
 #                                   # own year; assignment folds into the shares. "close" nets
@@ -362,7 +362,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (books recomputed via the engine's `--as-of` cutoff: full ACB + deferred-wash fidelity; pre-wash, pre-ticker.map); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block over the taxable accounts — Canada: one row per Schedule 3 line (line 4 shares & fund units 13199/13200; line 6 options, futures & other properties 15199/15300; line 7 crypto-assets 15200/15301 — 15199/15300 before 2025) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (short sales as |amounts|, sell commissions as outlays; a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the allowed gain, the denial going onto the replacement's ACB), plus the `fx-cash` estimate for line 15300; USA: Form 8949's own Part I/II (d) proceeds, (e) cost, (g) adjustment, (h) gain. Rows equal `form-export`'s line totals; `--json` adds the per-account split. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
-| `taxjson edge-cases [ACCOUNT] [--margin DAYS] [--json]` | Everything whose treatment turns on a boundary, with where it lands and why: trades that settle in a different year than they trade (and the year `tax_date` puts them in), dispositions in the last and first days of a year, written options and expiries across Dec 31, income paid around New Year, crypto near midnight, superficial-loss windows that span Dec 31 and denied losses carried into next year; then every taxable loss with an acquisition (any account) or a sale within `--margin` days (default 3) of day 30, with the day count on both date bases and a flag where the basis decides the verdict; and long calls bought inside a share loss's window (s.54 'right to acquire', advisory). |
+| `taxjson edge-cases [ACCOUNT] [--margin DAYS] [--json]` | Everything whose treatment turns on a boundary, with where it lands and why: trades that settle in a different year than they trade (and the year `tax_date` puts them in), dispositions in the last and first days of a year, written options and expiries across Dec 31, income paid around New Year, crypto near midnight, superficial-loss windows that span Dec 31 and denied losses carried into next year; then every taxable loss with an acquisition (any account) or a sale within `--margin` days (default 3) of day 30, with the day count on both date bases and a flag where the basis decides the verdict; and long calls bought inside a share loss's window (s.54 'right to acquire': replacement property when still held on day 30). |
 | `taxjson checklist [--walk] [--done ID] [--skip ID] [--undo ID] [--quick] [--json]` | The filing checklist ([`docs/filing.md`](./docs/filing.md)) as a command: every step is auto-detected by running the command that proves it (run, sanity, find-missing-history, elect, audit, option-boundary, reconcile-slips, form-export, t1135, check-filed, git status); the steps no command can prove are confirmed with `--done` (marks live in `checklist.json`, commit it) and never hide a later finding — a step marked done whose detector finds a problem shows `[!]` with the mark beside it and keeps the list open (`--skip` is the explicit "reviewed, accepted"); form-export is checked against `sum`'s FOR THE RETURN totals and the taxable realized gain. US projects get the US names (1099-B, Form 8949 / Schedule D) and `n/a` for Canada-only steps; a project with no taxable account gets `n/a` for the taxable-only steps. `--walk` visits the open steps one at a time. Exit 1 while anything is open. |
 | `taxjson redact FILE... [--out DIR] [--also REGEX] [--check]` | Strips account numbers, names and contact details it recognises (plus wallet addresses and exchange transaction ids, and anything on the private denylist) while keeping every row shape (same-shape placeholders, consistent across the file) so a statement can be shared as a parser sample or bug report. Pattern-based, not a guarantee: **review the output before sharing** — the report lists the free-text lines to read. Writes `NAME.redacted.EXT`; never touches the input; refuses `.xlsx`/binary input (export CSV first); `--check` exits 1 when it finds something. |
 | `taxjson sell-check SYMBOL ...` | Sell-side wash check: is selling this ticker **at a loss** today safe? **UNSAFE** when a recent affiliated buy would deny it (LOCKED — permanently for the registered-matched portion); **ACTION** when a rescueable violation is open (sell the full position before the deadline); **SAFE\*/SAFE** with the applicable caveats. Whether it *is* a loss at today's price is `harvest`'s job. `--json` for machines; exit 1 on unsafe. |
@@ -626,30 +626,31 @@ taxjson wash-sales --explain            # all accounts
 (For tracing an arbitrary non-wash disposition, the standalone `taxjson-explain
 --symbol XYZ work/<account>_base.json` remains available.)
 
-**Option-as-replacement wash triggers (warn-only)** — set `cross_asset =
-true` in `[settings]` (or pass `--cross-asset` to `taxjson-gains`) to also
-scan each realized loss for OPTION acquisitions that would deny it:
+**Options as replacement property** — a call option is "a right to
+acquire" the shares, which ITA s.54 (closing words, para (i)) deems
+identical to them. So in the Canada engine a **long call** on the same
+shares, opened inside the ±30-day window of a loss on **long shares** and
+still held at the end of day 30 (in any of your accounts, registered ones
+included), is replacement property: the loss is denied at 100 shares per
+contract, and the denied amount is added to the **call's** cost (recovered
+when the call is sold, or rolled into the shares if it is exercised). A call
+held in a registered account makes that part permanent. A buy-to-close of a
+written call acquires nothing and never counts.
 
-- a loss on **long shares** with a **long call** on the same underlying
-  bought inside the ±30-day window (CRA s.54 "a right to acquire" / IRS
-  §1091 "option to acquire"), and
-- a loss from **closing a short** with a **long put** bought in the window.
+The rule is one-way, by design:
 
-This is deliberately asymmetric: the underlying shares are **never**
-replacement property for a long option's loss, and option losses themselves
-wash only when the **identical contract** (same OCC symbol) is repurchased —
-a near-identical contract (same underlying, one strike or expiry away) is
-NOT matched; that judgment call is left to you. Matching is suffix-exact
-(an option suffixed `.US` matches shares held as `.US`, not a `.TO`
-listing) and follows ticker renames.
+- shares are **never** replacement property for an option's loss;
+- an option's loss is deferred only by repurchasing the **identical
+  contract** (same OCC symbol). A different strike or expiry on the same
+  shares does not count;
+- matching is suffix-exact (a call suffixed `.US` matches `.US` shares, not a
+  `.TO` listing, unless ticker.map joins them) and follows ticker renames.
 
-Findings are **warnings only** — computed numbers never change. Each carries
-the loss, the option acquisition, the rule that fired, and (Canada) whether
-the option is still held at the end of the +30-day window, since s.54 also
-requires that. They appear in the gains JSON under
-`option_replacement_warnings` and as `warning:` lines in the `.sum`
-DIAGNOSTICS banner. Review them with your accountant; a future release may
-offer enforcement.
+`wash-radar`, `buy-check`, `sell-check` and `edge-cases` apply the same
+rule. `cross_asset = true` in `[settings]` (or `--cross-asset` on
+`taxjson-gains`) still adds the **warn-only** scans: a loss from closing a
+short with a long put bought in the window, and in the experimental US
+engine the call rule (§1091 "option to acquire") as a warning.
 
 **`taxjson t1135`** — CRA **Form T1135** (Foreign Income Verification Statement)
 helper, for Canadian filers holding foreign securities. Answers the filing

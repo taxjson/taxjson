@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Calls are replacement property for share losses (s.54 para (i)).** A
+  long call on the same shares, opened within 30 days of a loss on long
+  shares and still held on day 30 (any account, registered included), now
+  denies the loss at 100 shares per contract; the denied amount is added
+  to the call's cost (permanent when the call is in a registered
+  account). It was a warn-only scan behind `cross_asset`. One-way by
+  design: shares never replace an option, and only the identical contract
+  replaces an option. `wash-radar`, `buy-check`, `sell-check` and
+  `edge-cases` follow the same rule (buy-check and sell-check no longer
+  let an option's row decide a share trade or another series' trade).
 - **`taxjson edge-cases`.** One report of everything whose treatment turns
   on a boundary: trades that settle in the other year and where
   `tax_date` puts them, dispositions on the last and first days of a

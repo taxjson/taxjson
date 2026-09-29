@@ -208,6 +208,18 @@ def main():
     global_lacq = {}      # alias class -> {group -> {epoch, account}} latest buy per group
     recent_losses = {}    # alias class -> [loss dicts] (ALL in-window losses)
     open_events = {}      # alias class -> [(epoch, direction)] opening events, all history
+    # s.54 para (i): a LONG CALL is a right to acquire the underlying
+    # shares, so opening one is a trigger for a LONG SHARE loss (never
+    # for an option loss: options wash only against the identical
+    # contract). Keyed by the UNDERLYING's alias class.
+    call_open_events = {}  # underlying class -> [epoch] long-call openings
+    from taxjson.lib.core import parse_option_right, parse_option_underlying
+
+    def _call_underlying_cls(sym):
+        if parse_option_right(sym) != 'C':
+            return None
+        und = parse_option_underlying(sym)
+        return alias_of(und) if und else None
     seen_splits = set()   # (symbol, account, date, ratio, symbol_new) dedup
 
     for tx in transactions:
@@ -341,6 +353,16 @@ def main():
             # user to increase the short.
             open_events.setdefault(cls, []).append(
                 (tx._epoch, 'LONG' if qty_raw > 0 else 'SHORT'))
+            _ucls = _call_underlying_cls(ticker) if qty_raw > 0 else None
+            if _ucls:
+                call_open_events.setdefault(_ucls, []).append(tx._epoch)
+                _ga = global_lacq.setdefault(_ucls, {})
+                _pv = _ga.get(tx._group)
+                if _pv is None or tx._epoch > _pv['epoch']:
+                    _ga[tx._group] = {
+                        'epoch': tx._epoch,
+                        'account': (getattr(tx, 'account', '')
+                                    or '').strip()}
         else:
             # Closing
             avg_cost_unit = account_pool_acb[key] / abs(current_inv) if abs(current_inv) > 1e-6 else 0.0
@@ -430,9 +452,14 @@ def main():
             # sale+30d], ITA 54) — not "the last 30 days from today", and
             # never a short-opening sale triggering a LONG loss (or vice
             # versa).
-            return any(abs(e - l['epoch']) <= window_sec
-                       and d == l.get('direction', 'LONG')
-                       for e, d in open_events.get(cls, []))
+            if any(abs(e - l['epoch']) <= window_sec
+                   and d == l.get('direction', 'LONG')
+                   for e, d in open_events.get(cls, [])):
+                return True
+            return (not l.get('is_option')
+                    and l.get('direction', 'LONG') == 'LONG'
+                    and any(abs(e - l['epoch']) <= window_sec
+                            for e in call_open_events.get(cls, [])))
 
         triggered = [l for l in in_window_losses if _loss_has_trigger(l)]
 
@@ -459,6 +486,13 @@ def main():
         held_qty = sum(abs(qty) for (t, grp, acct), qty
                        in account_pool_qty.items()
                        if alias_of(t) == cls and abs(qty) > 0.01)
+        # Long calls on these shares are still-held substituted property
+        # for a share loss (100 shares per contract).
+        held_calls = 0.0
+        if not is_option_ticker(ticker):
+            held_calls = sum(qty for (t, grp, acct), qty
+                             in account_pool_qty.items()
+                             if qty > 0.01 and _call_underlying_cls(t) == cls)
 
         adv = ""
         is_relevant = False
@@ -468,7 +502,7 @@ def main():
 
         if in_window_losses:
             is_relevant = True
-            if triggered and held_qty > 0.01:
+            if triggered and (held_qty > 0.01 or held_calls > 0.01):
                 # Trigger acquired in the window AND still holding: already
                 # superficial — rescue needs a full exit that SETTLES on
                 # or before loss_settle+30, the engine's own held-at-end
@@ -496,7 +530,14 @@ def main():
                 settle_deadline = settle_d
                 verb = ("Sell" if worst.get('direction', 'LONG') == 'LONG'
                         else "Cover")
-                adv = (f"VIOLATION: {verb} {held_qty:.4f} shares (globally) "
+                _what = f"{held_qty:.4f} shares (globally)"
+                if held_calls > 0.01:
+                    _what = (f"{held_qty:.4f} shares and {held_calls:g} long "
+                             f"call contract(s) (globally)"
+                             if held_qty > 0.01 else
+                             f"{held_calls:g} long call contract(s) "
+                             f"(globally)")
+                adv = (f"VIOLATION: {verb} {_what} "
                        f"by {safe_d} (last TRADE date — the sale must "
                        f"SETTLE by {settle_d}) to rescue the loss.")
             else:

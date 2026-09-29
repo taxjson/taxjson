@@ -1,14 +1,17 @@
-"""Option-as-replacement wash detection (WARN-ONLY, gated on cross_asset).
+"""Options as replacement property.
 
 User-decided policy:
   1. share loss (LONG) + long CALL on the same underlying in the ±30d
-     window → replacement (warn);
+     window, still held at day 30 → replacement. ENFORCED by the Canada
+     engine (ITA s.54 para (i), 'a right to acquire'; 2026-09-29), 100
+     shares per contract, the deferral added to the call's ACB; the US
+     engine only warns (cross_asset);
   2. short-closing loss + long PUT → replacement (warn);
   3. option losses wash ONLY against the identical contract (existing
      symbol matching — pinned here);
   4. shares are NEVER replacement property for an option's loss.
 
-Numbers must never change; the scan only adds
+The cross_asset scan is warn-only for everything else: it only adds
 `option_replacement_warnings` + stderr notes.
 """
 
@@ -82,18 +85,63 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
             tx(date=opt_date, symbol=option, qty=opt_qty, price=3.0,
                net=300.0)]
 
-    def test_fires_canada(self):
+    def test_call_denies_share_loss_canada(self):
         res, err = gains(CanadaTaxRules(), self._txs())
-        warns = res['option_replacement_warnings']
-        self.assertEqual(len(warns), 1)
-        w = warns[0]
-        self.assertEqual(w['rule'], 'call_vs_share_loss')
-        self.assertEqual(w['loss_symbol'], 'AAPL.US')
-        self.assertEqual(w['option_symbol'], CALL)
-        self.assertAlmostEqual(w['loss_amount'], -1000.0, places=2)
-        self.assertTrue(w['held_at_window_end'])
-        self.assertIn('s.54', w['statute'])
-        self.assertIn('option-replacement (warn-only', err)
+        self.assertAlmostEqual(res['summary']['total_gain'], 0.0, places=2)
+        self.assertEqual(len(res['wash_sales']), 1)
+        self.assertAlmostEqual(res['wash_sales'][0]['amount'], 1000.0,
+                               places=2)
+        # The deferral rides on the call (the substituted property).
+        inv = {h['symbol']: h for h in res['inventory']}
+        self.assertAlmostEqual(inv[CALL]['total_cost'], 1300.0, places=2)
+        # Enforced, so no warn-only note for it.
+        self.assertEqual(res['option_replacement_warnings'], [])
+        self.assertNotIn('option-replacement (warn-only', err)
+
+    def test_call_enforced_without_cross_asset(self):
+        res, _ = gains(CanadaTaxRules(), self._txs(), cross_asset=False)
+        self.assertAlmostEqual(res['summary']['total_gain'], 0.0, places=2)
+
+    def test_partial_denial_one_contract_per_100_shares(self):
+        txs = [
+            tx(date='2025-01-06', symbol='AAPL.US', qty=400, price=20.0,
+               net=8000.0),
+            tx(date='2025-03-03', symbol='AAPL.US', qty=-400, price=10.0,
+               net=4000.0),
+            tx(date='2025-03-20', symbol=CALL, qty=1, price=3.0, net=300.0)]
+        res, _ = gains(CanadaTaxRules(), txs)
+        self.assertAlmostEqual(res['wash_sales'][0]['amount'], 1000.0,
+                               places=2)
+        self.assertAlmostEqual(res['summary']['total_gain'], -3000.0,
+                               places=2)
+
+    def test_registered_call_makes_denial_permanent(self):
+        rrsp_call = TaxTransaction(
+            action='BUYSELL', date='2025-03-20', date_settle='2025-03-20',
+            time='10:00:00', symbol=CALL, quantity=1, price=3.0,
+            net_amount=300.0, currency='USD', account='RRSP')
+        err = io.StringIO()
+        with redirect_stderr(err), redirect_stdout(io.StringIO()):
+            res = CanadaTaxRules().compute_gains(
+                long_loss(), sheltered_transactions=[rrsp_call])
+        loss = next(t for t in res['transactions'] if t.get('is_wash_sale'))
+        self.assertAlmostEqual(loss['permanently_disallowed'], 1000.0,
+                               places=2)
+
+    def test_buy_to_close_is_not_an_acquisition(self):
+        txs = long_loss() + [
+            tx(date='2025-02-20', symbol=CALL, qty=-1, price=3.0, net=300.0),
+            tx(date='2025-03-10', symbol=CALL, qty=1, price=1.0, net=100.0)]
+        res, _ = gains(CanadaTaxRules(), txs)
+        self.assertEqual(res['wash_sales'], [])
+
+    def test_ca_not_held_at_window_end(self):
+        txs = self._txs() + [
+            tx(date='2025-03-25', symbol=CALL, qty=-1, price=4.0, net=400.0)]
+        res, _ = gains(CanadaTaxRules(), txs)
+        self.assertEqual(res['wash_sales'], [])
+        self.assertAlmostEqual(res['summary']['total_gain'], -900.0,
+                               places=2)
 
     def test_fires_usa_no_held_at_end_concept(self):
         res, _ = gains(USATaxRules(), self._txs())
@@ -102,8 +150,8 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
         self.assertIsNone(warns[0]['held_at_window_end'])
         self.assertIn('1091', warns[0]['statute'])
 
-    def test_numbers_never_change(self):
-        for rules_cls in (CanadaTaxRules, USATaxRules):
+    def test_us_numbers_never_change(self):
+        for rules_cls in (USATaxRules,):
             on, _ = gains(rules_cls(), self._txs(), cross_asset=True)
             off, _ = gains(rules_cls(), self._txs(), cross_asset=False)
             self.assertAlmostEqual(on['summary']['total_gain'],
@@ -112,33 +160,33 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
                              len(off['transactions']))
 
     def test_off_by_default_and_silent(self):
-        res, err = gains(CanadaTaxRules(), self._txs(), cross_asset=False)
+        res, err = gains(USATaxRules(), self._txs(), cross_asset=False)
         self.assertEqual(res['option_replacement_warnings'], [])
         self.assertNotIn('option-replacement', err)
 
-    def test_outside_window_silent(self):
+    def test_outside_window_allowed(self):
         res, _ = gains(CanadaTaxRules(),
                        self._txs(opt_date='2025-05-15'))   # +73d
+        self.assertEqual(res['wash_sales'], [])
         self.assertEqual(res['option_replacement_warnings'], [])
 
     def test_put_does_not_trigger_long_loss(self):
         res, _ = gains(CanadaTaxRules(), self._txs(option=PUT))
+        self.assertEqual(res['wash_sales'], [])
         self.assertEqual(res['option_replacement_warnings'], [])
 
-    def test_different_underlying_silent(self):
+    def test_different_underlying_allowed(self):
         res, _ = gains(CanadaTaxRules(),
                        self._txs(option='MSFT250620C00300000.US'))
+        self.assertEqual(res['wash_sales'], [])
         self.assertEqual(res['option_replacement_warnings'], [])
 
-    def test_ca_not_held_at_window_end(self):
-        txs = self._txs() + [
-            tx(date='2025-03-25', symbol=CALL, qty=-1, price=4.0, net=400.0)]
-        res, err = gains(CanadaTaxRules(), txs)
-        warns = res['option_replacement_warnings']
-        self.assertEqual(len(warns), 1)
-        self.assertFalse(warns[0]['held_at_window_end'])
-        self.assertIn('NOT held at window end', err)
-
+    def test_other_listing_is_not_identical(self):
+        # A call on the .TO listing never replaces .US shares unless
+        # ticker.map joins the listings.
+        res, _ = gains(CanadaTaxRules(),
+                       self._txs(option='AAPL250620C00150000.TO'))
+        self.assertEqual(res['wash_sales'], [])
 
 class TestRuleTwoPutVsShortLoss(unittest.TestCase):
     def _txs(self, option=PUT):
@@ -158,6 +206,18 @@ class TestRuleTwoPutVsShortLoss(unittest.TestCase):
 
 
 class TestAsymmetry(unittest.TestCase):
+    def test_different_series_never_replaces_an_option(self):
+        # A loss on one call series is not deferred by buying another
+        # series (strike or expiry) on the same shares.
+        other = 'AAPL250718C00160000.US'
+        txs = [
+            tx(date='2025-01-06', symbol=CALL, qty=1, price=5.0, net=500.0),
+            tx(date='2025-03-03', symbol=CALL, qty=-1, price=1.0, net=100.0),
+            tx(date='2025-03-10', symbol=other, qty=1, price=2.0, net=200.0),
+        ]
+        res, _ = gains(CanadaTaxRules(), txs)
+        self.assertEqual(res['wash_sales'], [])
+
     def test_share_buy_never_triggers_option_loss(self):
         # Rule 4: lose money on a call, buy the shares in-window → silent.
         txs = [
@@ -201,6 +261,10 @@ class TestRenameBridge(unittest.TestCase):
                price=3.0, net=300.0),
         ]
         res, _ = gains(CanadaTaxRules(), txs)
+        self.assertEqual(len(res['wash_sales']), 1)
+        self.assertAlmostEqual(res['wash_sales'][0]['amount'], 1000.0,
+                               places=2)
+        res, _ = gains(USATaxRules(), txs)
         warns = res['option_replacement_warnings']
         self.assertEqual(len(warns), 1)
         self.assertEqual(warns[0]['loss_symbol'], 'OLD.US')
@@ -215,8 +279,8 @@ class TestCliFlag(unittest.TestCase):
         import sys
         import tempfile
         from pathlib import Path
-        txs = long_loss() + [
-            tx(date='2025-03-20', symbol=CALL, qty=1, price=3.0, net=300.0)]
+        txs = short_loss() + [
+            tx(date='2025-03-20', symbol=PUT, qty=1, price=3.0, net=300.0)]
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / 'base.json'
             inp.write_text(json.dumps(
@@ -230,6 +294,56 @@ class TestCliFlag(unittest.TestCase):
             res = json.loads(out.stdout)
             self.assertEqual(len(res['option_replacement_warnings']), 1)
             self.assertIn('option-replacement (warn-only', out.stderr)
+
+
+class TestRadarAndPlanningTools(unittest.TestCase):
+    """The radar and buy-check/sell-check follow the same one-way rule."""
+
+    def _radar(self, txs, date):
+        from test_audit_round2_fixes import _radar
+        return _radar(txs, date)
+
+    def test_radar_call_after_share_loss_is_violation(self):
+        from test_audit_round2_fixes import _row
+        txs = [
+            _row("BUYSELL", "2026-01-05", "ZZZ.TO", 100, 2000.0),
+            _row("BUYSELL", "2026-06-01", "ZZZ.TO", -100, 1000.0),
+            _row("BUYSELL", "2026-06-10", "ZZZ270115C00010000.TO", 1, 300.0),
+        ]
+        out = self._radar(txs, "2026-06-15")
+        line = next(l for l in out.splitlines() if l.startswith("ZZZ.TO"))
+        self.assertIn("VIOLATION", line)
+        self.assertIn("long call contract", line)
+
+    def test_radar_share_buy_after_option_loss_is_not_a_trigger(self):
+        from test_audit_round2_fixes import _row
+        opt = "ZZZ270115C00010000.TO"
+        txs = [
+            _row("BUYSELL", "2026-01-05", opt, 1, 500.0),
+            _row("BUYSELL", "2026-06-01", opt, -1, 100.0),
+            _row("BUYSELL", "2026-06-10", "ZZZ.TO", 100, 1000.0),
+        ]
+        out = self._radar(txs, "2026-06-15")
+        line = next(l for l in out.splitlines() if l.startswith(opt))
+        self.assertNotIn("VIOLATION", line)
+
+    def test_replacement_rows_filter(self):
+        from taxjson.bin.taxjson_run import _replacement_rows
+        rows = {"ZZZ.TO": {"category": "COOLING"},
+                "ZZZ270115C00010000.TO": {"category": "COOLING"},
+                "ZZZ270115C00012000.TO": {"category": "COOLING"},
+                "ZZZ270115P00008000.TO": {"category": "COOLING"}}
+        self.assertEqual(set(_replacement_rows("ZZZ.TO", rows, "buy")),
+                         {"ZZZ.TO"})
+        self.assertEqual(
+            set(_replacement_rows("ZZZ270115C00010000.TO", rows, "buy")),
+            {"ZZZ.TO", "ZZZ270115C00010000.TO"})
+        self.assertEqual(
+            set(_replacement_rows("ZZZ270115C00010000.TO", rows, "sell")),
+            {"ZZZ270115C00010000.TO"})
+        self.assertEqual(
+            set(_replacement_rows("ZZZ270115P00008000.TO", rows, "buy")),
+            {"ZZZ270115P00008000.TO"})
 
 
 if __name__ == '__main__':

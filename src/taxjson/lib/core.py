@@ -199,6 +199,9 @@ def parse_option_expiry(symbol: str) -> Optional[str]:
         return None
 
 
+OPTION_CONTRACT_SHARES = 100.0      # shares per standard equity option
+
+
 def parse_option_right(symbol: str) -> Optional[str]:
     """'C' or 'P' for an OCC option symbol, else None."""
     m = _OCC_OPTION_RE.match(symbol or '')
@@ -2171,6 +2174,36 @@ class CanadaTaxRules(TaxRules):
                                         f"it as a BUYSELL dated the "
                                         f"contribution day instead.")
                                 potential_triggers.append(t)
+                # ITA s.54, closing words para (i): "a right to acquire
+                # a property ... is deemed to be a property that is
+                # identical to the property". A LONG CALL on the loss
+                # shares, opened inside the window and still owned at
+                # day 30, is substituted property for a loss on LONG
+                # shares (100 shares per contract). Deliberately one-way
+                # (user policy, 2026-09-29): shares never replace an
+                # option, and a different option series never replaces
+                # an option — an option's own loss washes only against
+                # the identical contract (same symbol, above).
+                call_triggers = []
+                if (loss.get('direction', 'LONG') == 'LONG'
+                        and not is_option_symbol(tx.symbol)):
+                    for t in all_txs:
+                        if (t.id == tx.id or t.action != 'BUYSELL'
+                                or t.quantity <= 0
+                                or parse_option_right(t.symbol) != 'C'):
+                            continue
+                        _und = parse_option_underlying(t.symbol)
+                        if not _und or alias_of(_und) != loss_alias:
+                            continue
+                        t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
+                        if abs((t_date - loss_date).days) > 30:
+                            continue
+                        if _opening_qty(t, 'LONG') <= 1e-6:
+                            continue          # a buy-to-close acquires nothing
+                        call_triggers.append(t)
+                potential_triggers.extend(call_triggers)
+                _call_ids = {t.id for t in call_triggers}
+                _call_syms = {t.symbol for t in call_triggers}
                 if not potential_triggers: continue
 
                 end_window_date = (loss_date + timedelta(days=30)).strftime('%Y-%m-%d')
@@ -2216,6 +2249,16 @@ class CanadaTaxRules(TaxRules):
                     return q * split_timeline.lineage_factor(
                         t.symbol, d, tx.symbol, loss_sort,
                         from_inclusive=pre, ref_inclusive=loss_pre)
+
+                def _call_units(t, q: float) -> float:
+                    # q contracts of a call on the loss shares, in
+                    # loss-date loss-symbol SHARE units (100 per contract,
+                    # through the underlying's split lineage).
+                    d = get_sort_date(t)
+                    pre = bool(t.date and t.date < d)
+                    return q * OPTION_CONTRACT_SHARES * split_timeline.lineage_factor(
+                        parse_option_underlying(t.symbol), d, tx.symbol,
+                        loss_sort, from_inclusive=pre, ref_inclusive=loss_pre)
 
                 bal_at_end = sum(
                     _row_loss_units(t, t.quantity)
@@ -2263,12 +2306,36 @@ class CanadaTaxRules(TaxRules):
                                           + _row_loss_units(t, t.quantity))
                 _acq_h: Dict[Any, float] = {}
                 for t in potential_triggers:
+                    if t.id in _call_ids:
+                        continue
                     _h = _holder(t)
                     _acq_h[_h] = (_acq_h.get(_h, 0.0)
                                   + _row_loss_units(
                                       t, _opening_qty(t, 'LONG')))
                 _held_h = {h: max(0.0, min(a, _bal_end_h.get(h, 0.0)))
                            for h, a in _acq_h.items()}
+                # Calls back a denial per (holder, contract): units of
+                # THAT series opened in the window and still held at day
+                # 30. Share balances never back a call and vice versa.
+                if call_triggers:
+                    _call_acq: Dict[Any, float] = {}
+                    for t in call_triggers:
+                        _k = ('call', _holder(t), t.symbol)
+                        _call_acq[_k] = (_call_acq.get(_k, 0.0)
+                                         + _call_units(
+                                             t, _opening_qty(t, 'LONG')))
+                    _call_end: Dict[Any, float] = {}
+                    for t in current_tx_list:
+                        if (t.symbol in _call_syms
+                                and get_sort_date(t) <= end_window_date
+                                and t.action in ('BUYSELL', 'ASSIGN',
+                                                 'TRANSFER',
+                                                 'OPENING_BALANCE')):
+                            _k = ('call', _holder(t), t.symbol)
+                            _call_end[_k] = (_call_end.get(_k, 0.0)
+                                             + _call_units(t, t.quantity))
+                    for _k, a in _call_acq.items():
+                        _held_h[_k] = max(0.0, min(a, _call_end.get(_k, 0.0)))
                 held_substituted = sum(_held_h.values())
                 if held_substituted > 1e-6:
                     disallowed_qty = min(loss['qty'], held_substituted)
@@ -2316,15 +2383,20 @@ class CanadaTaxRules(TaxRules):
                     _rem = disallowed_qty
                     _cap_left = dict(_held_h)
                     for trg in ordered:
-                        _h = _holder(trg)
-                        cap = min(_row_loss_units(
-                            trg, _opening_qty(trg, 'LONG')),
-                            _cap_left.get(_h, 0.0))
+                        _hh = _holder(trg)
+                        if trg.id in _call_ids:
+                            _h = ('call', _hh, trg.symbol)
+                            _units = _call_units(trg, _opening_qty(trg, 'LONG'))
+                        else:
+                            _h = _hh
+                            _units = _row_loss_units(
+                                trg, _opening_qty(trg, 'LONG'))
+                        cap = min(_units, _cap_left.get(_h, 0.0))
                         take = min(_rem, cap)
                         if take > 1e-9:
                             amt = take * per_share_loss
                             allocations.append((trg, take, amt))
-                            if _h != ('taxable',):
+                            if _hh != ('taxable',):
                                 perm_amt += amt
                             _rem -= take
                             _cap_left[_h] = _cap_left.get(_h, 0.0) - take
@@ -2370,6 +2442,8 @@ class CanadaTaxRules(TaxRules):
                         if (trg.id in sheltered_ids
                                 or trg.id in affiliated_ids):
                             continue      # moot pools; leave in place
+                        if trg.id in _call_ids:
+                            continue      # the bump lands on the call itself
                         _own = _symbol_asof(trg.symbol,
                                             end_window_date, '23:59:59')
                         if _back_left.get(_own, 0.0) >= take - 1e-9:
@@ -2488,7 +2562,7 @@ class CanadaTaxRules(TaxRules):
                         if t.id in seen:
                             continue
                         seen.add(t.id)
-                        if t.symbol != tx.symbol:
+                        if t.symbol != tx.symbol and t.id not in _call_ids:
                             continue
                         if t.action in ('DISALLOW', 'ADJUST', 'DIVIDEND', 'TAX', 'INTEREST', 'FEE'):
                             continue
@@ -2899,6 +2973,11 @@ class CanadaTaxRules(TaxRules):
                 canonical=split_timeline.canonical,
                 statute_label="CRA s.54 ('a right to acquire')",
                 check_held_at_end=True)
+            # A long call against a share loss is ENFORCED now (the
+            # solver above); only the put-vs-short scan stays advisory.
+            option_replacement_warnings = [
+                w for w in option_replacement_warnings
+                if w['rule'] != 'call_vs_share_loss']
             _emit_option_replacement_stderr(option_replacement_warnings)
 
         # Conservation post-conditions (see the helpers' docstrings).

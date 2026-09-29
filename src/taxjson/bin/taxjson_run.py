@@ -1379,7 +1379,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         print("  note: wash-sale rule NOT applied — the IRS treats crypto "
               "as property, not a security (§1091 does not reach it); "
               "losses are allowed in full.")
-    # Warn-only option-as-replacement scan (numbers never change).
+    # Warn-only put-vs-short scan (numbers never change); a long call
+    # against a share loss is enforced by the engine itself.
     if is_taxable and settings.get("cross_asset"):
         cmd.append("--cross-asset")
     cmd += option_timing_flags(settings)
@@ -2467,8 +2468,8 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 # futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
 #                                     #   (daily variation margin); next_day = the clearing premium date
 
-# cross_asset   = false               # true: WARN-ONLY, flag option-as-replacement wash triggers
-#                                     #   (long call vs share loss / long put vs short loss); numbers never change
+# cross_asset   = false               # true: WARN-ONLY scan, long put vs short-cover loss (numbers never change);
+#                                     #   a long call vs a share loss is always enforced (s.54 right to acquire)
 # fx_cash_gains = false               # true: end-of-run FX-on-cash report ({fx_rule})
 {option_lines}
 # One [accounts.NAME] section per folder under inputs/. The folder name
@@ -8970,6 +8971,25 @@ def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
     return classes[0], matches, note
 
 
+def _replacement_rows(want: str, matches: Dict[str, Dict[str, Any]],
+                      mode: str) -> Dict[str, Dict[str, Any]]:
+    """Keep the radar rows a trade in `want` can actually affect (ITA
+    s.54, one-way option rule): buying SHARES touches share losses only
+    (shares never replace an option); buying a CALL also touches the
+    underlying's share losses (a right to acquire them) and its own
+    contract; any other option — and SELLING an option — touches only
+    the identical contract (a different series never replaces it)."""
+    from taxjson.lib.core import is_option_symbol, parse_option_right
+    q = want.strip().upper()
+    if not is_option_symbol(q):
+        return {t: r for t, r in matches.items()
+                if not is_option_symbol(t)}
+    call_buy = mode == "buy" and parse_option_right(q) == "C"
+    return {t: r for t, r in matches.items()
+            if t.strip().upper() == q
+            or (call_buy and not is_option_symbol(t))}
+
+
 def _last_loss_line(ll) -> Optional[str]:
     if not ll:
         return None
@@ -9002,6 +9022,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     results = []
     for want in args.symbol:
         wroot, matches, _note = _class_matches(radar, _canon, want)
+        matches = _replacement_rows(want, matches, "buy")
         # Worst verdict across the class (cross-listings included).
         verdict, lines = "SAFE", ([_note] if _note else [])
         clears = None
@@ -9101,6 +9122,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     results = []
     for want in args.symbol:
         wroot, matches, _note = _class_matches(radar, _canon, want)
+        matches = _replacement_rows(want, matches, "sell")
         verdict, lines = "SAFE", ([_note] if _note else [])
         clears = None        # safe-to-sell-from date (worst = LATEST)
         act_by = None        # rescue deadline: last TRADE date (EARLIEST)

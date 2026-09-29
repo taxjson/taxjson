@@ -18,8 +18,9 @@ Two kinds of boundary:
 
 Everything is read from the run's work files, so the symbols are the ones
 the engine pooled (ticker.map already applied): identical property is the
-same symbol. A long call on the same underlying is shown as advisory
-(taxjson denies nothing for it unless the engine is told to).
+same symbol, plus a long call on the same shares (s.54 'a right to
+acquire'), which the engine counts as replacement property for a share
+loss.
 """
 from __future__ import annotations
 
@@ -500,7 +501,8 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
             txt += " — THE DATE BASIS DECIDES THIS ONE"
     if it.get("option"):
         txt += (f". {it['option']} is a right to acquire the shares "
-                f"(s.54 para (i)); taxjson does not deny the loss for it")
+                f"(s.54 para (i)): replacement property if still held on "
+                f"day 30")
     return txt
 
 
@@ -510,9 +512,16 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
     sales within `margin` days of day 30 that decide 'still held'."""
     lo_edge, hi_edge = WINDOW - margin, WINDOW + margin
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
+    calls: Dict[str, List[Dict[str, Any]]] = {}
     for r in book.txs:
         if r.get("action") in ACQ_ACTIONS:
-            by_sym.setdefault(r.get("symbol") or "", []).append(r)
+            sym = r.get("symbol") or ""
+            by_sym.setdefault(sym, []).append(r)
+            if (_right(sym) == "C" and r.get("action") == "BUYSELL"
+                    and float(r.get("quantity") or 0) > 0):
+                und = _underlying(sym)
+                if und:
+                    calls.setdefault(und, []).append(r)
     out = []
     for g, ld, lo_ in _losses(book):
         sym = g.get("symbol") or ""
@@ -537,6 +546,23 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
                 items.append(dict(base, kind="sale", inside=inside,
                                   basis_flip=(alt is not None and
                                               (alt <= WINDOW) != inside)))
+        if not _is_option(sym):
+            for r in calls.get(sym, []):
+                d, od = book.bdate(r), book.other(r)
+                if not d:
+                    continue
+                off = (d - ld).days
+                if not lo_edge <= abs(off) <= hi_edge:
+                    continue
+                alt = (od - lo_).days if od and lo_ else None
+                inside = abs(off) <= WINDOW
+                items.append({"kind": "long call", "account": r["_acct"],
+                              "sheltered": book.kind.get(r["_acct"]) != "taxable",
+                              "date": str(d), "qty": float(r.get("quantity") or 0),
+                              "day": off, "other_basis_day": alt,
+                              "option": r.get("symbol"), "inside": inside,
+                              "basis_flip": (alt is not None and
+                                             (abs(alt) <= WINDOW) != inside)})
         if not items:
             continue
         end = ld + timedelta(days=WINDOW)
@@ -564,8 +590,8 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
 
 def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
     """Share losses with a long call on the same shares bought inside the
-    window (s.54 'a right to acquire'). Advisory: the engine does not deny
-    these losses; `cross_asset = true` only prints a warning."""
+    window (s.54 'a right to acquire'). The engine treats a call still
+    held on day 30 as replacement property (100 shares per contract)."""
     calls: Dict[str, List[Dict[str, Any]]] = {}
     for r in book.txs:
         sym = r.get("symbol") or ""
@@ -600,9 +626,9 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
         items = _group(items)
         for it in items:
             it["why"] = (_describe(book, it, 1.0)
-                         + ("; still held on day 30" if it["held_at_day30"] > 1e-9
-                            else "; no longer held on day 30, so s.54 would not "
-                                 "apply to it"))
+                         + ("; still held on day 30, so it backs a denial"
+                            if it["held_at_day30"] > 1e-9
+                            else "; no longer held on day 30, so it does not"))
         out.append({"account": g["_acct"], "symbol": sym,
                     "loss_date": str(ld), "qty": float(g.get("qty") or 0),
                     "raw_loss": round(float(g.get("raw_gain") or 0), 2),
@@ -743,9 +769,9 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
             L.append(f"      - {it['why']}")
     L.append("")
     cw = doc.get("calls_in_windows") or []
-    L.append(f"== Long calls bought inside a share loss's window ({len(cw)}) "
-             f"— advisory: s.54 treats a right to acquire as identical "
-             f"property, but taxjson does not deny these losses")
+    L.append(f"== Long calls bought inside a share loss's window ({len(cw)}): "
+             f"a call is a right to acquire the shares (s.54), so one still "
+             f"held on day 30 is replacement property")
     if not cw:
         L.append("   None.")
     for r in cw:
