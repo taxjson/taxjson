@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`taxjson tax-logic`.** A one-screen statement of every rule taxjson
+  applies for the project's country (or `--country`), one line per rule
+  (citing the Act where the rule comes from it), with the project's settings filled in
+  where they change the answer. `--json` for machines.
 - **`cross_asset` retired; puts are never replacement property.** A put
   is a right to sell, so the old warn-only "long put vs short-cover loss"
   scan is gone, and with the call rule enforced nothing is left opt-in.

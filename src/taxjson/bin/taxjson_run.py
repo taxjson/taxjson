@@ -6323,6 +6323,23 @@ def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
             f"unchanged in every later year's project.")
 
 
+def cmd_tax_logic(args: argparse.Namespace) -> None:
+    """`taxjson tax-logic`: a short statement of every rule taxjson
+    applies for the project's country, with the project's settings
+    filled in (lib/tax_logic). Works outside a project too (defaults)."""
+    from taxjson.lib.tax_logic import render, sections
+    root = Path(args.dir).resolve()
+    settings = dict((_soft_config(root).get("settings") or {}))
+    country = (args.country or settings.get("country") or "canada")
+    country = _normalize_country(str(country))
+    if getattr(args, "json", False):
+        _json_out({"country": country, "year": settings.get("year"),
+                   "sections": [{"title": t, "rules": r}
+                                for t, r in sections(country, settings)]})
+        return
+    print(render(country, settings))
+
+
 def cmd_edge_cases(args: argparse.Namespace) -> None:
     """`taxjson edge-cases`: transactions whose treatment turns on a
     boundary — trades that settle in a different year than they trade,
@@ -10153,6 +10170,16 @@ def main() -> None:
     p_edge.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
     p_edge.set_defaults(func=cmd_edge_cases)
+
+    p_logic = sub.add_parser(
+        "tax-logic",
+        help="A short statement of every rule taxjson applies for this "
+             "project's country, with its settings filled in")
+    p_logic.add_argument("--country", choices=("canada", "ca", "usa", "us"),
+                         help="Country (default: the project's, else canada)")
+    p_logic.add_argument("--json", action="store_true",
+                         help="Emit JSON instead of text")
+    p_logic.set_defaults(func=cmd_tax_logic)
 
     p_ck = sub.add_parser(
         "checklist",
