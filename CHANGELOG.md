@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Coinbase staking income is the Subtotal.** Coinbase's Total adds back its
+  staking commission ("Fees and/or Spread"), coins you never received; it
+  was booked as income and as the rewarded coins' cost. Income and ACB now
+  use the Subtotal (quantity x price).
 - **Kraken: fees charged in the traded coin.** Kraken's trades CSV states
   every fee in quote units, even when Kraken took it in the coin you
   bought or sold, so the full `vol` was booked and phantom coins piled up

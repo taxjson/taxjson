@@ -279,6 +279,19 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # silently double-tax on later disposition).
                     if not total and price and qty:
                         total = price * abs(qty)
+                    # The reward's value is what you RECEIVED: the Subtotal
+                    # (= quantity x price). Coinbase's Total adds back its
+                    # staking commission ("Fees and/or Spread", ~25-35% of
+                    # the gross reward) — coins you never received. Booking
+                    # the Total overstated staking income and the rewarded
+                    # coins' ACB by that commission (134.48 CAD on one
+                    # real 2025 export).
+                    _sub = abs(self._num(row, header_map, 'subtotal')) \
+                        if 'subtotal' in header_map else 0.0
+                    if _sub:
+                        total = _sub
+                    elif price and qty:
+                        total = price * abs(qty)
                     div = {
                         'action': 'DIVIDEND',
                         'date': date_str, 'time': time_str, 'date_settle': date_str,
