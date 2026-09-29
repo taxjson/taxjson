@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **`cross_asset` retired; puts are never replacement property.** A put
+  is a right to sell, so the old warn-only "long put vs short-cover loss"
+  scan is gone, and with the call rule enforced nothing is left opt-in.
+  The rule is: an option (a long call) replaces shares, never the
+  reverse; an option is replaced only by the identical contract. The
+  `cross_asset` key and `--cross-asset` flag are accepted and ignored
+  (`run` says so); the US engine prints its call warning without them.
 - **Calls are replacement property for share losses (s.54 para (i)).** A
   long call on the same shares, opened within 30 days of a loss on long
   shares and still held on day 30 (any account, registered included), now

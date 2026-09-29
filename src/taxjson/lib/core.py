@@ -219,19 +219,17 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
                                       canonical=None, statute_label='',
                                       window_days=30,
                                       check_held_at_end=False):
-    """WARN-ONLY option-as-replacement scan (user policy, 2026-07):
+    """WARN-ONLY call-as-replacement scan, used by the (experimental) US
+    engine; the Canada engine enforces the same rule in its solver.
 
       'call_vs_share_loss': loss on LONG shares + LONG CALL acquired on
-          the same underlying inside the ±window (CRA s.54 "a right to
-          acquire"; IRS §1091 "option to acquire").
-      'put_vs_short_loss':  loss from closing a SHORT + LONG PUT acquired
-          on the same underlying inside the ±window.
+          the same underlying inside the ±window (IRS §1091 "option to
+          acquire"; CRA s.54 "a right to acquire").
 
-    Deliberately asymmetric, per the decided policy: an option's own loss
-    is NEVER triggered by share purchases (options wash only against the
-    identical contract — the engines' existing symbol matching), and
-    near-identical contracts (same underlying, different strike/expiry)
-    are NOT matched. Detection only — computed numbers are never changed.
+    One-way, per the owner's policy (2026-09-29): options replace shares,
+    never the reverse, and an option is replaced only by the identical
+    contract (the engines' own symbol matching). A put is a right to
+    SELL, never replacement property. Detection only — numbers unchanged.
 
     `loss_entries`: dicts with symbol, date (already on the calling
     engine's window basis), amount (negative), id, direction.
@@ -267,7 +265,9 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
         symbol = loss['symbol']
         if is_option_symbol(symbol):
             continue
-        want = 'P' if loss.get('direction') == 'SHORT' else 'C'
+        if loss.get('direction') == 'SHORT':
+            continue            # a put is not a right to acquire
+        want = 'C'
         try:
             loss_dt = _d(loss['date'])
         except (KeyError, TypeError, ValueError):
@@ -304,8 +304,7 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
                         continue
                 held = bal > 1e-6
             out.append({
-                'rule': ('call_vs_share_loss' if want == 'C'
-                         else 'put_vs_short_loss'),
+                'rule': 'call_vs_share_loss',
                 'loss_symbol': symbol,
                 'loss_date': loss['date'],
                 'loss_amount': round(float(loss['amount']), 2),
@@ -2953,32 +2952,10 @@ class CanadaTaxRules(TaxRules):
             )
         _warn_undrained_adjustments(pending_adjustments, "canada")
 
-        # Warn-only option-as-replacement scan (user policy; numbers are
-        # never changed — gated on cross_asset until enforcement is
-        # decided). Losses on the settle basis, matching the engine's
-        # superficial-loss window convention.
+        # Options as replacement property are ENFORCED in the solver
+        # above (a long call vs a share loss, s.54 para (i)); nothing is
+        # left advisory. The key stays in the output for readers.
         option_replacement_warnings: List[Dict[str, Any]] = []
-        if cross_asset:
-            _orw_losses = [
-                {'symbol': g['symbol'],
-                 'date': g.get('date_settle') or g['date'],
-                 'amount': g['gain'],
-                 'id': g.get('tx_id', ''),
-                 'direction': g.get('direction', 'LONG')}
-                for g in final_realized_gains
-                if g['gain'] < -0.005 and not g.get('tainted')]
-            option_replacement_warnings = detect_option_replacement_matches(
-                _orw_losses, all_txs,
-                date_of=get_sort_date,
-                canonical=split_timeline.canonical,
-                statute_label="CRA s.54 ('a right to acquire')",
-                check_held_at_end=True)
-            # A long call against a share loss is ENFORCED now (the
-            # solver above); only the put-vs-short scan stays advisory.
-            option_replacement_warnings = [
-                w for w in option_replacement_warnings
-                if w['rule'] != 'call_vs_share_loss']
-            _emit_option_replacement_stderr(option_replacement_warnings)
 
         # Conservation post-conditions (see the helpers' docstrings).
         _pool_qty: Dict[str, float] = {}
@@ -4503,28 +4480,27 @@ class USATaxRules(TaxRules):
             )
         _warn_undrained_adjustments(pending_option_adjustments, "usa")
 
-        # Warn-only option-as-replacement scan (user policy; numbers are
-        # never changed — gated on cross_asset). Losses on the TRADE
-        # basis, matching the §1091 window convention. No held-at-end
-        # requirement in §1091 (that is a CRA s.54 condition).
-        option_replacement_warnings: List[Dict[str, Any]] = []
-        if cross_asset:
-            _orw_losses = [
-                {'symbol': g['symbol'],
-                 'date': g['date'],
-                 'amount': g.get('raw_gain', g['gain']),
-                 'id': g.get('id', ''),
-                 'direction': g.get('direction', 'LONG')}
-                for g in sell_entries
-                if g.get('raw_gain', g['gain']) < -0.005
-                and not g.get('tainted')]
-            option_replacement_warnings = detect_option_replacement_matches(
-                _orw_losses, all_events,
-                date_of=lambda t: t.date,
-                canonical=split_timeline.canonical,
-                statute_label="IRS §1091 ('option to acquire')",
-                check_held_at_end=False)
-            _emit_option_replacement_stderr(option_replacement_warnings)
+        # Warn-only call-as-replacement scan (the experimental US engine
+        # does not enforce it; always on — cross_asset is retired).
+        # Losses on the TRADE basis, matching the §1091 window
+        # convention. No held-at-end requirement in §1091 (that is a CRA
+        # s.54 condition).
+        _orw_losses = [
+            {'symbol': g['symbol'],
+             'date': g['date'],
+             'amount': g.get('raw_gain', g['gain']),
+             'id': g.get('id', ''),
+             'direction': g.get('direction', 'LONG')}
+            for g in sell_entries
+            if g.get('raw_gain', g['gain']) < -0.005
+            and not g.get('tainted')]
+        option_replacement_warnings = detect_option_replacement_matches(
+            _orw_losses, all_events,
+            date_of=lambda t: t.date,
+            canonical=split_timeline.canonical,
+            statute_label="IRS §1091 ('option to acquire')",
+            check_held_at_end=False)
+        _emit_option_replacement_stderr(option_replacement_warnings)
 
         # Conservation post-condition (see _verify_share_conservation).
         _inv_qty: Dict[str, float] = {}

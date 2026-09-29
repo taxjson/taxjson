@@ -588,7 +588,8 @@ def parse_args(argv=None):
     p.add_argument("--affiliated")
     p.add_argument("--incomplete-history", metavar="FILE")
     p.add_argument("--per-account-basis", action="store_true")
-    p.add_argument("--cross-asset", action="store_true")
+    p.add_argument("--cross-asset", action="store_true",
+                   help=argparse.SUPPRESS)    # retired, ignored
     p.add_argument("--option-premium-timing", choices=["grant", "close"], default="close")
     p.add_argument("--option-grant-since", type=int, default=None)
     p.add_argument("--option-buyback-wash", action="store_true")
@@ -714,7 +715,7 @@ def main(argv=None) -> int:
     kwargs: Dict[str, Any] = dict(
         sheltered_transactions=sheltered,
         affiliated_transactions=affiliated,
-        cross_asset=args.cross_asset, trace=True,
+        trace=True,
         detect_wash_sales=not args.no_wash)
     if country == "usa":
         kwargs["per_account_basis"] = args.per_account_basis

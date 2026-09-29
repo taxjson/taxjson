@@ -504,10 +504,13 @@ def validate_config(cfg: Dict[str, Any],
     _fs = settings.get("futures_settle")
     if _fs is not None and _fs not in ("trade", "next_day"):
         _die(f"[settings] futures_settle must be \"trade\" or \"next_day\" (got {_fs!r}).")
-    ca_flag = settings.get("cross_asset")
-    if ca_flag is not None and not isinstance(ca_flag, bool):
-        _die(f"[settings] cross_asset must be true/false, "
-                 f"got {ca_flag!r}")
+    if "cross_asset" in settings:
+        warnings.append(
+            "[settings] cross_asset is retired and ignored: a long call "
+            "on the same shares is always replacement property for a "
+            "share loss (s.54 'a right to acquire'); shares never replace "
+            "an option, and only the identical contract replaces an "
+            "option. Delete the line.")
     src = settings.get("source_currencies")
     if src is not None and (not isinstance(src, list)
                             or not all(isinstance(c, str) for c in src)):
@@ -1379,10 +1382,6 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         print("  note: wash-sale rule NOT applied — the IRS treats crypto "
               "as property, not a security (§1091 does not reach it); "
               "losses are allowed in full.")
-    # Warn-only put-vs-short scan (numbers never change); a long call
-    # against a share loss is enforced by the engine itself.
-    if is_taxable and settings.get("cross_asset"):
-        cmd.append("--cross-asset")
     cmd += option_timing_flags(settings)
     # Project-wide phantom opening-balances (from `find-missing-history
     # --gen-phantoms`). load_phantoms filters by (symbol, account), so passing
@@ -1587,8 +1586,6 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
         "--sheltered", str(sheltered_base),
         "--full-traces", str(wash_traces),
     ]
-    if settings.get("cross_asset"):
-        cmd.append("--cross-asset")
     cmd += option_timing_flags(settings)
     # Same phantom opening-balances as the main gains pass — without this the
     # wash-adjusted books (which `taxjson wash-sales` PREFERS when present)
@@ -1695,8 +1692,6 @@ def stage_blended_wash_pass(names: List[str],
         cmd.append("--per-account-basis")
     if sheltered_base is not None:
         cmd += ["--sheltered", str(sheltered_base)]
-    if settings.get("cross_asset"):
-        cmd.append("--cross-asset")
     cmd += option_timing_flags(settings)
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
@@ -2468,8 +2463,6 @@ tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for c
 # futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
 #                                     #   (daily variation margin); next_day = the clearing premium date
 
-# cross_asset   = false               # true: WARN-ONLY scan, long put vs short-cover loss (numbers never change);
-#                                     #   a long call vs a share loss is always enforced (s.54 right to acquire)
 # fx_cash_gains = false               # true: end-of-run FX-on-cash report ({fx_rule})
 {option_lines}
 # One [accounts.NAME] section per folder under inputs/. The folder name
@@ -9309,8 +9302,6 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl += ["--map", str(tmap)]
         if phantoms.exists():
             fl += ["--incomplete-history", str(phantoms)]
-        if settings.get("cross_asset"):
-            fl.append("--cross-asset")
         fl += option_timing_flags(settings)
         for sym in getattr(args, "symbol", None) or []:
             fl += ["--symbol", sym]

@@ -92,18 +92,11 @@ def _parse_args():
              "option as a superficial loss when identical options are acquired "
              "within 30 days and held (strict reading; default off — a "
              "closing purchase is not a disposition s.54 reaches).")
-    parser.add_argument(
-        "--cross-asset",
-        action="store_true",
-        help=(
-            "WARN-ONLY: also scan for option-as-replacement wash triggers "
-            "(a long CALL bought within +-30d of a share loss, or a long "
-            "PUT within +-30d of a short-closing loss, on the same "
-            "underlying). Emits option_replacement_warnings and stderr "
-            "notes; computed numbers are never changed. Option losses "
-            "themselves still wash only against the identical contract."
-        ),
-    )
+    # Retired (2026-09-29): long calls vs share losses are enforced by
+    # the Canada engine and always warned by the US engine; nothing is
+    # opt-in any more. Accepted so old scripts keep working.
+    parser.add_argument("--cross-asset", action="store_true",
+                        help=argparse.SUPPRESS)
     parser.add_argument(
         "--per-account-basis", action="store_true",
         help="Blended multi-account mode (combined taxable input): US "
@@ -342,7 +335,6 @@ def _main():
         incomplete_history=args.incomplete_history,
         trace=bool(args.full_traces),
         no_wash=args.no_wash,
-        cross_asset=args.cross_asset,
         per_account_basis=args.per_account_basis,
         option_premium_timing=args.option_premium_timing,
         option_grant_since=args.option_grant_since,

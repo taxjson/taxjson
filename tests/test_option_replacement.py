@@ -6,7 +6,7 @@ User-decided policy:
      engine (ITA s.54 para (i), 'a right to acquire'; 2026-09-29), 100
      shares per contract, the deferral added to the call's ACB; the US
      engine only warns (cross_asset);
-  2. short-closing loss + long PUT → replacement (warn);
+  2. a PUT is never replacement property (a right to sell);
   3. option losses wash ONLY against the identical contract (existing
      symbol matching — pinned here);
   4. shares are NEVER replacement property for an option's loss.
@@ -159,10 +159,10 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
             self.assertEqual(len(on['transactions']),
                              len(off['transactions']))
 
-    def test_off_by_default_and_silent(self):
+    def test_us_warns_without_any_setting(self):
         res, err = gains(USATaxRules(), self._txs(), cross_asset=False)
-        self.assertEqual(res['option_replacement_warnings'], [])
-        self.assertNotIn('option-replacement', err)
+        self.assertEqual(len(res['option_replacement_warnings']), 1)
+        self.assertIn('option-replacement', err)
 
     def test_outside_window_allowed(self):
         res, _ = gains(CanadaTaxRules(),
@@ -188,20 +188,24 @@ class TestRuleOneCallVsShareLoss(unittest.TestCase):
                        self._txs(option='AAPL250620C00150000.TO'))
         self.assertEqual(res['wash_sales'], [])
 
-class TestRuleTwoPutVsShortLoss(unittest.TestCase):
-    def _txs(self, option=PUT):
-        return short_loss() + [
-            tx(date='2025-03-20', symbol=option, qty=1, price=3.0, net=300.0)]
+class TestPutsNeverReplace(unittest.TestCase):
+    """A put is a right to SELL: never replacement property, for shares
+    or for a short-cover loss."""
 
-    def test_fires_both_engines(self):
+    def test_put_after_short_cover_loss(self):
+        txs = short_loss() + [
+            tx(date='2025-03-20', symbol=PUT, qty=1, price=3.0, net=300.0)]
         for rules_cls in (CanadaTaxRules, USATaxRules):
-            res, _ = gains(rules_cls(), self._txs())
-            warns = res['option_replacement_warnings']
-            self.assertEqual(len(warns), 1, rules_cls.__name__)
-            self.assertEqual(warns[0]['rule'], 'put_vs_short_loss')
+            res, _ = gains(rules_cls(), txs)
+            self.assertEqual(res['option_replacement_warnings'], [],
+                             rules_cls.__name__)
+        res, _ = gains(CanadaTaxRules(), txs)
+        self.assertEqual(res['wash_sales'], [])
 
     def test_call_does_not_trigger_short_loss(self):
-        res, _ = gains(CanadaTaxRules(), self._txs(option=CALL))
+        res, _ = gains(CanadaTaxRules(), short_loss() + [
+            tx(date='2025-03-20', symbol=CALL, qty=1, price=3.0, net=300.0)])
+        self.assertEqual(res['wash_sales'], [])
         self.assertEqual(res['option_replacement_warnings'], [])
 
 
@@ -272,15 +276,15 @@ class TestRenameBridge(unittest.TestCase):
                          'NEW250620C00150000.US')
 
 
-class TestCliFlag(unittest.TestCase):
-    def test_gains_cli_threads_cross_asset(self):
+class TestCrossAssetRetired(unittest.TestCase):
+    def test_gains_cli_accepts_retired_flag(self):
         import json
         import subprocess
         import sys
         import tempfile
         from pathlib import Path
-        txs = short_loss() + [
-            tx(date='2025-03-20', symbol=PUT, qty=1, price=3.0, net=300.0)]
+        txs = long_loss() + [
+            tx(date='2025-03-20', symbol=CALL, qty=1, price=3.0, net=300.0)]
         with tempfile.TemporaryDirectory() as td:
             inp = Path(td) / 'base.json'
             inp.write_text(json.dumps(
@@ -292,8 +296,16 @@ class TestCliFlag(unittest.TestCase):
                 capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, out.stderr)
             res = json.loads(out.stdout)
-            self.assertEqual(len(res['option_replacement_warnings']), 1)
-            self.assertIn('option-replacement (warn-only', out.stderr)
+            self.assertEqual(res['option_replacement_warnings'], [])
+            self.assertAlmostEqual(res['summary']['total_gain'], 0.0,
+                                   places=2)
+
+    def test_setting_warns_retired(self):
+        from taxjson.bin import taxjson_run as tr
+        w = tr.validate_config({'settings': {'year': 2025,
+                                             'cross_asset': True},
+                                'accounts': {'m': {'type': 'taxable'}}})
+        self.assertTrue(any('cross_asset is retired' in x for x in w))
 
 
 class TestRadarAndPlanningTools(unittest.TestCase):

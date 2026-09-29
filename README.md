@@ -256,7 +256,6 @@ tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 #                              # margin settles the P/L) | next_day (clearing premium date)
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
-# cross_asset = true           # WARN-ONLY put-vs-short scan (long calls vs share losses are always enforced)
 # option_premium_timing = "grant"   # Canada (default): a written option's premium is a gain in
 #                                   # the year WRITTEN (ITA s.49(1)); a buy-back is a loss in its
 #                                   # own year; assignment folds into the shares. "close" nets
@@ -647,10 +646,11 @@ The rule is one-way, by design:
   `.TO` listing, unless ticker.map joins them) and follows ticker renames.
 
 `wash-radar`, `buy-check`, `sell-check` and `edge-cases` apply the same
-rule. `cross_asset = true` in `[settings]` (or `--cross-asset` on
-`taxjson-gains`) still adds the **warn-only** scans: a loss from closing a
-short with a long put bought in the window, and in the experimental US
-engine the call rule (§1091 "option to acquire") as a warning.
+rule. A put is a right to sell, so it is never replacement property: not
+for shares, and not for a loss on covering a short (a new short sale
+acquires nothing either). The experimental US engine does not enforce the
+call rule yet; it prints a warning for each case (§1091 "option to
+acquire"). The old `cross_asset` setting is retired and ignored.
 
 **`taxjson t1135`** — CRA **Form T1135** (Foreign Income Verification Statement)
 helper, for Canadian filers holding foreign securities. Answers the filing

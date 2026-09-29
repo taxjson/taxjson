@@ -98,7 +98,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Why deferred:** which reading is right for shares acquired AND disposed inside the window before the loss is not settled authority; flagged so the asymmetry is known (2026-09 audit).
 
 ### US: options as replacement property are advisory-only
-- **Where:** `core.py` `detect_option_replacement_matches` (warn-only by design).
+- **Where:** `core.py` `detect_option_replacement_matches` (warn-only in the US engine; the Canada engine enforces the call rule).
 - **Current behavior:** §1091(a) covers "a contract or option so to acquire"; a deep-ITM call bought inside the window leaves the stock loss allowed, with a warning. A user policy choice, not a bug — the statute itself is mandatory, so treat the warning as an instruction (2026-09 audit).
 
 ### US: specific-lot identification is not supported (FIFO only)

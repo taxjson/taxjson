@@ -193,8 +193,6 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     sheltered = cache / "sheltered_base.json"
     if basis == "wash-adjusted" and sheltered.exists():
         cmd += ["--sheltered", str(sheltered)]
-    if settings.get("cross_asset"):
-        cmd.append("--cross-asset")
     cmd += option_timing_flags(settings)
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
@@ -238,8 +236,6 @@ def recompute_year(cache: Path, account: str, year: int,
     sheltered = cache / "sheltered_base.json"
     if basis == "wash-adjusted" and sheltered.exists():
         cmd += ["--sheltered", str(sheltered)]
-    if settings.get("cross_asset"):
-        cmd.append("--cross-asset")
     cmd += option_timing_flags(settings)
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
