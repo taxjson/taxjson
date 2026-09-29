@@ -30,6 +30,7 @@ import argparse
 from pathlib import Path
 
 from taxjson.lib.core import register_brokerage, TaxTransaction, load_brokerage
+from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.schema import validate_transactions
 from taxjson.lib.brokerages import ib_extractor
 from taxjson.lib.brokerages import questrade
@@ -198,6 +199,10 @@ Examples:
     overrides = (load_security_overrides(Path(args.security_overrides))
                  if args.security_overrides else [])
     normalized = []
+    # Parser-declared contract multipliers, parallel to `normalized`
+    # (not a TaxTransaction field — they feed only the schema notional
+    # check below, which is an ERROR for rows that declare one).
+    multipliers = []
     dropped_keys = {}
     lint_problems = 0
     kept_aside: list = []
@@ -222,6 +227,14 @@ Examples:
                   f"the usual cause — inspect/trim the offending row.",
                   file=sys.stderr)
             sys.exit(2)
+        except BrokerageParseError as e:
+            # The parser refused the file rather than guess (missing
+            # required column, unparseable money, a row whose money does
+            # not add up, a Cash Report mismatch, a non-activity report).
+            # A finding in the DATA: exit 1, one line, no traceback.
+            print(f"taxjson-brokerage: error: {input_path.name}: {e}",
+                  file=sys.stderr)
+            sys.exit(1)
 
         if not args.transfers:
             # Custody evidence, not tax events: a taxable book's basis
@@ -305,7 +318,7 @@ Examples:
             # or newly-invented parser field would otherwise vanish here
             # with zero signal ('qty' is exempt: aliased above).
             for k in t:
-                if k not in valid_keys and k != 'qty':
+                if k not in valid_keys and k not in ('qty', 'multiplier'):
                     dropped_keys[k] = dropped_keys.get(k, 0) + 1
             clean = {k: v for k, v in t.items() if k in valid_keys}
             # Only override the parser's account label when --account
@@ -316,6 +329,7 @@ Examples:
             if args.account_name is not None:
                 clean['account'] = args.account_name
             normalized.append(TaxTransaction(**clean))
+            multipliers.append(t.get('multiplier'))
 
     for key, n in sorted(dropped_keys.items()):
         print(f"warning: parser emitted unknown field {key!r} on {n} "
@@ -327,7 +341,8 @@ Examples:
     # violations that corrupt tax math; they abort only under --strict
     # (or --lint) so a mid-season odd export still produces output.
     errors, schema_warnings = validate_transactions(
-        [t.to_dict() for t in normalized], lint=args.lint)
+        [({**t.to_dict(), 'multiplier': m} if m else t.to_dict())
+         for t, m in zip(normalized, multipliers)], lint=args.lint)
     for w in schema_warnings:
         print(f"warning: schema: {w}", file=sys.stderr)
     for e in errors:

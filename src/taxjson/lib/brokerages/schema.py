@@ -52,7 +52,8 @@ KNOWN_ACTIONS = frozenset({
 # account, description, type, id, ...) is universally optional.
 SCHEMA: Dict[str, Dict[str, Tuple[str, ...]]] = {
     'BUYSELL':          {'required': ('date', 'symbol', 'quantity', 'currency', 'net_amount'),
-                         'optional': ('price', 'commission', 'fee', 'date_settle', 'gross_amount')},
+                         'optional': ('price', 'commission', 'fee', 'date_settle', 'gross_amount',
+                                      'multiplier')},
     'ASSIGN':           {'required': ('date', 'symbol', 'quantity', 'currency'),
                          'optional': ('price', 'net_amount', 'date_settle')},
     'SPLIT':            {'required': ('date', 'symbol', 'quantity'),
@@ -98,8 +99,10 @@ def validate_transactions(txs: List[Dict[str, Any]],
     Returns (errors, warnings). Errors are convention violations that
     will corrupt downstream math (unknown action, malformed dates, a
     negative trade net, a non-positive split ratio, missing required
-    fields). Warnings are suspicious-but-survivable (unknown market
-    suffix, trade notional far from qty*price). `lint=True` adds
+    fields, and a trade notional far from qty*price*multiplier when the
+    parser DECLARED the row's `multiplier`). Warnings are
+    suspicious-but-survivable (unknown market suffix, the same notional
+    gap on a row whose multiplier is only guessed). `lint=True` adds
     style-level findings (non-canonical symbol_new spelling) that are
     deliberately silent in everyday runs.
     """
@@ -142,19 +145,35 @@ def validate_transactions(txs: List[Dict[str, Any]],
                               f"the quantity sign")
             if price < -_MONEY_EPS:
                 errors.append(f"{_who(tx, i)}: negative price {price}")
-            # Notional sanity (warn-level: brokers round, and fees sit
-            # inside net for buys / outside for sells). price==0 rows
-            # (crypto awaiting fill-crypto, expiries) are exempt.
+            # Notional sanity: net_amount vs qty * price * multiplier
+            # (brokers round, and fees sit inside net for buys / outside
+            # for sells). price==0 rows (crypto awaiting fill-crypto,
+            # expiries) are exempt. A row whose parser DECLARES its
+            # contract size (`multiplier`: IB carries the statement's
+            # own — CL 1000, MET 0.1, equity option 100) is checked
+            # against it and a mismatch is an ERROR: the guess of 1 or
+            # 100 drowned every futures row in false positives, so the
+            # check could only ever warn. Rows without a declared
+            # multiplier keep the guess and stay warn-level.
             if action == 'BUYSELL' and price > 0 and net > 0:
-                mult = 100.0 if is_option_symbol(tx.get('symbol') or '') else 1.0
+                declared = tx.get('multiplier')
+                try:
+                    declared = float(declared) if declared else 0.0
+                except (TypeError, ValueError):
+                    declared = 0.0
+                if declared > 0:
+                    mult = declared
+                else:
+                    mult = (100.0 if is_option_symbol(tx.get('symbol') or '')
+                            else 1.0)
                 expected = abs(qty) * price * mult
                 fees = (abs(float(tx.get('commission') or 0.0))
                         + abs(float(tx.get('fee') or 0.0)))
                 gap = abs(expected - net)
                 if gap > fees + max(5.0, 0.02 * expected):
-                    warnings.append(
+                    (errors if declared > 0 else warnings).append(
                         f"{_who(tx, i)}: net_amount {net:,.2f} is far from "
-                        f"qty*price{'*100' if mult > 1 else ''} = "
+                        f"qty*price{f'*{mult:g}' if mult != 1 else ''} = "
                         f"{expected:,.2f} (±fees {fees:,.2f}) — possible "
                         f"data typo; silent wrong money if real")
 
@@ -213,6 +232,10 @@ def render_schema_prompt() -> str:
         "  - Trades (BUYSELL/ASSIGN): net_amount is ALWAYS POSITIVE; the "
         "direction is the SIGN of quantity (+buy / -sell). net_amount is "
         "fee-inclusive for buys, net of fees for sells.",
+        "  - multiplier (optional, BUYSELL): the contract size when the "
+        "export states it (100 per equity option, 1000 per CL future); "
+        "a declared multiplier makes |net - qty*price*multiplier| beyond "
+        "fees a schema ERROR.",
         "  - Income rows are SIGN-PRESERVING: brokers post negative "
         "reversal rows that must net out — never abs() an amount.",
         "  - DIVIDEND gross_amount is the pre-withholding amount when "
