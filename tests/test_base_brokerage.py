@@ -262,7 +262,20 @@ class TestSettlementDateT1(unittest.TestCase):
     def test_skips_weekend(self):
         # Friday → Monday (skip Sat/Sun).
         self.assertEqual(
+            self.b.settlement_date_t1('2025-01-10', '%Y-%m-%d'),
+            '2025-01-13',
+        )
+
+    def test_skips_holiday(self):
+        # Friday before MLK Day → Tuesday (US); the TSX is open that
+        # Monday, so a CAD trade settles Monday.
+        self.assertEqual(
             self.b.settlement_date_t1('2025-01-17', '%Y-%m-%d'),
+            '2025-01-21',
+        )
+        self.assertEqual(
+            self.b.settlement_date_t1('2025-01-17', '%Y-%m-%d',
+                                      currency='CAD'),
             '2025-01-20',
         )
 

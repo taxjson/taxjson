@@ -738,7 +738,7 @@ def main():
 
     print("-" * head_w)
     print("Definitions:")
-    print("  VIOLATION: You sold at a loss but still hold the same security. Sell it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (T+1 assumed; an exchange holiday inside the lag moves the last safe trade date one day EARLIER).")
+    print("  VIOLATION: You sold at a loss but still hold the same security. Sell it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (the printed date already allows for the T+1 lag and any settlement holiday inside it).")
     print("  BLOCKED: You sold at a loss in the last 30 days. Buying now cancels that loss.")
     print("  LOCKED: A sheltered/registered account bought in the last 30 days and the sheltered side still holds. Selling taxable at a loss is superficial; the registered-matched portion is denied for good.\n  EXITABLE: You bought in the last 30 days in a taxable account. Selling the FULL position at a loss is fine; a partial loss sale is superficial (basis defers into the rest).\n  CAUTION: A sheltered account bought recently but all sheltered accounts are now at 0. A full-exit loss sale stands unless an affiliated account re-buys within 30 days after.")
     print("  COOLING: You recently sold out at a loss. Wait 30 days from the sale before buying back.")

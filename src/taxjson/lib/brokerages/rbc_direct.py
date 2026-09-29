@@ -959,7 +959,8 @@ class RbcBrokerage(BaseBrokerage):
         if r.settle:
             date_settle = r.settle
         elif occ:
-            date_settle = self.settlement_date_t1(r.date, "%Y-%m-%d")
+            date_settle = self.settlement_date_t1(r.date, "%Y-%m-%d",
+                                                  currency=r.currency)
         else:
             date_settle = self.equity_settlement_date(r.date, r.currency,
                                                       "%Y-%m-%d")

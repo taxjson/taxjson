@@ -168,7 +168,8 @@ class TestIbExpirySettlement(unittest.TestCase):
                 + _ib_trade(self.OPT, 'QZX 15JAN27 70 C',
                             '2026-12-31, 10:00:00', 1, 5.00, -500, -1, 'O'))
         txs, _ = _parse(IbBrokerage(), body)
-        self.assertEqual(txs[0]['date_settle'], '2027-01-01')
+        # 2027-01-01 is New Year's Day (a Friday): next settlement Monday.
+        self.assertEqual(txs[0]['date_settle'], '2027-01-04')
 
 
 WB_HEAD = (',,,,,,,,,\n'

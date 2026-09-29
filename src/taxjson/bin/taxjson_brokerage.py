@@ -189,6 +189,16 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--futures-settle", dest="futures_settle",
+        choices=("trade", "next_day"), default="trade",
+        help=(
+            "IB only: settle date of futures and futures options — "
+            "'trade' (default; variation margin settles the P/L daily, so "
+            "the disposition is the trade date) or 'next_day' (the "
+            "clearing house's premium settlement day)."
+        ),
+    )
+    parser.add_argument(
         "--account-type", dest="account_type",
         choices=("taxable", "sheltered"), default=None,
         help=(
@@ -231,6 +241,8 @@ Examples:
         extractor = extractor_class()
         if hasattr(extractor, 'foreign_return_of_capital'):
             extractor.foreign_return_of_capital = args.foreign_roc
+        if hasattr(extractor, 'futures_settle'):
+            extractor.futures_settle = args.futures_settle
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
         _kept_this_file = 0     # TRANSFER evidence rows set aside below

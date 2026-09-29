@@ -258,10 +258,11 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
         line = next(l for l in out.splitlines() if l.startswith("ML.TO"))
         self.assertIn("VIOLATION", line)
         # loss #1's rescue deadline: settle bound 07-01, and the last
-        # T+1 TRADE date that settles inside it (06-30) is what the
-        # user is told to act on.
+        # T+1 TRADE date that settles inside it is what the user is told
+        # to act on. 07-01 is Canada Day, so a 06-30 trade settles 07-02:
+        # the last safe trade date is 06-29.
         self.assertIn("SETTLE by 2026-07-01", line)
-        self.assertIn("by 2026-06-30", line)
+        self.assertIn("by 2026-06-29", line)
 
     def test_short_position_loss_not_reported_as_sell_violation(self):
         # Short 100, cover 40 at a loss: the short-OPENING sale must not

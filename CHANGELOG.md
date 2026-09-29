@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **`taxjson edge-cases`.** One report of everything whose treatment turns
+  on a boundary: trades that settle in the other year and where
+  `tax_date` puts them, dispositions on the last and first days of a
+  year, written options and expiries across Dec 31, income paid around
+  New Year, crypto near midnight, loss windows spanning Dec 31 and
+  deferrals carried into next year. For each taxable loss it lists every
+  purchase (any account) or sale within `--margin` days of day 30, with
+  the day count on both date bases, and flags where the basis alone
+  decides. Long calls bought inside a share loss's window are listed as
+  advisory (s.54 'right to acquire'; not enforced).
+- **Settle dates skip holidays.** Brokers that don't print a settle date
+  (IB, and Webull's trade date worked back from its settle date) were
+  dated by skipping weekends only, so 250 of the owner's IB trades
+  settled on a closed day (Good Friday, Labour Day, July 3 2026, Jan 1).
+  That picked the wrong day's Bank of Canada rate and could move a
+  repurchase into or out of the 30-day superficial-loss window. A new
+  rule-based calendar (`lib/market_calendar.py`) counts settlement days:
+  US = NYSE plus Federal Reserve holidays (Columbus and Veterans Day trade
+  but don't settle); Canada = TSX plus Remembrance Day and the National
+  Day for Truth and Reconciliation. It was checked against every settle
+  date Questrade and RBC print. Equities before 2017-09-05 now settle T+3.
+- **Futures settle on the trade date.** IB futures and futures options
+  were given the stock T+1 settle date, so a close on Dec 31 landed in the
+  next tax year. Variation margin settles their profit and loss daily, so
+  the disposition is now the trade date. `[settings] futures_settle =
+  "next_day"` restores the clearing house's premium date.
+
 - **Coinbase staking income is the Subtotal.** Coinbase's Total adds back its
   staking commission ("Fees and/or Spread"), coins you never received; it
   was booked as income and as the rewarded coins' cost. Income and ACB now

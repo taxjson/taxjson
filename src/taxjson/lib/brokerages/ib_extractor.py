@@ -123,36 +123,40 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
                 t['symbol'] = f"{root}.{want}"
 
 
+FUTURES_CATEGORIES = ('Futures', 'Options On Futures')
+
+
 def get_ib_settlement(date_str: str, asset_cat: str,
-                      currency: str = 'USD') -> str:
+                      currency: str = 'USD',
+                      futures_settle: str = 'trade') -> str:
+    """Settlement date for an IB trade (the activity CSV has no settle
+    column):
+    - Futures and futures options: the TRADE date by default. Their
+      profit and loss is settled daily through variation margin, so the
+      disposition happens when the position is closed.
+      futures_settle='next_day' uses the next settlement day instead
+      (the clearing house's option-premium date).
+    - Stocks/Warrants: T+1 since the cutover (US 2024-05-28; Canada
+      2024-05-27, a TSX trading day the US spent closed for Memorial
+      Day), T+2 before, T+3 before 2017-09-05.
+    - Everything else (equity and index options, bonds): T+1.
+    Days are counted in the trade currency's settlement calendar (US:
+    NYSE + Federal Reserve holidays; Canada: TSX + bank holidays), see
+    lib/market_calendar.
     """
-    Logic from ib_trades.pl:
-    - Default T+1
-    - Stocks/Warrants before the T+1 cutover are T+2. The cutover is
-      MARKET-specific, keyed by trade currency: US 2024-05-28; Canada
-      2024-05-27 (a TSX trading day — the US was closed for Memorial Day).
-    - Skips weekends (exchange holidays are NOT modeled — documented
-      limitation)
-    """
+    from taxjson.lib.dates import settlement_lag_days
+    from taxjson.lib.market_calendar import add_settlement_days
     try:
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
         return date_str
-
-    cutover = ('2024-05-27' if (currency or '').upper() == 'CAD'
-               else '2024-05-28')
-    days_to_add = 1
-    if asset_cat in ('Stocks', 'Warrants') and date_str < cutover:
-        days_to_add = 2
-        
-    added = 0
-    curr = dt
-    while added < days_to_add:
-        curr += timedelta(days=1)
-        if curr.weekday() < 5: # Monday-Friday
-            added += 1
-            
-    return curr.strftime("%Y-%m-%d")
+    if asset_cat in FUTURES_CATEGORIES:
+        if futures_settle == 'next_day':
+            return add_settlement_days(date_str, 1, currency).isoformat()
+        return date_str
+    is_equity = asset_cat in ('Stocks', 'Warrants')
+    days = settlement_lag_days(date_str, currency, is_option=not is_equity)
+    return add_settlement_days(date_str, days, currency).isoformat()
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          _parse_div_qty_rate,
@@ -392,6 +396,9 @@ class IbBrokerage(BaseBrokerage):
     # taxjson-brokerage --foreign-roc, which `taxjson run` passes from
     # [settings] foreign_return_of_capital.
     foreign_return_of_capital = 'dividend'
+    # 'trade' (default) | 'next_day': settle date of futures and futures
+    # options ([settings] futures_settle, passed by taxjson-brokerage).
+    futures_settle = 'trade'
 
     # ------------------------------------------------------------ helpers
 
@@ -1033,7 +1040,8 @@ class IbBrokerage(BaseBrokerage):
                         f"{asset_cat} trade row")
                 date, time = _ib_split_datetime(
                     self._cell(row, header_map, 'Date/Time'), where)
-                date_settle = get_ib_settlement(date, asset_cat, currency)
+                date_settle = get_ib_settlement(date, asset_cat, currency,
+                                                futures_settle=self.futures_settle)
                 qty = _num('Quantity')
                 opt_exp = section == 'Options Expirations'
                 price = _num('T. Price', optional=opt_exp)

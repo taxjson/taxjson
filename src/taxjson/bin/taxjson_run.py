@@ -447,7 +447,7 @@ _SETTINGS_KEYS = ("year", "country", "base_currency", "tax_date",
                   "source_currencies", "cross_asset", "province",
                   "fx_cash_gains", "option_premium_timing",
                   "option_grant_timing_since", "option_buyback_loss_superficial",
-                  "foreign_return_of_capital")
+                  "foreign_return_of_capital", "futures_settle")
 _ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                  "brokerage", "account", "query_id", "holdings")
 _ACCOUNT_TYPES = ("taxable", "sheltered")
@@ -501,6 +501,9 @@ def validate_config(cfg: Dict[str, Any],
     _froc = settings.get("foreign_return_of_capital")
     if _froc is not None and _froc not in ("dividend", "acb"):
         _die(f"[settings] foreign_return_of_capital must be \"dividend\" or \"acb\" (got {_froc!r}).")
+    _fs = settings.get("futures_settle")
+    if _fs is not None and _fs not in ("trade", "next_day"):
+        _die(f"[settings] futures_settle must be \"trade\" or \"next_day\" (got {_fs!r}).")
     ca_flag = settings.get("cross_asset")
     if ca_flag is not None and not isinstance(ca_flag, bool):
         _die(f"[settings] cross_asset must be true/false, "
@@ -1012,6 +1015,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     src_manifest = cache / f"{name}_sources.list"
     # Parser option (IB foreign ROC): in the manifest so a toggle re-parses.
     _froc_acb = settings.get("foreign_return_of_capital") == "acb"
+    _fut_next = settings.get("futures_settle") == "next_day"
     # Membership covers EVERY input kind that feeds the merge — CSVs and
     # .tt files alike. Listing only CSVs left a deleted .tt's
     # transactions in the cached books under --fast (its converted JSON
@@ -1032,7 +1036,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
          for p in csvs]
         + [f"tt/{p.name}" for p in input_files(acct_dir, ".tt")]
         + _map_entries
-        + (["setting/foreign_return_of_capital=acb"] if _froc_acb else []))) + "\n"
+        + (["setting/foreign_return_of_capital=acb"] if _froc_acb else [])
+        + (["setting/futures_settle=next_day"] if _fut_next else []))) + "\n"
     if (not src_manifest.exists()
             or src_manifest.read_text(encoding="utf-8") != src_txt):
         src_manifest.write_text(src_txt, encoding="utf-8")
@@ -1064,6 +1069,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                                else "sheltered"]
             if _froc_acb:
                 cmd += ["--foreign-roc", "acb"]
+            if _fut_next:
+                cmd += ["--futures-settle", "next_day"]
             _sidecar = out.with_name(out.stem + "_transfers.json")
             if include_transfers:
                 cmd.append("--transfers")
@@ -2457,6 +2464,8 @@ country           = "{country}"{country_pad}# canada | ca | usa | us
 {province_line}base_currency     = "{base_currency}"{base_pad}# report currency; foreign income converted at BoC/IRS rates
 source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besides base_currency (FX rates fetched)
 tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
+# futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
+#                                     #   (daily variation margin); next_day = the clearing premium date
 
 # cross_asset   = false               # true: WARN-ONLY, flag option-as-replacement wash triggers
 #                                     #   (long call vs share loss / long put vs short loss); numbers never change
@@ -6320,6 +6329,27 @@ def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
             f"unchanged in every later year's project.")
 
 
+def cmd_edge_cases(args: argparse.Namespace) -> None:
+    """`taxjson edge-cases`: transactions whose treatment turns on a
+    boundary — trades that settle in a different year than they trade,
+    dispositions in the last/first days of a year, written options and
+    expiries across Dec 31, income around New Year, crypto near midnight,
+    superficial-loss windows that span the year end, and every taxable
+    loss with an acquisition or sale within --margin days of the 30-day
+    window's edge — each with where it lands and why (lib/edge_cases)."""
+    from taxjson.lib.edge_cases import analyze, render_text
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    if not (root / "work").is_dir():
+        sys.exit("taxjson edge-cases: no work/ directory — run `taxjson run` first.")
+    doc = analyze(root, cfg, margin=args.margin, account=args.account)
+    if getattr(args, "json", False):
+        _json_out(doc)
+        return
+    for line in render_text(doc):
+        print(line)
+
+
 def cmd_option_boundary(args: argparse.Namespace) -> None:
     """`taxjson option-boundary [--json]`: every written option in the
     taxable accounts whose write and close straddle a tax-year boundary
@@ -10095,6 +10125,21 @@ def main() -> None:
     p_ob.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_ob.set_defaults(func=cmd_option_boundary)
+
+    p_edge = sub.add_parser(
+        "edge-cases",
+        help="Year-boundary and superficial-loss-window edge cases: trades "
+             "that settle in another year, options and income around Dec 31, "
+             "and acquisitions/sales near day 30 of a loss's window — where "
+             "each lands and why")
+    p_edge.add_argument("account", nargs="?",
+                        help="Account (default: all)")
+    p_edge.add_argument("--margin", type=int, default=3, metavar="DAYS",
+                        help="How close to day 30 counts as an edge "
+                             "(default 3: days 27-33)")
+    p_edge.add_argument("--json", action="store_true",
+                        help="Emit JSON instead of text")
+    p_edge.set_defaults(func=cmd_edge_cases)
 
     p_ck = sub.add_parser(
         "checklist",

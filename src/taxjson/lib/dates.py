@@ -45,20 +45,26 @@ def noon_utc(dt: datetime) -> datetime:
 
 
 # ---------------------------------------------------------- settlement
-# One home for the settlement-lag convention. Equities settled T+2 until
-# the 2024 cutover (US 2024-05-28; Canada 2024-05-27, a TSX trading day
-# the US spent closed for Memorial Day) and T+1 since; options are T+1
-# in every era. Weekends are skipped; exchange holidays are NOT modeled
-# (documented limitation — a holiday inside the lag makes the true
-# settle date one day LATER, so callers deriving a "last safe trade
-# date" should treat these as the optimistic bound).
+# One home for the settlement-lag convention. Equities settled T+3 until
+# 2017-09-05 (US and Canada moved together), T+2 until the 2024 cutover
+# (US 2024-05-28; Canada 2024-05-27, a TSX trading day the US spent
+# closed for Memorial Day) and T+1 since; options are T+1 in every era.
+# The lag is counted in SETTLEMENT days of the trade's market
+# (lib/market_calendar: US = NYSE + Federal Reserve holidays, Canada =
+# TSX + Remembrance Day + Truth and Reconciliation), so a holiday inside
+# the lag moves the settle date later, as the clearing houses do.
+
+T3_TO_T2 = '2017-09-05'
+
 
 def settlement_lag_days(trade_iso: str, currency: str = 'USD',
                         is_option: bool = False) -> int:
-    """Business days between trade and settlement for a trade on
+    """Settlement days between trade and settlement for a trade on
     `trade_iso` (YYYY-MM-DD) in the given market."""
     if is_option:
         return 1
+    if trade_iso < T3_TO_T2:
+        return 3
     cutover = ('2024-05-27' if (currency or '').upper() == 'CAD'
                else '2024-05-28')
     return 2 if trade_iso < cutover else 1
@@ -66,37 +72,34 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
 
 def settlement_date(trade_iso: str, currency: str = 'USD',
                     is_option: bool = False) -> str:
-    """Era-aware settlement date for a trade dated `trade_iso`;
-    returns the input unchanged when it does not parse."""
+    """Era- and holiday-aware settlement date for a trade dated
+    `trade_iso`; returns the input unchanged when it does not parse."""
+    from taxjson.lib.market_calendar import add_settlement_days
     try:
-        dt = datetime.strptime(trade_iso, "%Y-%m-%d")
+        datetime.strptime(trade_iso, "%Y-%m-%d")
     except (TypeError, ValueError):
         return trade_iso
-    added = 0
     days = settlement_lag_days(trade_iso, currency, is_option)
-    while added < days:
-        dt += timedelta(days=1)
-        if dt.weekday() < 5:
-            added += 1
-    return dt.strftime("%Y-%m-%d")
+    return add_settlement_days(trade_iso, days, currency).isoformat()
 
 
 def last_trade_date_settling_by(deadline_iso: str, currency: str = 'USD',
                                 is_option: bool = False) -> str:
-    """The LAST trade date (a weekday) whose settlement lands on or
-    before `deadline_iso`. The superficial-loss rescue test is on the
-    SETTLE date (core.py: end_window_date = loss_settle + 30, rescue
-    sale's sort/settle date <= that), so a deadline quoted as a settle
-    date must be walked back through the lag — and past a weekend
-    deadline — before it is safe to hand to a user as "sell by".
+    """The LAST trading day whose settlement lands on or before
+    `deadline_iso`. The superficial-loss rescue test is on the SETTLE
+    date (core.py: end_window_date = loss_settle + 30, rescue sale's
+    sort/settle date <= that), so a deadline quoted as a settle date
+    must be walked back through the lag, past weekends and holidays,
+    before it is safe to hand to a user as "sell by".
     Returns the input unchanged when it does not parse."""
+    from taxjson.lib.market_calendar import is_trading_day
     try:
         dt = datetime.strptime(deadline_iso, "%Y-%m-%d")
     except (TypeError, ValueError):
         return deadline_iso
-    for _ in range(14):        # lag <= 2 business days, plus weekends
+    for _ in range(21):        # lag <= 3 settlement days, plus holidays
         iso = dt.strftime("%Y-%m-%d")
-        if dt.weekday() < 5 and settlement_date(
+        if is_trading_day(iso, currency) and settlement_date(
                 iso, currency, is_option) <= deadline_iso:
             return iso
         dt -= timedelta(days=1)

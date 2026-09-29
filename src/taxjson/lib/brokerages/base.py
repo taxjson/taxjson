@@ -599,9 +599,11 @@ class BaseBrokerage:
             if d and s and d <= exp < s:
                 tx['date_settle'] = exp
 
-    def settlement_date_t1(self, date_str: str, *formats: str) -> str:
-        """Add one business day to the given trade date. Used by brokerages
-        whose CSV doesn't carry a settlement-date column.
+    def settlement_date_t1(self, date_str: str, *formats: str,
+                           currency: str = 'USD') -> str:
+        """Add one settlement day (holiday-aware for USD and CAD) to the
+        given trade date. Used by brokerages whose CSV doesn't carry a
+        settlement-date column, for options (T+1 in every era).
 
         formats lists strptime patterns to try; if none parse, the input
         string is returned unchanged so callers can degrade gracefully on
@@ -609,13 +611,8 @@ class BaseBrokerage:
         dt = self.parse_date(date_str, *formats) if formats else None
         if dt is None:
             return date_str
-        added = 0
-        curr = dt
-        while added < 1:
-            curr += timedelta(days=1)
-            if curr.weekday() < 5:
-                added += 1
-        return curr.strftime("%Y-%m-%d")
+        from taxjson.lib.market_calendar import add_settlement_days
+        return add_settlement_days(dt, 1, currency).isoformat()
 
     def trade_date_from_settlement(self, settle_str: str,
                                    currency: str = 'USD',
@@ -625,29 +622,25 @@ class BaseBrokerage:
         whose CSV date column IS the settlement date (Webull, per user
         verification against real statements). Options T+1 in all eras;
         equities T+2 before the T+1 cutover (US 2024-05-28 / CA 2024-05-27),
-        T+1 after. Weekends skipped backwards; exchange holidays are NOT
-        modeled (documented limitation). Era selection keys off the settle
-        date — ambiguous only in the 1-2 day window around the cutover."""
+        T+1 after (T+3 before 2017-09-05). Walks back through weekends and
+        the market's settlement holidays to the latest trading day that
+        settles on that date (lib/market_calendar). Era selection keys off
+        the settle date — ambiguous only around a cutover."""
         dt = self.parse_date(settle_str, *formats) if formats else None
         if dt is None:
             return settle_str
+        from taxjson.lib.dates import settlement_lag_days
+        from taxjson.lib.market_calendar import sub_settlement_days
         iso = dt.strftime("%Y-%m-%d")
-        cutover = ('2024-05-27' if (currency or '').upper() == 'CAD'
-                   else '2024-05-28')
-        days = 1 if is_option else (2 if iso < cutover else 1)
-        removed = 0
-        curr = dt
-        while removed < days:
-            curr -= timedelta(days=1)
-            if curr.weekday() < 5:
-                removed += 1
-        return curr.strftime("%Y-%m-%d")
+        days = settlement_lag_days(iso, currency, is_option)
+        return sub_settlement_days(iso, days, currency).isoformat()
 
     def equity_settlement_date(self, date_str: str, currency: str = 'USD',
                                *formats: str) -> str:
         """Era-aware EQUITY settlement for brokerages whose CSV carries no
-        settlement column: T+2 before the T+1 cutover, T+1 after, weekends
-        skipped (exchange holidays are NOT modeled — documented limitation).
+        settlement column: T+2 before the T+1 cutover, T+1 after (T+3
+        before 2017-09-05), counted in the market's settlement days
+        (weekends and USD/CAD settlement holidays skipped).
         The cutover is market-specific: US 2024-05-28; Canada 2024-05-27 (a
         TSX trading day — the US was closed for Memorial Day)."""
         dt = self.parse_date(date_str, *formats) if formats else None

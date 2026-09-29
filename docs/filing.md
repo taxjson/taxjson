@@ -48,6 +48,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson wash-sales` — read every denial. A **permanently** denied
       loss (repurchase in a registered account) is money gone; make sure
       each one is real and not a custody move (`taxjson transfers`).
+- [ ] `taxjson edge-cases` — lists every trade that settles in the other
+      year, the options and income around Dec 31, and each loss with a
+      purchase or sale within a few days of day 30 of its superficial-loss
+      window. Read the items marked THE DATE BASIS DECIDES THIS ONE.
 - [ ] `taxjson option-boundary` — confirms whether a written option that
       straddles the year end requires a prior-year amendment.
 
