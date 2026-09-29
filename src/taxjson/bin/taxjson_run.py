@@ -1058,7 +1058,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # scrolling past as a warning into the filed numbers.
             cmd = _cmd("taxjson-brokerage") + ["--account", name,
                                                "--brokerage", broker,
-                                               "--strict"]
+                                               "--strict",
+                                               "--account-type",
+                                               "taxable" if is_taxable
+                                               else "sheltered"]
             if _froc_acb:
                 cmd += ["--foreign-roc", "acb"]
             _sidecar = out.with_name(out.stem + "_transfers.json")

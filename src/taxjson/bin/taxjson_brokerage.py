@@ -182,6 +182,17 @@ Examples:
             "always an ACB reduction; a payment in lieu is always income."
         ),
     )
+    parser.add_argument(
+        "--account-type", dest="account_type",
+        choices=("taxable", "sheltered"), default=None,
+        help=(
+            "Whether the account is taxable. Parsers use it only to "
+            "decide whether a taxable-account caveat is worth a warning "
+            "(Questrade: a dividend booked net of non-resident "
+            "withholding, a transfer-in with no book value). `taxjson "
+            "run` passes it from the account's `type`."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -214,6 +225,8 @@ Examples:
         extractor = extractor_class()
         if hasattr(extractor, 'foreign_return_of_capital'):
             extractor.foreign_return_of_capital = args.foreign_roc
+        if args.account_type and hasattr(extractor, 'account_taxable'):
+            extractor.account_taxable = args.account_type == 'taxable'
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
         try:
             transactions = extractor.parse_file(input_path)
