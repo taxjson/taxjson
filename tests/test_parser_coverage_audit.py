@@ -6,7 +6,7 @@ made-up ISINs). One class per gap:
   1. IB `Trades / Forex` rows       -> recognized non-events, no phantom asset
   2. Kraken stablecoin rewards      -> priced 1.0/unit, income = qty
   3. IB exercise code `Ex`          -> ASSIGN; premium rolls into the stock leg
-  4. IB `Transaction Fees`          -> folded into the same-day trade, else FEE
+  4. IB `Transaction Fees`          -> a breakdown of Comm/Fee (never folded again)
   5. IB `Commission Adjustments`    -> negative (refund) FEE row
   6. IB tender / voluntary offer    -> no-op round trip vs. booked cash sale
   7. Kraken transfer/transferpeertopeer -> TRANSFER evidence
@@ -273,82 +273,86 @@ class TestIbExerciseCode(unittest.TestCase):
 
 
 # ---------------------------------------------------- 4. Transaction Fees
+# RE-PREMISED (2026-09 IB/Questrade parse hardening). These tests used to
+# pin the opposite: that a `Transaction Fees` levy sits OUTSIDE Comm/Fee
+# and must be folded into the trade. The real statements say otherwise —
+# the 2025 AWE buy carries Comm/Fee -54.34 with Basis 9,934.34 (= 9,880 +
+# 54.34) while its two UK stamp-tax rows sum to -49.40, and IB's own Cash
+# Report shows Commissions GBP -12.91 + Transaction Fees GBP -49.40 ==
+# -62.31, the sum of the GBP Comm/Fee column. Comm/Fee already INCLUDES
+# the levy; folding it again charged it twice (fee 103.74 on AWE).
+IB_CASH_H = ('Cash Report,Header,Currency Summary,Currency,Total,'
+             'Securities,Futures,\n')
+
+
 class TestIbTransactionFees(unittest.TestCase):
-    def test_levy_folds_into_same_day_trade(self):
-        csv = IB_HEAD + IB_TRADES_H + (
-            'Trades,Data,Order,Stocks,GBP,U1,AWE,"2026-03-04, 08:05:12",'
-            '100,5.00,0,-500,-1,0,0,0,O\n'
-        ) + IB_TXN_FEES_H + (
-            'Transaction Fees,Data,Stocks,GBP,U1,"2026-03-04, 08:05:12",'
-            'AWE,UK Stamp Tax,100,5.00,-2.50,\n'
-            'Transaction Fees,Data,Total,,,,,,,,-2.50,\n'
-            'Transaction Fees,Data,Total in CAD,,,,,,,,-4.30,\n'
+    AWE = (
+        'Trades,Data,Order,Stocks,GBP,U1,AWE,"2025-03-28, 09:06:18",'
+        '"10,000",0.988,0.968,-9880,-54.34,9934.34,0,-200,O;P\n'
+        'Trades,Data,Order,Stocks,GBP,U1,AWE,"2025-03-28, 11:06:18",'
+        '-500,1.00,0,500,-7.97,0,0,0,C\n'
+    )
+    LEVIES = IB_TXN_FEES_H + (
+        'Transaction Fees,Data,Stocks,GBP,U1,"2025-03-28, 09:06:18",'
+        'AWE,UK Stamp Tax,"8,900",0.988,-43.966,\n'
+        'Transaction Fees,Data,Stocks,GBP,U1,"2025-03-28, 09:06:18",'
+        'AWE,UK Stamp Tax,"1,100",0.988,-5.434,\n'
+        'Transaction Fees,Data,Total,,,,,,,,-49.40,\n'
+    )
+
+    def _cash(self, commissions, txn_fees):
+        return IB_CASH_H + (
+            f'Cash Report,Data,Commissions,GBP,{commissions},'
+            f'{commissions},0,\n'
+            f'Cash Report,Data,Transaction Fees,GBP,{txn_fees},'
+            f'{txn_fees},0,\n'
+            'Cash Report,Data,Trades (Sales),GBP,500,500,0,\n'
+            'Cash Report,Data,Trades (Purchase),GBP,-9880,-9880,0,\n'
         )
+
+    def test_levy_is_a_breakdown_not_a_second_charge(self):
+        csv = IB_HEAD + IB_TRADES_H + self.AWE + self.LEVIES
         parser, txs, _ = _parse(IbBrokerage, csv)
-        self.assertEqual([t["action"] for t in txs], ["BUYSELL"],
-                         "a folded levy must not ALSO emit a FEE row")
-        t = txs[0]
-        self.assertEqual(t["symbol"], "AWE.L")
-        self.assertAlmostEqual(t["fee"], 3.5)          # 1 comm + 2.5 stamp
-        self.assertAlmostEqual(t["net_amount"], 503.5)  # cost incl. levy
+        self.assertEqual([t["action"] for t in txs],
+                         ["BUYSELL", "BUYSELL"],
+                         "a levy must not emit a FEE row either")
+        buy = txs[0]
+        self.assertEqual(buy["symbol"], "AWE.L")
+        self.assertAlmostEqual(buy["fee"], 54.34, places=6)
+        self.assertAlmostEqual(buy["net_amount"], 9934.34, places=6,
+                               msg="cost == IB's own Basis column")
         self.assertEqual(parser._skip_counts.get(
-            f"{NE}Transaction Fees subtotal row"), 2)
+            f"{NE}Transaction Fees row (breakdown of a levy already in "
+            f"the trade's Comm/Fee)"), 2)
+        self.assertEqual(parser._skip_counts.get(
+            f"{NE}Transaction Fees subtotal row"), 1)
         self.assertEqual(_unaccounted(parser), 0)
 
-    def test_per_fill_levies_all_fold_into_one_order_row(self):
-        # Real 2025 export: a 10,000-share AWE buy filled 8,900 + 1,100
-        # carried TWO UK Stamp Tax rows against ONE Order row. The
-        # taken-once fold sent the second row out as a standalone FEE
-        # ("no same-day trade to fold into") — 5.43 GBP that never
-        # reached the ACB.
-        csv = IB_HEAD + IB_TRADES_H + (
-            'Trades,Data,Order,Stocks,GBP,U1,AWE,"2025-03-28, 09:06:18",'
-            '"10,000",0.988,0.968,-9880,-54.34,9934.34,0,-200,O;P\n'
-        ) + IB_TXN_FEES_H + (
-            'Transaction Fees,Data,Stocks,GBP,U1,"2025-03-28, 09:06:18",'
-            'AWE,UK Stamp Tax,"8,900",0.988,-43.966,\n'
-            'Transaction Fees,Data,Stocks,GBP,U1,"2025-03-28, 09:06:18",'
-            'AWE,UK Stamp Tax,"1,100",0.988,-5.434,\n'
-            'Transaction Fees,Data,Total,,,,,,,,-49.40,\n'
-        )
-        parser, txs, _ = _parse(IbBrokerage, csv)
-        self.assertEqual([t["action"] for t in txs], ["BUYSELL"])
-        t = txs[0]
-        self.assertAlmostEqual(t["fee"], 54.34 + 43.966 + 5.434, places=6)
-        self.assertAlmostEqual(t["net_amount"], 9934.34 + 49.40, places=6)
-        self.assertEqual(_unaccounted(parser), 0)
-        # Two same-day trades with one levy each still pair 1:1 by
-        # quantity, in either row order.
-        csv2 = IB_HEAD + IB_TRADES_H + (
-            'Trades,Data,Order,Stocks,GBP,U1,AWE,"2025-03-28, 09:06:18",'
-            '100,5.00,0,-500,-1,0,0,0,O\n'
-            'Trades,Data,Order,Stocks,GBP,U1,AWE,"2025-03-28, 11:06:18",'
-            '300,5.00,0,-1500,-1,0,0,0,O\n'
-        ) + IB_TXN_FEES_H + (
-            'Transaction Fees,Data,Stocks,GBP,U1,"2025-03-28, 11:06:18",'
-            'AWE,UK Stamp Tax,300,5.00,-7.50,\n'
-            'Transaction Fees,Data,Stocks,GBP,U1,"2025-03-28, 09:06:18",'
-            'AWE,UK Stamp Tax,100,5.00,-2.50,\n'
-        )
-        _, txs2, _ = _parse(IbBrokerage, csv2)
-        fees = {float(t["quantity"]): round(t["fee"], 4) for t in txs2}
-        self.assertEqual(fees, {100.0: 3.5, 300.0: 8.5})
+    def test_cash_report_identity_commissions_plus_levies(self):
+        # sum(Comm/Fee) = -62.31 = Commissions -12.91 + Transaction Fees
+        # -49.40: the real 2025 layout reconciles.
+        csv = (IB_HEAD + IB_TRADES_H + self.AWE + self.LEVIES
+               + self._cash('-12.91', '-49.40'))
+        _, txs, _ = _parse(IbBrokerage, csv)
+        self.assertEqual(len(txs), 2)
+        # A layout whose Comm/Fee EXCLUDED the levy (Cash Report
+        # Commissions == sum(Comm/Fee) on its own, levies extra) fails
+        # loudly instead of silently under-booking the cost.
+        csv_bad = (IB_HEAD + IB_TRADES_H + self.AWE + self.LEVIES
+                   + self._cash('-62.31', '-49.40'))
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse(IbBrokerage, csv_bad)
+        self.assertIn("GBP Commissions + Transaction Fees", str(cm.exception))
 
-    def test_unmatched_levy_becomes_symbol_bound_fee_row(self):
+    def test_levy_without_a_trade_is_still_not_booked(self):
         csv = IB_HEAD + IB_TXN_FEES_H + (
             'Transaction Fees,Data,Stocks,GBP,U1,"2026-03-04, 08:05:12",'
             'AWE,UK Stamp Tax,100,5.00,-2.50,\n'
         )
         parser, txs, _ = _parse(IbBrokerage, csv)
-        self.assertEqual(len(txs), 1)
-        f = txs[0]
-        self.assertEqual(f["action"], "FEE")
-        self.assertEqual(f["symbol"], "AWE.L")
-        self.assertEqual(f["currency"], "GBP")
-        self.assertAlmostEqual(f["net_amount"], 2.5,
-                               msg="repo FEE sign: positive = charged")
-        self.assertEqual(f["date"], "2026-03-04")
-        self.assertIn("UK Stamp Tax", f["description"])
+        self.assertEqual(txs, [], "the trade (and its Comm/Fee, which "
+                                  "holds the levy) lives in another file")
         self.assertEqual(_unaccounted(parser), 0)
 
 
@@ -636,10 +640,12 @@ class TestIbRowAccounting(unittest.TestCase):
         # (c) the Corporate Actions Total row no longer reaches the
         # currency -> suffix lookup.
         self.assertNotIn("has no exchange-suffix mapping", err)
-        # The SEC levy folded into the MSFT buy (0.30) on top of 1 comm.
+        # RE-PREMISED: the SEC levy (0.30) is a breakdown of the -1
+        # Comm/Fee, not an extra charge (Cash Report identity:
+        # sum(Comm/Fee) == Commissions + Transaction Fees).
         msft = next(t for t in txs if t["action"] == "BUYSELL")
-        self.assertAlmostEqual(msft["fee"], 1.30)
-        self.assertAlmostEqual(msft["net_amount"], 20001.30)
+        self.assertAlmostEqual(msft["fee"], 1.00)
+        self.assertAlmostEqual(msft["net_amount"], 20001.00)
 
     def test_fees_subtotals_excluded_from_dateless_warning(self):
         csv = IB_HEAD + (

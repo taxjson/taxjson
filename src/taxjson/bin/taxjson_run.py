@@ -1052,8 +1052,16 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     deps.append(_m)
         if force or needs_rebuild(out, *deps):
             print(f"  parse {broker}: {len(csvs)} file(s)")
+            # --strict: a schema ERROR (negative trade net, zero split
+            # ratio, a notional that contradicts the row's declared
+            # contract multiplier ...) stops the run instead of
+            # scrolling past as a warning into the filed numbers.
             cmd = _cmd("taxjson-brokerage") + ["--account", name,
-                                               "--brokerage", broker]
+                                               "--brokerage", broker,
+                                               "--strict",
+                                               "--account-type",
+                                               "taxable" if is_taxable
+                                               else "sheltered"]
             if _froc_acb:
                 cmd += ["--foreign-roc", "acb"]
             _sidecar = out.with_name(out.stem + "_transfers.json")

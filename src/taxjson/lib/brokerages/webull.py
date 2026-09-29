@@ -104,7 +104,11 @@ class WebullBrokerage(BaseBrokerage):
 
             qty = self.clean_number(qty_raw)
             price = self.clean_number(price_raw)
-            net_amount = self.clean_number(proceeds_raw)
+            # Webull prints a buy's proceeds in accounting parentheses
+            # ("(1,352.97)"); clean_number reads those as NEGATIVE, and
+            # the trade convention wants the magnitude (direction lives
+            # in the quantity sign), so take abs() here.
+            net_amount = abs(self.clean_number(proceeds_raw))
             qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'SELL'))
 
             opt = self.parse_option_from_description(current_description)

@@ -140,18 +140,64 @@ class TestCleanNumber(unittest.TestCase):
         self.assertEqual(BaseBrokerage.clean_number('€50.50'), 50.50)
         self.assertEqual(BaseBrokerage.clean_number('£25'), 25.0)
 
-    def test_parens_stripped_as_magnitude_not_negative(self):
-        """Webull and similar use accounting parens but engine wants magnitude;
-        sign comes from the action, not the CSV formatting."""
-        self.assertEqual(BaseBrokerage.clean_number('(1,000.50)'), 1000.50)
+    def test_parens_are_negative(self):
+        """RE-PREMISED (2026-09 parse hardening): accounting parentheses
+        are a NEGATIVE amount. The old magnitude reading flipped the
+        sign of every parenthesized cell whose parser did not abs() it;
+        Webull (the one real user of parens, "(1,352.97)" on buys) now
+        takes abs() itself, so its output is unchanged."""
+        self.assertEqual(BaseBrokerage.clean_number('(1,000.50)'), -1000.50)
+        self.assertEqual(BaseBrokerage.clean_number('\u22125'), -5.0)
 
     def test_empty_returns_default(self):
         self.assertEqual(BaseBrokerage.clean_number(''), 0.0)
         self.assertEqual(BaseBrokerage.clean_number(None), 0.0)
         self.assertEqual(BaseBrokerage.clean_number('', default=-1.0), -1.0)
 
-    def test_garbage_returns_default(self):
-        self.assertEqual(BaseBrokerage.clean_number('not a number'), 0.0)
+    def test_garbage_returns_default_with_warning(self):
+        import io
+        from contextlib import redirect_stderr
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(BaseBrokerage.clean_number('not a number'), 0.0)
+        self.assertIn("not a number", err.getvalue())
+
+
+class TestParseStrictNumber(unittest.TestCase):
+    """REQUIRED money/quantity cells: nothing ambiguous reads as 0."""
+
+    def test_accepted_forms(self):
+        from taxjson.lib.brokerages.base import parse_strict_number as p
+        for raw, want in (('1234.5', 1234.5), ('-1,234.50', -1234.5),
+                          ('+3', 3.0), ('.5', 0.5), ('1e-05', 1e-05),
+                          ('$-12.00', -12.0), ('-$12.00', -12.0),
+                          ('(1,234.56)', -1234.56), ('\u221212.5', -12.5),
+                          (' 10,000 ', 10000.0), ('0', 0.0)):
+            with self.subTest(raw=raw):
+                self.assertEqual(p(raw), want)
+
+    def test_refused_forms(self):
+        from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                                 parse_strict_number as p)
+        for raw in ('1234,56', '12,34', '1,2345', '1 000', '5-', 'N/A',
+                    '', None, '(-5)', '--', '.', '1,000e3'):
+            with self.subTest(raw=raw):
+                with self.assertRaises(BrokerageParseError):
+                    p(raw, field='Amount', where='x line 3')
+
+    def test_blank_allowed_only_when_asked(self):
+        from taxjson.lib.brokerages.base import parse_strict_number as p
+        self.assertEqual(p('', allow_blank=True, blank=0.0), 0.0)
+
+    def test_require_columns_names_section_and_columns(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaises(BrokerageParseError) as cm:
+            BaseBrokerage.require_columns({'A': 0}, ('A', 'B', ('C', 'D')),
+                                          section='Trades')
+        msg = str(cm.exception)
+        self.assertIn("'Trades'", msg)
+        self.assertIn("'B'", msg)
+        self.assertIn("'C' or 'D'", msg)
 
 
 class TestBackComputeFee(unittest.TestCase):

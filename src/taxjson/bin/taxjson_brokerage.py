@@ -30,6 +30,7 @@ import argparse
 from pathlib import Path
 
 from taxjson.lib.core import register_brokerage, TaxTransaction, load_brokerage
+from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.schema import validate_transactions
 from taxjson.lib.brokerages import ib_extractor
 from taxjson.lib.brokerages import questrade
@@ -187,6 +188,17 @@ Examples:
             "always an ACB reduction; a payment in lieu is always income."
         ),
     )
+    parser.add_argument(
+        "--account-type", dest="account_type",
+        choices=("taxable", "sheltered"), default=None,
+        help=(
+            "Whether the account is taxable. Parsers use it only to "
+            "decide whether a taxable-account caveat is worth a warning "
+            "(Questrade: a dividend booked net of non-resident "
+            "withholding, a transfer-in with no book value). `taxjson "
+            "run` passes it from the account's `type`."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -204,6 +216,10 @@ Examples:
     overrides = (load_security_overrides(Path(args.security_overrides))
                  if args.security_overrides else [])
     normalized = []
+    # Parser-declared contract multipliers, parallel to `normalized`
+    # (not a TaxTransaction field — they feed only the schema notional
+    # check below, which is an ERROR for rows that declare one).
+    multipliers = []
     dropped_keys = {}
     lint_problems = 0
     kept_aside: list = []
@@ -215,6 +231,8 @@ Examples:
         extractor = extractor_class()
         if hasattr(extractor, 'foreign_return_of_capital'):
             extractor.foreign_return_of_capital = args.foreign_roc
+        if args.account_type and hasattr(extractor, 'account_taxable'):
+            extractor.account_taxable = args.account_type == 'taxable'
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
         try:
             transactions = extractor.parse_file(input_path)
@@ -228,6 +246,14 @@ Examples:
                   f"the usual cause — inspect/trim the offending row.",
                   file=sys.stderr)
             sys.exit(2)
+        except BrokerageParseError as e:
+            # The parser refused the file rather than guess (missing
+            # required column, unparseable money, a row whose money does
+            # not add up, a Cash Report mismatch, a non-activity report).
+            # A finding in the DATA: exit 1, one line, no traceback.
+            print(f"taxjson-brokerage: error: {input_path.name}: {e}",
+                  file=sys.stderr)
+            sys.exit(1)
 
         if not args.transfers:
             # Custody evidence, not tax events: a taxable book's basis
@@ -319,7 +345,8 @@ Examples:
             # or newly-invented parser field would otherwise vanish here
             # with zero signal ('qty' is exempt: aliased above).
             for k in t:
-                if k not in valid_keys and k not in _EVIDENCE_KEYS:
+                if k not in valid_keys and k not in _EVIDENCE_KEYS \
+                        and k not in ('qty', 'multiplier'):
                     dropped_keys[k] = dropped_keys.get(k, 0) + 1
             clean = {k: v for k, v in t.items() if k in valid_keys}
             # Only override the parser's account label when --account
@@ -330,6 +357,7 @@ Examples:
             if args.account_name is not None:
                 clean['account'] = args.account_name
             normalized.append(TaxTransaction(**clean))
+            multipliers.append(t.get('multiplier'))
 
     for key, n in sorted(dropped_keys.items()):
         print(f"warning: parser emitted unknown field {key!r} on {n} "
@@ -341,7 +369,8 @@ Examples:
     # violations that corrupt tax math; they abort only under --strict
     # (or --lint) so a mid-season odd export still produces output.
     errors, schema_warnings = validate_transactions(
-        [t.to_dict() for t in normalized], lint=args.lint)
+        [({**t.to_dict(), 'multiplier': m} if m else t.to_dict())
+         for t, m in zip(normalized, multipliers)], lint=args.lint)
     for w in schema_warnings:
         print(f"warning: schema: {w}", file=sys.stderr)
     for e in errors:

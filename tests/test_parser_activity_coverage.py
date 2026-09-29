@@ -534,23 +534,25 @@ class TestIbActivities(unittest.TestCase):
         self.assertEqual(by_sym['MSFT.US']['action'], 'ASSIGN',
                          "Code='A' (bare) must classify as ASSIGN")
 
-    def test_malformed_trade_cell_skips_row_not_whole_parse(self):
-        """A malformed numeric cell in one Trades row (e.g. 'N/A' where
-        Quantity should be) must skip just that row with a stderr
-        warning; the rest of the file must still parse. Was a hard
-        parse-abort that lost every trade in the file."""
+    def test_malformed_trade_cell_fails_the_parse_naming_the_cell(self):
+        """RE-PREMISED (2026-09 parse hardening). A malformed numeric
+        cell in a Trades row (e.g. 'N/A' where Quantity should be) used
+        to skip that row with a warning and let the rest of the file
+        parse — a trade silently missing from the book, the same
+        failure class as a missing column read as 0. The parse now
+        FAILS, naming the line, section and cell; the old behaviour
+        before that (a raw ValueError traceback) is also gone."""
         csv_content = IB_HEADER_LINES + (
             'Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,'
             'Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,'
             'Realized P/L,MTM P/L,Code\n'
-            # Malformed Quantity — old behaviour killed the whole parse here.
             'Trades,Data,Order,Stocks,USD,AAPL,"2025-05-01, 09:30:00",'
-            'N/A,150.0,0,15000,1,0,0,0,O\n'
-            # Valid row that must still come through.
+            'N/A,150.0,0,-15000,-1,0,0,0,O\n'
             'Trades,Data,Order,Stocks,USD,MSFT,"2025-05-02, 09:30:00",'
-            '50,400.0,0,20000,1,0,0,0,O\n'
+            '50,400.0,0,-20000,-1,0,0,0,O\n'
         )
         from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        from taxjson.lib.brokerages.base import BrokerageParseError
         import os, tempfile, io, sys as _sys
         from unittest.mock import patch
         f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
@@ -558,16 +560,13 @@ class TestIbActivities(unittest.TestCase):
         buf = io.StringIO()
         try:
             with patch.object(_sys, 'stderr', buf):
-                txs = IbBrokerage().parse_file(Path(f.name))
+                with self.assertRaises(BrokerageParseError) as cm:
+                    IbBrokerage().parse_file(Path(f.name))
         finally:
             os.remove(f.name)
-        syms = [t['symbol'] for t in txs]
-        self.assertIn('MSFT.US', syms,
-                      "Valid row after a malformed one must still parse")
-        self.assertNotIn('AAPL.US', syms,
-                         "Malformed row must be skipped, not silently kept")
-        self.assertIn('warning', buf.getvalue().lower())
-        self.assertIn('Trades', buf.getvalue())
+        msg = str(cm.exception)
+        self.assertIn('Trades', msg)
+        self.assertIn("Quantity 'N/A'", msg)
 
 
 # ============================================================================

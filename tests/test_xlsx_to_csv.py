@@ -112,5 +112,47 @@ class TestXlsxToCsv(unittest.TestCase):
             self.assertAlmostEqual(float(rows[1][1]), 500.00, places=2)
 
 
+try:
+    import pandas as _pd_only    # noqa: F401 — openpyxl not needed below
+    _PANDAS_AVAILABLE = True
+except ImportError:
+    _PANDAS_AVAILABLE = False
+
+
+@unittest.skipUnless(_PANDAS_AVAILABLE, "pandas not installed")
+class TestXlsxCellsAsText(unittest.TestCase):
+    """2026-09 parse hardening: every cell is read as text, NA sentinels
+    stay literal, and only a VALID thousands grouping loses its commas."""
+
+    def test_read_sheet_asks_pandas_for_text_and_no_na(self):
+        from taxjson.bin import xlsx_to_csv as mod
+        seen = {}
+
+        class _FakePd:
+            @staticmethod
+            def read_excel(path, **kw):
+                seen.update(kw)
+                return 'frame'
+
+        self.assertEqual(mod.read_sheet(_FakePd, 'x.xlsx', 0), 'frame')
+        self.assertIs(seen['dtype'], str)
+        self.assertIs(seen['keep_default_na'], False)
+
+    def test_ticker_na_and_iso_dates_survive(self):
+        import pandas as pd
+        from taxjson.bin import xlsx_to_csv as mod
+        df = pd.DataFrame({'Symbol': ['NA', 'AAPL'],
+                           'Transaction Date': ['2025-12-31 00:00:00',
+                                                '2025-06-02 00:00:00'],
+                           'Net Amount': ['-1,234.50', '12,34']})
+        out = mod._apply_cells(df, mod._clean_numeric_commas)
+        self.assertEqual(list(out['Symbol']), ['NA', 'AAPL'])
+        self.assertEqual(out['Transaction Date'][0], '2025-12-31 00:00:00')
+        self.assertEqual(out['Net Amount'][0], '-1234.50')
+        self.assertEqual(out['Net Amount'][1], '12,34',
+                         "a decimal comma is left for the strict parser "
+                         "to refuse, not turned into 1234")
+
+
 if __name__ == '__main__':
     unittest.main()

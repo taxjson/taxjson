@@ -100,6 +100,94 @@
   split twice (a parser that now books it plus a manual .tt SPLIT line),
   merge2 warns "duplicate split" (it is applied once); the same event
   with different ratios warns "conflicting splits".
+- **IB: Transaction Fees are no longer charged twice.** IB's Trades
+  Comm/Fee already includes per-fill levies (UK stamp tax, SEC/FINRA
+  fees); the Transaction Fees section only breaks them down (the Cash
+  Report shows Commissions + Transaction Fees = the Comm/Fee sum). The
+  parser folded the levy into the trade again: on a real 2025 AWE buy the
+  fee drops from 103.74 to 54.34 GBP and the cost basis from 9,983.74 to
+  9,934.34 (IB's own Basis). A layout that ever excluded the levy now
+  fails the Cash Report check instead of under-booking.
+- **IB: commission rebates keep their sign.** A positive Comm/Fee is a
+  rebate; abs() booked it as a charge, overstating costs and understating
+  proceeds by twice the rebate (real 2025 margin statement: 65 rows,
+  245.95 USD; 2026: 195 rows, 624.94 USD; RRSP 17.66 and 6.04 USD). The
+  fee is now negative for a rebate and net_amount is the cash IB moved.
+  Questrade's commission is signed the same way (none of its real
+  exports carries a rebate).
+- **IB and Questrade: missing columns fail the parse.** Every Trades,
+  Dividends, Withholding Tax, Interest, Fees, Corporate Actions, Transfers
+  and Commission Adjustments column that carries money, quantity, price,
+  date or currency (IB), and all 14 Questrade columns, are resolved by
+  header name and required; a renamed or missing one used to read as 0
+  (every fee or every gross silently gone) or as USD. Money cells parse
+  strictly (a decimal comma, text or a blank is an error; parentheses
+  and the unicode minus are negative), dates must be ISO, and each trade
+  row must add up: |proceeds| = |qty| x price x multiplier (IB's own
+  instrument multiplier — CL 1000, ES 50, MET 0.1, SI 5000; a futures
+  contract size is never guessed) with a plausible commission, and for
+  Questrade Net = Gross + Commission.
+- **IB: parsed money reconciles to the Cash Report.** Per currency,
+  Dividends, Payment in Lieu, Withholding Tax, Broker Interest, Other
+  Fees, Commissions (+ Transaction Fees) and Trades (Sales + Purchase)
+  must match IB's own Cash Report within 0.02, or the parse fails naming
+  the currency and line. All 17 real Activity Statements reconcile.
+- **IB: unknown sections are loud.** Only known metadata sections are
+  quiet; an unknown section with money columns (a localized
+  "Dividendes", a renamed "Transactions") fails the parse, any other
+  warns. A "Realized Summary" report is refused instead of being read
+  as activity.
+- **Schema: declared multipliers make the notional check an error, and
+  `taxjson run` parses with `--strict`.** IB and Questrade trade rows
+  carry their contract multiplier; a net amount far from qty x price x
+  multiplier is now a schema error for such rows (the 1/100 guess made
+  every futures row a false positive — 61 warnings on the real 2025/2026
+  margin statements, now 0). Every real 2025/2026 input parses with zero
+  schema errors, so `taxjson run` now passes `--strict`: schema errors
+  stop the run instead of scrolling past.
+- **IB: a cancelled corporate action is undone.** A `Ca` row now removes
+  or adjusts its original split leg, cash in lieu, tender sale, spinoff
+  or untranslated merger; a restated split 3:1 -> 2:1 leaves one SPLIT
+  2.0 (both were booked). A cancellation whose original is not in the
+  statement is a loud skip.
+- **IB: option root renames share one symbol.** When IB relists an
+  adjusted option under a new root after a corporate action (DFDV ->
+  DFDV1, one contract id in the instrument list), both legs are booked
+  under the original root, so the assignment folds the premium; a
+  ticker.map DFDV1 -> DFDV rule becomes a no-op. Monthly futures options
+  use their real expiry from the instrument list instead of day 20 of
+  the delivery month.
+- **IB: smaller fixes.** `ADR;Po` / `ADR;Re` dividend accruals pair by
+  token; Warrant and futures-option transfers are booked (they were
+  treated as cash); a consolidated statement spanning several accounts
+  warns (ids masked); an income row whose ISIN country has no suffix
+  mapping warns when no position confirms the assumed .US listing.
+- **Questrade: no first-match symbol rebinding.** Only internal codes
+  (S098765) and dotted dividend codes (.BTO -> the traded BTG) are
+  rebound to the traded symbol; a real ticker is kept, and a
+  description matching several traded symbols is never guessed (older
+  RESP exports booked FTN.PR income under FTN.PRA; it now stays FTN.PR
+  with a warning to add a ticker.map rule).
+- **Questrade: quantity-bearing DIS rows are corporate-action legs.**
+  Warrant spinoff / rights legs (+100 / -100 / +100, no cash) were
+  counted as "zero-net dividend (informational)"; they are now their own
+  category and reported (taxjson-corp-actions books them); any other
+  quantity DIS row is a loud skip.
+- **Questrade: taxable-account caveats warn.** A dividend marked NON-RES
+  TAX WITHHELD is booked at the net (the export has no gross or tax), and
+  a transfer-in without TRANSFER BOOK VALUE enters at $0 cost; both now
+  warn in taxable accounts (`taxjson-brokerage --account-type`, passed by
+  `taxjson run`).
+- **Questrade .xlsx exports.** `taxjson-xlsx-to-csv` reads every cell as
+  text (dates arrive as ISO text, the ticker NA stays NA, a decimal comma
+  is not turned into thousands), and the parser accepts ISO dates
+  ("2025-12-31 00:00:00"); a settlement date that is present but
+  unparseable is an error instead of a silent T+1 fallback.
+- **Parsers: parentheses are negative.** `clean_number` read "(1,352.97)"
+  as +1352.97; it is now -1352.97 and it warns on unparseable text.
+  Webull (the one real user of parentheses) takes the magnitude itself,
+  so its outputs are unchanged.
+
 - **Webull: columns by header label, both export layouts pinned.** The
   Trading Summary's 2024 layout has 9 columns (Proceeds in column 8), the
   2025 layout 10 (an empty column 8). The parser read by position with a

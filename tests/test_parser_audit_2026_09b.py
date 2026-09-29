@@ -59,6 +59,19 @@ IB_TRADES_HDR = (
     'Realized P/L,MTM P/L,Code\n')
 
 
+def _ib_fii_futures(sym, mult):
+    """Financial Instrument Information for a synthetic future. Added
+    in the 2026-09 parse hardening: a futures contract size can no
+    longer be guessed (it used to be taken as 1), so a fixture must
+    state it the way a real statement does."""
+    return ('Financial Instrument Information,Header,Asset Category,'
+            'Symbol,Description,Conid,Underlying,Listing Exch,Multiplier,'
+            'Expiry,Delivery Month,Code\n'
+            f'Financial Instrument Information,Data,Futures,{sym},'
+            f'{sym} TEST,999000001,{sym[:3]},CME,{mult},2026-06-26,'
+            f'2026-06,\n')
+
+
 def _ib_trade(cat, sym, when, qty, price, proceeds, comm, code):
     return (f'Trades,Data,Order,{cat},USD,{sym},"{when}",{qty},{price},0,'
             f'{proceeds},{comm},0,0,0,{code}\n')
@@ -145,7 +158,8 @@ class TestIbExpirySettlement(unittest.TestCase):
     def test_futures_final_settlement_is_same_day(self):
         body = (IB_TRADES_HDR
                 + _ib_trade('Futures', 'QZFM6', '2026-06-26, 16:20:00',
-                            -1, 5000, 500, -2, 'C;Ep'))
+                            -1, 5000, 500, -2, 'C;Ep')
+                + _ib_fii_futures('QZFM6', '0.1'))
         txs, _ = _parse(IbBrokerage(), body)
         self.assertEqual(txs[0]['date_settle'], '2026-06-26')
 
@@ -433,7 +447,8 @@ class TestFuturesShortNotPhantom(unittest.TestCase):
                 + _ib_trade('Futures', 'QZFK6', '2026-05-29, 06:15:54',
                             1, 73100, 7310, -2, 'C')
                 + _ib_trade('Stocks', 'QZS', '2026-05-29, 10:00:00',
-                            -5, 10, 50, -1, 'O'))
+                            -5, 10, 50, -1, 'O')
+                + _ib_fii_futures('QZFK6', '0.1'))
         txs, _ = _parse(IbBrokerage(), body)
         fields = TaxTransaction.__dataclass_fields__
         tts = [TaxTransaction(**{k: v for k, v in r.items() if k in fields})

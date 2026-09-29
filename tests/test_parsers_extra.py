@@ -186,7 +186,12 @@ class TestWebullParser(unittest.TestCase):
 class TestQuestradeParser(unittest.TestCase):
     """Questrade CSVs are simpler (single header row, Date/Time format
     with AM/PM). We verify commission propagation (the recent fix), option
-    symbol reconstruction from descriptions, and EXP/ASN action mapping."""
+    symbol reconstruction from descriptions, and EXP/ASN action mapping.
+
+    RE-PREMISED fixtures (2026-09 parse hardening): the header now lists
+    all 14 export columns — the parser refuses an export missing any
+    (Account #, Activity Type, Account Type were absent here; the data
+    rows simply leave those trailing cells empty)."""
 
     def _parse(self, content):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
@@ -202,7 +207,7 @@ class TestQuestradeParser(unittest.TestCase):
         Every BUYSELL must now carry the value through."""
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
-            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,AAPL,APPLE INC,'
             '100,150.00,15000.00,9.95,-15009.95,USD\n'
         )
@@ -213,7 +218,7 @@ class TestQuestradeParser(unittest.TestCase):
     def test_buy_vs_sell_qty_sign(self):
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
-            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,AAPL,X,'
             '100,150.00,15000.00,1.00,-15001.00,USD\n'
             '2025-03-15 09:30:00 AM,2025-03-16 12:00:00 AM,Sell,AAPL,X,'
@@ -229,7 +234,7 @@ class TestQuestradeParser(unittest.TestCase):
         """Description 'CALL AAPL 06/20/25 150.00' → AAPL250620C00150000.<ext>."""
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
-            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,AAPL.OPT,'
             'CALL AAPL 06/20/25 150.00,1,2.50,250.00,1.25,-251.25,USD\n'
         )
@@ -241,7 +246,7 @@ class TestQuestradeParser(unittest.TestCase):
         treats this as a position-clearing BUYSELL with no cash flow."""
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
-            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2025-06-20 09:30:00 AM,2025-06-20 12:00:00 AM,EXP,AAPL.OPT,'
             'CALL AAPL 06/20/25 150.00 - EXPIRED,1,0.00,0.00,0.00,0.00,USD\n'
         )
@@ -256,7 +261,7 @@ class TestQuestradeParser(unittest.TestCase):
         +1 instead of netting the bought +1 to zero."""
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
-            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2026-02-09 12:00:00 AM,2026-02-10 12:00:00 AM,Buy,8LRQKH9,'
             'CALL ACM 02/20/26 105 AECOM,1,2.1,210.00,0.99,-210.99,USD\n'
             '2026-02-23 12:00:00 AM,2026-02-23 12:00:00 AM,EXP,8LRQKH9,'
@@ -304,7 +309,7 @@ class TestQuestradeParser(unittest.TestCase):
     def test_assignment_maps_to_assign_action(self):
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
-            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2025-06-20 09:30:00 AM,2025-06-20 12:00:00 AM,ASN,AAPL.OPT,'
             'CALL AAPL 06/20/25 150.00 ASSIGNMENT,1,0.00,0.00,0.00,0.00,USD\n'
         )
@@ -314,7 +319,7 @@ class TestQuestradeParser(unittest.TestCase):
     def test_currency_drives_symbol_suffix(self):
         csv = (
             'Transaction Date,Settlement Date,Action,Symbol,Description,'
-            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency\n'
+            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n'
             '2025-01-15 09:30:00 AM,2025-01-16 12:00:00 AM,Buy,SHOP,X,'
             '10,100.00,1000.00,4.95,-1004.95,CAD\n'
         )

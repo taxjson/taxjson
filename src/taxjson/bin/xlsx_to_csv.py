@@ -13,11 +13,14 @@ Typical flow:
 """
 import argparse
 import os
+import re
 import sys
 
 from taxjson.lib import cli_diag
 
 PROG = "taxjson-xlsx-to-csv"
+
+_GROUPED_NUMBER_RE = re.compile(r'^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$')
 
 
 def _clean_numeric_commas(val):
@@ -30,17 +33,18 @@ def _clean_numeric_commas(val):
     strings (descriptions, dates, etc.) are passed through unchanged.
     """
     import pandas as pd
-    if pd.isna(val):
+    if val is None or (not isinstance(val, str) and pd.isna(val)):
         return ""
     if isinstance(val, (int, float)):
         return val
     s_val = str(val).strip()
-    clean_s = s_val.replace(',', '')
-    try:
-        float(clean_s)
-        return clean_s
-    except ValueError:
-        return s_val
+    # Only a VALID thousands grouping loses its commas ("1,234.56",
+    # "-2,000,000"). A decimal comma ("12,34") or any other comma shape
+    # passes through untouched, so the downstream strict parser refuses
+    # it instead of it silently becoming 1234.
+    if _GROUPED_NUMBER_RE.match(s_val):
+        return s_val.replace(',', '')
+    return s_val
 
 
 def _apply_cells(df, fn):
@@ -56,6 +60,23 @@ def _apply_cells(df, fn):
     return df.applymap(fn)
 
 
+def read_sheet(pd, input_file, sheet_name=0):
+    """Read one sheet with EVERY cell as text, exactly as shown:
+
+      * dtype=str — no type inference: an integer-looking id keeps its
+        leading zeros, and a date cell comes through as ISO text
+        ("2025-12-31 00:00:00"), which the parsers accept (Questrade's
+        own CSV spells it "2025-12-31 12:00:00 AM").
+      * keep_default_na=False — pandas' NA sentinels ("NA", "N/A",
+        "null", "nan", ...) stay literal strings: the ticker NA
+        (National Bank) used to become an empty cell. Only a truly
+        empty cell is empty.
+    """
+    return pd.read_excel(input_file, sheet_name=sheet_name,
+                         engine='openpyxl', dtype=str,
+                         keep_default_na=False)
+
+
 def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None:
     """Read `input_file` (one sheet), strip numeric-comma formatting,
     and write CSV to `output_file` or stdout."""
@@ -68,7 +89,7 @@ def convert_xlsx_to_csv(input_file: str, output_file=None, sheet_name=0) -> None
     import pandas as pd
 
     print(f"Reading {input_file!r}...", file=sys.stderr)
-    df = pd.read_excel(input_file, sheet_name=sheet_name, engine='openpyxl')
+    df = read_sheet(pd, input_file, sheet_name)
     df = _apply_cells(df, _clean_numeric_commas)
 
     if output_file:
