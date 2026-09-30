@@ -225,6 +225,25 @@ def echo_parse_stats(out_path: Path) -> None:
         elif line.startswith("warning: ") and " parsed to 0 transactions" in line:
             # Indent the warning to match per-file count nesting.
             print(f"  {line}")
+        elif line.startswith(UNBOOKED_PREFIX):
+            # Input rows the parser knows are real events but could not
+            # book (e.g. Kraken ledger trades with no trades-export
+            # fill): the tax numbers are missing them. Console, always.
+            print(f"  {line}")
+
+
+# Parser warning prefix for rows that are known tax events the parser
+# could NOT book. `taxjson run` echoes these to the console and, under
+# --strict, refuses to publish (R1-104).
+UNBOOKED_PREFIX = "warning: UNBOOKED:"
+
+
+def unbooked_lines(out_path: Path) -> List[str]:
+    diag_path = out_path.with_name(out_path.name + ".diag")
+    if not diag_path.exists():
+        return []
+    return [ln for ln in diag_path.read_text(errors="replace").splitlines()
+            if ln.startswith(UNBOOKED_PREFIX)]
 
 
 _DIAG_MARKER_RE = re.compile(
@@ -1102,6 +1121,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # glance that each CSV contributed the expected number
             # of rows.
             echo_parse_stats(out)
+        # Outside the rebuild branch on purpose: `run --strict --fast`
+        # on a cached parse must hit the same gate.
+        if strict and unbooked_lines(out):
+            sys.exit(f"taxjson run --strict: {name}: {broker} input has "
+                     f"event(s) the parser could not book (UNBOOKED "
+                     f"warning above / in {out.name}.diag) — aborting.")
         parsed.append(out)
 
     # 2. corp-actions per equity broker. taxjson-corp-actions requires

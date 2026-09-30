@@ -220,5 +220,74 @@ class TestCoinbaseBlankTotal(unittest.TestCase):
         self.assertIn("Total", str(cm.exception))
 
 
+# ---------------------------------------------------------------- R1-104
+def _kr_files(folder, *, cover_sell=True, trades=True):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "kr_ledgers_2026.csv").write_text(
+        KR_LEDGER_H
+        + "LD1,FD01AAAA,2026-01-10 12:00:00,deposit,,currency,fiat,ZCAD,"
+          "spot / main,5000,0,5000\n"
+        + "LT1,TBUY01AAAA,2026-02-03 12:00:00,trade,tradespot,currency,"
+          "crypto,SOL,spot / main,10,0,10\n"
+        + "LT2,TBUY01AAAA,2026-02-03 12:00:00,trade,tradespot,currency,"
+          "fiat,ZCAD,spot / main,-1500,0,3500\n"
+        + "LT3,TSEL01BBBB,2026-07-06 12:00:00,trade,tradespot,currency,"
+          "crypto,SOL,spot / main,-10,0,0\n"
+        + "LT4,TSEL01BBBB,2026-07-06 12:00:00,trade,tradespot,currency,"
+          "fiat,ZCAD,spot / main,2500,0,6000\n")
+    if trades:
+        rows = ("TBUY01AAAA,OB1,SOL/CAD,forex,crypto,2026-02-03 12:00:00,"
+                "buy,limit,150,1500,0,10,0,,\n")
+        if cover_sell:
+            rows += ("TSEL01BBBB,OS1,SOL/CAD,forex,crypto,2026-07-06 "
+                     "12:00:00,sell,limit,250,2500,0,10,0,,\n")
+        (folder / "kr_trades_2026.csv").write_text(KR_TRADES_H + rows)
+
+
+class TestKrakenLedgerTradeCoverage(unittest.TestCase):
+    def _parse_ledger(self, **kw):
+        from taxjson.lib.brokerages.kraken import KrakenBrokerage
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td) / "kr"
+            _kr_files(folder, **kw)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                KrakenBrokerage().parse_file(folder / "kr_ledgers_2026.csv")
+        return err.getvalue()
+
+    def test_uncovered_ledger_trade_is_an_unbooked_warning(self):
+        err = self._parse_ledger(cover_sell=False)
+        self.assertIn("warning: UNBOOKED:", err)
+        self.assertIn("1 trade", err)
+        self.assertIn("2026-07-06", err)
+        self.assertIn("TS***", err)
+        self.assertNotIn("TSEL01BBBB", err)      # refids masked
+
+    def test_complete_trades_export_is_quiet(self):
+        err = self._parse_ledger(cover_sell=True)
+        self.assertNotIn("UNBOOKED", err)
+
+    def test_no_trades_export_at_all_is_an_unbooked_warning(self):
+        err = self._parse_ledger(trades=False)
+        self.assertIn("warning: UNBOOKED:", err)
+        self.assertIn("2 trade", err)
+
+    def test_run_surfaces_it_and_strict_aborts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td, source_currencies=())
+            _kr_files(root / "inputs" / "crypto", cover_sell=False)
+            env = _env(Path(td), TAXJSON_OFFLINE="1")
+            r = _run_cli(root, "run", "--no-input", env=env)
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertIn("UNBOOKED", r.stdout + r.stderr)
+            rs = _run_cli(root, "run", "--strict", "--no-input", env=env)
+            self.assertNotEqual(rs.returncode, 0)
+            self.assertIn("--strict", rs.stderr)
+            # --fast cache hit must not skip the gate.
+            rf = _run_cli(root, "run", "--strict", "--fast", "--no-input",
+                          env=env)
+            self.assertNotEqual(rf.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

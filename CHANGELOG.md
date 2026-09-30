@@ -12,6 +12,12 @@
   proceeds with no warning. The Total is now rebuilt from Subtotal ± fee
   (or quantity × price ± fee), with a note; a row with nothing to rebuild
   it from stops the parse, naming the row.
+- **Kraken ledger trades missing from the trades export.** They were
+  dropped behind the same note a complete run prints. Each unmatched
+  trade is now an `UNBOOKED` warning on the console (count, dates,
+  masked refids), and `taxjson run --strict` stops on it. A ledger whose
+  trades are all matched no longer prints the "parsed to 0 transactions"
+  warning.
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
   new shares' cost), flagging a taxable spin-off booked at $0 and showing

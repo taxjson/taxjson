@@ -314,6 +314,15 @@ Examples:
             print(f"  {input_path.name}: 0 tax objects "
                   f"({_kept_this_file} TRANSFER row(s) kept aside)",
                   file=sys.stderr)
+        elif (not transactions and file_size > 0
+              and getattr(extractor, 'zero_tx_reason', None)):
+            # The parser knows why this file books nothing (a Kraken
+            # ledger whose trade rows are all booked from the trades
+            # export) — not the regression the warning below is for,
+            # and a warning on every correct run trains users to
+            # ignore real ones.
+            print(f"  {input_path.name}: 0 tax objects "
+                  f"({extractor.zero_tx_reason})", file=sys.stderr)
         elif not transactions and file_size > 0:
             print(
                 f"warning: {input_path.name} parsed to 0 transactions "
