@@ -9625,6 +9625,7 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                    "overdrafts": ledger["overdrafts"],
                    "unrated": ledger["unrated"],
                    "open_pools": ledger["pools"],
+                   "pools_year_end": ledger.get("pools_year_end") or {},
                    "currency": base, "year": year})
         return
     print(FX.render_report(ledger, base, year, country, verdict))
