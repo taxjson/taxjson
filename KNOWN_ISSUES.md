@@ -162,6 +162,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Why deferred:** needs a contract-classification table (which symbols are §1256 contracts) plus a mark-to-market pass; no user data currently exercises it.
 - **Workaround:** report §1256 contracts from your broker's 1099-B (they're reported mark-to-market there) and exclude them from the tool's totals.
 
+### US: January-paid Q4 fund dividends are dated in the pay year
+- **Where:** `src/taxjson/lib/pipeline.py` (income belongs to the year it was received — the pay date), shared by `divs-sum`, `sum-income` and the US estimate.
+- **Current behavior:** a RIC/REIT dividend declared in October–December with a December record date and paid in January (IRC s.852(b)(7); REITs s.857(b)(9)) counts in the PAY year. The 1099-DIV puts it in the prior year, so the dividend totals and the US estimate shift about one quarter's ETF distribution between years (audit S076-23). Dividends are not form-exported, so no form number is affected.
+- **Why deferred (owner decision):** broker exports carry the pay date and rarely the record/declaration date, and nothing in the books says whether a security is a RIC/REIT. Options: (a) a per-project override list of January payments to move to Dec 31; (b) a heuristic for US-listed ETFs/funds with a January pay date and a December ex-date when the export has one; (c) keep pay-date dating and reconcile against the 1099-DIV by hand.
+
 ### US estimated taxes (1040-ES) are not modeled
 - **Where:** `src/taxjson/bin/taxjson_instalments.py` implements the Canadian instalment regime only; `taxjson instalments` refuses on a US project.
 - **Why deferred:** the US regime differs in every mechanical detail — four different due dates (Apr 15 / Jun 15 / Sep 15 / Jan 15), safe harbours (90% of the current year, or 100%/110% of the prior year by AGI), the annualized-income method, and a Form 2210 penalty computed at the federal short-term rate plus 3%. Sharing code with the Canadian model would produce a hybrid that is right for neither.
@@ -190,6 +195,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** taxable-account TRANSFER rows are dropped at parse and rejected by the engine.
 - **Current behavior:** the taxable-side disposition of an in-kind contribution is booked only if you record it as a `.tt` BUYSELL at fair market value in the taxable account. A loss on it is then denied indirectly (as a superficial loss against the plan's acquisition, permanent), which coincides with s.40(2)(g)(iv) — a loss on a transfer to an RRSP/TFSA is nil — in the common case; a gain is taxable as usual.
 - **Workaround:** record the contribution day as a BUYSELL sell at FMV in the taxable account (and the plan's acquisition with `transfers = true`).
+
+### Same-timestamp buy and sell rows: buys go first, whatever the export order
+- **Where:** `src/taxjson/lib/corporate_timeline.py` `CaPriority` (BUY=3 < SELL=4) in the Canada main pass.
+- **Current behavior:** rows with the same date, phase and clock time are ordered buys before sells. Webull stamps every row 09:30:00, so a write listed before its same-day buy-back (SELL then BUY in the export) is booked as a long round trip (buy, then sell) — which can expose the loss to a superficial-loss denial that a grant-timed write + buy-back would not get under `option_buyback_loss_superficial = false` (audit R1-30). On the owner's 2025 book five Webull pairs change character this way; the year totals are the same.
+- **Why deferred (owner decision):** the export's row order is the only evidence of intraday order, and it cannot be proven either way. Options: (a) give SELL the BUY rung so ties keep the export's row order (the audit's patch: only the ladder-pinning test changes); (b) keep buy-first (a same-moment pair never looks short, which the phantom and radar walks rely on too).
 
 ### Second-order superficial losses from the ACB bump's date
 - **Where:** `src/taxjson/lib/core.py` (the deferral ADJUST is dated the trigger).
