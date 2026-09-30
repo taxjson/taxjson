@@ -228,7 +228,12 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
 - **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Split-share corporations, some REIT/LP distributions and small-business dividends are non-eligible (15% gross-up, smaller credit) and are overstated in the estimate; T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
 - **Why deferred:** brokers' activity exports do not carry the T5 box; the split is only known from the slip.
-- **Workaround:** the estimate is disclosed as an estimate; use the slips for the return. `taxjson reconcile-slips` compares totals.
+- **Workaround:** the estimate is disclosed as an estimate; use the T5/T3 slips for the return. (`taxjson reconcile-slips` reads only T5008 / 1099-B disposition slips; it does not check dividend slips.)
+
+### reconcile-slips cannot read per-type-code T5008s or scope a slip to one broker
+- **Where:** `src/taxjson/bin/taxjson_reconcile_slips.py`.
+- **Current behavior:** comparison is per security. IBKR issues one T5008 row per type code (SHS / OPC / WTS / FUT) identified as "Various"; such a slip cannot be compared, so transcribe a per-security CSV. Several brokers' slips are reconciled together against the account's combined dispositions; a single broker's slip cannot be scoped to that broker's own sales when one account mixes brokers (the gains rows carry no broker).
+- **Why deferred:** a per-type-code total mode needs each disposition's broker (to separate IB's sales from Webull's and RBC's in a mixed account) and a warrant/share split the books do not carry.
 
 ## Latent assumptions (audit-flagged, not firing on current data)
 
@@ -255,6 +260,11 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 - **Why not collapse them:** the pre/post comparison is the design's value-add. Future change candidate: bake the "POST-WASH (FILE FROM THIS)" / "PRE-WASH (DIAGNOSTIC)" label into a header line at the top of each file so the role is unambiguous when a user opens one in isolation.
 
 ---
+
+### T1135 cost amounts leave out denied superficial losses
+- **Where:** `src/taxjson/bin/taxjson_t1135.py` `walk_costs` (its own average-cost replay of the base books).
+- **Current behavior:** the engine adds a denied superficial loss to the replacement shares' ACB (s.53(1)(f)); the T1135 walk does not, so the max-cost / Dec-31 cost columns (and the threshold test) are low by the deferred amount while those shares are held. The report names the deferred amounts from the gains files and says when they could lift the maximum over the threshold.
+- **Why deferred:** the add-backs live only in the engine's run (virtual ADJUST rows); the year-scoped gains files do not carry prior years' add-backs. Sketch: run one full-history `run_gains` pass in `cmd_t1135` (as `carryover` does) and feed each disposition's `wash_trigger.adjust_amount` / `adjust_date` into the walk as ADJUST rows (needs the landing symbol recorded in `wash_trigger`).
 
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`TRANSFER` in `_NON_CAPITAL`; taxable books post-sidecar contain no TRANSFER rows at all).

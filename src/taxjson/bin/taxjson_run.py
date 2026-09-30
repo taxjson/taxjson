@@ -5861,8 +5861,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 _die(f"unsupported province {_prov!r} for the estimate "
                      f"(supported: "
                      f"{', '.join(sorted(_te.CA_PROVINCES))})")
+    _run_state: List[str] = []
     if cfg:
         _warn_artifact_year(files, (cfg.get("settings") or {}).get("year"))
+        _run_state = _warn_run_state(root, cfg)
 
     header = ["ACCOUNT", "STOCK", "OPTION", "REALIZED", "DIVIDEND", "PIL",
               "FEES", "TOTAL"]
@@ -5913,6 +5915,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as e:
+                if acct in taxable_accounts:
+                    # A taxable account's books left out of the filing
+                    # block, the estimate and instalments with rc 0
+                    # (R1-277, S004-09): refuse instead.
+                    _die(f"could not read {p}: {e} — a taxable "
+                         f"account's gains cannot be left out of the "
+                         f"totals. Re-run `taxjson run` to rebuild it.")
                 print(f"taxjson: warning: could not read {p}: {e}", file=sys.stderr)
                 continue
             year = year or (data.get("summary") or {}).get("year")
@@ -6009,7 +6018,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
     _fyear = year or _settings.get("year")
     _is_us = _normalize_country(str(_settings.get("country", "canada"))) \
         in ("us", "usa")
-    _date_key = "date" if _is_us else "date_settle"
+    # The date the gains files were scoped on — an explicit tax_date
+    # that differs from the country default dropped a year-end sale
+    # from FOR THE RETURN (R1-200).
+    _date_key = ("date" if _tax_date_basis(_settings) == "trade"
+                 else "date_settle")
     filing_rows: List[Dict[str, Any]] = []
     _filing_ents: List[Dict[str, Any]] = []
     for acct, p in files.items():
@@ -6018,9 +6031,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
         try:
             _ents, _ = load_dispositions([p], _fyear, _date_key)
         except (OSError, ValueError) as e:
-            print(f"taxjson sum: warning: {acct}: could not read "
-                  f"dispositions: {e}", file=sys.stderr)
-            continue
+            _die(f"{acct}: could not read dispositions from {p}: {e} — "
+                 f"re-run `taxjson run` to rebuild it (the FOR THE "
+                 f"RETURN block cannot leave a taxable account out).")
         if ((cfg.get("accounts") or {}).get(acct) or {}).get("crypto"):
             _ents = mark_crypto(_ents)
         _filing_ents += _ents
@@ -6053,11 +6066,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # (T4037) but lives outside the engine's dispositions; show the
     # estimate beside the block when the ledger builds, else a pointer.
     _fx_note: Optional[Dict[str, Any]] = None
+    _fx_err = ""
     if filing_rows and not _is_us:
+        import contextlib as _ctx
+        import io as _io
+        _fx_buf = _io.StringIO()
         try:
-            import contextlib as _ctx
-            import io as _io
-            with _ctx.redirect_stderr(_io.StringIO()):
+            with _ctx.redirect_stderr(_fx_buf):
                 _fxl, _fxv, _, _, _ = _fx_cash_doc(root, cache)
             _fx_note = {"net_gain": round(float(_fxl["net_gain"]), 2),
                         "reportable": round(float(_fxv["reportable"]), 2),
@@ -6071,8 +6086,20 @@ def cmd_summary(args: argparse.Namespace) -> None:
                         "caveat": "explicit conversions and deposits "
                                   "are not in the ledger; the figure "
                                   "can be wrong in either direction"}
-        except (SystemExit, Exception):             # noqa: BLE001
-            _fx_note = None
+        except SystemExit as e:
+            # The ledger refused (an unreadable or missing native tx
+            # file): say so instead of a silent pointer (S005-04).
+            _fx_note, _fx_err = None, str(e.code or "")
+        except Exception as e:                      # noqa: BLE001
+            _fx_note, _fx_err = None, f"{type(e).__name__}: {e}"
+        _fx_warn = [ln for ln in _fx_buf.getvalue().splitlines()
+                    if "warning" in ln.lower()]
+        if _fx_err or _fx_warn:
+            print(f"taxjson {_CURRENT_CMD or 'sum'}: warning: FX-on-cash "
+                  f"(line 15300) estimate "
+                  + ("omitted — " + _fx_err if _fx_err else
+                     "built with warnings — " + "; ".join(_fx_warn)),
+                  file=sys.stderr)
     # Base currency is just a label here — soft-read, no hard config
     # dependency (the command works from the work/ gains files).
     base = _base_currency(root)
@@ -6123,6 +6150,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                        "fx_cash": _fx_note,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
+            "run_state_problems": _run_state,
             "subtotals": {g.lower(): _sum_rows(rows)
                           for g, rows in group_defs}}
         if want_estimate:
@@ -6447,6 +6475,13 @@ def cmd_instalments(args: argparse.Namespace) -> None:
     if res.returncode != 0:
         _die(f"could not compute the estimate it builds on: "
              f"{(res.stderr or '').strip()[:400]}")
+    # The estimate's own warnings (an unreadable or stale-year gains
+    # file, tainted sales EXCLUDED, a run that failed) are caveats on
+    # every figure below: relay them, never swallow them (S005-05,
+    # S007-04, S043-17, S047-22).
+    if (res.stderr or "").strip():
+        sys.stderr.write(res.stderr if res.stderr.endswith("\n")
+                         else res.stderr + "\n")
     r = (_json.loads(res.stdout) or {}).get("estimate") or {}
     if not r:
         _die("the estimate produced no result — run `taxjson run` "
@@ -6455,10 +6490,20 @@ def cmd_instalments(args: argparse.Namespace) -> None:
     if doc is None:
         _die("no `year` under [settings] in taxjson.toml — the "
              "instalment schedule is per tax year.")
+    # A year the built-in tables do not cover (a 2023 project on the
+    # 2024 tables and the post-2024 AMT) must say so here too (S043-16).
+    from taxjson.lib.tax_estimate import vintage_notes
+    doc["vintage"] = r.get("vintage")
+    doc["vintage_notes"] = (vintage_notes(year, str(r.get("vintage")))
+                            if r.get("vintage") else [])
     if getattr(args, "json", False):
         _json_out(doc)
         return
     print(INST.render(doc, base))
+    if doc["vintage_notes"]:
+        print()
+        for _n in doc["vintage_notes"]:
+            print(_wrap_note("NOTE: " + _n))
 
 
 def cmd_estimate(args: argparse.Namespace) -> None:
@@ -7236,6 +7281,13 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     rows = []
     books = 0
     missing = []
+    _phantoms = None
+    if (root / "phantoms.json").exists():
+        from taxjson.lib.phantom_holdings import load_phantoms
+        try:
+            _phantoms = load_phantoms(root / "phantoms.json") or None
+        except (OSError, ValueError) as e:
+            _die(f"phantoms.json is unreadable: {e}")
     for name, acfg in sorted((cfg.get("accounts") or {}).items()):
         if not isinstance(acfg, dict) or acfg.get("type", "sheltered") != "taxable":
             continue
@@ -7254,6 +7306,12 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                                              if k in TaxTransaction.__dataclass_fields__}))
             except TypeError:
                 continue
+        if _phantoms is not None:
+            # The same phantom openings the gains stage adds: a phantom-
+            # backed LONG option sold to close read as a WRITE, with a
+            # false checklist ATTENTION when it had expired (S044-09).
+            from taxjson.lib.phantom_holdings import synthesize_openings
+            txs, _log = synthesize_openings(txs, _phantoms)
         for r in straddling(txs, year, timing, since, filed_years,
                             filed_timing=filed_timing):
             r["account"] = r["account"] or name
@@ -8237,6 +8295,11 @@ def cmd_t1135(args: argparse.Namespace) -> None:
         if gains is not None:
             gains_argv += ["--gains", str(gains)]
     argv: List[str] = base_argv + gains_argv
+    # A configured taxable account with inputs but no books made the
+    # filing-threshold test read "not required" with rc 0 (S006-03).
+    _require_taxable_books(root, cfg,
+                           {n: 1 for n in taxable if n not in missing},
+                           "base book")
     missing = [n for n in missing
                if n not in _accounts_skipped_for_no_inputs(root)]
     if missing:
@@ -8246,8 +8309,18 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     if not argv:
         sys.exit(f"taxjson t1135: no taxable base files in {cache} "
                  f"(run `taxjson run` first).")
+    # The income/gain columns come from the year-scoped gains files: on
+    # books built for another year they silently read 0 (S007-06,
+    # S048-01).
+    _warn_artifact_year(
+        {Path(g).name.rsplit("_gains", 1)[0]: Path(g)
+         for g in gains_argv[1::2]}, year)
+    _warn_run_state(root, cfg)
 
-    argv += ["--year", str(year), "--base-currency", base_currency]
+    argv += ["--year", str(year), "--base-currency", base_currency,
+             # S052-10: the gain join and the cost walk follow the
+             # project's tax_date, like the gains files.
+             "--tax-date", _tax_date_basis(settings)]
     t1135_map = root / "t1135.map"
     if t1135_map.exists():
         argv += ["--map", str(t1135_map)]
@@ -8310,6 +8383,8 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     argv = base_argv + crypto_argv + [
         "--country", _normalize_country(str(settings.get("country", "canada"))),
         "--base-currency", str(settings.get("base_currency", "CAD")),
+        # The same year attribution as run / close-year (R1-192).
+        "--tax-date", _tax_date_basis(settings),
     ] + option_timing_flags(settings)       # same timing as the returns
     if settings.get("year") is not None:
         # Rows before the project year are flagged as possibly partial.
@@ -8325,6 +8400,25 @@ def cmd_carryover(args: argparse.Namespace) -> None:
         argv += ["--claimed", str(claimed)]
     elif args.claimed:
         sys.exit(f"taxjson carryover: no such claimed file: {claimed}")
+    # Each locked year's filed realized total: the ledger recomputes
+    # every year with THIS project's option timing, and a locked year it
+    # disagrees with is flagged (S047-21, S048-20).
+    from taxjson.bin import taxjson_filed
+    import json as _json
+    for _yr, _lp in taxjson_filed.list_snapshots(root):
+        try:
+            _lock = _json.loads(_lp.read_text(encoding="utf-8"))
+            _real = float((_lock.get("totals") or {})["realized"])
+        except (OSError, ValueError, KeyError, TypeError,
+                AttributeError):
+            continue
+        argv += ["--filed", f"{_yr}={_real!r}"]
+    _w = _grant_since_warning(settings)
+    if _w:
+        print(f"taxjson carryover: warning: {_w}", file=sys.stderr)
+    # Deferred / failed / validation-ERROR books drive the carryforward
+    # balance too (S048-21).
+    _warn_run_state(root, cfg)
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_carryover.main(argv))
@@ -8332,7 +8426,8 @@ def cmd_carryover(args: argparse.Namespace) -> None:
 
 def _taxable_gains_argv(root: Path, cache: Path, *,
                         exclude_crypto: bool = False,
-                        prog: str = "taxjson") -> List[str]:
+                        prog: str = "taxjson",
+                        required: bool = False) -> List[str]:
     """`--gains FILE` pairs for every taxable account, preferring the
     wash-adjusted `<account>_gains_wash.json` (the allowed numbers a return
     reports). Shared by the form-export and reconcile-slips wrappers.
@@ -8362,13 +8457,24 @@ def _taxable_gains_argv(root: Path, cache: Path, *,
     from taxjson.lib.report_model import resolve_gains_files
     argv: List[str] = []
     _no_input = _accounts_skipped_for_no_inputs(root)
+    have = {}
     for name in sorted(taxable):
         gains = resolve_gains_files(cache, name).get(name)
         if gains is not None:
             argv += ["--gains", str(gains)]
+            have[name] = gains
+        elif required and _has_inputs(root, name):
+            pass                        # refused below, all at once
         elif name not in _no_input:
             print(f"taxjson: warning: no gains file for taxable account {name!r} — "
                   f"run `taxjson run` first.", file=sys.stderr)
+    if required:
+        # The Schedule 3 / 8949 export and the slip check must not be
+        # partial: a failed account was a one-line warning with rc 0,
+        # and the checklist certified the partial export (S045-21).
+        _require_taxable_books(
+            root, {"accounts": {n: accounts_cfg[n] for n in taxable}},
+            have, "gains file")
     if not argv:
         _die(f"no taxable gains files in {cache} "
                  f"(run `taxjson run` first).")
@@ -8398,11 +8504,12 @@ def cmd_form_export(args: argparse.Namespace) -> None:
              f"(this run renders {form}); use --csv FILE to save the "
              f"{form} rows.")
 
-    gains_argv = _taxable_gains_argv(root, cache)
+    gains_argv = _taxable_gains_argv(root, cache, required=True)
     # form-export takes gains files positionally.
     files = [gains_argv[i + 1] for i in range(0, len(gains_argv), 2)]
     _warn_artifact_year({Path(f).name.rsplit("_gains", 1)[0]: Path(f)
                          for f in files}, year)
+    _warn_run_state(root, _cfg)
     # Crypto books go on Schedule 3's crypto-assets line: name them.
     from taxjson.lib.report_model import resolve_gains_files
     _crypto_files = []
@@ -8413,7 +8520,10 @@ def cmd_form_export(args: argparse.Namespace) -> None:
                 _crypto_files += ["--crypto", str(_g)]
     argv = files + _crypto_files + ["--form", form,
                     "--base-currency",
-                    str(settings.get("base_currency", ""))]
+                    str(settings.get("base_currency", "")),
+                    # R1-200: rows are picked by the date the gains
+                    # files were scoped on, not the form's default.
+                    "--date-basis", _tax_date_basis(settings)]
     if year is not None:
         argv += ["--year", str(year)]
     if args.csv:
@@ -8575,6 +8685,72 @@ def _warn_artifact_year(files: Dict[str, Path], config_year) -> None:
           f"first.", file=sys.stderr)
 
 
+def _tax_date_basis(settings: Dict[str, Any]) -> str:
+    """The date the project's gains files are year-scoped on: the
+    explicit [settings] tax_date, else the country default (CRA:
+    settlement, IRS: trade) — what stage_account feeds the engine."""
+    return settings.get("tax_date") or (
+        "trade" if _normalize_country(str(settings.get("country",
+                                                       "canada")))
+        in ("us", "usa") else "settle")
+
+
+def _has_inputs(root: Path, name: str) -> bool:
+    """inputs/<name>/ holds an activity file `taxjson run` reads."""
+    d = root / "inputs" / name
+    return bool(input_files(d, ".csv") or input_files(d, ".tt"))
+
+
+def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
+    """What `taxjson checklist`'s run-clean step finds wrong with the
+    books the filing commands read: validation ERRORs in the last run,
+    an account deferred on pending elections, inputs changed since the
+    last full run (a failed run leaves them newer than the artifacts),
+    an account with inputs but no report. [] when clean or when there
+    is nothing to judge (no reports yet). The report commands used to
+    serve these books with rc 0 and no word (R1-252, S049-11)."""
+    try:
+        from datetime import date as _d
+        from taxjson.lib.checklist import Ctx, d_run_clean
+        year = int((cfg.get("settings") or {}).get("year") or 0)
+        res = d_run_clean(Ctx(root, cfg, year, _d.today(),
+                              lambda *a, **k: (0, "", "")))
+    except Exception:                                   # noqa: BLE001
+        return []
+    if res.status != "attention":
+        return []
+    return [x.strip() for x in res.detail.split("; ") if x.strip()]
+
+
+def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
+    """Loud stderr banner for _run_state_problems; returns them."""
+    probs = _run_state_problems(root, cfg)
+    if probs:
+        _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
+        print(f"{_pfx}: WARNING: these books are not the clean result of "
+              f"the current inputs — {'; '.join(probs)}. The figures "
+              f"below may leave sales out or carry default FX; fix and "
+              f"re-run `taxjson run` before using them.", file=sys.stderr)
+    return probs
+
+
+def _require_taxable_books(root: Path, cfg: Dict[str, Any],
+                           have: Dict[str, Any], what: str) -> None:
+    """Die when a configured taxable account that HAS inputs has no
+    `what` artifact: a partial filing figure (form-export, t1135,
+    close-year) was reported with rc 0 and a one-line warning
+    (S045-21, S006-03, S006-07)."""
+    missing = sorted(
+        n for n, c in (cfg.get("accounts") or {}).items()
+        if isinstance(c, dict) and c.get("type") == "taxable"
+        and n not in have and _has_inputs(root, n))
+    if missing:
+        _die(f"no {what} for taxable account(s) {', '.join(missing)} — "
+             f"the last `taxjson run` did not build them (did it fail?). "
+             f"Fix and re-run `taxjson run`; figures without them would "
+             f"leave those accounts out.")
+
+
 def _filed_run_gains(cmd_tail, out_path):
     """taxjson-gains invocation for the filed-year recompute."""
     run_to_file(_cmd("taxjson-gains") + cmd_tail, Path(out_path),
@@ -8612,6 +8788,39 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  f") but [settings].year is {settings.get('year')} — "
                  f"rebuild with `taxjson run` first, then close. "
                  f"Nothing was written.")
+    # A taxable account with inputs but no gains file (its stage
+    # failed) was left out of the lock without a word, and then never
+    # drift-checked (S006-07).
+    _require_taxable_books(root, cfg, files, "gains file")
+    # The lock certifies the filing numbers: books from a run with
+    # validation ERRORs, a pending-election deferral or inputs changed
+    # since (a failed run) are not locked without --force (S048-23,
+    # S049-11).
+    _state = _run_state_problems(root, cfg)
+    if _state and not args.force:
+        sys.exit("taxjson close-year: the books are not the clean result "
+                 "of the current inputs — " + "; ".join(_state)
+                 + ". Fix and re-run `taxjson run`, then close (or pass "
+                 "--force to lock them anyway). Nothing was written.")
+    if _state:
+        print("taxjson close-year: WARNING: locking books with open "
+              "problems (--force): " + "; ".join(_state),
+              file=sys.stderr)
+    # Equity taxable accounts always get the blended cross-account pass
+    # in a full run; a plain <acct>_gains.json means only `run --account`
+    # ran (or an account is deferred) — per-account, unblended numbers
+    # that check-filed's blended recompute then reports as DRIFT
+    # (S046-01).
+    _unblended = sorted(
+        a for a, pth in files.items()
+        if not (cfg.get("accounts", {}).get(a) or {}).get("crypto")
+        and not Path(pth).name.endswith("_gains_wash.json"))
+    if _unblended:
+        sys.exit(f"taxjson close-year: {', '.join(_unblended)} "
+                 f"only has per-account (pre-wash, unblended) gains — "
+                 f"the cross-account pass of a full `taxjson run` never "
+                 f"ran. Run `taxjson run` with no --account first. "
+                 f"Nothing was written.")
     # Staleness guard: after `run --account X` the wash file predates
     # the just-rebuilt plain gains (the blend pass was skipped).
     # `taxjson sum` merely notes this; close-year WRITES the filing
@@ -8632,7 +8841,12 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     accounts = {}
     import json as _json
     for acct, pth in sorted(files.items()):
-        doc = _json.loads(Path(pth).read_text(encoding="utf-8"))
+        try:
+            doc = _json.loads(Path(pth).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            sys.exit(f"taxjson close-year: could not read {pth}: {e} — "
+                     f"re-run `taxjson run` to rebuild it. Nothing was "
+                     f"written.")
         accounts[acct] = taxjson_filed.aggregates_from_gains(doc)
     basis = gains_basis_label(files)
     from taxjson.lib.pipeline import option_timing_from_settings
@@ -8897,8 +9111,13 @@ def cmd_check_filed(args: argparse.Namespace) -> None:
               "creates one after you file.")
         return
     print("==> filed-year drift check")
+    # "OK" is only as good as the books it recomputes (S048-23).
+    _state = _warn_run_state(root, load_config(root))
     if _check_filed_years(root, cache, settings, strict=False):
         raise SystemExit(1)
+    if _state:
+        print("  (the books above are not clean — see the warning; an OK "
+              "here is not conclusive until `taxjson run` is clean)")
 
 
 def cmd_reconcile_slips(args: argparse.Namespace) -> None:
@@ -8913,8 +9132,25 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
 
     _slips = (args.slip_csv if isinstance(args.slip_csv, list)
               else [args.slip_csv])
-    argv = list(_slips) + _taxable_gains_argv(
-        root, cache, exclude_crypto=True, prog="taxjson reconcile-slips")
+    gains_argv = _taxable_gains_argv(
+        root, cache, exclude_crypto=True, prog="taxjson reconcile-slips",
+        required=True)
+    # Books built for another tax year made every slip row read
+    # MISSING_FROM_COMPUTED "dropped CSV rows or a missing statement?"
+    # — the wrong cause (S047-24, S049-06).
+    _stale = _artifact_year_mismatch(
+        {Path(g).name: Path(g) for g in gains_argv[1::2]}, year)
+    if _stale:
+        got = ", ".join(f"{a} ({y})" for a, y in sorted(_stale.items()))
+        _die(f"[settings].year is {year} but the work/ books were built "
+             f"for another tax year: {got}. Rebuild with `taxjson run` "
+             f"before reconciling the {year} slips.")
+    argv = list(_slips) + gains_argv
+    tmap = root / "ticker.map"
+    if tmap.exists():
+        # Slips print the broker's symbols; the books carry the
+        # ticker.map consolidations (KGC -> K, R1-19).
+        argv += ["--ticker-map", str(tmap)]
     if year is not None:
         argv += ["--year", str(year)]
         # Same date convention stage_account feeds the gains engine:
@@ -8977,13 +9213,58 @@ def _explain_wash_sales(root: Path, cache: Path,
         common += ["--incomplete-history", str(phantoms)]
     common += option_timing_flags(settings)
 
+    # Trace the computation the table comes from: the pipeline BLENDS
+    # the taxable equity books (s.47 ACB / cross-account §1091), and
+    # Canadian crypto books when there are two or more. One explain
+    # per account's own book gave each its own pool — "no matching
+    # gains" for a real denial, or a denial the books do not have
+    # (S046-09).
+    _acfg = _soft_config(root).get("accounts") or {}
+    _crypto_blend = _normalize_country(settings.get("country", "canada")) \
+        not in ("us", "usa")
+    _by_name = {p.name[:-len("_base.json")]: p for p in bases}
+    if account and account in _acfg:
+        _is_c = bool((_acfg.get(account) or {}).get("crypto"))
+        for n in _taxable_equity_account_names(root):
+            if (n != account and bool((_acfg.get(n) or {}).get("crypto"))
+                    == _is_c and (cache / f"{n}_base.json").exists()):
+                _by_name[n] = cache / f"{n}_base.json"
+    equity = [p for n, p in sorted(_by_name.items())
+              if not (_acfg.get(n) or {}).get("crypto")]
+    crypto = [p for n, p in sorted(_by_name.items())
+              if (_acfg.get(n) or {}).get("crypto")]
+    groups = ([equity] if equity else []) + (
+        [crypto] if crypto and _crypto_blend
+        else [[c] for c in crypto])
+    import os as _os
+    import tempfile as _tf
+    from taxjson.lib.dispatch import run_cmd as _run_cmd
     rc = 0
-    for base in bases:
-        # Each trace block self-identifies its account, so no per-file header
-        # is needed (and none is printed, avoiding a stdout-ordering glitch).
-        from taxjson.lib.dispatch import run_cmd as _run_cmd
-        proc = _run_cmd(_cmd("taxjson-explain") + common + [str(base)])
-        rc = proc.returncode or rc
+    for grp in groups:
+        target, tmp = grp[0], None
+        if len(grp) > 1:
+            fd, name = _tf.mkstemp(prefix="taxjson_explain_",
+                                   suffix=".json")
+            _os.close(fd)
+            tmp = Path(name)
+            res = _run_cmd(_cmd("taxjson-merge") + [str(b) for b in grp],
+                           capture_output=True)
+            if res.returncode != 0:
+                tmp.unlink(missing_ok=True)
+                sys.exit(f"taxjson wash-sales: could not merge the "
+                         f"taxable base books: "
+                         f"{(res.stderr or '').strip()[:300]}")
+            tmp.write_text(res.stdout, encoding="utf-8")
+            target = tmp
+        try:
+            # Each trace block self-identifies its account, so no
+            # per-file header is needed.
+            proc = _run_cmd(_cmd("taxjson-explain") + common
+                            + [str(target)])
+            rc = proc.returncode or rc
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
     raise SystemExit(rc)
 
 
@@ -9791,13 +10072,20 @@ def _fx_cash_doc(root: Path, cache: Path):
             # taxable holdings; registered accounts are exempt.
         f = _native_tx_file(cache, name)
         if f is None:
+            if _has_inputs(root, name):
+                # A partial ledger flipped the line-15300 figure's sign
+                # with rc 0 (S005-04, S046-19).
+                sys.exit(f"taxjson fx-cash: no native transaction file "
+                         f"for taxable account {name!r} — run `taxjson "
+                         f"run` first; a ledger without it would be "
+                         f"partial.")
             continue
         try:
             doc = _json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
-            print(f"taxjson fx-cash: warning: could not read {f}: {e}",
-                  file=sys.stderr)
-            continue
+            sys.exit(f"taxjson fx-cash: could not read {f}: {e} — "
+                     f"re-run `taxjson run` to rebuild it; a ledger "
+                     f"without account {name!r} would be partial.")
         found = True
         for t in doc.get("transactions", []):
             t.setdefault("account", name)
@@ -10362,6 +10650,9 @@ def cmd_audit(args: argparse.Namespace) -> None:
               "--base-currency", base_currency]
         if year:
             fl += ["--year", str(year)]
+        if settings.get("year"):
+            # The saved gains files are year-scoped (R1-191).
+            fl += ["--check-year", str(settings.get("year"))]
         if rates.exists():
             fl += ["--rates", str(rates)]
         if tmap.exists():
@@ -10438,6 +10729,8 @@ def cmd_audit(args: argparse.Namespace) -> None:
         for n in names:
             for src in _audit_source_files(cache, n):
                 fl += ["--source", str(src)]
+            if (cache / f"{n}_filled.json").exists():
+                fl += ["--filled", str(cache / f"{n}_filled.json")]
             chk = cache / f"{n}_gains_wash.json"
             if not chk.exists():
                 chk = cache / f"{n}_gains.json"
@@ -10466,6 +10759,9 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl += ["--sheltered", str(sheltered_base)]
         for src in _audit_source_files(cache, n):
             fl += ["--source", str(src)]
+        if (cache / f"{n}_filled.json").exists():
+            # Crypto rows priced by fill-crypto-prices (R1-271).
+            fl += ["--filled", str(cache / f"{n}_filled.json")]
         chk = cache / f"{n}_gains_wash.json"
         if not chk.exists():
             chk = cache / f"{n}_gains.json"

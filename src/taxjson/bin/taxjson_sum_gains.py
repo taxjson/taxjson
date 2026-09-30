@@ -141,6 +141,13 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         # consumer a different warning).
         'tainted_routed': len(
             data.get('manual_reporting_required') or []),
+        # The routed rows themselves, for the .sum's MANUAL REPORTING
+        # section (R1-320: the .sum you file from dropped them without
+        # a word while `taxjson sum` pointed at a section nobody wrote).
+        'manual_rows': [
+            {k: r.get(k) for k in ('symbol', 'date', 'date_settle',
+                                   'qty', 'proceeds', 'account')}
+            for r in (data.get('manual_reporting_required') or [])],
         'total_fees': total_fees,
         'option_fees': option_fees,
         'total_year': target_year,
@@ -329,6 +336,11 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         lines.append(f"TOTAL TRADING FEES PAID:    {total_fee:17,.2f} {currency}")
         lines.append(f"  (OPTION TRADING FEES):    {opt_fee:17,.2f} {currency}")
 
+    if data.get('manual_rows'):
+        from taxjson.bin.taxjson_form_export import manual_section
+        lines.append("")
+        lines += manual_section(data['manual_rows'],
+                                ", ".join(sorted(all_currencies)) or "")
     return "\n".join(lines)
 
 def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], year: str, use_color: bool = True) -> str:
@@ -409,6 +421,7 @@ def main():
     else:
         all_by_ticker = {}
         all_txs = []
+        all_manual = []
         total_year = 'all'
         # Merge total_fees_by_currency across files (summing per currency
         # and asset type). taxjson-gains writes this block from the raw
@@ -425,6 +438,7 @@ def main():
                 all_by_ticker.update(data['by_ticker'])
             if 'transactions' in data:
                 all_txs.extend(data['transactions'])
+            all_manual.extend(data.get('manual_reporting_required') or [])
             summary = data.get('summary') or {}
             if summary.get('year'):
                 total_year = summary['year']
@@ -436,6 +450,7 @@ def main():
         merged_data = {
             'by_ticker': all_by_ticker,
             'transactions': all_txs,
+            'manual_reporting_required': all_manual,
             'summary': {'year': total_year, 'total_fees_by_currency': merged_fees,
                         'wash_solver_converged': wash_converged}
         }

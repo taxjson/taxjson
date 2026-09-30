@@ -73,7 +73,7 @@ def load_symbol_overrides(dirs):
         if not os.path.isfile(p):
             continue
         try:
-            with open(p, 'r', encoding='utf-8') as f:
+            with open(p, 'r', encoding='utf-8-sig') as f:
                 for lineno, line in enumerate(f, 1):
                     line = line.split('#', 1)[0].strip()
                     if not line:

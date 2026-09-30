@@ -740,7 +740,15 @@ from the same books the rest of the pipeline reports on, with the project's
 Registered accounts are excluded by law and never read. A plain futures
 contract has no cost amount (nothing is paid to open one), so its notional
 stays out of the cost columns and the threshold test; an option on futures
-counts at its premium. `--json` for machine-readable output.
+counts at its premium. An assigned written put's premium is deducted from the
+shares' cost and an exercised call's cost added to them (s.49(3)/(3.1)), rows
+sharing a timestamp follow the engine's order, a split inside a trade's settle
+lag re-denominates it like the engine, and the gain column and year-end
+position follow the project's `tax_date`. Denied superficial losses still in a
+position's ACB (s.53(1)(f)) are NOT added to the cost columns yet — the report
+names them and says when they could flip the filing verdict. A configured
+taxable account with inputs but no books is refused, and books built for
+another year are warned about. `--json` for machine-readable output.
 
 ```
 $ taxjson t1135
@@ -758,7 +766,9 @@ AAPL.US | USA     |      98,000.00 |      49,000.00 | 132.00 |  12,000.00 |
 Domicile is classified by market suffix (`.US` → USA, `.L` → GBR, `.AX` → AUS;
 `.TO`/`.V`/`.CN`/`.NE` → Canadian, i.e. not foreign property). Since domicile —
 not listing exchange — is what T1135 cares about, interlisted names can need a
-`t1135.map` override in the project root:
+`t1135.map` override in the project root (a BOM is fine; an override follows
+the symbol through a ticker change, and one that matches nothing in the books
+is warned about):
 
 ```
 # t1135.map — SYMBOL COUNTRY (ISO-3 code, or CA/EXCLUDE for "not foreign")
@@ -818,9 +828,21 @@ problem (dropped rows, missing statement months) or a legitimate,
 documentable difference (per-broker box-20 book value vs blended ACB, broker
 lot method vs FIFO). Slip headers are matched loosely (`Security`/`Box 16`/
 `Box 21`/`Box 20` T5008 spellings work as-is; so do `Symbol`/`Quantity`/
-`Proceeds`/`Cost or other basis`), market suffixes are stripped for matching
-(slip `AAPL` ↔ computed `AAPL.US`), and net-of-commission slips are detected
-and noted. Exits 1 when anything doesn't reconcile — cron and pre-filing
+`Proceeds`/`Cost or other basis`, the T5008 box headings and French
+headings too; an exact heading wins and two columns that both look like
+proceeds are refused as ambiguous). A slip symbol without a market suffix
+matches the computed listing of that root (slip `AAPL` ↔ computed `AAPL.US`);
+when the books hold two listings of one root (a CDR `AMZN.TO` and `AMZN.US`)
+the row is `AMBIGUOUS_LISTING` until the slip CSV names the suffix. Broker
+option descriptions (`XYZ 21MAR25 50 C`, `CALL XYZ03/21/25 50`), share
+classes (`BRK B`) and the project's `ticker.map` renames (slip `KGC` ↔ books
+`K.TO`) are matched. A blank proceeds cell beside a cost is nil proceeds (an
+option that expired worthless); a worthless expiry with no slip row is
+`NO_SLIP_EXPECTED`, not a failure. A slip row with amounts but no symbol, or
+an unreadable quantity, is counted as not reconciled. Net-of-commission slips
+are detected and noted. Slips aggregated per type code (IBKR's SHS/OPC/FUT
+rows, "Various") cannot be compared — transcribe a per-security CSV. Books
+built for another tax year are refused with a rebuild message. Exits 1 when anything doesn't reconcile — cron and pre-filing
 checklist friendly. Slip cost differences are reported as *notes*, not
 mismatches, because they're often correct (document them, don't "fix" them).
 

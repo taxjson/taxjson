@@ -79,7 +79,8 @@ def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
              if not is_option_symbol(t.symbol or "")
              and t.action in ("BUYSELL", "ASSIGN")}
     rows = sorted((t for t in transactions
-                   if t.action in ("BUYSELL", "ASSIGN", "SPLIT")
+                   if t.action in ("BUYSELL", "ASSIGN", "SPLIT",
+                                   "OPENING_BALANCE")
                    and is_option_symbol(t.symbol or "")),
                   key=lambda x: event_sort_key(x, profile="ca_main", date_of=_sort_date))
     pos: Dict[str, float] = {}
@@ -103,6 +104,13 @@ def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
                 lots.setdefault(new, []).extend(moved)
             continue
         p = pos.get(sym, 0.0)
+        if t.action == "OPENING_BALANCE":
+            # A phantom opening (phantoms.json, --include-options): the
+            # contracts were held LONG before the history starts, so the
+            # sale that follows closes them — it is not a write (S044-09;
+            # the engine books it the same way).
+            pos[sym] = p + q
+            continue
         net = float(t.net_amount or 0.0)
         if q < 0:
             opening = -q - min(-q, max(p, 0.0))

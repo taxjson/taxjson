@@ -425,7 +425,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     sums = sorted(ctx.reports.glob("*.sum")) if ctx.reports.is_dir() else []
     if not sums:
         return Result("run-clean", "blocked", "no reports — run `taxjson run`")
-    errors = 0
+    per_account: Dict[str, int] = {}
     empty_parse: List[str] = []
     for s in sums:
         try:
@@ -434,13 +434,19 @@ def d_run_clean(ctx: Ctx) -> Result:
             continue
         m = re.search(r"validation: (\d+) error", head)
         if m:
-            errors += int(m.group(1))
+            # <acct>.sum and <acct>_wash.sum carry the SAME account's
+            # diagnostics: one error was counted twice (R1-252).
+            acct = s.stem[:-len("_wash")] if s.stem.endswith("_wash") \
+                else s.stem
+            per_account[acct] = max(per_account.get(acct, 0),
+                                    int(m.group(1)))
         # A non-empty export that parsed to nothing dropped a whole
         # file from the books (R1-247).
         for f in re.findall(r"warning: (\S+) parsed to 0 transactions",
                             head):
             if f not in empty_parse:
                 empty_parse.append(f)
+    errors = sum(per_account.values())
     pend = [p for p in ctx.cache.glob("*pending_elections.json")
             if p.is_file() and p.stat().st_size > 2]
     oldest_report = min(s.stat().st_mtime for s in sums)
@@ -834,10 +840,17 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
         parts = [f"{c.get('mismatch', 0)} mismatch",
                  f"{c.get('missing_from_computed', 0)} missing from computed",
                  f"{c.get('missing_from_slip', 0)} missing from slip"]
+        if c.get("ambiguous_listing"):
+            parts.append(f"{c['ambiguous_listing']} ambiguous listing")
         if rep.get("unreadable_rows"):
             parts.append(f"{rep['unreadable_rows']} unreadable slip row(s)")
+        # Real mismatches first as the examples (R1-1).
+        _rank = {"MISMATCH": 0, "AMBIGUOUS_LISTING": 1,
+                 "MISSING_FROM_COMPUTED": 2, "MISSING_FROM_SLIP": 3}
         bad = [f"{r.get('symbol')} {r.get('status')}"
-               for r in (rep.get("rows") or []) if r.get("status") != "OK"]
+               for r in sorted((r for r in (rep.get("rows") or [])
+                                if r.get("status") in _rank),
+                               key=lambda r: _rank[r.get("status")])]
         if bad:
             parts.append("e.g. " + ", ".join(bad[:3]) + (" ..." if len(bad) > 3 else ""))
         return ", ".join(parts)
