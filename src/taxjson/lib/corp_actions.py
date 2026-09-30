@@ -1162,8 +1162,24 @@ parse_questrade_corporate_actions.accepts_context = True
 # mergers ("MERGER TO") need a tax election and become CorporateActions here.
 # The brokerage parser books every other pair itself as ONE SPLIT.
 RBC_REORG_CODES = frozenset({'MGR', 'NAC', 'REV', 'MER', 'XCH'})
-_RBC_MERGER_TO_RE = re.compile(r'\bMERGER\s+TO\s+(.+?)(?:\s+[\d.]+\s+NEW|\s*$)', re.I)
-_RBC_RATIO_RE = re.compile(r'([\d.]+)\s+NEW\s*=\s*([\d.]+)\s+OLD', re.I)
+# A number in RBC's free text: '1,000' groups thousands (a '[\d.]+'
+# group stopped at the comma and read '1 NEW = 1,000 OLD' as 1-for-1 —
+# then the cash-in-lieu sold almost the whole position; audit S073-14).
+_RBC_NUM = r'(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d*\.?\d+)'
+_RBC_MERGER_TO_RE = re.compile(
+    rf'\bMERGER\s+TO\s+(.+?)(?:\s+{_RBC_NUM}\s+NEW|\s*$)', re.I)
+_RBC_RATIO_RE = re.compile(
+    rf'({_RBC_NUM})\s+NEW\s*=\s*({_RBC_NUM})\s+OLD', re.I)
+
+
+def rbc_ratio_parts(desc: str) -> Optional[Tuple[float, float]]:
+    """(new, old) of an RBC "<N> NEW = <M> OLD" phrase, thousands
+    commas understood; None when absent."""
+    m = _RBC_RATIO_RE.search(desc or '')
+    if not m:
+        return None
+    return (_num_text(m.group(1), where=desc[:60]),
+            _num_text(m.group(2), where=desc[:60]))
 _RBC_OLDCO_RE = re.compile(r'^\s*MGR\s*[-:]?\s*(.+?)\s+MERGER\s+TO\b', re.I)
 _RBC_RECVCO_RE = re.compile(
     r'^\s*MGR\s*[-:]?\s*(.+?)\s+(?:SHRS|SHARES)\s+RECEIVED', re.I)
@@ -1185,7 +1201,10 @@ _RBC_TO_RE = re.compile(
     r'\s+[\d.]+\s+NEW\s*=|$)')
 _RBC_RECEIPT_TAIL_RE = re.compile(
     r'\s+(?:AS\s+OF\s+\d|RESULT\s+OF\b|SHRS\s+RECEIVED|SHARES\s+RECEIVED)')
-_RBC_ROC_RE = re.compile(r'\bROC\b|\bRETURN\s+OF\s+CAPITAL\b', re.I)
+# RBC's own return-of-capital phrase ("DEFAULT: ROC OF C$6.1585"), not a
+# bare ROC token: a company named "ROC OIL CORP" turned un-understood
+# merger boot into a return of capital (audit S071-24).
+_RBC_ROC_RE = re.compile(r'\bROC\s+OF\b|\bRETURN\s+OF\s+CAPITAL\b', re.I)
 _RBC_NAME_STOP = frozenset((
     'CORPORATION CORP INCORPORATED INC LTD LIMITED COMPANY CO PLC SA NV AG '
     'HOLDINGS HOLDING GROUP THE COM COMMON STOCK SHARES SHARE SHS SH NEW NO '
@@ -1325,12 +1344,16 @@ def _rbc_stated_ratio(desc: str) -> Optional[float]:
     """New shares per old share stated in a removal's description:
     "1.025 NEW = 1 OLD", ".963957 NEW SHS PER 1 OLD", "; 1 FOR 10"."""
     d = (desc or '').upper()
-    for pat in (r'(\d*\.?\d+)\s+NEW\s*=\s*(\d*\.?\d+)\s+OLD',
-                r'(\d*\.?\d+)\s+NEW\s+SH(?:S|ARES?)?\s+PER\s+(\d*\.?\d+)\s+OLD',
-                r'\b(\d+(?:\.\d+)?)\s+FOR\s+(\d+(?:\.\d+)?)\b'):
+    n = _RBC_NUM
+    # '\b...(?![\d,])': '1 FOR 1,000' must read 1000, never stop at
+    # the comma and read 1-for-1 (audit S073-19).
+    for pat in (rf'({n})\s+NEW\s*=\s*({n})\s+OLD',
+                rf'({n})\s+NEW\s+SH(?:S|ARES?)?\s+PER\s+({n})\s+OLD',
+                rf'\b({n})\s+FOR\s+({n})(?![\d,])'):
         m = re.search(pat, d)
         if m:
-            new, old = float(m.group(1)), float(m.group(2))
+            new = _num_text(m.group(1), where=d[:60])
+            old = _num_text(m.group(2), where=d[:60])
             if new > 0 and old > 0:
                 return new / old
     return None
@@ -1429,6 +1452,53 @@ def _rbc_option_score(rem, rc) -> float:
             + (0.5 if rem.date == rc.date else 0.0))
 
 
+def _rbc_strike_gap(rem, rc) -> float:
+    """|strike change| between a removal and a receipt option leg. A
+    special-dividend XCH adjusts every strike a little (64 -> 63.50,
+    70 -> 69.50): two same-right, same-expiry contracts adjusted the
+    same day tie on every other score, and the first receipt in file
+    order used to win — swapping ACB between the contracts (audit
+    S071-19). The closest strike is the same contract."""
+    a, b = _rbc_leg_option(rem), _rbc_leg_option(rc)
+    try:
+        return abs(float(a[3]) - float(b[3]))
+    except (TypeError, ValueError, IndexError):
+        return float('inf')
+
+
+# An RBC merger phrase on a leg whose sign says the account was SHORT:
+# the "MERGER TO" (removal) phrase on a positive quantity, or the
+# "SHRS RECEIVED THRU MERGER" (receipt) phrase on a negative one.
+def _rbc_short_merger_leg(leg) -> bool:
+    d = (leg.desc or '').upper()
+    if 'REVERSE ENTRY' in d:
+        return False
+    if leg.qty > 0 and _RBC_MERGER_TO_RE.search(d):
+        return True
+    return leg.qty < 0 and bool(re.search(r'\b(?:SHRS|SHARES)\s+RECEIVED\b',
+                                          d))
+
+
+def _rbc_cross_issuer(rem, rc) -> bool:
+    """An RBC MGR exchange INTO ANOTHER COMPANY worded without "MERGER
+    TO" ("MAPLE ENERGY CORP XCH TO OVERSEAS ENERGY INC; 1 FOR 5" + a
+    "SHRS RECEIVED THRU MERGER" receipt). Booked as a basis-carrying
+    rename it decided a rollover with no election (audit S072-00). Same-
+    issuer exchanges (Celestica's share-class collapse, BlackRock's
+    holdco, Brookfield's new corp) name the same company on both sides
+    and stay parser-booked."""
+    if (rem.code or '').upper() != 'MGR':
+        return False
+    if not re.search(r'\bMERGER\b', ((rem.desc or '') + ' '
+                                       + (rc.desc or '')).upper()):
+        return False
+    old, new = _rbc_removal_names(rem)
+    if not new:
+        return False
+    return max(rbc_name_similarity(old, new),
+               rbc_name_similarity(_rbc_receipt_name(rc), old)) < 0.8
+
+
 def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
     """Pair RBC reorganization legs (rows classified 'reorg') into events
     and fold cash-in-lieu rows ('cil') into them. `rows` are
@@ -1456,9 +1526,14 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
         events.append(RbcReorgEvent('reversal', neg, pos))
 
     # 2) Each removal with its best receipt within ±7 days.
-    removals = sorted((r for r in legs if id(r) not in used and r.qty < 0),
-                      key=chrono)
-    receipts = [r for r in legs if id(r) not in used and r.qty > 0]
+    # A merger on a SHORT position inverts the legs' signs; paired as if
+    # long, the SPLIT renamed the NEW ticker into the temporary code
+    # (audit S071-22). Such legs stay unmatched — the loud path.
+    short = {id(r) for r in legs if _rbc_short_merger_leg(r)}
+    removals = sorted((r for r in legs if id(r) not in used
+                       and id(r) not in short and r.qty < 0), key=chrono)
+    receipts = [r for r in legs if id(r) not in used
+                and id(r) not in short and r.qty > 0]
     for rem in removals:
         is_opt = _rbc_leg_is_option(rem)
         window = [rc for rc in receipts
@@ -1472,19 +1547,27 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
             scored = [s for s in scored if s[0] > 0]
             if scored:
                 pick = max(scored, key=lambda s: (
-                    s[0], -_rbc_days(s[1].date, rem.date)))[1]
+                    s[0], -_rbc_strike_gap(rem, s[1]),
+                    -_rbc_days(s[1].date, rem.date)))[1]
         else:
             scored = [(_rbc_stock_score(rem, rc), rc) for rc in window]
-            named = [s for s in scored if s[0][1] >= 0.5]
+            # More than half the significant name tokens: 'ALPHA
+            # RESOURCES' vs 'ALPHA GOLD' (0.5) is two companies, and a
+            # 0.5 pair moved one company's pool into the other's.
+            named = [s for s in scored if s[0][1] > 0.5]
             if named:
                 pick = max(named, key=lambda s: (
                     s[0][0], -_rbc_days(s[1].date, rem.date)))[1]
             elif len(window) == 1:
                 # A lone candidate with an unrecognisable name: accept only
-                # when the stated ratio (if any) explains its quantity.
+                # when a STATED ratio explains its quantity. Accepting any
+                # lone receipt in the window paired a removal whose own
+                # receipt posts in the next export with an unrelated
+                # company's reorganization (audit S071-20).
                 ratio = _rbc_stated_ratio(rem.desc)
                 rc = window[0]
-                if ratio is None or abs(abs(rem.qty) * ratio - rc.qty) < 1.0:
+                if ratio is not None \
+                        and abs(abs(rem.qty) * ratio - rc.qty) < 1.0:
                     pick = rc
         if pick is None:
             continue
@@ -1492,7 +1575,8 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
         if is_opt:
             events.append(RbcReorgEvent('option_adjust', rem, pick))
             continue
-        kind = 'merger' if _RBC_MERGER_TO_RE.search(rem.desc) else 'reorg'
+        kind = ('merger' if _RBC_MERGER_TO_RE.search(rem.desc)
+                or _rbc_cross_issuer(rem, pick) else 'reorg')
         roc = (rem.value if rem.value > 0.005 and _RBC_ROC_RE.search(rem.desc)
                else 0.0)
         events.append(RbcReorgEvent(kind, rem, pick,
@@ -1586,6 +1670,15 @@ def parse_rbc_corporate_actions(
     pairing = pair_rbc_reorganizations(rows)
     events: List[CorporateAction] = []
     for leg in pairing.unmatched:
+        if _rbc_short_merger_leg(leg):
+            print(
+                f"warning: RBC merger leg on {leg.date} ({leg.symbol}, qty "
+                f"{leg.qty:g}) is a merger of a SHORT position — taxjson "
+                f"cannot book it (the legs' signs are inverted). NOTHING "
+                f"was booked: record the cover of the old short and the "
+                f"new short by hand in a .tt file. {leg.desc[:90]!r}",
+                file=sys.stderr)
+            continue
         if leg.qty < 0 and _RBC_MERGER_TO_RE.search(leg.desc):
             oldm = _RBC_OLDCO_RE.search(leg.desc)
             print(
@@ -1601,13 +1694,19 @@ def parse_rbc_corporate_actions(
         if ev.kind != 'merger':
             continue
         rem, rc = ev.removal, ev.receipt
-        rr = _RBC_RATIO_RE.search(rem.desc)
-        ratio_new = float(rr.group(1)) if rr else 1.0
-        ratio_old = float(rr.group(2)) if rr and float(rr.group(2)) else 1.0
+        rr = rbc_ratio_parts(rem.desc)
+        if rr and rr[0] > 0 and rr[1] > 0:
+            ratio_new, ratio_old = rr
+        elif ev.ratio:
+            # "XCH TO <other company>; 1 FOR 5" (no NEW = OLD phrase).
+            ratio_new, ratio_old = ev.ratio, 1.0
+        else:
+            ratio_new, ratio_old = 1.0, 1.0
         oldm = _RBC_OLDCO_RE.search(rem.desc)
         src_raw = rem.symbol
         if not _rbc_is_real_ticker(src_raw):
-            oldco = _rbc_norm_company(oldm.group(1)) if oldm else ''
+            oldco = _rbc_norm_company(oldm.group(1) if oldm
+                                      else _rbc_removal_names(rem)[0])
             resolved = name_to_symbol.get(oldco) or name_to_symbol.get(
                 _rbc_norm_company(rem.symdesc))
             if resolved:

@@ -151,5 +151,203 @@ class TestDistributionsMap(unittest.TestCase):
                                places=2)
 
 
+# ================================================================== RBC
+_RBC_HEADER = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+               '"Price","Settlement Date","Account","Value","Currency",'
+               '"Description"\n')
+
+
+def _rbc_row(date, activity, sym, symdesc, qty, value, cur, desc,
+             price='', acct='55500001'):
+    return (f'"{date} 00:00:00","{activity}","{sym}","{symdesc}","{qty}",'
+            f'"{price}","{date} 00:00:00","{acct}","{value}","{cur}",'
+            f'"{desc}"\n')
+
+
+def _rbc_file(tmp, name, *rows):
+    p = Path(tmp) / name
+    p.write_text(_RBC_HEADER + ''.join(rows))
+    return p
+
+
+def _rbc_pairing(tmp, *rows):
+    from taxjson.lib.brokerages.rbc_direct import read_rbc_rows
+    from taxjson.lib.corp_actions import pair_rbc_reorganizations
+    p = _rbc_file(tmp, "rbc.csv", *rows)
+    return pair_rbc_reorganizations(read_rbc_rows(p).rows)
+
+
+def _rbc_events(tmp, *rows, context=()):
+    from taxjson.lib.corp_actions import parse_rbc_corporate_actions
+    p = _rbc_file(tmp, "rbc.csv", *rows)
+    ctx = [_rbc_file(tmp, f"ctx{i}.csv", *c) for i, c in enumerate(context)]
+    evs, err = _quiet(parse_rbc_corporate_actions, p, "margin",
+                      context_files=[p] + ctx)
+    return evs, err
+
+
+class TestRbcThousandsRatios(unittest.TestCase):
+    def test_s073_19_one_for_one_thousand(self):
+        from taxjson.lib.corp_actions import _rbc_stated_ratio
+        self.assertAlmostEqual(_rbc_stated_ratio(
+            "REV - FOO CORP REV SPLIT TO FOO CORP NEW; 1 FOR 1,000"), 0.001)
+        self.assertAlmostEqual(_rbc_stated_ratio(
+            "MGR - FOO CORP MERGER TO BARCO INC 1 NEW = 1,000 OLD"), 0.001)
+        self.assertAlmostEqual(_rbc_stated_ratio(
+            "REV - FOO CORP REV SPLIT TO FOO CORP NEW; 1 FOR 10"), 0.1)
+
+    def test_s073_14_merger_ratio_with_comma(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _rbc_events(
+                tmp,
+                _rbc_row("2025-06-02", "Buy", "FOOC", "FOO CORP", "1500",
+                         "-3009.95", "USD", "FOO CORP BUY", price="2"),
+                _rbc_row("2025-09-10", "Reorganization", "F012345",
+                         "FOO CORP", "-1500", "0", "USD",
+                         "MGR - FOO CORP MERGER TO BARCO INC "
+                         "1 NEW = 1,000 OLD"),
+                _rbc_row("2025-09-10", "Reorganization", "BARC",
+                         "BARCO INC", "1", "0", "USD",
+                         "MGR - BARCO INC SHRS RECEIVED THRU MERGER"))
+        self.assertEqual(len(evs), 1, err)
+        self.assertEqual((evs[0].ratio_new, evs[0].ratio_old), (1.0, 1000.0))
+        self.assertIn("BARCO INC", evs[0].raw_descriptions[0])
+
+    def test_phantom_holdings_ratio_regex(self):
+        from taxjson.lib.phantom_holdings import _RATIO_RE
+        m = _RATIO_RE.search("MERGER TO BARCO INC 1 NEW = 1,000 OLD")
+        self.assertEqual(m.group(2).replace(",", ""), "1000")
+
+
+class TestRbcPairing(unittest.TestCase):
+    def test_s071_19_xch_pairs_by_strike(self):
+        rows = [
+            _rbc_row("2024-11-15", "Reorganization", "8AAAAA1", "", "-1",
+                     "0", "CAD", "XCH - CALL .TUX   03/21/25    64 TUX "
+                     "CORP ADJ: SPCL CASH DIVD"),
+            _rbc_row("2024-11-15", "Reorganization", "8AAAAA2", "", "-1",
+                     "0", "CAD", "XCH - CALL .TUX   03/21/25    70 TUX "
+                     "CORP ADJ: SPCL CASH DIVD"),
+            # the 69.50 receipt listed first
+            _rbc_row("2024-11-15", "Reorganization", "8BBBBB2", "", "1",
+                     "0", "CAD", "XCH - CALL .TUX   03/21/25    69.50 TUX "
+                     "CORP ADJ: SPCL CASH DIVD"),
+            _rbc_row("2024-11-15", "Reorganization", "8BBBBB1", "", "1",
+                     "0", "CAD", "XCH - CALL .TUX   03/21/25    63.50 TUX "
+                     "CORP ADJ: SPCL CASH DIVD"),
+        ]
+        import itertools
+        for perm in itertools.permutations(rows):
+            with tempfile.TemporaryDirectory() as tmp:
+                p = _rbc_pairing(tmp, *perm)
+            pairs = sorted((e.removal.symbol, e.receipt.symbol)
+                           for e in p.events if e.kind == 'option_adjust')
+            self.assertEqual(pairs, [("8AAAAA1", "8BBBBB1"),
+                                     ("8AAAAA2", "8BBBBB2")])
+
+    def test_s071_20_no_lone_candidate_guess(self):
+        rows = [
+            _rbc_row("2025-12-29", "Reorganization", "A012345",
+                     "ALPHA WIDGETS INC", "-100", "0", "USD", "MGR - "),
+            _rbc_row("2025-12-30", "Reorganization", "B054321",
+                     "BETA MINING CORP", "-50", "0", "USD",
+                     "MGR - BETA MINING CORP TO BETA MINING CORP NEW"),
+            _rbc_row("2025-12-30", "Reorganization", "BMC",
+                     "BETA MINING CORP NEW", "50", "0", "USD",
+                     "MGR - BETA MINING CORP NEW SHRS RECEIVED THRU MERGER"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _rbc_pairing(tmp, *rows)
+        pairs = [(e.removal.symbol, e.receipt.symbol) for e in p.events]
+        self.assertEqual(pairs, [("B054321", "BMC")])
+        self.assertEqual([u.symbol for u in p.unmatched], ["A012345"])
+
+    def test_s071_20_half_token_is_not_a_name_match(self):
+        rows = [
+            _rbc_row("2025-12-29", "Reorganization", "A012345",
+                     "ALPHA RESOURCES INC", "-100", "0", "USD", "MGR - "),
+            _rbc_row("2025-12-30", "Reorganization", "AGN",
+                     "ALPHA GOLD CORP", "50", "0", "USD",
+                     "MGR - ALPHA GOLD CORP SHRS RECEIVED THRU MERGER"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _rbc_pairing(tmp, *rows)
+        self.assertEqual(p.events, [])
+        self.assertEqual(len(p.unmatched), 2)
+
+    def test_s071_24_roc_word_in_company_name_is_not_roc(self):
+        rows = [
+            _rbc_row("2025-05-01", "Reorganization", "R012345",
+                     "ROC OIL CORP", "-100", "500.00", "CAD",
+                     "MER - ROC OIL CORP DEFAULT: C$5.00 + .5 NEW SHS PER "
+                     "1 OLD"),
+            _rbc_row("2025-05-01", "Reorganization", "ROX", "ROC OIL CORP",
+                     "50", "0", "CAD",
+                     "MGR - ROC OIL CORP NEW SHRS RECEIVED THRU MER"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _rbc_pairing(tmp, *rows)
+        self.assertEqual(len(p.events), 1)
+        self.assertEqual(p.events[0].roc_amount, 0.0)
+        from taxjson.lib.corp_actions import _RBC_ROC_RE
+        self.assertTrue(_RBC_ROC_RE.search(
+            "MER - THOMSON REUTERS CORP COM NEW DEFAULT: ROC OF C$6.1585 "
+            "+ .963957 NEW SHS PER 1 OLD"))
+
+    def test_s072_00_cross_issuer_xch_to_needs_election(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _rbc_events(
+                tmp,
+                _rbc_row("2025-01-10", "Buy", "MPLE", "MAPLE ENERGY CORP",
+                         "500", "-10009.95", "CAD", "MAPLE ENERGY CORP",
+                         price="20"),
+                _rbc_row("2025-06-02", "Reorganization", "M012345",
+                         "MAPLE ENERGY CORP", "-500", "0", "CAD",
+                         "MGR - MAPLE ENERGY CORP XCH TO OVERSEAS ENERGY "
+                         "INC; 1 FOR 5"),
+                _rbc_row("2025-06-02", "Reorganization", "OVRX",
+                         "OVERSEAS ENERGY INC", "100", "0", "CAD",
+                         "MGR - OVERSEAS ENERGY INC SHRS RECEIVED THRU "
+                         "MERGER"))
+        self.assertEqual(len(evs), 1, err)
+        ev = evs[0]
+        self.assertEqual(ev.action_type, "merger")
+        self.assertEqual((ev.source_symbol, ev.target_symbol),
+                         ("MPLE.TO", "OVRX.TO"))
+        self.assertAlmostEqual(ev.ratio, 0.2)
+
+    def test_same_issuer_exchange_stays_a_reorg(self):
+        rows = [
+            _rbc_row("2024-04-30", "Reorganization", "C005166",
+                     "CELESTA INC SUBORD VTG SHS", "-175", "0", "CAD",
+                     "MGR - CELESTA INC SUBORD VTG SHS XCH TO CELESTA INC "
+                     "1 FOR 1"),
+            _rbc_row("2024-04-30", "Reorganization", "CLX",
+                     "CELESTA INC COM", "175", "0", "CAD",
+                     "MGR - CELESTA INC COM SHRS RECEIVED THRU MERGER"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _rbc_pairing(tmp, *rows)
+        self.assertEqual([e.kind for e in p.events], ["reorg"])
+
+    def test_s071_22_short_merger_is_refused(self):
+        rows = [
+            _rbc_row("2025-03-03", "Reorganization", "O000001",
+                     "OLDR CORPORATION", "100", "0", "CAD",
+                     "MGR - OLDR CORPORATION MERGER TO NEWR CORPORATION "
+                     "1 NEW = 1 OLD"),
+            _rbc_row("2025-03-03", "Reorganization", "NEWR",
+                     "NEWR CORPORATION", "-100", "0", "CAD",
+                     "MGR - NEWR CORPORATION SHRS RECEIVED THRU MERGER"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _rbc_pairing(tmp, *rows)
+            evs, err = _rbc_events(tmp, *rows)
+        self.assertEqual(p.events, [])
+        self.assertEqual(len(p.unmatched), 2)
+        self.assertEqual(evs, [])
+        self.assertIn("SHORT", err)
+
+
 if __name__ == "__main__":
     unittest.main()

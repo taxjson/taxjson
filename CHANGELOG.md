@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **RBC reorganizations pair on evidence.** A ratio written with a
+  thousands comma (`1 FOR 1,000`, `1 NEW = 1,000 OLD`) was read as
+  1-for-1, so the cash-in-lieu row sold almost the whole position. Two
+  option contracts adjusted the same day now pair by the closest strike
+  (they swapped ACB by file order); a removal no longer pairs with a
+  lone unrelated receipt or a half-name match; a company named "ROC ..."
+  no longer turns merger cash into a return of capital; an exchange into
+  a different company worded `XCH TO` asks for the merger election
+  instead of rolling over silently; and a merger of a short position is
+  refused loudly instead of renaming the new ticker into the temporary
+  code.
 - **`distributions.map` rows find their shares.** A map whose first line
   carried a byte-order mark, a lowercase symbol, a key naming the
   listing a `ticker.map` rule consolidates, or the old ticker after a

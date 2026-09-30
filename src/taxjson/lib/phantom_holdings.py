@@ -373,8 +373,13 @@ def detect_zero_basis_acquisitions(
     return out
 
 
-_MERGER_TO_RE = re.compile(r'\bMERGER\s+TO\s+(.+?)(?:\s+[\d.]+\s+NEW|\s*$)', re.I)
-_RATIO_RE = re.compile(r'([\d.]+)\s+NEW\s*=\s*([\d.]+)\s+OLD', re.I)
+# Thousands commas in the ratio ('1 NEW = 1,000 OLD'): the corp-actions
+# extractor's own number pattern (audit S073-14).
+from taxjson.lib.corp_actions import _RBC_NUM
+_MERGER_TO_RE = re.compile(
+    rf'\bMERGER\s+TO\s+(.+?)(?:\s+{_RBC_NUM}\s+NEW|\s*$)', re.I)
+_RATIO_RE = re.compile(
+    rf'({_RBC_NUM})\s+NEW\s*=\s*({_RBC_NUM})\s+OLD', re.I)
 _OLDCO_RE = re.compile(r'^\s*(?:MGR|MERGER)\s*[-:]?\s*(.+?)\s+MERGER\s+TO\b', re.I)
 _RECVCO_RE = re.compile(
     r'^\s*(?:MGR|MERGER)\s*[-:]?\s*(.+?)\s+(?:SHRS|SHARES)\s+RECEIVED', re.I)
@@ -459,8 +464,9 @@ def detect_corp_action_links(
         i, rc = pick
         used.add(i)
         rr = _RATIO_RE.search(rem.description or '')
-        ratio = (float(rr.group(1)) / float(rr.group(2))
-                 if rr and float(rr.group(2)) else 0.0)
+        _rn = float(rr.group(1).replace(',', '')) if rr else 0.0
+        _ro = float(rr.group(2).replace(',', '')) if rr else 0.0
+        ratio = _rn / _ro if _ro else 0.0
         oldm = _OLDCO_RE.search(rem.description or '')
         rcm = _RECVCO_RE.search(rc.description or '')
         links.append(MergerLink(
