@@ -231,6 +231,37 @@ def map_symbol(symbol: str, mapping: Dict[str, str]) -> str:
     return symbol
 
 
+def guard_option_listing_collisions(symbols, mapping: Dict[str, str],
+                                    prog: str = "taxjson-ticker-map"
+                                    ) -> Dict[str, str]:
+    """`mapping` plus an identity rule for every OPTION the underlying
+    rule would move onto a contract code the book already carries
+    under that code natively (R1-16). `TOBASE BCE.US BCE.TO` renames
+    BCE270115C00025000.US (a USD-strike OCC contract) to ...TO — when
+    the book also trades the Montreal BCE270115C00025000.TO (a
+    CAD-strike CDCC contract), the rename pooled two different
+    properties' ACB (not identical under s.47/s.54) and changed the
+    reported gain without a word. The US contract now keeps its own
+    symbol, and each one is named on stderr. An exact rule for the
+    option symbol itself still wins (it is the user's explicit
+    choice)."""
+    natives = set(s for s in symbols if s)
+    out = dict(mapping)
+    for sym in sorted(natives):
+        if sym in mapping:
+            continue                    # explicit rule for this symbol
+        target = map_symbol(sym, mapping)
+        if target != sym and target in natives:
+            out[sym] = sym
+            print(f"{prog}: warning: the underlying rule would rename option "
+                  f"{sym} to {target}, a different listed contract this book "
+                  f"also trades (strike currency and clearing house differ, so "
+                  f"they are not identical property) — kept separate as {sym}. "
+                  f"Add an exact rule for {sym} in ticker.map if they really "
+                  f"are one contract.", file=sys.stderr)
+    return out
+
+
 def apply_mapping(tx: TaxTransaction, mapping: Dict[str, str]) -> TaxTransaction:
     mapped_symbol = map_symbol(tx.symbol, mapping)
     if mapped_symbol != tx.symbol:
@@ -281,6 +312,8 @@ def main():
         # RAW symbol. taxjson-merge2 applies the same order so one map
         # file means one thing on the equity and crypto paths.
         transactions = apply_drops(transactions, tmap.delete)
+        mapping = guard_option_listing_collisions(
+            [t.symbol for t in transactions], mapping)
         updated_transactions = []
 
         for tx in transactions:

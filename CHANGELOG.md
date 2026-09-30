@@ -1365,6 +1365,13 @@
   property's cost (s.53(1)(f)), as the ACB does, so the year-end and
   maximum cost columns and the $100,000 threshold test no longer
   understate after a superficial loss in the project year.
+- **TOBASE no longer pools a US option into a Montreal contract.** When
+  a share rule's root rename would move a US-listed option onto a
+  contract code the account also trades on the Montreal Exchange, the
+  US contract keeps its own symbol (different strike currency and
+  clearing house: not identical property) and the `.sum` DIAGNOSTICS
+  name it; before, the two ACBs were pooled and the gain changed
+  silently.
 
 ## v0.16.0 (2026-09-25)
 
