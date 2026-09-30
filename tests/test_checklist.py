@@ -42,6 +42,9 @@ def _project(root: Path, *, activity_to="2026-02-02", with_reports=True):
     if with_reports:
         (root / "reports").mkdir()
         (root / "reports" / "margin.sum").write_text("DIAGNOSTICS\nvalidation: 0 error(s)\n")
+        # run-clean now requires a report for every account with inputs
+        # (S018-02) — a full run writes crypto.sum too.
+        (root / "reports" / "crypto.sum").write_text("DIAGNOSTICS\nvalidation: 0 error(s)\n")
 
 
 class FakeSub:

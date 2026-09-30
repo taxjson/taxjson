@@ -275,5 +275,286 @@ class TestReconcileManualRows(unittest.TestCase):
         self.assertAlmostEqual(rec["proceeds_net"], 500.0)
 
 
+
+# ------------------------------------------------------------ checklist
+from datetime import date as _date  # noqa: E402
+
+
+class _Sub:
+    def __init__(self, table=None):
+        self.table = table or {}
+        self.calls = []
+
+    def __call__(self, argv, timeout=900):
+        self.calls.append(list(argv))
+        return self.table.get(argv[0], (0, "", ""))
+
+
+_CL_TOML = ('[settings]\nyear = 2026\ncountry = "canada"\n'
+            '[accounts.margin]\ntype = "taxable"\n'
+            '[accounts.rrsp]\ntype = "sheltered"\n')
+
+
+def _cl_project(root: Path, toml: str = _CL_TOML):
+    from taxjson.bin import taxjson_run as R
+    (root / "taxjson.toml").write_text(toml)
+    for a in ("margin", "rrsp"):
+        (root / "inputs" / a).mkdir(parents=True)
+        (root / "inputs" / a / f"{a}.csv").write_text("x\n")
+    (root / "work").mkdir()
+    (root / "reports").mkdir()
+    for a in ("margin", "rrsp"):
+        (root / "reports" / f"{a}.sum").write_text(
+            "DIAGNOSTICS\nvalidation: 0 error(s)\n")
+    return R.load_config(root)
+
+
+def _cl_ctx(root, cfg, table=None, year=2026):
+    from taxjson.lib import checklist as cl
+    return cl.Ctx(root=root, cfg=cfg, year=year, today=_date(2026, 9, 29),
+                  run_sub=_Sub(table))
+
+
+class TestChecklistWash(unittest.TestCase):
+    """R1-158: wash-reviewed reads the year on the settle basis."""
+
+    def test_december_trade_january_settle_denial(self):
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            (root / "work" / "margin_gains_wash.json").write_text(json.dumps(
+                {"transactions": [{"date": "2025-12-31",
+                                   "date_settle": "2026-01-02",
+                                   "disallowed_amount": 1000.0,
+                                   "permanently_disallowed": 1000.0}]}))
+            r = cl.d_wash_reviewed(_cl_ctx(root, cfg))
+        self.assertEqual(r.status, "manual", r.detail)
+        self.assertIn("1,000.00 permanently denied", r.detail)
+
+
+class TestChecklistRunClean(unittest.TestCase):
+    """R1-249 / S067-07 / S018-02: run-clean sees root inputs, content
+    changes, deletions and accounts the last run did not finish."""
+
+    def _clean(self, root, cfg):
+        from taxjson.lib import checklist as cl
+        import os
+        import time
+        # reports newer than every input
+        t = time.time() + 5
+        for s in (root / "reports").glob("*.sum"):
+            os.utime(s, (t, t))
+        return cl.d_run_clean(_cl_ctx(root, cfg))
+
+    def test_baseline_done(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            self.assertEqual(self._clean(root, cfg).status, "done")
+
+    def test_distributions_map_added(self):
+        from taxjson.lib import checklist as cl
+        import os
+        import time
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            self._clean(root, cfg)
+            m = root / "distributions.map"
+            m.write_text("XYZ.TO 2026-03-01 -1.00\n")
+            t = time.time() + 60
+            os.utime(m, (t, t))
+            r = cl.d_run_clean(_cl_ctx(root, cfg))
+        self.assertEqual(r.status, "attention", r.detail)
+
+    def test_fingerprint_sees_deletion_and_old_mtime_copy(self):
+        from taxjson.lib import checklist as cl
+        import os
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            (root / "inputs" / "margin" / "extra.csv").write_text("y\n")
+            cl.record_input_fingerprint(root, cfg)
+            self.assertEqual(self._clean(root, cfg).status, "done")
+            (root / "inputs" / "margin" / "extra.csv").unlink()
+            r = cl.d_run_clean(_cl_ctx(root, cfg))
+            self.assertEqual(r.status, "attention", r.detail)
+            self.assertIn("extra.csv", r.detail)
+            (root / "inputs" / "margin" / "extra.csv").write_text("y\n")
+            self.assertEqual(self._clean(root, cfg).status, "done")
+            f = root / "inputs" / "margin" / "margin.csv"
+            f.write_text("corrected\n")
+            os.utime(f, (1_000_000_000, 1_000_000_000))   # cp -p, old mtime
+            r = cl.d_run_clean(_cl_ctx(root, cfg))
+            self.assertEqual(r.status, "attention", r.detail)
+            self.assertIn("margin.csv", r.detail)
+
+    def test_account_without_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            (root / "reports" / "rrsp.sum").unlink()
+            r = self._clean(root, cfg)
+        self.assertEqual(r.status, "attention", r.detail)
+        self.assertIn("rrsp", r.detail)
+
+
+class TestChecklistState(unittest.TestCase):
+    def test_year_bump_does_not_resurrect_marks(self):
+        """R1-254."""
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cl.set_override(root, 2024, "t5008", "skipped", "2024 slips")
+            cl.set_override(root, 2024, "t5-t3", "done")
+            cl.set_override(root, 2025, "noa", "done")
+            st = json.loads((root / cl.STATE_FILE).read_text())
+        self.assertEqual(st["year"], 2025)
+        self.assertEqual(sorted(st["overrides"]), ["noa"])
+
+    def test_corrupt_state_is_not_overwritten(self):
+        """S068-07."""
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cl.set_override(root, 2025, "noa", "done", "NOA ok")
+            p = root / cl.STATE_FILE
+            p.write_text(p.read_text().replace("{", "{,", 1))
+            before = p.read_text()
+            with self.assertRaises(cl.StateFileError) as cm:
+                cl.set_override(root, 2025, "estimate", "done")
+            self.assertIn(cl.STATE_FILE, str(cm.exception))
+            self.assertEqual(p.read_text(), before)
+            with self.assertRaises(cl.StateFileError):
+                cl.load_state(root)
+
+    def test_blocked_outranks_done_mark(self):
+        """S068-13."""
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            cl.set_override(root, 2026, "audit", "done", "ok")
+            ctx = _cl_ctx(root, cfg, {"audit": (1, "", "no gains files")})
+            res = cl.evaluate(ctx, only=["audit"])
+        r = res[0]
+        self.assertEqual(r.status, "blocked")
+        self.assertEqual(r.effective, "blocked")
+        self.assertFalse(r.passed)
+        self.assertTrue(r.finding)
+        self.assertFalse(cl.to_json(res, 2026, "canada")["all_passed"])
+
+
+class TestChecklistSlips(unittest.TestCase):
+    def test_upper_case_slip_found(self):
+        """S067-21."""
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "inputs" / "slips").mkdir(parents=True)
+            (root / "inputs" / "slips" / "t5008_a.csv").write_text("x")
+            (root / "inputs" / "slips" / "T5008_B.CSV").write_text("x")
+            names = [p.name for p in cl.slip_files(root)]
+        self.assertEqual(sorted(names), ["T5008_B.CSV", "t5008_a.csv"])
+
+    def test_account_export_with_1099_in_name_is_not_a_slip(self):
+        """S067-23."""
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (root / "inputs" / "margin" /
+             "questrade_acct_55510990.csv").write_text("x")   # pii-ok
+            self.assertEqual(cl.slip_files(root), [])
+
+    def test_all_slip_files_reconciled_together(self):
+        """R1-207: one reconcile-slips call over every slip file."""
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            (root / "inputs" / "slips").mkdir()
+            for n in ("ib_t5008.csv", "rbc_t5008.csv"):
+                (root / "inputs" / "slips" / n).write_text("x")
+            ctx = _cl_ctx(root, cfg)
+            r = cl.d_t5008(ctx)
+            calls = [c for c in ctx.run_sub.calls
+                     if c[0] == "reconcile-slips"]
+        self.assertEqual(len(calls), 1, calls)
+        self.assertTrue(any(c.endswith("ib_t5008.csv") for c in calls[0]))
+        self.assertTrue(any(c.endswith("rbc_t5008.csv") for c in calls[0]))
+        self.assertEqual(r.status, "done")
+
+
+class TestChecklistFormExportTolerance(unittest.TestCase):
+    """R1-280: per-row rounding over many Schedule 3 rows is not a
+    finding; a real gap still is."""
+
+    def _run(self, gain, realized, rows):
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            fe = {"totals": {"proceeds_all": 1000.0, "gain_all": gain},
+                  "rows": [{}] * rows}
+            sm = {"filing": {"totals": {"proceeds": 1000.0, "gain": gain}},
+                  "accounts": [{"account": "margin", "realized": realized}]}
+            ctx = _cl_ctx(root, cfg, {"form-export": (0, json.dumps(fe), ""),
+                                      "sum": (0, json.dumps(sm), "")})
+            return cl.d_form_export(ctx)
+
+    def test_rounding_residual_many_rows(self):
+        self.assertEqual(self._run(403224.55, 403224.61, 831).status, "done")
+
+    def test_real_gap(self):
+        self.assertEqual(self._run(403224.55, 403229.61, 831).status,
+                         "attention")
+
+    def test_small_book_keeps_tight_tolerance(self):
+        self.assertEqual(self._run(100.00, 100.06, 1).status, "attention")
+
+
+class TestChecklistWording(unittest.TestCase):
+    def test_fees_step_does_not_send_commissions_to_22100(self):
+        """S023-21 / S066-14 / S078-00."""
+        from taxjson.lib import checklist as cl
+        sid, _st, title, cmd, why = cl.step_meta("fees", "canada")
+        self.assertNotIn("data subscriptions are deductible", why)
+        self.assertIn("commission", why.lower())
+        self.assertIn("interest", (title + why).lower())
+        self.assertNotEqual(cmd.strip(), "taxjson fees")
+
+    def test_carryover_units(self):
+        """R1-203 / S066-16."""
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            r = cl.d_carryover(_cl_ctx(root, cfg))
+            self.assertIn("100%", r.detail)
+            us = dict(cfg, settings=dict(cfg["settings"], country="usa"))
+            r = cl.d_carryover(_cl_ctx(root, us))
+            self.assertNotIn("25300", r.detail)
+            self.assertIn("line 21", r.detail)
+        title = cl.step_meta("carryover", "usa")[2]
+        self.assertNotIn("lines 6 / 14", title)
+
+
+class TestAccountTypeValidatedForChecklist(unittest.TestCase):
+    """S018-01 (already fixed on main by R1-268): the checklist's config
+    reader refuses an invalid account type instead of dropping it."""
+
+    def test_taxable_capitalized_refused(self):
+        from taxjson.bin import taxjson_run as R
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\n[accounts.cash]\n'
+                'type = "Taxable"\n')
+            with self.assertRaises(SystemExit):
+                R.load_config(root)
+
+
 if __name__ == "__main__":
     unittest.main()

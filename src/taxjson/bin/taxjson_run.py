@@ -2774,6 +2774,17 @@ def cmd_run(args: argparse.Namespace) -> None:
         print(f"taxjson: warning: filed-year check failed: {_e}",
               file=sys.stderr)
 
+    if not args.account:
+        # What these reports were built from (content hashes), so the
+        # checklist's run-clean step sees a deleted input or a
+        # corrected export copied with an old mtime (S067-07).
+        try:
+            from taxjson.lib.checklist import record_input_fingerprint
+            record_input_fingerprint(root, cfg)
+        except Exception as _e:          # advisory, never a crash
+            print(f"taxjson: warning: could not record the input "
+                  f"fingerprint: {_e}", file=sys.stderr)
+
     try:
         _fx_cash_after_run(root, cache, reports_dir)
     except Exception as _e:              # advisory guard, never a crash
@@ -7202,6 +7213,8 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             except KeyError:
                 sys.exit(f"taxjson checklist: unknown step {step!r} "
                          f"(ids: {', '.join(ids)})")
+            except cl.StateFileError as e:
+                sys.exit(f"taxjson checklist: {e}")
             verb = {"done": "marked done", "skipped": "marked skipped",
                     None: "mark removed"}[mark]
             if not changed:
@@ -7244,11 +7257,17 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             sys.exit("taxjson checklist --walk needs a terminal (use "
                      "`taxjson checklist` for the report, --done/--skip to "
                      "record steps).")
-        _checklist_walk(ctx, cl, only, quick=args.quick)
+        try:
+            _checklist_walk(ctx, cl, only, quick=args.quick)
+        except cl.StateFileError as e:
+            sys.exit(f"taxjson checklist: {e}")
         return
 
-    results = cl.evaluate(ctx, only=only, quick=args.quick,
-                          progress=cl.stderr_progress)
+    try:
+        results = cl.evaluate(ctx, only=only, quick=args.quick,
+                              progress=cl.stderr_progress)
+    except cl.StateFileError as e:
+        sys.exit(f"taxjson checklist: {e}")
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
     else:
@@ -8770,7 +8789,9 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
     settings = load_config(root).get("settings", {})
     year = settings.get("year")
 
-    argv = [args.slip_csv] + _taxable_gains_argv(
+    _slips = (args.slip_csv if isinstance(args.slip_csv, list)
+              else [args.slip_csv])
+    argv = list(_slips) + _taxable_gains_argv(
         root, cache, exclude_crypto=True, prog="taxjson reconcile-slips")
     if year is not None:
         argv += ["--year", str(year)]
@@ -11491,9 +11512,11 @@ def main() -> None:
         "reconcile-slips",
         help="Diff broker T5008 / 1099-B slip CSVs against computed "
              "dispositions (exit 1 on any mismatch)")
-    p_rec.add_argument("slip_csv", help="Slip CSV — headers matched "
-                       "loosely (symbol/ticker, quantity/box 16, "
-                       "proceeds/box 21, cost/box 20)")
+    p_rec.add_argument("slip_csv", nargs="+",
+                       help="Slip CSV(s) — headers matched loosely "
+                       "(symbol/ticker, quantity/box 16, proceeds/box 21, "
+                       "cost/box 20); several (one per broker) are "
+                       "reconciled together")
     p_rec.add_argument("--tolerance", type=float, default=None,
                        help="Absolute per-symbol tolerance (default 1.00)")
     p_rec.add_argument("--json", action="store_true",

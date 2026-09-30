@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Filing checklist fixes.**
+  - run-clean compares the inputs with what the last full run was built
+    from (content, not dates): a deleted input, a corrected export copied
+    with its old date, or a new `distributions.map` / `phantoms.json` /
+    `ticker_extraction_overrides.txt` now says "inputs changed". It also
+    flags an account with inputs but no report (a run that died on it, or
+    a `run --account` of another account).
+  - wash-reviewed counts a December loss that settles in January in the
+    settle year, like every other denial total.
+  - t5008 reconciles all slip files together (one per broker is normal;
+    each file alone could never reconcile), finds `.CSV` files, reads
+    only `inputs/slips/`, and names a non-CSV file there as not
+    reconciled. `taxjson reconcile-slips` takes several slip files.
+  - form-export's gain check allows for per-row rounding on a big book
+    (a 6-cent residual over 831 rows was a false attention).
+  - A done mark no longer hides a detector that crashed or had nothing
+    to check. An unreadable `checklist.json` is reported by name and never
+    overwritten. Changing `year` no longer brings last year's marks back
+    at the next mark.
+  - The fees step no longer sends trade commissions to line 22100 or
+    calls data subscriptions deductible: line 22100 is the margin
+    interest from the statements. The carryover step says what to record
+    (Canada: the 100% loss; US: the Schedule D line 21 deduction).
+
 - **check-filed recomputes a locked year the way it was filed.** The
   drift check used the current project's written-option timing, so a
   2026 project without `option_grant_timing_since` recomputed the 2025

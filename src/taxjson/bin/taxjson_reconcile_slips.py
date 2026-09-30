@@ -328,8 +328,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Reconcile T5008 / 1099-B slip CSVs against taxjson's "
                     "computed dispositions.")
-    parser.add_argument("slip_csv", type=Path, help="Slip CSV (see --help "
-                        "header docs for accepted column spellings)")
+    parser.add_argument("slip_csv", type=Path, nargs="+",
+                        help="Slip CSV(s) (see --help header docs for "
+                             "accepted column spellings). Several files "
+                             "(one per broker) are reconciled TOGETHER "
+                             "against the combined dispositions.")
     parser.add_argument("--gains", action="append", type=Path, default=[],
                         required=True,
                         help="Year-scoped <account>_gains.json (repeatable; "
@@ -350,18 +353,32 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Emit the report as JSON instead of text")
     args = parser.parse_args(argv)
 
-    if not args.slip_csv.exists():
-        print(f"taxjson-reconcile-slips: no such file: {args.slip_csv}",
-              file=sys.stderr)
-        return 2
+    for sp in args.slip_csv:
+        if not sp.exists():
+            print(f"taxjson-reconcile-slips: no such file: {sp}",
+                  file=sys.stderr)
+            return 2
     for p in args.gains:
         if not p.exists():
             print(f"taxjson-reconcile-slips: no such file: {p}",
                   file=sys.stderr)
             return 2
 
-    slip = load_slip(args.slip_csv)
-    dropped_rows = int(slip.pop("__dropped_rows__", 0) or 0)
+    # One slip per broker is the norm (R1-207): each file on its own
+    # reported every other broker's sales as MISSING_FROM_SLIP.
+    slip: Dict[str, Dict[str, Any]] = {}
+    dropped_rows = 0
+    for sp in args.slip_csv:
+        one = load_slip(sp)
+        dropped_rows += int(one.pop("__dropped_rows__", 0) or 0)
+        for sym, rec in one.items():
+            acc = slip.setdefault(sym, {"qty": 0.0, "proceeds": 0.0,
+                                        "cost": None, "rows": 0})
+            acc["qty"] += rec["qty"]
+            acc["proceeds"] += rec["proceeds"]
+            acc["rows"] += rec["rows"]
+            if rec["cost"] is not None:
+                acc["cost"] = (acc["cost"] or 0.0) + rec["cost"]
     computed = load_computed(args.gains, args.year, args.date_basis)
     rep = reconcile(slip, computed, args.tolerance)
     if dropped_rows:
