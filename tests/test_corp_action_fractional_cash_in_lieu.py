@@ -96,12 +96,19 @@ class TestMergerTaxableSnap(unittest.TestCase):
         """The motivating case: SSL.TO 1-for-16 merger leaving
         100.0026 RGLD.US must snap the BUY to 100 with proportionally
         reduced cost basis. The phantom 0.0026 dust position is gone."""
-        rows = _canada_merger_taxable(_event(), 'taxable_disposition', {})
+        # One valuation: proceeds = FMV of the RGLD received (the USD
+        # in-leg), expressed in CAD at the event-date rate.
+        fx = lambda a, f, t, d: a * 1.4 if (f, t) == ('USD', 'CAD') \
+            else a / 1.4
+        rows = _canada_merger_taxable(_event(), 'taxable_disposition',
+                                      {'__fx__': fx})
         buys = [r for r in rows if r['action'] == 'BUYSELL' and r['quantity'] > 0]
         sells = [r for r in rows if r['action'] == 'BUYSELL' and r['quantity'] < 0]
-        # Source SELL unchanged.
+        # Source SELL: the whole consideration (fraction included).
         self.assertEqual(len(sells), 1)
-        self.assertAlmostEqual(sells[0]['net_amount'], 25920.67, places=2)
+        self.assertEqual(sells[0]['currency'], 'CAD')
+        self.assertAlmostEqual(sells[0]['net_amount'], 18550.50 * 1.4,
+                               places=2)
         # Target BUY snapped to 100 whole shares.
         self.assertEqual(len(buys), 1)
         self.assertEqual(buys[0]['quantity'], 100.0)

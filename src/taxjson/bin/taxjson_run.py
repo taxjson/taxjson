@@ -732,6 +732,43 @@ def _country_has_corp_rules(country: str) -> bool:
     return _normalize_country(country) in RULES_BY_COUNTRY
 
 
+def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
+                              corp_files: List[Path], cache: Path) -> None:
+    """A taxable spin-off booked at $0 (the documented `fmv_per_share=0`
+    "defer") books no dividend income and a $0 cost for the new shares:
+    a later sale overstates the gain by the same amount. It stays loud
+    on EVERY run — on the console and, through a `.diag` sidecar, in the
+    account's .sum — until a value is set (2026-09 audit: it was silent
+    after the prompt). Registered accounts: no tax effect, no warning."""
+    import json as _json
+    from taxjson.lib.corp_actions import zero_value_spinoff_rows
+    diag = cache / f"{name}_corp_spinoff_value.diag"
+    lines: List[str] = []
+    if is_taxable:
+        for f in corp_files:
+            try:
+                rows = _json.loads(f.read_text(encoding="utf-8")).get(
+                    "transactions", [])
+            except (OSError, ValueError):
+                continue
+            for r in zero_value_spinoff_rows(rows):
+                eid = r.get("corp_event_id", "?")
+                lines.append(
+                    f"warning: {name}: spin-off {r.get('symbol')} on "
+                    f"{r.get('date')} (event {eid}) is booked at $0 — no "
+                    f"dividend income and a $0 cost for the new shares, "
+                    f"so a later sale overstates the gain by the same "
+                    f"amount. Set its value: taxjson elect {name} --set "
+                    f"{eid}={r.get('corp_election')} --hint "
+                    f"fmv_per_share=<value>")
+    if lines:
+        diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        for ln in lines:
+            print(f"  ! {ln}", file=sys.stderr)
+    else:
+        diag.unlink(missing_ok=True)
+
+
 def detect_broker(csv_path: Path) -> Optional[str]:
     """Filename hint first (covers coinbase/kraken whose CSV shapes aren't
     distinctive enough for content detection), then content detection
@@ -1263,14 +1300,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # stage too, or its rows from the deleted file live on
             # (2026-09 audit — the parse/merge stages had this dep,
             # the corp stage was missed).
+            # rates dep: a cross-currency exchange's legs are valued
+            # at the event-date rate (one fair value for both legs).
             if force or needs_rebuild(out, *csvs, manifest_path,
-                                      src_manifest):
+                                      src_manifest, rates):
                 print(f"  corp-actions {broker}")
                 cmd = _cmd("taxjson-corp-actions") + [
                     "--account-name", name,
                     "--country", country,
                     "--brokerage", broker,
                     "--manifest", str(manifest_path),
+                    "--rates", str(rates),
+                    "--base-currency", base_currency,
                 ]
                 # Interactive by default: corp-actions prompts for the tax
                 # election (taxable vs rollover) on stderr and reads the
@@ -1293,6 +1334,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                         raise PendingElectionsError(name, pending_path)
                     raise
             corp_files.append(out)
+        _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
 
     # 3. starting-position .tt files. Their converted JSON lives in its
     # own `<acct>_tt_<stem>` namespace: `<acct>_<stem>` collided with
@@ -2885,7 +2927,9 @@ def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
     swallowed: the run repeats it."""
     import contextlib
     import io as _io
-    from taxjson.bin.taxjson_corp_actions import EXTRACTORS, _pending_doc
+    from taxjson.bin.taxjson_corp_actions import (EXTRACTORS, _pending_doc,
+                                                  extract_events)
+    from taxjson.lib.corp_actions import combine_broker_copies
     try:
         grouped = group_inputs(acct_dir)
     except SystemExit:
@@ -2895,17 +2939,19 @@ def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
         extractor = EXTRACTORS.get(broker)
         if extractor is None:
             continue
-        for csv_path in csvs:
-            try:
-                with contextlib.redirect_stderr(sink), \
-                        contextlib.redirect_stdout(sink):
-                    events = extractor(csv_path, name)
-            except Exception:
-                continue
-            for ev in events:
-                if ev.event_id == event_id:
-                    return _pending_doc([ev], manifest_path,
-                                        country)["pending"][0]
+        # The same extraction the run does (all the group's files as
+        # context, broker-account copies combined), so the id matches.
+        try:
+            with contextlib.redirect_stderr(sink), \
+                    contextlib.redirect_stdout(sink):
+                events = combine_broker_copies(
+                    extract_events(extractor, csvs, name), stream=sink)
+        except Exception:
+            continue
+        for ev in events:
+            if ev.event_id == event_id:
+                return _pending_doc([ev], manifest_path,
+                                    country)["pending"][0]
     return None
 
 

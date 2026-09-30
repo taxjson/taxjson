@@ -161,7 +161,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Spin-off default wording
 - **Where:** `lib/corp_actions.py` spin-off default.
-- **Current behavior:** every spin-off distribution is labelled a "foreign dividend at FMV"; a Canadian parent's in-kind distribution is an eligible dividend (or a s.86 reorganisation), and the estimate then classifies it by the target's suffix.
+- **Current behavior:** the default books a spin-off as a dividend at FMV; the estimate then classifies it by the target's suffix (a Canadian parent's in-kind distribution is an eligible dividend). A Canadian parent's tax-deferred spin-off (a butterfly / s.86 reorganisation) has no election of its own: book it with `rollover_s_86_1` and the allocated ACB, which moves cost the same way.
+
+### IB stock-plus-cash mergers are not booked
+- **Where:** `lib/corp_actions.py` `_ib_unsupported_events`.
+- **Current behavior:** an IB merger paying shares AND cash (`WITH <id> 1 for 2 AND USD 5.00`), or any other merger row the parser does not recognise, becomes an `unsupported` corporate-action event: `taxjson run` stops (exit 3) naming it until the exchange is recorded by hand in a `.tt` file and the event is elected `ignore`. Cash takeovers (`FOR USD 30.00 PER SHARE`) are booked as sales; share-for-share mergers (including decimal ratios and class-share tickers) go through the merger election.
 
 ### Carryover has no inclusion-rate adjustment for pre-2001 losses
 - **Where:** `bin/taxjson_carryover.py`.

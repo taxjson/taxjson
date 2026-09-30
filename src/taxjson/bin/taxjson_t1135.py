@@ -217,18 +217,18 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # pools symbol-globally across all of them — undeduped, two
     # accounts through a 2:1 split scaled the pool 4x (the engines
     # dedupe the same way, core._dedupe_corporate_splits).
-    from taxjson.lib.corporate_timeline import split_event_key
+    from taxjson.lib.corporate_timeline import split_seen
     seen_splits: set = set()
     for tx in sorted(transactions, key=_sort_key):
         date = tx.get("date_settle") or tx.get("date") or ""
         if date > year_end:
             break
         if (tx.get("action") or "").upper() == "SPLIT":
-            key = split_event_key(tx.get("symbol") or "", tx.get("date") or "",
-                                  tx.get("quantity"), tx.get("symbol_new") or "")
-            if key in seen_splits:
+            # Same split booked on two dates by two brokers = one event.
+            if split_seen(seen_splits, tx.get("symbol") or "",
+                          tx.get("date") or "", tx.get("quantity"),
+                          tx.get("symbol_new") or "") is not None:
                 continue
-            seen_splits.add(key)
         # First event inside the year: the Jan-1 state (built from all
         # prior events) itself counts toward the in-year maximum.
         if date >= year_start and not baseline_taken:

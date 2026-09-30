@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **One split booked on two dates applies once.** IB and Questrade date
+  the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
+  were applied, scaling the pool by the ratio twice. Copies of one split
+  (same security and ratio) within 7 days are one event, applied on the
+  earlier date, with a note.
+- **IB spin-offs go through the spin-off election.** IB `Spinoff` rows
+  were always booked as a dividend at IB's value, with no s.86.1 choice
+  (and a Canadian parent's tax-deferred spin-off taxed as income). They
+  now ask like every other broker's; the default dividend uses IB's
+  value without asking for it. Existing IB spin-offs need one election.
+- **Spin-offs use the broker's value.** A deemed-dividend spin-off with
+  no (or a 0) `fmv_per_share` hint is booked at the broker's reported
+  value when there is one. A taxable spin-off booked at $0 is warned
+  about on every run and in the account's .sum until a value is set.
+- **IB cash takeovers are booked.** `Merged(Acquisition) FOR USD 30.00
+  PER SHARE` is a sale at the cash amount (it was left in inventory with
+  only a .sum note). Decimal-ratio and class-share (`BRK B`) mergers are
+  parsed; a stock-plus-cash merger stops the run by name for manual
+  booking instead of vanishing.
+- **A taxable merger uses one value for both legs.** The old shares'
+  proceeds and the new shares' cost are now the same fair value (the
+  shares received, plus any cash in lieu); the broker's separate out-leg
+  and in-leg figures left their difference as a permanent phantom gain
+  or loss. Across currencies, each leg is converted at the event date
+  (a hint in USD was booked as CAD proceeds).
+- **A merger or spin-off held in two broker accounts is booked for
+  both.** Two IB sub-account statements, or two RBC accounts, feeding
+  one taxjson account kept only the first account's disposition. Their
+  quantities are now combined under the one election; an overlapping
+  statement of the same broker account still counts once.
+- **Questrade spin-off parents are found in any export of the account,**
+  and a US parent bought from the CAD side (`EXCHANGE RATE` rows) is
+  named with its US listing, as the parser books it. The s.86.1 cost
+  reduction used to land on an empty pool and book a phantom gain. RBC
+  spin-off parents and merger placeholders get the same all-exports
+  lookup.
+
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is

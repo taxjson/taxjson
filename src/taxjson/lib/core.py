@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
-                                            normalize_symbol_new, split_event_key)
+                                            normalize_symbol_new, split_seen)
 from decimal import Decimal
 
 from taxjson.lib.numeric import D
@@ -756,10 +756,9 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
                     bal[t.account] = bal.get(t.account, 0.0) + float(t.quantity or 0)
                 elif (t.action == 'SPLIT'
                       and not normalize_symbol_new(t.symbol, t.symbol_new)):
-                    k = split_event_key(t.symbol, t.date, t.quantity, '')
-                    if k in seen_plain:
+                    if split_seen(seen_plain, t.symbol, t.date,
+                                  t.quantity, '') is not None:
                         continue
-                    seen_plain.add(k)
                     for a in bal:
                         bal[a] *= float(t.quantity or 0)
             return {a: q for a, q in bal.items() if q > 1e-9}

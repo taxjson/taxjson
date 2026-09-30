@@ -304,7 +304,11 @@ class TestIbCancellations(unittest.TestCase):
             sum(1 for t in txs if t['action'] == 'BUYSELL'), 1)
 
     def test_restated_spinoff_emits_once(self):
-        txs = self._parse(
+        # Spin-offs are an election, booked by taxjson-corp-actions (the
+        # parser leaves the rows alone); the restatement still yields
+        # ONE event of 10 shares at IB's value.
+        from taxjson.lib.corp_actions import parse_ib_corporate_actions
+        text = (
             'Corporate Actions,Header,Asset Category,Currency,'
             'Report Date,Date/Time,Description,Quantity,Proceeds,'
             'Value,Realized P/L,Code\n'
@@ -317,10 +321,19 @@ class TestIbCancellations(unittest.TestCase):
             'Corporate Actions,Data,Stocks,USD,2025-06-03,'
             '"2025-06-01, 20:25:00","PARN(US0000000401) Spinoff  1 for '
             '10 (SPNC, SPINCO CORP, US0000000402)",10,0,250.0,0,\n')
-        self.assertEqual(
-            sum(1 for t in txs if t['action'] == 'DIVIDEND'), 1)
-        self.assertEqual(
-            sum(1 for t in txs if t['action'] == 'BUYSELL'), 1)
+        txs = self._parse(text)
+        self.assertEqual(txs, [])
+        with tempfile.NamedTemporaryFile('w', suffix='.csv',
+                                         delete=False) as f:
+            f.write(text)
+        try:
+            evs = parse_ib_corporate_actions(Path(f.name), 'margin')
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0].action_type, 'spinoff')
+        self.assertAlmostEqual(evs[0].qty_received, 10.0)
+        self.assertAlmostEqual(evs[0].target_fmv, 250.0)
 
 
 class TestVentureSuffix(unittest.TestCase):
