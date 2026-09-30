@@ -63,6 +63,54 @@ class LabelValueCells(unittest.TestCase):
             self.assertEqual(main([str(p), "--check", "--no-denylist"]), 1)
 
 
+class Denylist(unittest.TestCase):
+    """R1-345: digit loosening, the file name, a missing configured file."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.deny = self.d / "deny"
+        self.deny.write_text("# synthetic\n11223344\nQwertyfoo\n", encoding="utf-8")
+        self.env = {**os.environ, "TAXJSON_PII_DENYLIST": str(self.deny)}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_spaced_and_dashed_digits(self):
+        src = self.d / "misc.csv"
+        src.write_text("a,b\nWire 1122 3344 in,1\nJournal 1122-3344,2\nPlain 11223344,3\n",
+                       encoding="utf-8")
+        r = _run(str(src), "--out", str(self.d / "out"), env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = (self.d / "out" / "misc.redacted.csv").read_text(encoding="utf-8")
+        self.assertNotIn("3344", out)
+
+    def test_check_catches_spaced_digits(self):
+        src = self.d / "one.csv"
+        src.write_text("a,b\nref 1122 3344,1\n", encoding="utf-8")
+        self.assertEqual(_run(str(src), "--check", env=self.env).returncode, 1)
+
+    def test_file_name_denylisted_word(self):
+        src = self.d / "qwertyfoo_stmt.csv"
+        src.write_text("a,b\n1,2\n", encoding="utf-8")
+        r = _run(str(src), "--out", str(self.d / "out"), env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        names = [p.name for p in (self.d / "out").iterdir()]
+        self.assertEqual(len(names), 1)
+        self.assertNotIn("qwertyfoo", names[0].lower())
+        self.assertNotIn("qwertyfoo", r.stdout.lower())
+        self.assertEqual(redacted_name(Path("a_1234.csv"), {}), "a_1234.redacted.csv")
+
+    def test_missing_configured_denylist_fails_closed(self):
+        src = self.d / "word.csv"
+        src.write_text("a,b\nQwertyfoo,1\n", encoding="utf-8")
+        env = {**self.env, "TAXJSON_PII_DENYLIST": str(self.d / "typo")}
+        r = _run(str(src), "--check", env=env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("TAXJSON_PII_DENYLIST", r.stderr)
+        self.assertEqual(_run(str(src), "--check", "--no-denylist", env=env).returncode, 0)
+
+
 class FrenchStreet(unittest.TestCase):
     """S036-16: '1234 rue Saint-Denis' in a statement preamble."""
 

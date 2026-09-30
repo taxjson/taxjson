@@ -33,9 +33,12 @@ What it changes, and nothing else:
     stable same-shape pseudonym, so rows that shared an id still share
     one and distinct rows stay distinct;
   * anything matching the private denylist (`~/.config/taxjson/
-    pii-denylist`, the same file scripts/check-pii.sh uses) or `--also`
-    — case-insensitive. An invalid pattern FAILS CLOSED on the command
-    line (exit 2, nothing written).
+    pii-denylist`, or $TAXJSON_PII_DENYLIST — the same file
+    scripts/check-pii.sh uses, matched the same way: case-insensitive,
+    a 4+ digit run also matching with spaces or dashes between digits)
+    or `--also`, in the text and in the output FILE NAME. An invalid
+    pattern, or a TAXJSON_PII_DENYLIST naming a missing file, FAILS
+    CLOSED on the command line (exit 2, nothing written).
 Binary input (.xlsx — Questrade's default export — .xls, .pdf, .zip) is
 REFUSED: export CSV (or run taxjson-xlsx-to-csv) and redact that.
 Encoding: UTF-8 (BOM kept), UTF-16 (BOM or NUL-stuffed; re-written as
@@ -303,6 +306,9 @@ class Report:
         self.review: List[Tuple[int, str]] = []  # (line number, reason)
         self.encoding = "utf-8"
         self.notes: List[str] = []
+        # Compiled denylist / --also patterns, also applied to the
+        # output FILE NAME (check-pii scans names too).
+        self.name_patterns: List[re.Pattern] = []
 
     def found_anything(self) -> bool:
         return bool(self.accounts or self.identity_rows or self.emails
@@ -676,6 +682,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                 ) -> Tuple[str, Report]:
     rep = Report()
     compiled, bad = compile_patterns(extra_patterns or [])
+    rep.name_patterns = compiled
     for b in bad:
         rep.notes.append(f"pattern skipped (not a valid regex): {b}")
     text = _redact_html_identity(text, rep)
@@ -869,21 +876,79 @@ def decode_export(raw: bytes) -> Tuple[str, str, bytes]:
         return raw.decode("cp1252", errors="replace"), "cp1252", b""
 
 
+class DenylistMissing(Exception):
+    """TAXJSON_PII_DENYLIST names a file that does not exist."""
+
+
+def loosen(pattern: str) -> str:
+    """scripts/check-pii.sh's loosen(): every run of 4+ literal digits
+    also matches with a space or dash between digits (1234 5678,
+    1234-5678). Escapes, bracket expressions and {m,n} are copied
+    verbatim, so the result is still a valid pattern."""
+    out: List[str] = []
+    run = ""
+    i, n = 0, len(pattern)
+
+    def flush() -> None:
+        nonlocal run
+        out.append(run[0] + "".join("[ -]?" + d for d in run[1:])
+                   if len(run) >= 4 else run)
+        run = ""
+    while i < n:
+        c = pattern[i]
+        if c.isdigit() and c.isascii():
+            run += c; i += 1; continue
+        flush()
+        if c == "\\":
+            out.append(pattern[i:i + 2]); i += 2; continue
+        if c == "[":
+            j = i + 1
+            if pattern[j:j + 1] == "^":
+                j += 1
+            if pattern[j:j + 1] == "]":
+                j += 1
+            while j < n:
+                if pattern[j:j + 2] == "[:":
+                    e = pattern.find(":]", j + 2)
+                    if e >= 0:
+                        j = e + 2; continue
+                if pattern[j] == "]":
+                    break
+                j += 1
+            out.append(pattern[i:j + 1]); i = j + 1; continue
+        if c == "{":
+            j = pattern.find("}", i)
+            if j >= 0:
+                out.append(pattern[i:j + 1]); i = j + 1; continue
+        out.append(c); i += 1
+    flush()
+    return "".join(out)
+
+
 def load_denylist(path: Optional[str] = None) -> List[str]:
-    p = Path(path or os.environ.get("TAXJSON_PII_DENYLIST")
-             or Path.home() / ".config" / "taxjson" / "pii-denylist")
+    """The private denylist's patterns, digit runs loosened exactly as
+    check-pii.sh loosens them. A TAXJSON_PII_DENYLIST (or `path`) that
+    names a missing file raises DenylistMissing — a typo must not turn
+    the denylist off silently. The default path may be absent."""
+    explicit = path or os.environ.get("TAXJSON_PII_DENYLIST")
+    p = Path(explicit or Path.home() / ".config" / "taxjson" / "pii-denylist")
     if not p.is_file():
+        if explicit:
+            raise DenylistMissing(str(p))
         return []
     pats = []
     for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
         s = ln.strip()
         if s and not s.startswith("#"):
-            pats.append(s)
+            pats.append(loosen(s))
     return pats
 
 
-def redacted_name(src: Path, accounts: Dict[str, str]) -> str:
+def redacted_name(src: Path, accounts: Dict[str, str],
+                  patterns: Optional[List[re.Pattern]] = None) -> str:
     stem = src.stem
+    for pat in patterns or []:
+        stem = pat.sub("REDACTED", stem)
     for orig, ph in sorted(accounts.items(), key=lambda kv: -len(kv[0])):
         stem = stem.replace(orig, ph)
     # Ids that appear only in the name (IB names downloads after the account).
@@ -909,6 +974,8 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"`taxjson-xlsx-to-csv`) and redact the CSV.")
     text, enc, bom = decode_export(raw)
     new, rep = redact_text(text, extra)
+    # A denylisted string in the file NAME counts as a finding too.
+    rep.patterns += sum(len(p.findall(src.stem)) for p in rep.name_patterns)
     rep.encoding = enc
     if enc != "utf-8":
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
@@ -919,7 +986,7 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     if dst_dir.exists() and not dst_dir.is_dir():
         raise SystemExit(f"taxjson redact: --out {dst_dir} is not a directory")
     dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / redacted_name(src, rep.accounts)
+    dst = dst_dir / redacted_name(src, rep.accounts, rep.name_patterns)
     if dst.resolve() == src.resolve():
         raise SystemExit(f"taxjson redact: refusing to overwrite {src}")
     if dst.is_symlink():
@@ -937,7 +1004,8 @@ _REVIEW_SHOWN = 25
 
 
 def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
-    shown_src = redacted_name(src, rep.accounts).replace(".redacted", "")
+    shown_src = redacted_name(src, rep.accounts,
+                              rep.name_patterns).replace(".redacted", "")
     where = f" -> {dst}" if dst else " (check only)"
     print(f"{shown_src}{where}")
     if rep.accounts and rep.unreplaced:
@@ -1000,7 +1068,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Fail CLOSED on a bad pattern: silently skipping it would publish
     # exactly the string the user asked to remove.
     _, bad_also = compile_patterns(list(args.also))
-    deny = [] if args.no_denylist else load_denylist()
+    try:
+        deny = [] if args.no_denylist else load_denylist()
+    except DenylistMissing as e:
+        print(f"taxjson redact: TAXJSON_PII_DENYLIST names {e}, which does "
+              f"not exist — fix the path (or pass --no-denylist). "
+              f"Nothing written.", file=sys.stderr)
+        return 2
     bad_deny = [i for i, p in enumerate(deny, 1) if compile_patterns([p])[1]]
     if bad_also or bad_deny:
         for b in bad_also:

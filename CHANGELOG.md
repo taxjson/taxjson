@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **redact matches the private denylist the way check-pii does.** A
+  denylisted number written with spaces or dashes (`1122 3344`) is
+  replaced, a denylisted word in the file name is replaced in the output
+  name (and counts for `--check`), and a `TAXJSON_PII_DENYLIST` that
+  names a missing file stops the run instead of silently turning the
+  denylist off (audit R1-345).
+
 - **redact: Québec addresses and accented or ambiguous names.** A
   French-order street line (`1234 rue Saint-Denis`) is blanked like an
   English one; names with accented letters (`Josée Tremblay`) are
