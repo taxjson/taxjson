@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A malformed `ticker.map` line stops the run.** A typo such as
+  `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
+  ACB pools and the Schedule 3 gain, and the warning reached only
+  `reports/*.sum` while `run` and `run --strict` exited 0. `taxjson run`
+  now refuses the map, listing each bad line as `ticker.map:<line>`.
 - **An export that parses to 0 transactions is loud, and fatal under
   `--strict`.** A Coinbase file with a renamed header, or a `kr_`-named
   file that is not a Kraken ledger, dropped its whole book with exit 0

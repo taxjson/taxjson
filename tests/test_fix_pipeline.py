@@ -289,5 +289,48 @@ class TestZeroTransactionParse(unittest.TestCase):
         self.assertIn("0 transactions", res.detail)
 
 
+class TestMalformedTickerMapLine(unittest.TestCase):
+    """S009-03: a ticker.map line that cannot be parsed was dropped
+    with a warning that reached only reports/*.sum; run and run
+    --strict exited 0 while the dropped TOBASE rule changed the
+    Schedule 3 gain."""
+
+    def _run_with_map(self, text, *extra):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            (root / "ticker.map").write_text(text)
+            return _run_cli(root, "run", "--no-input", *extra)
+
+    def test_malformed_line_stops_the_run_with_its_line_number(self):
+        for bad in ("TOBASE XYZ.US=XYZ.TO", "TOBSE XYZ.US XYZ.TO",
+                    "DELETE", "JOURNAL DLR.U.TO"):
+            with self.subTest(bad=bad):
+                r = self._run_with_map(
+                    "# header comment\nGLOBAL OLD.TO XEI.TO\n" + bad + "\n")
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn("ticker.map:3", r.stderr)
+                self.assertIn(bad, r.stderr)
+
+    def test_well_formed_map_runs_quietly(self):
+        r = self._run_with_map(
+            "# comment\nTOBASE XYZ.US XYZ.TO   # trailing note\n"
+            "DISTINCT UNH.TO UNH.US\nDELETE JUNK.TO\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("ticker.map:", r.stderr)
+
+    def test_loader_warning_carries_the_line_number(self):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_ticker_map import load_map_file
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "ticker.map"
+            p.write_text("GLOBAL A.TO B.TO\nTOBASE X.US=X.TO\n")
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                tm = load_map_file(p)
+        self.assertEqual(tm.glob, {"A.TO": "B.TO"})
+        self.assertIn("ticker.map:2", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

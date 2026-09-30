@@ -2098,6 +2098,20 @@ def cmd_run(args: argparse.Namespace) -> None:
     # DELETE nukes a ticker. Each merge/export stage requests its subset.
     ticker_map = root / "ticker.map"
     ticker_map_arg = ticker_map if ticker_map.exists() else None
+    if ticker_map_arg:
+        # A line the loader cannot parse DROPS its rule, and a dropped
+        # TOBASE/GLOBAL/JOURNAL rule moves ACB pools and the Schedule 3
+        # gain; its warning used to reach only reports/*.sum while the
+        # run (even --strict) exited 0 (S009-03). Refuse up front.
+        from taxjson.bin.taxjson_ticker_map import map_file_problems
+        _tm_problems = map_file_problems(ticker_map)
+        if _tm_problems:
+            _die(f"{len(_tm_problems)} malformed ticker.map line(s) — "
+                 f"each rule would be silently dropped, changing ACB "
+                 f"pools and gains:\n    "
+                 + "\n    ".join(_tm_problems)
+                 + "\n  Fix the line (KEYWORD FROM TO, separated by "
+                 "spaces; notes after `#`) or delete it.")
     # ticker_extraction_overrides.txt — description-keyed ticker
     # corrections for securities the currency->exchange suffix mislabels.
     sec_overrides = root / "ticker_extraction_overrides.txt"
