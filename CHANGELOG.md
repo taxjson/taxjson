@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Rows at the same moment keep the export's row order (Canada).**
+  Webull prints no clock time, so every row is stamped 09:30:00, and the
+  Canada engine put a buy before a sell at one moment: a write listed
+  before its same-day buy-back became a long round trip, whose loss a
+  re-buy within 30 days could deny. Trades at one moment now follow the
+  export's row order in both countries (the US engine already did); the
+  fixed places (opening balance, split, assignment legs, adjustments)
+  stay. The wash radar and `t1135` follow (a same-moment sale listed
+  before the purchase is a short covered at once, not property held
+  for the T1135 cost test); the missing-history walks
+  still read a same-moment pair buys first (they only look for missing
+  history). Questrade and generic-importer files listed newest first are
+  read bottom-up, as RBC's always were. tax-logic CA-DATE-14 /
+  US-DATE-13 (audit R1-30).
+
 - **crypto-sends: a Kraken PYUSD or GUSD send is a coin send.** The
   Kraken parser books those two as coins, but crypto-sends treated them
   as US-dollar cash on every exchange, so a gift or payment of them got

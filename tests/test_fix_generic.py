@@ -289,8 +289,11 @@ class TestGenericSettlement(unittest.TestCase):
                 'symbol="Ticker"\nquantity="Shares"\nprice="Price"\n'
                 'currency="Currency"\n[actions]\n"SELL"="sell"\n')
         txs, _ = _parse(csv, toml)
-        self.assertEqual([t["date_settle"] for t in txs],
-                         ["2026-01-05", "2025-12-31"])
+        # (Keyed by trade date: this file lists newest first, so its rows
+        # are emitted bottom-up — CA-DATE-14.)
+        self.assertEqual({t["date"]: t["date_settle"] for t in txs},
+                         {"2025-12-31": "2026-01-05",
+                          "2025-12-30": "2025-12-31"})
 
     def test_settle_before_trade_refused(self):
         csv = ("Date,Settle,Type,Ticker,Shares,Price,Currency\n"

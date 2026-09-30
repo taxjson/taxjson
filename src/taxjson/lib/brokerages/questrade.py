@@ -481,6 +481,14 @@ class QuestradeBrokerage(BaseBrokerage):
         self._ctx = ctx
         self._desc_to_ticker = ctx.desc_to_ticker
         rows = _read_qt_rows(path)
+        # Rows of one day tie (Questrade stamps 00:00:00) and keep the
+        # order they are emitted in (CA-DATE-14 / US-DATE-13): read a
+        # newest-first export bottom-up so that order is the real one.
+        if self.newest_first([
+                self.parse_date((r.get('Transaction Date') or '')[:10],
+                                '%Y-%m-%d')
+                for _, r in rows]):
+            rows = rows[::-1]
 
         # Taxable hint from the Account Type column: a registered-plan
         # marker -> sheltered; "margin"/"cash" without one -> taxable;

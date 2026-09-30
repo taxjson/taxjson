@@ -197,10 +197,10 @@ class TestCaPriorityLadderPinned(unittest.TestCase):
             (self._tx("ASSIGN", 100), P.ASSIGN_STOCK_OR_SPLIT),
             (self._tx("SPLIT", 2.0), P.ASSIGN_STOCK_OR_SPLIT),
             (self._tx("ADJUST", 5), P.ADJUST),
-            (self._tx("BUYSELL", 100), P.BUY),
-            (self._tx("BUYSELL", 0.5), P.BUY),          # a fractional buy
-            (self._tx("BUYSELL", 1, opt), P.BUY),        # an option buy, not an ASSIGN
-            (self._tx("BUYSELL", -100), P.SELL),
+            (self._tx("BUYSELL", 100), P.TRADE),
+            (self._tx("BUYSELL", 0.5), P.TRADE),        # a fractional buy
+            (self._tx("BUYSELL", 1, opt), P.TRADE),      # an option buy, not an ASSIGN
+            (self._tx("BUYSELL", -100), P.TRADE),        # one rung (CA-DATE-14)
             (self._tx("BUYSELL", 0), P.OTHER),
         ]
         for t, want in cases:
@@ -217,7 +217,8 @@ class TestCaPriorityLadderPinned(unittest.TestCase):
                sorted(rows, key=lambda t: event_sort_key(t, profile="ca_main"))]
         self.assertEqual(got, [("OPENING_BALANCE", 100), ("DISALLOW", 0),
                                ("ASSIGN", -1), ("ASSIGN", 100),
-                               ("BUYSELL", 100), ("BUYSELL", -100),
+                               # tied trades: input order (CA-DATE-14)
+                               ("BUYSELL", -100), ("BUYSELL", 100),
                                ("ADJUST", 5), ("BUYSELL", 0)])
 
 

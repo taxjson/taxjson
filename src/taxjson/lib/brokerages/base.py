@@ -626,6 +626,23 @@ class BaseBrokerage:
         return None
 
     @staticmethod
+    def newest_first(dates: List[Any]) -> bool:
+        """True when an export lists its rows NEWEST FIRST: the row dates
+        (file order; None/blank skipped) never increase and there are at
+        least two distinct ones. A one-date file, or one whose dates go
+        both ways, reads as oldest first (file order kept).
+
+        Rows at one moment (Webull, Questrade and the generic importer
+        print no clock time) are taken in the order a parser emits them
+        (tax-logic CA-DATE-14 / US-DATE-13; every later stage sorts
+        stably), so a parser reads a newest-first export bottom-up —
+        otherwise a same-day sell-then-rebuy would replay rebuy first.
+        RBC Direct does this with its own per-row times."""
+        ds = [d for d in dates if d]
+        return (len(set(ds)) > 1
+                and all(a >= b for a, b in zip(ds, ds[1:])))
+
+    @staticmethod
     def disambiguate_split_fills(transactions: List[Dict[str, Any]]) -> None:
         """Mark the second+ instance of identical-looking rows in this
         file as split fills. Some brokerages emit multiple CSV rows for

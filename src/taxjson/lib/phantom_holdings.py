@@ -191,8 +191,9 @@ def detect_phantoms(
     """
     # state[(symbol, account, currency)] -> running, peak_short, first_neg, count
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-    # Same-date rows with equal clock times keep the engine's convention
-    # (buys before sells): a Norbert's-gambit pair — sell DLR.TO, buy
+    # Same-date rows with equal clock times go buys before sells (the
+    # walks' convention — the engines keep the export's row order, see
+    # corporate_timeline._walk_rest): a Norbert's-gambit pair — sell DLR.TO, buy
     # DLR.U.TO the same morning, folded to one symbol by the ticker map —
     # otherwise read as a 4,000-share phantom short (real 2025 book).
     sorted_txs = _drop_duplicate_splits(sorted(

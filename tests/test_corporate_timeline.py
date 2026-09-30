@@ -264,7 +264,7 @@ class TestOldImplementationParity(unittest.TestCase):
 class TestRadarPriority(unittest.TestCase):
     """The radar's tie-break ladder is hosted in corporate_timeline (its
     private copy is what let engine ordering fixes miss it). Pins the
-    historical semantics — ADJUST first, then ASSIGN/SPLIT, buys, sells —
+    historical semantics — ADJUST first, then ASSIGN/SPLIT, then trades —
     and that wash_radar consumes THIS ladder, not a local one."""
 
     def _tx(self, action, qty):
@@ -278,8 +278,10 @@ class TestRadarPriority(unittest.TestCase):
         self.assertEqual(radar_priority(self._tx("ADJUST", 0)), 0)
         self.assertEqual(radar_priority(self._tx("ASSIGN", 1)), 1)
         self.assertEqual(radar_priority(self._tx("SPLIT", 0)), 1)
+        # Trades share one rung: tied trades replay in the export's row
+        # order, as in the engines (CA-DATE-14 / US-DATE-13).
         self.assertEqual(radar_priority(self._tx("BUYSELL", 10)), 2)
-        self.assertEqual(radar_priority(self._tx("BUYSELL", -10)), 3)
+        self.assertEqual(radar_priority(self._tx("BUYSELL", -10)), 2)
 
     def test_wash_radar_uses_the_shared_ladder(self):
         from taxjson.bin import taxjson_wash_radar as radar

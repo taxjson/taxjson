@@ -629,14 +629,17 @@ class TestT1135Walk(unittest.TestCase):
         self.assertAlmostEqual(
             w["per_symbol"]["XYZ.US"]["year_end_cost"], 6400.0, places=2)
 
-    def test_same_stamp_order_does_not_decide(self):
-        """S008-05: a same-stamp round trip, sell row first."""
+    def test_same_stamp_order_is_the_engines(self):
+        """S008-05: the walk takes a same-stamp round trip in the
+        engine's order — since CA-DATE-14 (audit R1-30, owner decision
+        D7) the export's row order. Sell row first: a short sale covered
+        at once, never property held; buy row first: 125,000 held."""
         rows = [_tx("BUYSELL", "2025-06-02", "CCC.US", -1500, 120000.0),
                 _tx("BUYSELL", "2025-06-02", "CCC.US", 1500, -125000.0)]
         a = self._walk(rows)
         b = self._walk(list(reversed(rows)))
-        self.assertEqual(a["max_total_cost"], b["max_total_cost"])
-        self.assertAlmostEqual(a["max_total_cost"], 125000.0, places=2)
+        self.assertAlmostEqual(a["max_total_cost"], 0.0, places=2)
+        self.assertAlmostEqual(b["max_total_cost"], 125000.0, places=2)
 
     def test_split_inside_settle_lag(self):
         """S008-06: a pre-split sale settling after the split."""
