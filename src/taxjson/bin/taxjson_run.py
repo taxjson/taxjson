@@ -380,9 +380,25 @@ def load_config(root: Path) -> Dict[str, Any]:
                          f"name — use letters, digits, '_', '-' or "
                          f"'.' (must start with a letter, digit or "
                          f"'_'); it becomes file and directory names.")
-            return cfg
         except Exception as e:
             _die(f"{path} is not valid TOML: {e}")
+    _refuse_bad_account_types(cfg)
+    return cfg
+
+
+def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
+    """Die on an [accounts.*] entry whose `type` is missing or not
+    exactly taxable/sheltered. Applied by EVERY config reader
+    (load_config, _soft_config), not only `run`'s validate_config: the
+    filing commands partition on an exact string match, so a type
+    edited after the run ("Taxable") silently dropped the account from
+    estimate, sum, form-export and the close-year lock (R1-268). Silent
+    on a valid config."""
+    from taxjson.lib.config_check import account_type_problems
+    problems = account_type_problems(cfg)
+    if problems:
+        _die(problems[0] if len(problems) == 1
+             else "\n  ".join(["invalid account types:"] + problems))
 
 
 # The command currently executing (set by main's dispatch loop) so
@@ -540,20 +556,10 @@ def validate_config(cfg: Dict[str, Any],
             if key not in _ACCOUNT_KEYS:
                 warnings.append(f"unknown [accounts.{name}] key {key!r} is "
                                 f"ignored{_suggest(key, _ACCOUNT_KEYS)}")
-        atype = acfg.get("type")
-        if atype is None:
-            # Fatal, like a bad value: the old "default to sheltered"
-            # silently dropped an untyped TAXABLE account's gains from
-            # every filing command (2026-09 CLI audit).
-            _die(f"[accounts.{name}] has no `type` — it is required: "
-                 f"add type = \"taxable\" or type = \"sheltered\" "
-                 f"(taxable | sheltered). An untyped account would "
-                 f"otherwise be left out of the return.")
-        elif atype not in _ACCOUNT_TYPES:
-            _die(f"[accounts.{name}] type must be "
-                     f"\"taxable\" or \"sheltered\", got {atype!r} — this "
-                     f"account would otherwise be silently dropped from "
-                     f"the run{_suggest(str(atype), _ACCOUNT_TYPES)}")
+    # Missing / invalid `type`: fatal, and the SAME check every other
+    # config reader applies (lib/config_check.py).
+    _refuse_bad_account_types(cfg)
+    for name, acfg in accounts.items():
         for flag in ("crypto", "transfers"):
             if flag in acfg and not isinstance(acfg[flag], bool):
                 _die(f"[accounts.{name}] {flag} must be "
@@ -7285,9 +7291,13 @@ def _soft_config(root: Path) -> Dict[str, Any]:
     cfg_path = root / "taxjson.toml"
     if cfg_path.exists() and tomllib is not None:
         try:
-            return tomllib.loads(cfg_path.read_text(encoding="utf-8")) or {}
+            cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8")) or {}
         except Exception:
-            pass
+            return {}
+        # Soft about a MISSING or unreadable config, never about an
+        # account the filing commands would silently drop (R1-268).
+        _refuse_bad_account_types(cfg)
+        return cfg
     return {}
 
 

@@ -102,5 +102,69 @@ class TestTtStemCollision(unittest.TestCase):
         self.assertIn(("broker", "m_questrade.json"), got)
 
 
+class TestAccountTypeCheckedEverywhere(unittest.TestCase):
+    """R1-268: validate_config ran only in `taxjson run`. An account
+    type edited after the run ("Taxable") matched neither partition, so
+    estimate / instalments / sum / form-export / close-year / carryover
+    dropped the account with rc 0 — close-year even locked the wrong
+    total. Every command that reads the config must refuse it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._td = tempfile.TemporaryDirectory()
+        cls.root = _project(cls._td.name)
+        r = _run_cli(cls.root, "run", "--no-input")
+        assert r.returncode == 0, r.stderr + r.stdout
+        cfg = cls.root / "taxjson.toml"
+        cfg.write_text(cfg.read_text().replace('type = "taxable"',
+                                               'type = "Taxable"'))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._td.cleanup()
+
+    def _refused(self, *args):
+        r = _run_cli(self.root, *args)
+        self.assertNotEqual(r.returncode, 0, (args, r.stdout))
+        self.assertIn("[accounts.margin] type must be", r.stderr, args)
+        self.assertIn("'Taxable'", r.stderr, args)
+
+    def test_filing_commands_refuse_an_invalid_type(self):
+        for args in (("estimate",), ("instalments",), ("sum",),
+                     ("sum", "margin"), ("form-export",),
+                     ("carryover",), ("close-year",), ("checklist",),
+                     ("t1135",)):
+            with self.subTest(args=args):
+                self._refused(*args)
+        self.assertFalse((self.root / "filed").exists()
+                         and any((self.root / "filed").iterdir()))
+
+    def test_web_context_refuses_an_invalid_type(self):
+        try:
+            from taxjson.web.context import ProjectContext
+        except ImportError:
+            self.skipTest("web extras not installed")
+        with self.assertRaises(ValueError) as cm:
+            ProjectContext.load(self.root)
+        self.assertIn("'Taxable'", str(cm.exception))
+
+    def test_untyped_account_is_refused_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
+                             0)
+            (root / "taxjson.toml").write_text(
+                _CONFIG.replace('type = "taxable"\n', ""))
+            r = _run_cli(root, "estimate")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("has no `type`", r.stderr)
+
+    def test_valid_config_stays_quiet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            r = _run_cli(root, "tax-logic")
+        self.assertNotIn("[accounts.", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

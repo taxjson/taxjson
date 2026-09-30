@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Every command refuses an invalid account type, not only `run`.** An
+  account `type` edited after the run (`"Taxable"`, or deleted) silently
+  dropped that account from `estimate`, `instalments`, `sum`,
+  `form-export`, `carryover` and `close-year` (which locked the wrong
+  total), all with exit 0. Every command that reads `taxjson.toml`, and
+  `taxjson serve`, now stops with the same message `run` gives.
 - **A .tt file named after a broker no longer erases that broker's
   trades.** `questrade.tt` (or `webull.tt`, `ib.tt`, `generic.tt` ...)
   wrote its converted JSON over the broker's parse in `work/`, so every
