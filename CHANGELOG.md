@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Generic importer: fewer ways to book wrong money quietly.** Symbols
+  are upper-cased (`xyz` and `XYZ` used to be two pools, the sale a
+  phantom short). An unmapped action that carries a quantity or an amount
+  (a DRIP reinvest, say) is an `UNBOOKED` warning — on the console, fatal
+  under `run --strict`, a `--lint` failure — instead of a note in the
+  report. A row with no price is still checked against its amount (a
+  swapped fee/amount mapping booked the commission as the cost), a
+  mapping with no fee column infers the commission from the net instead
+  of refusing a valid commission-inclusive export, a futures symbol needs
+  its amount (the contract size is never guessed as 1 or 100), and an
+  unescaped quote that swallows the next row stops the import naming the
+  line.
+- **Standalone fee rows have one sign: positive = charged.** The generic
+  importer's `fee` action booked a CSV's negative cash as a negative fee
+  (the opposite of IB, Questrade and RBC, so `fx-cash` read a charge as
+  cash received); `[formats] fee_sign` picks the CSV's convention. The
+  `taxjson fees` view flipped every IB/Questrade/RBC fee row into a
+  rebate and understated TOTAL FEES; it now reads them as charged.
 - **Corporate-action elections say what the law says.** The s.85.1
   share-for-share rollover is automatic when it applies (you opt out by
   reporting the gain); taxjson described it backwards and printed a

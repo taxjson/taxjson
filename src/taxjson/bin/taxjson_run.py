@@ -4858,9 +4858,11 @@ def cmd_fees(args: argparse.Namespace) -> None:
     for acct, tx in rows:
         if tx.get("action") == "FEE":
             # Standalone fee rows (e.g. IB monthly/market-data fees) carry
-            # the amount in net_amount, sign-preserved: negative = charged.
-            # Flip so a charge counts as a positive fee (a rebate nets out).
-            fee = -float(tx.get("net_amount") or 0.0)
+            # the amount in net_amount: POSITIVE = charged, the convention
+            # every parser (IB, Questrade, RBC, generic) and fx-cash use
+            # (a rebate is negative and nets out). The old flip showed
+            # every charge as a rebate (R1-124).
+            fee = float(tx.get("net_amount") or 0.0)
         else:
             fee = _tx_fee(tx)
         if abs(fee) < 0.005:

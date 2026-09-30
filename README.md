@@ -101,13 +101,22 @@ map your CSV's header names in `[columns]`, its date format in `[formats]`, and
 each action value to one of `buy | sell | dividend | tax | interest | fee |
 skip` in `[actions]`. Conventions match the hand-written parsers: signed
 amounts are preserved, unmapped action values are counted and summarized (never
-silently dropped), and a mapping that references columns the CSV doesn't have
-refuses loudly. Every buy/sell row is cross-checked — |amount| must equal
-qty × price (× 100 for an OCC option symbol) ± fee within 1%, a fee above 5% of
-the gross needs `[options] allow_large_fees = true`, two fields may not share
-one header, and the currency must be mapped or set in `[defaults]` (no implicit
-USD) — so a mis-mapped column stops the import instead of booking wrong money.
-The import also refuses:
+silently dropped — an unmapped row that carries a quantity or an amount is an
+`UNBOOKED` warning on the console, refused by `run --strict` and failed by
+`taxjson-brokerage --lint`; map it, or map it to `skip`), and a mapping that
+references columns the CSV doesn't have refuses loudly. A `fee` row is booked
+positive = charged, like every broker parser: the default `[formats] fee_sign =
+"cash"` flips a CSV that shows a charge as negative cash; `fee_sign =
+"charged"` takes the cell as is. Every buy/sell row is cross-checked — |amount|
+must equal qty × price (× 100 for an OCC option symbol) ± fee within 1%, a fee
+above 5% of the gross needs `[options] allow_large_fees = true`, two fields may
+not share one header, and the currency must be mapped or set in `[defaults]`
+(no implicit USD) — so a mis-mapped column stops the import instead of booking
+wrong money. With no `fee` column mapped, the commission is inferred from
+|amount| − qty × price (a commission-inclusive Net column); a row with no price
+is checked against its amount instead (a fee at least a buy's whole amount is
+refused). A futures symbol (`F:` or `/` prefix) needs the `amount` column: the
+contract size is never guessed. The import also refuses:
 
 - an unknown section or key in the mapping (`ammount`, `commission`,
   `[format]`, `tax_sgn` …), with a did-you-mean suggestion;
@@ -121,8 +130,10 @@ The import also refuses:
   negative quantities (map buys and sells to separate action values);
 - a decimal-comma number (`12,50`, `1.234,56`): only a thousands comma
   (`1,234.56`) is accepted. Re-export with a decimal point.
+- a record with more cells than the header, or a cell holding a line break —
+  the mark of an unescaped quote in a text cell swallowing the next row.
 
-**Symbols.** A symbol written with an exchange suffix (`.TO`, `.V`, `.CN`,
+**Symbols.** Symbols are upper-cased (`xyz` and `XYZ` are one security). A symbol written with an exchange suffix (`.TO`, `.V`, `.CN`,
 `.NE`, `.US`, `.AX`, `.L`) keeps it — `DLR.U.TO` bought in USD stays
 `DLR.U.TO`. A bare symbol takes the suffix of the row's currency (`XEI` in CAD
 becomes `XEI.TO`, `SPY` in USD `SPY.US`).
