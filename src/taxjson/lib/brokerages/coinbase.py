@@ -1,5 +1,6 @@
 import csv
 import re
+import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -100,12 +101,38 @@ _KNOWN_NONEVENT_TYPES = frozenset({
 # value Coinbase states for it (Subtotal / Total).
 _STABLECOINS = frozenset({'USDC', 'USDT', 'DAI', 'PYUSD', 'GUSD'})
 
+# Fiat currencies a Coinbase pair can be quoted in (or a row priced
+# in). Anything else in the quote slot of an Advanced Trade pair is a
+# crypto-asset: trading ETH-BTC disposes of BTC (or acquires it), a
+# taxable leg of its own. Erring toward "crypto" is the safe side — a
+# fiat code missing here books a visible phantom position; a crypto
+# coin wrongly treated as cash would drop a disposition silently.
+_FIAT = frozenset({
+    'USD', 'CAD', 'EUR', 'GBP', 'AUD', 'NZD', 'JPY', 'CHF', 'SGD', 'HKD',
+    'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'BRL', 'MXN', 'INR', 'ZAR', 'TRY',
+    'KRW', 'CNY', 'AED', 'ILS',
+})
+
+# Advanced Trade rows name the pair only in Notes, e.g. "Bought 3 ETH
+# for 0.1 BTC on ETH-BTC at 0.0333 BTC/ETH" — Coinbase emits ONE row
+# per fill (the base asset), valued in the account's fiat. The quote
+# amount includes the fee on a buy and is net of it on a sell (checked
+# against real ETH-USDC fills: "for Y USDC" = qty x rate x (1 + fee)).
+_PAIR_RE = re.compile(r'\bon\s+([A-Z0-9]{1,15})-([A-Z0-9]{1,15})\b',
+                      re.IGNORECASE)
+_NUM = r'([\d,]*\.?\d+(?:[eE][-+]?\d+)?)'
+_ADV_NOTES_RE = re.compile(
+    r'\b(Bought|Sold)\s+' + _NUM + r'\s+([A-Z0-9]{1,15})\s+for\s+'
+    + _NUM + r'\s+([A-Z0-9]{1,15})\s+on\s+([A-Z0-9]{1,15})-'
+    r'([A-Z0-9]{1,15})\b', re.IGNORECASE)
+
 
 class CoinbaseBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Coinbase"
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions: List[Dict[str, Any]] = []
+        self._blank_totals = 0
         # utf-8-sig swallows a BOM if present, plain utf-8 reads it as a
         # data byte and silently breaks the first column match.
         with open(path, 'r', encoding='utf-8-sig') as f:
@@ -236,6 +263,30 @@ class CoinbaseBrokerage(BaseBrokerage):
                 dt = self._ts(row, header_map, type_raw)
 
                 asset = self._col(row, header_map, 'asset').strip()
+                # The pair an Advanced Trade fill was on (Notes). A
+                # crypto quote (ETH-BTC) is a crypto-to-crypto swap:
+                # both coins change hands (R1-102 — the quote coin's
+                # disposition used to be dropped silently).
+                crypto_quote = None
+                if (is_buy or is_sell) and not is_staking:
+                    _pm = _PAIR_RE.search(
+                        self._col(row, header_map, 'notes') or '')
+                    if _pm and _pm.group(2).upper() not in (
+                            _FIAT | _STABLECOINS):
+                        crypto_quote = _pm.group(2).upper()
+                        if asset.upper() in _STABLECOINS:
+                            raise ValueError(
+                                f"Coinbase row "
+                                f"{self._col(row, header_map, 'timestamp')!r} "
+                                f"{type_raw.strip()!r}: stablecoin "
+                                f"{asset.upper()} traded against the "
+                                f"crypto-asset {crypto_quote} "
+                                f"({_pm.group(0).strip()!r}) — that "
+                                f"disposes of (or acquires) "
+                                f"{crypto_quote}, a shape this parser "
+                                f"does not book. Enter the "
+                                f"{crypto_quote} leg via a .tt file and "
+                                f"remove the row.")
                 if (asset.upper() in _STABLECOINS
                         and (is_buy or is_sell) and not is_staking):
                     # "Bought 3495.67 USDC for 5000 CAD": fiat -> USD
@@ -329,6 +380,15 @@ class CoinbaseBrokerage(BaseBrokerage):
 
                 qty = self.signed_quantity(qty, action_is_sell=is_sell)
 
+                if not self._col(row, header_map, 'total').strip():
+                    # R1-103: a blank Total read as 0 booked $0 cost /
+                    # $0 proceeds with no warning. Derive it the way
+                    # Coinbase builds it, or refuse.
+                    total = self._derive_blank_total(
+                        row, header_map, type_raw, is_sell, qty, price,
+                        fee)
+                    self._blank_totals = (self._blank_totals or 0) + 1
+
                 # Coinbase Advanced Trade Sell rows store both qty and total
                 # as negative ("money out, position out"); store the magnitude
                 # so the gain engine sees positive proceeds. Matches the old
@@ -349,7 +409,18 @@ class CoinbaseBrokerage(BaseBrokerage):
                 }
                 if cb_id:
                     tx['id'] = cb_id
+                if crypto_quote:
+                    transactions.extend(self._crypto_pair_legs(
+                        row, header_map, tx, type_raw, is_sell,
+                        crypto_quote, cb_id))
+                    continue
                 transactions.append(tx)
+        if self._blank_totals:
+            print(f"note: Coinbase {path.name}: {self._blank_totals} "
+                  f"Buy/Sell row(s) had a blank Total — derived from "
+                  f"Subtotal ± fee (or quantity × price ± fee when "
+                  f"Subtotal is blank too). Check them against the "
+                  f"Coinbase statement.", file=sys.stderr)
         # Older Coinbase exports have no ID column, so byte-identical
         # same-second fills would hash to the same content id and
         # `taxjson-sort --dedup` would silently delete real trades —
@@ -457,6 +528,108 @@ class CoinbaseBrokerage(BaseBrokerage):
                 sell['fee'] = fee
             return [sell]
         return [sell, buy]
+
+    def _derive_blank_total(self, row, header_map, type_raw, is_sell, qty,
+                            price, fee) -> float:
+        """Total for a Buy/Sell row whose Total cell is blank. Coinbase
+        builds Total = Subtotal + fee on a buy and Subtotal - fee on a
+        sell; without a Subtotal, quantity x price stands in for it.
+        With neither, the row's value is unknown — refuse rather than
+        book $0 cost or $0 proceeds."""
+        fee = abs(fee)
+        sub = (abs(self._num(row, header_map, 'subtotal'))
+               if self._col(row, header_map, 'subtotal').strip() else 0.0)
+        if not sub and price and qty:
+            sub = abs(price * qty)
+        if not sub:
+            raise ValueError(
+                f"Coinbase row "
+                f"{self._col(row, header_map, 'timestamp')!r} "
+                f"{type_raw.strip()!r} "
+                f"{self._col(row, header_map, 'asset')!r}: the Total "
+                f"cell is blank and neither Subtotal nor quantity x "
+                f"price is there to derive it from — refusing to book "
+                f"$0 {'proceeds' if is_sell else 'cost'}. Fill in the "
+                f"Total from the Coinbase statement.")
+        return max(sub - fee, 0.0) if is_sell else sub + fee
+
+    def _crypto_pair_legs(self, row, header_map, tx, type_raw, is_sell,
+                          quote, cb_id):
+        """Both legs of an Advanced Trade fill on a crypto-quoted pair
+        (R1-102): `tx` (the base asset, already built from the row) and
+        the quote coin moving the other way — a disposition of it on a
+        buy, an acquisition of it on a sell, at the fill's fair value
+        (CRA / IRS barter-at-FMV, as _build_convert and Kraken's
+        crypto/crypto path book it).
+
+        The quote amount comes from Notes ("Bought 3 ETH for 0.1 BTC on
+        ETH-BTC"): fee included on a buy, net of it on a sell, so its
+        fair value is the row's Total either way. That puts the fee on
+        exactly one leg — capitalised into the bought coin, netted from
+        the sold one. When the row is priced in the quote coin itself
+        (no fiat value on it), both legs ship price 0 in USD for
+        taxjson-fill-crypto, whose failure is a validation ERROR."""
+        notes = self._col(row, header_map, 'notes') or ''
+        ts = self._col(row, header_map, 'timestamp')
+        where = (f"Coinbase row {ts!r} {type_raw.strip()!r} "
+                 f"(notes {notes!r})")
+        m = _ADV_NOTES_RE.search(notes)
+        if not m:
+            raise ValueError(
+                f"{where}: a fill on a crypto-quoted pair disposes of "
+                f"(or acquires) {quote}, but Notes does not carry the "
+                f"'Bought|Sold X BASE for Y {quote} on BASE-{quote}' "
+                f"text needed to book that leg — refusing rather than "
+                f"drop it. Enter the {quote} leg via a .tt file.")
+        verb, b_qty, b_sym, q_qty, q_sym, p_base, p_quote = m.groups()
+        asset = (self._col(row, header_map, 'asset') or '').strip().upper()
+        b_qty = strict_money(b_qty, 'Notes quantity', where)
+        q_qty = strict_money(q_qty, 'Notes quantity', where)
+        if (b_sym.upper() != asset or p_base.upper() != asset
+                or q_sym.upper() != quote or p_quote.upper() != quote
+                or (verb.lower() == 'sold') != is_sell
+                or b_qty <= 0 or q_qty <= 0
+                or abs(b_qty - abs(tx['quantity']))
+                > 1e-9 * max(1.0, b_qty)):
+            raise ValueError(
+                f"{where}: Notes disagree with the row (asset {asset!r}, "
+                f"quantity {abs(tx['quantity']):g}, "
+                f"{'sell' if is_sell else 'buy'}) — refusing to guess "
+                f"which to book.")
+        date_str, time_str = tx['date'], tx['time']
+        quote_leg = {
+            'action': 'BUYSELL',
+            'date': date_str, 'time': time_str, 'date_settle': date_str,
+            'symbol': quote,
+            'quantity': self.signed_quantity(q_qty,
+                                             action_is_sell=not is_sell),
+            'currency': tx['currency'], 'price': 0.0,
+            'net_amount': 0.0, 'gross_amount': 0.0, 'fee': 0.0,
+            'account': self.DEFAULT_ACCOUNT,
+            'description': f"Advanced Trade {p_base.upper()}-{quote} "
+                           f"(counter leg): {notes}".strip(),
+        }
+        if cb_id:
+            quote_leg['id'] = f'{cb_id}-quote'
+        if tx['currency'] not in _FIAT:
+            # Priced in the quote coin (or another crypto): the row has
+            # no fiat value. Both legs go to taxjson-fill-crypto.
+            for leg in (tx, quote_leg):
+                leg.update(currency='USD', price=0.0, net_amount=0.0,
+                           gross_amount=0.0, fee=0.0)
+            tx['description'] = (f"Advanced Trade {p_base.upper()}-"
+                                 f"{quote} ({'sell' if is_sell else 'buy'}"
+                                 f" leg): {notes}").strip()
+            return [tx, quote_leg]
+        value = abs(tx['net_amount'])
+        if not value:
+            raise ValueError(
+                f"{where}: the row's Total is $0, so the {quote} leg has "
+                f"no fair value to book — refusing. Fill in the Total "
+                f"from the Coinbase statement.")
+        quote_leg.update(price=round(value / q_qty, 8), net_amount=value,
+                         gross_amount=value)
+        return [tx, quote_leg]
 
     # ------------------------------------------------------------ helpers
     def _num(self, row, header_map, key) -> float:

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Coinbase Advanced Trade on a crypto-quoted pair books both coins.**
+  A fill on `ETH-BTC` booked only the ETH; the BTC spent (or received)
+  was never disposed of (or acquired), so its gain went missing and a
+  phantom BTC position stayed in the book. The quote coin's leg is now
+  booked at the fill's stated value; Notes that don't say how much of it
+  moved stop the parse.
+- **Coinbase Buy/Sell with a blank Total.** It booked $0 cost or $0
+  proceeds with no warning. The Total is now rebuilt from Subtotal ± fee
+  (or quantity × price ± fee), with a note; a row with nothing to rebuild
+  it from stops the parse, naming the row.
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
   new shares' cost), flagging a taxable spin-off booked at $0 and showing
