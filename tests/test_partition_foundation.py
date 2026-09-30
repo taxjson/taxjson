@@ -872,9 +872,9 @@ class TestEnginePartition(unittest.TestCase):
         book = [tx("BUYSELL", "2025-01-02", "HHH.US", 100, 1000),
                 tx("BUYSELL", "2025-02-03", "HHH.US", -100, 800)]
         ira = [tx("BUYSELL", "2025-02-05", "HHH.US", 100, 800,
-                  account="55500002"),
+                  account="55500002"),  # pii-ok
                tx("BUYSELL", "2025-02-12", "HHH.US", -100, 820,
-                  account="55500002")]
+                  account="55500002")]  # pii-ok
         r = gains_both(book, sheltered=ira)
         perm = {c: round(sum(t.get("permanently_disallowed", 0.0) or 0.0
                              for t in r[c]["transactions"]), 2)
