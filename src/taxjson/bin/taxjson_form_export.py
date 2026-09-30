@@ -700,6 +700,12 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
     lines.append("  - FX gains on foreign cash (s.39(1.1), `taxjson "
                  "fx-cash`) are not in these rows; T4037 puts them on "
                  "line 15300.")
+    lines.append("  - Capital gains paid out by funds and trusts are not "
+                 "in these rows either: T3 box 21 goes on line 17600 and "
+                 "T5/T5013 box 18 on line 17400. Enter them from the "
+                 "slips; the books carry those distributions as "
+                 "dividends, so line 19700 is these rows plus the slip "
+                 "lines.")
     lines.append("  - Not tax advice; reconcile against your T5008 slips "
                  "before filing (see taxjson-reconcile-slips).")
     return "\n".join(lines)

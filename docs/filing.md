@@ -91,7 +91,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
       (15200/15301; 15199/15300 before 2025). Each line's totals equal
       the matching row of `taxjson sum`'s FOR THE RETURN block, and all
       lines together equal the wash-adjusted realized gain in
-      `reports/<account>_wash.sum`.
+      `reports/<account>_wash.sum`. They are not all of line 19700:
+      capital gains paid out by funds and trusts go on line 17600 (T3
+      box 21) and line 17400 (T5/T5013 box 18), entered from the slips —
+      the books carry those distributions as dividends.
 - [ ] `taxjson t1135` — required when the cost of foreign property
       exceeded CAD 100,000 at any time in the year.
 - [ ] `taxjson carryover` — net capital losses of other years (line

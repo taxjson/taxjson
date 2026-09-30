@@ -167,5 +167,92 @@ class TestDiffAndPush(_Sandbox):
         self.assertIn("IDENTITY", r.stderr)
 
 
+_REAL_U = "U" + "7654321"          # a "real" IB id shape (not exempt)
+_FIX_U = "U" + "1234567"           # the exempt synthetic IB id
+
+
+class TestMediumRoundGaps(_Sandbox):
+    """R1-347, S024-05, S024-06, S024-12, S022-05 (medium round)."""
+
+    def test_adhoc_name_scan_ignores_the_path_prefix(self):   # R1-347
+        first = _NAME.split()[0]
+        parent = self.tmp / _NAME / "work"
+        parent.mkdir(parents=True)
+        (parent / "clean.txt").write_text("nothing here\n")
+        for arg in ("clean.txt", str(parent / "clean.txt"), "."):
+            r = subprocess.run(["bash", str(self.repo / "scripts" / "check-pii.sh"), arg],
+                               cwd=parent, capture_output=True, text=True, env=self.env)
+            self.assertEqual(r.returncode, 0, arg + r.stdout)
+        # The file's own name still counts, and the output never shows it.
+        (parent / f"{_NAME}.txt").write_text("x\n")
+        r = subprocess.run(["bash", str(self.repo / "scripts" / "check-pii.sh"), "."],
+                           cwd=parent, capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("file NAME matches the private denylist", r.stdout)
+        self.assertNotIn(first, r.stdout)
+
+    def test_unscannable_text_fails_closed_whatever_the_extension(self):   # S024-05
+        f = self.repo / "export.tsv"
+        f.write_bytes(f"Account\t{_REAL_U}\n".encode("utf-16-le"))
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("NUL bytes", r.stdout)
+        f.unlink()
+        # A Latin-1 byte makes grep call the file binary: scan it anyway.
+        (self.repo / "run.log").write_bytes(b"caf\xe9 " + _REAL_U.encode() + b"\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("IB account id", r.stdout)
+
+    def test_diff_binary_guard_covers_every_non_binary_extension(self):   # S024-05
+        diff = "diff --git a/export.tsv b/export.tsv\nBinary files /dev/null and b/export.tsv differ\n"
+        self.assertEqual(self.scan("--diff", stdin=diff).returncode, 1)
+        diff = "diff --git a/doc.pdf b/doc.pdf\nBinary files /dev/null and b/doc.pdf differ\n"
+        self.assertEqual(self.scan("--diff", stdin=diff).returncode, 0)
+
+    def test_exemption_applies_per_match_not_per_line(self):   # S024-06
+        acct = "8765" + "4321"
+        for text in (f"moved shares from {_REAL_U} today (fixture {_FIX_U})",
+                     f"account no. {acct}, old fixture 9990" + "1234",
+                     "write to me" + "@corp.io or test@example.com"):
+            r = self.scan("--text", stdin=text + "\n")
+            self.assertEqual(r.returncode, 1, text)
+        self.assertEqual(self.scan("--text", stdin=f"fixture {_FIX_U}\n").returncode, 0)
+        (self.repo / f"{_FIX_U}_activity.csv").write_text(f"Account,{_REAL_U}\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("IB account id", r.stdout)
+
+    def test_configured_denylist_missing_or_unreadable_fails(self):   # S024-12
+        missing = self.tmp / "no-such-denylist"
+        env = dict(self.env, TAXJSON_PII_DENYLIST=str(missing))
+        r = subprocess.run(["bash", str(self.repo / "scripts" / "check-pii.sh")],
+                           cwd=self.repo, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn(missing.name, r.stdout)
+        if os.geteuid() != 0:
+            self.deny.chmod(0)
+            try:
+                r = self.scan()
+            finally:
+                self.deny.chmod(0o600)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("cannot be read", r.stdout)
+        # No variable and no default file: generic patterns only, still clean.
+        env = {k: v for k, v in self.env.items() if k != "TAXJSON_PII_DENYLIST"}
+        r = subprocess.run(["bash", str(self.repo / "scripts" / "check-pii.sh")],
+                           cwd=self.repo, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("no private denylist", r.stdout)
+
+    def test_sin_shape_with_valid_check_digit(self):   # S022-05 hardening
+        sin = "046" + " 454 " + "286"                   # CRA's published sample
+        r = self.scan("--text", stdin=f"SIN {sin}\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("social insurance number", r.stdout)
+        self.assertEqual(self.scan("--text", stdin=f"SIN {sin.replace(' ', '-')}\n").returncode, 1)
+        self.assertEqual(self.scan("--text", stdin="ref 123 456 789\n").returncode, 0)  # bad check digit
+
+
 if __name__ == "__main__":
     unittest.main()

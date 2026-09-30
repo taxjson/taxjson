@@ -18,9 +18,11 @@
 #      outside every repository, so the strings it guards against are
 #      never themselves committed. scripts/dev-setup.sh scaffolds it.
 #
-# Fails CLOSED: a scanner error (bad pattern, unreadable file, a text
-# file that contains NUL bytes — UTF-16 exports read as "binary" and
-# would otherwise be skipped) counts as a hit. File NAMES are scanned
+# Fails CLOSED: a scanner error (bad pattern, unreadable file, a
+# non-binary file of any extension that contains NUL bytes — UTF-16
+# exports read as "binary" and would otherwise be skipped — or a
+# denylist that was configured but is missing or unreadable) counts as
+# a hit. Only known binary types (BIN_EXT) are skipped. File NAMES are scanned
 # too (IB names downloads after the account id), including the new path
 # of a pure rename. Denylist matching is case-insensitive, and a run of
 # 4+ literal digits in a denylist pattern also matches with spaces or
@@ -34,7 +36,12 @@ PWD0="$PWD"
 cd "$(dirname "$0")/.."
 DENY="${TAXJSON_PII_DENYLIST:-$HOME/.config/taxjson/pii-denylist}"
 ALLOW_EMAILS='noreply@anthropic\.com|users\.noreply\.github\.com|@example\.(com|org|net)|ckscijdtest@gmail\.com'
-TEXT_EXT='csv|tt|txt|md|toml|json|py|sh|yml|yaml|html|css|cfg|ini|xml'
+# Real binaries: the only files the scan may skip. Everything else is
+# scanned as text (grep -a, so a stray Latin-1 byte cannot make grep call
+# the file "binary" and skip it), and a NUL byte in it — a UTF-16 export
+# whatever its extension (.tsv, .log, .ofx) — fails closed.
+BIN_EXT='pdf|png|jpe?g|gif|ico|webp|bmp|tiff?|svgz|xlsx|xlsm|xls|docx|doc|pptx|odt|ods|zip|gz|tgz|bz2|xz|7z|whl|woff2?|ttf|otf|eot|mp3|mp4|mov|pyc'
+is_bin() { printf '%s\n' "$1" | grep -qiE "\.($BIN_EXT)\$"; }
 
 mode=tree
 case "${1:-}" in
@@ -101,7 +108,8 @@ is_date8() {
 fail() { hits=$((hits + 1)); echo "!! $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/   /'; }
 # Masking never interprets the pattern (no delimiter/dialect issues): any
 # 5+ char token that could be an id, name or address becomes <masked>.
-mask() { sed -E 's/[A-Za-z0-9@._%+~-]*[0-9@][A-Za-z0-9@._%+~-]*/<masked>/g' | cut -c1-140; }
+# Non-ASCII bytes print as '?' (a Latin-1 hit line must not garble the report).
+mask() { LC_ALL=C sed -E 's/[^ -~]/?/g' | sed -E 's/[A-Za-z0-9@._%+~-]*[0-9@][A-Za-z0-9@._%+~-]*/<masked>/g' | cut -c1-140; }
 
 # ---- input -----------------------------------------------------------
 NAMES=""     # newline-separated file names (tree mode), for the name scan
@@ -124,41 +132,94 @@ if [ "$mode" = diff ]; then
   # A real binary (pdf, png) is fine; a TEXT-extension file that git
   # calls binary is a UTF-16 (or NUL-stuffed) export and must not slip
   # through unscanned.
-  b="$(printf '%s\n' "$RAW" | sed -nE 's#^Binary files .* and (b/)?(.*) differ$#\2#p' | grep -E "\.($TEXT_EXT)$" || true)"
-  [ -z "$b" ] || fail "text-extension file(s) git treats as binary (UTF-16?) — cannot be scanned; convert to UTF-8" "$(printf '%s\n' "$b" | mask)"
-  scan() { printf '%s\n' "$INPUT" | grep -nE $CI -e "$1" | sed -E 's/^([0-9]+):/added line \1: /'; }
+  b="$(printf '%s\n' "$RAW" | sed -nE 's#^Binary files .* and (b/)?(.*) differ$#\2#p' | grep -viE "\.($BIN_EXT)$" || true)"
+  [ -z "$b" ] || fail "non-binary file(s) git treats as binary (UTF-16?) — cannot be scanned; convert to UTF-8" "$(printf '%s\n' "$b" | mask)"
+  scan() { printf '%s\n' "$INPUT" | grep -anE $CI -e "$1" | sed -E 's/^([0-9]+):/added line \1: /'; }
 elif [ "$mode" = text ] || [ "$mode" = identity ]; then
   INPUT="$(tr -d '\0' < "$RAWF")"
-  scan() { printf '%s\n' "$INPUT" | grep -nE $CI -e "$1" | sed -E "s/^([0-9]+):/$mode line \\1: /"; }
+  scan() { printf '%s\n' "$INPUT" | grep -anE $CI -e "$1" | sed -E "s/^([0-9]+):/$mode line \\1: /"; }
 else
   if [ $# -gt 0 ]; then
+    # Ad hoc: LIST holds the absolute paths to read; NAMES holds each path
+    # relative to the directory that contains the argument, so the name
+    # scan sees what was asked about (a/b/file), never the $HOME prefix
+    # above it (a home directory named after its owner is not a leak).
     LIST=""
     for p in "$@"; do
       case "$p" in /*) ;; *) p="$PWD0/$p" ;; esac
       [ -e "$p" ] || { fail "path does not exist: $p"; continue; }
-      LIST="$LIST$(find "$p" -type f -print0 | tr '\0' '\n')
+      while [ "${#p}" -gt 1 ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+      case "$p" in */.) p="${p%/.}" ;; esac
+      base="${p%/*}/"
+      found="$(find "$p" -type f -print0 | tr '\0' '\n')"
+      LIST="$LIST$found
+"
+      NAMES="$NAMES$(printf '%s\n' "$found" | while IFS= read -r f; do [ -n "$f" ] && printf '%s\n' "${f#"$base"}"; done)
 "
     done
   else
     LIST="$(git ls-files -z --cached --others --exclude-standard | tr '\0' '\n')"
+    NAMES="$LIST"
   fi
-  NAMES="$LIST"
+  SCANLIST="$(printf '%s\n' "$LIST" | while IFS= read -r f; do [ -n "$f" ] && ! is_bin "$f" && printf '%s\n' "$f"; done)"
   scan() {   # NUL-delimited names so spaces/quotes cannot split or abort;
              # errors surface as "grep: …" lines (xargs' own status is
-             # 123 for a plain no-match, so it cannot be used)
-    printf '%s\n' "$LIST" | grep -v '^$' | tr '\n' '\0' \
-      | xargs -0 -r grep -HInE $CI -e "$1" --
+             # 123 for a plain no-match, so it cannot be used). -a: every
+             # non-binary file is read as text (the NUL guard below fails
+             # the ones that cannot be).
+    printf '%s\n' "$SCANLIST" | grep -v '^$' | tr '\n' '\0' \
+      | xargs -0 -r grep -HanE $CI -e "$1" --
   }
 fi
 
-report() {   # report LABEL PATTERN [EXCLUDE-REGEX]
+# Keep a hit line only while PATTERN still matches after every EXEMPT
+# token is removed from it: the exemption covers the synthetic token, not
+# a real id (or its file path) that happens to share the line.
+still_hit() {   # still_hit PATTERN EXEMPT-REGEX  (lines on stdin)
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$line" | sed -E "s#$2##g" | grep -aqE $CI -e "$1" && printf '%s\n' "$line"
+  done
+  return 0
+}
+
+# Luhn-valid 3-3-3 digit groups (a Social Insurance Number's shape).
+sin_filter() {
+  LC_ALL=C awk '
+  function luhn(d,   i, t, x) {
+    t = 0
+    for (i = 9; i >= 1; i--) {
+      x = substr(d, i, 1) + 0
+      if ((9 - i) % 2 == 1) { x *= 2; if (x > 9) x -= 9 }
+      t += x
+    }
+    return t % 10 == 0
+  }
+  {
+    s = $0; keep = 0
+    while (match(s, /[0-9][0-9][0-9][ -][0-9][0-9][0-9][ -][0-9][0-9][0-9]/)) {
+      pre = (RSTART > 1) ? substr(s, RSTART - 1, 1) : ""
+      post = substr(s, RSTART + RLENGTH, 1)
+      d = substr(s, RSTART, RLENGTH); gsub(/[ -]/, "", d)
+      if (pre !~ /[0-9]/ && post !~ /[0-9]/ && luhn(d)) { keep = 1; break }
+      s = substr(s, RSTART + 1)
+    }
+    if (keep) print
+  }'
+}
+
+report() {   # report LABEL PATTERN [EXEMPT-REGEX [FILTER]]
   local out
-  out="$(scan "$2" 2>&1 | grep -vE -e "$PII_OK")"
-  if printf '%s\n' "$out" | grep -q '^grep: '; then
-    fail "scanner error while checking: $1" "$(printf '%s\n' "$out" | grep '^grep: ' | head -3)"
-    out="$(printf '%s\n' "$out" | grep -v '^grep: ')"
+  # -a throughout: a hit line with a stray non-UTF-8 byte must stay a
+  # line, not collapse into grep's "binary file matches".
+  out="$(scan "$2" 2>&1 | grep -avE -e "$PII_OK")"
+  if printf '%s\n' "$out" | grep -aq '^grep: '; then
+    fail "scanner error while checking: $1" "$(printf '%s\n' "$out" | grep -a '^grep: ' | head -3)"
+    out="$(printf '%s\n' "$out" | grep -av '^grep: ')"
   fi
-  [ -n "${3:-}" ] && out="$(printf '%s\n' "$out" | grep -vE -e "$3")"
+  [ -n "${3:-}" ] && out="$(printf '%s\n' "$out" | still_hit "$2" "$3")"
+  [ -n "${4:-}" ] && out="$(printf '%s\n' "$out" | "$4")"
   [ -n "$out" ] || return 0
   # A denylist hit IS the private string (names have no digit for mask()
   # to catch): show where, never what.
@@ -168,15 +229,13 @@ report() {   # report LABEL PATTERN [EXCLUDE-REGEX]
   fail "$1" "$(printf '%s\n' "$out" | mask)"
 }
 
-# ---- NUL bytes in text-like files (UTF-16 exports read as binary) -----
+# ---- NUL bytes in any non-binary file (UTF-16 exports read as binary) --
 if [ "$mode" = tree ]; then
   while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    case "${f##*.}" in
-      csv|tt|txt|md|toml|json|py|sh|yml|yaml|html|css|cfg|ini|xml)
-        if LC_ALL=C tr -d '\0' < "$f" | cmp -s - "$f"; then :; else fail "text file contains NUL bytes (UTF-16? cannot be scanned): $f"; fi ;;
-    esac
-  done <<< "$NAMES"
+    [ -n "$f" ] && [ -f "$f" ] || continue
+    if LC_ALL=C tr -d '\0' < "$f" | cmp -s - "$f"; then :; else
+      fail "text file contains NUL bytes (UTF-16? cannot be scanned): $(printf '%s\n' "$f" | sed "s#^$HOME#~#")"; fi
+  done <<< "$SCANLIST"
 fi
 
 # ---- file names ------------------------------------------------------
@@ -206,11 +265,38 @@ report "IB account id (U + 7-8 digits)"                  '\bU[0-9]{7,8}\b'      
 report "8-digit number next to the word account"        '[Aa]ccount[^0-9]{0,20}[0-9]{8}'       '9990[0-9]{4,}|1234567[89]'
 report "home directory path"                            '/home/[a-z][a-z0-9_-]+|/Users/[A-Za-z][A-Za-z0-9_-]+' ''
 report "e-mail address not on the allowlist"            '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}' "$ALLOW_EMAILS"
+report "social insurance number shape (3-3-3, valid check digit)" '\b[0-9]{3}[ -][0-9]{3}[ -][0-9]{3}\b' '' sin_filter
 report "credential-looking string"                      'ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}' ''
 fi
 
+# Show where a denylisted name is, never what: every path component the
+# pattern matches is hidden (and the whole path when no single one does).
+hide_parts() {   # hide_parts PATTERN  (paths on stdin)
+  local f out c hid
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out=""; hid=0
+    IFS=/ read -ra parts <<< "$f"
+    for c in "${parts[@]}"; do
+      if [ -n "$c" ] && printf '%s\n' "$c" | grep -qiE -e "$1"; then c="<name hidden>"; hid=1; fi
+      out="$out/$c"
+    done
+    [ "$hid" -eq 1 ] && printf '%s\n' "${out#/}" || printf '%s\n' "<path hidden>"
+  done
+}
+
 # ---- private denylist -------------------------------------------------
-if [ -r "$DENY" ]; then
+# A denylist that was asked for (TAXJSON_PII_DENYLIST) but is missing, or
+# one that exists but cannot be read, fails the scan: passing on the
+# generic patterns alone would drop the guard without a word.
+DENYSHOW="$(printf '%s' "$DENY" | sed "s#^$HOME#~#")"
+if [ -e "$DENY" ] && [ ! -r "$DENY" ]; then
+  fail "private denylist $DENYSHOW exists but cannot be read — fix its permissions"
+  denynote="denylist unreadable"
+elif [ ! -e "$DENY" ] && [ -n "${TAXJSON_PII_DENYLIST:-}" ]; then
+  fail "private denylist $DENYSHOW (TAXJSON_PII_DENYLIST) does not exist"
+  denynote="denylist missing"
+elif [ -r "$DENY" ]; then
   while IFS= read -r pat || [ -n "$pat" ]; do
     pat="${pat%$'\r'}"
     case "$pat" in ''|'#'*) continue ;; esac
@@ -225,14 +311,14 @@ if [ -r "$DENY" ]; then
     else
       report "private denylist match" "$loose" ''
       if [ -n "$NAMES" ] && printf '%s\n' "$NAMES" | grep -qiE -e "$loose"; then
-        fail "file NAME matches the private denylist" "$(printf '%s\n' "$NAMES" | grep -iE -e "$loose" | sed -E 's#[^/]*$#<file name hidden>#' | sort -u)"
+        fail "file NAME matches the private denylist" "$(printf '%s\n' "$NAMES" | grep -iE -e "$loose" | hide_parts "$loose" | sort -u)"
       fi
     fi
     CI=""
   done < "$DENY"
-  denynote="denylist: $(printf '%s' "$DENY" | sed "s#^$HOME#~#")"
+  denynote="denylist: $DENYSHOW"
 else
-  denynote="no private denylist at ~/.config/taxjson/pii-denylist — generic patterns only (scripts/dev-setup.sh scaffolds one)"
+  denynote="no private denylist at $DENYSHOW — generic patterns only (scripts/dev-setup.sh scaffolds one)"
 fi
 
 if [ "$hits" -gt 0 ]; then

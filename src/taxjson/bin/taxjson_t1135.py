@@ -548,6 +548,63 @@ def join_income_gains(gains_paths: List[Path], year: int,
     return out
 
 
+def wash_adjustments(gains_paths: List[Path],
+                     transactions: List[Dict[str, Any]],
+                     tax_date: str = "settle") -> List[Dict[str, Any]]:
+    """The engine's s.53(1)(f) additions as ADJUST rows for the cost walk.
+
+    A superficial loss the engine denies (s.54) is added to the ACB of
+    the substituted property; the T1135 cost amount of capital property
+    is its ACB (s.248(1)), so the walk must carry the same addition
+    (audit G7-0: the walk replayed base rows only and understated every
+    replacement's cost by the denied loss). Each gains file's
+    `wash_sales` entry becomes an ADJUST on the replacement lot's symbol
+    — only when the lot is one of the walked (taxable) rows; a
+    replacement bought in a registered or affiliated account is not the
+    filer's foreign property. The row is stamped at the LATER of the
+    losing sale and the replacement purchase (a replacement bought
+    before the losing sale must not have part of the addition averaged
+    out by that sale); an ADJUST sorts after the trades at its stamp.
+    The gains files are year-scoped: a loss denied in an EARLIER year is
+    not listed (see `_deferred_wash`)."""
+    by_id = {str(t.get("id")): t for t in transactions if t.get("id") not in (None, "")}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for p in gains_paths:
+        try:
+            data = load_json(p)
+        except (OSError, json.JSONDecodeError):
+            continue                    # join_income_gains warns
+        if not isinstance(data, dict):
+            continue
+        for w in data.get("wash_sales") or []:
+            lot = by_id.get(str(w.get("trigger_lot_id") or ""))
+            if lot is None:
+                continue
+            parts = str(w.get("adjust_cmd") or "").split()
+            sym = parts[3] if len(parts) >= 6 else (lot.get("symbol") or "")
+            try:
+                amt = float(w.get("amount", parts[5] if len(parts) >= 6 else 0.0))
+            except (TypeError, ValueError):
+                continue
+            key = (str(w.get("loss_tx_id")), str(w.get("trigger_lot_id")), sym, round(amt, 6))
+            if not sym or abs(amt) < 1e-9 or key in seen:
+                continue
+            seen.add(key)
+            at = lot
+            loss = by_id.get(str(w.get("loss_tx_id") or ""))
+            if loss is not None and _sort_key(loss, tax_date) > _sort_key(lot, tax_date):
+                at = loss
+            out.append({"id": f"wash:{w.get('loss_tx_id')}:{w.get('trigger_lot_id')}",
+                        "action": "ADJUST", "symbol": sym,
+                        "date": at.get("date") or "",
+                        "date_settle": at.get("date_settle") or at.get("date") or "",
+                        "time": at.get("time") or "00:00:00",
+                        "quantity": 0.0, "net_amount": amt,
+                        "account": lot.get("account") or ""})
+    return out
+
+
 def _deferred_wash(gains_paths: List[Path],
                    overrides: Dict[str, Optional[str]]) -> Dict[str, float]:
     """{foreign symbol: denied superficial loss still in its ACB at year
@@ -583,6 +640,10 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     txs = load_transactions(base_paths, phantoms)
     user_keys = set(overrides)
     overrides = dict(overrides)         # the walk adds rename targets
+    # The year's denied superficial losses join the walk as ADJUST rows
+    # (G7-0); the sort puts each after the trades at its stamp.
+    wash = wash_adjustments(gains_paths, txs, tax_date)
+    txs = txs + wash
     walk = walk_costs(txs, year, overrides, tax_date)
     inc = join_income_gains(gains_paths, year, overrides, tax_date)
     # An override that matches nothing (a ticker change, a ticker.map
@@ -595,6 +656,14 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
               f"(renamed, consolidated by ticker.map, or a typo?) — the "
               f"override is not applied.", file=sys.stderr)
     deferred = _deferred_wash(gains_paths, overrides)
+    # What the walk already carries is not "excluded": only a deferral
+    # beyond the year's own additions (a loss denied in an earlier year)
+    # is left for the note.
+    added: Dict[str, float] = {}
+    for w in wash:
+        added[w["symbol"]] = added.get(w["symbol"], 0.0) + float(w["net_amount"])
+    deferred = {k: round(v - added.get(k, 0.0), 2) for k, v in deferred.items()
+                if v - added.get(k, 0.0) > 0.005}
     futures = set(walk.get("futures_symbols") or ())
 
     rows = []
@@ -668,9 +737,10 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "futures_symbols": sorted(futures),
         "phantoms_applied": phantoms is not None,
         "unused_overrides": unused_overrides,
-        # Superficial losses denied and still in open positions' ACB
-        # (s.53(1)(f)): this walk does not add them (DEFERRED — see
-        # KNOWN_ISSUES), so the cost columns are low by up to this.
+        # Superficial losses still in open positions' ACB (s.53(1)(f))
+        # beyond those the year's gains files list (added to the walk):
+        # a loss denied in an earlier year — the cost columns are low
+        # by up to this (KNOWN_ISSUES).
         "deferred_wash_not_in_cost": deferred,
         "tax_date_basis": tax_date,
     }

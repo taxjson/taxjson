@@ -636,8 +636,29 @@ def d_missing_history(ctx: Ctx) -> Result:
     return Result("missing-history", "done", "nothing affects the year")
 
 
+def _zero_value_elections(ctx: Ctx) -> int:
+    """Taxable spin-offs/mergers the last run booked at $0 (the "0 to
+    defer" FMV): `run` names each in <acct>_corp_spinoff_value.diag."""
+    n = 0
+    for p in ctx.cache.glob("*_corp_spinoff_value.diag"):
+        try:
+            n += sum(1 for ln in p.read_text(encoding="utf-8").splitlines()
+                     if ln.startswith("warning:"))
+        except OSError:
+            continue
+    return n
+
+
 def d_elections(ctx: Ctx) -> Result:
     code, out, err = ctx.sub("elect", "--pending")
+    # A deferred FMV is an unresolved election too: booked at $0 it
+    # carries no income and a $0 cost for the new shares (R1-11).
+    zero = _zero_value_elections(ctx)
+    if zero:
+        return Result("elections", "attention",
+                      f"{zero} spin-off/merger(s) booked at $0 — set "
+                      f"fmv_per_share with `taxjson elect` (see the .sum "
+                      f"DIAGNOSTICS)")
     if "No pending elections" in out or (code == 0 and not out.strip()):
         return Result("elections", "done", "none pending")
     if code != 0 and not out:
