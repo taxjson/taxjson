@@ -738,7 +738,8 @@ def d_option_boundary(ctx: Ctx) -> Result:
             parts.append(f"{amend} contract(s) require a T1-ADJ")
         if att:
             parts.append(f"{att} need attention (a locked year on transition close "
-                         f"timing, or an expired contract with no expiry row)")
+                         f"timing, a premium no filed return reports, or an "
+                         f"expired contract with no expiry row)")
         return Result("option-boundary", "attention",
                       "; ".join(parts) + " — `taxjson option-boundary`")
     if doc.get("missing_books"):
