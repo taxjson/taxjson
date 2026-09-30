@@ -450,6 +450,65 @@ def join_income_gains(gains_paths: List[Path], year: int,
     return out
 
 
+# ---------------------------------------------------------------- wash
+
+def wash_adjustments(gains_paths: List[Path],
+                     transactions: List[Dict[str, Any]]
+                     ) -> List[Dict[str, Any]]:
+    """The engine's s.53(1)(f) additions as ADJUST rows for the cost walk.
+
+    A superficial loss the engine denies (s.54) is added to the ACB of
+    the substituted property; the T1135 cost amount of capital property
+    is its ACB (s.248(1)), so the walk must carry the same addition
+    (audit G7-0: the walk replayed base rows only and understated every
+    replacement's cost by the denied loss). Each gains file's
+    `wash_sales` entry becomes an ADJUST on the replacement lot's symbol
+    at that lot's own date/time — only when the lot is one of the walked
+    (taxable) rows; a replacement bought in a registered or affiliated
+    account is not the filer's foreign property. The row is placed at
+    the LATER of the loss sale and the replacement purchase: a
+    replacement bought before the losing sale must not have part of the
+    addition averaged out by that sale. The gains files are
+    year-scoped, so a loss denied in an EARLIER year still rides on the
+    walk's replay only as far as the base rows carry it."""
+    by_id = {str(t.get("id")): t for t in transactions if t.get("id") not in (None, "")}
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for p in gains_paths:
+        try:
+            data = load_json(p)
+        except (OSError, json.JSONDecodeError):
+            continue                    # join_income_gains warns
+        if not isinstance(data, dict):
+            continue
+        for w in data.get("wash_sales") or []:
+            lot = by_id.get(str(w.get("trigger_lot_id") or ""))
+            if lot is None:
+                continue
+            parts = str(w.get("adjust_cmd") or "").split()
+            sym = parts[3] if len(parts) >= 6 else (lot.get("symbol") or "")
+            try:
+                amt = float(w.get("amount", parts[5] if len(parts) >= 6 else 0.0))
+            except (TypeError, ValueError):
+                continue
+            key = (str(w.get("loss_tx_id")), str(w.get("trigger_lot_id")), sym, round(amt, 6))
+            if not sym or abs(amt) < 1e-9 or key in seen:
+                continue
+            seen.add(key)
+            at = lot
+            loss = by_id.get(str(w.get("loss_tx_id") or ""))
+            if loss is not None and _sort_key(loss) > _sort_key(lot):
+                at = loss
+            out.append({"id": f"wash:{w.get('loss_tx_id')}:{w.get('trigger_lot_id')}",
+                        "action": "ADJUST", "symbol": sym,
+                        "date": at.get("date") or "",
+                        "date_settle": at.get("date_settle") or at.get("date") or "",
+                        "time": at.get("time") or "00:00:00",
+                        "quantity": 0.0, "net_amount": amt,
+                        "account": lot.get("account") or ""})
+    return out
+
+
 # ---------------------------------------------------------------- report
 
 def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
@@ -459,6 +518,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  detailed_threshold: float = DETAILED_THRESHOLD,
                  phantoms: Optional[Path] = None) -> Dict[str, Any]:
     txs = load_transactions(base_paths, phantoms)
+    # Appended after the base rows: the walk's sort is stable, so each
+    # addition lands right after its replacement purchase.
+    txs = txs + wash_adjustments(gains_paths, txs)
     walk = walk_costs(txs, year, overrides)
     inc = join_income_gains(gains_paths, year, overrides)
     futures = set(walk.get("futures_symbols") or ())

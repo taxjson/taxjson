@@ -1360,6 +1360,11 @@
   configured `TAXJSON_PII_DENYLIST` that is missing, or a denylist that
   cannot be read, fails instead of passing on the generic patterns; and
   a spaced or dashed 3-3-3 number with a valid SIN check digit is a hit.
+- **T1135 cost includes denied superficial losses.** The cost walk now
+  adds the amount the engine denies under s.54 to the replacement
+  property's cost (s.53(1)(f)), as the ACB does, so the year-end and
+  maximum cost columns and the $100,000 threshold test no longer
+  understate after a superficial loss in the project year.
 
 ## v0.16.0 (2026-09-25)
 
