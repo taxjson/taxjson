@@ -1350,6 +1350,16 @@
   and at its own premium, and a buy-back of a grant lot is a loss of
   exactly the amount paid even when other lots were written at other
   premiums — both move amounts between years, never the total.
+- **check-pii closes five gaps.** Ad-hoc mode matches file names
+  relative to the scanned argument (a home directory named after its
+  owner no longer fails every scan) and hides each matching path
+  component; every file that is not a known binary type is scanned as
+  text and fails closed on NUL bytes whatever its extension (a UTF-16
+  `.tsv` or `.log`); an exempt synthetic token no longer hides a real
+  id, account number or e-mail on the same line or in the file path; a
+  configured `TAXJSON_PII_DENYLIST` that is missing, or a denylist that
+  cannot be read, fails instead of passing on the generic patterns; and
+  a spaced or dashed 3-3-3 number with a valid SIN check digit is a hit.
 
 ## v0.16.0 (2026-09-25)
 
