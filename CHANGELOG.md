@@ -89,6 +89,22 @@
   year, or T1-ADJ to add it), and an assignment says no amendment is
   needed instead of "remove the premium … filed with it".
 
+- **carryover says what its numbers leave out.** The ledger now notes
+  that slip capital gains (lines 17400/17600; US Schedule D line 13) and
+  the line-15300 FX gain on foreign cash are not in NET GAIN(LOSS), flags
+  rows before the project year as rebuilt from this project's books and
+  possibly partial, and `--claimed` / README state the units to record
+  (Canada: the 100% loss, line 25300 x2 at 50%; US: Schedule D line 21).
+- **claimed_losses.txt takes `1,234.56` and `$1,234.56`.** An amount
+  written the way the return or notice of assessment prints it was
+  dropped with a warning, so the carryforward kept the claimed loss. A
+  malformed grouping is still refused.
+- **carryover: an old claim no longer eats a later loss.** A
+  `claimed_losses.txt` amount recorded for a year the books show no loss
+  for was held and taken by the next loss in ANY later year, lowering
+  its carryforward. A loss carries back only 3 years (ITA 111(1)(b)), so
+  a claim left unmet past that window now stays unmatched, with a
+  warning, and the carryforward is untouched.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

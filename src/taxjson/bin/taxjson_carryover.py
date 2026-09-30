@@ -26,7 +26,9 @@ apply the 50% inclusion rate on Schedule 3 / T1A, not here.
 The ledger computes what the TRANSACTION HISTORY supports. What you
 actually claimed on filed returns may differ — record reality in a
 `--claimed FILE` (lines of `YEAR AMOUNT`, `#` comments): each line is the
-loss amount actually applied against that YEAR's return. Claims fold into
+loss amount actually applied against that YEAR's return — Canada: the
+100% capital loss (line 25300 divided by the inclusion rate, x2 at 50%);
+US: the Schedule D line 21 deduction against ordinary income. Claims fold into
 the running balance (a claim recorded before the loss exists — e.g. a
 carryback entered under the target year — is held pending and consumed
 when the loss arrives).
@@ -42,6 +44,7 @@ Or through the project wrapper: `taxjson carryover`.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -57,6 +60,20 @@ _INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE')
 US_ORDINARY_OFFSET = 3000.0
 
 
+_AMOUNT_RE = re.compile(r"\$?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?|\$?\.\d+")
+
+
+def _parse_amount(text: str) -> float:
+    """A claimed amount as the T1 / notice of assessment prints it:
+    plain `1234.56`, grouped `1,234.56`, optionally with a leading `$`
+    (S027-13: those forms were dropped with a warning, overstating the
+    carryforward). A malformed grouping (`12,34`) is refused — never
+    guessed."""
+    if _AMOUNT_RE.fullmatch(text) is None:
+        return float(text)          # 'nan', '-5', '1e3' -> float()'s rules
+    return float(text.lstrip("$").replace(",", ""))
+
+
 def load_claimed(path: Optional[Path]) -> Dict[int, float]:
     claimed: Dict[int, float] = {}
     if path is None:
@@ -67,7 +84,7 @@ def load_claimed(path: Optional[Path]) -> Dict[int, float]:
             continue
         parts = stripped.split()
         try:
-            year, amount = int(parts[0]), float(parts[1])
+            year, amount = int(parts[0]), _parse_amount(parts[1])
             import math
             # not-isfinite: 'nan' passed the `< 0` check and poisoned
             # the ledger — APPLIED ballooned to the whole balance with
@@ -131,6 +148,8 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     # capacity intact, and the ledger re-suggested a T1A carryback the
     # user had already filed.
     pending_by_year: Dict[int, float] = {}
+    # Claims whose carryback window closed before any loss met them.
+    expired: Dict[int, float] = {}
     # Remaining carryback capacity per gain year (advisory; reduced by
     # claims against that year and by earlier loss-years' suggestions so
     # two loss years never point at the same dollar of gain).
@@ -142,6 +161,14 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             balance += loss
         if claimed.get(y):
             pending_by_year[y] = pending_by_year.get(y, 0.0) + claimed[y]
+        # A claim recorded against year C can only be met by a loss
+        # of a year up to C+3: a net capital loss carries BACK at most
+        # three years (ITA s.111(1)(b); form T1A). Past that window a
+        # still-pending claim can never be matched — a later loss must
+        # not silently absorb it (S001-03: a pre-book 2021 claim ate
+        # 3,000 of a 2025 loss's carryforward).
+        for _cy in [c for c in pending_by_year if y > c + 3]:
+            expired[_cy] = expired.get(_cy, 0.0) + pending_by_year.pop(_cy)
         # Fold claims oldest-recorded-first: each consumed dollar
         # shelters the gains of ITS recorded year, whose carryback
         # capacity it therefore consumes.
@@ -187,9 +214,13 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
         })
     out = {'country': 'canada', 'rows': rows,
            'final_carryforward': round(balance, 2)}
-    _unmatched = sum(pending_by_year.values())
+    _unmatched = sum(pending_by_year.values()) + sum(expired.values())
     if _unmatched > 0.005:
         out['unmatched_claims'] = round(_unmatched, 2)
+    _exp = {str(k): round(v, 2) for k, v in sorted(expired.items())
+            if v > 0.005}
+    if _exp:
+        out['expired_claims'] = _exp
     return out
 
 
@@ -272,6 +303,23 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
 
 _money = fmt_money                  # shared report-layer formatter
 
+# S028-03: what NET GAIN(LOSS) leaves out. A net capital loss nets
+# every taxable capital gain of the year (ITA 111(8) "net capital
+# loss"), including slip gains and the s.39(1.1) FX gain.
+SCOPE_NOTE = {
+    'canada': ("NET GAIN(LOSS) counts the dispositions in these books "
+               "only. Capital gains reported on slips (T3 box 21, T5 "
+               "box 18 -> lines 17400/17600) and the ITA s.39(1.1) FX "
+               "gain or loss on foreign cash (line 15300, `taxjson "
+               "fx-cash`) are NOT included; in a loss year they change "
+               "the net capital loss, so the carryforward and the "
+               "carryback caps shown are off by that amount."),
+    'usa': ("Net ST/LT count the dispositions in these books only. "
+            "Capital gain distributions (1099-DIV box 2a -> Schedule D "
+            "line 13) are NOT included; in a loss year they change the "
+            "carryover shown."),
+}
+
 
 def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
            claimed_used: bool) -> str:
@@ -327,6 +375,13 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
             lines.append(f"  warning: {_money(ledger['unmatched_claims'])} "
                          f"of --claimed amounts exceed the losses this "
                          f"history supports — check the claimed file.")
+        for _y, _amt in (ledger.get('expired_claims') or {}).items():
+            lines.append(f"  warning: {_money(_amt)} claimed for {_y} "
+                         f"was never met by a loss of {_y} or earlier "
+                         f"in these books, and a later loss can reach "
+                         f"back only 3 years (ITA 111(1)(b)) — it came "
+                         f"from losses before this history, so it does "
+                         f"not reduce the carryforward shown.")
     else:
         lines.append(f"  Carryover after {rows[-1]['year']}: "
                      f"ST {_money(ledger['final_st_carryover'])} + "
@@ -352,6 +407,20 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
         lines.append("  - The $3,000 ordinary-income offset is ASSUMED used "
                      "whenever available; override a year with a --claimed "
                      "line (0 is valid).")
+    if ledger.get('scope_note'):
+        lines.append("  - " + ledger['scope_note'])
+    prior = [r['year'] for r in rows if r.get('prior_year')]
+    if prior:
+        py = ledger.get('project_year')
+        lines.append(f"  - warning: the rows before {py} "
+                     f"({', '.join(str(y) for y in prior)}) are rebuilt "
+                     f"from this project's books — opening *_start.tt "
+                     f"lots plus whatever prior-year exports are in "
+                     f"inputs/ — and may be partial (a missing export "
+                     f"shows a smaller gain, or a loss that never "
+                     f"happened). Verify each against the filed return "
+                     f"(Schedule 3 / Schedule D) before trusting a "
+                     f"carryforward or carryback from it.")
     if first_tx_year is not None and rows and rows[0]['year'] <= first_tx_year:
         lines.append(f"  - warning: this history starts in {first_tx_year} — "
                      f"if you traded before then, earlier gains/losses (and "
@@ -390,7 +459,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="phantoms.json for truncated-history openings")
     parser.add_argument("--claimed", type=Path, default=None,
                         help="`YEAR AMOUNT` lines: losses actually applied "
-                             "on filed returns")
+                             "on filed returns. Canada: the 100%% capital "
+                             "loss applied that year — the line 25300 "
+                             "amount divided by the inclusion rate (x2 at "
+                             "50%%). US: the Schedule D line 21 deduction "
+                             "against ordinary income that year (not the "
+                             "line 6/14 carryover coming in).")
+    parser.add_argument("--project-year", type=int, default=None,
+                        metavar="YEAR",
+                        help="The project's tax year: earlier rows are "
+                             "flagged as rebuilt from this project's "
+                             "books and possibly partial.")
     parser.add_argument("--base-currency", default="CAD",
                         help="Label for amounts (default: CAD)")
     parser.add_argument("--json", action="store_true",
@@ -491,6 +570,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if t.date[:4].isdigit()]
     first_tx_year = min(tx_years) if tx_years else None
     ledger['first_transaction_year'] = first_tx_year
+    ledger['scope_note'] = SCOPE_NOTE[country]
+    if args.project_year is not None:
+        # R1-279: a year before the project's is rebuilt from THIS
+        # project's books — opening *_start.tt lots plus whatever
+        # prior-year exports sit in inputs/ — and can be partial even
+        # when the history starts earlier (a start lot dated 2023 hid
+        # a 2024 row that held 52k of a filed 731k).
+        ledger['project_year'] = args.project_year
+        for r in ledger['rows']:
+            r['prior_year'] = r['year'] < args.project_year
     if results.get('manual_reporting_required'):
         n = len(results['manual_reporting_required'])
         print(f"warning: {n} tainted disposition(s) with phantom cost basis "

@@ -8205,6 +8205,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
         "--country", _normalize_country(str(settings.get("country", "canada"))),
         "--base-currency", str(settings.get("base_currency", "CAD")),
     ] + option_timing_flags(settings)       # same timing as the returns
+    if settings.get("year") is not None:
+        # Rows before the project year are flagged as possibly partial.
+        argv += ["--project-year", str(int(settings["year"]))]
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
