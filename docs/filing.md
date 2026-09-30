@@ -73,9 +73,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
 
 ## 3. Reconcile to what the CRA already has
 
-- [ ] **T5008 slips** from every broker: `taxjson reconcile-slips` exits
-      clean. The CRA matches Schedule 3 proceeds against these; this is
-      the step that prevents a review letter.
+- [ ] **T5008 slips** from every broker, as CSVs in `inputs/slips/`:
+      `taxjson reconcile-slips inputs/slips/*.csv` (all brokers' slips
+      together) exits clean. The CRA matches Schedule 3 proceeds against
+      these; this is the step that prevents a review letter.
 - [ ] **T5 / T3 / NR4 slips** against `taxjson divs-sum` and
       `taxjson roc-sum`. Trust units and split-share corps report on a
       T3, often weeks after the T5s.
@@ -94,12 +95,16 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson t1135` — required when the cost of foreign property
       exceeded CAD 100,000 at any time in the year.
 - [ ] `taxjson carryover` — net capital losses of other years (line
-      25300); record what is actually claimed in `claimed_losses.txt`.
+      25300); record what is actually claimed in `claimed_losses.txt`
+      as the 100% loss applied (the line 25300 amount divided by the
+      inclusion rate — twice it at 50%).
 - [ ] `taxjson fx-cash` — gains on foreign-currency cash above the $200
       de minimis (ITA s.39(1.1)).
-- [ ] `taxjson fees` — carrying charges for line 22100 (margin interest,
-      data subscriptions). The tool reports them; it does not deduct
-      them from any gain.
+- [ ] Carrying charges for line 22100 — the margin interest you paid,
+      from the broker statements (`taxjson events` lists the INTEREST
+      rows; no taxjson command totals them). Trade commissions are not
+      carrying charges: they are already in the ACB and proceeds, so do
+      not take the `taxjson fees` total to line 22100 (CRA, line 22100).
 - [ ] `taxjson estimate` with other income, then `taxjson instalments` —
       a sanity check on the tax and on what is still owed against what
       was paid.
