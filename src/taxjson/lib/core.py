@@ -3459,8 +3459,9 @@ class CanadaTaxRules(TaxRules):
             # field presence without per-engine branching. Canada-specific
             # fields use None / 0.0 / [] for "concept doesn't apply here":
             #   - term: Canadian tax has no ST/LT distinction.
-            #   - permanently_disallowed: ITA 54 is always deferred via ACB
-            #     bump, never permanent.
+            #   - permanently_disallowed: the share of the denial whose
+            #     replacement sits in a sheltered account (lost for good,
+            #     CA-SL-09); the rest is deferred via the ACB bump.
             #   - wash_replacements: US-specific shape (basis_bump per rep);
             #     Canada uses wash_trigger + wash_window instead.
             tx_id_full = g['id' if 'id' in g else 'tx_id']
@@ -3558,7 +3559,8 @@ class CanadaTaxRules(TaxRules):
         for tx in transactions:
             # PIL goes to a dedicated entry below so sum-gains can show it
             # in its own column. Keep it out of the eligible-dividend total
-            # so T5/Schedule B reporting stays accurate.
+            # so the T5 / T3 dividend lines stay accurate (a payment in
+            # lieu is other income, CA-INC-03).
             if tx.action == 'DIVIDEND_IN_LIEU' or tx.type == 'dividend_in_lieu':
                 pil_amount = tx.gross_amount if tx.gross_amount else tx.net_amount
                 pil_entry = {
