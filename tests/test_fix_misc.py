@@ -381,6 +381,13 @@ class TestEstimateInputsEndToEnd(unittest.TestCase):
             r = cli("estimate", "--json", "--other-income", "150000")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])
             doc = json.loads(r.stdout)
+            # R1-44: the Schedule 3 outputs say slip capital gains
+            # (lines 17400/17600) are not in their rows.
+            sum_txt = cli("sum").stdout
+            fe_txt = cli("form-export").stdout
+        for txt in (sum_txt, fe_txt):
+            self.assertIn("17600", txt)
+            self.assertIn("17400", txt)
         self.assertEqual(doc["totals"]["stock"], 500.0)
         self.assertEqual(doc["totals"]["option"], 220.0)
         self.assertEqual(doc["totals"]["pil"], 70.0)

@@ -1751,6 +1751,10 @@
   settlement date, like the gains year and `t1135`: a sale traded Dec 31
   that settles in January is still held at Dec 31. The banner names the
   basis; `taxjson-gains --as-of` follows `--tax-date`.
+- **Schedule 3 outputs name the slip capital-gain lines.** `sum`'s FOR
+  THE RETURN block, `form-export` and docs/filing.md now say that
+  capital gains on T3 (box 21, line 17600) and T5/T5013 (box 18, line
+  17400) slips are not in their rows and are entered from the slips.
 
 ## v0.16.0 (2026-09-25)
 

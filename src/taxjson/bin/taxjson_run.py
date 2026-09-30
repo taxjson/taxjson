@@ -6507,6 +6507,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 print("FX on foreign cash (s.39(1.1)) is not in the rows "
                       "above — T4037 puts it on line 15300; see `taxjson "
                       "fx-cash`.")
+            # Slip capital gains are part of line 19700 too (R1-44).
+            print("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
+                  "slips are not in the rows above — Schedule 3 lines "
+                  "17600 and 17400, entered from the slips (the books "
+                  "carry those distributions as dividends).")
 
     if want_estimate:
         _print_tax_estimate(
