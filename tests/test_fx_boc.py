@@ -102,6 +102,8 @@ class TestBankOfCanadaPrimary(_CacheCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(T, "fetch_boc", self.boc), \
                 mock.patch.object(T, "fetch_yahoo", self.yahoo), \
+                mock.patch.object(T, "fetch_boc_noon",
+                                  lambda *_a: {}), \
                 mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": ""}), \
                 redirect_stdout(out), redirect_stderr(err):
             rc = T.main(["USD", "CAD", "--start", "2016-12-28",
@@ -219,6 +221,8 @@ class TestOffline(_CacheCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(T, "fetch_boc", self.boc), \
                 mock.patch.object(T, "fetch_yahoo", self.yahoo), \
+                mock.patch.object(T, "fetch_boc_noon",
+                                  lambda *_a: {}), \
                 mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "1"}), \
                 redirect_stdout(out), redirect_stderr(err):
             rc = T.main(["USD", "CAD"])

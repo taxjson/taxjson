@@ -1093,3 +1093,75 @@ class TestPriceChain(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 pc.fetch_option_prices(['XYZ261120C00050000.US'],
                                        cache_path=cache)
+
+
+class TestFxSources(unittest.TestCase):
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from taxjson.bin import to_base_curr as T
+        self.T = T
+        td = tempfile.mkdtemp()
+        p = mock.patch.object(T, 'CACHE_FILE', str(Path(td) / 'fx.json'))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _weekdays(self, a, b):
+        from datetime import date
+        out, d = [], a
+        while d <= b:
+            if date.fromisoformat(d).weekday() < 5:
+                out.append(d)
+            d = self.T._shift(d, 1)
+        return out
+
+    def test_noon_rate_before_march_2017(self):
+        # R1-146: BoC noon for 2007-05-01..2017-02-28, Yahoo before.
+        T = self.T
+        noon = lambda c, a, b: {d: '1.2914' for d in self._weekdays(a, b)}
+        boc = lambda c, a, b: {d: '1.3500' for d in self._weekdays(a, b)}
+        yahoo = lambda t, a, b: {d: 1.2 for d in self._weekdays(a, b)}
+        rows, errors, _ = T.build_rates(
+            'USD', 'CAD', '2006-01-02', '2017-03-10', today='2026-09-28',
+            fetch_boc_fn=boc, fetch_yahoo_fn=yahoo, fetch_noon_fn=noon)
+        src = {d: (v, s) for d, v, s in rows}
+        self.assertEqual(src['2016-06-15'], ('1.2914', 'boc-noon'))
+        self.assertEqual(src['2017-02-15'], ('1.2914', 'boc-noon'))
+        self.assertEqual(src['2017-03-02'], ('1.3500', 'boc'))
+        self.assertEqual(src['2006-06-15'][1], 'yahoo')
+        self.assertEqual(errors, [])
+
+    def test_failed_yahoo_download_is_asked_again(self):
+        # S055-02: an empty answer with no later data is a failure.
+        T = self.T
+        cache = {}
+        errs = T.refresh_yahoo(cache, 'USDCAD', [('2015-01-01', '2015-12-31')],
+                               '2026-09-28', fetch=lambda t, a, b: {})
+        self.assertTrue(errs)
+        self.assertEqual(T._yahoo_coverage(cache, 'USDCAD'), [])
+        errs = T.refresh_yahoo(
+            cache, 'USDCAD', [('2015-01-01', '2015-12-31')], '2026-09-28',
+            fetch=lambda t, a, b: {d: 1.3 for d in self._weekdays(a, b)})
+        self.assertEqual(errs, [])
+        self.assertIn('USDCAD-2015-06-15', cache)
+        # A range before the source's known history: remembered as empty.
+        errs = T.refresh_yahoo(cache, 'USDCAD', [('2000-01-01', '2000-12-31')],
+                               '2026-09-28', fetch=lambda t, a, b: {})
+        self.assertEqual(errs, [])
+
+    def test_pre_coverage_fallback_message_names_a_working_remedy(self):
+        # S028-13.
+        from taxjson.bin import taxjson_convert_currency as C
+        C.reset_fallback_tally()
+        C._FALLBACK_ROWS.append({'id': 'x', 'date': '2001-02-02',
+                                 'currency': 'USD', 'symbol': 'ABC.US',
+                                 'action': 'BUYSELL',
+                                 'reason': 'date predates rates file '
+                                           'start 2003-09-17'})
+        msg = list(C.fallback_validation_issues('CAD', 1.35).values())[0][0]
+        C.reset_fallback_tally()
+        self.assertIn('refreshing cannot help', msg)
+        self.assertIn('in CAD', msg)
+        self.assertNotIn('pass --default-rate', msg)

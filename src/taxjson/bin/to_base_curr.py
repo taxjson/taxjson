@@ -6,9 +6,13 @@ SOURCES (per date, recorded in the output):
   * Target CAD: the Bank of Canada Valet daily average series
     FX<CUR>CAD is the PRIMARY source — CRA (Income Tax Folio S5-F4-C1)
     expects the Bank of Canada rate, or another reliable source used
-    consistently. The Valet daily series begin 2017-01-03.
-    Yahoo Finance (<CUR>CAD=X) is only a FALLBACK: for dates before
-    2017-01-03, for currencies the Bank does not publish, and for a
+    consistently. The Valet daily series begin 2017-01-03. For a date
+    before 2017-03-01 the Folio (para 1.4) names the Bank's NOON rate:
+    the legacy noon series (Valet, 2007-05-01..2017-04-28; source
+    `boc-noon`) wins wherever its cache reaches.
+    Yahoo Finance (<CUR>CAD=X) is only a FALLBACK: for dates the noon
+    series does not reach (before 2007-05-01, or a failed noon fetch),
+    for currencies the Bank does not publish, and for a
     published series that has stopped (no observation within a week,
     e.g. RUB since 2022). A Bank of Canada fetch that FAILS is never
     papered over with Yahoo — those dates are left without a rate, and
@@ -19,7 +23,7 @@ SOURCES (per date, recorded in the output):
 
 OUTPUT: one row per calendar date,
     YYYY-MM-DD 12:00:00 FROM TO RATE SOURCE
-SOURCE is `boc` or `yahoo`. The sixth column is additive: every loader
+SOURCE is `boc`, `boc-noon` or `yahoo`. The sixth column is additive: every loader
 reads the first five (load_exchange_rates ignores extra columns).
 
 WEEKENDS / HOLIDAYS: a date with no published rate takes the rate of the
@@ -70,6 +74,25 @@ PROG = "taxjson-to-base-curr"
 CACHE_FILE = os.path.expanduser("~/.currency_price_cache.json")
 
 BOC_START = "2017-01-03"            # first observation of the Valet FX series
+# Folio S5-F4-C1 para 1.4: a date before March 1, 2017 uses the Bank of
+# Canada NOON rate. Valet still serves the legacy noon series from
+# 2007-05-01 (audit R1-146 — those dates used Yahoo closes).
+NOON_START = "2007-05-01"
+NOON_BEFORE = "2017-03-01"
+NOON_URL = ("https://www.bankofcanada.ca/valet/observations/"
+            "{series}/json?start_date={start}&end_date={end}")
+# Valet legacy noon series (group legacy_noon_rates) per currency.
+NOON_SERIES = {
+    "USD": "IEXE0101", "EUR": "EUROCAE01", "GBP": "IEXE1201",
+    "AUD": "IEXE1601", "JPY": "IEXE0701", "CHF": "IEXE1101",
+    "HKD": "IEXE1401", "NZD": "IEXE1901", "MXN": "IEXE2001",
+    "RUB": "IEXE2101", "CNY": "IEXE2201", "PLN": "IEXE2401",
+    "IDR": "IEXE2601", "BRL": "IEXE2801", "INR": "IEXE3001",
+    "KRW": "IEXE3101", "MYR": "IEXE3201", "ZAR": "IEXE3401",
+    "TWD": "IEXE3501", "THB": "IEXE3601", "SGD": "IEXE3701",
+    "PEN": "IEXE5201", "TRY": "IEXE5802", "VND": "IEXE6503",
+    "NOK": "IEXE0901", "SEK": "IEXE1001",
+}
 DEFAULT_START = "2000-01-01"
 MAX_FILL_DAYS = 7                   # longest weekend/holiday forward-fill
 TAIL_REFETCH_DAYS = 7               # re-ask BoC for the last week (late posts)
@@ -182,6 +205,32 @@ def fetch_boc(currency: str, start: str, end: str) -> Dict[str, str]:
         if exc.code == 404 and _valet_not_found(exc, series):
             raise SeriesNotFound(series) from exc
         raise
+    out: Dict[str, str] = {}
+    for ob in doc.get("observations") or []:
+        d = ob.get("d")
+        v = (ob.get(series) or {}).get("v")
+        if not (isinstance(d, str) and _DATE_RE.match(d)):
+            continue
+        try:
+            if v is None or not float(v) > 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        out[d] = str(v).strip()
+    return out
+
+
+def fetch_boc_noon(currency: str, start: str, end: str) -> Dict[str, str]:
+    """The Bank of Canada legacy NOON rate for `currency` (Valet
+    series NOON_SERIES[currency]), start..end inclusive; {} for a
+    currency without one."""
+    series = NOON_SERIES.get(currency)
+    if not series:
+        return {}
+    url = NOON_URL.format(series=series, start=start, end=end)
+    req = urllib.request.Request(url, headers={"User-Agent": "taxjson"})
+    with urllib.request.urlopen(req, timeout=30) as res:
+        doc = json.loads(res.read().decode("utf-8"))
     out: Dict[str, str] = {}
     for ob in doc.get("observations") or []:
         d = ob.get("d")
@@ -387,6 +436,37 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
     return True, errors
 
 
+def refresh_boc_noon(cache: dict, currency: str, start: str, end: str,
+                     today: str, fetch=None) -> List[str]:
+    """Fill the legacy noon-rate cache for [max(start, NOON_START),
+    min(end, NOON_BEFORE - 1)]. The series is closed (it ends in April
+    2017), so a covered range is never re-asked; a failed fetch is an
+    error for this run (those dates fall back to Yahoo as before)."""
+    if currency not in NOON_SERIES:
+        return []
+    fetch = fetch or globals()["fetch_boc_noon"]
+    lo, hi = max(start, NOON_START), min(end, _shift(NOON_BEFORE, -1))
+    if lo > hi:
+        return []
+    key = f"boc_noon:{currency}CAD"
+    blk = cache.setdefault("_boc_noon", {}).setdefault(f"{currency}CAD", {})
+    if not isinstance(blk.get("obs"), dict):
+        blk["obs"] = {}
+    errors: List[str] = []
+    for a, b in _missing_ranges(_coverage(cache, key), lo, hi):
+        try:
+            got = fetch(currency, a, b)
+        except Exception as exc:          # network, HTTP error, bad JSON
+            errors.append(f"Bank of Canada noon {currency}CAD {a}..{b}: "
+                          f"{exc}")
+            continue
+        if not got:
+            continue                      # nothing to cache; asked again
+        blk["obs"].update(got)
+        _add_coverage(cache, key, a, b)
+    return errors
+
+
 def refresh_yahoo(cache: dict, pair: str, ranges: List[Tuple[str, str]],
                   today: str, fetch=None) -> List[str]:
     """Fill the legacy Yahoo cache keys for each needed range not yet
@@ -407,6 +487,16 @@ def refresh_yahoo(cache: dict, pair: str, ranges: List[Tuple[str, str]],
             errors.append(f"Yahoo Finance {ticker} {a}..{b}: {exc}")
             continue
         existing = _yahoo_obs(cache, pair)
+        if not got and not any(d > b for d in existing):
+            # yfinance swallows a failed download (rate limit, network)
+            # into an empty frame. Remember a range as "asked, no data"
+            # only when the source is known to have data AFTER it (its
+            # history simply starts later); otherwise it is a failure
+            # for this run, asked again next run (audit S055-02 — one
+            # hiccup used to leave the range unrated forever).
+            errors.append(f"Yahoo Finance {ticker} {a}..{b}: no data "
+                          f"returned (download failed?)")
+            continue
         # Seed the forward-fill from the last cached value before `a`.
         prev = _prior(sorted(existing), _shift(a, -1))
         cur = existing[prev] if prev and _days(prev, a) <= MAX_FILL_DAYS \
@@ -460,6 +550,13 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
         boc_obs = blk.get("obs") or {}
         boc_cov = _coverage(cache, f"boc:{pair}")
     boc_dates = sorted(boc_obs)
+    noon_obs: Dict[str, str] = {}
+    noon_cov: List[List[str]] = []
+    if to_curr == "CAD":
+        noon_obs = ((cache.get("_boc_noon") or {}).get(pair) or {}).get(
+            "obs") or {}
+        noon_cov = _coverage(cache, f"boc_noon:{pair}")
+    noon_dates = sorted(noon_obs)
     y_obs = _yahoo_obs(cache, pair)
     y_dates = sorted(y_obs)
     y_cov = _yahoo_coverage(cache, pair)
@@ -469,6 +566,15 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
     last = min(end, today)
     while d <= last:
         val = src = None
+        # Before March 2017 the CRA names the Bank's NOON rate (Folio
+        # S5-F4-C1 para 1.4): it wins over the daily average (Jan-Feb
+        # 2017) and over Yahoo wherever the cached noon series reaches.
+        if d < NOON_BEFORE and noon_dates and _reaches(noon_cov, d, today):
+            p = _prior(noon_dates, d)
+            if p and _days(p, d) <= MAX_FILL_DAYS:
+                rows.append((d, noon_obs[p], "boc-noon"))
+                d = _shift(d, 1)
+                continue
         boc_era = use_boc and d >= BOC_START
         boc_reach = boc_era and _reaches(boc_cov, d, today)
         if boc_reach:
@@ -531,6 +637,9 @@ def summarize(rows: List[Tuple[str, str, str]]) -> str:
         sp[1] = d
     parts = [f"Bank of Canada Valet for {counts.get('boc', 0)} dates",
              f"Yahoo fallback for {counts.get('yahoo', 0)}"]
+    if counts.get("boc-noon"):
+        parts.insert(1, f"Bank of Canada noon rate (before 2017-03) for "
+                        f"{counts['boc-noon']}")
     if counts.get("yahoo"):
         parts[-1] += f" ({span['yahoo'][0]}..{span['yahoo'][1]})"
     return ", ".join(parts)
@@ -558,6 +667,7 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
                 today: Optional[str] = None, offline: bool = False,
                 fetch_boc_fn: Optional[Callable] = None,
                 fetch_yahoo_fn: Optional[Callable] = None,
+                fetch_noon_fn: Optional[Callable] = None,
                 ) -> Tuple[List[Tuple[str, str, str]], List[str], List[str]]:
     """Refresh the cache as needed and resolve the rows. Returns
     (rows, errors, notes)."""
@@ -575,6 +685,12 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
         if n:
             notes.append(n)
     elif to_curr == "CAD":
+        if fetch_noon_fn is None and fetch_boc_fn is not None:
+            # An injected Bank fetcher (tests) without a noon one: no
+            # noon source — never a live request behind a stub.
+            fetch_noon_fn = lambda _c, _a, _b: {}          # noqa: E731
+        errors += refresh_boc_noon(cache, from_curr, start, end, today,
+                                   fetch_noon_fn)
         published = from_curr in BOC_CURRENCIES
         if published:
             published, errs = refresh_boc(cache, from_curr, start, end,
@@ -628,8 +744,9 @@ def main(argv=None):
             "format read by taxjson-convert-currency "
             "(`YYYY-MM-DD HH:MM:SS FROM TO RATE SOURCE` per line). For a "
             "CAD target the Bank of Canada Valet daily rate is the "
-            "primary source (from 2017-01-03); Yahoo Finance fills dates "
-            "before that and currencies the Bank does not publish. Other "
+            "primary source (from 2017-01-03; its legacy noon rate before "
+            "2017-03-01, back to 2007-05-01); Yahoo Finance fills earlier "
+            "dates and currencies the Bank does not publish. Other "
             "targets use Yahoo Finance. Weekends and holidays take the "
             "most recent prior business-day rate. Fetched values are "
             "cached in ~/.currency_price_cache.json. TAXJSON_OFFLINE=1 "

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **FX before March 2017 uses the Bank of Canada noon rate.** Folio
+  S5-F4-C1 names the Bank's noon rate for dates before 2017-03-01;
+  those dates (back to 2007-05-01, where Valet's legacy noon series
+  starts) used Yahoo closes, and Jan-Feb 2017 the new daily average.
+  They now take the noon rate (source `boc-noon`); Yahoo stays the
+  fallback for earlier dates. A Yahoo download that fails silently (an
+  empty answer) is no longer remembered as "no data" forever, so the
+  next online run asks again. The default-rate error for a date before
+  every rate source no longer tells you to refresh (it cannot help) or
+  to pass a flag `taxjson run` does not have: enter the row in the base
+  currency at its date's rate.
 - **Harvest prices the right thing in the right currency.** USD-traded
   TSX units (`DLR.U.TO`) are valued in USD and spelled `DLR-U.TO` for
   Yahoo; trust units (`DIR.UN.TO` -> `DIR-UN.TO`) and US class shares
