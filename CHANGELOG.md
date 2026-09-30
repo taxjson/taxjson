@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A sheltered-account rerun no longer serves stale wash numbers.**
+  After `run --account <sheltered>` rebuilt `sheltered_base.json`, `sum`,
+  `form-export` and `close-year` read the older wash-adjusted gains with
+  no warning (a registered-account buy that makes a taxable loss
+  superficial was missing). They now warn, and `close-year` refuses
+  until a full `taxjson run` (audit R1-251).
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
   is undone when both are in the account's inputs; it used to stay

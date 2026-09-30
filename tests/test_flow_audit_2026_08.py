@@ -348,7 +348,7 @@ class TestCloseYearStalenessGuard(unittest.TestCase):
             os.utime(work / "margin_gains.json", (now + 5, now + 5))
             with self.assertRaises(SystemExit) as cm:
                 _run_cmd(cmd_close_year, root, year=None, force=False)
-        self.assertIn("STALER", str(cm.exception))
+        self.assertIn("STALE", str(cm.exception))
 
 
 class TestCombinedSidecarStaleness(unittest.TestCase):

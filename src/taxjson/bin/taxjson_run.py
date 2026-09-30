@@ -8567,19 +8567,19 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     # the just-rebuilt plain gains (the blend pass was skipped).
     # `taxjson sum` merely notes this; close-year WRITES the filing
     # lock, so snapshotting stale numbers is a hard stop.
+    # A sheltered rebuild (`run --account <sheltered>`) refreshes
+    # sheltered_base.json without the wash pass — the same stale lock
+    # (2026-09 audit R1-251).
+    from taxjson.lib.report_model import stale_wash_inputs
     stale = sorted(
-        a for a, p in files.items()
-        if p.name.endswith("_gains_wash.json")
-        and p.with_name(p.name.replace("_gains_wash.json",
-                                       "_gains.json")).exists()
-        and _wash_preferred_gains(
-            p.with_name(p.name.replace("_gains_wash.json",
-                                       "_gains.json"))) != p)
+        f"{a} (older than {', '.join(stale_wash_inputs(p))})"
+        for a, p in files.items()
+        if p.name.endswith("_gains_wash.json") and stale_wash_inputs(p))
     if stale:
         sys.exit(f"taxjson close-year: wash-adjusted gains for "
-                 f"{', '.join(stale)} are STALER than the plain gains "
-                 f"(a --account rerun skipped the cross-account wash "
-                 f"pass) — run a full `taxjson run` first.")
+                 f"{'; '.join(stale)} are STALE (a --account rerun "
+                 f"skipped the cross-account wash pass) — run a full "
+                 f"`taxjson run` first. Nothing was written.")
     accounts = {}
     import json as _json
     for acct, pth in sorted(files.items()):
