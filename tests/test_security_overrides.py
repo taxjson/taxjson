@@ -80,15 +80,18 @@ class TestLoadSecurityOverrides(unittest.TestCase):
                 ("some fund", "*", "FUND.TO"),
             ])
 
-    def test_malformed_line_skipped(self):
+    def test_malformed_line_is_an_error(self):
+        # A skipped rule changes ACB pooling silently (audit S001-01):
+        # the line is refused, named by its number.
+        from taxjson.bin.taxjson_brokerage import SecurityOverrideError
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / 'security_overrides.txt'
             # Missing the symbol field.
             f.write_text("US DLR CURRENCY ETF | USD\n"
                          "Good Fund | CAD | GF.TO\n")
-            overrides = load_security_overrides(f)
-            self.assertEqual(overrides, [("good fund", "CAD", "GF.TO")])
-
+            with self.assertRaises(SecurityOverrideError) as cm:
+                load_security_overrides(f)
+            self.assertIn('line 1', str(cm.exception))
 
 if __name__ == '__main__':
     unittest.main()

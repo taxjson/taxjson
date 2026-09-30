@@ -13,8 +13,9 @@ from the code. This module is the single source of truth:
     scaffolding, and enforcement cannot diverge again.
 
 Convention notes encoded here (the "why" behind the checks):
-  * Trade rows (BUYSELL/ASSIGN): `net_amount` is ALWAYS POSITIVE; the
-    trade's direction lives in the SIGN OF `quantity` (+buy/-sell).
+  * Trade rows (BUYSELL/ASSIGN): `net_amount` is POSITIVE; the trade's
+    direction lives in the SIGN OF `quantity` (+buy/-sell). A sell may
+    net negative (commission larger than the gross of a penny close).
   * Income rows (DIVIDEND/TAX/INTEREST/...): sign-preserving. Brokers
     (IB especially) post re-characterizations as a negative reversal row
     plus a corrected row; the negatives must flow through so the pair
@@ -139,7 +140,12 @@ def validate_transactions(txs: List[Dict[str, Any]],
             if action == 'BUYSELL' and abs(qty) < _QTY_EPS:
                 errors.append(f"{_who(tx, i)}: BUYSELL with quantity 0 "
                               f"(direction lives in the quantity sign)")
-            if net < -_MONEY_EPS:
+            # A SELL may net negative: closing an option at 0.01 with a
+            # 1.00+ commission brings in less than nothing, and the
+            # engine books those negative proceeds (core._trade_money).
+            # Refusing them failed every `taxjson run` on a routine
+            # penny close (audit S017-00). A negative BUY is still wrong.
+            if net < -_MONEY_EPS and not qty < -_QTY_EPS:
                 errors.append(f"{_who(tx, i)}: trade net_amount must be "
                               f">= 0 (got {net}); direction belongs in "
                               f"the quantity sign")
@@ -155,12 +161,19 @@ def validate_transactions(txs: List[Dict[str, Any]],
             # 100 drowned every futures row in false positives, so the
             # check could only ever warn. Rows without a declared
             # multiplier keep the guess and stay warn-level.
-            if action == 'BUYSELL' and price > 0 and net > 0:
+            # An ASSIGN leg that carries a price (the stock leg at the
+            # strike) is checked too, net 0 included: a wrong or blank
+            # Proceeds on it booked silently, even a negative ACB (audit
+            # S017-02). A zero-price leg (the option side) is exempt.
+            if price > 0 and (net > 0 if action == 'BUYSELL'
+                              else abs(qty) > _QTY_EPS):
                 declared = tx.get('multiplier')
                 try:
                     declared = float(declared) if declared else 0.0
                 except (TypeError, ValueError):
                     declared = 0.0
+                if action == 'ASSIGN':
+                    declared = 0.0          # warn-level: never declared
                 if declared > 0:
                     mult = declared
                 else:
@@ -169,7 +182,7 @@ def validate_transactions(txs: List[Dict[str, Any]],
                 expected = abs(qty) * price * mult
                 fees = (abs(float(tx.get('commission') or 0.0))
                         + abs(float(tx.get('fee') or 0.0)))
-                gap = abs(expected - net)
+                gap = abs(expected - abs(net))
                 if gap > fees + max(5.0, 0.02 * expected):
                     (errors if declared > 0 else warnings).append(
                         f"{_who(tx, i)}: net_amount {net:,.2f} is far from "
@@ -229,9 +242,10 @@ def render_schema_prompt() -> str:
     lines += [
         "",
         "Conventions (violations corrupt tax math downstream):",
-        "  - Trades (BUYSELL/ASSIGN): net_amount is ALWAYS POSITIVE; the "
+        "  - Trades (BUYSELL/ASSIGN): net_amount is POSITIVE; the "
         "direction is the SIGN of quantity (+buy / -sell). net_amount is "
-        "fee-inclusive for buys, net of fees for sells.",
+        "fee-inclusive for buys, net of fees for sells (a sell whose fee "
+        "exceeds its gross nets negative).",
         "  - multiplier (optional, BUYSELL): the contract size when the "
         "export states it (100 per equity option, 1000 per CL future); "
         "a declared multiplier makes |net - qty*price*multiplier| beyond "

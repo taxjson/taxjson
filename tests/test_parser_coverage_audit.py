@@ -793,8 +793,9 @@ class TestIbTransferCancellations(unittest.TestCase):
             '250,--,"7,188.25",0.00,0.00,Ca\n'
         )
         parser, txs, err = _parse(IbBrokerage, csv)
+        # The description names the security next to the kind (S059-03).
         self.assertEqual([(t["action"], t["quantity"], t["description"])
                           for t in txs],
-                         [("TRANSFER", 250.0, "ATON (Ca)")])
+                         [("TRANSFER", 250.0, "ATON (MDX) (Ca)")])
         self.assertIn("cancelled", err)
         self.assertEqual(_unaccounted(parser), 0)

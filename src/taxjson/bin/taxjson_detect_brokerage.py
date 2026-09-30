@@ -6,6 +6,7 @@ Returns brokerage name that can be passed to taxjson_brokerage.py
 """
 
 import csv
+import io
 import sys
 from pathlib import Path
 from typing import Optional
@@ -23,7 +24,17 @@ def detect_brokerage(file_path: Path) -> Optional[str]:
         Brokerage name (ib, rbc_direct, questrade, webull) or None if not detected
     """
     try:
-        with file_path.open(newline="", encoding="utf-8-sig") as fh:
+        # Decode the way the parsers do: a UTF-16 BOM (a spreadsheet's
+        # "Unicode text" save) is UTF-16, anything else UTF-8 with an
+        # optional BOM. Detection used to open every file as UTF-8, so a
+        # UTF-16 export the IB/Questrade/RBC parsers read could not be
+        # routed (audit R1-70).
+        raw = file_path.read_bytes()
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            text = raw.decode("utf-16")
+        else:
+            text = raw.decode("utf-8-sig")
+        with io.StringIO(text, newline="") as fh:
             reader = csv.reader(fh)
             first_row = next(reader, None)
             
