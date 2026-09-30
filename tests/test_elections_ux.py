@@ -121,8 +121,10 @@ class TestFilingReminder(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
             r = _run(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("FILING REQUIRED", r.stderr)
-        self.assertIn("s. 85.1(5)", r.stderr)
+        # The s.85.1 rollover is automatic — there is no election form,
+        # so no FILING REQUIRED reminder (audit R1-138 corrected the
+        # reminder this test used to pin).
+        self.assertNotIn("FILING REQUIRED", r.stderr)
 
     def test_no_reminder_for_sheltered_account(self):
         # A rollover inside a registered plan has no gain to defer, so

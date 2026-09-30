@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
                                          is_roc_description)
 from taxjson.lib.corp_actions import (
@@ -101,17 +102,13 @@ _RBC_USD_DLR_RE = re.compile(r'\bU\s?\.?\s?S\.?\s+DLR\s+CURRENCY\s+ETF\b',
 # Option description as RBC writes it, with the codes that may prefix it
 # (EXP expiry, ASN assignment, XCH adjustment/exchange). Overrides the
 # base patterns, which don't know "XCH -".
-# The strike may carry a thousands separator ("CALL .BKNG 06/20/25 5,000",
-# "PUT .NDX 06/20/25 21,500"): the old ([\d\.]+) stopped at the comma and
-# pooled a 5,000 and a 5,025 call as one 5-strike contract (audit S063-15).
-_RBC_STRIKE = r'(\d{1,3}(?:,\d{3})+(?:\.\d+)?|[\d\.]+)'
 _RBC_OPTION_PATTERNS = (
     re.compile(
         r'^(?:(?:EXP|ASN|XCH)\s*-\s*)?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+'
-        r'(\d{1,2}/\d{1,2}/\d{2})\s+' + _RBC_STRIKE, re.I),
+        r'(\d{1,2}/\d{1,2}/\d{2})\s+' + OPTION_STRIKE_RE, re.I),
     re.compile(
         r'ASSIGNMENT OF OPTION.*?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+'
-        r'(\d{1,2}/\d{1,2}/\d{2})\s+' + _RBC_STRIKE, re.I),
+        r'(\d{1,2}/\d{1,2}/\d{2})\s+' + OPTION_STRIKE_RE, re.I),
 )
 # A stock dividend paid in shares ("DIS - <name> STK DIV ON 1390 SHS").
 _RBC_STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b', re.I)
@@ -204,7 +201,9 @@ def _err(path: Path, line: int, msg: str) -> RbcFormatError:
 
 
 _NUM_RE = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)')
-_THOUSANDS_RE = re.compile(r'[+-]?\d{1,3}(?:,\d{3})+(?:\.\d*)?')
+# A first group of 0 is a decimal comma ('0,125'), never thousands
+# (audit S055-08).
+_THOUSANDS_RE = re.compile(r'[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?')
 
 
 def rbc_number(raw: Optional[str], *, path: Path, line: int,
@@ -1014,12 +1013,6 @@ class RbcBrokerage(BaseBrokerage):
 
     def _option_description_patterns(self):
         return _RBC_OPTION_PATTERNS
-
-    def parse_option_from_description(self, desc):
-        opt = super().parse_option_from_description(desc)
-        if opt:
-            opt['strike'] = opt['strike'].replace(',', '')
-        return opt
 
     # ----------------------------------------------------------- warnings
     def _warn(self, msg: str, *, lint: bool = False,

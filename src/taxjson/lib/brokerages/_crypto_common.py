@@ -26,7 +26,9 @@ DEFAULT_LOCAL_TZ = 'America/Toronto'
 # Currency markers an exchange may glue to an amount. Longest first so
 # `CA$` is not half-eaten by `A$`/`$`.
 _MONEY_PREFIXES = ('CA$', 'US$', 'C$', 'A$', '$', '€', '£')
-_THOUSANDS_OK = re.compile(r'^\d{1,3}(,\d{3})+(\.\d*)?$')
+# A first group of 0 is a decimal comma ('0,125'), never thousands
+# (audit S055-08).
+_THOUSANDS_OK = re.compile(r'^[1-9]\d{0,2}(,\d{3})+(\.\d*)?$')
 
 
 def strict_money(raw, what: str = 'amount', context: str = '') -> float:

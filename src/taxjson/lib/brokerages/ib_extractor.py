@@ -79,7 +79,9 @@ def _split_known_ext(symbol: str):
 
 
 def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
-                                    extra_held=None) -> None:
+                                    extra_held=None, fallback_held=None,
+                                    isins_by_root=None,
+                                    mismatches=None) -> None:
     """Rewrite each DIVIDEND/TAX suffix to match the position held for the same
     ticker in this file, correcting ISIN-vs-listing mismatches. Leaves the
     ISIN-derived suffix untouched when the account holds no position for that
@@ -92,7 +94,20 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     fallback (STX.L, BTG.TO) came back every hold-year; (b) an interlisted
     same-ticker name (ENB-class) whose OTHER listing is still held makes the
     root ambiguous, correctly suppressing the rewrite instead of misbinding a
-    .TO dividend onto the .US listing traded in this file."""
+    .TO dividend onto the .US listing traded in this file.
+
+    `fallback_held` (the listings held or traded in the account's OTHER
+    statements) is used only for a root this statement has no position
+    evidence for: a statement with only a dividend or ROC row kept the ISIN
+    suffix and booked the ROC on a phantom listing (audit S060-00).
+
+    `isins_by_root` (the Financial Instrument Information Security IDs per
+    ticker) makes the rebind require the SAME security: a row whose ISIN
+    names a different issuer than the held listing of that root (AT&T's T
+    vs Telus's T.TO, Equifax vs Enerflex EFX.TO) keeps its ISIN-derived
+    suffix (audit S059-24 / S060-19); the (symbol, ISIN) pairs skipped
+    are added to `mismatches`. A row whose ISIN, or whose root's listing
+    ISIN, is unknown is rebound as before."""
     held: Dict[str, set] = {}
     for full in (extra_held or ()):
         root, ext = _split_known_ext(full)
@@ -103,6 +118,12 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
             root, ext = _split_known_ext(t.get('symbol'))
             if ext:
                 held.setdefault(root, set()).add(ext)
+    fb: Dict[str, set] = {}
+    for full in (fallback_held or ()):
+        root, ext = _split_known_ext(full)
+        if ext and root not in held:
+            fb.setdefault(root, set()).add(ext)
+    held.update(fb)
     if not held:
         return
     for t in transactions:
@@ -120,10 +141,33 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
         if suffixes and len(suffixes) == 1:
             want = next(iter(suffixes))
             if want != ext:
+                row_isin = (t.get('_isin') or '').upper()
+                known = (isins_by_root or {}).get(root) or set()
+                if row_isin and known and row_isin not in known:
+                    if mismatches is not None:
+                        mismatches.add((t.get('symbol'), row_isin,
+                                        f"{root}.{want}"))
+                    continue
                 t['symbol'] = f"{root}.{want}"
 
 
 FUTURES_CATEGORIES = ('Futures', 'Options On Futures')
+
+# Parser warnings about statement COVERAGE or identity that the numbers
+# may silently depend on (a statement ending before year end, a missing
+# Cash Report, one security under two symbols). `taxjson run` echoes
+# lines with this prefix to the console (they used to live only in the
+# .diag / .sum DIAGNOSTICS banner).
+ATTENTION_PREFIX = "warning: ATTENTION:"
+# Known tax events the parser could not book (same prefix Kraken uses):
+# echoed to the console by `taxjson run`, fatal under `run --strict`.
+UNBOOKED_PREFIX = "warning: UNBOOKED:"
+# The security an IB tender allocation DELIVERS: the first token of the
+# row's trailing `(TICKER, NAME, ISIN)` parenthetical.
+_IB_DELIVERED_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .]*?)\s*,[^()]*\)\s*$')
+_IB_STOCK_DIV_RE = re.compile(
+    r'^\s*([A-Z0-9][A-Z0-9 .]*?)\s*\([^)]*\)\s+Stock\s+Dividend\b',
+    re.IGNORECASE)
 
 
 def get_ib_settlement(date_str: str, asset_cat: str,
@@ -159,8 +203,10 @@ def get_ib_settlement(date_str: str, asset_cat: str,
     return add_settlement_days(date_str, days, currency).isoformat()
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
                                          encode_occ_strike,
+                                         option_strike_text,
                                          is_roc_description,
                                          parse_strict_number)
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
@@ -238,6 +284,70 @@ def _mask_account(acct: str) -> str:
     return (a[:2] + '***') if a else '?'
 
 
+def _ib_period(raw: str):
+    """(start, end) ISO dates of a Statement 'Period' value ('January 1,
+    2024 - December 27, 2024'; a one-day period names one date), or
+    None when it does not parse."""
+    parts = [x.strip() for x in (raw or '').split(' - ')]
+    try:
+        days = [datetime.strptime(x, "%B %d, %Y").date() for x in parts]
+    except ValueError:
+        return None
+    if len(days) == 1:
+        return days[0], days[0]
+    if len(days) == 2 and days[0] <= days[1]:
+        return days[0], days[1]
+    return None
+
+
+def _warn_coverage_gaps(periods, today=None) -> None:
+    """Warn when an account's IB statements leave days of a FINISHED
+    calendar year uncovered: a gap between two statements, or a last
+    statement that stops before Dec 31 (the 2024 statement that ended
+    Dec 27 dropped a Dec 30 sale silently — audit R1-2 / R1-195). The
+    first statement may start mid-year (an account opened in May); the
+    current year is still open, so its end is not checked."""
+    from datetime import date as _date
+    if not periods:
+        return
+    today = today or _date.today()
+    spans = sorted((a, b, n) for n, a, b in periods)
+    merged = [[spans[0][0], spans[0][1], spans[0][2]]]
+    gaps = []
+    for a, b, n in spans[1:]:
+        cur = merged[-1]
+        if a <= cur[1] + timedelta(days=1):
+            if b > cur[1]:
+                cur[1], cur[2] = b, n
+        else:
+            gaps.append((cur[1] + timedelta(days=1),
+                         a - timedelta(days=1), cur[2], n))
+            merged.append([a, b, n])
+    for g0, g1, before, after in gaps:
+        print(f"{ATTENTION_PREFIX} IB statements leave {g0.isoformat()} .. "
+              f"{g1.isoformat()} uncovered (between {before} and {after}) "
+              f"— any trade or income in those days is missing from the "
+              f"books. Download the statement for that period.",
+              file=sys.stderr)
+    last_end, last_name = merged[-1][1], merged[-1][2]
+    if last_end.year < today.year and (last_end.month, last_end.day) != (12, 31):
+        print(f"{ATTENTION_PREFIX} {last_name}: the account's IB statements "
+              f"end {last_end.isoformat()}, before the end of "
+              f"{last_end.year} — any trade or income from "
+              f"{(last_end + timedelta(days=1)).isoformat()} to "
+              f"{last_end.year}-12-31 is missing from the books. Download "
+              f"the statement that covers the rest of the year.",
+              file=sys.stderr)
+
+
+def unmatched_ca_warning(ca: Dict[str, Any]) -> str:
+    return (f"warning: {ca['where']}: IB cancelled (Ca) the corporate "
+            f"action {ca['desc']!r} ({ca['qty']:g} on {ca['date']}) but "
+            f"its original row is not in this account's statements — "
+            f"nothing undone; if the original was booked another way, "
+            f"reverse it by hand in a .tt file.")
+
+
 def _ib_split_datetime(raw: str, where: str):
     """(date, time) from IB's `YYYY-MM-DD, HH:MM:SS`; a date in any
     other shape (Flex `20250328;093000`, `03/28/2025`) is refused —
@@ -275,6 +385,79 @@ def _canonical_root(roots) -> str:
     return roots[0]
 
 
+def _root_aliases(occ_by_conid, underlying_by_conid):
+    """(root_alias, alias_conids) for conids listed under several option
+    roots (DFDV 251121P..., DFDV1 251121P... after a corporate action
+    renamed the adjusted contract): every alias root maps to the
+    canonical one. The canonical root is the contract's UNDERLYING when
+    it is one of the roots — after a ticker rename (SQ -> XYZ) the
+    shorter old root won and the assigned option never met the
+    delivered shares (audit S059-11); otherwise _canonical_root."""
+    root_alias: Dict[str, str] = {}
+    alias_conids: Dict[str, set] = {}
+    for conid, occs in occ_by_conid.items():
+        roots = {o[0] for o in occs}
+        if len(roots) < 2:
+            continue
+        und = (underlying_by_conid.get(conid) or '').strip()
+        canon = und if und in roots else _canonical_root(roots)
+        for r in roots:
+            if r != canon:
+                root_alias[r] = canon
+                alias_conids.setdefault(r, set()).add(conid)
+    return root_alias, alias_conids
+
+
+# Canadian listing venues as IB's Financial Instrument Information names
+# them (Listing Exch).
+_IB_CA_VENUES = frozenset({'TSE', 'VENTURE', 'TSXV', 'CSE', 'NEO', 'AEQLIT',
+                           'PURE', 'OMEGA', 'CHIXCA', 'ALPHA', 'LYNX'})
+
+
+def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
+                    fii: Dict[tuple, Any]) -> str:
+    """The exchange suffix of a stock/warrant row: from the currency,
+    except a USD-class unit of a TSX-listed fund ('ZSP.U', 'DLR.U'),
+    which is a Canadian listing (X.U.TO — the spelling RBC and the
+    ticker maps use); `.US` made it a fictional US security (audit
+    S010-06). Only the `.U` unit class is re-suffixed: IB's instrument
+    list names a single primary listing per symbol, so a USD trade of an
+    interlisted ordinary share (MDA on the NYSE) must keep `.US`."""
+    ext = _ib_currency_ext(currency)
+    s = (raw_symbol or '').strip()
+    if (ext != 'TO' and asset_cat in ('Stocks', 'Warrants')
+            and re.search(r'[.\s]U$', s)):
+        info = (fii.get((asset_cat, s))
+                or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
+        if (info.get('exch') or '').upper() in _IB_CA_VENUES:
+            return 'TO'
+    return ext
+
+
+def _ib_stock_symbol(asset_cat: str, raw_symbol: str, currency: str,
+                     fii: Dict[tuple, Any]) -> str:
+    sym = (raw_symbol or '').strip().replace(' ', '.')
+    sym = re.sub(r'\.(TO|US|AX|L)$', '', sym, flags=re.IGNORECASE)
+    return f"{sym}.{_ib_listing_ext(asset_cat, raw_symbol, currency, fii)}"
+
+
+def _warn_stock_aliases(conid_syms: Dict[str, set], where: str) -> None:
+    """One stock conid listed under several symbols (a ticker change
+    with no corporate-action row): the parser books each symbol as its
+    own security, so the position splits into two pools (audit S059-13 /
+    S060-17). Said on the console with the ticker.map fix."""
+    for conid, syms in sorted(conid_syms.items()):
+        if len(syms) < 2:
+            continue
+        a, b = sorted(syms)[:2]
+        print(f"{ATTENTION_PREFIX} {where}: IB lists one stock (contract "
+              f"id {conid}) under several symbols: {', '.join(sorted(syms))}"
+              f" — a ticker change. Each symbol is booked as its own "
+              f"security until you join them in ticker.map, e.g. "
+              f"`GLOBAL {a}.US {b}.US` (old symbol first; use the listing's "
+              f"suffix).", file=sys.stderr)
+
+
 def _ib_prescan(rows, where: str) -> Dict[str, Any]:
     """Read the statement-level context every row branch needs BEFORE
     the row walk (these sections sit after Trades in IB's layout):
@@ -286,7 +469,9 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'title': '', 'fii': {}, 'root_alias': {}, 'alias_conids': {},
         'accounts': set(), 'accounts_included': '', 'cash': {},
         'cash_currencies': set(), 'has_cash_report': False,
-        'has_order_level': False,
+        'has_order_level': False, 'order_levels': {},
+        'stock_isins': {}, 'stock_conid_syms': {}, 'opt_underlying': {},
+        'held_rows': [],
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -307,6 +492,29 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
 
         if sec == 'Trades' and g('DataDiscriminator') == 'Order':
             out['has_order_level'] = True
+        if (sec in ('Trades', 'Transfers', 'Open Positions')
+                and g('Asset Category') in ('Stocks', 'Warrants')
+                and g('Symbol') and g('Currency')):
+            # Listings this statement trades or holds (raw symbol,
+            # category, currency) — the account-wide income rebind uses
+            # them (prepare_files).
+            out['held_rows'].append((g('Symbol'), g('Asset Category'),
+                                     g('Currency')))
+        if (sec == 'Trades'
+                and g('DataDiscriminator') in ('Order', 'Trade')):
+            # Quantity per (category, symbol, trade day) and detail
+            # level: an execution-level 'Trade' row is a duplicate only
+            # when an 'Order' row covers the same symbol and day.
+            _okey = (g('Asset Category'), g('Symbol'),
+                     (g('Date/Time').replace(',', ' ').split() or [''])[0])
+            try:
+                _oq = parse_strict_number(g('Quantity'), field='Quantity',
+                                          where=where)
+            except BrokerageParseError:
+                _oq = 0.0
+            _lv = out['order_levels'].setdefault(_okey, {})
+            _lv[g('DataDiscriminator')] = _lv.get(
+                g('DataDiscriminator'), 0.0) + _oq
         acct = g('Account')
         if acct and 'Total' not in acct:
             out['accounts'].add(acct)
@@ -333,9 +541,21 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             except BrokerageParseError:
                 mult = None
             info = {'mult': mult, 'expiry': g('Expiry'),
-                    'conid': g('Conid')}
+                    'conid': g('Conid'), 'exch': g('Listing Exch'),
+                    'isin': g('Security ID'), 'underlying': g('Underlying')}
             texts = [s.strip() for s in g('Symbol').split(',')
                      if s.strip()]
+            if cat in ('Stocks', 'Warrants'):
+                for t in texts:
+                    _root = re.sub(r'\s+', '.', t)
+                    if info['isin']:
+                        out['stock_isins'].setdefault(_root, set()).add(
+                            info['isin'].upper())
+                    if info['conid']:
+                        out['stock_conid_syms'].setdefault(
+                            info['conid'], set()).add(_root)
+            elif info['conid'] and info['underlying']:
+                out['opt_underlying'][info['conid']] = info['underlying']
             if g('Description'):
                 texts.append(g('Description'))
             for t in texts:
@@ -366,19 +586,19 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 continue
             out['cash'][(line, cur)] = out['cash'].get((line, cur),
                                                        0.0) + tot
-    # One conid listed under several option roots (DFDV 251121P...,
-    # DFDV1 251121P... after a corporate action renamed the adjusted
-    # contract): every alias root maps to the canonical one.
-    for conid, occs in occ_by_conid.items():
-        roots = {o[0] for o in occs}
-        if len(roots) < 2:
-            continue
-        canon = _canonical_root(roots)
-        for r in roots:
-            if r != canon:
-                out['root_alias'][r] = canon
-                out['alias_conids'].setdefault(r, set()).add(conid)
+    out['occ_by_conid'] = occ_by_conid
+    out['root_alias'], out['alias_conids'] = _root_aliases(
+        occ_by_conid, out['opt_underlying'])
     out['contract_conids'] = contract_conids
+    for (_cat, _sym, _day), _lv in out['order_levels'].items():
+        if ('Order' in _lv and 'Trade' in _lv
+                and abs(_lv['Order'] - _lv['Trade']) > 1e-6):
+            raise BrokerageParseError(
+                f"{where}: Trades {_cat} {_sym} on {_day}: the Order rows "
+                f"total {_lv['Order']:g} but the execution-level Trade "
+                f"rows total {_lv['Trade']:g} — the two detail levels "
+                f"disagree; refusing to pick one. Export one detail "
+                f"level (Order) only.")
     # A consolidated statement names its members in "Accounts
     # Included"; a single-account one only in "Account".
     if not out['accounts_included']:
@@ -401,6 +621,56 @@ class IbBrokerage(BaseBrokerage):
     # 'trade' (default) | 'next_day': settle date of futures and futures
     # options ([settings] futures_settle, passed by taxjson-brokerage).
     futures_settle = 'trade'
+
+    # Account-wide context (set by taxjson-brokerage from prepare_files).
+    account_context = None
+
+    @classmethod
+    def prepare_files(cls, paths) -> Dict[str, Any]:
+        """Read ALL of one account's IB statements once, before any is
+        parsed: statement periods (coverage check below) and the facts a
+        per-file parse cannot see alone. Account-level warnings print
+        here, once."""
+        ctx: Dict[str, Any] = {
+            'periods': [], 'occ_by_conid': {}, 'contract_conids': {},
+            'opt_underlying': {}, 'stock_conid_syms': {},
+            'stock_isins': {}, 'held': set()}
+        for path in paths:
+            name = Path(path).name
+            try:
+                rows = cls._read_rows(Path(path))
+                pre = _ib_prescan(rows, name)
+            except (OSError, UnicodeError, BrokerageParseError):
+                continue                 # parse_file reports it
+            for row in rows:
+                if (len(row) >= 4 and row[0] == 'Statement'
+                        and row[1] == 'Data' and row[2] == 'Period'):
+                    span = _ib_period(row[3])
+                    if span:
+                        ctx['periods'].append((name, *span))
+                    break
+            # Identity facts learned from ANY of the account's
+            # statements: an option root alias listed only in last
+            # year's instrument list (audit S059-15), a stock renamed
+            # between statements (S060-17), the listings held for the
+            # income rebind (S060-00).
+            for conid, occs in pre['occ_by_conid'].items():
+                ctx['occ_by_conid'].setdefault(conid, set()).update(occs)
+            for key, by_root in pre['contract_conids'].items():
+                tgt = ctx['contract_conids'].setdefault(key, {})
+                for root, ids in by_root.items():
+                    tgt.setdefault(root, set()).update(ids)
+            ctx['opt_underlying'].update(pre['opt_underlying'])
+            for conid, syms in pre['stock_conid_syms'].items():
+                ctx['stock_conid_syms'].setdefault(conid, set()).update(syms)
+            for root, ids in pre['stock_isins'].items():
+                ctx['stock_isins'].setdefault(root, set()).update(ids)
+            for sym, cat, cur in pre['held_rows']:
+                ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
+        _warn_coverage_gaps(ctx['periods'])
+        _warn_stock_aliases(ctx['stock_conid_syms'],
+                            'the account\'s IB statements')
+        return ctx
 
     # ------------------------------------------------------------ helpers
 
@@ -549,13 +819,16 @@ class IbBrokerage(BaseBrokerage):
         DFDV1 251121P... after a corporate action), so the opening and
         the assigned leg share ONE symbol and the premium folds."""
         symbol = raw
-        opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+([\d\.]+)\s+([PC])$', raw)
-        opt_match_monthly = (re.search(r'^(.+?)\s+([A-Z]{3})(\d{2})\s+([\d\.]+)\s+([PC])$', raw)
+        # Strikes may carry a thousands separator (5,000): OPTION_STRIKE_RE
+        # tries the grouped form first; the commas are dropped below.
+        opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
+        opt_match_monthly = (re.search(r'^(.+?)\s+([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
                              if not opt_match else None)
-        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+([\d\.]+)', raw)
+        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+' + OPTION_STRIKE_RE, raw)
                             if not (opt_match or opt_match_monthly) else None)
         if opt_match:
             base, day, mon, yr, strike, right = opt_match.groups()
+            strike = option_strike_text(strike)
             month = _MON_MAP.get(mon.upper())
             if month:
                 if asset_cat == 'Equity and Index Options':
@@ -566,6 +839,7 @@ class IbBrokerage(BaseBrokerage):
                 symbol = f"{base}{yr}{month}{day}{right}{encode_occ_strike(strike)}"
         elif opt_match_monthly:
             base, mon, yr, strike, right = opt_match_monthly.groups()
+            strike = option_strike_text(strike)
             month = _MON_MAP.get(mon.upper())
             if month:
                 base = base.replace(' ', '.')
@@ -594,6 +868,7 @@ class IbBrokerage(BaseBrokerage):
                 symbol = f"{base}{ymd}{right}{encode_occ_strike(strike)}"
         elif opt_match_legacy:
             base, exp, right, strike = opt_match_legacy.groups()
+            strike = option_strike_text(strike)
             base = base.replace(' ', '.')
             symbol = f"{base}{exp[2:]}{right}{encode_occ_strike(strike)}"
         # Strip all spaces as a fallback / cleanup
@@ -638,6 +913,16 @@ class IbBrokerage(BaseBrokerage):
         or mis-signed — the parse FAILS rather than emit a book that
         disagrees with the broker."""
         if not pre['has_cash_report']:
+            # Flex queries and customized statements can leave the
+            # section out; every guard that rides on the reconciliation
+            # (a dropped, doubled or word-matched money row) is then
+            # off — said on the console, not silently (audit R1-53).
+            if any(booked.values()):
+                print(f"{ATTENTION_PREFIX} {path.name}: the statement has "
+                      f"no Cash Report — parsed money is NOT reconciled "
+                      f"against IB's own totals. Include the Cash Report "
+                      f"section in the export (Flex: add it to the query).",
+                      file=sys.stderr)
             return
         if not pre['cash_currencies']:
             print(f"note: {path.name}: the Cash Report has no per-currency "
@@ -687,6 +972,12 @@ class IbBrokerage(BaseBrokerage):
         # taxjson-corp-actions — one note each at end of parse.
         cash_takeovers: List[str] = []
         corp_owned_rows: List[str] = []
+        # Corporate Actions rows that are real events nothing books (an
+        # option adjustment, a spin-off debit on a short parent, a
+        # share-for-share tender): one UNBOOKED line each at the end.
+        unbooked_ca: List[str] = []
+        # Stock dividends booked at $0 cost: one ATTENTION line each.
+        stock_dividends: List[str] = []
 
         # Fee rows that lack both a Date column and a "for Mmm YYYY" hint
         # in the description. Collected and reported as one summary line
@@ -754,6 +1045,10 @@ class IbBrokerage(BaseBrokerage):
         # same-contract trades whose T+1 settle falls after the expiry
         # (BaseBrokerage.clamp_settlement_to_expiry).
         expiry_txs: List[Dict[str, Any]] = []
+        # Assignment / exercise legs: the option side (ASSIGN) and the
+        # stock side (a BUYSELL coded A or Ex), paired after the loop.
+        assign_option_legs: List[Dict[str, Any]] = []
+        assign_stock_legs: List[Dict[str, Any]] = []
 
         # `Transaction Fees` rows (UK Stamp Tax, SEC/FINRA-style
         # levies) are a per-fill BREAKDOWN of charges IB ALREADY
@@ -829,6 +1124,12 @@ class IbBrokerage(BaseBrokerage):
             elif kind in ('corp_owned', 'spinoff'):
                 if eff['desc'] in corp_owned_rows:
                     corp_owned_rows.remove(eff['desc'])
+            elif kind == 'unbooked':
+                if eff['msg'] in unbooked_ca:
+                    unbooked_ca.remove(eff['msg'])
+            elif kind == 'stockdiv':
+                if eff['msg'] in stock_dividends:
+                    stock_dividends.remove(eff['msg'])
             elif kind == 'unhandled':
                 t = eff['ticker']
                 unhandled_ca_tickers[t] = unhandled_ca_tickers.get(t, 0) - 1
@@ -890,6 +1191,23 @@ class IbBrokerage(BaseBrokerage):
 
         rows = self._read_rows(path)
         pre = _ib_prescan(rows, path.name)
+        ctx = self.account_context
+        if ctx:
+            # Option-root aliases from ALL of the account's statements
+            # (audit S059-15: next year's instrument list may name only
+            # the adjusted root).
+            occ = {c: set(v) for c, v in pre['occ_by_conid'].items()}
+            for c, v in ctx.get('occ_by_conid', {}).items():
+                occ.setdefault(c, set()).update(v)
+            und = dict(ctx.get('opt_underlying', {}))
+            und.update(pre['opt_underlying'])
+            pre['root_alias'], pre['alias_conids'] = _root_aliases(occ, und)
+            for key, by_root in ctx.get('contract_conids', {}).items():
+                tgt = pre['contract_conids'].setdefault(key, {})
+                for root, ids in by_root.items():
+                    tgt.setdefault(root, set()).update(ids)
+        else:
+            _warn_stock_aliases(pre['stock_conid_syms'], path.name)
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']
@@ -904,10 +1222,6 @@ class IbBrokerage(BaseBrokerage):
                   f"taxable margin accounts); export a registered "
                   f"account (TFSA/RRSP) separately.", file=sys.stderr)
         header_maps = {} # section -> header_map
-        # Whether this file's Trades section carries Order-level
-        # rows (DataDiscriminator): once seen, execution-level
-        # 'Trade' rows are duplicates and are skipped.
-        _seen_order_level = False
 
         for lineno, row in enumerate(rows, 1):
             if not row:
@@ -939,7 +1253,14 @@ class IbBrokerage(BaseBrokerage):
                     asset_cat = self._cell(row, header_map,
                                            'Asset Category')
                 else:
-                    asset_cat = 'Equity and Index Options'
+                    # The row's own Asset Category when the section has
+                    # one: a futures-option expiry read as an equity
+                    # option became a phantom non-F: contract while the
+                    # real position never closed (audit R1-56).
+                    asset_cat = (self._cell(row, header_map,
+                                            'Asset Category')
+                                 if 'Asset Category' in header_map
+                                 else 'Equity and Index Options')
 
                 # Roll-up rows carry the asset category of what
                 # they sum (`Total,Forex,...`), so they must be
@@ -967,10 +1288,33 @@ class IbBrokerage(BaseBrokerage):
                     elif asset_cat in ('Total', '') or 'Total' in asset_cat:
                         self.count_skip(f"{_NE}Trades subtotal row")
                     else:
-                        # Bonds, CFDs, ... — a real asset class the
-                        # parser has no branch for: loud bucket (and
-                        # the Cash Report reconciliation below fails
-                        # on the cash it moved).
+                        # Bonds, CFDs, Mutual Funds, a renamed category
+                        # — a real asset class the parser has no branch
+                        # for. A row that moves money is a disposition
+                        # or acquisition this parser would DROP: an
+                        # error, like an unknown money section (audit
+                        # S060-08 — it was a counted skip, caught only
+                        # when a Cash Report happened to be present).
+                        _raw_money = (self._cell(row, header_map,
+                                                 'Proceeds')
+                                      or self._cell(row, header_map,
+                                                    'Notional Value'))
+                        try:
+                            _moves = abs(parse_strict_number(
+                                _raw_money, field='Proceeds', where=where,
+                                allow_blank=True, blank=0.0)) > 0.005
+                        except BrokerageParseError:
+                            _moves = True
+                        if _moves:
+                            raise BrokerageParseError(
+                                f"{where}: Trades row in asset category "
+                                f"{asset_cat!r} "
+                                f"({self._cell(row, header_map, 'Symbol')}"
+                                f") moves money, and this parser has no "
+                                f"branch for that category — refusing to "
+                                f"drop it. Book it by hand in a .tt file "
+                                f"and remove the rows from the export, or "
+                                f"report the category.")
                         self.count_skip(f"Trades/{asset_cat}")
                     continue
 
@@ -989,13 +1333,24 @@ class IbBrokerage(BaseBrokerage):
                         self.count_skip(f"{_NE}Trades roll-up row "
                                         f"({_disc})")
                         continue
-                    if _disc == 'Trade' and _seen_order_level:
+                    # A Trade row is skipped only when an Order row
+                    # covers the SAME symbol and day (audit S060-10: a
+                    # file-global flag set by the first Order row
+                    # dropped every later Trade-only fill of any symbol,
+                    # and a Trade row listed before its Order row was
+                    # booked twice). The prescan refuses a file whose
+                    # two levels disagree on the quantity.
+                    if _disc == 'Trade' and 'Order' in pre[
+                            'order_levels'].get(
+                            (asset_cat, self._cell(row, header_map,
+                                                   'Symbol'),
+                             (self._cell(row, header_map, 'Date/Time')
+                              .replace(',', ' ').split() or [''])[0]),
+                            {}):
                         self.count_skip(f"{_NE}Trades execution-level "
                                         f"duplicate of an Order row")
                         continue
-                    if _disc == 'Order':
-                        _seen_order_level = True
-                    elif _disc and _disc not in ('Order', 'Trade'):
+                    if _disc and _disc not in ('Order', 'Trade'):
                         self.count_skip(f"Trades DataDiscriminator "
                                         f"{_disc}")
                         continue
@@ -1143,7 +1498,9 @@ class IbBrokerage(BaseBrokerage):
                 # Remove common known exchange extensions to avoid doubling
                 symbol = re.sub(r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE)
 
-                ext = _ib_currency_ext(currency)
+                ext = (_ib_listing_ext(asset_cat, description, currency, fii)
+                       if asset_cat in ('Stocks', 'Warrants')
+                       else _ib_currency_ext(currency))
                 full_symbol = f"{symbol}.{ext}"
 
                 _trade_tx = {
@@ -1185,6 +1542,11 @@ class IbBrokerage(BaseBrokerage):
                 transactions.append(_trade_tx)
                 if is_expiry:
                     expiry_txs.append(_trade_tx)
+                if action == 'ASSIGN' and asset_cat == 'Equity and Index Options':
+                    assign_option_legs.append(_trade_tx)
+                elif (asset_cat in ('Stocks', 'Warrants')
+                      and ('A' in code_tokens or 'Ex' in code_tokens)):
+                    assign_stock_legs.append(_trade_tx)
                 # Cash Report: futures settle daily through "Cash
                 # Settling MTM", never through Trades (Sales/Purchase).
                 if asset_cat != 'Futures':
@@ -1288,6 +1650,7 @@ class IbBrokerage(BaseBrokerage):
                             symbol=f"{ticker}.{ext}", currency=currency,
                             date=date, desc=description, amount=amount,
                             account='IB'))
+                        transactions[-1]['_isin'] = isin
                         self.note_row_consumed()
                         continue
                 action = 'DIVIDEND_IN_LIEU' if is_pil else 'DIVIDEND'
@@ -1318,7 +1681,8 @@ class IbBrokerage(BaseBrokerage):
                     'gross_amount': amount,
                     'type': tx_type,
                     'account': 'IB',
-                    'description': description
+                    'description': description,
+                    '_isin': isin,      # income rebind check; popped
                 })
                 self.note_row_consumed()
 
@@ -1353,9 +1717,8 @@ class IbBrokerage(BaseBrokerage):
                 except ValueError:
                     self.count_skip(f"malformed {section} row")
                     continue
-                sym = symbol.strip().replace(' ', '.')
-                sym = re.sub(r'\.(TO|US|AX|L)$', '', sym, flags=re.IGNORECASE)
-                open_position_syms.add(f"{sym}.{_ib_currency_ext(currency)}")
+                open_position_syms.add(_ib_stock_symbol(
+                    asset_cat, symbol, currency, fii))
                 self.note_row_consumed()      # read into parser state
 
             elif section == 'Statement':
@@ -1525,7 +1888,8 @@ class IbBrokerage(BaseBrokerage):
                     'net_amount': amount,
                     'type': 'tax',
                     'account': 'IB',
-                    'description': description
+                    'description': description,
+                    '_isin': isin,      # income rebind check; popped
                 })
                 self.note_row_consumed()
 
@@ -1779,6 +2143,32 @@ class IbBrokerage(BaseBrokerage):
                 # corporate action does.
                 _eff = {'desc': description, 'date': date, 'qty': qty,
                         'kind': 'none', 'txs': [], 'consumed': False}
+
+                def _unbooked(msg, _eff=_eff):
+                    unbooked_ca.append(msg)
+                    _eff.update(kind='unbooked', msg=msg)
+                    self.count_skip(f"{section} row not booked (see "
+                                    f"UNBOOKED warning)")
+                    _ca_record(_eff)
+
+                # Every branch below builds STOCK symbols (ticker + the
+                # currency suffix, multiplier 1). An option or futures
+                # row (a contract adjustment on a split) booked there
+                # became an equity SPLIT on an invented symbol while the
+                # real contract never rolled (audit S058-16).
+                if _ca_cat and _ca_cat not in ('Stocks', 'Warrants'):
+                    if qty != 0 or abs(proceeds) > 0.005:
+                        _unbooked(
+                            f"{path.name} {date}: {_ca_cat} corporate "
+                            f"action {description[:90]!r} (quantity "
+                            f"{qty:g}) — contract adjustments are not "
+                            f"translated; book the old and the adjusted "
+                            f"contract by hand in a .tt file.")
+                    else:
+                        self.count_nonevent(f"{section} zero-quantity row")
+                        _ca_record(_eff)
+                    continue
+
                 _troot = ib_tender_root(description)
                 if _troot is not None:
                     _tsym = f"{_troot}.{ext}"
@@ -1799,6 +2189,25 @@ class IbBrokerage(BaseBrokerage):
                                        or (not _tender_in and qty < 0))
                     _eff.update(kind='tender', tender=_tl,
                                 parked=qty if _is_placeholder else 0.0)
+                    # An allocation that DELIVERS another security (a
+                    # share-for-share exchange offer) is a merger, not a
+                    # journal: it used to be netted as a no-op, the old
+                    # shares staying in the book and the acquirer's
+                    # never arriving (audit S013-06).
+                    _dm = _IB_DELIVERED_RE.search(description)
+                    _delivered = (_dm.group(1).strip().replace(' ', '.')
+                                  if _dm else '')
+                    if (not _tender_in and qty > 0 and _delivered
+                            and _delivered.upper() != _troot.upper()):
+                        _tl['foreign'] = True
+                        _unbooked(
+                            f"{path.name} {date}: tender/exchange offer "
+                            f"for {_tsym} delivered {qty:g} {_delivered} "
+                            f"(another security) — a share-for-share "
+                            f"exchange is a disposition of {_tsym} (or a "
+                            f"s.85.1 rollover): book it by hand in a .tt "
+                            f"file.")
+                        continue
                     if abs(proceeds) < 0.005:
                         if _is_placeholder:
                             _tl['parked'] += qty
@@ -1892,11 +2301,18 @@ class IbBrokerage(BaseBrokerage):
                         pending_cil[symbol] = pending_cil.get(symbol, 0.0) - qty
                     handled = True
 
-                split_match = re.search(r'^([A-Z0-9\s\.]+)\s*\(([^)]+)\)\s+Split\s+([\d\.]+)\s+for\s+([\d\.]+)', description, re.IGNORECASE)
+                # Ratio terms may be comma-grouped ('Split 1 for 1,000'):
+                # the old [\d\.]+ stopped at the comma and read it as 1
+                # for 1 (audit S058-19). Parsed strictly.
+                split_match = re.search(r'^([A-Z0-9\s\.]+)\s*\(([^)]+)\)\s+Split\s+([\d\.,]+)\s+for\s+([\d\.,]+)', description, re.IGNORECASE)
                 if split_match and not handled:
                     ticker = split_match.group(1).strip().replace(' ', '.')
-                    new_sh = float(split_match.group(3))
-                    old_sh = float(split_match.group(4))
+                    new_sh = parse_strict_number(split_match.group(3),
+                                                 field='split ratio',
+                                                 where=where)
+                    old_sh = parse_strict_number(split_match.group(4),
+                                                 field='split ratio',
+                                                 where=where)
                     ratio = new_sh / old_sh if old_sh != 0 else 1.0
                     symbol = f"{ticker}.{ext}"
                     split_key = (symbol, date, round(ratio, 9))
@@ -1937,6 +2353,19 @@ class IbBrokerage(BaseBrokerage):
                 # as the broker FMV. This branch used to book every
                 # one as a dividend at |Value| with no election
                 # (2026-09 audit). Recognized, not booked, here.
+                # A spin-off DEBIT (negative quantity) is a short
+                # parent's delivery obligation for the spun-off shares.
+                # taxjson-corp-actions books only the long side, so it
+                # used to fall into the unhandled tally as a
+                # "non-spin-off" row (audit S058-22).
+                if (qty < 0 and not handled
+                        and ib_spinoff_parts(description) is not None):
+                    _unbooked(
+                        f"{path.name} {date}: spin-off debit of {qty:g} on "
+                        f"a SHORT parent position ({description[:90]!r}, "
+                        f"Value {val:,.2f}) — the short spun-off position "
+                        f"is not booked; add it by hand in a .tt file.")
+                    continue
                 if (qty > 0 and not handled
                         and ib_spinoff_parts(description) is not None):
                     _eff.update(kind='spinoff')
@@ -1985,6 +2414,40 @@ class IbBrokerage(BaseBrokerage):
                     _ca_record(_eff)
                     continue
 
+                # A stock dividend: new shares delivered in kind. They
+                # used to be dropped (a phantom short at the next full
+                # sale — audit S058-24). Booked the way the Questrade
+                # parser books one: at $0 cost, with IB's Value shown so
+                # a taxable account can add the declared amount.
+                _sd = _IB_STOCK_DIV_RE.match(description)
+                if _sd and not handled:
+                    if qty > 0:
+                        _sym = f"{_sd.group(1).strip().replace(' ', '.')}.{ext}"
+                        _stx = {
+                            'action': 'BUYSELL', 'date': date, 'time': time,
+                            'date_settle': date, 'symbol': _sym,
+                            'quantity': qty, 'currency': currency,
+                            'price': 0.0, 'fee': 0.0, 'net_amount': 0.0,
+                            'gross_amount': 0.0, 'multiplier': 1.0,
+                            'account': 'IB', 'description': description,
+                        }
+                        transactions.append(_stx)
+                        _msg = (f"{_sym}: stock dividend of {qty:g} "
+                                f"share(s) on {date} booked at $0 cost (IB "
+                                f"Value {val:,.2f} {currency}) — in a "
+                                f"taxable account, add the dividend amount "
+                                f"(distributions.map or a .tt ADJUST) for "
+                                f"the correct ACB and income.")
+                        stock_dividends.append(_msg)
+                        _eff.update(kind='stockdiv', txs=[_stx], msg=_msg)
+                        self.note_row_consumed()
+                        _ca_record(_eff)
+                    else:
+                        _unbooked(f"{path.name} {date}: stock dividend row "
+                                  f"with quantity {qty:g} "
+                                  f"({description[:90]!r}) — not booked.")
+                    continue
+
                 # A share-for-share merger (or a merger shape nothing
                 # can book, which becomes a blocking `unsupported`
                 # event): taxjson-corp-actions owns it, after the
@@ -2010,7 +2473,7 @@ class IbBrokerage(BaseBrokerage):
                     ticker = m.group(1) if m else '<unknown>'
                     unhandled_ca_tickers[ticker] = unhandled_ca_tickers.get(ticker, 0) + 1
                     self.count_skip(f"{section} row not translated "
-                                    f"(see NOTE)")
+                                    f"(see UNBOOKED warning)")
                     _eff.update(kind='unhandled', ticker=ticker)
                 else:
                     self.count_nonevent(f"{section} zero-quantity row")
@@ -2028,6 +2491,12 @@ class IbBrokerage(BaseBrokerage):
                 asset_cat = self._cell(row, header_map, 'Asset Category')
                 transfer_type = self._cell(row, header_map, 'Type')
                 symbol = self._cell(row, header_map, 'Symbol')
+                # The description names the SECURITY (the raw IB symbol,
+                # as on Trades rows) next to the transfer kind: the
+                # security overrides key on it, and a kind-only
+                # description ('ACATS') left the transfer on the
+                # un-overridden listing — the pool split (audit S059-03).
+                xfer_desc = f"{transfer_type} ({symbol})"
                 currency = self._cell(row, header_map, 'Currency')
                 qty_str = self._cell(row, header_map, 'Qty')
                 if not asset_cat or asset_cat.startswith('Total'):
@@ -2044,10 +2513,9 @@ class IbBrokerage(BaseBrokerage):
                     else:
                         self.count_skip(f"{section}/{asset_cat}")
                     continue
-                if not qty_str:
-                    self.count_nonevent(f"{section} row with no "
-                                        f"quantity")
-                    continue
+                # A security transfer without a quantity moves shares
+                # we cannot count: refused (it was a calm non-event,
+                # and the position change was lost — audit R1-55).
                 qty = parse_strict_number(qty_str, field='Qty',
                                           where=where)
                 date = _ib_require_date(
@@ -2077,7 +2545,10 @@ class IbBrokerage(BaseBrokerage):
                     symbol = symbol.replace(' ', '.')
 
                 symbol = re.sub(r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE)
-                ext = _ib_currency_ext(currency)
+                ext = (_ib_listing_ext(asset_cat, self._cell(
+                           row, header_map, 'Symbol'), currency, fii)
+                       if asset_cat in ('Stocks', 'Warrants')
+                       else _ib_currency_ext(currency))
                 symbol = f"{symbol}.{ext}"
 
                 abs_qty = abs(qty)
@@ -2104,7 +2575,7 @@ class IbBrokerage(BaseBrokerage):
                                 and abs(float(_t.get('quantity') or 0)
                                         + qty) < 1e-9
                                 and _t.get('description')
-                                == transfer_type):
+                                == xfer_desc):
                             del transactions[_i]
                             self.note_row_consumed()  # + original
                             break
@@ -2122,7 +2593,7 @@ class IbBrokerage(BaseBrokerage):
                             'currency': currency, 'price': price,
                             'net_amount': abs(total_cost),
                             'account': 'IB',
-                            'description': f"{transfer_type} (Ca)",
+                            'description': f"{xfer_desc} (Ca)",
                         })
                         self.note_row_consumed()
                     continue
@@ -2138,7 +2609,7 @@ class IbBrokerage(BaseBrokerage):
                     'price': price,
                     'net_amount': abs(total_cost),
                     'account': 'IB',
-                    'description': transfer_type
+                    'description': xfer_desc
                 })
                 self.note_row_consumed()
 
@@ -2196,13 +2667,16 @@ class IbBrokerage(BaseBrokerage):
         # `Ca` rows whose original never appeared: a cancellation of
         # something booked in an EARLIER statement (or a restatement
         # this parser cannot pair). Nothing is guessed — loud skip.
+        # Kept for taxjson-brokerage, which offers each unmatched Ca row
+        # to the account's OTHER statements (a split booked in the 2025
+        # statement and cancelled in the 2026 one — audit S059-04).
+        # Under an account context it also prints the warning for the
+        # rows no statement matched; a lone parse warns here.
+        self.ca_undo = _ca_undo
+        self.unmatched_ca = list(pending_ca)
         for _ca in pending_ca:
-            print(f"warning: {_ca['where']}: IB cancelled (Ca) the "
-                  f"corporate action {_ca['desc']!r} ({_ca['qty']:g} on "
-                  f"{_ca['date']}) but its original row is not in this "
-                  f"statement — nothing undone; if the original was "
-                  f"booked from an earlier statement, reverse it by "
-                  f"hand in a .tt file.", file=sys.stderr)
+            if self.account_context is None:
+                print(unmatched_ca_warning(_ca), file=sys.stderr)
             self.count_skip("Corporate Actions Ca row whose original is "
                             "not in this statement (see warning)")
 
@@ -2230,7 +2704,7 @@ class IbBrokerage(BaseBrokerage):
                     f"({_dates}) — the offer's outcome (shares returned "
                     f"or cash paid) is in a later statement; nothing was "
                     f"booked for them here.", file=sys.stderr)
-            elif _tl['cash_qty'] == 0:
+            elif _tl['cash_qty'] == 0 and not _tl.get('foreign'):
                 print(
                     f"note: {_tsym}: {_tl['rows']} tender/voluntary-offer "
                     f"journal row(s) ({_dates}) moved shares to and from "
@@ -2274,15 +2748,25 @@ class IbBrokerage(BaseBrokerage):
                   f"Corporate Action row(s) in {path.name} are booked by "
                   f"taxjson-corp-actions after the tax election (`taxjson "
                   f"run` runs it), not by this parser.", file=sys.stderr)
+        for _m in stock_dividends:
+            print(f"{ATTENTION_PREFIX} {_m}", file=sys.stderr)
+        for _m in unbooked_ca:
+            print(f"{UNBOOKED_PREFIX} {_m}", file=sys.stderr)
         if unhandled_ca_tickers:
             total = sum(unhandled_ca_tickers.values())
             tickers = ', '.join(sorted(unhandled_ca_tickers.keys()))
+            # UNBOOKED (console; fatal under run --strict): a row that
+            # moved shares and nothing booked. The old advice — a
+            # manual TRANSFER row — is dropped in a taxable account and
+            # double-booked what corp-actions already books (R1-140).
             print(
-                f"NOTE: {total} unhandled Corporate Action row(s) in {path.name} "
-                f"for: {tickers}. Only splits, cash in lieu, tenders and cash "
-                f"takeovers are booked here (mergers and spin-offs by "
-                f"taxjson-corp-actions). For other events that affect basis, "
-                f"add a manual TRANSFER entry to your *_in.tt file.",
+                f"{UNBOOKED_PREFIX} {total} unhandled Corporate Action "
+                f"row(s) in {path.name} for: {tickers}. Only splits, cash "
+                f"in lieu, stock dividends, tenders and cash takeovers are "
+                f"booked here (mergers and spin-offs by "
+                f"taxjson-corp-actions). If the event changed your "
+                f"position or basis, book it by hand in a .tt file "
+                f"(BUYSELL / SPLIT rows).",
                 file=sys.stderr,
             )
 
@@ -2356,8 +2840,20 @@ class IbBrokerage(BaseBrokerage):
         # for its ticker (fixes ISIN-country vs listing-exchange mismatches on
         # dual-listed names). Runs after the full file is parsed so it sees
         # every position regardless of section order.
-        _reattribute_income_to_holdings(transactions,
-                                        extra_held=open_position_syms)
+        _isin_mismatch: set = set()
+        _reattribute_income_to_holdings(
+            transactions, extra_held=open_position_syms,
+            fallback_held=(ctx or {}).get('held'),
+            isins_by_root={**(ctx or {}).get('stock_isins', {}),
+                           **pre['stock_isins']},
+            mismatches=_isin_mismatch)
+        for t in transactions:
+            t.pop('_isin', None)
+        for _sym, _isin, _held in sorted(_isin_mismatch):
+            print(f"warning: {path.name}: income on {_sym} (ISIN {_isin}) "
+                  f"was NOT moved to the held listing {_held}: that "
+                  f"listing is a different security (another ISIN) with "
+                  f"the same ticker.", file=sys.stderr)
         if isin_fallback:
             _held = set(open_position_syms) | {
                 t.get('symbol') for t in transactions
@@ -2376,6 +2872,23 @@ class IbBrokerage(BaseBrokerage):
                       f"this statement confirms that listing. Check the "
                       f"symbol (a ticker.map rule fixes it).",
                       file=sys.stderr)
+
+        # An assignment's option leg settles with its STOCK leg: the
+        # premium rolls into the delivered shares, so the pair must share
+        # a settle date or an unrelated same-underlying trade sorting
+        # between them consumes the staged premium. Before the T+1
+        # cutover the option class settled T+1 and the stock T+2 (audit
+        # S058-01). Cash-settled contracts have no stock leg: unchanged.
+        _stock_by_key = {}
+        for _st in assign_stock_legs:
+            _root, _ext = _split_known_ext(_st['symbol'])
+            _stock_by_key.setdefault((_root, _ext, _st['date']), _st)
+        for _ol in assign_option_legs:
+            _om = re.match(r'^(.+?)\d{6}[CP]\d{8}\.(\w+)$', _ol['symbol'])
+            _st = (_stock_by_key.get((_om.group(1), _om.group(2),
+                                      _ol['date'])) if _om else None)
+            if _st is not None:
+                _ol['date_settle'] = _st['date_settle']
 
         self.clamp_settlement_to_expiry(transactions, expiry_txs)
 

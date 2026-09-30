@@ -25,7 +25,9 @@ cash deposits/withdrawals, so the ledger can be asked to spend
 currency it never saw acquired. Such overdrafts dispose only what the
 pool holds (the excess moves at that day's rate with zero gain) and
 are COUNTED — a large overdraft count means conversion/deposit rows
-are missing and the result understates activity. This is why the
+are missing. Unseen conversions can move the result in EITHER
+direction (a lot converted away and re-bought later is priced against
+the wrong pool), which the report says every time. This is why the
 feature is OFF by default (`fx_cash_gains = true` under [settings]
 turns the end-of-run report on); the `taxjson fx-cash` command works
 either way.
@@ -46,13 +48,50 @@ _INFLOW = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST")
 _OUTFLOW = ("TAX", "FEE")
 
 
+# Fiat and USD-pegged coins: a reward or trade leg IN one of these is
+# cash (the crypto parsers fold stablecoins to their fiat quote).
+_CASH_LIKE = ("USD", "CAD", "EUR", "GBP", "AUD", "JPY", "CHF",
+              "USDC", "USDT", "DAI")
+
+
+def _non_cash(tx: Dict[str, Any]) -> bool:
+    """A row whose consideration is PROPERTY, not currency (S003-05):
+    it is valued in a currency for the gains engine, but no foreign
+    cash changes hands, so it neither acquires nor disposes of any
+    under ITA s.39(1.1)."""
+    desc = str(tx.get("description") or "")
+    low = desc.lower()
+    # Crypto-for-crypto: Kraken trade/instant-trade legs, Coinbase
+    # Convert legs. Both sides are priced in USD; neither moves USD.
+    if "crypto-to-crypto" in low or low.startswith("convert ("):
+        return True
+    # In-kind staking reward in a coin (the income row and its
+    # acquisition row). A reward paid in fiat or a stablecoin is cash.
+    if low.startswith("staking reward"):
+        sym = str(tx.get("symbol") or "").upper().split(".")[0]
+        return sym not in _CASH_LIKE
+    # Corporate-action legs (share-for-share merger, spin-off ACB
+    # allocation, taxable exchange at FMV): stock for stock. The only
+    # cash is a standalone cash-in-lieu leg. A cash takeover is a sale
+    # the broker parser books, never a corp-action row.
+    if tx.get("corp_event_id"):
+        return ": cash-in-lieu for" not in low
+    return False
+
+
 def _flows(tx: Dict[str, Any]) -> Optional[float]:
     """Signed cash flow of a transaction in its NATIVE currency:
     positive = cash received (acquires currency), negative = cash paid
     (disposes). None = not a cash event for this ledger."""
     action = tx.get("action")
     net = float(tx.get("net_amount") or 0.0)
-    if action == "BUYSELL":
+    if _non_cash(tx):
+        return None
+    # ASSIGN: an assignment/exercise stock leg carrying the strike cash
+    # (Webull books both legs ASSIGN; IB/RBC/Questrade book the stock
+    # leg as BUYSELL) moves cash exactly like a trade (R1-147). The
+    # option leg carries no cash (net 0) and is skipped below.
+    if action in ("BUYSELL", "ASSIGN"):
         qty = float(tx.get("quantity") or 0.0)
         if net == 0:
             return None
@@ -112,7 +151,17 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
                   key=lambda t: (str(t.get("date_settle")
                                      or t.get("date") or ""),
                                  str(t.get("time") or "")))
+    year_end = f"{ystr}-12-31"
+    pools_ye: Optional[Dict[str, Dict[str, float]]] = None
+
+    def _snap() -> Dict[str, Dict[str, float]]:
+        return {c: {"units": round(p[0], 2), "acb": round(p[1], 2)}
+                for c, p in sorted(pools.items()) if p[0] > 0.005}
+
     for tx in rows:
+        if pools_ye is None and str(tx.get("date_settle")
+                                    or tx.get("date") or "") > year_end:
+            pools_ye = _snap()           # the balance at Dec 31
         cur = str(tx.get("currency") or "").upper()
         if not cur or cur == base:
             continue
@@ -163,9 +212,12 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
             "net_gain": round(net, 2),
             "overdrafts": overdrafts,
             "unrated": unrated,
-            "pools": {c: {"units": round(p[0], 2),
-                          "acb": round(p[1], 2)}
-                      for c, p in sorted(pools.items()) if p[0] > 0.005}}
+            # End of the whole history (the books may run past the
+            # tax year) and at Dec 31 of the tax year — the latter is
+            # what a broker's year-end cash balance can be compared to.
+            "pools": _snap(),
+            "pools_year_end": pools_ye if pools_ye is not None
+            else _snap()}
 
 
 def apply_jurisdiction(net_gain: float, country: str) -> Dict[str, Any]:
@@ -222,14 +274,30 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
                           ["<", ">", ">", ">"], body, foot)
     lines += ["", f"All amounts {base}. {verdict['note']}"]
     warn: List[str] = []
+    ye = doc.get("pools_year_end") or {}
+    if ye:
+        bal = ", ".join(f"{c} {fmt_money(v['units'])}"
+                        for c, v in sorted(ye.items()))
+        warn.append(f"Ledger's foreign-cash balance at {year}-12-31: "
+                    f"{bal}. Compare it with the brokers' year-end "
+                    f"cash balances — a gap means conversions or "
+                    f"deposits/withdrawals the ledger cannot see.")
     if doc["overdrafts"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["overdrafts"].items()))
         warn.append(f"WARNING: disposals exceeded the ledgered "
                     f"balance ({counts}; full history) — cash "
                     f"conversions/deposits the broker CSVs don't "
-                    f"carry. Those move at the day's rate with zero "
-                    f"gain, so the result understates activity.")
+                    f"carry. The excess moves at the day's rate with "
+                    f"zero gain.")
+    # Always: explicit conversions (IB Forex rows, bank FX, deposits)
+    # are not read, so a lot converted away and later re-bought is
+    # priced against the wrong pool (R1-148).
+    warn.append("CAVEAT: explicit currency conversions and cash "
+                "deposits/withdrawals are not in the ledger, so this "
+                "figure can be wrong in either direction — not only "
+                "understated. Treat it as a starting point for the "
+                "s.39(1.1) calculation, not the answer.")
     if doc["unrated"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["unrated"].items()))

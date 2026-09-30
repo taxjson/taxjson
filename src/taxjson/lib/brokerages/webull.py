@@ -6,14 +6,15 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
-                                         parse_strict_number)
+                                         OPTION_STRIKE_RE, parse_strict_number)
 
 
 # Webull's option descriptions run the ticker directly into the date with
 # no separator: "CALL ABBV01/17/25 190". The base regex requires whitespace
 # between the two — override it here.
 _WEBULL_OPTION_RE = re.compile(
-    r'(CALL|PUT)\s+([A-Z.\d]+?)\s*(\d{2}/\d{2}/\d{2})\s+([\d\.]+)', re.IGNORECASE
+    r'(CALL|PUT)\s+([A-Z.\d]+?)\s*(\d{2}/\d{2}/\d{2})\s+'
+    + OPTION_STRIKE_RE, re.IGNORECASE
 )
 
 
