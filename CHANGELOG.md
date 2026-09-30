@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Wash radar, sell-check, buy-check and safe-to-sell say what they
+  cannot see.** Their verdicts cover the project's own accounts only; a
+  purchase by a spouse or common-law partner or a controlled corporation
+  (Canada: affiliated persons, s.251.1; US: IRS Pub. 550) also denies a
+  loss. Each report now says so in one line. tax-logic CA-PLAN-04 /
+  US-PLAN-04.
+- **Wash radar: a sale whose commission exceeds its gross is a loss.**
+  Its proceeds are negative, as the engine books them. The radar used
+  abs() and called the loss a gain, so a superficial loss had no
+  VIOLATION and no rescue date. A return of capital on a short position
+  now lowers the short's gain, as in the engine.
+- **Wash radar: crypto rescue deadlines are not walked back through
+  T+1.** A coin settles on its trade date, so the last day to sell is
+  the settle bound itself, weekends included; the row says "units", not
+  "shares".
+- **Wash radar wording.** CAUTION says a loss sale of any size is clean,
+  not only a full exit. BLOCKED, RISK and buy-check say that a rebuy (a
+  DRIP too) denies the loss only on as many shares as it buys, and
+  BLOCKED / buy-check print the amount per unit. `taxjson watch` reports
+  these rows as changed once after the upgrade.
+- **Wash radar input.** A book row the engine would refuse (a
+  non-numeric quantity, a missing date, a trade with no amount) stops
+  the radar and safe-to-sell with one line naming the file and row. It
+  used to print a traceback, or skip the row silently. A bare-array
+  book is accepted.
+- **buy-check / sell-check "last loss sale" line** dates the loss on the
+  project's window basis (trade date in a US project).
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the

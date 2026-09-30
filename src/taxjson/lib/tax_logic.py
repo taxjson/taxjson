@@ -714,6 +714,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "registered accounts as context, so a sibling account's "
                  "purchase in the window denies the loss as the filing "
                  "would."),
+            Rule("CA-PLAN-04",
+                 "Their verdicts cover the project's own accounts only and "
+                 "say so: a purchase by your spouse or common-law partner, "
+                 "or by a corporation you or they control (affiliated "
+                 "persons, s.251.1), also makes a loss superficial, and "
+                 "those accounts are not in the project."),
         ]),
         ("Project country", _ownership(c)),
     ]
@@ -1083,6 +1089,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "The web what-if runs a sale with every taxable "
                  "account's purchases and the IRAs as wash-sale context, "
                  "on the account's own FIFO basis."),
+            Rule("US-PLAN-04",
+                 "Their verdicts cover the project's own accounts only and "
+                 "say so: a purchase by your spouse or by a corporation "
+                 "you control also makes a loss a wash sale (IRS Pub. "
+                 "550), and those accounts are not in the project."),
         ]),
         ("Project country", _ownership(c)),
     ]

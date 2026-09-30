@@ -11479,12 +11479,27 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     _acct_cfg = _soft_config(root).get("accounts") or {}
     _taxable = {a for a, c in _acct_cfg.items()
                 if (c or {}).get("type") == "taxable"}
+    last_loss = _last_loss_by_class(
+        resolve_gains_files(cache), canon, _taxable,
+        usa=_radar_country_is_usa(root))
+    return radar, canon, last_loss
+
+
+def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
+                        ) -> Dict[str, Dict[str, Any]]:
+    """Each symbol class's most recent LOSING disposition in the taxable
+    gains files (economic raw_gain, so a denied loss still shows), dated
+    on the country's window basis — the SETTLE date under s.54, the
+    TRADE date under §1091 — so the "N days ago / INSIDE the window"
+    line agrees with the radar's verdict at the day-30 edge (audit
+    S050-00; it used settle dates in US projects too)."""
+    import json as _json
     last_loss: Dict[str, Dict[str, Any]] = {}
-    for _a, _p in resolve_gains_files(cache).items():
-        if _taxable and _a not in _taxable:
+    for _a, _p in gains_files.items():
+        if taxable and _a not in taxable:
             continue
         try:
-            _doc = _json.loads(_p.read_text(encoding="utf-8"))
+            _doc = _json.loads(Path(_p).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         for _t in _doc.get("transactions", []):
@@ -11494,17 +11509,15 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             if _g >= 0:
                 continue
             _c = canon(str(_t.get("symbol") or ""))
-            # Settlement basis: the radar's ±30-day windows are
-            # settle-based, so a trade-date age contradicted the
-            # verdict for anything traded 31-32 days ago.
-            _d = str(_t.get("date_settle") or _t.get("date") or "")
+            _d = str((_t.get("date") or _t.get("date_settle")) if usa
+                     else (_t.get("date_settle") or _t.get("date")) or "")
             _prev = last_loss.get(_c)
             if _prev is None or _d > _prev["date"]:
                 last_loss[_c] = {"date": _d,
                                  "symbol": _t.get("symbol"),
                                  "gain": round(_g, 2),
                                  "account": _t.get("account") or _a}
-    return radar, canon, last_loss
+    return last_loss
 
 
 def _fold_class_separator(symbol: str) -> str:
@@ -11587,9 +11600,9 @@ def _last_loss_line(ll) -> Optional[str]:
     from datetime import date as _date
     try:
         _ago = (_date.today() - _date.fromisoformat(ll["date"])).days
-        # `date` is the settle date: a sale made today settles later
-        # (T+1), so a negative age means "not settled yet", not
-        # "-1 days ago".
+        # `date` is the country's window date (settle for Canada): a
+        # sale made today settles later (T+1), so a negative age means
+        # "not settled yet", not "-1 days ago".
         _ago_s = (f"{_ago} days ago" if _ago >= 0 else
                   f"traded, settles in {-_ago} day"
                   f"{'s' if _ago < -1 else ''}")
@@ -11652,10 +11665,17 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                        else None)
                 if _cd:
                     clears = max(clears, _cd) if clears else _cd
+                # Only the rebought units' share of the loss is denied
+                # (audit S054-07): state it per unit when the radar
+                # carries the loss and the units sold at it.
+                _rl, _rq = r.get("recent_loss"), r.get("recent_loss_qty")
+                _per = (f" on as many units as you buy (about "
+                        f"${float(_rl) / float(_rq):,.2f} of it per unit)"
+                        if _rl and _rq and float(_rq) > 1e-9 else "")
                 lines.append(
                     f"{t}: {cat} — a loss sold within the past 30 "
-                    f"days; buying now cancels it (DEFERRED if bought "
-                    f"taxable, PERMANENT if bought "
+                    f"days; buying now cancels it{_per} (DEFERRED if "
+                    f"bought taxable, PERMANENT if bought "
                     f"{'in an IRA' if _usa else 'sheltered'})."
                     + (f" Safe to buy from {_cd}." if _cd else
                        " Wait until 31 days after the LATEST in-window "
@@ -11711,13 +11731,18 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                         "clears_at": clears, "detail": lines,
                         "last_loss": _ll})
 
+    # SAFE is "as far as this project's accounts show" (CA-PLAN-04 /
+    # US-PLAN-04, audit S054-22).
+    from taxjson.lib.wash_scope import scope_note as _scope_note
+    _scope = _scope_note("usa" if _usa else "canada")
     if getattr(args, "json", False):
-        _json_out({"results": results})
+        _json_out({"results": results, "scope_note": _scope})
     else:
         for r in results:
             print(f"{r['symbol']}: {r['verdict']}")
             for ln in r["detail"]:
                 print(f"  {ln}")
+        print(_scope)
     if unsafe:
         raise SystemExit(1)
 
@@ -11872,13 +11897,18 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                         "clears_at": clears,
                         "act_by": act_by, "detail": lines,
                         "last_loss": _last_loss.get(wroot)})
+    # SAFE is "as far as this project's accounts show" (CA-PLAN-04 /
+    # US-PLAN-04, audit S054-22).
+    from taxjson.lib.wash_scope import scope_note as _scope_note
+    _scope = _scope_note("usa" if _usa else "canada")
     if getattr(args, "json", False):
-        _json_out({"results": results})
+        _json_out({"results": results, "scope_note": _scope})
     else:
         for r in results:
             print(f"{r['symbol']}: {r['verdict']}")
             for ln in r["detail"]:
                 print(f"  {ln}")
+        print(_scope)
     if unsafe:
         raise SystemExit(1)
 
