@@ -56,6 +56,11 @@ def _flows(tx: Dict[str, Any]) -> Optional[float]:
         qty = float(tx.get("quantity") or 0.0)
         if net == 0:
             return None
+        if (tx.get("type") or "") == "futures_settlement":
+            # A futures fill moves only its settled P/L (lib/futures.py):
+            # signed, + received / - paid. Its notional never changes
+            # hands — counting it disposed of phantom USD (R1-204).
+            return net
         # Buys consume cash, sells raise it; base books store net
         # magnitudes with the direction on quantity.
         return -abs(net) if qty > 0 else abs(net)
@@ -99,6 +104,10 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
     unrated: Dict[str, int] = {}
     ystr = str(year)
 
+    # Plain futures on the settlement basis (native books carry each
+    # fill's notional).
+    from taxjson.lib.futures import settle_futures_dicts
+    transactions = settle_futures_dicts(list(transactions))
     rows = sorted(transactions,
                   key=lambda t: (str(t.get("date_settle")
                                      or t.get("date") or ""),

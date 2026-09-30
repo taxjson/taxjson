@@ -278,6 +278,16 @@ def convert_transaction(
 def process_transactions(
     transactions: list, target_curr: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal
 ) -> list:
+    """Convert every row. For a CAD target (the Canadian books) plain
+    futures fills are first put on the SETTLEMENT basis in their native
+    currency (lib/futures.settle_futures): an opening carries 0, a close
+    carries the realized native P/L, so each close's P/L is converted at
+    that closing leg's own rate and no notional is ever translated
+    (R1-0/R1-52/R1-204). Raises ValueError on a futures row that cannot
+    be put on that basis."""
+    if norm_currency(target_curr) == "CAD":
+        from taxjson.lib.futures import settle_futures
+        transactions, _stats = settle_futures(list(transactions))
     return [convert_transaction(tx, target_curr, history, default_rate) for tx in transactions]
 
 
@@ -464,7 +474,12 @@ def main():
         sys.exit(1)
     default_rate = Decimal(str(resolve_default_rate(args.default_rate)))
 
-    converted_transactions = process_transactions(transactions, target_curr, history, default_rate)
+    try:
+        converted_transactions = process_transactions(
+            transactions, target_curr, history, default_rate)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     emit_fallback_summary(default_rate)
     if abort_if_currency_uncovered(

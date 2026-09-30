@@ -756,6 +756,11 @@ FILE` writes importable rows, `--json` the raw report.
   properties (15199 / 15300 — T4037 lists options there), **line 7**
   crypto-assets from the `crypto = true` accounts (15200 / 15301; for 2024
   and earlier returns crypto goes on 15199 / 15300), with per-line totals.
+  A futures contract is booked on its settled P/L, not its notional (the
+  notional never changes hands): the P/L of each close, commissions
+  included, is converted at that closing leg's rate and shown the way the
+  broker's T5008 shows it — a gain as proceeds with ACB 0, a loss as ACB
+  with proceeds 0, no separate outlays.
   Sell-side commissions are re-split into the outlays column (gain
   unchanged), and every row foots — proceeds − ACB − outlays = the allowed
   gain: a superficial loss denied on the row shows as an ACB reduced by the

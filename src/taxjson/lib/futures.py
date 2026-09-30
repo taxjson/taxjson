@@ -82,38 +82,28 @@ def _part(tx: TaxTransaction, qty: Decimal, frac: Decimal, net: Decimal,
     return TaxTransaction(**d)
 
 
-def settle_futures(transactions: List[TaxTransaction]
-                   ) -> Tuple[List[TaxTransaction], Dict[str, int]]:
-    """Rewrite every plain-futures BUYSELL row of one book on the
-    settlement basis (module docstring). Rows already rewritten, and
-    every other row, pass through unchanged and in place. Returns
-    (rows, stats) with stats = {'rows', 'closes', 'split'}.
-
-    A plain-futures row that moves a position through any action other
-    than BUYSELL (an OPENING_BALANCE, an ASSIGN, a SPLIT) is refused:
-    its money cannot be put on the settlement basis, and booking the
-    notional would bring back the FX-on-notional error silently."""
+def _settle(transactions: List[TaxTransaction]
+            ) -> Tuple[Dict[int, List[TaxTransaction]], Dict[str, int]]:
+    """{input index: replacement rows} for the plain-futures fills of
+    one book, plus stats. See settle_futures."""
     stats = {"rows": 0, "closes": 0, "split": 0}
     fut_idx = []
     for i, tx in enumerate(transactions):
         if not is_plain_future(tx.symbol):
             continue
         if (tx.type or "") == FUTURES_SETTLEMENT:
-            return list(transactions), stats        # already settled
+            return {}, stats                       # already settled
         if tx.action != "BUYSELL":
             if abs(float(tx.quantity or 0.0)) > 0 and tx.action not in (
                     "DIVIDEND", "DIVIDEND_IN_LIEU", "TAX", "INTEREST",
                     "FEE", "DISALLOW", "ADJUST"):
                 raise ValueError(
                     f"futures row {tx.action} {tx.symbol} {tx.date} "
-                    f"(id={tx.id}, account={tx.account}): only BUYSELL "
-                    f"fills of a futures contract can be booked (on "
-                    f"their settlement P/L). Replace it with the buy/sell "
-                    f"fills, or remove it.")
+                    f"(id={tx.id}): only BUYSELL fills of a futures "
+                    f"contract can be booked (on their settled P/L). "
+                    f"Replace it with the buy/sell fills, or remove it.")
             continue
         fut_idx.append(i)
-    if not fut_idx:
-        return list(transactions), stats
 
     order = sorted(fut_idx, key=lambda i: (
         transactions[i].date_settle or transactions[i].date,
@@ -148,12 +138,12 @@ def settle_futures(transactions: List[TaxTransaction]
             pl = avg * closing - close_money
         stats["closes"] += 1
         p[1] -= avg * closing
-        p[0] += closing if q > 0 else -closing
         sign = Decimal(1) if q > 0 else Decimal(-1)
+        p[0] += sign * closing
         parts = [_part(tx, sign * closing, frac, pl, True)]
-        left = abs(q) - closing
         if abs(p[0]) <= _EPS:
             p[0], p[1] = Decimal(0), Decimal(0)
+        left = abs(q) - closing
         if left > _EPS:
             # Crossed zero: the rest opens the opposite position.
             stats["split"] += 1
@@ -162,8 +152,47 @@ def settle_futures(transactions: List[TaxTransaction]
             p[1] = money * lfrac
             parts.append(_part(tx, sign * left, lfrac, Decimal(0), False))
         out_parts[i] = parts
+    return out_parts, stats
 
+
+def settle_futures(transactions: List[TaxTransaction]
+                   ) -> Tuple[List[TaxTransaction], Dict[str, int]]:
+    """Rewrite every plain-futures BUYSELL row of one book on the
+    settlement basis (module docstring). Every other row passes through
+    unchanged and in place; a book already rewritten is returned as is.
+    Returns (rows, stats) with stats = {'rows', 'closes', 'split'}.
+
+    A plain-futures row that moves a position through any action other
+    than BUYSELL (an OPENING_BALANCE, an ASSIGN, a SPLIT) is refused
+    with ValueError: its money cannot be put on the settlement basis,
+    and booking its notional would bring back the FX-on-notional error
+    silently."""
+    parts, stats = _settle(transactions)
     out: List[TaxTransaction] = []
     for i, tx in enumerate(transactions):
-        out.extend(out_parts.get(i, [tx]))
+        out.extend(parts.get(i, [tx]))
     return out, stats
+
+
+def settle_futures_dicts(rows: List[dict]) -> List[dict]:
+    """settle_futures over row DICTS (report tools reading native books),
+    one book per `account` value. Non-futures rows pass through as the
+    same dict objects; futures rows come back as settlement dicts that
+    keep any extra keys of their source row."""
+    from taxjson.lib.core import coerce_transaction_row
+    by_acct: Dict[str, List[int]] = {}
+    for i, r in enumerate(rows):
+        if isinstance(r, dict) and is_plain_future(r.get("symbol") or ""):
+            by_acct.setdefault(str(r.get("account") or ""), []).append(i)
+    replaced: Dict[int, List[dict]] = {}
+    for acct, idx in by_acct.items():
+        objs = [coerce_transaction_row(rows[i], i, f"account {acct}")
+                for i in idx]
+        parts, _ = _settle(objs)
+        for k, i in enumerate(idx):
+            if k in parts:
+                replaced[i] = [{**rows[i], **p.to_dict()} for p in parts[k]]
+    out: List[dict] = []
+    for i, r in enumerate(rows):
+        out.extend(replaced.get(i, [r]))
+    return out

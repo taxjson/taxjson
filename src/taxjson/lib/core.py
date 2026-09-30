@@ -1091,6 +1091,13 @@ class CanadaTaxRules(TaxRules):
             as positive proceeds (a -220.90 loss reported as -201.00;
             2026-09 engine audit)."""
             _n = float(tx.net_amount or 0.0)
+            if (tx.type or '') == 'futures_settlement':
+                # A futures fill on the settlement basis (lib/futures.py):
+                # net_amount is the realized P/L, SIGNED (+ received,
+                # - paid), 0 on an opening. A sell's proceeds are it; a
+                # buy (a short's cover) costs its negation, so a short
+                # closed at a profit realizes exactly the P/L.
+                return _n if float(tx.quantity or 0.0) < 0 else -_n
             return _n if float(tx.quantity or 0.0) < 0 else abs(_n)
 
         def _grant_applies(tx) -> bool:

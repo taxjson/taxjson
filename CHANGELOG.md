@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Futures are booked on their settled P/L, not their notional.** Each
+  leg's notional (quantity x price x multiplier) was converted to CAD at
+  its own date's rate, so the CAD gain carried FX on money that never
+  changed hands, and Schedule 3 line 6 showed the notional as proceeds
+  and ACB. A futures fill that opens a position now carries nothing; a
+  close carries the realized native P/L (commissions included), converted
+  at the closing leg's rate. Line 6 shows a gain as proceeds and a loss as
+  ACB (the T5008 shape); `sum`, `form-export`, `audit` (which re-derives
+  the P/L from the broker rows) and `fx-cash` agree. Owner books: 2025
+  +241.09 (CL), 2026 -2,251.16. Options on futures are unchanged.
 - **T1135: a futures contract has no cost amount.** A long futures
   position was counted at its full notional (one CL contract added about
   80,000 CAD to the threshold test and could flip "filing required").

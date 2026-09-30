@@ -259,5 +259,177 @@ class TestT1135Phantoms(unittest.TestCase):
         self.assertAlmostEqual(row["max_cost"], 1500.0, places=2)
 
 
+# ------------------------------------------------------------ R1-0/52/204
+
+from decimal import Decimal  # noqa: E402
+
+from taxjson.lib.core import TaxTransaction, get_tax_rules  # noqa: E402
+from taxjson.lib.futures import (  # noqa: E402
+    FUTURES_SETTLEMENT, settle_futures, is_plain_future)
+
+
+def _fut(date, qty, net, price, symbol="F:CLZ5.US", fee=2.37,
+         cur="USD", time="10:00:00", **kw):
+    return TaxTransaction(
+        action="BUYSELL", date=date, date_settle=date, time=time,
+        symbol=symbol, quantity=qty, currency=cur, price=price, fee=fee,
+        net_amount=net, gross_amount=abs(qty) * price * 1000,
+        account="IB", **kw)
+
+
+# The owner's 2025 CL round trip, in shape: 1 CL bought (notional
+# 57,400 + 2.37 commission), sold (61,730 - 2.37). IB's realized P/L is
+# 4,325.26 USD; the T5008 shows proceeds ~6,051, cost 0.
+CL_OPEN = ("2025-10-20", 1.0, 57402.37, 57.40)
+CL_CLOSE = ("2025-10-24", -1.0, 61727.63, 61.73)
+RATES = {"USD": {"2025-10-20": Decimal("1.4036"),
+                 "2025-10-24": Decimal("1.4014"),
+                 "2025-11-03": Decimal("1.4000"),
+                 "2025-11-10": Decimal("1.3500")}}
+
+
+def _convert(rows, to="CAD"):
+    from taxjson.bin.taxjson_convert_currency import (
+        process_transactions, reset_fallback_tally)
+    reset_fallback_tally()
+    return process_transactions(rows, to, RATES, Decimal("1.35"))
+
+
+def _gains(rows):
+    res = get_tax_rules("canada").compute_gains(rows)
+    return [g for g in res["transactions"]
+            if g.get("qty") and "gain" in g]
+
+
+class TestSettleFutures(unittest.TestCase):
+    def test_plain_future_vs_option_on_future(self):
+        self.assertTrue(is_plain_future("F:CLZ5.US"))
+        self.assertTrue(is_plain_future("/ESZ5"))
+        self.assertFalse(is_plain_future("F:CL251117C00070000.US"))
+        self.assertFalse(is_plain_future("AAPL.US"))
+
+    def test_open_carries_nothing_close_carries_native_pl(self):
+        rows, st = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
+        self.assertEqual([r.type for r in rows], [FUTURES_SETTLEMENT] * 2)
+        self.assertEqual(rows[0].net_amount, 0.0)
+        self.assertAlmostEqual(rows[1].net_amount, 4325.26, places=6)
+        self.assertEqual(st["closes"], 1)
+
+    def test_crossing_fill_is_split_and_short_close_is_signed(self):
+        f = lambda d, q, n, t: _fut(d, q, n, n / abs(q) / 1000,  # noqa
+                                    symbol="F:XXZ5.US", fee=0.0, time=t)
+        rows, st = settle_futures([
+            f("2025-11-03", 1.0, 100.0, "10:00:00"),
+            f("2025-11-03", -2.0, 220.0, "11:00:00"),   # close 1, short 1
+            f("2025-11-10", 1.0, 105.0, "10:00:00")])  # cover at a gain
+        self.assertEqual(st["split"], 1)
+        self.assertEqual([r.quantity for r in rows], [1.0, -1.0, -1.0, 1.0])
+        self.assertEqual([round(r.net_amount, 6) for r in rows],
+                         [0.0, 10.0, 0.0, 5.0])
+        # The closing part keeps the fill's id; the opening part is new.
+        self.assertNotEqual(rows[1].id, rows[2].id)
+
+    def test_other_actions_on_a_future_are_refused(self):
+        bad = TaxTransaction(action="OPENING_BALANCE", date="2025-01-02",
+                             symbol="F:CLZ5.US", quantity=1.0,
+                             currency="USD", net_amount=57000.0)
+        with self.assertRaises(ValueError) as cm:
+            settle_futures([bad])
+        self.assertIn("F:CLZ5.US", str(cm.exception))
+
+    def test_idempotent(self):
+        once, _ = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
+        twice, _ = settle_futures(once)
+        self.assertEqual([r.to_dict() for r in once],
+                         [r.to_dict() for r in twice])
+
+
+class TestFuturesGainAtCloseRate(unittest.TestCase):
+    def test_long_gain_is_native_pl_at_the_closing_rate(self):
+        conv = _convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
+        g = _gains(conv)
+        self.assertEqual(len(g), 1)
+        # 4,325.26 x 1.4014 — not 61,727.63 x 1.4014 - 57,402.37 x
+        # 1.4036 = 5,935.13 (FX on a notional never paid).
+        self.assertAlmostEqual(g[0]["gain"], 4325.26 * 1.4014, places=2)
+
+    def test_short_gain_is_native_pl_at_the_closing_rate(self):
+        es = lambda d, q, n: _fut(d, q, n, n / 50, symbol="F:ESZ5.US",  # noqa
+                                  fee=2.0)
+        conv = _convert([es("2025-11-03", -1.0, 299998.0),
+                         es("2025-11-10", 1.0, 295002.0)])
+        g = _gains(conv)
+        self.assertEqual(len(g), 1)
+        self.assertAlmostEqual(g[0]["gain"], 4996.0 * 1.35, places=2)
+
+    def test_loss_and_crossing_totals(self):
+        f = lambda d, q, n, t: _fut(d, q, n, n / abs(q) / 1000,  # noqa
+                                    symbol="F:XXZ5.US", fee=0.0, time=t)
+        conv = _convert([f("2025-11-03", 1.0, 100.0, "10:00:00"),
+                         f("2025-11-03", -2.0, 220.0, "11:00:00"),
+                         f("2025-11-10", 1.0, 115.0, "10:00:00")])
+        g = sorted(_gains(conv), key=lambda e: e["date"])
+        self.assertAlmostEqual(g[0]["gain"], 10 * 1.40, places=6)
+        self.assertAlmostEqual(g[1]["gain"], -5 * 1.35, places=6)
+
+    def test_futures_options_and_usd_books_untouched(self):
+        fop = _fut("2025-10-20", 1.0, 2500.0, 2.5,
+                   symbol="F:CL251117C00070000.US")
+        conv = _convert([fop])
+        self.assertEqual(conv[0].type, "")
+        self.assertAlmostEqual(conv[0].net_amount, 2500.0 * 1.4036, places=6)
+        usd = _convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)], to="USD")
+        self.assertEqual([r.net_amount for r in usd], [57402.37, 61727.63])
+
+
+class TestFuturesScheduleThree(unittest.TestCase):
+    def test_line6_shows_pl_not_notional(self):
+        from taxjson.bin.taxjson_form_export import build_schedule3
+        entries = _gains(_convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)]))
+        loss = _gains(_convert([
+            _fut("2025-11-03", 1.0, 60000.0, 60.0, symbol="F:CLF6.US"),
+            _fut("2025-11-10", -1.0, 59000.0, 59.0, symbol="F:CLF6.US")]))
+        rep = build_schedule3(entries + loss, 2025)
+        rows = {r["symbol"]: r for r in rep["rows"]}
+        cl = rows["F:CLZ5.US"]
+        self.assertAlmostEqual(cl["proceeds"], 6061.42, places=2)
+        self.assertEqual(cl["acb"], 0.0)
+        self.assertEqual(cl["outlays"], 0.0)
+        self.assertAlmostEqual(cl["gain"], 6061.42, places=2)
+        lo = rows["F:CLF6.US"]
+        self.assertEqual(lo["proceeds"], 0.0)
+        self.assertAlmostEqual(lo["acb"], 1350.0, places=2)
+        self.assertAlmostEqual(lo["gain"], -1350.0, places=2)
+        self.assertEqual(cl["line"], "6")
+        self.assertIn("settled P/L", cl["notes"])
+
+
+class TestFuturesAudit(unittest.TestCase):
+    def test_settled_pl_is_rederived_from_the_broker_rows(self):
+        from taxjson.bin.taxjson_audit import futures_native_nets
+        raw = [_fut(*CL_OPEN), _fut(*CL_CLOSE)]
+        base = _convert(raw)
+        source_index = {r.id: [{"label": "ib.csv", "row": r.to_dict()}]
+                        for r in raw}
+        base_index = {r.id: r.to_dict() for r in base}
+        nets = futures_native_nets(source_index, base_index)
+        self.assertAlmostEqual(nets[raw[1].id], 4325.26, places=6)
+        self.assertAlmostEqual(nets[raw[1].id] * 1.4014,
+                               base_index[raw[1].id]["net_amount"],
+                               places=6)
+
+
+class TestFuturesFxCash(unittest.TestCase):
+    def test_only_the_settled_pl_moves_usd(self):
+        from taxjson.bin.taxjson_fx_cash import build_ledger
+        rows = [r.to_dict() for r in (_fut(*CL_OPEN), _fut(*CL_CLOSE))]
+        rates = {"2025-10-20": 1.4036, "2025-10-24": 1.4014}
+        led = build_ledger(rows, "CAD", {}, 2025,
+                           rate_of=lambda c, d: rates.get(d))
+        usd = led["per_currency"]["USD"]
+        self.assertAlmostEqual(usd["acquired"], 4325.26, places=2)
+        self.assertAlmostEqual(usd["disposed"], 0.0, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

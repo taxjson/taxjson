@@ -269,7 +269,8 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         if not symbol:
             continue
         if is_plain_future(symbol):
-            if classify_country(symbol, overrides) is not None:
+            if date >= year_start \
+                    and classify_country(symbol, overrides) is not None:
                 futures_seen.add(symbol)
             continue
         qty = float(tx.get("quantity") or 0.0)

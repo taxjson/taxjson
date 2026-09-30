@@ -66,6 +66,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from taxjson.lib.core import is_option_symbol
+from taxjson.lib.futures import is_plain_future
 from taxjson.lib.report_model import load_report_json
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -376,7 +377,18 @@ def build_schedule3(entries: List[Dict[str, Any]],
         gain = float(e.get("gain") or 0.0)
         outlays = float(e.get("commission") or 0.0) + float(e.get("fee") or 0.0)
         direction = e.get("direction") or "LONG"
-        if direction == "SHORT":
+        if pclass == "futures" and is_plain_future(symbol):
+            # A futures contract is booked on its settled P/L
+            # (lib/futures.py): nothing is paid to open one, so the
+            # notional is neither proceeds nor ACB. Each closed contract
+            # shows the T5008 shape — a gain as PROCEEDS, a loss as ACB
+            # (the P/L before any superficial-loss denial; the footing
+            # ACB below absorbs a denial the usual way). Commissions are
+            # inside the P/L, so no separate outlays.
+            pl = (float(e["raw_gain"]) if e.get("raw_gain") is not None
+                  else gain)
+            rec["proceeds"] += max(pl, 0.0)
+        elif direction == "SHORT":
             # Engine signed short convention (FUZZ #E): `cost` is the
             # NEGATED opening short-sale proceeds and `proceeds` the
             # NEGATED buy-to-cover cost. Filing wants the real-world
@@ -422,7 +434,10 @@ def build_schedule3(entries: List[Dict[str, Any]],
                          f"no ACB addition)")
         if "futures" in r["classes"]:
             notes.append("futures / option on futures — reported with "
-                         "the other properties (options, T4037)")
+                         "the other properties (options, T4037)"
+                         + ("; futures: settled P/L (gain as proceeds, "
+                            "loss as ACB), not the notional"
+                            if is_plain_future(symbol) else ""))
         if r["short"]:
             notes.append("includes short position(s) — |amounts| shown")
         # `+ 0.0` turns a rounded -0.0 into 0.0 (no "-0.00" cells).
