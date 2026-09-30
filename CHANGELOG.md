@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`taxjson fees` counts a charged fee as a fee.** Standalone FEE rows
+  (IB market-data subscriptions, Questrade/RBC custody fees) were shown
+  negative and netted against commissions, and a commission refund was
+  shown as a charge; FEE rows now follow the repo convention (positive =
+  charged) (audit R1-54, R1-269).
+- **`taxjson trades` prints signed totals and fees.** A fee rebate printed
+  as a charge and a penny close's negative proceeds as positive, so the
+  single-account taxtext did not round-trip; TOTAL SELL and `trades-sum`
+  sold now net those proceeds signed (audit S039-11).
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
   is undone when both are in the account's inputs; it used to stay

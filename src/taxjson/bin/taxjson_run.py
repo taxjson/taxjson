@@ -3673,10 +3673,14 @@ def _tx_display_line(tx: dict) -> Optional[str]:
     fee = (float(tx.get("fee") or 0.0)
            + float(tx.get("commission") or 0.0))
 
+    # SIGNED total/fee, exactly as convert_tt.tx_to_tt_line emits them:
+    # abs() printed every fee rebate as a charge and a penny close's
+    # negative proceeds as positive, so the "round-trippable" view
+    # flipped both on re-import (audit S039-11).
     if action in ("BUYSELL", "ASSIGN"):
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(abs(net))} {money(abs(fee))}"
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
     if action == "TRANSFER":
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(abs(net))}"
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}"
     if action == "SPLIT":
         return f"SPLIT {date} {time} {sym} {tx.get('symbol_new') or sym} {sig(qty)}"
     if action in ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX"):
@@ -3790,6 +3794,16 @@ def _instrument_filter(args: argparse.Namespace):
     return lambda sym: bool(wanted & _instrument_tags(sym))
 
 
+def _trade_total(tx: dict) -> float:
+    """A trade row's money for the buy/sell totals, in the engine's pool
+    terms (core.py _trade_money): a BUY's cost as a magnitude (parsers
+    spell it either sign), a SELL's proceeds SIGNED — a penny close whose
+    commission exceeds the gross really has negative proceeds, and abs()
+    added it to TOTAL SELL (audit S039-11)."""
+    net = float(tx.get("net_amount") or 0.0)
+    return net if float(tx.get("quantity") or 0.0) < 0 else abs(net)
+
+
 def _run_tx_view(args: argparse.Namespace, actions, label: str,
                  symbol_filter=None) -> None:
     """Shared engine for `transactions` / `dividends` / `buysell`: read the
@@ -3847,8 +3861,8 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             cur = tx.get("currency") or "?"
             act = tx.get("action")
             if act in ("BUYSELL", "ASSIGN"):
-                amt = abs(float(tx.get("net_amount") or 0.0))
                 q = float(tx.get("quantity") or 0.0)
+                amt = _trade_total(tx)
                 bucket = "buy" if q > 0 else "sell" if q < 0 else None
                 if bucket:
                     jb[bucket][cur] = jb[bucket].get(cur, 0.0) + amt
@@ -3880,7 +3894,7 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         cur = tx.get("currency") or "?"
         act = tx.get("action")
         if act in ("BUYSELL", "ASSIGN"):
-            amt = abs(float(tx.get("net_amount") or 0.0))
+            amt = _trade_total(tx)
             q = float(tx.get("quantity") or 0.0)
             if q > 0:
                 buys[cur] = buys.get(cur, 0.0) + amt
@@ -4880,10 +4894,13 @@ def cmd_fees(args: argparse.Namespace) -> None:
     entries = []
     for acct, tx in rows:
         if tx.get("action") == "FEE":
-            # Standalone fee rows (e.g. IB monthly/market-data fees) carry
-            # the amount in net_amount, sign-preserved: negative = charged.
-            # Flip so a charge counts as a positive fee (a rebate nets out).
-            fee = -float(tx.get("net_amount") or 0.0)
+            # Standalone fee rows (IB market-data fees, Questrade/RBC FCH,
+            # IB Commission Adjustments) follow the repo FEE convention:
+            # net_amount POSITIVE = charged, negative = refund/rebate —
+            # the sign every parser emits and fx-cash reads. The old flip
+            # (from before IB's sign was aligned) showed every charge as
+            # a rebate (audit R1-54/R1-269).
+            fee = float(tx.get("net_amount") or 0.0)
         else:
             fee = _tx_fee(tx)
         if abs(fee) < 0.005:
@@ -5079,7 +5096,7 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         q = float(tx.get("quantity") or 0.0)
-        amt = abs(float(tx.get("net_amount") or 0.0))
+        amt = _trade_total(tx)          # sells signed (S039-11)
         fee = _tx_fee(tx)
         d = agg.setdefault((str(tx.get("symbol") or "?"), cur),
                            {"buys": 0, "sells": 0, "bought": 0.0, "sold": 0.0,
