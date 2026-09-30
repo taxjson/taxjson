@@ -31,6 +31,28 @@
   when mapped; otherwise buy/sell rows get the standard holiday-aware
   cycle (T+1/T+2/T+3 by era, options T+1) on the listing's market.
   `[options] settle_on_trade_date = true` keeps the trade date (crypto).
+- **RBC: one identity across an account's yearly exports.** The parser
+  learned a symbol's listing, an option code's contract and a temporary
+  reorganization code's company from each file alone. Now all of an
+  account's RBC files are read together. A US stock's USD dividend no
+  longer lands on the TSX listing that shares its bare ticker (owner
+  2024: HCA and NVDA dividends and withholding move from .TO to .US; no
+  gain changes). A TSX stock's USD dividend or return of capital in a
+  year with no trades keeps its .TO listing. An option re-described
+  between exports (RCI vs RCI.B, XCH-adjusted TRP1) keeps one symbol, so
+  its close is no longer booked as a new written option. A name change
+  under a temporary code finds the old ticker in an earlier export, and
+  warns with the `ticker.map` line when no file names it.
+- **RBC: overlapping re-downloads are de-duplicated.** A row's time came
+  from its position within the day, so the same trade in two downloads
+  of one account got two ids and was booked twice. Rows already in an
+  earlier file of the same RBC account are now skipped (identical fills
+  on one day are matched by count), with a note; files without an
+  Account column are never matched, and a warning says so.
+- **RBC: ticker change without a reorganization row.** When one symbol
+  stops with shares open and another with the same Symbol Description
+  and currency opens with a sale they cover (ORCC to OBDC in 2023), the
+  parser warns and prints the `GLOBAL` line for `ticker.map`.
 
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
