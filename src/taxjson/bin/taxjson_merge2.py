@@ -48,6 +48,7 @@ from taxjson.bin.taxjson_convert_currency import (
 )
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
 from taxjson.lib.corporate_timeline import normalize_symbol_new
+from taxjson.lib.trade_cancel import pair_cancellations
 
 
 def warn_duplicate_splits(txs) -> int:
@@ -158,6 +159,26 @@ def reconcile_dividend_tax(txs):
                 # Signed: a refund row keeps its negative per-share rate.
                 t.price = round((getattr(t, 'net_amount', 0.0) or 0.0)
                                 / total_qty, 8)
+
+
+def cancel_trade_pairs(txs):
+    """Drop each marked trade cancellation (IB `Ca`) with the original it
+    reverses; warn about one whose original is in none of the inputs (it
+    stays booked as a reversing trade)."""
+    kept, pairs, unmatched = pair_cancellations(txs)
+    for orig, _ca in pairs:
+        print(f"note: dropped the {orig.symbol} trade of "
+              f"{orig.quantity:g} @ {orig.price:g} on {orig.date} and "
+              f"its broker cancellation (Ca) from another statement.",
+              file=sys.stderr)
+    for ca in unmatched:
+        print(f"warning: {ca.symbol}: the broker cancelled (Ca) a trade "
+              f"of {-ca.quantity:g} @ {ca.price:g} on {ca.date}, but the "
+              f"original fill is in none of this account's inputs — the "
+              f"cancellation stays booked as a reversing trade. Add the "
+              f"statement holding the original (or remove both rows by "
+              f"hand) so the pair nets out.", file=sys.stderr)
+    return kept
 
 
 def _load_json_files(paths, require_inputs=False):
@@ -348,6 +369,13 @@ def main():
                     f"account={account} id={tx_id}",
                     file=sys.stderr,
                 )
+
+    # --- Stage 2b: broker trade cancellations -------------------------
+    # An IB `Ca` row whose original fill sits in ANOTHER statement of the
+    # account (a 2026 statement cancelling a 2025 fill) survives the
+    # parse as a marked cancellation leg; drop it with its original here
+    # (lib/trade_cancel, audit R1-51). Always on: a no-op without marks.
+    txs = cancel_trade_pairs(txs)
 
     # --- Stage 3: ticker-map ------------------------------------------
     if args.map_file:

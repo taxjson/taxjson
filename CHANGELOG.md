@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **IB: a cancelled trade (`Ca`) nets out.** A Trades row coded `Ca`
+  was booked as an ordinary trade, so a cancel-and-rebook was a phantom
+  round trip: a loss sale rebooked a cent higher became two denied
+  superficial losses and the remaining shares' ACB was wrong. The
+  cancellation now drops out with its original fill; when the original
+  is in an earlier statement of the same account, `taxjson-merge2`
+  (`taxjson run`) pairs them, and a cancellation whose original is in
+  no input stays booked with a warning.
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is

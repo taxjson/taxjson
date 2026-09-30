@@ -164,6 +164,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          is_roc_description,
                                          parse_strict_number)
 from taxjson.lib.corp_actions import ib_tender_root
+from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE, pair_cancellations
 
 # Statement sections that are statement METADATA or roll-ups of rows the
 # parser reads elsewhere — never tax events of their own. Any section
@@ -780,6 +781,9 @@ class IbBrokerage(BaseBrokerage):
         # suffix mapping (fell back to .US).
         isin_fallback: set = set()
         pending_ca: List[Dict[str, Any]] = []
+        # Trades rows coded `Ca` (cancelled): paired with their original
+        # after the loop (lib/trade_cancel).
+        trade_cancels: List[Dict[str, Any]] = []
         # Unknown (non-allowlisted) sections already warned about.
         unknown_sections: set = set()
 
@@ -1155,6 +1159,21 @@ class IbBrokerage(BaseBrokerage):
                     'account': 'IB',
                     'description': description,
                 }
+                # `Ca` = IB CANCELLED an earlier fill: this row reverses
+                # it (opposite quantity, same date/time and price). It
+                # used to book as an ordinary trade — a phantom round
+                # trip whose rebooking turned an allowed loss into two
+                # superficial-loss denials (audit R1-51). Marked here,
+                # dropped with its original after the loop; an original
+                # in an earlier statement is paired by taxjson-merge2.
+                # The Cash Report booking below keeps both rows (IB's
+                # own totals include both).
+                if 'Ca' in code_tokens:
+                    # (description stays the raw symbol: the security
+                    # overrides key on it, and the original must get the
+                    # same rewrite for the pair to match.)
+                    _trade_tx['type'] = TRADE_CANCEL_TYPE
+                    trade_cancels.append(_trade_tx)
                 transactions.append(_trade_tx)
                 if is_expiry:
                     expiry_txs.append(_trade_tx)
@@ -2104,6 +2123,26 @@ class IbBrokerage(BaseBrokerage):
                           f"they carry no trades or income.",
                           file=sys.stderr)
                 self.count_skip(f"section {section} (unknown)")
+
+        if trade_cancels:
+            _kept, _pairs, _unpaired = pair_cancellations(transactions)
+            _gone = {id(t) for pr in _pairs for t in pr}
+            transactions[:] = _kept
+            expiry_txs[:] = [t for t in expiry_txs if id(t) not in _gone]
+            for _o, _c in _pairs:
+                print(f"note: {path.name}: IB cancelled (Ca) the "
+                      f"{_o['symbol']} trade of {_o['quantity']:g} @ "
+                      f"{_o['price']:g} on {_o['date']} — the trade and "
+                      f"its cancellation are both dropped.",
+                      file=sys.stderr)
+            for _c in _unpaired:
+                print(f"note: {path.name}: IB cancelled (Ca) a "
+                      f"{_c['symbol']} trade of {-_c['quantity']:g} @ "
+                      f"{_c['price']:g} on {_c['date']} whose original "
+                      f"row is not in this statement — kept as a "
+                      f"cancellation leg; taxjson-merge2 (taxjson run) "
+                      f"drops it with the original from the account's "
+                      f"other statement.", file=sys.stderr)
 
         # `Ca` rows whose original never appeared: a cancellation of
         # something booked in an EARLIER statement (or a restatement
