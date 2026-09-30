@@ -119,6 +119,10 @@ _FEE_SHARES_TICKER_RE = re.compile(
 # corporate-action leg taxjson-corp-actions books (same marker it uses).
 _QT_CA_LEG_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b',
                            re.IGNORECASE)
+# A BRW listing journal's book value: "... JOURNAL POSITION FROM CAD BOOK
+# VALUE: $3039.64 CNV@ 1.4138" (carried as evidence, like RBC's).
+_BRW_BOOK_VALUE_RE = re.compile(
+    r'BOOK\s+VALUE:?\s*\$?\s*([\d,]+(?:\.\d+)?)', re.IGNORECASE)
 # A dividend Questrade posts NET of non-resident withholding.
 _NONRES_NET_RE = re.compile(r'NON-?RES\w*\.?\s+TAX\s+WITH', re.IGNORECASE)
 
@@ -741,17 +745,38 @@ class QuestradeBrokerage(BaseBrokerage):
                 _q = parse_strict_number(
                     row.get('Quantity'), field='Quantity',
                     where=self._where(lineno), allow_blank=True, blank=0.0)
-                if action_raw == 'BRW' and 'JOURNAL' in _du:
+                if action_raw == 'BRW' and 'JOURNAL' in _du and abs(_q) > 1e-9:
                     # "... JOURNAL POSITION TO USD" / "FROM CAD": units
                     # journaled between the CAD and USD lines of ONE
-                    # security (DLR.TO <-> DLR.U.TO). Not a disposition;
-                    # the two lines are one pool under a ticker.map
-                    # JOURNAL rule.
-                    self.count_nonevent(
-                        "same-security journal between listings (BRW) — "
-                        "one pool under a ticker.map JOURNAL rule")
-                    journals.append(
-                        f"{(row.get('Symbol') or '').strip()} {_q:+g}")
+                    # security (Norbert's gambit, DLR.TO <-> DLR.U.TO).
+                    # Booked the way RBC's TFR journal legs are: a
+                    # TRANSFER per leg, the USD leg on its TSX listing
+                    # (DLR.U.TO). A ticker.map JOURNAL rule makes the two
+                    # lines one pool and the pair nets out; the legs used
+                    # to be skipped, leaving the units on DLR.TO.
+                    _bv = _BRW_BOOK_VALUE_RE.search(desc)
+                    _date = self._date(row, 'Transaction Date', lineno)
+                    _jtx = {
+                        'action': 'TRANSFER',
+                        'date': _date.strftime('%Y-%m-%d'),
+                        'time': _date.strftime('%H:%M:%S'),
+                        'date_settle': _date.strftime('%Y-%m-%d'),
+                        'symbol': self.apply_currency_suffix(
+                            (row.get('Symbol') or '').strip().upper(),
+                            currency),
+                        'quantity': _q, 'currency': currency,
+                        'price': 0.0, 'net_amount': 0.0,
+                        'gross_amount': 0.0,
+                        'account': self.DEFAULT_ACCOUNT,
+                        'description': desc,
+                    }
+                    if _bv:
+                        _jtx['book_value'] = parse_strict_number(
+                            _bv.group(1), field='BOOK VALUE',
+                            where=self._where(lineno))
+                    self.note_row_consumed()
+                    transactions.append(_jtx)
+                    journals.append(f"{_jtx['symbol']} {_q:+g}")
                     continue
                 # Previously a silent drop — a new Questrade action code
                 # lost rows with zero signal. Count it; the summary at
@@ -1025,10 +1050,10 @@ class QuestradeBrokerage(BaseBrokerage):
         if journals:
             print(f"note: {path.name}: {len(journals)} BRW journal row(s) "
                   f"move units between the CAD and USD lines of one "
-                  f"security ({', '.join(journals[:6])}) and are not "
-                  f"booked — the two lines must be ONE pool: a ticker.map "
-                  f"JOURNAL rule (e.g. JOURNAL DLR.U.TO DLR.TO).",
-                  file=sys.stderr)
+                  f"security ({', '.join(journals[:6])}) — booked as "
+                  f"TRANSFER legs; a ticker.map JOURNAL rule (e.g. "
+                  f"JOURNAL DLR.U.TO DLR.TO) makes the lines one pool so "
+                  f"the pair nets out.", file=sys.stderr)
         self.emit_skip_summary(path.name)
         return transactions
 

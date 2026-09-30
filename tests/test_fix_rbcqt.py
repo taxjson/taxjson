@@ -220,19 +220,40 @@ class TestQtRowShapes(unittest.TestCase):
         self.assertEqual(txs, [])
         self.assertIn('warning: UNBOOKED:', err)
 
-    def test_brw_listing_journal_is_a_note_not_unbooked(self):
-        body = (q(action='BRW', sym='DLR.TO', desc='GLOBAL X US DLR CURRENCY '
-                  'ETF UNIT CL A JOURNAL POSITION TO USD', qty='-300',
-                  price='0', gross='0', comm='0', net='0', cur='CAD',
-                  act='Other')
-                + q(action='BRW', sym='DLR.U.TO', desc='GLOBAL X US DLR '
-                    'CURRENCY ETF UNIT CL A JOURNAL POSITION FROM CAD',
-                    qty='300', price='0', gross='0', comm='0', net='0',
-                    act='Other'))
-        txs, err, pars = qt_parse(body)
-        self.assertEqual(txs, [])
+    BRW = (q(action='BRW', sym='DLR.TO', desc='GLOBAL X US DLR CURRENCY '
+             'ETF UNIT CL A JOURNAL POSITION TO USD', qty='-300',
+             price='0', gross='0', comm='0', net='0', cur='CAD',
+             act='Other')
+           + q(action='BRW', sym='DLR.U.TO', desc='GLOBAL X US DLR '
+               'CURRENCY ETF UNIT CL A JOURNAL POSITION FROM CAD BOOK '
+               'VALUE: $3039.64 CNV@ 1.4138', qty='300', price='0',
+               gross='0', comm='0', net='0', act='Other'))
+
+    def test_brw_listing_journal_is_a_transfer_pair(self):
+        """QT-BRW: Norbert's gambit journal booked like RBC's TFR legs."""
+        txs, err, _ = qt_parse(self.BRW)
+        self.assertEqual(sorted((t['action'], t['symbol'], t['quantity'])
+                                for t in txs),
+                         [('TRANSFER', 'DLR.TO', -300.0),
+                          ('TRANSFER', 'DLR.U.TO', 300.0)])
+        self.assertAlmostEqual(of(txs, symbol='DLR.U.TO')[0]['book_value'],
+                               3039.64)
         self.assertNotIn('UNBOOKED', err)
-        self.assertIn('JOURNAL rule', err)
+        self.assertIn('JOURNAL', err)
+
+    def test_brw_journal_nets_under_a_journal_rule(self):
+        """End to end through taxjson-brokerage + the transfer pre-pass:
+        with JOURNAL DLR.U.TO DLR.TO the two legs are one symbol and
+        cancel (a sheltered account with transfers on)."""
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.core import TaxTransaction
+        txs, _, _ = qt_parse(self.BRW)
+        mapped = [TaxTransaction(**{k: v for k, v in {
+            **t, 'symbol': 'DLR.TO'}.items() if k != 'book_value'})
+            for t in txs]
+        kept, dropped = _drop_self_cancelling_transfers(mapped)
+        self.assertEqual(kept, [])
+        self.assertTrue(dropped)
 
     def test_transfer_carries_its_description(self):
         """R1-69."""
@@ -428,6 +449,332 @@ class TestQtCorpActionChains(unittest.TestCase):
                                  act='Dividends'))
         self.assertEqual(len(ev), 1)
         self.assertIn("INTERNAL code 'D056068'", err)
+
+
+
+# ------------------------------------------------------------------ RBC
+
+from taxjson.lib.brokerages.rbc_direct import RbcBrokerage, RbcFormatError  # noqa: E402
+
+RH = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price",'
+      '"Settlement Date","Account","Value","Currency","Description"\n')
+
+
+def rrow(date, activity, symbol, symdesc, qty, price, value, cur, desc,
+         settle=None):
+    cells = [date, activity, symbol, symdesc, qty, price,
+             date if settle is None else settle, ACCT, value, cur, desc]
+    return ','.join('"%s"' % c for c in cells) + '\n'
+
+
+def rbc_parse(*bodies, raw=False):
+    """Parse RBC files as ONE account. Returns (txs, stderr, parsers)."""
+    with tempfile.TemporaryDirectory() as d:
+        paths = []
+        for i, body in enumerate(bodies):
+            p = Path(d) / f"rbc_{2025 + i}.csv"
+            p.write_text(body if raw else RH + body, encoding='utf-8')
+            paths.append(p)
+        err = io.StringIO()
+        txs, pars = [], []
+        with contextlib.redirect_stderr(err):
+            ctx = RbcBrokerage.prepare_files(paths)
+            for p in paths:
+                par = RbcBrokerage()
+                par.account_context = ctx
+                txs.extend(par.parse_file(p))
+                pars.append(par)
+    return txs, err.getvalue(), pars
+
+
+RBUY = rrow("March 3, 2025", "Buy", "XYZ", "XYZ CORP", "100", "50",
+            "-5009.95", "CAD", "XYZ CORP UNSOLICITED DA")
+
+
+class TestRbcTradeRows(unittest.TestCase):
+
+    def test_blank_value_on_a_sale_is_refused(self):
+        """R1-82."""
+        with self.assertRaises(RbcFormatError):
+            rbc_parse(RBUY + rrow("April 1, 2025", "Sell", "XYZ", "XYZ CORP",
+                                  "-100", "60", "", "CAD", "XYZ CORP"))
+
+    def test_explicit_zero_value_is_allowed(self):
+        txs, _, _ = rbc_parse(rrow("April 1, 2025", "Sell", "8QQQQQ1",
+                                   "CALL .XYZ 04/17/25 90 XYZ CORP", "-1",
+                                   "0.01", "0", "CAD",
+                                   "CALL .XYZ 04/17/25 90 XYZ CORP"))
+        self.assertAlmostEqual(txs[0]['net_amount'], 0.0)
+
+    def test_value_off_by_a_factor_is_refused(self):
+        """S023-19."""
+        for value in ("-500.99", "-50099.50"):
+            with self.assertRaises(RbcFormatError, msg=value):
+                rbc_parse(rrow("March 3, 2025", "Buy", "XYZ", "XYZ CORP",
+                               "100", "50", value, "CAD", "XYZ CORP"))
+
+    def test_small_option_with_a_large_commission_is_fine(self):
+        txs, _, _ = rbc_parse(rrow("April 8, 2024", "Buy", "9QQQQQ5",
+                                   "CALL .SNQ 04/19/24 7 SNQ INC", "1",
+                                   "0.32", "-43.95", "USD",
+                                   "CALL .SNQ 04/19/24 7 SNQ INC"))
+        self.assertAlmostEqual(txs[0]['net_amount'], 43.95)
+
+    def test_comma_strikes_are_distinct_contracts(self):
+        """S063-15."""
+        txs, _, _ = rbc_parse(
+            rrow("June 2, 2025", "Buy", "8QQQQQ2", "", "1", "100",
+                 "-10009.95", "USD", "CALL .BKQ 06/20/25 5,000")
+            + rrow("June 2, 2025", "Buy", "8QQQQQ3", "", "1", "80",
+                   "-8009.95", "USD", "CALL .BKQ 06/20/25 5,025"))
+        self.assertEqual(sorted(t['symbol'] for t in txs),
+                         ['BKQ250620C05000000.US', 'BKQ250620C05025000.US'])
+
+    def test_stock_leg_with_contract_text_is_the_equity(self):
+        """R1-86: in the Description and in the Symbol Description."""
+        for desc, symdesc in (
+                ("ABC CORP ASSIGNMENT OF OPTION CALL ABC 05/16/25 50",
+                 "ABC CORP"),
+                ("ABC CORP ASSIGNMENT OF OPTION AS OF 05/16/25",
+                 "ASSIGNMENT OF OPTION CALL ABC 05/16/25 50")):
+            txs, _, _ = rbc_parse(rrow("May 16, 2025", "Sell", "ABC",
+                                       symdesc, "-100", "50", "4990.05",
+                                       "USD", desc))
+            self.assertEqual((txs[0]['symbol'], txs[0]['quantity']),
+                             ('ABC.US', -100.0), desc)
+
+    def test_listed_symbol_with_another_contract_is_refused(self):
+        with self.assertRaises(RbcFormatError):
+            rbc_parse(rrow("May 16, 2025", "Sell", "ABC", "ABC CORP", "-100",
+                           "50", "4990.05", "USD",
+                           "CALL XYZ 05/16/25 50 XYZ CORP"))
+
+    def test_blank_settle_assignment_legs_share_the_equity_cycle(self):
+        """S065-06: pre-cutover, the ASN option leg follows its stock leg."""
+        txs, _, _ = rbc_parse(
+            rrow("June 16, 2023", "Other", "8QQQQQ4", "", "1", "", "0",
+                 "CAD", "ASN - PUT .QZX 06/16/23 50", settle="")
+            + rrow("June 16, 2023", "Buy", "QZX", "QZX CORP", "100", "50",
+                   "-5000", "CAD", "QZX CORP ASSIGNMENT OF OPTION AS OF "
+                   "06/16/23", settle=""))
+        self.assertEqual({t['date_settle'] for t in txs}, {'2023-06-20'})
+
+    def test_warrant_expiry_settles_on_its_date(self):
+        """S065-04."""
+        txs, _, _ = rbc_parse(rrow("December 31, 2027", "Reorganization",
+                                   "QZW.WT", "QZW CORP WTS", "-100", "", "0",
+                                   "CAD", "EXP - WTS QZW CORP AS OF 12/31/27 "
+                                   "EXPIRED", settle="January 3, 2028"))
+        self.assertEqual(txs[0]['date_settle'], '2027-12-31')
+
+
+class TestRbcIncomeAndCorporateRows(unittest.TestCase):
+
+    def test_reinvestment_reversal_cancels(self):
+        """R1-83."""
+        rei = rrow("April 18, 2022", "Dividends", "SRU.UN", "SMARTCENTRES",
+                   "2", "", "-64.48", "CAD", "REI - SMARTCENTRES REINV@C$32.24")
+        cxl = rrow("April 22, 2022", "Dividends", "SRU.UN", "SMARTCENTRES",
+                   "-2", "", "64.48", "CAD",
+                   "REI - SMARTCENTRES REINV@C$32.24 CANCEL")
+        txs, _, _ = rbc_parse(rei + cxl)
+        self.assertEqual(txs, [])
+        with self.assertRaises(RbcFormatError):
+            rbc_parse(cxl)
+        with self.assertRaises(RbcFormatError):
+            rbc_parse(rrow("April 18, 2022", "Dividends", "SRU.UN",
+                           "SMARTCENTRES", "2", "", "64.48", "CAD",
+                           "REI - SMARTCENTRES REINV@C$32.24"))
+
+    def test_in_kind_reinvested_distribution(self):
+        """R1-87."""
+        txs, _, _ = rbc_parse(rrow(
+            "April 7, 2022", "Dividends", "RBF8411", "RBC INTL EQUITY O",
+            "5", "", "", "USD",
+            "DIV - Rbc International Equity Series O U$ (8411) As Of "
+            "04/07/22 Reinvest @ $20.00"))
+        self.assertEqual(sorted((t['action'], t['net_amount']) for t in txs),
+                         [('BUYSELL', 100.0), ('DIVIDEND', 100.0)])
+
+    def test_stock_dividend_books_shares_at_zero(self):
+        """S015-06: Reorganization and Dividends forms."""
+        for activity in ("Reorganization", "Dividends"):
+            txs, err, _ = rbc_parse(
+                rrow("March 3, 2025", "Buy", "XTD", "XTD SPLIT CORP", "1390",
+                     "5", "-6950", "CAD", "XTD SPLIT CORP")
+                + rrow("July 29, 2025", activity, "XTD", "XTD SPLIT CORP",
+                       "208", "", "0", "CAD",
+                       "DIS - XTD SPLIT CORP STK DIV ON 1390 SHS"))
+            self.assertEqual(sum(t['quantity'] for t in txs), 1598.0,
+                             activity)
+            self.assertNotIn('UNCLASSIFIED', err)
+
+    def test_cash_in_lieu_of_dividend_on_a_frac_name_is_income(self):
+        """S064-05."""
+        txs, _, _ = rbc_parse(rrow("March 3, 2025", "Dividends", "GUTZ",
+                                   "FRACTYL HEALTH INC", "", "", "25.00",
+                                   "USD", "FRACTYL HEALTH INC CASH IN LIEU "
+                                   "OF DIVIDEND"))
+        self.assertEqual([(t['action'], t['net_amount']) for t in txs],
+                         [('DIVIDEND', 25.0)])
+
+    def test_transfer_in_of_a_deliver_named_security_stays_in(self):
+        """S016-05 / S065-03."""
+        txs, _, _ = rbc_parse(rrow(
+            "March 10, 2025", "Transfers", "GDN", "GLOBAL DELIVERY NETWORKS",
+            "100", "", "0", "CAD", "TFI - GLOBAL DELIVERY NETWORKS INC "
+            "ACCOUNT TRANSFER BOOK VALUE 5000.00 FROM ACCOUNT"))
+        self.assertEqual(txs[0]['quantity'], 100.0)
+
+    def test_transfer_out_code_still_flips(self):
+        txs, _, _ = rbc_parse(rrow(
+            "March 10, 2025", "Transfers", "GDN", "GLOBAL NETWORKS", "100",
+            "", "0", "CAD", "TFO - GLOBAL NETWORKS INC ACCOUNT TRANSFER"))
+        self.assertEqual(txs[0]['quantity'], -100.0)
+
+    def test_blank_description_falls_back_to_symbol_description(self):
+        """S065-01."""
+        txs, _, _ = rbc_parse(rrow("March 3, 2025", "Buy", "ZZ",
+                                   "ZZ US DOLLAR CURRENCY ETF", "100", "10",
+                                   "-1009.95", "USD", ""))
+        self.assertEqual(txs[0]['description'], 'ZZ US DOLLAR CURRENCY ETF')
+
+    def test_split_on_a_short_scales_up(self):
+        """S065-00."""
+        txs, _, _ = rbc_parse(
+            rrow("March 3, 2025", "Sell", "SPC", "SPC CORP", "-100", "20",
+                 "1990.05", "CAD", "SPC CORP SHORT. UNSOLICITED")
+            + rrow("March 10, 2025", "Reorganization", "SPC", "SPC CORP",
+                   "-100", "", "0", "CAD",
+                   "DIS - SPC CORP STK SPLIT ON 100 SHS"))
+        self.assertAlmostEqual(of(txs, action='SPLIT')[0]['quantity'], 2.0)
+
+    def test_cil_reversal_nets(self):
+        """S063-19."""
+        mer = (rrow("June 28, 2023", "Reorganization", "T099003",
+                    "TRIX REUTERS CORP COM NEW", "-50", "", "307.93", "CAD",
+                    "MER - TRIX REUTERS CORP COM NEW DEFAULT: ROC OF "
+                    "C$6.1585 + .963957 NEW SHS PER 1 OLD")
+               + rrow("June 28, 2023", "Reorganization", "TRX",
+                      "TRIX REUTERS CORP COM NO PAR", "48", "", "0", "CAD",
+                      "MGR - TRIX REUTERS CORP COM NO PAR SHRS RECEIVED THRU "
+                      "MERGER")
+               + rrow("May 3, 2023", "Buy", "TRX", "TRIX REUTERS CORP COM NEW",
+                      "50", "170", "-8509.95", "CAD", "TRIX UNSOLICITED DA"))
+
+        def cil(date, v, extra=''):
+            return rrow(date, "Reorganization", "TRX",
+                        "TRIX REUTERS CORP COM NO PAR", "", "", v, "CAD",
+                        "CIL - TRIX REUTERS CORP COM NO PAR CASH IN LIEU OF "
+                        "FRAC SHARES" + extra)
+        txs, _, _ = rbc_parse(cil("July 12, 2023", "30.00")
+                              + cil("July 13, 2023", "-30.00", " CXL")
+                              + cil("July 14, 2023", "30.00") + mer)
+        frac = [t for t in of(txs, action='BUYSELL') if t['quantity'] < 0]
+        self.assertAlmostEqual(frac[0]['net_amount'], 30.0)
+
+    def test_reorganization_straddling_two_files_pairs(self):
+        """S064-14."""
+        rem = rrow("December 31, 2025", "Reorganization", "G099004",
+                   "GLOBEX DATA CORP", "-700", "", "0", "CAD",
+                   "REV - GLOBEX DATA CORP REV SPLIT TO GLOBEX DATA CORP "
+                   "NEW; 1 FOR 10")
+        rc = rrow("January 2, 2026", "Reorganization", "GLBX",
+                  "GLOBEX DATA CORP NEW", "70", "", "0", "CAD",
+                  "REV - GLOBEX DATA CORP NEW RESULT OF REVERSE SPLIT")
+        buy = rrow("March 3, 2025", "Buy", "GLBX", "GLOBEX DATA CORP", "700",
+                   "2", "-1409.95", "CAD", "GLOBEX UNSOLICITED")
+        txs, err, _ = rbc_parse(rem + buy, rc)
+        self.assertNotIn('UNMATCHED', err)
+        self.assertAlmostEqual(of(txs, action='SPLIT')[0]['quantity'], 0.1)
+
+    def test_notional_distribution_says_the_income_is_not_booked(self):
+        """S063-17 (the income itself is an owner decision)."""
+        _, err, _ = rbc_parse(
+            RBUY + rrow("December 31, 2025", "Dividends", "XYZ", "XYZ CORP",
+                        "", "", "0", "CAD", "ADJ - XYZ CORP 2025 NOTIONAL "
+                        "DISTRIBUTION ADJUSTMENT TO BOOK COST $200.00"))
+        self.assertIn('NOT in taxjson', err)
+
+
+class TestRbcUnbookedRows(unittest.TestCase):
+    """S016-00 / S064-17 / S063-21: rows the parser does not book reach
+    the console (`taxjson run` echoes UNBOOKED lines; `run --strict`
+    refuses them)."""
+
+    def test_unclassified_share_row_is_unbooked(self):
+        _, err, pars = rbc_parse(rrow("March 3, 2025", "Sold", "QQQX",
+                                      "QQQX INC", "-100", "10", "990.05",
+                                      "USD", "QQQX INC"))
+        self.assertIn('warning: UNBOOKED:', err)
+        self.assertTrue(pars[0].lint_findings)
+
+    def test_transfer_with_blank_quantity_is_unbooked(self):
+        _, err, _ = rbc_parse(rrow("February 13, 2025", "Transfers", "ZZQ",
+                                   "ZZQ CORP", "", "", "0.00", "CAD",
+                                   "TFI - ZZQ CORP ACCOUNT TRANSFER"))
+        self.assertIn('warning: UNBOOKED:', err)
+
+    def test_unmatched_reorganization_leg_is_unbooked(self):
+        _, err, _ = rbc_parse(rrow("December 31, 2025", "Reorganization",
+                                   "G099004", "GLOBEX", "-700", "", "0",
+                                   "CAD", "REV - GLOBEX REV SPLIT TO GLOBEX "
+                                   "NEW; 1 FOR 10"))
+        self.assertIn('warning: UNBOOKED:', err)
+
+    def test_swallowed_row_is_refused(self):
+        """R1-84."""
+        # The Description's only internal quote is its last character:
+        # raw '...PRINCIPAL ""' then a newline keeps the field open.
+        body = (RH
+                + rrow("May 1, 2024", "Sell", "ABC", "ABC CORP", "-100", "10",
+                       "990.05", "CAD", 'ABC CORP WE ACTED AS PRINCIPAL "')
+                + rrow("May 2, 2024", "Buy", "DEF", "DEF CORP", "50", "20",
+                       "-1000.00", "CAD", "DEF CORP"))
+        self.assertIn('PRINCIPAL ""\n', body)
+        with self.assertRaises(RbcFormatError):
+            rbc_parse(body, raw=True)
+
+
+
+class TestBrokerMarkedShorts(unittest.TestCase):
+    """R1-8: an RBC 'SHORT.' sale is a real short, not truncated history."""
+
+    def _txs(self, marker=' SHORT.'):
+        from taxjson.lib.core import TaxTransaction
+
+        def t(date, qty, desc):
+            return TaxTransaction(action='BUYSELL', date=date, symbol='QQA.TO',
+                                  quantity=qty, price=10.7,
+                                  net_amount=abs(qty) * 10.7,
+                                  account='margin', currency='CAD',
+                                  description=desc)
+        return [t('2024-04-15', -700, f'QQA CORP{marker} UNSOLICITED'),
+                t('2024-04-16', -300, f'QQA CORP{marker} UNSOLICITED'),
+                t('2024-04-19', 1000, 'QQA CORP COVER SHORT. UNSOLICITED')]
+
+    def test_marked_short_is_not_a_phantom_candidate(self):
+        from taxjson.lib.phantom_holdings import detect_phantoms
+        self.assertEqual(detect_phantoms(self._txs()), [])
+        marked = detect_phantoms(self._txs(), include_broker_shorts=True)
+        self.assertEqual([c.broker_marked_short for c in marked], [True])
+
+    def test_unmarked_short_still_is(self):
+        from taxjson.lib.phantom_holdings import detect_phantoms
+        self.assertEqual(len(detect_phantoms(self._txs(marker=''))), 1)
+
+    def test_missing_history_reports_it_apart(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / 'margin_base.json'
+            f.write_text(json.dumps({'transactions': [
+                t.to_dict() for t in self._txs()]}))
+            r = subprocess.run(
+                [sys.executable, '-m', 'taxjson.bin.taxjson_missing_history',
+                 '--year', '2024', str(f)], capture_output=True, text=True,
+                env={**os.environ, 'PYTHONPATH': str(REPO / 'src')})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('Broker-marked short sales', r.stdout)
+        self.assertNotIn('AFFECTS 2024', r.stdout)
 
 
 if __name__ == '__main__':

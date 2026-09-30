@@ -1207,7 +1207,8 @@ _RBC_TEMP_SYMBOL_RE = re.compile(r'^[A-Z]\d{4,}$')
 # RBC's internal 7-character option code ('8DZQFW4', '9PKLPN0').
 _RBC_OPTION_CODE_RE = re.compile(r'^[89][A-Z0-9]{6}$')
 _RBC_LEG_OPTION_RE = re.compile(
-    r'\b(CALL|PUT)\s+\.?([A-Z0-9.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+([\d.]+)')
+    r'\b(CALL|PUT)\s+\.?([A-Z0-9.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+'
+    r'(\d{1,3}(?:,\d{3})+(?:\.\d+)?|[\d.]+)')   # "5,025": audit S063-15
 _RBC_CODE_PREFIX_RE = re.compile(r'^\s*[A-Z]{2,4}\s*-\s*')
 _RBC_TO_RE = re.compile(
     r'\b(?:NAME\s+(?:CHANGE|CHG)\s+TO|REV(?:ERSE)?\s+SPLIT\s+TO|MERGER\s+TO|'
@@ -1251,7 +1252,11 @@ def is_rbc_cil_row(activity: str, description: str) -> bool:
     — a "CASH IN LIEU OF DIVIDEND" is income, not a fraction."""
     d = (description or '').upper()
     is_reorg = 'Reorganization' in (activity or '')
-    if 'CASH IN LIEU' in d and (is_reorg or re.search(r'\bFRAC', d)):
+    if 'CASH IN LIEU' in d and (is_reorg or re.search(
+            r'CASH\s+IN\s+LIEU\s+(?:OF\s+)?(?:A\s+)?FRAC', d)):
+        # The fraction word must follow CASH IN LIEU: a name starting
+        # FRAC (FRACTYL HEALTH) made a CASH IN LIEU OF DIVIDEND a
+        # fractional-share row (audit S064-05).
         return True
     if not is_reorg:
         return False
@@ -1370,7 +1375,8 @@ def _rbc_leg_option(leg):
     for text in (leg.desc, leg.symdesc):
         m = _RBC_LEG_OPTION_RE.search((text or '').upper())
         if m:
-            return m.groups()
+            right, base, exp, strike = m.groups()
+            return right, base, exp, strike.replace(',', '')
     return None
 
 
@@ -1656,7 +1662,8 @@ def parse_rbc_corporate_actions(
                 )
         src = _rbc_ca_symbol(src_raw, rem.currency)
         tgt = _rbc_ca_symbol(rc.symbol, rc.currency)
-        cil_amount = sum(abs(c.value) for c in ev.cil)
+        # SIGNED: a reversal CIL row cancels its posting (audit S063-19).
+        cil_amount = max(0.0, sum(c.value for c in ev.cil))
         events.append(CorporateAction(
             date=rem.date, time='09:30:00', action_type='merger',
             source_symbol=src, source_isin=src,

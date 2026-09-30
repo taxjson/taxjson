@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **RBC books what it used to drop, and says what it cannot book.** A
+  stock dividend (`DIS - ... STK DIV ON N SHS`) enters at $0 cost like
+  Questrade's; an RBC Dominion Securities "Reinvest @ $p" distribution
+  row with units books the income and the purchase; a reversed DRIP
+  cancels its original; a reorganization whose legs or cash-in-lieu
+  straddle two yearly exports is paired across them; a split on a short
+  position scales it up; an option strike with a thousands separator
+  (`5,025`) is read whole; a cash-in-lieu reversal nets instead of
+  adding proceeds. Rows it cannot book (unclassified, unmatched legs,
+  a Transfers row with no quantity) are `UNBOOKED` warnings on the
+  console and fatal under `run --strict`.
+- **RBC refuses rows it would mis-book.** A trade with a blank Value
+  (read as $0 proceeds or cost), a Value that does not fit quantity x
+  price (a commission below zero or far above RBC's), a Description with
+  an unescaped quote that swallowed the next row, and a listed-ticker row
+  whose text names a contract on another underlying are errors. A stock
+  leg whose text quotes the assigned contract books as the stock; a
+  security named DELIVERY... no longer turns a transfer-in into a
+  transfer-out; FRACTYL-style names keep their cash-in-lieu of dividend
+  as income; a blank Description falls back to the Symbol Description
+  for security overrides; a rights/warrant expiry settles on its date; a
+  blank-settle assignment's option leg shares its stock leg's cycle; a
+  notional distribution warns that its income is not in the totals.
+- **Broker-marked shorts are not missing history.** A position RBC
+  marks as a short sale (`SHORT.` / `COVER SHORT.`) is no longer offered
+  as a phantom by `find-missing-history`, `--suggest-phantoms` or the
+  run's go-short hint; `find-missing-history` lists it apart.
 - **Questrade keeps a TSX listing traded in USD on `.TO`.** `DLR.U.TO`
   and `XUS.U.TO` bought in USD became `DLR.U.US` / `XUS.U.US`: a pool
   apart from the same units at RBC or IB, a `JOURNAL DLR.U.TO DLR.TO`
@@ -26,9 +53,10 @@
   ready `GLOBAL old new` line (the sale's gain used to drop out).
 - **Questrade row shapes.** `BUY`/`buy` and lower-case symbols are read
   like `Buy`; an unknown action that moves shares is an `UNBOOKED`
-  warning on the console (fatal under `run --strict`); a `BRW` journal
-  between `DLR.TO` and `DLR.U.TO` is a note pointing at a `JOURNAL`
-  rule; a negated stock-dividend row cancels its original; a DIS or
+  warning on the console (fatal under `run --strict`); a `BRW`
+  Norbert's-gambit journal between `DLR.TO` and `DLR.U.TO` is booked as
+  a TRANSFER pair like RBC's journal legs (skipped before, leaving the
+  units on `DLR.TO`), which a `JOURNAL DLR.U.TO DLR.TO` rule nets; a negated stock-dividend row cancels its original; a DIS or
   stock-dividend row carrying both shares and cash is refused; a
   CAD-settled US trade's CAD net must match the USD gross at the stated
   rate and keeps its sign; a blank settlement date on an option is T+1;
