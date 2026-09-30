@@ -128,6 +128,63 @@
   no warning (a registered-account buy that makes a taxable loss
   superficial was missing). They now warn, and `close-year` refuses
   until a full `taxjson run` (audit R1-251).
+- **`roc` / `roc-sum` show `distributions.map` adjustments.** The map's
+  ACB adjustments are booked only in `<acct>_base.json`, so both views
+  said there were none while the engine applied them; they are listed now
+  (MAP_ROWS), and `roc-sum` warns when the same symbol and date also has a
+  `.tt` ADJUST (the ACB would be reduced twice) (audit R1-163).
+- **`reports/ccd.rpt` and `leaps.rpt` match their query twins.** They
+  counted phantom-basis (tainted) rows that `ccd-sum` / `leaps-sum` skip,
+  `leaps.rpt` was titled "LEAPS" while listing every long option of any
+  tenor (now titled so, pointing at `leaps-sum`), and an unreadable input
+  printed TOTAL 0.00 with exit 0 (now exit 1) (audit R1-173).
+- **`scan` US-LISTING respects DISTINCT and the US line's own dividends.**
+  A US stock was called a "Canadian issuer held via its US listing" when
+  any `.TO` symbol shared its root, even one `ticker.map` declared
+  `DISTINCT` (a CDR), and a non-paying US line borrowed the `.TO` line's
+  dividends. The check now needs the US line itself to pay, and a
+  `DISTINCT` ruling silences it (audit S042-06, S049-09).
+- **Query views stop on an unreadable file.** `list`, `shares`, `winners`,
+  `wash-sales`, `ccd-sum`, `leaps`, `gains`, the transaction views and the
+  -sum roll-ups warned about a truncated work/ file and printed a partial
+  report with exit 0 (`winners` moved by 39k, `scan` said "clean scan");
+  they now name the file and exit nonzero (audit S045-01, S042-05).
+- **An unparseable `taxjson.toml` is an error in every query command.**
+  It was read as an empty config: `fees-sum` converted a USD-base
+  project's fees to CAD at an invented 1.35 and dropped its sibling-account
+  guard, and the radar treated registered books as taxable (audit S049-00).
+- **`divs-sum` and `winners` separate registered accounts.** Both summed
+  RRSP/TFSA/LIRA/RESP amounts into the headline (the 2025 `winners` total
+  was 2.24x the Schedule 3 gain, and the USD `divs-sum` 2.25x the slips);
+  they now print TAXABLE and SHELTERED lines, and the checklist points the
+  slip tie-out at the TAXABLE line. `divs-sum` counts DIVIDEND rows only
+  (payments in lieu are `dil-sum`; adding the two counted PIL twice), and
+  the `divs` help says it shows both (audit S040-13, S041-04, R1-272).
+- **`winners` and `ccd-sum` count routed phantom-basis sales.** The
+  "skipped N tainted" warning read only in-line rows, so a pipeline file's
+  `manual_reporting_required` sales vanished from the ranking without a
+  word (audit S040-15).
+- **Tax-year views follow the settlement date.** `winners`, `gains`,
+  `ccd-sum`, `leaps` and `leaps-sum` windowed a tax year on the trade
+  date, so a Dec-31 trade that settles in January dropped out of every
+  year's view (the 2026 `ccd-sum` was 3,000.97 short of `ccd.rpt`). On a
+  settle-basis project the year window now uses the settlement date, like
+  `sum` and form-export (audit R1-171, R1-186, R1-238, R1-273).
+- **`leaps` / `leaps-sum` warn outside the books' year, and the default
+  window refuses a stale build.** They had no scope warning (`leaps-sum
+  all` said "all history" over one year); `winners`, `ccd-sum`, `leaps`
+  and `leaps-sum` with the default window now stop when `work/` was built
+  for another year than `[settings] year` instead of saying the year had
+  no dispositions (audit S048-11, S048-14).
+- **`taxjson fees` counts a charged fee as a fee.** Standalone FEE rows
+  (IB market-data subscriptions, Questrade/RBC custody fees) were shown
+  negative and netted against commissions, and a commission refund was
+  shown as a charge; FEE rows now follow the repo convention (positive =
+  charged) (audit R1-54, R1-269).
+- **`taxjson trades` prints signed totals and fees.** A fee rebate printed
+  as a charge and a penny close's negative proceeds as positive, so the
+  single-account taxtext did not round-trip; TOTAL SELL and `trades-sum`
+  sold now net those proceeds signed (audit S039-11).
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
   is undone when both are in the account's inputs; it used to stay

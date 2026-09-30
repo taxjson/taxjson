@@ -85,10 +85,11 @@ class TestFeesIncludesFeeRows(unittest.TestCase):
                      "price": 10.0, "net_amount": 1009.99, "fee": 9.99,
                      "currency": "CAD"},
                     # Standalone fee (e.g. IB market-data): amount lives in
-                    # net_amount, negative = charged.
+                    # net_amount, POSITIVE = charged (the repo FEE
+                    # convention every parser emits; audit R1-54).
                     {"action": "FEE", "date": "2026-03-05",
                      "time": "09:30:00", "symbol": "CASH", "quantity": 0.0,
-                     "net_amount": -25.00, "currency": "CAD"}]}))
+                     "net_amount": 25.00, "currency": "CAD"}]}))
             r = _runsub(root, "fees")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("FEE", r.stdout)

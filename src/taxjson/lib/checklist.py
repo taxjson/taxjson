@@ -1053,7 +1053,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "option-boundary": d_option_boundary,
     "handoff": d_handoff,
     "t5008": d_t5008,
-    "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with `taxjson divs-sum` / `roc-sum`"),
+    "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with the TAXABLE line of `taxjson divs-sum` / `roc-sum`"),
     "foreign-tax": lambda ctx: Result("foreign-tax", "manual", "from the slips"),
     "form-export": d_form_export,
     "t1135": d_t1135,

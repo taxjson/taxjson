@@ -260,7 +260,7 @@ machines), resolve each with `taxjson elect <account> --set
 - `work/<account>_<broker>_transfers.json` — custody-transfer sidecar: TRANSFER rows the parse stage keeps OUT of the books (evidence, not tax events); `taxjson transfers` reads these
 - `crosslistings.rpt` — flags cross-listed (`.TO`/`.US`) tickers the radar may not consolidate
 - `fees.rpt` — trading fees by brokerage, with comparison stats
-- `ccd.rpt`, `leaps.rpt` — cross-account covered-call / LEAPS views
+- `ccd.rpt`, `leaps.rpt` — cross-account covered-call / long-option views (`leaps.rpt` lists every long option close of any tenor; `taxjson leaps-sum` is the LEAPS-only figure; phantom-basis rows are excluded and counted, as in `ccd-sum`)
 - `<account>_holdings.toml` — machine-readable positions (native + base-currency cost, and the per-position acquisition/sell `trades` history). `cost_per_share` is `total_cost / quantity`, so for an option it is per contract; divide by `contract_multiplier` for the per-share price the `trades` show
 - `exports/` — SeekingAlpha / FastGraph / TradingView watchlist CSVs
 
@@ -391,7 +391,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson crypto-sends [ACCOUNT] [--json]` | Every crypto withdrawal/send that did **not** arrive on another of your exchanges (a send is paired with an arrival of the same coin on another exchange within 3 days, losing at most 10% to the network fee), with your decision — `self` (your own wallet: no tax event), `gift` or `payment` (a disposition at fair market value; a gift under ITA s.69(1)(b)) — or PENDING. For each: the fair value per coin and in CAD with its source (the exchange's spot price when the row carries one — Coinbase; otherwise the Yahoo daily close `fill-crypto` uses, at the send date, times the Bank of Canada rate), and the ready line `BUYSELL <date> <local time> <COIN> -<qty> CAD <price> <proceeds> 0`. A Kraken network fee taken in the coin is already booked by the parser and is not in the quantity. Stablecoins (USDC/USDT/DAI; PYUSD/GUSD on Coinbase) are US-dollar cash in the books, so a gift/payment of one gets no sale line: the command shows the **currency gain** instead — value at the send-date Bank of Canada rate minus the average CAD cost of the USD-cash/stablecoin pool rebuilt from the ledgers — flagged when likely superficial (USD/stablecoins acquired within 30 days and still held), with the year's total. `--set ID=self\|gift\|payment [--note TEXT] [--price P]` records a decision (repeatable; `--price` when the price lookup fails), `--write` regenerates `inputs/<acct>/crypto_sends.tt` (idempotent; it warns when another `.tt` already sells the same coin, date and quantity). `taxjson run` asks at a terminal (self / gift / payment / skip) after the crypto parse and refreshes the file; headless it prints one note. Ids carry exchange, local date/time, coin and quantity — never a txid or address; refs are masked (`LG***`). A `checklist` step. |
 | `taxjson roc-sum` | Return-of-capital / ACB-adjustment total per ticker (default: tax year). |
 | `taxjson dil-sum` | Payment-in-lieu total per symbol (default: tax year) — DIVIDEND_IN_LIEU rows only, split out because they are ordinary income (no dividend gross-up/credit or qualified rate). |
-| `taxjson winners [PERIOD] [--top N]` | Per-ticker realized gains RANKED — biggest winners and losers over a window (default: tax year); options grouped under their underlying. |
+| `taxjson winners [PERIOD] [--top N]` | Per-ticker realized gains RANKED — biggest winners and losers over a window (default: tax year); options grouped under their underlying. A tax-year window (default, `tax_year`, `2025`) follows the project's `tax_date` in `winners`, `gains`, `ccd-sum`, `leaps` and `leaps-sum`: on the settle basis a Dec-31 trade that settles in January belongs to the next year, as in `sum`. These views refuse when `work/` was built for another year than `[settings] year`. |
 | `taxjson ccd-sum` | Covered-call (short call) realized-gain summary per underlying over a window (default: tax year) — the windowed query twin of `reports/ccd.rpt`. |
 | `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year). |
 | `taxjson instalments` | Canadian tax instalments: what each of the four dates (Mar/Jun/Sep/Dec 15) calls for under your chosen basis, what you have paid, and the **offset interest** plus **s.163.1 penalty** that follow from any gap. The current-year basis is driven by `taxjson estimate` itself (AMT included). Interest uses CRA's published quarterly rates (built in; `prescribed_rate(s)` overrides), credit interest runs from the later of the payment date and January 1, and net interest of $25 or less is not charged; CRA charges instalment interest only if it sent you a reminder for the year, which the report says. Configure `[instalments]` in `taxjson.toml`; `--json` for machines. |
@@ -596,7 +596,10 @@ they need an annual refresh, and the output says so. These are
 planning estimates, never filing numbers.
 
 **`taxjson divs-sum [PERIOD] [ACCOUNT]`** — dividends received per ticker over
-the window, with a per-currency grand total.
+the window (DIVIDEND rows; payments in lieu are in `dil-sum`), with
+per-currency totals split TAXABLE / SHELTERED when a registered account
+contributes — the TAXABLE line is the figure to compare with the T5/T3 slips.
+`winners` prints the same taxable/sheltered split under its ranking.
 
 **`taxjson trades-sum [PERIOD] [ACCOUNT]`** — per ticker: buy/sell counts, value
 bought/sold, and fees, with per-currency totals.
@@ -919,8 +922,11 @@ cases differently:
    ```
 
 Inspect what's recorded with `taxjson roc <period>` (every ADJUST row,
-taxtext) and `taxjson roc-sum` (per-ticker capital returned, split into
-broker-classified vs manual rows). If cumulative ROC ever pushes a
+taxtext, including the `distributions.map` adjustments `run` books) and
+`taxjson roc-sum` (per-ticker capital returned, split into
+broker-classified, manual and `distributions.map` rows; it warns when a
+symbol has a book ADJUST and a map row on the same date — the same ROC
+entered twice). If cumulative ROC ever pushes a
 position's ACB below zero, the excess is a deemed capital gain under
 s.40(3) — the engine flags this rather than computing it.
 
