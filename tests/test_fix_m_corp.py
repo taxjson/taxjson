@@ -349,5 +349,98 @@ class TestRbcPairing(unittest.TestCase):
         self.assertIn("SHORT", err)
 
 
+class TestRbcSymbolResolution(unittest.TestCase):
+    _SPIN = ("DIS - NEWCO HOLDINGS INC SPINOFF ON 120 SHS FROM SEC# P000001 "
+             "{parent} REC 03/01/25 PAY 03/05/25")
+
+    def _spin(self, parent, qty="30", cur="USD", date="2025-03-05"):
+        return _rbc_row(date, "Reorganization", "NEWC", "NEWCO HOLDINGS INC", qty,
+                        "0", cur, self._SPIN.format(parent=parent))
+
+    def test_s019_05_parent_listing_is_its_own(self):
+        # Parent bought on the TSX; the spun-off shares arrive in USD.
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _rbc_events(
+                tmp,
+                _rbc_row("2024-05-01", "Buy", "PAR", "PARENTCO INC", "120",
+                         "-6000", "CAD", "PARENTCO INC", price="50"),
+                self._spin("PARENTCO INC"))
+        self.assertEqual(evs[0].source_symbol, "PAR.TO", err)
+        self.assertEqual(evs[0].target_symbol, "NEWC.US")
+
+    def test_s019_06_option_code_is_never_the_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _rbc_events(
+                tmp,
+                _rbc_row("2025-01-10", "Sell", "8ABCDE1",
+                         "CALL .ACME 01/15/27 50 ACME TECHNOLOGIES INC",
+                         "-1", "300", "USD",
+                         "CALL .ACME 01/15/27 50 ACME TECHNOLOGIES INC",
+                         price="3"),
+                self._spin("ACME TECHNOLOGIES INC"))
+        self.assertNotIn("8ABCDE1", evs[0].source_symbol)
+        self.assertIn("not traded", err)
+
+    def test_s072_02_fuzzy_parent_needs_both_names_to_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _rbc_events(
+                tmp,
+                _rbc_row("2025-01-10", "Buy", "BEPC",
+                         "BROOKFIELD RENEWABLE CORP", "100", "-3000", "USD",
+                         "BROOKFIELD RENEWABLE CORP", price="30"),
+                self._spin("BROOKFIELD CORP"))
+        self.assertNotEqual(evs[0].source_symbol, "BEPC.US")
+        self.assertIn("not traded", err)
+
+    def test_fuzzy_parent_still_resolves_real_shapes(self):
+        # The real 2024 shapes: 'GE AEROSPACE' -> the 'GE AEROSPACE
+        # COMMON STOCK' line; 'GRAYSCALE ETHEREUM TR ETH' -> ETHE.
+        for parent, sym, symdesc in (
+                ("GE AEROSPACE", "GEX", "GE AEROSPACE COMMON STOCK"),
+                ("GRAYSCALE ETHEREUM TR ETH", "ETHX",
+                 "GRAYSCALE ETHEREUM TR ETF SHS")):
+            with tempfile.TemporaryDirectory() as tmp:
+                evs, err = _rbc_events(
+                    tmp,
+                    _rbc_row("2024-01-10", "Buy", sym, symdesc, "120",
+                             "-3000", "USD", symdesc, price="25"),
+                    self._spin(parent))
+            self.assertEqual(evs[0].source_symbol, f"{sym}.US", err)
+
+    def test_s074_09_merger_source_by_removal_currency(self):
+        # B2GOLD-style: one company traded as BTOX (CAD) and BTGX (USD);
+        # the USD removal under a temporary code is the USD holding,
+        # whatever the file order.
+        rows = [
+            _rbc_row("2025-01-10", "Buy", "BTGX", "BTWO GOLD CORP", "200",
+                     "-600", "USD", "BTWO GOLD CORP", price="3"),
+            _rbc_row("2025-02-10", "Buy", "BTOX", "BTWO GOLD CORP", "100",
+                     "-400", "CAD", "BTWO GOLD CORP", price="4"),
+            _rbc_row("2025-02-11", "Sell", "BTOX", "BTWO GOLD CORP", "-100",
+                     "410", "CAD", "BTWO GOLD CORP", price="4.1"),
+            _rbc_row("2025-06-02", "Reorganization", "H012345",
+                     "BTWO GOLD CORP", "-200", "0", "USD",
+                     "MGR - BTWO GOLD CORP MERGER TO BIGCO INC "
+                     "1 NEW = 2 OLD"),
+            _rbc_row("2025-06-02", "Reorganization", "BIGCO", "BIGCO INC",
+                     "100", "0", "USD",
+                     "MGR - BIGCO INC SHRS RECEIVED THRU MERGER"),
+        ]
+        for order in (rows, list(reversed(rows))):
+            with tempfile.TemporaryDirectory() as tmp:
+                evs, err = _rbc_events(tmp, *order)
+            self.assertEqual(evs[0].source_symbol, "BTGX.US", err)
+
+    def test_s072_04_spinoff_on_short_parent_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _rbc_events(
+                tmp,
+                _rbc_row("2025-01-10", "Sell", "PRB", "PARENTCO INC",
+                         "-100", "6000", "CAD", "PARENTCO INC", price="60"),
+                self._spin("PARENTCO INC", qty="-20", cur="CAD"))
+        self.assertEqual(evs, [])
+        self.assertIn("SHORT", err)
+
+
 if __name__ == "__main__":
     unittest.main()

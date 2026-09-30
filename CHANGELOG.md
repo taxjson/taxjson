@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **RBC spin-off parents and merger sources resolve to the right pool.**
+  The parent took its market suffix from the spun-off shares' row (a TSX
+  parent became `.US`), could resolve to a covered call's option code or
+  to another company sharing its first word (`BROOKFIELD CORP` →
+  Brookfield Renewable), and an interlisted company was resolved by
+  file order. A spin-off's s.86.1 ACB reduction then landed on an empty
+  pool as a phantom gain. The parent now uses its own listing, options
+  never qualify, a fuzzy match needs both names to agree, a merger's
+  temporary code prefers the removal's currency, and an ambiguous
+  listing is refused with a warning. A spin-off debited from a short
+  parent is refused instead of booked as a long buy and a negative
+  dividend.
 - **RBC reorganizations pair on evidence.** A ratio written with a
   thousands comma (`1 FOR 1,000`, `1 NEW = 1,000 OLD`) was read as
   1-for-1, so the cash-in-lieu row sold almost the whole position. Two

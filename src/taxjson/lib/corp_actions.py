@@ -1661,11 +1661,55 @@ def parse_rbc_corporate_actions(
             lookup_rows.extend(read_rbc_rows(Path(other)).rows)
         except Exception:
             continue
-    name_to_symbol: Dict[str, str] = {}
+    # name -> {symbol: {listing currencies}}. Only SHARE lines count (an
+    # option's code and description name the issuer too, and an s.86.1
+    # ADJUST pointed at the option's empty pool became a phantom gain —
+    # audit S019-06). A symbol's listing is the currency its TRADES
+    # settle in (the parser suffixes trades by row currency); rows that
+    # never trade (dividends) fall back to their own currency. Keeping
+    # every listing, not the first seen, lets an interlisted company be
+    # told apart by the removal's currency — or refused as ambiguous —
+    # instead of by file order (audits S019-05, S074-09).
+    name_listings: Dict[str, Dict[str, set]] = {}
+    trade_cur: Dict[str, set] = {}
+    other_cur: Dict[str, set] = {}
+    share_rows = []
     for r in lookup_rows:
+        if not (r.symbol and _rbc_is_real_ticker(r.symbol)) \
+                or _rbc_leg_is_option(r) \
+                or getattr(r, 'cls', '') in ('reorg', 'spinoff', 'cil'):
+            continue
+        share_rows.append(r)
+        cur = (r.currency or '').upper()
+        (trade_cur if getattr(r, 'cls', '') in ('trade', 'transfer')
+         else other_cur).setdefault(r.symbol, set()).add(cur)
         name = _rbc_norm_company(r.symdesc)
-        if r.symbol and name and _rbc_is_real_ticker(r.symbol):
-            name_to_symbol.setdefault(name, r.symbol)
+        if name:
+            name_listings.setdefault(name, {}).setdefault(r.symbol, set())
+
+    def _listings(sym: str) -> set:
+        return trade_cur.get(sym) or other_cur.get(sym) or set()
+
+    def _resolve(syms, prefer_cur: str = '', what: str = ''
+                 ) -> Optional[str]:
+        """One (symbol, listing) from candidate share symbols, as the
+        parser's suffixed symbol; None (with a warning) when several
+        listings remain after preferring `prefer_cur`."""
+        opts = sorted({(sym, c) for sym in syms for c in _listings(sym)})
+        if not opts:
+            return None
+        if len(opts) > 1 and prefer_cur:
+            pick = [o for o in opts if o[1] == prefer_cur.upper()]
+            if len(pick) == 1:
+                opts = pick
+        if len(opts) > 1:
+            shown = ', '.join(_rbc_ca_symbol(sy, c) for sy, c in opts)
+            print(f"warning: RBC {what}: the company trades under several "
+                  f"listings in this account ({shown}) — not guessed. "
+                  f"Map the one that holds the shares with a ticker.map "
+                  f"GLOBAL line.", file=sys.stderr)
+            return None
+        return _rbc_ca_symbol(*opts[0])
 
     pairing = pair_rbc_reorganizations(rows)
     events: List[CorporateAction] = []
@@ -1704,14 +1748,18 @@ def parse_rbc_corporate_actions(
             ratio_new, ratio_old = 1.0, 1.0
         oldm = _RBC_OLDCO_RE.search(rem.desc)
         src_raw = rem.symbol
+        src = _rbc_ca_symbol(src_raw, rem.currency)
         if not _rbc_is_real_ticker(src_raw):
             oldco = _rbc_norm_company(oldm.group(1) if oldm
                                       else _rbc_removal_names(rem)[0])
-            resolved = name_to_symbol.get(oldco) or name_to_symbol.get(
-                _rbc_norm_company(rem.symdesc))
+            syms = (name_listings.get(oldco)
+                    or name_listings.get(_rbc_norm_company(rem.symdesc)))
+            resolved = _resolve(syms or {}, rem.currency,
+                                f"merger removal {rem.symbol} on "
+                                f"{rem.date}") if syms else None
             if resolved:
-                src_raw = resolved
-            else:
+                src = resolved
+            elif not syms:
                 print(
                     f"warning: RBC merger removal for "
                     f"{(oldm.group(1).strip() if oldm else rem.symbol)!r} is "
@@ -1723,7 +1771,6 @@ def parse_rbc_corporate_actions(
                     f"{_rbc_ca_symbol(rem.symbol, rem.currency)}.",
                     file=sys.stderr,
                 )
-        src = _rbc_ca_symbol(src_raw, rem.currency)
         tgt = _rbc_ca_symbol(rc.symbol, rc.currency)
         cil_amount = sum(abs(c.value) for c in ev.cil)
         events.append(CorporateAction(
@@ -1745,28 +1792,56 @@ def parse_rbc_corporate_actions(
     for r in rows:
         if getattr(r, 'cls', '') != 'spinoff':
             continue
+        if r.qty < 0:
+            # Spun-off shares DEBITED: the account was short the parent
+            # and owes them. Snapped to a long buy it booked a negative
+            # dividend and a phantom long (audit S072-04).
+            print(f"warning: RBC spin-off on {r.date} DEBITS {abs(r.qty):g} "
+                  f"{r.symbol} — the parent was held SHORT. taxjson cannot "
+                  f"book a spin-off on a short position: NOTHING was "
+                  f"booked; record the owed shares by hand in a .tt file. "
+                  f"{r.desc[:90]!r}", file=sys.stderr)
+            continue
         m = _RBC_SPINOFF_RE.search(r.desc)
         parent_qty = _num_text(m.group(1), where=r.label()) if m else 0.0
         parent_code = m.group(2).strip() if m else ''
         parent_name = m.group(3).strip().lstrip('*') if m else ''
-        parent = name_to_symbol.get(_rbc_norm_company(parent_name)) \
-            if parent_name else None
-        if not parent and parent_name:
-            best = max(((rbc_name_similarity(parent_name, x.symdesc), x.symbol)
-                        for x in lookup_rows
-                        if x.symdesc and _rbc_is_real_ticker(x.symbol)
-                        and x.symbol != r.symbol and x.cls != 'spinoff'),
-                       default=(0.0, ''))
-            if best[0] >= 0.8:
-                parent = best[1]
-        if not parent:
+        what = f"spin-off parent {parent_name or parent_code!r} on {r.date}"
+        syms = (name_listings.get(_rbc_norm_company(parent_name))
+                if parent_name else None)
+        if not syms and parent_name:
+            # Fuzzy fallback (RBC appends 'COMMON STOCK' and the like, so
+            # exact names rarely hit). BOTH names must be mostly covered
+            # by the other: scoring only the shorter one let 'BROOKFIELD
+            # CORP' match 'BROOKFIELD RENEWABLE CORP' (audit S072-02).
+            def _cov(a, b):
+                ta, tb = _rbc_name_tokens(a), _rbc_name_tokens(b)
+                if not ta or not tb:
+                    return 0.0
+                return sum(1 for x in ta
+                           if any(_rbc_tok_eq(x, y) for y in tb)) / len(ta)
+            scored = {}
+            for x in share_rows:
+                if not x.symdesc or x.symbol == r.symbol:
+                    continue
+                sc = min(_cov(parent_name, x.symdesc),
+                         _cov(x.symdesc, parent_name))
+                if sc >= 0.6:
+                    scored[x.symbol] = max(sc, scored.get(x.symbol, 0.0))
+            if scored:
+                top = max(scored.values())
+                syms = {sy for sy, sc in scored.items() if sc == top}
+        parent = _resolve(syms, '', what) if syms else None
+        if not parent and not syms:
             print(f"warning: RBC spin-off parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded in this statement, so "
                   f"its ticker is unknown — a s.86.1 rollover's parent-ACB "
                   f"reduction would land on an empty pool. Include the "
                   f"statement that bought the parent.", file=sys.stderr)
-        src = _rbc_ca_symbol(parent, r.currency) if parent else (
-            parent_code or '(unknown parent)')
+        # The parent's OWN listing, never the spun-off row's currency: a
+        # TSX parent whose spin-off arrives in USD was PARENT.US, and the
+        # s.86.1 ACB reduction became a phantom gain (audit S019-05).
+        src = parent or (parent_code or '(unknown parent)')
         tgt = _rbc_ca_symbol(r.symbol, r.currency)
         if rbc_is_temp_symbol(r.symbol):
             print(f"warning: RBC spin-off on {r.date} is booked under the "
