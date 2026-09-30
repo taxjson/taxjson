@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Generic importer: one spelling per security.** `BRK-B` and `BRK/B`
+  are `BRK.B` (they were separate ACB pools, so a cross-account
+  superficial loss was missed), an OCC symbol padded to 21 characters is
+  compacted, and an option description in the symbol column is refused
+  instead of booked as a share that never expires (audit S010-04).
 - **US projects: an IB return of capital reduces basis by default.** A
   `country = "usa"` project no longer books an issuer-designated return
   of capital as a dividend under Canada's s.90(2) rule; it is a

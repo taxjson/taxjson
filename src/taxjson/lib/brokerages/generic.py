@@ -80,6 +80,7 @@ currency must be mapped or set in [defaults] — there is no silent USD.
 
 import csv
 import difflib
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -334,7 +335,31 @@ class GenericBrokerage(BaseBrokerage):
         a different identity, so a superficial loss across accounts was
         missed (audit R1-122). A bare symbol still takes its suffix from
         the currency (XEI in CAD -> XEI.TO)."""
-        sym = symbol_raw.strip().replace(" ", ".")
+        sym = symbol_raw.strip()
+        # One security, one spelling (audit S010-04): the ACB pool and
+        # the superficial-loss match key on the exact symbol string.
+        #  * An OCC symbol padded to 21 characters ('XYZ   250321C...')
+        #    is the compact contract, not 'XYZ...250321C...'.
+        #  * A class-share separator '-' or '/' is the dot every broker
+        #    parser uses: BRK-B and BRK/B are BRK.B.
+        #  * A broker option DESCRIPTION ('XYZ 21MAR25 50 C', 'CALL XYZ
+        #    03/21/25 50') is not a symbol: booked as a share, it never
+        #    expired. Refused — give the OCC symbol.
+        _occ = re.match(r'^([A-Za-z0-9.]+)\s+(\d{6}[CPcp]\d{8})$', sym)
+        if _occ:
+            sym = _occ.group(1) + _occ.group(2).upper()
+        elif (re.match(r'^\S+\s+\d{1,2}[A-Za-z]{3}\d{2}\s+[\d.,]+\s+[CPcp]$',
+                       sym)
+              or re.match(r'^(?:CALL|PUT)\s', sym, re.IGNORECASE)):
+            raise BrokerageParseError(
+                f"generic importer: symbol {symbol_raw!r} is an option "
+                f"DESCRIPTION, not a symbol — give the OCC symbol (e.g. "
+                f"XYZ250321C00050000) so the contract is an option.")
+        _cls = re.match(r'^([A-Za-z0-9]+)[-/]([A-Za-z]{1,2})(\.[A-Za-z]{1,2})?$',
+                        sym)
+        if _cls:
+            sym = f"{_cls.group(1)}.{_cls.group(2)}{_cls.group(3) or ''}"
+        sym = sym.replace(" ", ".")
         up = sym.upper()
         # A Canadian venue (.TO/.V/.VN/.CN/.NE) is one Canadian listing,
         # spelled ROOT.TO by every broker parser (base.canonical_ca_
