@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **check-filed recomputes a locked year the way it was filed.** The
+  drift check used the current project's written-option timing, so a
+  2026 project without `option_grant_timing_since` recomputed the 2025
+  lock on close timing and advised amending a correct return. It now
+  uses the timing the lock recorded and notes when the project differs.
+- **One bad lock no longer switches off the drift guard.** A lock that
+  cannot be read (bad JSON, a hand-edited file missing a count) made
+  `run --strict` exit 0 and skip every other lock, and made
+  `check-filed` crash with a traceback. Each lock is now checked on its
+  own; a bad one is named and fails `--strict`.
+- **A renamed account is reported, not recomputed from its old book.**
+  A locked account that is no longer a taxable account in
+  `taxjson.toml` was recomputed from its orphan `work/<name>_base.json`
+  and the check said OK.
+- **The lock records dividends and payments in lieu separately.** A
+  dividend reclassified as a payment in lieu (different return line, no
+  gross-up) now shows as drift; locks written before this keep
+  comparing the combined income only.
+- **`country` and `tax_date` are checked for every command.** "Canada",
+  "CA" or " canada" are read as `canada` everywhere (check-filed and the
+  web what-if crashed on them, switching the drift guard off); an
+  invalid `tax_date` stops every command with a clear message instead
+  of an engine usage error. The checklist no longer reports a failed
+  check-filed as drift.
+- **reconcile-slips counts phantom-basis sales.** A sale reported by
+  hand (phantom cost basis) was still shown as MISSING_FROM_COMPUTED;
+  it now matches the slip with the "phantom basis included" note.
+
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

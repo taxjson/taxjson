@@ -842,9 +842,19 @@ def d_filed_lock(ctx: Ctx) -> Result:
         return Result("filed-lock", "todo", "no filed/<year>.json — `taxjson close-year` after filing")
     code, out, err = ctx.sub("check-filed")
     if code != 0:
-        return Result("filed-lock", "attention",
-                      "check-filed reports drift against the lock — amend or "
-                      "`close-year --force` after re-filing")
+        # Only a reported DRIFT is drift; a failed recompute (bad
+        # config, unreadable lock, crash) is not a reason to amend a
+        # return or re-lock it (S031-21).
+        if "DRIFTED" in err or "DRIFTED" in out:
+            return Result("filed-lock", "attention",
+                          "check-filed reports drift against the lock — amend or "
+                          "`close-year --force` after re-filing")
+        why = next((ln.strip() for ln in (err + "\n" + out).splitlines()
+                    if "could not be checked" in ln), "")
+        return Result("filed-lock", "blocked",
+                      "check-filed could not check the lock (not drift): "
+                      + (why or _last_line(err) or _last_line(out)
+                         or f"exit {code}"))
     return Result("filed-lock", "done", f"locked; no drift")
 
 

@@ -405,7 +405,31 @@ def load_config(root: Path) -> Dict[str, Any]:
         except Exception as e:
             _die(f"{path} is not valid TOML: {e}")
     _refuse_bad_account_types(cfg)
+    _normalize_settings(cfg)
     return cfg
+
+
+def _normalize_settings(cfg: Dict[str, Any]) -> None:
+    """Canonical `country` (canada|usa) and a checked `tax_date` for
+    EVERY config reader, not only `run`'s validate_config: check-filed,
+    audit and close-year passed the raw strings to the gains engine,
+    whose argparse refused "Canada"/"CA"/"Settle" — the filed-year
+    drift guard went silently off and the checklist called the crash
+    drift (S031-21, S031-24)."""
+    settings = cfg.get("settings")
+    if not isinstance(settings, dict):
+        return
+    country = settings.get("country")
+    if country is not None:
+        canon = _normalize_country(str(country))
+        if canon not in _COUNTRY_CANON.values():
+            _die(f"[settings] country must be canada|ca|usa|us, "
+                 f"got {country!r}")
+        settings["country"] = canon
+    tax_date = settings.get("tax_date")
+    if tax_date is not None and tax_date not in ("settle", "trade"):
+        _die(f"[settings] tax_date must be settle|trade, "
+             f"got {tax_date!r}")
 
 
 def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
@@ -7897,6 +7921,7 @@ def _soft_config(root: Path) -> Dict[str, Any]:
         # Soft about a MISSING or unreadable config, never about an
         # account the filing commands would silently drop (R1-268).
         _refuse_bad_account_types(cfg)
+        _normalize_settings(cfg)
         return cfg
     return {}
 
@@ -8602,24 +8627,76 @@ def _check_filed_years(root: Path, cache: Path,
                   "crypto books would be blended into the combined "
                   "equity recompute and may report false drift.",
                   file=sys.stderr)
+    _taxable_cfg = {a for a, c in _acct_cfg.items()
+                    if isinstance(c, dict) and c.get("type") == "taxable"}
+    unreadable = 0
     for year, path in snaps:
-        snap = _json.loads(path.read_text(encoding="utf-8"))
-        _snap_accts = list(snap.get("accounts", {}))
-        # Taxable accounts the BOOKS have but the lock does not (added
-        # or renamed after close-year) are recomputed too — in the same
-        # blend — so diff_snapshot can report them instead of saying OK.
-        _snap_accts += sorted(
-            a for a, c in _acct_cfg.items()
-            if isinstance(c, dict) and c.get("type") == "taxable"
-            and a not in _snap_accts
-            and (cache / f"{a}_base.json").exists())
-        _crypto = [a for a in _snap_accts
-                   if (_acct_cfg.get(a) or {}).get("crypto")]
-        _equity = [a for a in _snap_accts if a not in _crypto]
-        recomputed = taxjson_filed.recompute_accounts(
-            cache, _equity, _crypto, year, settings,
-            snap.get("basis", ""), _filed_run_gains)
-        lines = taxjson_filed.diff_snapshot(snap, recomputed)
+        # One lock at a time: an unreadable or hand-edited lock is
+        # reported BY NAME and counted as a failure, and the other
+        # locks are still checked. A KeyError/JSONDecodeError here used
+        # to escape the loop, skip --strict's exit and every later lock
+        # (R1-189).
+        try:
+            snap = _json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(snap, dict) or not isinstance(
+                    snap.get("accounts", {}), dict) or not all(
+                    isinstance(v, dict)
+                    for v in snap.get("accounts", {}).values()):
+                raise ValueError("not a close-year lock (no per-account "
+                                 "table)")
+            _snap_accts = list(snap.get("accounts", {}))
+            # A locked account that is no longer a configured taxable
+            # account (renamed/removed) is NOT recomputed from its
+            # orphan work/<label>_base.json — that blended stale books
+            # into the check and said OK (S002-06).
+            _gone = ({a for a in _snap_accts if a not in _taxable_cfg}
+                     if _acct_cfg else set())
+            _snap_accts = [a for a in _snap_accts if a not in _gone]
+            # Taxable accounts the BOOKS have but the lock does not
+            # (added or renamed after close-year) are recomputed too —
+            # in the same blend — so diff_snapshot can report them
+            # instead of saying OK.
+            _snap_accts += sorted(
+                a for a in _taxable_cfg
+                if a not in _snap_accts
+                and (cache / f"{a}_base.json").exists())
+            _crypto = [a for a in _snap_accts
+                       if (_acct_cfg.get(a) or {}).get("crypto")]
+            _equity = [a for a in _snap_accts if a not in _crypto]
+            _lock_timing = snap.get("option_timing")
+            recomputed = taxjson_filed.recompute_accounts(
+                cache, _equity, _crypto, year, settings,
+                snap.get("basis", ""), _filed_run_gains,
+                option_timing=_lock_timing)
+            lines = taxjson_filed.diff_snapshot(snap, recomputed,
+                                                unconfigured=_gone)
+        except SystemExit:
+            raise
+        except Exception as e:          # this lock only
+            unreadable += 1
+            print(f"  !! filed {year}: {path.name} could not be checked: "
+                  f"{type(e).__name__}: {e} — fix or restore the lock "
+                  f"(it is the record of the filed return)",
+                  file=sys.stderr)
+            continue
+        if isinstance(_lock_timing, dict):
+            from taxjson.lib.pipeline import option_timing_from_settings
+            _cur = option_timing_from_settings(settings) or {}
+            if _cur and (
+                    _cur.get("option_premium_timing")
+                    != _lock_timing.get("option_premium_timing")
+                    or _cur.get("option_grant_since")
+                    != _lock_timing.get("option_grant_since")):
+                print(f"  note: filed {year} recomputed with the option "
+                      f"timing its lock records "
+                      f"({_lock_timing.get('option_premium_timing')}, "
+                      f"since {_lock_timing.get('option_grant_since')}); "
+                      f"this project uses "
+                      f"{_cur.get('option_premium_timing')}, since "
+                      f"{_cur.get('option_grant_since')} — set "
+                      f"option_grant_timing_since to match or contracts "
+                      f"written around {year} are taxed in the wrong "
+                      f"year or twice")
         if lines:
             drifting += 1
             print(f"  !! filed {year} DRIFTED vs {path.name}:",
@@ -8632,10 +8709,15 @@ def _check_filed_years(root: Path, cache: Path,
                   f"with [settings].year = {year}).", file=sys.stderr)
         else:
             print(f"  filed {year}: OK (matches {path.name})")
+    if unreadable and strict:
+        sys.exit(f"taxjson run --strict: {unreadable} filed-year "
+                 f"lock(s) could not be checked"
+                 + (f" and {drifting} drifted" if drifting else "")
+                 + " — aborting.")
     if drifting and strict:
         sys.exit(f"taxjson run --strict: {drifting} filed year(s) "
                  f"drifted — aborting.")
-    return drifting
+    return drifting + unreadable
 
 
 def _fx_cash_after_run(root: Path, cache: Path,

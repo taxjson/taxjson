@@ -179,7 +179,10 @@ def load_computed(gains_paths: List[Path],
         for e in list(data.get("transactions", [])) + _manual:
             if e.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 continue
-            if "gain" not in e or "qty" not in e:
+            # Manual (phantom-basis) rows carry qty and proceeds but no
+            # `gain` (the pipeline strips it); requiring `gain` dropped
+            # every one of them again (R1-206).
+            if "qty" not in e or ("gain" not in e and not e.get("tainted")):
                 continue
             # Year-scope on the same basis the gains files (and the
             # broker's slip) use: the IRS recognizes on TRADE date, so a
