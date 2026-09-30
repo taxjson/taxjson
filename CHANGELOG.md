@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **harvest: claimable-now losses and option marks that match the
+  books.** A LOCKED position counts the part of its loss a sale today
+  keeps as claimable now (only the units a registered account bought in
+  the window and still holds wait for the clear date); a VIOLATION's
+  last rescue day reads `sell-by:…,+0d`, not "deadline passed"; a
+  written option whose premium was taxed at the write (grant timing)
+  shows the buy-back's whole cost as the loss (the engine's inventory
+  now carries `recognised_premium`); an option the pipeline renamed via
+  ticker.map (TOBASE KGC.US K.TO) is quoted as the contract actually
+  held, in its currency; and when the wash-radar reports are older than
+  the books (after `run --account`), harvest runs the radar live instead
+  of showing a registered-account lock as CLEAR (audit R1-230, R1-232,
+  S033-24, S034-11, S038-09).
+- **`taxjson-safe-to-sell` reads the wash radar.** Its own position walk
+  missed today's (unsettled) buys, booked short covers as long lots and
+  ignored ticker renames; quantities and statuses (SAFE, SAFE*,
+  FULL-EXIT-ONLY, LOCKED, PARTIAL, VIOLATION) now come from the radar,
+  and a bad `--date` is a usage error (audit R1-233, S007-09, S050-03).
+
 - **The wash radar follows the engine's per-holder superficial-loss
   rule.** A loss is superficial only for units a holder — your taxable
   accounts together, or one registered account — bought inside the

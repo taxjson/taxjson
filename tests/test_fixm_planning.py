@@ -398,3 +398,183 @@ class TestUnreadableConfig(unittest.TestCase):   # S048-13
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ------------------------------------------------------------- harvest
+from taxjson.bin import taxjson_harvest as H  # noqa: E402
+
+
+def _harvest(argv, prices=None, option_prices=None, seen=None):
+    def _fetch(remaining):
+        return {s: ((prices or {})[s], "fake") for s in remaining
+                if s in (prices or {})}
+
+    def _opt(remaining):
+        if seen is not None:
+            seen.extend(remaining)
+        return {s: ((option_prices or {})[s], "ibkr") for s in remaining
+                if s in (option_prices or {})}
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        rc = H.main(argv, fetchers=[_fetch], option_fetchers=[_opt])
+    return rc, out.getvalue(), err.getvalue()
+
+
+class TestHarvest(unittest.TestCase):
+    def test_violation_deadline_day_is_sell_by(self):   # S033-24
+        today = date.today()
+        rec = {"category": "VIOLATION", "clears_at": today.isoformat()}
+        self.assertEqual(H._advisory_display(rec, today),
+                         f"VIOLATION(sell-by:{today.isoformat()},+0d)")
+        rec["clears_at"] = (today - timedelta(days=1)).isoformat()
+        self.assertIn("deadline-passed", H._advisory_display(rec, today))
+
+    def test_locked_fraction_is_claimable_now(self):   # R1-232
+        clears = (date.today() + timedelta(days=15)).isoformat()
+        rows = [{"verdict": "LOSS", "unrealized": -1000.0,
+                 "radar": {"category": "LOCKED", "clears_at": clears,
+                           "at_risk_qty": 4.0, "taxable_qty": 100.0}}]
+        sched = H._recovery_schedule(rows)
+        self.assertEqual(sched["now"], 960.0)
+        self.assertEqual(sched["30d"], 1000.0)
+        # An older sidecar without the field keeps the whole loss locked.
+        rows[0]["radar"].pop("at_risk_qty")
+        self.assertEqual(H._recovery_schedule(rows)["now"], 0.0)
+
+    def test_grant_timed_short_shows_the_buyback_loss(self):   # R1-230
+        exp = (date.today() + timedelta(days=80)).strftime("%y%m%d")
+        opt = f"XYZ{exp}C00050000.TO"
+        with tempfile.TemporaryDirectory() as td:
+            g = Path(td) / "margin_gains_wash.json"
+            g.write_text(json.dumps({"inventory": [
+                {"symbol": opt, "qty": -1, "total_cost": -200.0,
+                 "recognised_premium": 200.0}]}))
+            rc, out, err = _harvest(
+                [str(g), "--no-ibkr", "--country", "canada", "--options",
+                 "--json"], option_prices={opt: 1.00})
+        self.assertEqual(rc, 0, err)
+        row = json.loads(out)["rows"][0]
+        # Buying back at 1.00 x 100 books a -100 loss (the premium was
+        # taxed at the write), not a +100 gain.
+        self.assertAlmostEqual(row["unrealized"], -100.0)
+        self.assertEqual(row["verdict"], "LOSS")
+
+    def test_renamed_option_is_quoted_as_the_contract_held(self):  # S034-11
+        exp = (date.today() + timedelta(days=200)).strftime("%y%m%d")
+        held, booked = f"KGC{exp}C00012000.US", f"K{exp}C00012000.TO"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            g = root / "margin_gains_wash.json"
+            g.write_text(json.dumps({"inventory": [
+                {"symbol": booked, "qty": 1, "total_cost": 136.0}]}))
+            (root / "margin_raw_gains.json").write_text(json.dumps(
+                {"inventory": [{"symbol": held, "qty": 1,
+                                "total_cost": 100.0}]}))
+            (root / "ticker.map").write_text("TOBASE KGC.US K.TO\n")
+            (root / "to_base.csv").write_text(
+                f"{date.today().isoformat()} 12:00:00 USD CAD 1.38\n")
+            seen = []
+            rc, out, err = _harvest(
+                [str(g), "--no-ibkr", "--country", "canada", "--options",
+                 "--ticker-map", str(root / "ticker.map"), "--json"],
+                option_prices={held: 1.00}, seen=seen)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(seen, [held])
+        row = json.loads(out)["rows"][0]
+        self.assertEqual(row["price_currency"], "USD")
+        self.assertAlmostEqual(row["value"], 138.0)
+
+
+class TestHarvestStaleRadar(unittest.TestCase):   # S038-09
+    def test_single_account_run_does_not_serve_a_stale_radar(self):
+        today = date.today()
+        d = lambda n: (today + timedelta(days=n)).isoformat()  # noqa: E731
+        margin = _QT_HEADER + _qt(d(-200), d(-200), "Buy", "XYZ.TO", 200,
+                                  10.0)
+        tfsa = _QT_HEADER + _qt(d(-10), d(-10), "Buy", "XYZ.TO", 10, 7.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "taxjson.toml").write_text(_config(
+                today.year, [("margin", "taxable"), ("tfsa", "sheltered")]))
+            for a in ("margin", "tfsa"):
+                (root / "inputs" / a).mkdir(parents=True)
+            (root / "inputs" / "margin" / "m.csv").write_text(margin)
+            (root / "inputs" / "tfsa" / "t.csv").write_text(
+                _QT_HEADER + _qt(d(-300), d(-300), "Buy", "ABC.TO", 1, 5.0))
+            r = _cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            (root / "inputs" / "tfsa" / "t.csv").write_text(tfsa)
+            r = _cli(root, "run", "--no-input", "--account", "tfsa")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            (root / "work" / ".price_cache.json").write_text(json.dumps(
+                {"XYZ.TO": {"price": 8.0, "asof": today.isoformat(),
+                            "currency": "CAD"}}))
+            h = _cli(root, "harvest", "--no-ibkr", "--json")
+        self.assertEqual(h.returncode, 0, h.stderr[-2000:])
+        rows = json.loads(h.stdout)["rows"]
+        xyz = next(x for x in rows if x["symbol"] == "XYZ.TO")
+        self.assertEqual((xyz.get("radar") or {}).get("category"), "LOCKED",
+                         h.stderr)
+
+
+# --------------------------------------------------------- safe-to-sell
+def _sts(taxable, as_of=None, sheltered=None, extra=()):
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp) / "t.json"
+        t.write_text(json.dumps({"transactions": taxable}))
+        cmd = [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell",
+               "--taxable", str(t), *extra]
+        if as_of:
+            cmd += ["--date", as_of]
+        if sheltered is not None:
+            s = Path(tmp) / "s.json"
+            s.write_text(json.dumps({"transactions": sheltered}))
+            cmd += ["--sheltered", str(s)]
+        r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
+                           text=True)
+    return r
+
+
+def _sts_rows(out):
+    rows = {}
+    for ln in out.splitlines():
+        cells = ln.split()
+        if len(cells) >= 3 and cells[1].replace(".", "").lstrip(
+                "-").isdigit():
+            rows[cells[0]] = (float(cells[1]), cells[2])
+    return rows
+
+
+class TestSafeToSell(unittest.TestCase):
+    def test_buy_made_today_is_seen(self):   # S007-09
+        today = date.today()
+        tax = [_row("2026-01-05", "SYN.TO", 100, 5000.0),
+               _row(today.isoformat(), "SYN.TO", 100, 3000.0,
+                    settle=(today + timedelta(days=1)).isoformat())]
+        r = _sts(tax)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(_sts_rows(r.stdout)["SYN.TO"],
+                         (200.0, "FULL-EXIT-ONLY"))
+
+    def test_short_cover_is_not_a_long_lot(self):   # R1-233
+        opt = "ABC261218C00050000.TO"
+        tax = [_row("2026-05-01", "XYZ.TO", -100, 5000.0),
+               _row("2026-05-01", "XYZ.TO", 100, 4900.0),
+               _row("2026-09-15", opt, -3, 300.0)]
+        r = _sts(tax, "2026-09-29")
+        rows = _sts_rows(r.stdout)
+        self.assertNotIn("XYZ.TO", rows)
+        self.assertEqual(rows[opt][0], -3.0)
+
+    def test_rename_is_followed(self):   # S050-03
+        tax = [_row("2026-01-05", "OLD.TO", 100, 5000.0),
+               dict(_row("2026-03-02", "OLD.TO", 1.0, 0.0, action="SPLIT"),
+                    symbol_new="NEW.TO"),
+               _row("2026-04-01", "NEW.TO", -100, 5200.0)]
+        r = _sts(tax, "2026-09-29")
+        self.assertEqual(_sts_rows(r.stdout), {})
+
+    def test_bad_date_is_a_usage_error(self):
+        r = _sts([_row("2026-01-05", "SYN.TO", 100, 5000.0)], "2026-13-01")
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("Traceback", r.stderr)

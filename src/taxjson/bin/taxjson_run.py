@@ -8461,10 +8461,48 @@ def cmd_harvest(args: argparse.Namespace) -> None:
         # per-account sidecars can't see. Preferred only while FRESH:
         # a per-account sidecar rebuilt after it means the combined
         # view is stale and must not shadow it.
-        cmd += ["--radar", str(combined_sidecar)]
+        radar_files = [combined_sidecar]
     else:
-        for sidecar in per_acct_sidecars:
-            cmd += ["--radar", str(sidecar)]
+        radar_files = list(per_acct_sidecars)
+    # A sidecar older than the books it describes — `run --account`
+    # rebuilds an account's books (and sheltered_base.json) but skips
+    # the cross reports — reported a registered-account buy's LOCKED
+    # name as CLEAR / claimable now (2026-09 audit S038-09). Run the
+    # radar live over the current books instead.
+    _books = [p for p in cache.glob("*_base.json")
+              if not p.name.startswith(".")]
+    _newest_book = max((p.stat().st_mtime for p in _books), default=0.0)
+    if radar_files and any(sc.stat().st_mtime < _newest_book
+                           for sc in radar_files):
+        from taxjson.lib.dispatch import run_cmd as _run_live
+        _live = cache / ".harvest_radar.json"
+        _bases = _radar_taxable_bases(root, cache, "taxjson harvest")
+        _rcmd = _cmd("taxjson-wash-radar") + [
+            "--taxable", *[str(b) for b in _bases],
+            "--json-out", str(_live), "--account", "LIVE"]
+        _rcmd += _radar_engine_args(_bases, root / "phantoms.json",
+                                    settings.get("country", "canada"))
+        if (cache / "sheltered_base.json").exists():
+            _rcmd += ["--sheltered", str(cache / "sheltered_base.json")]
+        _res = _run_live(_rcmd, capture_output=True)
+        if _res.returncode == 0 and _live.exists():
+            note("taxjson harvest",
+                 "the wash-radar reports are older than the books (a "
+                 "single-account run?) — using a live radar; run a full "
+                 "`taxjson run` to refresh reports/.")
+            radar_files = [_live]
+        else:
+            print("taxjson harvest: warning: the wash-radar reports are "
+                  "older than the books and a live radar failed — the "
+                  "ADVISORY column is left empty (losses count as 'no "
+                  "clear date'); run a full `taxjson run`.",
+                  file=sys.stderr)
+            radar_files = []
+    for sidecar in radar_files:
+        cmd += ["--radar", str(sidecar)]
+    _tmap = root / "ticker.map"
+    if _tmap.exists():
+        cmd += ["--ticker-map", str(_tmap)]
     # Sheltered accounts' inventories feed the SH_QTY / SH_ADD columns:
     # shares held sheltered and days since the sheltered side last
     # acquired (a sheltered add within the 30-day window makes a

@@ -877,8 +877,10 @@ lists every straddling contract and says whether a filed year needs a
 T1-ADJ; a contract written in a LOCKED year (`filed/<year>.json`, which
 now records the timing that return used) but kept on transition close
 timing here is flagged ATTENTION, as is a contract past its expiry date
-with no expiry/assignment row in the export. Positions, `harvest` and the holdings export keep the economic
-book cost of an open written option; only the year attribution moves.
+with no expiry/assignment row in the export. Positions and the holdings export keep the economic
+book cost of an open written option; only the year attribution moves. `harvest`, which asks what closing
+today would book, leaves a premium already recognised at the write out of the cost, so its UNREALIZED
+on a grant-timed written option is the whole buy-back cost (the loss the close books).
 
 Whether the loss on buying back a written option can be *superficial* —
 denied because identical options were bought within 30 days and held,
@@ -1018,7 +1020,12 @@ out. `RISK` losses count as claimable **now** — the superficial-loss rule
 needs an acquisition inside the ±30-day window, not mere sheltered
 ownership — but carry a forward caveat: an affiliated buy (a DRIP is
 the classic) within 30 days *after* the sale denies the loss
-permanently, so pause sheltered adds first.
+permanently, so pause sheltered adds first. A `LOCKED` loss counts as
+claimable now except for the units a registered account bought in the
+window and still holds (`LOCKED(at-risk:4/100sh,…)`). When the radar
+reports are older than the books (after `run --account`), harvest runs
+the radar live. With `--options`, a contract that ticker.map renamed
+onto another listing's code is quoted as the contract actually held.
 Accounts marked `crypto = true` are **excluded by default** (the price
 chain serves stock snapshots; crypto symbols mostly fail to price) —
 pass `--crypto` to include them.

@@ -2,9 +2,17 @@
 """
 taxjson_safe_to_sell.py
 
-Proactive superficial loss prevention.
-Focuses ONLY on shares held in TAXABLE accounts.
-Ported from tt_safe_to_sell.pl.
+Proactive superficial loss prevention: one line per TAXABLE position —
+may it be sold at a loss today?
+
+A thin view over the wash radar's walk (taxjson-wash-radar). This used
+to be a separate port of tt_safe_to_sell.pl with its own position walk,
+and every engine rule the radar learned since was missing here: a buy
+made today (settling tomorrow) was invisible, a short cover opened a
+phantom long lot while real short positions vanished, and a ticker
+rename left the old symbol "held" and SAFE (2026-09 audits R1-233,
+S007-09, S050-03). Quantities and verdicts now come from the radar, so
+the two can never disagree.
 
 Usage:
     python -m taxjson.bin.taxjson_safe_to_sell --taxable tax1.json --sheltered sh1.json [--date YYYY-MM-DD]
@@ -12,13 +20,24 @@ Usage:
 
 import argparse
 import json
-from datetime import datetime, timezone
-from pathlib import Path
+import subprocess
+import sys
+from datetime import datetime
+from typing import List, Optional
 
-# UTC-noon epoch helper: shared home in lib/dates (DST rationale there).
-from taxjson.lib.dates import date_to_epoch, noon_utc  # noqa: E402,F401
+# Radar category -> this view's status. EXITABLE: only a FULL exit is
+# clean (a partial loss sale is superficial); LOCKED: a registered
+# account's in-window buy it still holds denies the loss (PARTIAL when
+# only some units are at risk); VIOLATION: a loss already made is
+# superficial unless the replacement is sold by the deadline.
+_STATUS = {
+    "CLEAR": "SAFE", "RISK": "SAFE", "BLOCKED": "SAFE", "COOLING": "SAFE",
+    "CAUTION": "SAFE*", "EXITABLE": "FULL-EXIT-ONLY", "LOCKED": "LOCKED",
+    "VIOLATION": "VIOLATION",
+}
 
-def main():
+
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Taxable-Only Safe-to-Sell Audit")
     # nargs='+' + extend: both `--taxable a b` (historical) and repeated
     # `--taxable a --taxable b` (A2 composability) work.
@@ -29,118 +48,61 @@ def main():
                         metavar="FILE",
                         help="Sheltered transaction JSON files (repeatable)")
     parser.add_argument("--date", help="Target date (YYYY-MM-DD), defaults to today")
-    
-    args = parser.parse_args()
+    parser.add_argument("--gains", nargs='+', action='extend', default=[],
+                        metavar="FILE",
+                        help="The engine's gains files (passed to the radar: "
+                             "the engine decides which sales were losses)")
+    parser.add_argument("--incomplete-history", metavar="FILE", default=None,
+                        help="phantoms.json (passed to the radar)")
+    parser.add_argument("--country", default="canada",
+                        help="Project country (passed to the radar)")
+    args = parser.parse_args(argv)
 
     if args.date:
-        today_dt = datetime.strptime(args.date, "%Y-%m-%d")
-    else:
-        today_dt = datetime.now()
-    
-    today_dt = noon_utc(today_dt)
-    today_epoch = today_dt.timestamp()
+        try:
+            datetime.strptime(args.date, "%Y-%m-%d")
+        except ValueError:
+            parser.error(f"--date {args.date!r} is not a valid YYYY-MM-DD date")
 
-    taxable_inventory = {} # ticker -> [ {date, qty, epoch} ]
-    last_acq_global = {}   # ticker -> epoch (Any account)
-
-    def process_files(files, is_taxable):
-        for f in files:
-            path = Path(f)
-            with open(path, 'r', encoding='utf-8') as fh:
-                data = json.load(fh)
-                txs = data.get("transactions", [])
-                # Transactions are likely sorted already, but let's be safe
-                sorted_txs = sorted(txs, key=lambda x: (x.get('date'), x.get('time', '09:30:00')))
-                
-                for tx_data in sorted_txs:
-                    # Settle-basis, matching the engine's CRA window.
-                    date = tx_data.get('date_settle') or tx_data.get('date')
-                    ticker = tx_data.get('symbol')
-                    # `qty` alias: some producers emit 'qty' (matches the
-                    # radar's alias handling).
-                    qty = tx_data.get('quantity', tx_data.get('qty', 0.0))
-                    action = tx_data.get('action', '').upper()
-
-                    epoch = date_to_epoch(date)
-                    if epoch > today_epoch:
-                        continue
-
-                    if action == 'SPLIT':
-                        # Scale held lots by the ratio (mirrors the radar /
-                        # engine walks). Ignoring splits showed phantom
-                        # quantities: a 1:10 reverse split left the pre-split
-                        # count, and post-split sells over-drained — hiding a
-                        # genuinely held (possibly LOCKED) position.
-                        ratio = qty
-                        if is_taxable and ratio and abs(ratio) > 1e-12 \
-                                and ticker in taxable_inventory:
-                            for lot in taxable_inventory[ticker]:
-                                lot['qty'] *= ratio
-                        continue
-
-                    # ASSIGN (option assignment/exercise) acquires and
-                    # disposes shares exactly like BUYSELL — the engine
-                    # and the radar both count it as a trigger; skipping
-                    # it hid a LOCK opened by an assigned put.
-                    if action not in ('BUYSELL', 'ASSIGN'):
-                        continue
-
-                    if qty > 0:
-                        # ANY buy is a window trigger
-                        if ticker not in last_acq_global or epoch > last_acq_global[ticker]:
-                            last_acq_global[ticker] = epoch
-                        
-                        # Only track inventory for TAXABLE
-                        if is_taxable:
-                            if ticker not in taxable_inventory:
-                                taxable_inventory[ticker] = []
-                            taxable_inventory[ticker].append({'epoch': epoch, 'date': date, 'qty': qty})
-                    else:
-                        # Drain taxable inventory ONLY
-                        if is_taxable:
-                            to_rem = abs(qty)
-                            if ticker in taxable_inventory:
-                                while to_rem > 1e-6 and taxable_inventory[ticker]:
-                                    lot = taxable_inventory[ticker][0]
-                                    if lot['qty'] <= to_rem + 1e-6:
-                                        to_rem -= lot['qty']
-                                        taxable_inventory[ticker].pop(0)
-                                    else:
-                                        lot['qty'] -= to_rem
-                                        to_rem = 0.0
-
-    process_files(args.taxable, True)
-    process_files(args.sheltered, False)
+    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+           "--taxable", *args.taxable, "--all", "--json",
+           "--country", args.country]
+    if args.sheltered:
+        cmd += ["--sheltered", *args.sheltered]
+    if args.date:
+        cmd += ["--date", args.date]
+    if args.gains:
+        cmd += ["--gains", *args.gains]
+    if args.incomplete_history:
+        cmd += ["--incomplete-history", args.incomplete_history]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.stderr.write(res.stderr)
+        return res.returncode or 1
+    doc = json.loads(res.stdout)
 
     print("TAXABLE-ONLY SAFE-TO-SELL AUDIT — CRA 30-day window")
     print()
     headers = ["TICKER", "TAXABLE QTY", "STATUS", "REASON"]
     output_rows = []
-
-    for t in sorted(taxable_inventory.keys()):
-        lots = taxable_inventory[t]
-        total = sum(lot['qty'] for lot in lots)
-        if total < 0.001:
-            continue
-
-        lacq = last_acq_global.get(t, 0.0)
-        safe_epoch = lacq + (31 * 86400)
-        # UTC to round-trip the UTC-noon epochs back to the same calendar day.
-        last_date = datetime.fromtimestamp(lacq, tz=timezone.utc).strftime("%Y-%m-%d")
-        safe_date = datetime.fromtimestamp(safe_epoch, tz=timezone.utc).strftime("%Y-%m-%d")
-        
-        status = "SAFE"
-        reason = "NO RECENT BUYS"
-        
-        if today_epoch < safe_epoch:
-            status = "LOCKED"
-            reason = f"Last Buy {last_date} (Safe {safe_date})"
-        
-        output_rows.append([t, f"{total:.4f}", status, reason])
+    for sec in doc.get("sections") or []:
+        for r in sec.get("rows") or []:
+            q = float(r.get("taxable_qty") or 0.0)
+            if abs(q) <= 1e-6:
+                continue
+            cat = r.get("category") or ""
+            status = _STATUS.get(cat, cat or "-")
+            if cat == "LOCKED" and r.get("at_risk_qty") is not None \
+                    and float(r["at_risk_qty"]) < abs(q) - 1e-6:
+                status = "PARTIAL"
+            adv = r.get("advisory") or ""
+            reason = adv.split(":", 1)[1].strip() if ":" in adv else adv
+            output_rows.append([r.get("ticker"), f"{q:.4f}", status, reason])
+    output_rows.sort(key=lambda row: row[0])
 
     if not output_rows:
         print("No taxable holdings found.")
-        return
+        return 0
 
     widths = [len(h) for h in headers]
     for row in output_rows:
@@ -154,8 +116,13 @@ def main():
     for row in output_rows:
         print(fmt.format(*row))
 
-    print("\nNOTE: 'SAFE' means no acquisitions occurred in the last 30 days.")
+    print("\nNOTE: statuses are the wash radar's (`taxjson wash-radar` "
+          "explains each). SAFE means no replacement bought in the last "
+          "30 days would make a loss sale superficial; FULL-EXIT-ONLY "
+          "means only selling the whole position is clean.")
     print("To fully avoid superficial loss, you must also NOT REPURCHASE for 30 days AFTER selling.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
