@@ -177,5 +177,48 @@ class TestFillCryptoAmountsPinned(unittest.TestCase):
         self.assertEqual(got[0]["gross_amount"], 210.375)
 
 
+class TestCaPriorityLadderPinned(unittest.TestCase):
+    """G1-7: every rung of the Canada same-timestamp ladder, through the
+    function and through the ca_main sort."""
+
+    def _tx(self, action, qty, symbol="ZZQ.US"):
+        from taxjson.lib.core import TaxTransaction
+        return TaxTransaction(action=action, date="2025-06-10", time="10:00:00",
+                              quantity=qty, symbol=symbol, currency="CAD")
+
+    def test_each_rung(self):
+        from taxjson.lib.corporate_timeline import CaPriority as P, _ca_priority
+        opt = "ZZQ250620C00010000.US"
+        cases = [
+            (self._tx("OPENING_BALANCE", 100), P.OPENING_BALANCE),
+            (self._tx("DISALLOW", 0), P.DISALLOW),
+            (self._tx("ASSIGN", -1, opt), P.ASSIGN_OPTION),
+            (self._tx("ASSIGN", 100), P.ASSIGN_STOCK_OR_SPLIT),
+            (self._tx("SPLIT", 2.0), P.ASSIGN_STOCK_OR_SPLIT),
+            (self._tx("ADJUST", 5), P.ADJUST),
+            (self._tx("BUYSELL", 100), P.BUY),
+            (self._tx("BUYSELL", 0.5), P.BUY),          # a fractional buy
+            (self._tx("BUYSELL", 1, opt), P.BUY),        # an option buy, not an ASSIGN
+            (self._tx("BUYSELL", -100), P.SELL),
+            (self._tx("BUYSELL", 0), P.OTHER),
+        ]
+        for t, want in cases:
+            self.assertEqual(_ca_priority(t), want, (t.action, t.quantity, t.symbol))
+
+    def test_same_timestamp_sort_order(self):
+        from taxjson.lib.corporate_timeline import event_sort_key
+        opt = "ZZQ250620C00010000.US"
+        rows = [self._tx("BUYSELL", 0), self._tx("ADJUST", 5),
+                self._tx("BUYSELL", -100), self._tx("BUYSELL", 100),
+                self._tx("ASSIGN", 100), self._tx("ASSIGN", -1, opt),
+                self._tx("DISALLOW", 0), self._tx("OPENING_BALANCE", 100)]
+        got = [(t.action, t.quantity) for t in
+               sorted(rows, key=lambda t: event_sort_key(t, profile="ca_main"))]
+        self.assertEqual(got, [("OPENING_BALANCE", 100), ("DISALLOW", 0),
+                               ("ASSIGN", -1), ("ASSIGN", 100),
+                               ("BUYSELL", 100), ("BUYSELL", -100),
+                               ("ADJUST", 5), ("BUYSELL", 0)])
+
+
 if __name__ == "__main__":
     unittest.main()
