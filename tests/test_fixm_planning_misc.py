@@ -90,7 +90,9 @@ class TestShelteredRerunStaleness(unittest.TestCase):
             self.assertIn("stale", f.stderr)
             c = _cli(root, "close-year")
             self.assertNotEqual(c.returncode, 0, c.stdout)
-            self.assertIn("STALE", c.stderr)
+            # Either guard may fire first: the run-state check (inputs
+            # changed since the last full run) or the STALE wash check.
+            self.assertRegex(c.stderr, r"STALE|not the clean result")
             self.assertFalse((root / "filed" / "2024.json").exists())
 
 
