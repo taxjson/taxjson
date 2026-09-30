@@ -401,3 +401,78 @@ class TestWhatIfOptions(unittest.TestCase):
             r = data.what_if_sell(ctx, "margin", "AEM270115C00150000.TO",
                                   1, 1.0, on="2026-06-30")
         self.assertFalse(r["ok"], r)
+
+
+# ----------------------------------------------------------------- redact
+class TestRedactHolderNames(unittest.TestCase):
+    """R1-250: holder names in Coinbase / IB Flex / IB HTML layouts, and
+    IB ids glued to letters (HTML element ids)."""
+
+    def _redact(self, text):
+        from taxjson.bin.taxjson_redact import redact_text
+        return redact_text(text)
+
+    def test_coinbase_user_preamble(self):
+        cb = ("\n"
+              "Transactions\n"
+              "User,Jane Q Sample,1a2b3c4d-1111-2222-3333-444455556666\n"
+              "ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
+              "Price Currency,Price at Transaction,Subtotal,Total (inclusive "
+              "of fees and/or spread),Fees and/or Spread,Notes\n"
+              "69542e538c6c1d2e3f4a5b6c,2025-12-30 10:00:00 UTC,Staking "
+              "Income,SOL,0.0001,CAD,$170.51,$0.02,$0.02,$0.00,\n")
+        out, rep = self._redact(cb)
+        self.assertNotIn("Jane", out)
+        self.assertNotIn("1a2b3c4d-1111", out)
+        self.assertIn("User,REDACTED,", out)
+        self.assertGreaterEqual(rep.identity_rows, 1)
+        self.assertIn("Staking Income,SOL,0.0001,CAD,$170.51", out)
+        self.assertEqual(len(out.splitlines()), len(cb.splitlines()))
+
+    def test_ib_flex_account_section_name_column(self):
+        flex = ("Account,Header,AccountNumber,AccountAlias,Name,"
+                "BaseCurrency,\n"
+                "Account,Data,U9990001,myalias,Jane Q Sample,CAD,\n")  # pii-ok
+        out, rep = self._redact(flex)
+        self.assertNotIn("Jane", out)
+        self.assertNotIn("myalias", out)
+        self.assertIn(",CAD,", out)
+        self.assertEqual(rep.identity_rows, 2)
+
+    def test_flat_name_column_without_account_context_is_kept(self):
+        # A security-name column (no account/alias column beside it) is
+        # not a person.
+        flat = ("Name,Symbol,Side,Filled,Price\n"
+                "Advanced Micro Devices,AMD,Buy,10,116.50\n")
+        out, _ = self._redact(flat)
+        self.assertIn("Advanced Micro Devices", out)
+
+    def test_ib_html_account_information(self):
+        html = ('<div class="sectionHeadingClosed" '
+                'id="secAccountInformation_U12345678Heading" '
+                'onClick="showHide(\'tblAccountInformation_U12345678Body\', '
+                '\'secAccountInformation_U12345678Heading\');"></div>\n'
+                '<div id="tblAccountInformation_U12345678Body">\n'
+                '<table>\n<tr>\n<td>Name</td>\n<td>Jane Q Sample</td>\n'
+                '</tr>\n<tr>\n<td>Account</td>\n<td>U12345678</td>\n</tr>\n'
+                '<tr>\n<td>Account Type</td>\n<td>Individual</td>\n</tr>\n'
+                '</table>\n</div>\n')
+        out, rep = self._redact(html)
+        self.assertNotIn("Jane", out)
+        self.assertNotIn("12345678", out)
+        self.assertIn("<td>Individual</td>", out)
+        self.assertEqual(len(out.splitlines()), len(html.splitlines()))
+        self.assertEqual(rep.unreplaced, {})
+
+    def test_report_never_claims_replacement_it_did_not_make(self):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_redact import Report, print_report
+        rep = Report()
+        rep.accounts = {"U12345678": "U99900001"}
+        rep.unreplaced = {"U12345678": 2}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_report(Path("x.csv"), None, rep)
+        self.assertNotIn("every occurrence replaced", buf.getvalue())
+        self.assertIn("NOT replaced", buf.getvalue())

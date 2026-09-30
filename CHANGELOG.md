@@ -24,6 +24,13 @@
   `.TO`) was looked up under its unmapped name, and the what-if
   simulated writing a new short. It now follows the underlying's rule,
   and a sale that would open a short is refused.
+- **`taxjson redact` removes the holder's name from Coinbase and IB
+  Flex/HTML exports.** Coinbase's `User,<name>,<id>` line, the `Name`
+  column of an IB Flex `Account` section and the Name cell of IB's .html
+  statements were kept. IB ids glued to letters (HTML element ids) were
+  collected but not replaced, while the report said "every occurrence
+  replaced"; they are replaced now, and the report checks the copy and
+  lists any id it could not replace.
 - **The wash radar applies `phantoms.json`.** Phantom-backed positions
   showed as shorts (rebuys as short covers with invented losses) in the
   radar, `watch`, `buy-check`, `sell-check`, harvest's ADVISORY and the
