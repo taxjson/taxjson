@@ -666,16 +666,38 @@ def load_phantoms(path: Path) -> Set[Tuple[str, str]]:
     return out
 
 
+# The replacement rule a manual warning names, and the date its ±30-day
+# window runs on: the SAME basis the country's engine uses (partition
+# ENGINE-04/05, INPUTS-11) — Canada's s.54 window on settlement dates,
+# the US §1091 window on trade dates.
+LOSS_RULE = {"canada": ("the superficial-loss rule (ITA s.54)", "settle"),
+             "usa": ("the wash-sale rule (§1091)", "trade")}
+LOSS_CHECK_LABEL = {"canada": "superficial-loss check (manual)",
+                    "usa": "wash-sale check (manual)"}
+
+
+def loss_window_date(row: Dict[str, Any], country: str) -> str:
+    """The date a row's ±30-day loss window is measured on for
+    `country` (settle date in Canada, trade date in the US)."""
+    from taxjson.lib.country import canonical_country
+    basis = LOSS_RULE[canonical_country(country)][1]
+    if basis == "settle":
+        return str(row.get('date_settle') or row.get('date') or '')
+    return str(row.get('date') or '')
+
+
 def detect_superficial_loss_warnings(
     clean_losses: List[Dict[str, Any]],
     all_tainted: List[Dict[str, Any]],
     *,
+    country: str,
     window_days: int = 30,
 ) -> List[Dict[str, Any]]:
     """Find clean losses with tainted dispositions on the same symbol
-    within ±window_days. The tainted leg has unknown ACB so the
-    superficial-loss adjustment (CRA ITA 54, IRS §1091) can't be
-    computed automatically. Each warning identifies the affected
+    within ±window_days, measured on the country's own window dates
+    (``loss_window_date``). The tainted leg has unknown cost so the
+    country's replacement rule (ITA s.54 in Canada, §1091 in the US)
+    can't be applied automatically. Each warning identifies the affected
     clean loss and the tainted disposition(s) within the window so
     the user can resolve it manually.
 
@@ -685,6 +707,7 @@ def detect_superficial_loss_warnings(
     affect a Jan 5 in-year loss the next year, and vice versa.
     """
     from datetime import datetime as _dt
+    from taxjson.lib.country import canonical_country
     out: List[Dict[str, Any]] = []
     if not clean_losses or not all_tainted:
         return out
@@ -699,16 +722,15 @@ def detect_superficial_loss_warnings(
         if not candidates:
             continue
         try:
-            # Settle-basis (matches the engine's CRA window).
-            loss_dt = _dt.strptime(
-                loss.get('date_settle') or loss.get('date', ''), '%Y-%m-%d')
+            loss_dt = _dt.strptime(loss_window_date(loss, country),
+                                   '%Y-%m-%d')
         except ValueError:
             continue
         nearby: List[Dict[str, Any]] = []
         for t in candidates:
             try:
-                t_dt = _dt.strptime(
-                    t.get('date_settle') or t.get('date', ''), '%Y-%m-%d')
+                t_dt = _dt.strptime(loss_window_date(t, country),
+                                    '%Y-%m-%d')
             except ValueError:
                 continue
             if abs((t_dt - loss_dt).days) <= window_days:
@@ -729,7 +751,10 @@ def detect_superficial_loss_warnings(
                 'message': (
                     f"Clean loss of {abs(loss.get('gain', 0.0)):.2f} on {loss.get('symbol')} "
                     f"({loss.get('date')}) has {len(nearby)} tainted disposition(s) within "
-                    f"±{window_days} days. The superficial-loss rule may apply; verify manually."
+                    f"±{window_days} days ({LOSS_RULE[canonical_country(country)][1]} "
+                    f"dates). {LOSS_RULE[canonical_country(country)][0][0].upper()}"
+                    f"{LOSS_RULE[canonical_country(country)][0][1:]} may apply; "
+                    f"verify manually."
                 ),
             })
     return out

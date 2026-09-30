@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Manual loss checks next to phantom-basis sales follow the country.**
+  With `phantoms.json`, the "check by hand" warnings measured the window
+  on settle dates in every project (the US rule runs on trade dates) and
+  the partial-taint one on trade dates (Canada's runs on settle dates),
+  and both said "superficial-loss" in US projects, US crypto included.
+  Now: settle dates and ITA s.54 in Canada, trade dates and "wash-sale
+  check (§1091)" in the US, and none where wash detection is off (US
+  crypto). Warnings only; no numbers change.
 - **A crypto `gift` saved in sends.json is refused in a US project when
   the .tt is written, not only at `--set`.** A decision carried over
   from a Canada project, copied or hand-edited was written to

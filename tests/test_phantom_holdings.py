@@ -395,7 +395,8 @@ class TestSuperficialLossWarning(unittest.TestCase):
             'date': '2024-12-28', 'symbol': 'AAPL.US', 'account': 'LIRA',
             'qty': 100, 'proceeds': 18000,
         }]
-        warnings = detect_superficial_loss_warnings(clean_losses, all_tainted)
+        warnings = detect_superficial_loss_warnings(clean_losses, all_tainted,
+                                                    country="canada")
         self.assertEqual(len(warnings), 1)
         w = warnings[0]
         self.assertEqual(w['loss_date'], '2025-01-05')
@@ -413,7 +414,8 @@ class TestSuperficialLossWarning(unittest.TestCase):
             'qty': 100, 'proceeds': 18000,
         }]
         # 44 days apart — outside the 30-day window.
-        warnings = detect_superficial_loss_warnings(clean_losses, all_tainted)
+        warnings = detect_superficial_loss_warnings(clean_losses, all_tainted,
+                                                    country="canada")
         self.assertEqual(warnings, [])
 
     def test_no_warning_for_different_symbol(self):
@@ -425,7 +427,8 @@ class TestSuperficialLossWarning(unittest.TestCase):
             'date': '2024-12-28', 'symbol': 'NVDA.US', 'account': 'LIRA',
             'qty': 100, 'proceeds': 18000,
         }]
-        self.assertEqual(detect_superficial_loss_warnings(clean_losses, all_tainted), [])
+        self.assertEqual(detect_superficial_loss_warnings(clean_losses, all_tainted,
+                                                    country="canada"), [])
 
     def test_multiple_tainted_within_window(self):
         clean_losses = [{
@@ -436,7 +439,8 @@ class TestSuperficialLossWarning(unittest.TestCase):
             {'date': '2024-12-28', 'symbol': 'AAPL.US', 'account': 'LIRA', 'qty': 50, 'proceeds': 9000},
             {'date': '2025-02-05', 'symbol': 'AAPL.US', 'account': 'LIRA', 'qty': 50, 'proceeds': 9100},
         ]
-        warnings = detect_superficial_loss_warnings(clean_losses, all_tainted)
+        warnings = detect_superficial_loss_warnings(clean_losses, all_tainted,
+                                                    country="canada")
         self.assertEqual(len(warnings), 1)
         self.assertEqual(len(warnings[0]['tainted_dispositions']), 2)
 

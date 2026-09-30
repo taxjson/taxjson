@@ -425,5 +425,114 @@ class TestCryptoSendBookedTwice(unittest.TestCase):
                                        "crypto_sends.tt").read_text())
 
 
+# ---------------------------------------- ENGINE-04/05, INPUTS-11, SPEC-34
+class TestManualLossWarningsByCountry(unittest.TestCase):
+    """The phantom-basis loss warnings measure the window on the
+    country's own dates and name its rule: settle dates and s.54 in
+    Canada, trade dates and §1091 in the US; none where the US rule does
+    not apply (crypto)."""
+
+    def _run(self, book, **kw):
+        import json
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            ph = Path(td) / "phantoms.json"
+            ph.write_text(json.dumps([{"symbol": "NNN.US",
+                                       "account": "margin"}]))
+            return gains_both(book, year=2025, incomplete_history=ph, **kw)
+
+    @rule("CA-ACB-12")
+    @rule_absent("CA-ACB-12", country="usa")
+    @rule("US-BASIS-04")
+    @rule_absent("US-BASIS-04", country="canada")
+    def test_partial_taint_window_dates(self):
+        # A phantom-basis loss that settles 03-07 (traded 03-03) and a
+        # rebuy that settles 04-04 (traded 04-03): 28 settle days, 31
+        # trade days.
+        settle_near = [
+            tx("BUYSELL", "2025-01-02", "NNN.US", 100, 2000,
+               settle="2025-01-03"),
+            tx("BUYSELL", "2025-03-03", "NNN.US", -150, 1500,
+               settle="2025-03-07"),
+            tx("BUYSELL", "2025-04-03", "NNN.US", 100, 1000,
+               settle="2025-04-04")]
+        def rebuy_warnings(res):
+            # The partial-taint warnings (a phantom-basis loss with a
+            # purchase in the window); the cross-year ones have no
+            # acquisition_date.
+            return [w for w in res.get("superficial_loss_warnings") or []
+                    if w.get("acquisition_date")]
+        r = self._run(settle_near)
+        self.assertTrue(rebuy_warnings(r["canada"]))
+        self.assertIn("superficial-loss", r["canada"]["_stderr"])
+        self.assertFalse(rebuy_warnings(r["usa"]))
+        # US FIFO takes the $0 phantom lot first, so its phantom-basis
+        # leg is a gain (never a rebuy warning); the clean loss beside it
+        # is flagged in §1091 terms, never the CRA's.
+        us = r["usa"].get("superficial_loss_warnings")
+        self.assertTrue(us)
+        self.assertIn("§1091", us[0]["message"])
+        self.assertIn("wash-sale check", r["usa"]["_stderr"])
+        self.assertNotIn("superficial", r["usa"]["_stderr"])
+        # The trade-date twin: 29 trade days, 34 settle days.
+        trade_near = [
+            tx("BUYSELL", "2025-01-02", "NNN.US", 100, 2000,
+               settle="2025-01-03"),
+            tx("BUYSELL", "2025-03-03", "NNN.US", -150, 1500,
+               settle="2025-03-04"),
+            tx("BUYSELL", "2025-04-01", "NNN.US", 100, 1000,
+               settle="2025-04-07")]
+        r = self._run(trade_near)
+        self.assertFalse(rebuy_warnings(r["canada"]))
+        self.assertNotIn("superficial", r["usa"]["_stderr"])
+
+    @rule("CA-ACB-12")
+    @rule_absent("CA-ACB-12", country="usa")
+    @rule("US-BASIS-04")
+    @rule_absent("US-BASIS-04", country="canada")
+    def test_cross_year_window_dates(self):
+        from taxjson.lib.phantom_holdings import (
+            detect_superficial_loss_warnings)
+        loss = [{"date": "2025-04-06", "date_settle": "2025-04-03",
+                 "symbol": "MMM.US", "gain": -200.0}]
+        tainted = [{"date": "2025-03-03", "date_settle": "2025-03-04",
+                    "symbol": "MMM.US", "qty": -50}]
+        ca = detect_superficial_loss_warnings(loss, tainted,
+                                              country="canada")
+        us = detect_superficial_loss_warnings(loss, tainted, country="usa")
+        # 30 settle days: Canada warns; 34 trade days: the US does not.
+        self.assertEqual(len(ca), 1)
+        self.assertIn("s.54", ca[0]["message"])
+        self.assertEqual(us, [])
+        loss[0].update(date="2025-04-02", date_settle="2025-04-07")
+        self.assertEqual(detect_superficial_loss_warnings(
+            loss, tainted, country="canada"), [])
+        us = detect_superficial_loss_warnings(loss, tainted, country="usa")
+        self.assertEqual(len(us), 1)
+        self.assertIn("§1091", us[0]["message"])
+
+    @rule("US-BASIS-04")
+    def test_no_wash_check_without_the_wash_rule(self):
+        # A clean loss next to a phantom-basis sale: a manual wash-sale
+        # check — except where the rule does not apply (US crypto: wash
+        # detection off).
+        book = [tx("BUYSELL", "2025-01-02", "NNN.US", 100, 2000),
+                tx("BUYSELL", "2025-03-03", "NNN.US", -150, 1500)]
+        import json
+        import tempfile
+        from pathlib import Path
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        with tempfile.TemporaryDirectory() as td:
+            ph = Path(td) / "phantoms.json"
+            ph.write_text(json.dumps([{"symbol": "NNN.US",
+                                       "account": "margin"}]))
+            res = {nw: run_gains(list(book), req=GainsRequest(
+                country="usa", taxable=True, year=2025, no_wash=nw,
+                incomplete_history=ph)) for nw in (False, True)}
+        self.assertTrue(res[False].get("superficial_loss_warnings"))
+        self.assertFalse(res[True].get("superficial_loss_warnings"))
+
+
 if __name__ == "__main__":
     unittest.main()

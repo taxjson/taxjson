@@ -110,6 +110,7 @@ PARTITION_RULES = frozenset({
     "CA-FX-07",        # fx-cash s.39(1.1) $200 exemption
     "CA-FX-04",        # futures P/L on average cost
     "CA-STKDIV-01",    # stock dividend: $0 acquisition (counts for s.54)
+    "CA-ACB-12",       # manual phantom-loss check on settle dates
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
     "CA-DATE-04",      # computed T+1 settlement default
@@ -130,6 +131,7 @@ PARTITION_RULES = frozenset({
     "US-CTRY-03",      # base currency USD
     "US-FUT-01",       # futures P/L FIFO
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
+    "US-BASIS-04",     # manual phantom-loss check on trade dates
 })
 
 
@@ -370,6 +372,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "sales that draw on them are listed for manual reporting "
                  "and left out of the totals, with no superficial-loss "
                  "test, until the position is fully sold.", cont=True),
+            Rule("CA-ACB-12",
+                 "A loss within 30 days (settle dates) of such a sale, or "
+                 "such a sale at a loss with a purchase in that window, is "
+                 "flagged for a manual superficial-loss check.",
+                 cont=True),
         ]),
         ("Dispositions (Schedule 3)", [
             Rule("CA-DISP-01", "Gain = proceeds - ACB - outlays."),
@@ -610,6 +617,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-HOLD-03", "A stand-alone short sale is short-term.",
                  cont=True),
+            Rule("US-BASIS-04",
+                 "Shares with missing buy history go in phantoms.json: "
+                 "sales that draw on them are listed for manual reporting "
+                 "and left out of the totals. A loss within 30 days "
+                 "(trade dates) of such a sale, or such a sale at a loss "
+                 "with a purchase in that window, is flagged for a manual "
+                 "wash-sale check (not for crypto accounts)."),
             Rule("US-STKDIV-01",
                  "A stock dividend is not income (§305(a)): the basis of "
                  "the shares held is spread over the old and new shares "
