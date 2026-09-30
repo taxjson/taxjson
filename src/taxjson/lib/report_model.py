@@ -232,25 +232,47 @@ def resolve_gains_files(cache, account: Optional[str] = None, *,
         wash = cache / f"{name}_gains_wash.json"
         main = cache / f"{name}_gains.json"
         if prefer_wash and wash.exists():
-            try:
-                if main.exists() and (main.stat().st_mtime
-                                      > wash.stat().st_mtime + 1.0):
-                    # `run --account X` rebuilds the plain gains but
-                    # skips the blended wash pass — the preferred wash
-                    # file is then STALE, and form-export/t1135/
-                    # reconcile-slips served it silently (2026-09
-                    # audit). Loud, not fatal: partial runs are a
-                    # legitimate iteration loop.
-                    print(f"warning: {wash.name} is OLDER than "
-                          f"{main.name} — wash-adjusted numbers are "
-                          f"stale (run a full `taxjson run` before "
-                          f"filing from this output).",
-                          file=_sys.stderr)
-            except OSError:
-                pass
+            # `run --account X` rebuilds X's books but skips the
+            # cross-account wash pass — the preferred wash file is then
+            # STALE, and sum/form-export/t1135/reconcile-slips served it
+            # silently (2026-09 audit). Loud, not fatal: partial runs
+            # are a legitimate iteration loop.
+            newer = stale_wash_inputs(wash)
+            if newer:
+                print(f"warning: {wash.name} is OLDER than "
+                      f"{', '.join(newer)} — wash-adjusted numbers are "
+                      f"stale (run a full `taxjson run` before "
+                      f"filing from this output).",
+                      file=_sys.stderr)
             out[name] = wash
         elif main.exists():
             out[name] = main
+    return out
+
+
+def stale_wash_inputs(wash: Path) -> "list[str]":
+    """The inputs of a `<acct>_gains_wash.json` rebuilt AFTER it — its
+    account's plain gains and base book, and the combined sheltered book
+    (`run --account <sheltered>` rebuilds sheltered_base.json but skips
+    the wash pass, so a registered-account buy that makes a taxable loss
+    superficial never reached the served numbers; 2026-09 audit R1-251).
+    Empty when the wash file is current. One second of slack absorbs
+    filesystem timestamp granularity within one run."""
+    wash = Path(wash)
+    name = wash.name[: -len("_gains_wash.json")]
+    try:
+        w = wash.stat().st_mtime
+    except OSError:
+        return []
+    out = []
+    for p in (wash.with_name(f"{name}_gains.json"),
+              wash.with_name(f"{name}_base.json"),
+              wash.with_name("sheltered_base.json")):
+        try:
+            if p.stat().st_mtime > w + 1.0:
+                out.append(p.name)
+        except OSError:
+            continue
     return out
 
 

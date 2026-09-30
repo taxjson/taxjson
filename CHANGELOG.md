@@ -85,6 +85,49 @@
   (S038-09). The "inputs have changed" banner sees the project-root
   maps and compares against the oldest per-account report, like the
   checklist (S078-21).
+- **`list --date` says its ACB is per account.** The as-of view
+  recomputes each account alone, so a symbol held in two taxable
+  accounts shows each account's own cost, not the s.47 blend the return
+  uses. The label, `--help` and README now say so (they claimed "full
+  ACB fidelity"), and a note names the shared symbols (audit S044-21).
+- **Account names that collide with work/ artifacts are refused.** A
+  name ending in `_raw`, `_base`, `_gains`, `_wash`, `_tt` (and a few
+  other artifact suffixes), or the name `sheltered`, now stops every
+  command with a rename hint: `cb_raw` silently vanished from `sum` and
+  the estimate, and `margin_raw` overwrote `margin`'s native books
+  (audit S022-00, S041-14).
+- **`taxjson gains` names an account with no native gains.** After a
+  cross-currency rollover skips an account's native books, the run
+  deletes the previous run's stale native gains and `taxjson gains` says
+  the account is missing and why, instead of omitting it or serving the
+  old rows (audit S037-23).
+- **The `.sum` TOTAL PROCEEDS / TOTAL COST are labelled.** They are the
+  engine's signed figures (shorts and written options negated), not the
+  Schedule 3 proceeds and ACB; the report and KNOWN_ISSUES now point to
+  `taxjson form-export` for those (audit R1-208).
+- **Holdings TOML states its option cost unit.** `cost_per_share` in
+  `reports/<account>_holdings.toml` is `total_cost / quantity` (per
+  contract for an option, the convention the broker holdings files
+  share); the file and README now say so next to `contract_multiplier`
+  and the per-share trade prices (audit S030-08).
+- **`taxjson-diff` sees hand-reported dispositions.** Rows the pipeline
+  moves to `manual_reporting_required` (phantom basis) are compared too,
+  so adding, dropping or changing one is no longer "0 added | 0 removed"
+  (audit S029-16).
+- **No false all-clear from sanity or find-missing-history.** When a
+  configured `holdings` file is missing, `taxjson sanity` ends with an
+  `INCOMPLETE` line (`"complete": false` in `--json`), `run` prints a
+  `!!` line and the checklist keeps the step at attention.
+  `find-missing-history` (and `taxjson-missing-history`) no longer print
+  "No missing-cost-basis issues found" and exit 0 when a base book failed
+  to load or a configured account has no book; they name what was not
+  checked and exit 1 (audit R1-324, R1-336, S047-18).
+- **A sheltered-account rerun no longer serves stale wash numbers.**
+  After `run --account <sheltered>` rebuilt `sheltered_base.json`, `sum`,
+  `form-export` and `close-year` read the older wash-adjusted gains with
+  no warning (a registered-account buy that makes a taxable loss
+  superficial was missing). They now warn, and `close-year` refuses
+  until a full `taxjson run` (audit R1-251).
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
   is undone when both are in the account's inputs; it used to stay

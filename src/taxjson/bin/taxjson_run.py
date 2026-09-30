@@ -1817,6 +1817,16 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   f"after a cross-currency rollover rename. "
                   f"{name}_holdings.toml was NOT refreshed this run.",
                   file=sys.stderr)
+            # The native books of an EARLIER run (before the rollover
+            # rows arrived) would otherwise keep serving `taxjson gains`
+            # without the rolled-over disposition (2026-09 audit S037-23).
+            for _stale in (cache / f"{name}_raw_gains.json",
+                           cache / f"{name}_raw_base.json",
+                           cache / f"{name}_raw_base_gains.json"):
+                if _stale.exists():
+                    _stale.unlink()
+                    print(f"  removed stale {_stale.name}",
+                          file=sys.stderr)
         else:
             raw_gains = cache / f"{name}_raw_gains.json"
             if force or needs_rebuild(raw_gains, raw_json):
@@ -2882,6 +2892,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not args.account and any((_a or {}).get("holdings")
                                 for _a in cfg.get("accounts", {}).values()):
         print("\n==> holdings sanity (taxjson.toml `holdings`)")
+        _san_notes = _sanity_items_from_config(cfg.get("accounts", {}),
+                                               root)[1]
+        for _n in _san_notes:
+            # One unreadable holdings file drops that account from the
+            # compare while sanity itself still exits 0 — say so here,
+            # or the run reads as fully checked (2026-09 audit R1-324).
+            print(f"  !! holdings check incomplete: {_n}",
+                  file=sys.stderr)
         try:
             cmd_sanity(argparse.Namespace(dir=str(root), items=[],
                                           tolerance=None, json=False))
@@ -5164,6 +5182,14 @@ def cmd_gains(args: argparse.Namespace) -> None:
     if account:
         accounts = [account]
         if not (cache / f"{account}{suffix}").exists():
+            if (cache / f"{account}_base.json").exists():
+                sys.exit(f"taxjson gains: no native gains for account "
+                         f"{account!r}: crypto accounts have none, and "
+                         f"an equity account's native books are skipped "
+                         f"after a cross-currency rollover rename (see "
+                         f"the run's '!! raw holdings skipped' line) — "
+                         f"rerunning will not create them; its converted "
+                         f"gains are in `taxjson sum`.")
             sys.exit(f"taxjson gains: no native gains for account "
                      f"{account!r} in {cache} (crypto has none; else run "
                      f"`taxjson run`, or check the name).")
@@ -5171,6 +5197,20 @@ def cmd_gains(args: argparse.Namespace) -> None:
         accounts = sorted(p.name[: -len(suffix)]
                           for p in cache.glob(f"*{suffix}")
                           if not p.name.startswith("."))
+        # A configured equity account with converted books but no native
+        # gains had its raw stage skipped (a cross-currency rollover
+        # rename): say so, or the view silently omits the whole account
+        # while `sum` counts it (2026-09 audit S037-23).
+        for _n, _c in sorted((_soft_config(root).get("accounts")
+                              or {}).items()):
+            if (isinstance(_c, dict) and not _c.get("crypto")
+                    and _n not in accounts
+                    and (cache / f"{_n}_base.json").exists()):
+                print(f"taxjson gains: note: account {_n!r} has no native "
+                      f"gains (the last run skipped its native books — "
+                      f"see its '!! raw holdings skipped' line); its "
+                      f"converted gains are in `taxjson sum` / "
+                      f"`taxjson winners`.", file=sys.stderr)
         if not accounts:
             sys.exit(f"taxjson gains: no native gains files in {cache} "
                      f"(run `taxjson run` first).")
@@ -7753,6 +7793,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             "uncovered_accounts": uncovered,
             "notes": config_notes,
             "clean": not all_rows,
+            # False when an account's CONFIGURED holdings file could
+            # not be read: its positions were never compared (2026-09
+            # audit R1-324), so "clean" covers the other groups only.
+            "complete": not config_notes,
         })
         raise SystemExit(0 if not all_rows else 1)
 
@@ -7794,9 +7838,18 @@ def cmd_sanity(args: argparse.Namespace) -> None:
               f"({len(tax[a])} position(s) unchecked)")
     if not multi or uncovered:
         print()
+    if config_notes:
+        # A configured holdings file that could not be read drops its
+        # whole account from the compare: never let that read as a
+        # clean check (the checklist and run's auto-sanity key on this
+        # line — 2026-09 audit R1-324).
+        print(f"INCOMPLETE: {len(config_notes)} account(s) with "
+              f"`holdings` in taxjson.toml were NOT checked (see the "
+              f"notes on stderr) — fix the paths, then re-run.")
     if not all_rows:
         print("OK: tickers and quantities agree"
-              + (" in every group." if multi else "."))
+              + (" in every checked group." if config_notes
+                 else " in every group." if multi else "."))
     else:
         out_lines = [("ACCOUNTS SYMBOL ISSUE TAXJSON HOLDINGS DIFF"
                       if multi else
@@ -7832,10 +7885,11 @@ def cmd_positions(args: argparse.Namespace) -> None:
     as_of = getattr(args, "date", None)
     if as_of:
         # Positions AS OF a date: recompute each account's books from
-        # its base.json with the engine's --as-of cutoff. Full ACB
-        # fidelity (incl. deferred wash) but PRE-WASH and PRE-ticker.map
+        # its base.json with the engine's --as-of cutoff. Deferred wash
+        # within the account is kept, but it is PER-ACCOUNT ACB (no s.47
+        # blend across taxable accounts), PRE-WASH and PRE-ticker.map
         # (the cross-account pass only exists for full runs) — the
-        # basis label says so.
+        # basis label says so (2026-09 audit S044-21).
         import re as _re
         if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
             sys.exit("taxjson list: --date expects YYYY-MM-DD")
@@ -7901,7 +7955,28 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             sys.exit(f"taxjson list: no base files in {cache} "
                      f"(run `taxjson run` first).")
-        basis = f"as of {as_of} (pre-wash, pre-ticker.map)"
+        basis = (f"as of {as_of} (per-account ACB, pre-wash, "
+                 f"pre-ticker.map)")
+        # A symbol held in two taxable accounts has ONE s.47 ACB on the
+        # return (plain `list` shows it); this view recomputes each
+        # account alone, so its cost differs — say so rather than
+        # present it as the filing ACB (2026-09 audit S044-21).
+        _held: Dict[str, List[str]] = {}
+        for n, doc in tmp_docs.items():
+            if accounts_cfg.get(n, {}).get("type") != "taxable":
+                continue
+            for it in (doc.get("inventory") or []):
+                if abs(float(it.get("qty") or 0.0)) > 1e-9:
+                    _held.setdefault(str(it.get("symbol")), []).append(n)
+        _shared = sorted(s_ for s_, a in _held.items() if len(set(a)) > 1)
+        if _shared:
+            print(f"taxjson list: note: --date shows each account's OWN "
+                  f"ACB; {len(_shared)} symbol(s) held in more than one "
+                  f"taxable account ({', '.join(_shared[:5])}"
+                  f"{' ...' if len(_shared) > 5 else ''}) have one "
+                  f"blended (s.47) ACB on the return — plain `taxjson "
+                  f"list` shows it for the current books.",
+                  file=sys.stderr)
     else:
         files = resolve_gains_files(cache, args.account or None)
         if not files:
@@ -8607,19 +8682,19 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     # the just-rebuilt plain gains (the blend pass was skipped).
     # `taxjson sum` merely notes this; close-year WRITES the filing
     # lock, so snapshotting stale numbers is a hard stop.
+    # A sheltered rebuild (`run --account <sheltered>`) refreshes
+    # sheltered_base.json without the wash pass — the same stale lock
+    # (2026-09 audit R1-251).
+    from taxjson.lib.report_model import stale_wash_inputs
     stale = sorted(
-        a for a, p in files.items()
-        if p.name.endswith("_gains_wash.json")
-        and p.with_name(p.name.replace("_gains_wash.json",
-                                       "_gains.json")).exists()
-        and _wash_preferred_gains(
-            p.with_name(p.name.replace("_gains_wash.json",
-                                       "_gains.json"))) != p)
+        f"{a} (older than {', '.join(stale_wash_inputs(p))})"
+        for a, p in files.items()
+        if p.name.endswith("_gains_wash.json") and stale_wash_inputs(p))
     if stale:
         sys.exit(f"taxjson close-year: wash-adjusted gains for "
-                 f"{', '.join(stale)} are STALER than the plain gains "
-                 f"(a --account rerun skipped the cross-account wash "
-                 f"pass) — run a full `taxjson run` first.")
+                 f"{'; '.join(stale)} are STALE (a --account rerun "
+                 f"skipped the cross-account wash pass) — run a full "
+                 f"`taxjson run` first. Nothing was written.")
     accounts = {}
     import json as _json
     for acct, pth in sorted(files.items()):
@@ -10699,6 +10774,20 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         return
 
     cmd = _cmd("taxjson-missing-history") + [str(f) for f in files]
+    if not args.account:
+        # The glob above sees only books that exist: a CONFIGURED
+        # account whose book was never built (a failed parse, deferred
+        # elections) was skipped silently and the checklist marked the
+        # step done (2026-09 audit S047-18). Accounts `run` skipped for
+        # having no inputs at all are expected to have none.
+        _have = {f.name[: -len("_base.json")] for f in files}
+        _quiet = _accounts_skipped_for_no_inputs(root)
+        for _n in sorted((_soft_config(root).get("accounts") or {})):
+            if _n not in _have and _n not in _quiet:
+                print(f"taxjson find-missing-history: note: account {_n} "
+                      f"has no work/{_n}_base.json — not checked (run "
+                      f"`taxjson run`).", file=sys.stderr)
+                cmd += ["--unchecked-account", _n]
     if year:
         cmd += ["--year", str(year)]
     if args.include_options:
@@ -11242,9 +11331,10 @@ def main() -> None:
              "after ticker.map consolidation and base-currency conversion")
     p_pos.add_argument("account", nargs="?", help="Account (default: all)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
-                       help="Positions AS OF this date — books recomputed "
-                            "with the engine's --as-of cutoff (full "
-                            "ACB/deferred fidelity; pre-wash, "
+                       help="Positions AS OF this date — each account's "
+                            "books recomputed alone with the engine's "
+                            "--as-of cutoff (per-account ACB: no s.47 "
+                            "blend across taxable accounts; pre-wash, "
                             "pre-ticker.map)")
     p_pos.add_argument("--negative", action="store_true",
                        help="Show only positions with negative quantity "
