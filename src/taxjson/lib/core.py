@@ -749,6 +749,35 @@ def _make_assign_underlying_resolver(transactions, date_of):
     return resolve
 
 
+def _place_wash_adjusts(stream):
+    """Move each pre-loss superficial-loss ADJUST (marked `_wash_after`
+    = the loss row's id) to immediately after its loss row. s.53(1)(f)
+    adds the denied loss to the substituted property when the loss is
+    realized, so every later row sees it — including another fill of the
+    same order at the same second. Dated loss+1 s and sorted after SELLs,
+    the bump used to reach a second fill 2 s later but not one 0-1 s
+    later (audit R1-31). Rows keep their sorted order otherwise."""
+    moved = [t for t in stream if t.action == 'ADJUST'
+             and getattr(t, '_wash_after', None)]
+    if not moved:
+        return stream
+    losses = {t.id for t in stream
+              if t.action in ('BUYSELL', 'ASSIGN')}
+    after: Dict[str, list] = {}
+    for t in moved:
+        if t._wash_after in losses:
+            after.setdefault(t._wash_after, []).append(t)
+    placed = {id(t) for lst in after.values() for t in lst}
+    out = []
+    for t in stream:
+        if id(t) in placed:
+            continue
+        out.append(t)
+        if t.action in ('BUYSELL', 'ASSIGN') and t.id in after:
+            out.extend(after.pop(t.id))
+    return out
+
+
 class _AssignPremiumLedger:
     """Staged option-assignment premiums, each paired with ITS OWN stock
     leg(s) (audit R1-28/32/34/178, S070-18/20, S071-11).
@@ -1541,6 +1570,7 @@ class CanadaTaxRules(TaxRules):
             current_tx_list.sort(
                 key=lambda x: event_sort_key(x, profile='ca_main',
                                              date_of=get_sort_date))
+            current_tx_list = _place_wash_adjusts(current_tx_list)
             
             # Pools indexed by symbol
             global_pools = {}  # symbol -> {'qty', 'total_cost', 'last_acq_date', 'currency', 'tainted'}
@@ -2364,14 +2394,22 @@ class CanadaTaxRules(TaxRules):
                 if _t.action == 'SPLIT':
                     _new_sym = (_t.symbol_new or '').strip()
                     if _new_sym and _new_sym != _t.symbol:
-                        _renames[_t.symbol] = (
-                            get_sort_date(_t), _t.time or '', _new_sym)
+                        _renames[_t.symbol] = (_ev_key(_t), _new_sym)
 
-            def _symbol_asof(sym: str, d: str, tm: str) -> str:
+            def _symbol_asof(sym: str, hi_key, lo_key=None) -> str:
+                """The pool that holds shares booked under `sym` by the
+                row at main-pass key `lo_key`, as of key `hi_key`. A
+                rename moves them only when the main pass applies it
+                AFTER that row and at or before `hi_key` — compared on
+                the main pass's own ordering (audit S069-14: the clock
+                comparison ignored that a SPLIT runs before every
+                same-day row, so a trigger booked under the old ticker
+                on the rename date — never migrated — had its bump
+                sent to the empty new pool and lost)."""
                 seen_syms = set()
                 while sym in _renames and sym not in seen_syms:
-                    r_date, r_time, r_new = _renames[sym]
-                    if (r_date, r_time) <= (d, tm):
+                    r_key, r_new = _renames[sym]
+                    if (lo_key is None or lo_key < r_key) and r_key <= hi_key:
                         seen_syms.add(sym)
                         sym = r_new
                     else:
@@ -2386,11 +2424,16 @@ class CanadaTaxRules(TaxRules):
             # directions (spurious denials and masked real triggers).
             # Every other balance walk already orders through the
             # phase ladder; this one must too.
+            # No content-hash rung (audit S069-16): current_tx_list is
+            # already in main-pass order, so the stable sort keeps the
+            # main pass's tie order (its BUY-before-SELL rung, then the
+            # export's row order) — a one-cent price change used to flip
+            # which of two same-moment rows came first here, and with it
+            # a superficial-loss denial.
             for _t in sorted(current_tx_list,
-                             key=lambda x: (event_sort_key(
+                             key=lambda x: event_sort_key(
                                  x, profile='ca_balance',
-                                 date_of=get_sort_date),
-                                 x.id or '')):
+                                 date_of=get_sort_date)):
                 # Keyed by (account, RAW symbol): a rename-split
                 # scales/moves only the named symbol's shares (in
                 # every account — the event is corporate-wide), never
@@ -2789,7 +2832,9 @@ class CanadaTaxRules(TaxRules):
                     # the bump lands on the class pool with the most
                     # remaining still-held backing.
                     _pool_back: Dict[str, float] = {}
-                    _pool_repr: Dict[str, str] = {}
+                    _pool_repr: Dict[str, Any] = {}
+                    # A key after every row of the window's last day.
+                    _eow_key = (end_window_date, 99, '99:99:99', 99)
                     for t in current_tx_list:
                         if (alias_of(t.symbol) == loss_alias
                                 and get_sort_date(t) <= end_window_date
@@ -2798,13 +2843,12 @@ class CanadaTaxRules(TaxRules):
                                 and t.action in ('BUYSELL', 'ASSIGN',
                                                  'TRANSFER',
                                                  'OPENING_BALANCE')):
-                            _k = _symbol_asof(t.symbol,
-                                              end_window_date,
-                                              '23:59:59')
+                            _k = _symbol_asof(t.symbol, _eow_key,
+                                              _ev_key(t))
                             _pool_back[_k] = (_pool_back.get(_k, 0.0)
                                               + _row_loss_units(
                                                   t, t.quantity))
-                            _pool_repr.setdefault(_k, t.symbol)
+                            _pool_repr.setdefault(_k, t)
                     _lsign = 1.0                     # replacement is always a LONG holding (s.54)
                     _back_left = {k: max(0.0, _lsign * v)
                                   for k, v in _pool_back.items()}
@@ -2815,8 +2859,8 @@ class CanadaTaxRules(TaxRules):
                             continue      # moot pools; leave in place
                         if trg.id in _call_ids:
                             continue      # the bump lands on the call itself
-                        _own = _symbol_asof(trg.symbol,
-                                            end_window_date, '23:59:59')
+                        _own = _symbol_asof(trg.symbol, _eow_key,
+                                            _ev_key(trg))
                         if _back_left.get(_own, 0.0) >= take - 1e-9:
                             _back_left[_own] -= take
                             continue      # own pool holds the backing
@@ -2826,14 +2870,15 @@ class CanadaTaxRules(TaxRules):
                         if (_best is not None
                                 and _back_left.get(_best, 0.0) > 1e-9):
                             _back_left[_best] -= take
-                            _adjust_land[trg.id] = _pool_repr[_best]
+                            _adjust_land[trg.id] = _pool_repr[_best]  # a row of that pool
                         # No positive pool anywhere: keep the default
                         # landing — _defer_room already converted the
                         # unbacked portion to a permanent denial.
 
                     def _mk_adjust(trg, amt):
                         a_id = f"WASH_{tx.id}__{trg.id}"
-                        if _ev_key(trg) < _loss_key:
+                        _pre_loss = _ev_key(trg) < _loss_key
+                        if _pre_loss:
                             # Pre-loss trigger: the bump lands just
                             # after the loss sale — same settle date and
                             # phase (same trade date), one second later.
@@ -2861,15 +2906,21 @@ class CanadaTaxRules(TaxRules):
                         # property, named as of the adjust date so the
                         # bump enters it while live and rides any later
                         # rename with the pool's own state.
-                        a_sym = _symbol_asof(
-                            _adjust_land.get(trg.id, trg.symbol),
-                            a_date, a_time)
+                        _land = _adjust_land.get(trg.id, trg)
                         v = TaxTransaction(action='ADJUST', date=a_date,
-                                           time=a_time, symbol=a_sym,
+                                           time=a_time, symbol=_land.symbol,
                                            currency=tx.currency,
                                            net_amount=a_amt,
                                            account=trg.account, id=a_id,
                                            date_settle=a_settle)
+                        v.symbol = _symbol_asof(
+                            _land.symbol,
+                            _loss_key if _pre_loss else _ev_key(v),
+                            _ev_key(_land))
+                        if _pre_loss:
+                            # Applied right after the loss row in the
+                            # main pass (see _place_wash_adjusts).
+                            v._wash_after = tx.id
                         if trg.id in sheltered_ids:
                             sheltered_ids.add(a_id)
                         if trg.id in affiliated_ids:
@@ -3832,7 +3883,12 @@ class USATaxRules(TaxRules):
             out.sort(key=lambda r: (r['date'], r['tx'].time or '',
                                     2 if r['is_affiliated']
                                     else 1 if r['is_sheltered'] else 0,
-                                    r['tx'].account or '', r['tx'].id))
+                                    r['tx'].account or ''))
+            # (Stable sort: rows still tied keep the pre-pass order,
+            # which is the export's row order — the only evidence of
+            # acquisition order for same-moment lots. A content-hash id
+            # rung let a one-cent price change move the deferral to the
+            # other lot, audit S070-12.)
             return out
 
         # === MAIN PASS ===

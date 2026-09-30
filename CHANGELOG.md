@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Same-moment rows no longer depend on a content hash or a 1-second
+  gap.** The superficial-loss balance walk (Canada) and the US
+  replacement-lot order broke ties by each row's hash, so a one-cent
+  price or description change could flip a denial or move a US wash
+  deferral to the other lot; ties now keep the main pass's order (its
+  buy-before-sell rung, then the export's row order). A denied loss's
+  cost bump for a pre-loss rebuy now applies right after the loss row,
+  so another fill of the same order sees it whether it came 0, 1 or 2
+  seconds later. A bump for a rebuy booked under the old ticker on a
+  rename's own date lands on the pool that holds those shares instead
+  of vanishing into the empty new-ticker pool.
 - **Each option assignment's premium goes to its own stock leg.** Both
   engines staged every assignment's premium per (account, underlying)
   and handed the whole sum to the first stock trade that came along: a

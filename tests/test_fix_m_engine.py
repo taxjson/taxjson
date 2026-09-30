@@ -224,3 +224,81 @@ class TestAssignmentRootResolution(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestSameMomentOrdering(unittest.TestCase):
+    """S069-16 / S070-12 / R1-31 / S069-14: results must not depend on a
+    content hash or a one-second clock gap."""
+
+    def test_ca_balance_walk_ignores_row_hash(self):
+        # S069-16: an unrelated byte (the description) of a same-moment
+        # short + cover pair used to flip the superficial-loss denial.
+        def tx(d, q, p, desc=''):
+            return TaxTransaction(action='BUYSELL', date=d, date_settle=d,
+                                  time='09:30:00', symbol='XYZ.TO',
+                                  quantity=q, currency='CAD', price=p,
+                                  net_amount=abs(q * p), account='wb',
+                                  description=desc)
+        outcomes = set()
+        for i in range(24):
+            txs = [tx('2025-01-02', 2, 20.0), tx('2025-03-03', -2, 10.0),
+                   tx('2025-03-10', -2, 10.0, f'd{i}'),
+                   tx('2025-03-10', 1, 10.5, f'd{i}'),
+                   tx('2025-03-20', 2, 9.0)]
+            res, _ = _run(CanadaTaxRules(), txs)
+            s = res['summary']
+            outcomes.add((round(s['total_gain'], 2),
+                          round(s['total_disallowed'], 2)))
+        self.assertEqual(len(outcomes), 1, outcomes)
+
+    def test_us_same_moment_replacement_lots_in_row_order(self):
+        # S070-12: the deferral rides the lot listed first (FIFO sells
+        # it), whatever the rows' content hashes.
+        for i in range(24):
+            txs = _tt("""
+                BUYSELL 2025-01-02 09:30:00 XYZ.US 100 USD 20 2000
+                BUYSELL 2025-03-03 09:30:00 XYZ.US -100 USD 10 1000
+                BUYSELL 2025-03-10 09:30:00 XYZ.US 100 USD 10.5 1050
+                BUYSELL 2025-03-10 09:30:00 XYZ.US 100 USD 11 1100
+                BUYSELL 2025-06-02 09:30:00 XYZ.US -100 USD 12 1200
+            """)
+            txs[3] = TaxTransaction(**{**txs[3].to_dict(), 'id': None,
+                                       'description': f'd{i}'})
+            res, _ = _run(USATaxRules(), txs)
+            self.assertAlmostEqual(res['summary']['total_gain'], -850.0,
+                                   places=2, msg=f"variant {i}")
+
+    def test_ca_pre_loss_bump_reaches_same_second_fill(self):
+        # R1-31: fill 2 of the loss order sees the bump whether it is
+        # 0, 1 or 2 seconds after fill 1.
+        for t2 in ('11:00:00', '11:00:01', '11:00:02', '11:00:30'):
+            txs = _tt(f"""
+                BUYSELL 2024-12-02 10:00:00 ABC.TO 100 CAD 10 1000
+                BUYSELL 2024-12-20 11:00:00 ABC.TO -50 CAD 8 400
+                BUYSELL 2024-12-20 {t2} ABC.TO -30 CAD 8 240
+                BUYSELL 2025-03-03 10:00:00 ABC.TO -20 CAD 10 200
+            """)
+            res, _ = _run(CanadaTaxRules(), txs)
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2024'], -88.0, places=2, msg=t2)
+            self.assertAlmostEqual(yrs['2025'], -72.0, places=2, msg=t2)
+
+    def test_ca_bump_follows_pool_on_rename_day(self):
+        # S069-14: a replacement booked under the OLD ticker on the
+        # rename's own date stays in the OLD pool (the main pass runs
+        # the SPLIT first); the bump must land there at any clock time.
+        for tm in ('09:29:59', '09:30:00', '09:30:01', '15:00:00'):
+            txs = _tt(f"""
+                BUYSELL 2025-02-03 10:00:00 OLD.TO 100 CAD 20 2000
+                BUYSELL 2025-03-03 10:00:00 OLD.TO -100 CAD 10 1000
+                BUYSELL 2025-03-10 {tm} OLD.TO 100 CAD 11 1100
+            """)
+            txs.append(TaxTransaction(action='SPLIT', date='2025-03-10',
+                                      time='09:30:00', symbol='OLD.TO',
+                                      quantity=1.0, symbol_new='NEW.TO',
+                                      account='margin', currency='CAD'))
+            res, _ = _run(CanadaTaxRules(), txs)
+            self.assertAlmostEqual(res['summary']['total_disallowed'], 1000.0,
+                                   places=2, msg=tm)
+            cost = sum(r['total_cost'] for r in res['inventory'])
+            self.assertAlmostEqual(cost, 2100.0, places=2, msg=tm)
