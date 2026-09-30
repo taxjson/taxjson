@@ -701,8 +701,12 @@ currency and reports the **maximum total cost of specified foreign property at
 any time in the year** — the ITA 233.3 test ($100,000 threshold; $250,000 for
 the detailed method). If a filing is required, it prints per-property and
 per-country tables (maximum cost in year, cost at Dec 31, income, gain/loss)
-from the same books the rest of the pipeline reports on. Registered accounts
-are excluded by law and never read. `--json` for machine-readable output.
+from the same books the rest of the pipeline reports on, with the project's
+`phantoms.json` openings applied exactly as the gains stage applies them.
+Registered accounts are excluded by law and never read. A plain futures
+contract has no cost amount (nothing is paid to open one), so its notional
+stays out of the cost columns and the threshold test; an option on futures
+counts at its premium. `--json` for machine-readable output.
 
 ```
 $ taxjson t1135

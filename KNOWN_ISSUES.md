@@ -205,7 +205,7 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`TRANSFER` in `_NON_CAPITAL`; taxable books post-sidecar contain no TRANSFER rows at all).
-- **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history shows as a phantom opening (flagged "cost understated") — the threshold test can understate until the true history is declared.
+- **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history listed in `phantoms.json` shows as a phantom opening (`taxjson t1135` applies the project's phantoms.json the way the gains stage does, and flags a still-held phantom "cost understated") — the threshold test can understate until the true history is declared.
 - **Why this is the design:** T1135 cost amount IS adjusted cost base; the tool refuses to invent one from a transfer's arrival market value. Declare the real history (the same `custody_fixes.tt` pattern the wash engine prescribes) and the threshold is right.
 
 ## CLI silent-fail conditions

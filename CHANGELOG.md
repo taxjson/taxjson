@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **T1135: a futures contract has no cost amount.** A long futures
+  position was counted at its full notional (one CL contract added about
+  80,000 CAD to the threshold test and could flip "filing required").
+  Plain futures are now listed with a nil cost and a note; options on
+  futures still count at their premium.
+- **`taxjson t1135` applies phantoms.json.** Positions whose early
+  history is cut off read as shorts that later real purchases covered at
+  zero cost, so those purchases never reached the max-cost or Dec-31
+  columns (2024 books: 313k of max cost missing). The report now adds
+  the same phantom openings the gains stage adds, and flags a still-held
+  phantom "cost understated".
 - **One Bank of Canada 404 no longer switches a currency to Yahoo for
   good.** Any HTTP 404 from the Valet API (a maintenance page, a proxy)
   was cached as "series not published" with no expiry, so every later

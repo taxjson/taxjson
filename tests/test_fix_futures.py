@@ -143,5 +143,121 @@ class TestValet404IsNotSticky(_FxCase):
                             for n in notes), notes)
 
 
+# ------------------------------------------------------------ T1135
+
+def _tx(action="BUYSELL", date="2025-01-15", symbol="AAA.US", qty=0.0,
+        net=0.0, account="IB", **extra):
+    d = {"action": action, "date": date, "date_settle": date,
+         "time": "10:00:00", "symbol": symbol, "quantity": qty,
+         "net_amount": net, "currency": "CAD", "account": account}
+    d.update(extra)
+    return d
+
+
+class TestT1135Futures(unittest.TestCase):
+    """S008-04: a plain futures contract has a nil cost amount."""
+
+    def test_long_future_notional_is_not_cost(self):
+        from taxjson.bin.taxjson_t1135 import walk_costs
+        txs = [_tx(date="2025-01-10", qty=100, net=30000.0),
+               _tx(date="2025-10-20", symbol="F:CLZ5.US", qty=1,
+                   net=80569.97, price=80.56)]
+        w = walk_costs(txs, 2025, {})
+        self.assertAlmostEqual(w["max_total_cost"], 30000.0, places=2)
+        self.assertEqual(w["per_symbol"].get("F:CLZ5.US", {}).get(
+            "max_cost", 0.0), 0.0)
+
+    def test_futures_option_premium_still_counts(self):
+        from taxjson.bin.taxjson_t1135 import walk_costs
+        txs = [_tx(date="2025-03-01", symbol="F:CL251117C00070000.US",
+                   qty=1, net=2500.0)]
+        w = walk_costs(txs, 2025, {})
+        self.assertAlmostEqual(w["max_total_cost"], 2500.0, places=2)
+
+    def test_report_lists_future_with_nil_cost_and_note(self):
+        from taxjson.bin.taxjson_t1135 import build_report, render_report
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "margin_base.json"
+            base.write_text(json.dumps({"transactions": [
+                _tx(date="2025-01-10", qty=100, net=30000.0),
+                _tx(date="2025-10-20", symbol="F:CLZ5.US", qty=1,
+                    net=80569.97)]}))
+            gains = Path(td) / "margin_gains.json"
+            gains.write_text(json.dumps({"transactions": [
+                {"symbol": "F:CLZ5.US", "date": "2025-10-23",
+                 "gain": 6052.34}]}))
+            rep = build_report([base], [gains], 2025, {}, "CAD")
+        self.assertFalse(rep["filing_required"])
+        row = {r["symbol"]: r for r in rep["properties"]}["F:CLZ5.US"]
+        self.assertEqual(row["max_cost"], 0.0)
+        self.assertTrue(row["futures"])
+        self.assertIn("futures", render_report(rep))
+
+
+class TestT1135Phantoms(unittest.TestCase):
+    """R1-321: `taxjson t1135` applies phantoms.json like the gains pass."""
+
+    def _books(self, td):
+        base = Path(td) / "margin_base.json"
+        # A sale with no history (cut-off books), then a real purchase.
+        base.write_text(json.dumps({"transactions": [
+            _tx(date="2023-05-01", qty=-100, net=900.0),
+            _tx(date="2024-03-01", qty=150, net=1500.0)]}))
+        phantoms = Path(td) / "phantoms.json"
+        phantoms.write_text(json.dumps([
+            {"symbol": "AAA.US", "account": "IB"}]))
+        return base, phantoms
+
+    def test_phantom_opening_restores_real_purchase_cost(self):
+        from taxjson.bin.taxjson_t1135 import build_report
+        with tempfile.TemporaryDirectory() as td:
+            base, phantoms = self._books(td)
+            without = build_report([base], [], 2024, {}, "CAD")
+            with_ph = build_report([base], [], 2024, {}, "CAD",
+                                   phantoms=phantoms)
+        row0 = {r["symbol"]: r for r in without["properties"]}["AAA.US"]
+        row1 = {r["symbol"]: r for r in with_ph["properties"]}["AAA.US"]
+        self.assertAlmostEqual(row0["max_cost"], 500.0, places=2)  # the bug
+        self.assertAlmostEqual(row1["max_cost"], 1500.0, places=2)
+        self.assertAlmostEqual(row1["year_end_cost"], 1500.0, places=2)
+        self.assertFalse(row1["unknown_acb"])     # the phantom drained
+
+    def test_phantom_still_held_is_flagged(self):
+        from taxjson.bin.taxjson_t1135 import build_report
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "margin_base.json"
+            base.write_text(json.dumps({"transactions": [
+                _tx(date="2023-01-10", qty=10, net=100.0),
+                _tx(date="2024-05-01", qty=-100, net=900.0)]}))
+            phantoms = Path(td) / "phantoms.json"
+            phantoms.write_text(json.dumps([
+                {"symbol": "AAA.US", "account": "IB"}]))
+            rep = build_report([base], [], 2023, {}, "CAD",
+                               phantoms=phantoms)
+        self.assertIn("AAA.US", rep["unknown_acb_symbols"])
+
+    def test_cli_and_wrapper_pass_phantoms(self):
+        import argparse
+        from contextlib import redirect_stderr, redirect_stdout
+        from taxjson.bin.taxjson_run import cmd_t1135
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2024\ncountry = "canada"\n'
+                'base_currency = "CAD"\n\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            (root / "work").mkdir()
+            base, _ph = self._books(root / "work")
+            (root / "work" / "phantoms.json").rename(root / "phantoms.json")
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                with self.assertRaises(SystemExit) as cm:
+                    cmd_t1135(argparse.Namespace(dir=str(root), json=True))
+            self.assertEqual(cm.exception.code, 0, err.getvalue())
+            rep = json.loads(out.getvalue())
+        row = {r["symbol"]: r for r in rep["properties"]}["AAA.US"]
+        self.assertAlmostEqual(row["max_cost"], 1500.0, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()
