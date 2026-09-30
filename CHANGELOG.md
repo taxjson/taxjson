@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Webull: a Proceeds cell that does not fit its trade is refused.** The
+  gap between Proceeds and quantity x price is the commission; one that is
+  negative or far beyond commission size (a shifted or mislabelled
+  column) now stops the parse naming the line, as Questrade, IB and RBC
+  already do — it used to book with only a schema warning (S023-19).
 - **Generic importer: a sell whose commission exceeds its gross nets
   negative.** A penny option close with a larger commission is booked with
   its negative net (the schema accepts it since S017-00; the engine deducts

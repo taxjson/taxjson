@@ -272,6 +272,9 @@ class WebullBrokerage(BaseBrokerage):
             # clamped to the expiry (clamp_settlement_to_expiry below).
             is_expiry = (is_option and abs(price) < 1e-9
                          and abs(net_amount) < 1e-9)
+            if not is_expiry and abs(price) > 1e-9:
+                self._check_trade_money(where, action_raw, qty, price,
+                                        net_amount, is_option)
             if is_expiry:
                 trade_date, row_time = date_str, '16:00:00'
             else:
@@ -305,6 +308,30 @@ class WebullBrokerage(BaseBrokerage):
                 f"{path}: Webull row accounting failed — {data_rows} "
                 f"BUY/SELL rows but {len(transactions)} transactions")
         return transactions, expiries, skipped_actions
+
+    def _check_trade_money(self, where, action, qty, price, net,
+                           is_option) -> None:
+        """Fail-closed identity for a priced trade (audit S023-19, the
+        RBC check's twin). The Trading Summary has no commission column:
+        the gap between Proceeds and |qty| x Price x multiplier IS the
+        commission, so it must be a charge (a buy costs at least its
+        gross, a sale nets at most it) of commission size. A Proceeds
+        cell off by a factor (a shifted or mislabelled column) used to
+        book with only a schema warning; Questrade, IB and RBC refuse
+        it. Real Webull commissions are a few dollars."""
+        mult = self.OPTION_MULTIPLIER if is_option else 1
+        gross = abs(qty) * abs(price) * mult
+        fee = (gross - net) if action == 'SELL' else (net - gross)
+        low = -(0.05 + 0.005 * gross)
+        high = (max(250.0, 3.0 * abs(qty) if is_option else 0.0)
+                + 0.05 * gross)
+        if fee < low or fee > high:
+            raise BrokerageParseError(
+                f"{where}: {action} Proceeds {net:,.2f} does not fit "
+                f"|Quantity| {abs(qty):g} x Price {abs(price):g}"
+                f"{' x 100' if is_option else ''} = {gross:,.2f} (implied "
+                f"commission {fee:,.2f}) — a wrong or shifted column; "
+                f"refusing to book it.")
 
     # Header label -> field. Matching is on lowercased label text with
     # newlines folded, so the bilingual two-line cells ("Currency\nDevise")

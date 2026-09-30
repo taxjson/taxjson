@@ -256,3 +256,30 @@ class TestTickerChangeWarning(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTradeMoneyIdentity(unittest.TestCase):
+    """S023-19 (Webull half): a Proceeds cell that does not fit
+    |qty| x price (+/- a commission) is refused, as Questrade, IB and
+    RBC refuse it — a shifted or mislabelled column used to book with
+    only a schema warning."""
+
+    def test_proceeds_off_by_ten_refused(self):
+        text = (_PRE + _H25 +
+                'USD,10-03-2025,BUY,AAPL,APPLE INC,SHS,100,185.00,,"(1,850.00)"\n')
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse(text)
+        self.assertIn("does not fit", str(cm.exception))
+
+    def test_sale_netting_more_than_its_gross_refused(self):
+        text = (_PRE + _H25 +
+                'USD,10-03-2025,SELL,AAPL,APPLE INC,SHS,-100,185.00,,"19,500.00"\n')
+        with self.assertRaises(BrokerageParseError):
+            _parse(text)
+
+    def test_normal_commissions_accepted(self):
+        text = (_PRE + _H25 +
+                'USD,10-03-2025,BUY,AAPL,APPLE INC,SHS,100,185.00,,"(18,503.99)"\n'
+                'USD,11-03-2025,BUY,@ZZQ,CALL ZZQ01/17/26 50,OPC,3,4.50,,"(1,352.97)"\n')
+        tx, _ = _parse(text)
+        self.assertEqual(len(tx), 2)
