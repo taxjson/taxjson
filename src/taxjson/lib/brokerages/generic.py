@@ -6,7 +6,8 @@ TOML mapping: either a sidecar (`generic_<anything>.csv.toml`, wins) or
 one shared `generic.toml` in the same folder. Example:
 
     [columns]                   # CSV header names (case-insensitive)
-    date     = "Trade Date"     # required
+    date     = "Trade Date"     # required; the TRADE date
+    settle   = "Settle Date"    # optional; else computed (see below)
     action   = "Type"           # required unless defaults.action
     symbol   = "Ticker"         # required unless defaults.symbol
     quantity = "Shares"
@@ -17,6 +18,8 @@ one shared `generic.toml` in the same folder. Example:
 
     [formats]
     date = "%m/%d/%Y"           # strptime; default %Y-%m-%d
+    settle = "%m/%d/%Y"         # optional; default = formats.date
+    tax_sign = "cash"           # or "withheld" (positive = withheld)
 
     [actions]                   # CSV action value -> taxjson action
     "BUY"  = "buy"              # buy | sell | dividend | tax |
@@ -30,14 +33,26 @@ one shared `generic.toml` in the same folder. Example:
 
     [options]
     allow_large_fees = false    # fee > 5% of gross refused unless true
+    settle_on_trade_date = false  # true for crypto: no settlement cycle
+
+The mapping is validated strictly: an unknown section or key (a typo
+such as `ammount`, `commission` or `[format]`) is refused with a
+suggestion, dividend/tax/interest/fee targets require `amount`, and
+buy/sell targets require `quantity` plus `price` or `amount`.
 
 Conventions match the hand-written parsers: quantity is stored
 magnitude-signed by direction (buys positive, sells negative), amounts
-keep their CSV sign (a negative dividend is a reversal — never abs()),
-and the currency-of-listing suffix (.TO/.US) is applied from the row's
-currency. Unmapped action values are counted and summarized, never
-silently dropped; a mapping that references columns the CSV doesn't
-have refuses loudly.
+keep their CSV sign (a negative dividend is a reversal — never abs()).
+A symbol written with an exchange suffix (.TO/.V/.CN/.NE/.US/.AX/.L)
+keeps it; a bare symbol takes the suffix of the row's currency
+(CAD -> .TO, USD -> .US). Numbers accept a thousands comma (1,234.56)
+and refuse a decimal comma (1234,56). Trade rows settle on the mapped
+`settle` column when filled, else on the standard cycle from the
+holiday-aware lib.dates.settlement_date (T+1 since May 2024, T+2
+before, T+3 before 2017-09-05; options T+1) on the listing's market;
+income rows are dated `date`. Unmapped action values are counted and
+summarized, never silently dropped; a mapping that references columns
+the CSV doesn't have refuses loudly.
 
 Mis-mapped columns are the importer's worst failure mode — amounts in
 the fee column once inflated a filed return by ~$41k without a word.
@@ -49,20 +64,32 @@ So every BUY/SELL row is cross-checked and the import REFUSES when:
 * fee is more than 5% of the gross (qty × price × multiplier), unless
   `[options] allow_large_fees = true`;
 
+* the quantity is blank or zero, or neither price nor amount is given
+  (the fee alone became the cost), or a stock buy costs exactly 0;
+* the quantity/amount sign contradicts the mapped action (a negative
+  quantity under a `buy` action, a positive quantity with a negative
+  amount under `sell`, or a positive-quantity sell in a file whose
+  other sells carry negative quantities);
+* an income row's amount cell is blank;
+
 and WARNS when amount equals qty × price to the cent while the fee is
 nonzero (the GROSS column is probably mapped as `amount`). The
 currency must be mapped or set in [defaults] — there is no silent USD.
 """
 
 import csv
+import difflib
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from taxjson.lib.tomlcompat import tomllib
 
-from taxjson.lib.brokerages.base import BaseBrokerage
+from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         parse_strict_number)
 from taxjson.lib.core import is_option_symbol
+from taxjson.lib.dates import settlement_date
 
 # Row-level cross-check tolerance — the same 1% + $0.05 the .tt
 # converter uses for hand-entered totals.
@@ -71,10 +98,60 @@ _ABS_TOL = 0.05
 # A fee above this share of the gross is almost always a column mix-up
 # (the amount or the gross in the fee column).
 _MAX_FEE_SHARE = 0.05
-_OPTIONS = ("allow_large_fees",)
+_OPTIONS = ("allow_large_fees", "settle_on_trade_date")
 
 _VALID_TARGETS = ("buy", "sell", "dividend", "tax", "interest", "fee",
                   "skip")
+# Income-style targets book the amount cell as the money: it must be
+# mapped and non-blank (an unmapped amount booked every dividend as 0).
+_INCOME_TARGETS = ("dividend", "tax", "interest", "fee")
+
+# The mapping vocabulary. Anything else is a typo that used to be
+# ignored without a word (`ammount`, `commission`, `[format]`,
+# `tax_sgn`), so it is refused with a suggestion.
+_SECTIONS = ("columns", "formats", "actions", "defaults", "options")
+_COLUMN_KEYS = ("date", "settle", "action", "symbol", "quantity", "price",
+                "amount", "fee", "currency")
+_FORMAT_KEYS = ("date", "settle", "tax_sign")
+_DEFAULT_KEYS = ("currency", "action", "symbol")
+# Common spellings difflib cannot guess.
+_KEY_ALIASES = {
+    "commission": "fee", "commissions": "fee", "fees": "fee",
+    "qty": "quantity", "shares": "quantity", "units": "quantity",
+    "ticker": "symbol", "security": "symbol",
+    "type": "action", "transaction_type": "action",
+    "net": "amount", "net_amount": "amount", "total": "amount",
+    "value": "amount",
+    "settlement": "settle", "settle_date": "settle",
+    "settlement_date": "settle", "date_settle": "settle",
+    "trade_date": "date", "ccy": "currency",
+    "format": "formats", "action_map": "actions", "default": "defaults",
+    "option": "options", "column": "columns",
+}
+# Exchange suffixes a user may write explicitly. One of these on the
+# symbol is the LISTING and is kept; the row currency is only the
+# settlement currency (DLR.U.TO bought in USD is still DLR.U.TO).
+_KNOWN_SUFFIXES = ("TO", "V", "CN", "NE", "US", "AX", "L")
+_CA_SUFFIXES = (".TO", ".V", ".CN", ".NE")
+
+
+def _did_you_mean(key: str, valid) -> str:
+    k = str(key).strip().lower()
+    alias = _KEY_ALIASES.get(k)
+    if alias in valid:
+        return f" Did you mean {alias!r}?"
+    guess = difflib.get_close_matches(k, list(valid), n=1, cutoff=0.6)
+    return f" Did you mean {guess[0]!r}?" if guess else ""
+
+
+def _check_keys(path_name: str, section: str, table, valid) -> None:
+    for k in table:
+        if k not in valid:
+            raise ValueError(
+                f"generic importer: {path_name}: unknown [{section}].{k}."
+                f"{_did_you_mean(k, valid)} Valid keys: "
+                f"{', '.join(valid)}. An unknown key used to be ignored "
+                f"silently (and its column never read).")
 
 
 def _load_mapping(csv_path: Path) -> Dict[str, Any]:
@@ -95,7 +172,22 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         mapping = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"generic importer: {path.name}: bad TOML: {e}")
+    for sec, val in mapping.items():
+        if sec not in _SECTIONS:
+            raise ValueError(
+                f"generic importer: {path.name}: unknown section "
+                f"[{sec}].{_did_you_mean(sec, _SECTIONS)} Valid sections: "
+                f"{', '.join('[' + x + ']' for x in _SECTIONS)}.")
+        if not isinstance(val, dict):
+            raise ValueError(
+                f"generic importer: {path.name}: {sec} must be a "
+                f"[{sec}] table, got {val!r}")
     cols = mapping.get("columns") or {}
+    _check_keys(path.name, "columns", cols, _COLUMN_KEYS)
+    _check_keys(path.name, "formats", mapping.get("formats") or {},
+                _FORMAT_KEYS)
+    _check_keys(path.name, "defaults", mapping.get("defaults") or {},
+                _DEFAULT_KEYS)
     for k, v in cols.items():
         if not isinstance(v, str):
             raise ValueError(
@@ -127,8 +219,9 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     for k, v in options.items():
         if k not in _OPTIONS:
             raise ValueError(
-                f"generic importer: {path.name}: unknown [options].{k} "
-                f"(valid: {', '.join(_OPTIONS)})")
+                f"generic importer: {path.name}: unknown [options].{k}."
+                f"{_did_you_mean(k, _OPTIONS)} (valid: "
+                f"{', '.join(_OPTIONS)})")
         if not isinstance(v, bool):
             raise ValueError(
                 f"generic importer: {path.name}: [options].{k} must be "
@@ -148,6 +241,25 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 f"generic importer: {path.name}: [actions] {raw!r} maps "
                 f"to unknown target {target!r} (valid: "
                 f"{', '.join(_VALID_TARGETS)})")
+    # Required fields per target actually used.
+    targets = set((mapping.get("actions") or {}).values())
+    income = sorted(targets & set(_INCOME_TARGETS))
+    if income and "amount" not in cols:
+        raise ValueError(
+            f"generic importer: {path.name}: [actions] map to "
+            f"{', '.join(income)} but [columns].amount is not mapped — "
+            f"income/tax/fee rows book the amount cell, and without it "
+            f"every such row would be booked as 0.")
+    if targets & {"buy", "sell"}:
+        if "quantity" not in cols:
+            raise ValueError(
+                f"generic importer: {path.name}: [actions] map to buy/"
+                f"sell but [columns].quantity is not mapped.")
+        if "price" not in cols and "amount" not in cols:
+            raise ValueError(
+                f"generic importer: {path.name}: [actions] map to buy/"
+                f"sell but neither [columns].price nor [columns].amount "
+                f"is mapped — the cost/proceeds would be the fee alone.")
     mapping["_path"] = path.name
     return mapping
 
@@ -212,6 +324,23 @@ def _trade_net(fname: str, target: str, qty: float, price: float,
 class GenericBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Generic"
 
+    def _listing_symbol(self, symbol_raw: str, currency: str) -> str:
+        """The row's symbol with its exchange suffix. An explicit known
+        suffix (.TO/.V/.CN/.NE/.US/.AX/.L) is the LISTING and is kept:
+        the row currency is only what the trade settled in, and deriving
+        the suffix from it turned DLR.U.TO bought in USD into DLR.U.US —
+        a different identity, so a superficial loss across accounts was
+        missed (audit R1-122). A bare symbol still takes its suffix from
+        the currency (XEI in CAD -> XEI.TO)."""
+        sym = symbol_raw.strip().replace(" ", ".")
+        up = sym.upper()
+        if up.endswith(".VN"):             # Questrade's Venture spelling
+            return f"{sym[:-3]}.V"
+        for suf in _KNOWN_SUFFIXES:
+            if up.endswith("." + suf) and len(up) > len(suf) + 1:
+                return sym[:-len(suf)] + suf
+        return self.apply_currency_suffix(sym, currency)
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         mapping = _load_mapping(path)
         cols: Dict[str, str] = {k: v for k, v in
@@ -220,10 +349,14 @@ class GenericBrokerage(BaseBrokerage):
             str(k).upper(): v for k, v in
             (mapping.get("actions") or {}).items()}
         defaults = mapping.get("defaults") or {}
-        allow_large_fees = bool((mapping.get("options") or {})
-                                .get("allow_large_fees", False))
-        date_fmt = (mapping.get("formats") or {}).get("date", "%Y-%m-%d")
-        tax_sign = (mapping.get("formats") or {}).get("tax_sign", "cash")
+        options = mapping.get("options") or {}
+        allow_large_fees = bool(options.get("allow_large_fees", False))
+        settle_on_trade_date = bool(options.get("settle_on_trade_date",
+                                                False))
+        formats = mapping.get("formats") or {}
+        date_fmt = formats.get("date", "%Y-%m-%d")
+        settle_fmt = formats.get("settle", date_fmt)
+        tax_sign = formats.get("tax_sign", "cash")
         if tax_sign not in ("cash", "withheld"):
             raise ValueError(
                 f"generic importer: {mapping['_path']}: [formats]."
@@ -232,6 +365,9 @@ class GenericBrokerage(BaseBrokerage):
                 f"{tax_sign!r}")
 
         transactions: List[Dict[str, Any]] = []
+        # (where, target, raw signed quantity) per trade row, for the
+        # file-level sign-convention check after the loop.
+        trade_signs: List[tuple] = []
         try:
             text = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError as e:
@@ -270,34 +406,31 @@ class GenericBrokerage(BaseBrokerage):
                     f"Header: {fieldnames}. Fix "
                     f"{mapping['_path']}.")
 
-            def num(row, field):
-                """STRICT numeric: the importer's charter is refuse-
-                loudly, and clean_number's garbage->0.0 silently booked
-                $0-basis buys from 'C$10.00'-style cells. Empty is 0."""
+            def num(row, field, where) -> Optional[float]:
+                """STRICT numeric, None for a blank or unmapped cell.
+                The importer's charter is refuse-loudly: clean_number's
+                garbage->0.0 silently booked $0-basis buys from
+                'C$10.00'-style cells, and stripping every comma read a
+                decimal comma ('12,50') as 1250 (audit R1-118). A comma
+                is only a thousands separator here; accounting
+                parentheses are negative ('(138.00)' == -138.00)."""
                 raw = str(cell(row, field, "")).strip()
                 if not raw:
-                    return 0.0
-                s = raw.replace(",", "")
+                    return None
+                s = raw
                 for pre in ("CA$", "C$", "US$", "A$", "$", "€", "£"):
                     s = s.replace(pre, "")
                 s = s.strip()
-                # Accounting-negative: "(138.00)" means -138.00. The
-                # old strip-as-magnitude lost the sign on the
-                # SIGN-PRESERVING branches (a parenthesized DIVIDEND
-                # reversal booked as MORE income; a parenthesized TAX
-                # withholding flipped to a refund). Trade branches are
-                # unaffected — they re-sign via signed_quantity/abs().
-                negative = s.startswith("(") and s.endswith(")")
-                if negative:
-                    s = s[1:-1].strip()
                 try:
-                    v = float(s)
-                    return -v if negative else v
-                except ValueError:
+                    return parse_strict_number(s, field=field)
+                except BrokerageParseError:
+                    why = (" — a decimal comma? Only a thousands comma "
+                           "(1,234.56) is accepted; re-export with a "
+                           "decimal point" if "," in s else "")
                     raise ValueError(
-                        f"generic importer: {path.name}: unparseable "
-                        f"{field} value {raw!r} — fix the cell or the "
-                        f"[columns].{field} mapping.")
+                        f"generic importer: {where}: unparseable "
+                        f"{field} value {raw!r}{why} — fix the cell or "
+                        f"the [columns].{field} mapping.")
 
             def cell(row, field, default=""):
                 col = cols.get(field)
@@ -343,23 +476,34 @@ class GenericBrokerage(BaseBrokerage):
                         f"{mapping['_path']} — refusing to assume USD.")
                 symbol_raw = (str(cell(row, "symbol")).strip()
                               or str(defaults.get("symbol", "")))
-                symbol = (self.apply_currency_suffix(symbol_raw, currency)
+                symbol = (self._listing_symbol(symbol_raw, currency)
                           if symbol_raw else "")
-                qty = num(row, "quantity")
-                price = num(row, "price")
-                amount = num(row, "amount")
-                fee = num(row, "fee")
+                qty_v = num(row, "quantity", where)
+                price_v = num(row, "price", where)
+                amount_v = num(row, "amount", where)
+                fee_v = num(row, "fee", where)
+                qty = qty_v or 0.0
+                price = price_v or 0.0
+                amount = amount_v or 0.0
+                fee = fee_v or 0.0
 
                 if target in ("buy", "sell"):
                     mult = (float(self.OPTION_MULTIPLIER)
                             if is_option_symbol(symbol_raw)
                             or is_option_symbol(symbol) else 1.0)
+                    self._check_trade_shape(
+                        where, target, raw_action, qty, price_v, amount_v,
+                        fee, mult)
+                    trade_signs.append((where, target, qty))
                     _check_trade_row(where, target, qty, price, amount,
                                      fee, mult, allow_large_fees)
+                    date_settle = self._settle_for(
+                        row, cell, where, date, settle_fmt, symbol,
+                        currency, mult > 1, settle_on_trade_date)
                     transactions.append({
                         "action": "BUYSELL",
                         "date": date, "time": "09:30:00",
-                        "date_settle": date,
+                        "date_settle": date_settle,
                         "symbol": symbol,
                         "quantity": self.signed_quantity(
                             qty, action_is_sell=(target == "sell")),
@@ -376,10 +520,22 @@ class GenericBrokerage(BaseBrokerage):
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
                     })
-                elif target == "dividend":
+                    continue
+                # Income-style rows: the amount IS the money. A blank
+                # cell used to book 0 silently.
+                if amount_v is None:
+                    raise ValueError(
+                        f"generic importer: {where}: {raw_action} row "
+                        f"(-> {target}) has a blank amount cell — "
+                        f"refusing to book it as 0. Fill it in, or map "
+                        f"the action to skip if the row carries no "
+                        f"money.")
+                if target == "dividend":
                     transactions.append({
                         "action": "DIVIDEND",
                         "date": date, "time": "09:30:00",
+                        # Income is dated its payment day: no
+                        # settlement cycle.
                         "date_settle": date,
                         "symbol": symbol, "quantity": qty,
                         "currency": currency, "price": 0.0,
@@ -409,6 +565,97 @@ class GenericBrokerage(BaseBrokerage):
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
                     })
+        # A file that signs its quantities (a sell row carried a
+        # negative quantity) must not also carry a sell row with a
+        # POSITIVE quantity: that row is a buy under the file's own
+        # convention, booked as a sell through a mis-mapped action.
+        if any(q < 0 for _, _, q in trade_signs):
+            bad = [w for w, t, q in trade_signs if t == "sell" and q > 0]
+            if bad:
+                raise ValueError(
+                    f"generic importer: {bad[0]}: a sell row with a "
+                    f"POSITIVE quantity in a file whose other sell rows "
+                    f"carry negative quantities — this row is a buy by "
+                    f"the file's own sign convention. Check the "
+                    f"[actions] mapping ({len(bad)} such row(s)).")
         self.disambiguate_split_fills(transactions)
         self.emit_skip_summary(path.name)
         return transactions
+
+    @staticmethod
+    def _check_trade_shape(where: str, target: str, raw_action: str,
+                           qty: float, price_v: Optional[float],
+                           amount_v: Optional[float], fee: float,
+                           mult: float) -> None:
+        """Refuse a buy/sell row that cannot be booked without a guess:
+        no quantity, no price AND no amount (the fee alone became the
+        whole cost or proceeds, audit R1-120), a zero-cost stock buy,
+        or a quantity/amount sign that contradicts the mapped action
+        (a sell under an action mapped to buy was booked as a buy,
+        audit R1-121)."""
+        if not qty:
+            raise ValueError(
+                f"generic importer: {where}: {raw_action} row (-> "
+                f"{target}) has a blank or zero quantity.")
+        if price_v is None and amount_v is None:
+            raise ValueError(
+                f"generic importer: {where}: {raw_action} row (-> "
+                f"{target}) has neither a price nor an amount — the "
+                f"{'cost' if target == 'buy' else 'proceeds'} would be "
+                f"{'the fee alone' if fee else '0'}. Fill one in, or map "
+                f"the action to skip (a transfer-in needs its real cost "
+                f"as a .tt BUYSELL).")
+        if (target == "buy" and mult == 1.0 and not (price_v or 0.0)
+                and not (amount_v or 0.0)):
+            raise ValueError(
+                f"generic importer: {where}: {raw_action} row is a stock "
+                f"buy at ZERO cost (price and amount both 0). A zero-cost "
+                f"buy is almost always a transfer or journal row — map "
+                f"it to skip and supply the real cost basis (.tt).")
+        if target == "buy" and qty < 0:
+            raise ValueError(
+                f"generic importer: {where}: {raw_action} is mapped to "
+                f"buy but the quantity is NEGATIVE ({qty:g}) — a sell by "
+                f"its own sign. Map sells to their own action value; "
+                f"booking it as a buy would drop the disposition.")
+        if target == "sell" and qty > 0 and (amount_v or 0.0) < 0:
+            raise ValueError(
+                f"generic importer: {where}: {raw_action} is mapped to "
+                f"sell but the quantity is positive and the amount "
+                f"negative ({amount_v:g}, cash paid out) — a buy by its "
+                f"own signs. Map buys to their own action value.")
+
+    @staticmethod
+    def _settle_for(row, cell, where: str, date: str, settle_fmt: str,
+                    symbol: str, currency: str, is_option: bool,
+                    settle_on_trade_date: bool) -> str:
+        """Settlement date of a trade row: the mapped `settle` column
+        when the cell is filled, else the standard cycle from the
+        shared holiday-aware helper (T+1 since the 2024 cutover, T+2
+        before, T+3 before 2017-09-05; options T+1), on the listing's
+        market (a Canadian suffix settles on the Canadian calendar,
+        .US on the US one, otherwise the row currency). Booking the
+        trade date put a Dec-31 sale in the wrong Canadian tax year
+        (audits R1-123/R1-185). `[options] settle_on_trade_date = true`
+        (crypto) and futures (`F:` symbols) settle on the trade date."""
+        raw = str(cell(row, "settle")).strip()
+        if raw:
+            try:
+                sd = datetime.strptime(raw, settle_fmt)
+            except ValueError:
+                raise ValueError(
+                    f"generic importer: {where}: unparseable settle date "
+                    f"{raw!r} with [formats].settle={settle_fmt!r}")
+            settle = sd.strftime("%Y-%m-%d")
+            if settle < date:
+                raise ValueError(
+                    f"generic importer: {where}: settle date {settle} is "
+                    f"before the trade date {date} — are the date and "
+                    f"settle columns swapped?")
+            return settle
+        if settle_on_trade_date or symbol.upper().startswith("F:"):
+            return date
+        up = symbol.upper()
+        market = ("CAD" if up.endswith(_CA_SUFFIXES)
+                  else "USD" if up.endswith(".US") else currency)
+        return settlement_date(date, market, is_option)

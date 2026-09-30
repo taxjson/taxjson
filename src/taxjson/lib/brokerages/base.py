@@ -175,6 +175,34 @@ _STRICT_NUM_RE = re.compile(
     r'(?P<int>\d{1,3}(?:,\d{3})+|\d*)'
     r'(?P<frac>\.\d*)?'
     r'(?P<exp>[eE][+-]?\d+)?$')
+# A comma is only ever a THOUSANDS separator: digit groups of exactly
+# three after a 1-3 digit lead, optionally followed by a dot fraction.
+# Anything else with a comma ("0,95", "1,5", "1.234,56", "12,3456") is a
+# decimal-comma (French/European locale) number, and stripping the comma
+# reads it 100x or 10x too large -- so it is refused, never scaled.
+_THOUSANDS_COMMA_RE = re.compile(r'^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d*)?$')
+
+
+def check_comma_grouping(num_text: str, raw=None, *, where: str = '',
+                         field: str = 'value') -> None:
+    """Raise BrokerageParseError when `num_text` (a number already
+    stripped of currency signs and accounting parentheses) contains a
+    comma that is not a valid thousands separator. `raw` is the original
+    cell for the message. '1,234.56' passes; '1234,56' and '1.234,56'
+    raise -- a decimal comma is refused rather than read as 123456."""
+    if ',' not in num_text:
+        return
+    if _THOUSANDS_COMMA_RE.match(num_text.strip()):
+        return
+    loc = f"{where}: " if where else ''
+    shown = num_text if raw is None else raw
+    raise BrokerageParseError(
+        f"{loc}{field} {shown!r} uses a comma that is not a thousands "
+        f"separator — a decimal comma (French/European locale)? It is "
+        f"refused rather than read 10x-100x too large. Re-export with a "
+        f"decimal POINT (e.g. 1234.56 or 1,234.56).")
+
+
 # Unicode minus signs and dashes spreadsheets substitute for '-'.
 _MINUS_CHARS = ('−', '‒', '–', '—', '﹣', '－')
 _CURRENCY_SIGNS = ('$', '€', '£', '¥')
@@ -426,7 +454,10 @@ class BaseBrokerage:
         proceeds) takes abs() itself. The unicode minus is a minus.
 
         Returns `default` for a blank cell and, with a stderr warning,
-        for unparseable text. REQUIRED money/quantity cells must use
+        for unparseable text. A DECIMAL comma (`0,95`, `1.234,56`) raises
+        BrokerageParseError: stripping it read the value 100x too large
+        (audit R1-93); a thousands comma (`1,234.56`) is fine.
+        REQUIRED money/quantity cells must use
         `parse_strict_number` instead: a garbage-to-0 read of a
         required field is how a missing column once inflated a filed
         return by ~41k."""
@@ -440,7 +471,9 @@ class BaseBrokerage:
         neg = s.startswith('(') and s.endswith(')')
         if neg:
             s = s[1:-1]
-        s = s.replace(',', '').replace('$', '').replace('€', '').replace('£', '')
+        s = s.replace('$', '').replace('€', '').replace('£', '').strip()
+        check_comma_grouping(s, raw)
+        s = s.replace(',', '')
         try:
             v = float(s)
         except ValueError:

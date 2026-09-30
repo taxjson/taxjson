@@ -1933,14 +1933,21 @@ class TestDeferredLowTail(unittest.TestCase):
     def test_tt_roundtrip_preserves_reversal_signs(self):
         from taxjson.bin.taxjson_convert_tt import (parse_tt_line,
                                                     tx_to_tt_line)
+        # The fee sign (a rebate) must survive json->tt->json.
         tx = {'action': 'BUYSELL', 'date': '2025-03-01',
               'time': '09:30:00', 'symbol': 'A.TO', 'quantity': -10.0,
-              'currency': 'CAD', 'price': 5.0, 'net_amount': -50.0,
+              'currency': 'CAD', 'price': 5.0, 'net_amount': 51.0,
               'fee': -1.0}
         back = parse_tt_line(tx_to_tt_line(tx))
-        self.assertAlmostEqual(back['net_amount'], -50.0, places=2,
-                               msg="abs() re-inflated the reversal")
+        self.assertAlmostEqual(back['net_amount'], 51.0, places=2)
         self.assertAlmostEqual(back['fee'], -1.0, places=2)
+        # A NEGATIVE sell total used to round-trip as negative proceeds
+        # (audit R1-117: a +1,000 gain became a -3,000 loss). Trade
+        # net_amount must be >= 0 (schema), so it is now refused loudly
+        # on the way back in rather than preserved.
+        tx['net_amount'] = -50.0
+        with self.assertRaises(ValueError):
+            parse_tt_line(tx_to_tt_line(tx))
 
     def test_full_run_clears_orphaned_wash_artifacts(self):
         import shutil
