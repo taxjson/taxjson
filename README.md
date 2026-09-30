@@ -294,7 +294,7 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 #                                   # transition from books filed the old way. `taxjson init` writes
 #                                   # it; set it ONCE (first year filed under grant timing) and keep
 #                                   # it in every later project (unset, it follows `year` — warned)
-# option_buyback_loss_superficial = false # grant timing: treat the loss on buying back a written
+# option_buyback_loss_superficial = false # either timing: treat the loss on buying back a written
 #                                   # option as superficial when identical options are bought
 #                                   # within 30 days and held (strict reading; default off — a
 #                                   # closing purchase is not a disposition s.54 reaches)
@@ -850,7 +850,9 @@ Whether the loss on buying back a written option can be *superficial* —
 denied because identical options were bought within 30 days and held,
 permanently if a registered account holds them — is not settled: s.54
 needs "a loss from the disposition of a property" and a closing purchase
-disposes of nothing. The default does not apply the rule to buy-backs;
+disposes of nothing. The default does not apply the rule to buy-backs,
+under grant or close timing alike (a contract written before
+`option_grant_timing_since` included);
 `option_buyback_loss_superficial = true` takes the strict reading.
 
 ### Return of capital (ROC)

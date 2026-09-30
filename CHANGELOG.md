@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Superficial-loss rule fixes.** A cover that also opens a long (buy
+  150 while short 100) now counts its own 50 new shares as substituted
+  property, as two separate rows already did. In a blended pass the
+  cover-vs-acquisition test uses the pooled s.47 balance, so account B's
+  rebuy after selling shares only account A held is an acquisition. A
+  contract that expires before day 30 is not "still held", even with
+  no expiry row. `option_buyback_loss_superficial = false` (the
+  default) now exempts a written option's buy-back loss under close
+  timing and for contracts written before `option_grant_timing_since`
+  too, not only grant-timed lots. A warrant or right bought in the
+  window (`SLH.WT.TO`, `ABC.RT.TO`) is named in an option-replacement
+  warning for review. US engine: a registered or spouse account's
+  buy-to-close is no longer a §1091 replacement.
 - **Same-moment rows no longer depend on a content hash or a 1-second
   gap.** The superficial-loss balance walk (Canada) and the US
   replacement-lot order broke ties by each row's hash, so a one-cent

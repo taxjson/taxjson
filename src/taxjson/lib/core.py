@@ -318,6 +318,89 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
     return out
 
 
+_RIGHT_RE = re.compile(r'^(.+?)[.\-](WTS|WT|WS|WR|RT|W|R)([.\-][A-Z])?$')
+
+
+def right_underlying(symbol: str) -> Optional[str]:
+    """The share line a WARRANT or RIGHT names, from the dotted/dashed
+    listing spelling ('SLH.WT.TO' -> 'SLH.TO', 'ABC.RT.TO' -> 'ABC.TO',
+    'XYZ.WS.US' -> 'XYZ.US'), else None. Undotted US forms ('DFDVW')
+    are ambiguous with ordinary tickers and are not recognised."""
+    if not symbol or is_option_symbol(symbol):
+        return None
+    base, ext = symbol, ''
+    if '.' in symbol:
+        b, _, e = symbol.rpartition('.')
+        if e.isalpha() and e.isupper() and len(e) <= 3 and e not in (
+                'WT', 'WS', 'RT', 'W', 'R', 'WTS', 'WR'):
+            base, ext = b, e
+    m = _RIGHT_RE.match(base)
+    if not m:
+        return None
+    return f"{m.group(1)}.{ext}" if ext else m.group(1)
+
+
+def detect_right_replacement_matches(loss_entries, events, *, date_of,
+                                     canonical=None, statute_label='',
+                                     window_days=30):
+    """WARN-ONLY: a warrant or subscription right on the loss shares
+    acquired inside the ±window (audit S071-14). s.54's closing words
+    deem "a right to acquire a property" identical to it (IRC §1091:
+    "contract or option to acquire"), but the shares one warrant buys
+    are not in the books, so the engine cannot size a denial; it names
+    the case for review instead. Same record shape as
+    detect_option_replacement_matches, rule 'right_vs_share_loss'."""
+    canon = canonical or (lambda s: s)
+    acqs = []
+    for ev in events:
+        if ev.action != 'BUYSELL' or ev.quantity <= 0:
+            continue
+        und = right_underlying(ev.symbol)
+        if und:
+            acqs.append((canon(und), ev))
+    if not acqs:
+        return []
+    out = []
+    for loss in loss_entries:
+        symbol = loss['symbol']
+        if is_option_symbol(symbol) or right_underlying(symbol):
+            continue
+        if loss.get('direction') == 'SHORT':
+            continue
+        try:
+            loss_dt = datetime.strptime(loss['date'], '%Y-%m-%d')
+        except (KeyError, TypeError, ValueError):
+            continue
+        by_sym: Dict[str, Dict[str, Any]] = {}
+        for und_c, ev in acqs:
+            if und_c != canon(symbol):
+                continue
+            try:
+                ev_dt = datetime.strptime(date_of(ev), '%Y-%m-%d')
+            except (TypeError, ValueError):
+                continue
+            if abs((ev_dt - loss_dt).days) > window_days:
+                continue
+            rec = by_sym.setdefault(ev.symbol, {'qty': 0.0, 'first': None})
+            rec['qty'] += ev.quantity
+            if rec['first'] is None or date_of(ev) < rec['first']:
+                rec['first'] = date_of(ev)
+        for wsym, rec in sorted(by_sym.items()):
+            out.append({
+                'rule': 'right_vs_share_loss',
+                'loss_symbol': symbol,
+                'loss_date': loss['date'],
+                'loss_amount': round(float(loss['amount']), 2),
+                'loss_id': loss.get('id', ''),
+                'option_symbol': wsym,
+                'option_acquired': rec['first'],
+                'option_qty': rec['qty'],
+                'held_at_window_end': None,
+                'statute': statute_label,
+            })
+    return out
+
+
 def _emit_option_replacement_stderr(warnings) -> None:
     for w in warnings:
         held = ''
@@ -326,12 +409,16 @@ def _emit_option_replacement_stderr(warnings) -> None:
                     if w['held_at_window_end'] else
                     ' — NOT held at window end (s.54 would likely not '
                     'apply)')
+        verdict = ("this loss would be denied"
+                   if w['rule'] != 'right_vs_share_loss' else
+                   "a warrant/right is a right to acquire the shares, so "
+                   "the loss may be superficial — review it by hand")
         print(
             f"warning: option-replacement (warn-only, numbers unchanged): "
             f"{w['loss_symbol']} loss {w['loss_amount']:+,.2f} on "
             f"{w['loss_date']} has {w['option_symbol']} acquired "
             f"{w['option_acquired']} in the ±30d window{held}; under "
-            f"{w['statute']} this loss would be denied [{w['rule']}]",
+            f"{w['statute']} {verdict} [{w['rule']}]",
             file=sys.stderr,
         )
 
@@ -2231,7 +2318,10 @@ class CanadaTaxRules(TaxRules):
                                 # flowed into total_disallowed. The tainted
                                 # disposition itself is already excluded from
                                 # the gains report (manual_reporting_required).
-                                # A buy-back loss on grant-timed units is fed
+                                # A buy-back loss on a written option (any
+                                # timing: grant-timed units, a pre-since
+                                # transition lot, a close-timing project —
+                                # audit R1-270/R1-297) is fed
                                 # to the superficial-loss solver only when the
                                 # project opts in: s.54 needs "a loss from the
                                 # disposition of a property" and a closing
@@ -2242,7 +2332,8 @@ class CanadaTaxRules(TaxRules):
                                 # same series (a 30-second order correction
                                 # cost 18.5k that way on a real book).
                                 _wash_eligible = (option_buyback_loss_superficial
-                                                  or _grant_units_closed <= 1e-9)
+                                                  or not (pool['qty'] < 0
+                                                          and is_option_symbol(symbol)))
                                 # Every RAW loss re-enters the solver on every
                                 # pass (a fully denied one too), so each pass
                                 # shares the replacements out from scratch.
@@ -2434,11 +2525,19 @@ class CanadaTaxRules(TaxRules):
                              key=lambda x: event_sort_key(
                                  x, profile='ca_balance',
                                  date_of=get_sort_date)):
-                # Keyed by (account, RAW symbol): a rename-split
+                # Keyed by (holder, RAW symbol): a rename-split
                 # scales/moves only the named symbol's shares (in
                 # every account — the event is corporate-wide), never
-                # target-symbol shares acquired pre-rename.
-                _k = (_t.account, _t.symbol)
+                # target-symbol shares acquired pre-rename. The holder
+                # of every TAXABLE row is the taxpayer's one s.47 pool
+                # (all taxable accounts of a blended pass together — a
+                # sale in account B draws on A's shares there, so B's
+                # rebuy is an acquisition, not a cover: audit S069-15);
+                # sheltered and affiliated rows keep their own account.
+                _k = ((_t.account
+                       if (_t.id in sheltered_ids
+                           or _t.id in affiliated_ids)
+                       else '\x00taxable'), _t.symbol)
                 _bal_before[_t.id] = _running.get(_k, 0.0)
                 if _t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER',
                                  'OPENING_BALANCE'):
@@ -2496,7 +2595,18 @@ class CanadaTaxRules(TaxRules):
                 loss_alias = alias_of(tx.symbol)
                 potential_triggers = []
                 for t in all_txs:
-                    if t.id == tx.id or alias_of(t.symbol) != loss_alias: continue
+                    if alias_of(t.symbol) != loss_alias:
+                        continue
+                    # The loss row itself is a candidate only when it is
+                    # a cover that also OPENS a long (buy 150 while short
+                    # 100): its 50 new shares are identical property
+                    # acquired in the window (audit R1-29 — booked as
+                    # one row the loss was allowed, as two rows denied).
+                    # _opening_qty keeps just that opening portion.
+                    if t.id == tx.id and not (t is tx and tx.quantity > 0
+                                              and loss.get('direction')
+                                              == 'SHORT'):
+                        continue
                     # Only real acquisitions trigger a superficial loss.
                     # SPLIT carries positive `quantity` (the ratio) and
                     # was being misclassified as a long-side buy — a
@@ -2640,10 +2750,20 @@ class CanadaTaxRules(TaxRules):
                     return max(0.0, _opening_qty(t, 'LONG')
                                - _trg_used.get(t.id, 0.0))
 
+                # A contract that expires before day 30 is not owned at
+                # day 30, with or without an expiry row in the export
+                # (audit S071-17: a missing EXP row parked a realized
+                # long-option loss on a contract that can never be sold).
+                def _gone_by_end(t) -> bool:
+                    return (is_option_symbol(t.symbol)
+                            and (parse_option_expiry(t.symbol) or '9999')
+                            < end_window_date)
+
                 bal_at_end = sum(
                     _row_loss_units(t, t.quantity)
                     for t in current_tx_list
                     if alias_of(t.symbol) == loss_alias
+                    and not _gone_by_end(t)
                     and get_sort_date(t) <= end_window_date
                     # OPENING_BALANCE counts — phantom shares are held
                     # (see running_bal_by_tx walk above).
@@ -2681,6 +2801,7 @@ class CanadaTaxRules(TaxRules):
                 _bal_end_h: Dict[Any, float] = {}
                 for t in current_tx_list:
                     if (alias_of(t.symbol) == loss_alias
+                            and not _gone_by_end(t)
                             and get_sort_date(t) <= end_window_date
                             and t.action in ('BUYSELL', 'ASSIGN',
                                              'TRANSFER',
@@ -3393,9 +3514,22 @@ class CanadaTaxRules(TaxRules):
         _warn_undrained_adjustments(pending_adjustments.undrained(), "canada")
 
         # Options as replacement property are ENFORCED in the solver
-        # above (a long call vs a share loss, s.54 para (i)); nothing is
-        # left advisory. The key stays in the output for readers.
-        option_replacement_warnings: List[Dict[str, Any]] = []
+        # above (a long call vs a share loss, s.54 para (i)). A warrant
+        # or right bought in the window is only NAMED (warn-only): the
+        # shares it converts into are not in the books.
+        option_replacement_warnings: List[Dict[str, Any]] = \
+            detect_right_replacement_matches(
+                [{'symbol': g['symbol'], 'date': g.get('date_settle')
+                  or g['date'], 'amount': g.get('raw_gain', g['gain']),
+                  'id': g.get('id', ''),
+                  'direction': g.get('direction', 'LONG')}
+                 for g in processed_gains
+                 if g.get('raw_gain', g['gain']) < -0.005
+                 and not g.get('tainted')],
+                all_txs, date_of=get_sort_date,
+                canonical=alias_of,
+                statute_label="ITA s.54 ('a right to acquire')")
+        _emit_option_replacement_stderr(option_replacement_warnings)
 
         # Conservation post-conditions (see the helpers' docstrings).
         _pool_qty: Dict[str, float] = {}
@@ -3592,10 +3726,10 @@ class USATaxRules(TaxRules):
             return (acct, s) if per_account_basis else s
         # Context (sheltered/affiliated) books' running balances, keyed
         # (account, symbol) — partitions an other-scope SELL into its
-        # long-close vs short-open portions, mirroring the taxable
-        # partition. BUY registration deliberately stays full-quantity
-        # (Rev. Rul. 2008-5: any sheltered acquisition is replacement-
-        # eligible); only the SELL side consults this.
+        # long-close vs short-open portions and an other-scope BUY into
+        # its short-cover vs long-open portions, mirroring the taxable
+        # partition (Rev. Rul. 2008-5: a sheltered ACQUISITION is
+        # replacement-eligible; a buy-to-close acquires nothing).
         other_qty_state: Dict[tuple, float] = {}
         # Per-symbol split timeline (TRADE-basis dates, IRS semantics), ALL
         # scopes — a split is a property of the security, and
@@ -3697,7 +3831,14 @@ class USATaxRules(TaxRules):
                 # spouse/controlled-entity for affiliated), and they
                 # don't move the taxable running position.
                 if is_other_scope:
-                    open_qty = ev.quantity
+                    # ... but only the portion that OPENS or extends a
+                    # long in its own book: an IRA buy-to-close of a
+                    # written covered call, or a spouse's buy-to-cover,
+                    # acquires nothing (audit S070-10 — the full
+                    # quantity permanently denied taxable losses).
+                    _oprev = other_qty_state.get((ev.account, sym), 0.0)
+                    open_qty = ev.quantity - min(ev.quantity,
+                                                 max(0.0, -_oprev))
                 else:
                     open_qty = ev.quantity - min(ev.quantity, max(0.0, -prev))
                 if open_qty > epsilon:
@@ -4960,6 +5101,11 @@ class USATaxRules(TaxRules):
             canonical=split_timeline.canonical,
             statute_label="IRS §1091 ('option to acquire')",
             check_held_at_end=False)
+        option_replacement_warnings += detect_right_replacement_matches(
+            _orw_losses, all_events,
+            date_of=lambda t: t.date,
+            canonical=split_timeline.canonical,
+            statute_label="IRS §1091 ('contract or option to acquire')")
         _emit_option_replacement_stderr(option_replacement_warnings)
 
         # Conservation post-condition (see _verify_share_conservation).

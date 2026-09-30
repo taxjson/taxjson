@@ -302,3 +302,130 @@ class TestSameMomentOrdering(unittest.TestCase):
                                    places=2, msg=tm)
             cost = sum(r['total_cost'] for r in res['inventory'])
             self.assertAlmostEqual(cost, 2100.0, places=2, msg=tm)
+
+
+class TestSuperficialLossRules(unittest.TestCase):
+
+    def test_cover_that_opens_long_counts_its_own_new_shares(self):
+        # R1-29: one row (buy 150 while short 100) == two rows (100 + 50).
+        one = _tt("""
+            BUYSELL 2024-11-01 10:00:00 XYZ.TO -100 CAD 10 1000
+            BUYSELL 2024-12-16 10:00:00 XYZ.TO 150 CAD 12 1800
+            BUYSELL 2025-03-03 10:00:00 XYZ.TO -50 CAD 12 600
+        """)
+        two = _tt("""
+            BUYSELL 2024-11-01 10:00:00 XYZ.TO -100 CAD 10 1000
+            BUYSELL 2024-12-16 10:00:00 XYZ.TO 100 CAD 12 1200
+            BUYSELL 2024-12-16 10:00:01 XYZ.TO 50 CAD 12 600
+            BUYSELL 2025-03-03 10:00:00 XYZ.TO -50 CAD 12 600
+        """)
+        for txs in (one, two):
+            res, _ = _run(CanadaTaxRules(), txs)
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2024'], -100.0, places=2)
+            self.assertAlmostEqual(yrs['2025'], -100.0, places=2)
+
+    def _buyback(self, write_date, timing, since=2025, flag=False):
+        txs = _tt(f"""
+            BUYSELL {write_date} 10:00:00 ABC260320C00040000.TO -1 CAD 2 200
+            BUYSELL 2025-01-10 10:00:00 ABC260320C00040000.TO 1 CAD 3 300
+        """)
+        rrsp = _tt("""
+            BUYSELL 2025-01-13 10:00:00 ABC260320C00040000.TO 1 CAD 3 300
+        """, account='rrsp')
+        res, _ = _run(CanadaTaxRules(), txs, sheltered_transactions=rrsp,
+                      option_premium_timing=timing, option_grant_since=since,
+                      option_buyback_loss_superficial=flag)
+        return res['summary']['total_disallowed']
+
+    def test_buyback_flag_holds_under_every_timing(self):
+        # R1-270 / R1-297: the default exempts a written-option buy-back
+        # loss whether the lot is grant-timed, a pre-since transition lot
+        # or on close timing.
+        self.assertAlmostEqual(self._buyback('2025-01-02', 'grant'), 0.0)
+        self.assertAlmostEqual(self._buyback('2024-12-20', 'grant'), 0.0)
+        self.assertAlmostEqual(self._buyback('2025-01-02', 'close'), 0.0)
+        # The strict reading still applies when opted in.
+        self.assertAlmostEqual(
+            self._buyback('2025-01-02', 'close', flag=True), 100.0)
+
+    def test_blended_cover_test_uses_the_pooled_balance(self):
+        # S069-15: A holds 100; B sells 50 out of the pooled ACB at a
+        # loss and rebuys 50 -> denied, exactly as in one account.
+        a = _tt("BUYSELL 2025-01-02 10:00:00 XYZ.TO 100 CAD 50 5000",
+                account='acctA')
+        b = _tt("""
+            BUYSELL 2025-03-03 10:00:00 XYZ.TO -50 CAD 40 2000
+            BUYSELL 2025-03-10 10:00:00 XYZ.TO 50 CAD 41 2050
+        """, account='acctB')
+        res, _ = _run(CanadaTaxRules(), a + b)
+        self.assertAlmostEqual(res['summary']['total_disallowed'], 500.0,
+                               places=2)
+
+    def test_contract_expired_inside_window_is_not_held(self):
+        # S071-17: no EXP row; the rebuy expired 12-19 < day 30 (12-31).
+        txs = _tt("""
+            BUYSELL 2025-11-03 10:00:00 ZZQ251219C00015000.TO 1 CAD 2.01 201
+            BUYSELL 2025-12-01 10:00:00 ZZQ251219C00015000.TO -1 CAD 0.49 49
+            BUYSELL 2025-12-05 10:00:00 ZZQ251219C00015000.TO 1 CAD 0.41 41
+        """)
+        res, _ = _run(CanadaTaxRules(), txs)
+        self.assertAlmostEqual(res['summary']['total_disallowed'], 0.0)
+        self.assertAlmostEqual(res['summary']['total_gain'], -152.0,
+                               places=2)
+
+    def test_warrant_bought_in_window_is_named(self):
+        # S071-14: a warrant is a right to acquire the shares; the loss
+        # is flagged for review (the shares per warrant are unknown).
+        txs = _tt("""
+            BUYSELL 2025-01-10 10:00:00 SLH.TO 100 CAD 10 1000
+            BUYSELL 2025-03-03 10:00:00 SLH.TO -100 CAD 8 800
+            BUYSELL 2025-03-10 10:00:00 SLH.WT.TO 100 CAD 1 100
+        """)
+        res, err = _run(CanadaTaxRules(), txs)
+        self.assertIn('right_vs_share_loss', err)
+        self.assertIn('SLH.WT.TO', err)
+        self.assertEqual([w['option_symbol']
+                          for w in res['option_replacement_warnings']],
+                         ['SLH.WT.TO'])
+        res, err = _run(USATaxRules(), [
+            TaxTransaction(**{**t.to_dict(), 'id': None,
+                              'symbol': t.symbol.replace('.TO', '.US'),
+                              'currency': 'USD'}) for t in txs])
+        self.assertIn('right_vs_share_loss', err)
+
+    def test_right_underlying_spellings(self):
+        from taxjson.lib.core import right_underlying
+        self.assertEqual(right_underlying('SLH.WT.TO'), 'SLH.TO')
+        self.assertEqual(right_underlying('ABC.WT.A.TO'), 'ABC.TO')
+        self.assertEqual(right_underlying('CSU.RT.TO'), 'CSU.TO')
+        self.assertEqual(right_underlying('XYZ.WS.US'), 'XYZ.US')
+        self.assertIsNone(right_underlying('RCI.B.TO'))
+        self.assertIsNone(right_underlying('BRK.B.US'))
+        self.assertIsNone(right_underlying('SNOW.US'))
+
+    def test_us_other_scope_buy_to_close_is_not_a_replacement(self):
+        # S070-10 case A: the IRA buys back its own written call.
+        txs = _tt("""
+            BUYSELL 2025-02-03 10:00:00 XYZ250620C00050000.US 1 USD 5 500
+            BUYSELL 2025-03-03 10:00:00 XYZ250620C00050000.US -1 USD 2 200
+        """)
+        ira = _tt("""
+            BUYSELL 2025-01-10 10:00:00 XYZ250620C00050000.US -1 USD 3 300
+            BUYSELL 2025-03-10 10:00:00 XYZ250620C00050000.US 1 USD 2 200
+        """, account='ira')
+        res, _ = _run(USATaxRules(), txs, sheltered_transactions=ira)
+        self.assertAlmostEqual(res['summary']['total_gain'], -300.0,
+                               places=2)
+        # Case B: an affiliated buy-to-cover.
+        txs = _tt("""
+            BUYSELL 2025-01-02 10:00:00 XYZ.US 100 USD 20 2000
+            BUYSELL 2025-03-03 10:00:00 XYZ.US -100 USD 10 1000
+        """)
+        sp = _tt("""
+            BUYSELL 2025-02-20 10:00:00 XYZ.US -100 USD 12 1200
+            BUYSELL 2025-03-10 10:00:00 XYZ.US 100 USD 11 1100
+        """, account='spouse')
+        res, _ = _run(USATaxRules(), txs, affiliated_transactions=sp)
+        self.assertAlmostEqual(res['summary']['total_gain'], -1000.0,
+                               places=2)
