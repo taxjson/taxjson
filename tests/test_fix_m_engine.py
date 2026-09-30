@@ -841,3 +841,187 @@ class TestPerAccountSplit(unittest.TestCase):
         self.assertAlmostEqual(x[0]['qty'], 1000.0)
         self.assertAlmostEqual(x[0]['total_cost'], 50000.0)
         self.assertAlmostEqual(y[0]['qty'], 2000.0)
+
+
+class TestPhantomWalks(unittest.TestCase):
+    """phantom_holdings: detect / relevance / zero-basis / openings."""
+
+    def _cand(self, sym, acct='margin'):
+        from taxjson.lib.phantom_holdings import PhantomCandidate
+        return PhantomCandidate(symbol=sym, account=acct, currency='CAD',
+                                first_negative_date='2024-01-05',
+                                peak_short=-100.0, end_position=0.0,
+                                disposition_count=1, registered=False)
+
+    def _split(self, sym, d, tm, ratio, new='', acct='margin'):
+        return TaxTransaction(action='SPLIT', date=d, time=tm, symbol=sym,
+                              quantity=ratio, symbol_new=new,
+                              currency='CAD', account=acct)
+
+    def test_evening_split_after_settle_lagged_buy(self):
+        # S021-00: the buy executed before IB's 20:25 split is re-
+        # denominated by the engine; the walk must not invent a short.
+        from taxjson.lib.phantom_holdings import detect_phantoms
+        txs = _tt("""
+            BUYSELL 2026-04-01 10:00:00 DEF.TO 100 CAD 10 1000 0 2026-04-02
+            BUYSELL 2026-05-01 10:00:00 DEF.TO -200 CAD 6 1200 0 2026-05-02
+        """) + [self._split('DEF.TO', '2026-04-01', '20:25:00', 2.0)]
+        self.assertEqual(detect_phantoms(txs), [])
+
+    def test_cover_of_carried_short_affects_the_year(self):
+        # S021-01 / S076-07.
+        from taxjson.lib.phantom_holdings import assess_tax_year_relevance
+        txs = _tt("""
+            BUYSELL 2024-03-04 10:00:00 SPY.US -300 USD 400 120000
+            BUYSELL 2025-02-03 10:00:00 SPY.US 300 USD 500 150000
+        """)
+        r = assess_tax_year_relevance(txs, [self._cand('SPY.US')], 2025)
+        self.assertTrue(r[0].affects_year)
+
+    def test_relevance_ignores_tie_order_and_follows_renames(self):
+        # S075-12: a same-moment sell+buy pair; S075-13: a clean sale
+        # after a rename.
+        from taxjson.lib.phantom_holdings import assess_tax_year_relevance
+        base = _tt("""
+            BUYSELL 2024-01-05 10:00:00 XYZ.TO -50 CAD 10 500
+            BUYSELL 2024-02-01 10:00:00 XYZ.TO 50 CAD 10 500
+        """)
+        tie = _tt("""
+            BUYSELL 2025-03-03 09:30:00 XYZ.TO -100 CAD 11 1100
+            BUYSELL 2025-03-03 09:30:00 XYZ.TO 100 CAD 10 1000
+        """)
+        for rows in (base + tie, base + tie[::-1]):
+            r = assess_tax_year_relevance(rows, [self._cand('XYZ.TO')], 2025)
+            self.assertFalse(r[0].affects_year)
+        ren = _tt("""
+            BUYSELL 2024-01-02 10:00:00 OLD.TO 50 CAD 10 500
+            BUYSELL 2024-03-01 10:00:00 NEW.TO -150 CAD 7 1050
+            BUYSELL 2024-04-01 10:00:00 NEW.TO 150 CAD 7 1050
+            BUYSELL 2025-05-01 10:00:00 NEW.TO -60 CAD 7 420
+        """) + [self._split('OLD.TO', '2024-02-01', '00:00:01', 2.0,
+                            'NEW.TO')]
+        r = assess_tax_year_relevance(ren, [self._cand('NEW.TO')], 2025)
+        self.assertFalse(r[0].affects_year)
+
+    def test_year_is_the_settle_year(self):
+        # S075-16: traded 2024-12-31, settles 2025-01-02.
+        from taxjson.lib.phantom_holdings import (
+            assess_tax_year_relevance, detect_zero_basis_acquisitions)
+        txs = _tt("""
+            BUYSELL 2024-12-31 10:00:00 PPPX.US -100 USD 10 1000 0 2025-01-02
+        """)
+        self.assertTrue(assess_tax_year_relevance(
+            txs, [self._cand('PPPX.US')], 2025)[0].affects_year)
+        self.assertFalse(assess_tax_year_relevance(
+            txs, [self._cand('PPPX.US')], 2024)[0].affects_year)
+        z = _tt("""
+            BUYSELL 2024-03-01 10:00:00 ZZZX.US 100 USD 0 0
+            BUYSELL 2024-12-31 10:00:00 ZZZX.US -100 USD 14 1434.59 0 2025-01-02
+        """)
+        rows = detect_zero_basis_acquisitions(z, 2025)
+        self.assertTrue(rows and rows[0].affects_year)
+
+    def test_zero_basis_follows_a_rename(self):
+        # S075-19.
+        from taxjson.lib.phantom_holdings import detect_zero_basis_acquisitions
+        txs = _tt("""
+            BUYSELL 2025-01-10 10:00:00 SPN.TO 100 CAD 0 0
+            BUYSELL 2025-06-02 10:00:00 NSPN.TO -100 CAD 5 500
+        """) + [self._split('SPN.TO', '2025-03-01', '00:00:01', 1.0,
+                            'NSPN.TO')]
+        rows = detect_zero_basis_acquisitions(txs, 2025)
+        self.assertEqual([r.symbol for r in rows], ['NSPN.TO'])
+
+    def test_phantom_symbol_case_and_unmatched_pair(self):
+        # S075-24 / S076-00.
+        import json
+        import tempfile
+        from pathlib import Path
+        from taxjson.lib.phantom_holdings import (load_phantoms,
+                                                  synthesize_openings)
+        f = Path(tempfile.mkdtemp()) / 'phantoms.json'
+        f.write_text(json.dumps([{'symbol': 'xyz.to', 'account': 'margin'},
+                                 {'symbol': 'NOPE.TO', 'account': 'margin'}]))
+        ph = load_phantoms(f)
+        self.assertIn(('XYZ.TO', 'margin'), ph)
+        txs = _tt("BUYSELL 2025-03-03 10:00:00 XYZ.TO -100 CAD 20 2000")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _, log = synthesize_openings(txs, ph)
+        by = {e['symbol']: e for e in log}
+        self.assertTrue(by['XYZ.TO']['inserted'])
+        self.assertIn('no rows', by['NOPE.TO']['note'])
+        self.assertIn('NOPE.TO', err.getvalue())
+
+    def test_opening_size_ignores_tie_order(self):
+        # S076-04.
+        from taxjson.lib.phantom_holdings import synthesize_openings
+        head = _tt("BUYSELL 2025-02-03 10:00:00 PPP.TO -100 CAD 20 2000")
+        tie = _tt("""
+            BUYSELL 2025-06-02 09:30:00 PPP.TO -50 CAD 22 1100
+            BUYSELL 2025-06-02 09:30:00 PPP.TO 50 CAD 21 1050
+        """)
+        sizes = set()
+        for rows in (head + tie, head + tie[::-1]):
+            _, log = synthesize_openings(rows, {('PPP.TO', 'margin')})
+            sizes.add(log[0]['opening_qty'])
+        self.assertEqual(sizes, {100.0})
+
+    def test_rename_chain_both_ends_listed_is_deterministic(self):
+        # S021-04: same numbers under every PYTHONHASHSEED.
+        import os
+        import subprocess
+        import sys
+        code = (
+            "import json,sys\n"
+            "sys.path.insert(0, %r)\n"
+            "from test_fix_m_engine import _tt\n"
+            "from taxjson.lib.core import TaxTransaction\n"
+            "from taxjson.lib.phantom_holdings import synthesize_openings\n"
+            "t = _tt('''BUYSELL 2025-01-10 10:00:00 OLDX.TO -10 CAD 10 100\n"
+            "BUYSELL 2025-02-10 10:00:00 OLDX.TO 20 CAD 10 200\n"
+            "BUYSELL 2025-05-10 10:00:00 NEWX.TO -25 CAD 12 300''')\n"
+            "t.append(TaxTransaction(action='SPLIT', date='2025-03-10',"
+            " time='00:00:01', symbol='OLDX.TO', symbol_new='NEWX.TO',"
+            " quantity=1.0, currency='CAD', account='margin'))\n"
+            "_, log = synthesize_openings(t, {('NEWX.TO','margin'),"
+            " ('OLDX.TO','margin')})\n"
+            "print(sum(e['opening_qty'] for e in log))\n"
+        ) % os.path.dirname(os.path.abspath(__file__))
+        outs = set()
+        for seed in ('0', '1', '2', '3', '7'):
+            env = {**os.environ, 'PYTHONHASHSEED': seed}
+            r = subprocess.run([sys.executable, '-c', code], env=env,
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            outs.add(r.stdout.strip())
+        self.assertEqual(outs, {'15.0'})
+
+    def test_registered_from_configured_type(self):
+        # S076-08.
+        from taxjson.lib.phantom_holdings import detect_phantoms
+        txs = (_tt("BUYSELL 2025-03-03 10:00:00 XEI.TO -100 CAD 20 2000",
+                   account='retireA')
+               + _tt("BUYSELL 2025-03-03 10:00:00 XEI.TO -100 CAD 20 2000",
+                     account='sunlife'))
+        c = {x.account: x.registered for x in detect_phantoms(
+            txs, registered_accounts={'retireA': True, 'sunlife': False})}
+        self.assertEqual(c, {'retireA': True, 'sunlife': False})
+
+    def test_suggest_phantoms_year_on_settle_basis(self):
+        # S033-12: a phantom short covered 2025-12-31, settling 2026.
+        import json
+        import tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        f = tmp / 'margin_base.json'
+        f.write_text(json.dumps([t.to_dict() for t in _tt("""
+            BUYSELL 2025-06-02 10:00:00 COVR.TO -50 CAD 29.9 1495
+            BUYSELL 2025-12-31 10:00:00 COVR.TO 50 CAD 10.1 505 0 2026-01-02
+        """)]))
+        out = tmp / 'cand.json'
+        r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
+                 '--taxable', '--year', '2026', '--suggest-phantoms', out, f)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([e['symbol'] for e in json.loads(out.read_text())],
+                         ['COVR.TO'])

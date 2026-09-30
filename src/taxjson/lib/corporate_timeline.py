@@ -168,6 +168,33 @@ def _walk_priority(tx: Any) -> int:
     return WalkPriority.OTHER
 
 
+def _walk_rest(tx: Any) -> Tuple:
+    """Phantom-walk key after the trade date: (group, time, rung).
+
+    group -1: OPENING_BALANCE. group 0: SPLITs, and trades that SETTLE
+    after their trade date — ordered among themselves by clock, so a
+    trade executed before an evening-batch split (IB 20:25) comes first,
+    exactly the trades the engine re-denominates through the split
+    (core.py settle-lag rule; audit S021-00: the walk applied the split
+    first and invented a short). group 1: every other same-day
+    execution (post-split: splits are effective at market open).
+    Rung: at one moment a SPLIT first, then buys before sells — the
+    engines' buy-before-sell convention, so no walk depends on the
+    order of tied rows (audit S075-12 / S076-04)."""
+    act = tx.action
+    if act == 'OPENING_BALANCE':
+        return (WalkPriority.OPENING_BALANCE, tx.time or '00:00:00', 0)
+    if act == 'SPLIT':
+        return (WalkPriority.SPLIT, tx.time or '00:00:00', 0)
+    q = float(getattr(tx, 'quantity', 0) or 0)
+    rung = 1 if q > 0 else 2
+    ds = getattr(tx, 'date_settle', '') or ''
+    lagged = (act in ('BUYSELL', 'ASSIGN') and bool(ds) and bool(tx.date)
+              and ds > tx.date)
+    return ((WalkPriority.SPLIT if lagged else WalkPriority.OTHER),
+            tx.time or '00:00:00', rung)
+
+
 def _us_priority(tx: Any) -> int:
     if tx.action == 'OPENING_BALANCE':
         return UsPriority.OPENING_BALANCE
@@ -215,7 +242,7 @@ def event_sort_key(tx: Any, *, profile: str,
     if profile == 'plain_walk':
         return (tx.date, tx.time or '00:00:00')
     if profile == 'phantom_walk':
-        return (tx.date, _walk_priority(tx), tx.time or '00:00:00')
+        return (tx.date,) + _walk_rest(tx)
     d = (date_of or _settle_first)(tx)
     if profile == 'ca_main':
         return (d, _ca_phase(tx, d), tx.time, _ca_priority(tx))

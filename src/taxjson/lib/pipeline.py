@@ -852,7 +852,16 @@ def prepare_books(transactions, sheltered_transactions=(),
         # negative, the user may have truncated history they haven't told
         # us about. Emit a one-time hint so they notice. Options are
         # filtered out (sell-to-open is normal, not phantom).
-        candidates = detect_phantoms(transactions + sheltered_transactions + affiliated_transactions)
+        # Registered status from the books' roles, not the labels
+        # (audit S076-08): the --sheltered context is registered, and so
+        # is a main book that is not --taxable.
+        # (Affiliated accounts are not ours to type: label heuristic.)
+        _types = {t.account: not taxable for t in transactions}
+        _types.update({t.account: True for t in sheltered_transactions})
+        _types = {a: v for a, v in _types.items() if a}
+        candidates = detect_phantoms(
+            transactions + sheltered_transactions + affiliated_transactions,
+            registered_accounts=_types)
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Missing-history and phantom tools agree with the engine.**
+  `find-missing-history`, `--gen-phantoms`/`--suggest-phantoms` and the
+  phantom openings now: order same-moment rows buys first and put a trade
+  executed before an evening split (settling after it) ahead of the
+  split, as the engine does (no invented short, no order-dependent
+  opening size); count the in-year BUY that covers a short carried in
+  as affecting the year (the report said "safe to ignore" while the
+  year booked the cover); date a row by the project's `tax_date` (a
+  Dec-31 trade settling in January belongs to January's year); follow
+  renames (a clean sale after a rename is not flagged, a $0-cost
+  position renamed before its sale is); and take "registered" from the
+  account's configured type, not its name. `phantoms.json` symbols are
+  matched case-insensitively and a listed pair that matches no row is
+  named as such; both ends of a rename chain listed give one opening
+  whatever the hash seed.
 - **Per-account holdings include phantom openings and split the deferred
   loss.** In a blended taxable pass each account's `_gains_wash.json`
   inventory (read by `list`, `shares`, `harvest`) was apportioned from

@@ -212,56 +212,42 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
     before computing gains. The user reviews the candidate file, prunes
     any real shorts, then re-runs with --incomplete-history."""
     all_for_detection = transactions + sheltered_transactions + affiliated_transactions
+    # Registered status from the project's configured account types when
+    # the book sits in a project (work/<acct>_base.json), else from the
+    # books' roles — never from the label alone (audit S076-08).
+    from taxjson.lib.phantom_holdings import (account_types_near,
+                                              assess_tax_year_relevance)
+    types = {t.account: not args.taxable for t in transactions if t.account}
+    types.update({t.account: True for t in sheltered_transactions
+                  if t.account})
+    if args.input:
+        types.update(account_types_near(args.input))
     candidates = detect_phantoms(
         all_for_detection,
         include_options=args.include_options_in_suggestions,
+        registered_accounts=types,
     )
-    # Year-scope unless --all-history. A candidate "affects the tax year"
-    # if the pair's running balance is NEGATIVE at any moment inside the
-    # year (carried in from prior years or created in-year). This
-    # deliberately includes a pair whose only in-year activity is the
-    # BUY that covers a phantom short: filtering on in-year dispositions
-    # alone dropped that pair, and the engine then booked the cover as a
-    # clean short-close gain in the target year — silent corruption.
+    # Year-scope unless --all-history, with the SAME rule as the
+    # find-missing-history report (phantom_holdings.
+    # assess_tax_year_relevance): a pair is year-relevant when an in-year
+    # row draws on the short/phantom state — a sale while short, or the
+    # BUY that covers a phantom short carried in (dropping that pair let
+    # the engine book the cover as a clean short-close gain in the target
+    # year). The year of a row is its date on the tax_date basis, so a
+    # Dec-31 cover settling in January counts for January's year (audit
+    # S033-12, S076-07).
     if args.year and not args.all_history:
         year_str = str(args.year)
-        year_start = f"{year_str}-01-01"
-        next_year_start = f"{args.year + 1}-01-01"
-        short_in_year: set = set()
-        run: dict = {}
-        checked_start = False
-        for tx in sorted(all_for_detection,
-                         key=lambda t: (t.date or '', t.time or '')):
-            d = tx.date or ''
-            if not checked_start and d >= year_start:
-                # Balance ENTERING the year: anything short carried in
-                # from prior years is in-year relevant.
-                short_in_year.update(k for k, v in run.items()
-                                     if v < -1e-6)
-                checked_start = True
-            if d >= next_year_start:
-                break
-            key = (tx.symbol, tx.account)
-            if tx.action == 'SPLIT':
-                if tx.quantity:
-                    run[key] = run.get(key, 0.0) * tx.quantity
-            elif tx.action in ('BUYSELL', 'ASSIGN', 'TRANSFER'):
-                run[key] = run.get(key, 0.0) + tx.quantity
-            else:
-                continue
-            if d >= year_start and run.get(key, 0.0) < -1e-6:
-                short_in_year.add(key)
-            # Original criterion, kept as a union: any in-year
-            # disposition also marks the pair year-relevant (a pool that
-            # dipped negative in a prior year can still distort in-year
-            # ACB averages).
-            if (tx.action in ('BUYSELL', 'ASSIGN') and tx.quantity < 0
-                    and d.startswith(year_str)):
-                short_in_year.add(key)
-        if not checked_start:      # every tx predates the year
-            short_in_year.update(k for k, v in run.items() if v < -1e-6)
+        basis = args.tax_date or (
+            'trade' if str(args.country).strip().lower() in ('us', 'usa')
+            else 'settle')
+        rows = assess_tax_year_relevance(all_for_detection, candidates,
+                                         args.year, date_basis=basis)
+        keep = {(r.candidate.symbol, r.candidate.account)
+                for r in rows if r.affects_year}
         before = len(candidates)
-        candidates = [c for c in candidates if (c.symbol, c.account) in short_in_year]
+        candidates = [c for c in candidates
+                      if (c.symbol, c.account) in keep]
         if before > len(candidates):
             print(
                 f"Filtered {before - len(candidates)} candidate(s) outside tax year "

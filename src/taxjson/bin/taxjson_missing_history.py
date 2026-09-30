@@ -128,8 +128,14 @@ def main(argv=None):
     linked_new = {(l.new_symbol, l.account) for l in links}
 
     # --- 1. Truncated history (positions go negative) ---
+    # The project's configured account types and tax_date basis, when
+    # the base files sit in a project (audit S076-08, S075-16).
+    from taxjson.lib.phantom_holdings import account_types_near, tax_date_near
+    types = account_types_near(args.files[0])
+    basis = tax_date_near(args.files[0])
     candidates = detect_phantoms(txs, include_options=args.include_options,
-                                 include_broker_shorts=True)
+                                 include_broker_shorts=True,
+                                 registered_accounts=types or None)
     if args.account:
         candidates = [c for c in candidates if c.account == args.account]
     # A short the broker itself marks as a short sale (RBC "SHORT." /
@@ -138,12 +144,14 @@ def main(argv=None):
     # loss vanished behind one).
     broker_shorts = [c for c in candidates if c.broker_marked_short]
     candidates = [c for c in candidates if not c.broker_marked_short]
-    short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year)
+    short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year,
+                                                       date_basis=basis)
                   if (r.candidate.symbol, r.candidate.account) not in linked_old]
 
     # --- 2. $0-cost corp-action acquisitions later sold ---
     zero_rows = [r for r in detect_zero_basis_acquisitions(
-                    txs, args.year, include_options=args.include_options)
+                    txs, args.year, include_options=args.include_options,
+                    date_basis=basis)
                  if (r.symbol, r.account) not in linked_new
                  and (not args.account or r.account == args.account)]
 
