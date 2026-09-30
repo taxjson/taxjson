@@ -109,5 +109,184 @@ class TestFuturesByCountry(unittest.TestCase):
         self.assertEqual(out[0].net_amount, 10)
 
 
+# ------------------------------------------------------------ INPUTS-01
+def _usd_rates(path, start="2023-01-01"):
+    """A hand-written USD->CAD rates file reaching today (the run keeps
+    a fresh one offline)."""
+    from datetime import date, timedelta
+    d, stop = date.fromisoformat(start), date.today()
+    lines = []
+    while d <= stop:
+        lines.append(f"{d.isoformat()} 12:00:00 USD CAD 1.3500 boc")
+        d += timedelta(days=1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _run_offline(root, home, *args):
+    import os
+    import subprocess
+    import sys
+    from tax_rules.dual import SRC
+    env = dict(os.environ, PYTHONPATH=str(SRC), TAXJSON_OFFLINE="1",
+               HOME=str(home), NO_COLOR="1")
+    return subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_run",
+                           "-C", str(root), *args], capture_output=True,
+                          text=True, env=env, stdin=subprocess.DEVNULL,
+                          timeout=300)
+
+
+def _stkdiv(date, symbol, qty, **kw):
+    return tx("BUYSELL", date, symbol, qty, 0.0, price=0.0,
+              type="stock_dividend", **kw)
+
+
+class TestStockDividend(unittest.TestCase):
+    """INPUTS-01: the parsers emit a neutral stock-dividend event; the
+    Canada engine books it as a $0 acquisition (unchanged, and it counts
+    for s.54), the US engine as §305(a)/§307: the basis is spread over
+    old and new shares, the purchase date tacks, and it is not a §1091
+    purchase."""
+
+    @rule("CA-STKDIV-01")
+    @rule_absent("CA-STKDIV-01", country="usa")
+    @rule("US-STKDIV-01")
+    @rule_absent("US-STKDIV-01", country="canada")
+    def test_new_shares_in_a_later_sale(self):
+        book = [tx("BUYSELL", "2023-03-01", "XYZ.US", 100, 5000),
+                _stkdiv("2024-06-03", "XYZ.US", 5),
+                tx("BUYSELL", "2025-01-15", "XYZ.US", -105, 6300)]
+        r = gains_both(book, year=2025)
+        us = _gain_rows(r["usa"])
+        # US: ONE long-term lot of 105 shares, basis 5000, bought
+        # 2023-03-01 — not 100 LT + 5 ST shares at $0.
+        self.assertEqual([(g["qty"], g["term"], g["acquired_date"])
+                          for g in us], [(105.0, "LONG_TERM", "2023-03-01")])
+        self.assertAlmostEqual(us[0]["cost"], 5000.0, places=6)
+        self.assertIn("§307", r["usa"]["_stderr"])
+        # Canada: the 5 shares joined the pool at $0 (same total here),
+        # and the declared amount is left to the user, with a note.
+        self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 1300.0,
+                               places=6)
+        self.assertIn("declared amount", r["canada"]["_stderr"])
+        self.assertNotIn("§307", r["canada"]["_stderr"])
+
+    @rule("CA-STKDIV-01")
+    @rule_absent("CA-STKDIV-01", country="usa")
+    @rule("US-STKDIV-01")
+    @rule_absent("US-STKDIV-01", country="canada")
+    def test_stock_dividend_is_a_replacement_only_in_canada(self):
+        # A loss 14 days before a 5-share stock dividend, still held.
+        book = [tx("BUYSELL", "2024-01-02", "XYZ.US", 200, 10000),
+                tx("BUYSELL", "2024-05-20", "XYZ.US", -100, 4000),
+                _stkdiv("2024-06-03", "XYZ.US", 5)]
+        r = gains_both(book, year=2024)
+        # Canada: an acquisition in the window, held at day 30 ->
+        # 5/100 of the 1,000 loss is superficial.
+        self.assertAlmostEqual(r["canada"]["summary"]["total_disallowed"],
+                               50.0, places=6)
+        # US: not a purchase -> no wash sale.
+        self.assertEqual(r["usa"]["summary"]["total_disallowed"], 0)
+        self.assertFalse(any(g.get("is_wash_sale")
+                             for g in _gain_rows(r["usa"])))
+
+    @rule("US-STKDIV-01")
+    def test_per_account_basis_spreads_only_that_accounts_lots(self):
+        from taxjson.lib.core import get_tax_rules
+        book = [tx("BUYSELL", "2023-03-01", "XYZ.US", 100, 5000,
+                   account="a"),
+                tx("BUYSELL", "2023-03-02", "XYZ.US", 100, 7000,
+                   account="b"),
+                _stkdiv("2024-06-03", "XYZ.US", 10, account="a"),
+                tx("BUYSELL", "2025-01-15", "XYZ.US", -110, 6600,
+                   account="a")]
+        res = get_tax_rules("usa").compute_gains(book,
+                                                 per_account_basis=True)
+        rows = _gain_rows(res)
+        self.assertEqual([(round(g["qty"], 6), g["account"])
+                          for g in rows], [(110.0, "a")])
+        self.assertAlmostEqual(rows[0]["cost"], 5000.0, places=6)
+
+    @rule("US-STKDIV-02")
+    def test_no_shares_held_is_a_warned_zero_cost_purchase(self):
+        from taxjson.lib.core import get_tax_rules
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            res = get_tax_rules("usa").compute_gains(
+                [_stkdiv("2024-06-03", "XYZ.US", 5),
+                 tx("BUYSELL", "2025-01-15", "XYZ.US", -5, 300)])
+        self.assertIn("no shares held", err.getvalue())
+        self.assertAlmostEqual(sum(g["gain"] for g in _gain_rows(res)),
+                               300.0, places=6)
+
+    def test_parsers_emit_the_neutral_event_without_country_advice(self):
+        import contextlib
+        import io
+        from test_fix_ibparse import CA_H, HEAD, _ca, _parse_ib
+        body = (HEAD + CA_H + _ca(
+            'QZSD(US9990000999) Stock Dividend US9990000999 1 for 20 '
+            '(QZSD, QZSD CORP, US9990000999)', 5, value=100))
+        _, txs, err = _parse_ib(body)
+        self.assertEqual([(t["action"], t["quantity"], t["net_amount"],
+                           t.get("type")) for t in txs],
+                         [("BUYSELL", 5.0, 0.0, "stock_dividend")])
+        for law in ("ACB", "income", "§", "ITA"):
+            self.assertNotIn(law, err)
+        from test_parser_activity_coverage import (QUESTRADE_HEADER,
+                                                   _parse_csv)
+        from taxjson.lib.brokerages.questrade import QuestradeBrokerage
+        csv = QUESTRADE_HEADER + (
+            '2026-06-26 12:00:00 AM,2026-06-26 12:00:00 AM,DIS,QSC,'
+            'QUILL SPLIT CORP SHS CL A NEW STK DIV ON 1200 SHS REC '
+            '06/19/26 PAY 06/26/26,180.0,0.0,0.0,0.0,0.0,CAD,1,'
+            'Dividends,Individual\n')
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            qt = _parse_csv(QuestradeBrokerage, csv)
+        self.assertEqual([t.get("type") for t in qt], ["stock_dividend"])
+        self.assertNotIn("ACB", buf.getvalue())
+
+    @rule("CA-STKDIV-01")
+    @rule_absent("CA-STKDIV-01", country="usa")
+    @rule("US-STKDIV-01")
+    @rule_absent("US-STKDIV-01", country="canada")
+    def test_through_taxjson_run(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from tax_rules.dual import projects_both
+        from test_fix_ibparse import CA_H, HEAD, TRADES_H, _ca, _trade
+        csv = (HEAD + TRADES_H
+               + _trade('XYZ', '2023-03-01, 10:00:00', 100, 50, -5000)
+               + _trade('XYZ', '2025-01-15, 10:00:00', -105, 60, 6300,
+                        code='C')
+               + CA_H + _ca('XYZ(US9990000999) Stock Dividend '
+                            'US9990000999 5 for 100 (XYZ, XYZ CORP, '
+                            'US9990000999)', 5, value=250,
+                            when='2024-06-03, 20:25:00'))
+        with tempfile.TemporaryDirectory() as td:
+            ps = projects_both(Path(td), year=2025,
+                               accounts='[accounts.ib]\ntype = "taxable"\n',
+                               files={"inputs/ib/ib.csv": csv},
+                               canada={"source_currencies": ["USD"],
+                                       "option_grant_timing_since": 2025})
+            _usd_rates(ps["canada"] / "work" / "to_base.csv")
+            rows = {}
+            for c, root in ps.items():
+                r = _run_offline(root, td, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                g = json.loads((root / "work" / "ib_gains.json").read_text())
+                rows[c] = _gain_rows(g)
+        self.assertEqual([(g["qty"], g["term"], g["acquired_date"],
+                           round(g["cost"], 2)) for g in rows["usa"]],
+                         [(105.0, "LONG_TERM", "2023-03-01", 5000.0)])
+        # Canada: the $0 acquisition joins the pool (ACB 5000 x 1.35).
+        self.assertEqual([(g["qty"], g["term"]) for g in rows["canada"]],
+                         [(105.0, None)])
+        self.assertAlmostEqual(rows["canada"][0]["cost"], 6750.0, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Stock dividends follow the country.** The IB, Questrade and RBC
+  parsers booked a stock dividend as a $0 purchase in every project, so
+  in a US project the new shares were a short-term zero-basis lot and a
+  wash-sale replacement. The parsers now emit a neutral stock-dividend
+  event; the US engine applies §305(a)/§307 (the basis is spread over old
+  and new shares, the purchase date carries over, no wash sale), and the
+  Canada engine keeps the $0 acquisition (an s.54 acquisition) with the
+  "add the declared amount" note, now printed by the gains run instead
+  of the parser. Canadian numbers are unchanged. tax-logic CA-STKDIV-01,
+  US-STKDIV-01/02.
 - **Futures follow the country, not the base currency.** The settled-P/L
   booking of futures (no notional, each close's P/L at its own rate) ran
   only for a CAD target, so a US project kept FX on the notional of a

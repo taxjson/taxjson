@@ -1245,6 +1245,24 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
     return out[0], out[1], out[2]
 
 
+# A stock dividend (new shares delivered in kind), as the parsers emit
+# it: a BUYSELL of the new shares at $0 with this `type`. A NEUTRAL fact
+# — the parsers do not decide its tax treatment; each engine does
+# (partition INPUTS-01). Canada: an acquisition at $0 cost (the declared
+# amount is income and cost, added by the user; tax-logic CA-STKDIV-01),
+# which counts for s.54. US: not a purchase — the new shares join the
+# lots held, spreading their basis (§307) with the purchase dates
+# carried over (§1223(5)); not a §1091 replacement (US-STKDIV-01).
+STOCK_DIVIDEND = 'stock_dividend'
+
+
+def is_stock_dividend(tx) -> bool:
+    """A parser's stock-dividend row (a $0 BUYSELL of new shares)."""
+    t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
+    a = tx.get('action') if isinstance(tx, dict) else getattr(tx, 'action', '')
+    return (t or '') == STOCK_DIVIDEND and a == 'BUYSELL'
+
+
 class TaxRules:
     def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True) -> Dict[str, Any]:
         raise NotImplementedError()
@@ -3940,6 +3958,24 @@ class USATaxRules(TaxRules):
 
             prev = net_qty_state.get(_nkey(ev.account, sym), 0.0)
 
+            if is_stock_dividend(ev) and ev.quantity > 0:
+                # A nontaxable stock dividend (§305(a)) is not an
+                # acquisition "by purchase": it never replaces a loss
+                # (§1091), it only grows the position (partition
+                # INPUTS-01). With nothing held it is booked as a $0
+                # purchase by the main pass (and warned), so it stays a
+                # replacement there.
+                _held = (other_qty_state.get((ev.account, sym), 0.0)
+                         if is_other_scope else prev)
+                if _held > epsilon:
+                    if not is_other_scope:
+                        net_qty_state[_nkey(ev.account, sym)] = \
+                            prev + ev.quantity
+                    else:
+                        other_qty_state[(ev.account, sym)] = \
+                            _held + ev.quantity
+                    continue
+
             if ev.quantity > 0:
                 # Taxable buys close any taxable shorts first; leftover
                 # opens long. Sheltered/affiliated buys live in a
@@ -4403,6 +4439,40 @@ class USATaxRules(TaxRules):
 
             if abs(tx.quantity) < epsilon:
                 continue
+
+            # ----- Stock dividend (§305(a), §307, §1223(5)) -------------
+            # The new shares join the lots held: each lot's quantity
+            # grows pro rata, its basis and purchase date stay — the
+            # basis is spread over old and new shares and the holding
+            # period tacks. No purchase, no new lot (partition
+            # INPUTS-01; tax-logic US-STKDIV-01). With no long lots the
+            # row is a data gap: booked as the $0 purchase it looks
+            # like, with a warning.
+            if is_stock_dividend(tx) and tx.quantity > 0:
+                _lots = inventory_long.get(ikey, [])
+                _held = sum(l['qty'] for l in _lots)
+                if _held > epsilon and not inventory_short.get(ikey):
+                    _ratio = (_held + tx.quantity) / _held
+                    for _lot in _lots:
+                        _lot['qty'] = _lot['qty'] * _ratio
+                    print(f"note: {symbol}: stock dividend of "
+                          f"{tx.quantity:g} share(s) on {tx.date} — "
+                          f"nontaxable (§305(a)): the basis of the "
+                          f"{_held:g} share(s) held is spread over old "
+                          f"and new (§307) and their purchase dates carry "
+                          f"over; if it was taxable (§305(b), e.g. a cash "
+                          f"option), enter it by hand.", file=sys.stderr)
+                    if trace:
+                        symbol_traces[symbol].append(
+                            f"# {tx.date} STOCK DIVIDEND +{tx.quantity:g} "
+                            f"sh | spread over {len(_lots)} lot(s), "
+                            f"{_held:.4f} sh held")
+                    continue
+                print(f"warning: {symbol}: stock dividend of "
+                      f"{tx.quantity:g} share(s) on {tx.date} with no "
+                      f"shares held — booked as a $0 purchase; add the "
+                      f"missing purchase history so it can share their "
+                      f"basis (§307).", file=sys.stderr)
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);

@@ -109,6 +109,7 @@ PARTITION_RULES = frozenset({
     "CA-RPT-01",       # T1135
     "CA-FX-07",        # fx-cash s.39(1.1) $200 exemption
     "CA-FX-04",        # futures P/L on average cost
+    "CA-STKDIV-01",    # stock dividend: $0 acquisition (counts for s.54)
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
     "CA-DATE-04",      # computed T+1 settlement default
@@ -128,6 +129,7 @@ PARTITION_RULES = frozenset({
     "US-CTRY-02",      # Canada-only settings/commands/flags refused
     "US-CTRY-03",      # base currency USD
     "US-FUT-01",       # futures P/L FIFO
+    "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
 })
 
 
@@ -340,6 +342,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "RESP...) are tracked but kept out of the filing totals. "
                  "For the superficial-loss rule they count as affiliated "
                  "holders."),
+            Rule("CA-STKDIV-01",
+                 "A stock dividend's new shares enter the pool at $0 cost. "
+                 "Its declared amount (a dividend, and by law also the new "
+                 "shares' cost) is not in the broker's export: add it "
+                 "(distributions.map or a .tt ADJUST). The new shares are "
+                 "an acquisition for the superficial-loss rule."),
             Rule("CA-ACB-06", "Return of capital lowers the ACB."),
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
@@ -602,6 +610,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-HOLD-03", "A stand-alone short sale is short-term.",
                  cont=True),
+            Rule("US-STKDIV-01",
+                 "A stock dividend is not income (§305(a)): the basis of "
+                 "the shares held is spread over the old and new shares "
+                 "(§307), the new shares keep the old shares' purchase "
+                 "dates (§1223(5)), and they are not a purchase for the "
+                 "wash-sale rule."),
+            Rule("US-STKDIV-02",
+                 "A taxable stock dividend (§305(b), e.g. one with a cash "
+                 "option) is not detected: enter it by hand.", cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",

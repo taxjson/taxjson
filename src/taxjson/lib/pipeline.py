@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from taxjson.lib.core import TaxTransaction, get_tax_rules
+from taxjson.lib.core import TaxTransaction, get_tax_rules, is_stock_dividend
 from taxjson.lib.numeric import round_floats
 from taxjson.lib.phantom_holdings import (
     detect_phantoms,
@@ -960,6 +960,20 @@ def run_gains(transactions, sheltered_transactions=(),
             phantom_hint=req.phantom_hint)
 
     rules = get_tax_rules(req.country)
+    if req.country == 'canada':
+        # The parsers book a stock dividend as a neutral $0 event; the
+        # Canadian cost is its declared amount, which the export does
+        # not carry (tax-logic CA-STKDIV-01). The US engine words its
+        # own rule (§305(a)/§307) when it spreads the basis.
+        for _t in transactions:
+            if is_stock_dividend(_t) and float(_t.quantity or 0) > 0:
+                print(f"NOTE: {_t.symbol}: stock dividend of "
+                      f"{float(_t.quantity):g} share(s) on {_t.date} "
+                      f"entered at $0 cost — in Canada it is a dividend "
+                      f"at its declared amount, which is also the new "
+                      f"shares' cost: add it (distributions.map or a .tt "
+                      f"ADJUST) for the correct ACB and income.",
+                      file=sys.stderr)
     _extra = {}
     if req.per_account_basis and req.country == 'usa':
         _extra['per_account_basis'] = True
