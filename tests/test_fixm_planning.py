@@ -578,3 +578,16 @@ class TestSafeToSell(unittest.TestCase):
         r = _sts([_row("2026-01-05", "SYN.TO", 100, 5000.0)], "2026-13-01")
         self.assertEqual(r.returncode, 2)
         self.assertNotIn("Traceback", r.stderr)
+
+
+class TestPhantomsAlreadyApplied(unittest.TestCase):   # S053-15, S055-00
+    def test_phantom_backed_sale_is_not_a_short(self):
+        from test_fix_planning import _radar as _radar_ph
+        tax = [_row("2026-09-10", "XYZ.TO", -100, 4000.0),
+               _row("2026-09-20", "XYZ.TO", 100, 4500.0)]
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = _radar_ph(tmp, tax, "2026-09-29",
+                             phantoms=[{"symbol": "XYZ.TO",
+                                        "account": "margin"}])
+        self.assertEqual(rows["XYZ.TO"]["taxable_qty"], 100.0)
+        self.assertNotIn(rows["XYZ.TO"]["category"], ("COOLING", "BLOCKED"))
