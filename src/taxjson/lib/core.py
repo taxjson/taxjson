@@ -533,6 +533,15 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
             raise ValueError(
                 f"{_ctx}: required field {_fld} is missing — fix the "
                 f"input data.")
+    # A trade row without its quantity or money gets the dataclass
+    # default 0.0 — a buy at $0 cost (the whole sale becomes gain) or a
+    # sale at $0 proceeds (audit R1-162). The loader serves many tools
+    # (merge, ticker-map, ...), so it only MARKS the row;
+    # require_trade_fields() refuses it where money is computed.
+    _missing = ()
+    if clean_t.get('action') in ('BUYSELL', 'ASSIGN'):
+        _missing = tuple(f for f in ('quantity', 'net_amount')
+                         if f not in clean_t)
     for _fld in ('date', 'date_settle'):
         _d = clean_t.get(_fld)
         if _d:
@@ -548,7 +557,24 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
             f"{_ctx}: SPLIT ratio must be > 0 (got "
             f"{clean_t.get('quantity')!r}) — a zero/negative ratio "
             f"is never a real corporate action.")
-    return TaxTransaction(**clean_t)
+    tx = TaxTransaction(**clean_t)
+    if _missing:
+        tx._missing_trade_fields = (_ctx, _missing)
+    return tx
+
+
+def require_trade_fields(transactions) -> None:
+    """Refuse a BUYSELL/ASSIGN row that came in WITHOUT its quantity or
+    net_amount key (see coerce_transaction_row) — the same way a null
+    value is refused. Raises ValueError naming the row."""
+    for t in transactions:
+        miss = getattr(t, '_missing_trade_fields', None)
+        if miss:
+            ctx, fields = miss
+            raise ValueError(
+                f"{ctx}: required field(s) {', '.join(fields)} missing on "
+                f"a {t.action} row — the engine would book it at 0. Fix "
+                f"the input data.")
 
 
 def load_transactions(path: Path) -> List[TaxTransaction]:
@@ -4323,7 +4349,13 @@ class USATaxRules(TaxRules):
                 continue
 
             tx_qty_abs = abs(tx.quantity)
-            tx_net = abs(tx.net_amount)
+            # A BUY's cost is a magnitude (parsers spell it either sign);
+            # a SELL's proceeds stay SIGNED — negative only when the
+            # commission exceeds the gross (a $0.01 close), which abs()
+            # turned into a credit (audit R1-164; mirrors the Canada
+            # engine's _trade_money).
+            tx_net = (abs(tx.net_amount) if tx.quantity > 0
+                      else float(tx.net_amount))
             # Commission and fee are split separately on each gain entry
             # (see make_gain_entry below) — apportioned by chunk_qty share.
 

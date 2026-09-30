@@ -589,3 +589,43 @@ class TestReturnOfCapital(unittest.TestCase):
         self.assertAlmostEqual(res['summary']['total_gain'], 200.0,
                                places=2)
         self.assertIn('SHORT position', err)
+
+
+class TestInputAndSigns(unittest.TestCase):
+
+    def test_trade_row_missing_money_or_quantity_is_refused(self):
+        # R1-162: taxjson-gains refuses; taxjson-validate reports it.
+        import json
+        import tempfile
+        from pathlib import Path
+        for drop in ('net_amount', 'quantity'):
+            rows = [t.to_dict() for t in _tt("""
+                BUYSELL 2025-01-02 10:00:00 ZZQ.TO 100 CAD 10 1000
+                BUYSELL 2025-02-03 10:00:00 ZZQ.TO -100 CAD 12 1200
+            """)]
+            rows[0].pop(drop)
+            p = Path(tempfile.mkdtemp()) / 'b.json'
+            p.write_text(json.dumps(rows))
+            r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
+                     '--taxable', p)
+            self.assertEqual(r.returncode, 2, r.stdout)
+            self.assertIn(drop, r.stderr)
+            r = _cli('taxjson.bin.taxjson_validate', p)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"Missing '{drop}'", r.stdout + r.stderr)
+
+    def test_us_sell_with_net_debit_keeps_its_sign(self):
+        # R1-164: close at $0.01 with a 1.25 commission -> proceeds -0.25.
+        txs = _tt("""
+            BUYSELL 2025-02-03 10:00:00 ABC250321C00010000.US 1 USD 2.2 220
+            BUYSELL 2025-03-03 10:00:00 ABC250321C00010000.US -1 USD 0.01 -0.25
+        """)
+        res, _ = _run(USATaxRules(), txs)
+        self.assertAlmostEqual(res['transactions'][0]['proceeds'], -0.25)
+        self.assertAlmostEqual(res['transactions'][0]['gain'], -220.25)
+        txs = _tt("""
+            BUYSELL 2025-02-03 10:00:00 ABC250321C00010000.US -1 USD 0.01 -0.25
+            BUYSELL 2025-03-03 10:00:00 ABC250321C00010000.US 1 USD 0.3 30
+        """)
+        res, _ = _run(USATaxRules(), txs)
+        self.assertAlmostEqual(res['summary']['total_gain'], -30.25)

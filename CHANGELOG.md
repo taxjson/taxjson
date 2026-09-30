@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A trade row with no amount is refused.** `taxjson-gains` accepted a
+  BUYSELL/ASSIGN row whose `net_amount` (or `quantity`) key was missing
+  and booked it at $0, and `taxjson-validate` said OK; both now name the
+  row. US engine: a sale whose commission exceeds the gross (a $0.01
+  close) keeps its negative proceeds instead of booking a credit.
 - **Return of capital: no invented proceeds, right sign on a short.** An
   s.40(3) deemed gain (ROC below nil, or ROC after the position was
   sold) was booked with proceeds equal to the gain, overstating

@@ -327,6 +327,9 @@ def _main():
         if args.affiliated:
             affiliated_transactions = load_transactions(
                 Path(args.affiliated))
+        from taxjson.lib.core import require_trade_fields
+        require_trade_fields(transactions + sheltered_transactions
+                             + affiliated_transactions)
     except ValueError as e:
         print(f"taxjson-gains: error: {e}", file=sys.stderr)
         raise SystemExit(2)
