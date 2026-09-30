@@ -21,6 +21,11 @@
   DRIP row was read with abs() and booked as a second sale or buy (cash
   counted twice, phantom shares). The reversal now removes its original;
   a reversal whose original is not in the file is refused.
+- **Webull: a priced trade needs its Proceeds.** A blank, garbage or
+  misaligned Proceeds cell on a priced BUY/SELL booked $0 (the whole
+  gross became a "fee", so even `--strict` passed). Such a row, a row
+  wider or narrower than its header, and a decimal comma are refused
+  with the file line; a $0 net is never turned into a full-gross fee.
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is

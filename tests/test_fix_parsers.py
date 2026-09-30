@@ -261,5 +261,60 @@ class TestQuestradeReversals(unittest.TestCase):
         self.assertEqual([t['quantity'] for t in txs], [3, 0.5, -0.5])
 
 
+# -------------------------------------------------------------- Webull
+WB_HEAD = ('Currency,Date,Action Code,Symbol,Security Description,'
+           'Type Code,Quantity,Price,Proceeds\n')
+
+
+def _wb(rows, head=WB_HEAD):
+    from taxjson.lib.brokerages.webull import WebullBrokerage
+    return _parse(WebullBrokerage(), head + ''.join(rows), 'wb.csv')
+
+
+class TestWebullProceeds(unittest.TestCase):
+    """R1-91: a priced trade's Proceeds is required money."""
+    BUY = 'USD,10-03-2025,BUY,QQZ,QQZ INC,,100,50.00,"(5,001.00)"\n'
+
+    def test_control(self):
+        txs, _ = _wb([self.BUY,
+                      'USD,12-03-2025,SELL,QQZ,QQZ INC,,-100,55.00,'
+                      '5499.00\n'])
+        self.assertEqual([t['net_amount'] for t in txs], [5001.0, 5499.0])
+
+    def test_blank_proceeds_on_priced_row_is_refused(self):
+        with self.assertRaisesRegex(BrokerageParseError,
+                                    r'wb\.csv line 3.*blank Proceeds'):
+            _wb([self.BUY, 'USD,12-03-2025,SELL,QQZ,QQZ INC,,-100,55.00,'
+                           '\n'])
+
+    def test_garbage_proceeds_is_refused(self):
+        with self.assertRaisesRegex(BrokerageParseError,
+                                    r'line 3.*Proceeds'):
+            _wb([self.BUY, 'USD,12-03-2025,SELL,QQZ,QQZ INC,,-100,55.00,'
+                           'N/A\n'])
+
+    def test_decimal_comma_names_the_row(self):
+        with self.assertRaisesRegex(BrokerageParseError,
+                                    r'wb\.csv line 2.*Price'):
+            _wb(['USD,10-03-2025,BUY,QQZ,QQZ INC,,100,"50,00",'
+                 '"(5,001.00)"\n'])
+
+    def test_misaligned_row_is_refused(self):
+        with self.assertRaisesRegex(BrokerageParseError,
+                                    r'line 3.*10 cells.*9'):
+            _wb([self.BUY, 'USD,12-03-2025,SELL,QQZ,QQZ INC,,-100,55.00,,'
+                           '5499.00\n'])
+
+    def test_expiry_row_still_parses(self):
+        txs, _ = _wb(['USD,17-01-2025,SELL,@QQZ,CALL QQZ01/17/25 190,'
+                      'OPC,-2,,\n'])
+        self.assertEqual(txs[0]['net_amount'], 0.0)
+
+    def test_zero_net_is_never_a_full_gross_fee(self):
+        from taxjson.lib.brokerages.webull import WebullBrokerage
+        self.assertEqual(
+            WebullBrokerage().back_compute_fee(-100, 55.0, 0.0, False), 0.0)
+
+
 if __name__ == '__main__':
     unittest.main()

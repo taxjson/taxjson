@@ -526,7 +526,12 @@ class BaseBrokerage:
         implicit = abs(theoretical_gross - abs(net_amount))
         if implicit < min_fee:
             return 0.0
-        if abs(net_amount) > 1e-9 and implicit > sanity_ratio * abs(net_amount):
+        # A $0 net against a priced gross is not a 100% fee: the guard
+        # used to skip net == 0, so a blank Proceeds cell became a fee
+        # equal to the whole gross and the row passed every check
+        # (audit R1-91). The parser must refuse such a row; here it is
+        # never dressed up as a fee.
+        if implicit > sanity_ratio * abs(net_amount):
             return 0.0
         return round(implicit, 4)
 
