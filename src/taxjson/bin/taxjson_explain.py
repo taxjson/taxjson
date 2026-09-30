@@ -115,8 +115,10 @@ def parse_args():
              "history — applied exactly like taxjson-gains, so traces match "
              "the pipeline's books.")
     parser.add_argument("--option-premium-timing", choices=["grant", "close"],
-                        default="close", help="Canada: s.49(1) grant timing "
-                        "or close timing for written options (match the run).")
+                        default=None, help="Canada: s.49(1) grant timing "
+                        "or close timing for written options (match the "
+                        "run). Default: close, with a note — `taxjson run` "
+                        "defaults a Canada project to grant.")
     parser.add_argument("--option-grant-since", type=int, default=None,
                         metavar="YEAR")
     parser.add_argument("--option-buyback-wash", action="store_true")
@@ -233,8 +235,26 @@ def print_trace(g, args, use_color):
     print(colorize(rule_bot, 'rule', use_color))
 
 
+def _timing_default_note(args, prog):
+    """Standalone runs default to CLOSE timing, while a Canada project
+    (`taxjson run`) defaults to s.49(1) grant timing from the project
+    year: say so instead of silently disagreeing with the .sum (audit
+    R1-177)."""
+    if (args.option_premium_timing is None
+            and str(args.country or 'canada').strip().lower()
+            not in ('us', 'usa')):
+        print(f"{prog}: note: --option-premium-timing not given — using "
+              f"close timing. `taxjson run` on a Canada project uses "
+              f"grant timing from the project year; pass "
+              f"--option-premium-timing grant --option-grant-since YEAR "
+              f"to match it.", file=sys.stderr)
+    if args.option_premium_timing is None:
+        args.option_premium_timing = 'close'
+
+
 def main():
     args = parse_args()
+    _timing_default_note(args, "taxjson-explain")
     # Country-aware --tax-date default (matches taxjson-gains): settle for
     # canada (CRA), trade for usa (IRS).
     if args.tax_date is None:

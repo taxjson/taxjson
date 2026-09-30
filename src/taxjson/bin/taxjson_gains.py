@@ -82,10 +82,12 @@ def _parse_args():
              "that date, incl. ACB and deferred wash). Trade-date "
              "cutoff regardless of the settle/trade basis setting.")
     parser.add_argument(
-        "--option-premium-timing", choices=["grant", "close"], default="close",
+        "--option-premium-timing", choices=["grant", "close"], default=None,
         help="Canada: recognise a written option's premium on the write "
              "date (grant — ITA s.49(1)) or at the closing transaction "
-             "(close). Ignored for the US engine.")
+             "(close). Default: close, with a note — `taxjson run` "
+             "defaults a Canada project to grant. Ignored for the US "
+             "engine.")
     parser.add_argument(
         "--option-grant-since", type=int, default=None, metavar="YEAR",
         help="With grant timing: contracts written before YEAR keep close "
@@ -277,6 +279,23 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
     )
 
 
+def _timing_default_note(args, prog):
+    """Standalone runs default to CLOSE timing, while a Canada project
+    (`taxjson run`) defaults to s.49(1) grant timing from the project
+    year: say so instead of silently disagreeing with the .sum (audit
+    R1-177)."""
+    if (args.option_premium_timing is None
+            and str(args.country or 'canada').strip().lower()
+            not in ('us', 'usa')):
+        print(f"{prog}: note: --option-premium-timing not given — using "
+              f"close timing. `taxjson run` on a Canada project uses "
+              f"grant timing from the project year; pass "
+              f"--option-premium-timing grant --option-grant-since YEAR "
+              f"to match it.", file=sys.stderr)
+    if args.option_premium_timing is None:
+        args.option_premium_timing = 'close'
+
+
 def main():
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
@@ -288,6 +307,7 @@ def main():
 
 def _main():
     args = _parse_args()
+    _timing_default_note(args, "taxjson-gains")
 
     if not args.country:
         sys.exit(2)                            # unreachable: argparse default

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Option-timing settings read the same everywhere.** A quoted
+  `option_buyback_loss_superficial = "false"` or `crypto = "false"`
+  counted as TRUE in every command except `run` (carryover, check-filed,
+  audit, close-year, reconcile-slips, the web UI); every config reader
+  now refuses it. With `tax_date = "trade"`, `option_grant_timing_since`
+  is tested on the write's trade year, the same date the return's year
+  filter uses. Standalone `taxjson-gains` / `taxjson-explain` say when
+  they fall back to close timing (a Canada project runs grant timing).
 - **A trade row with no amount is refused.** `taxjson-gains` accepted a
   BUYSELL/ASSIGN row whose `net_amount` (or `quantity`) key was missing
   and booked it at $0, and `taxjson-validate` said OK; both now name the

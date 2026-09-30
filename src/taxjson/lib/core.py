@@ -1230,7 +1230,7 @@ class TaxRules:
         raise NotImplementedError()
 
 class CanadaTaxRules(TaxRules):
-    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False) -> Dict[str, Any]:
+    def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, option_premium_timing: str = 'close', option_grant_since: Optional[int] = None, option_buyback_loss_superficial: bool = False, option_grant_basis: str = 'settle') -> Dict[str, Any]:
         """
         Detects Superficial Losses (Wash Sales) based on CRA rules and calculates gains.
         Handles multi-account pooling and iterative adjustments.
@@ -1550,8 +1550,15 @@ class CanadaTaxRules(TaxRules):
                 return False
             if option_grant_since is None:
                 return True
+            # The write's YEAR on the project's tax_date basis — the
+            # same date the return's year filter uses (audit S068-21:
+            # with tax_date = "trade", a 2024-12-31 write settling in
+            # 2025 was grant-booked in 2024 although since=2025 put it
+            # on close timing, and no year's return taxed it).
+            _d = (tx.date if str(option_grant_basis).lower() == 'trade'
+                  else get_sort_date(tx))
             try:
-                return int(str(get_sort_date(tx))[:4]) >= int(option_grant_since)
+                return int(str(_d)[:4]) >= int(option_grant_since)
             except (TypeError, ValueError):
                 return True
 

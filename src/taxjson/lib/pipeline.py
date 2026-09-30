@@ -951,6 +951,7 @@ def run_gains(transactions, sheltered_transactions=(),
         _extra['option_premium_timing'] = req.option_premium_timing or 'close'
         _extra['option_grant_since'] = req.option_grant_since
         _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
+        _extra['option_grant_basis'] = tax_date
     results = rules.compute_gains(
         transactions,
         sheltered_transactions=sheltered_transactions,
@@ -1235,8 +1236,14 @@ def option_timing_from_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         since = None
     bb = settings.get("option_buyback_loss_superficial", False)
+    if bb is not None and not isinstance(bb, bool):
+        # bool("false") is True: the strict rule used to switch ON
+        # (audit S021-07). Every config reader refuses this too.
+        raise ValueError(
+            f"[settings] option_buyback_loss_superficial must be true or "
+            f"false, unquoted (got {bb!r})")
     return {"option_premium_timing": timing, "option_grant_since": since,
-            "option_buyback_loss_superficial": bool(bb) if bb is not None else False}
+            "option_buyback_loss_superficial": bool(bb)}
 
 
 def option_timing_flags(settings: Dict[str, Any]) -> List[str]:

@@ -629,3 +629,70 @@ class TestInputAndSigns(unittest.TestCase):
         """)
         res, _ = _run(USATaxRules(), txs)
         self.assertAlmostEqual(res['summary']['total_gain'], -30.25)
+
+
+class TestGrantTiming(unittest.TestCase):
+
+    def test_year_end_write_grant_record_lands_in_settle_year(self):
+        # R1-304: the s.49(1) grant record of a Dec-31 write settling in
+        # January belongs to the settle year (the documented basis).
+        txs = _tt("""
+            BUYSELL 2025-12-31 10:00:00 ABC260320C00050000.TO -2 CAD 3 599 0 2026-01-02
+        """)
+        res, _ = _run(CanadaTaxRules(), txs, option_premium_timing='grant',
+                      option_grant_since=2025)
+        rec = [r for r in res['transactions'] if r.get('grant')][0]
+        self.assertEqual(rec['date_settle'], '2026-01-02')
+        self.assertEqual(_by_year(res), {'2026': 599.0})
+
+    def test_grant_since_follows_the_tax_date_basis(self):
+        # S068-21: tax_date = trade -> a 2024-12-31 write (settling 2025)
+        # is a pre-since contract on close timing: 2025 books +30.
+        txs = _tt("""
+            BUYSELL 2024-12-31 10:00:00 ABC250321C00050000.TO -1 CAD 0.5 50 0 2025-01-02
+            BUYSELL 2025-03-03 10:00:00 ABC250321C00050000.TO 1 CAD 0.2 20 0 2025-03-04
+        """)
+        res, _ = _run(CanadaTaxRules(), txs, option_premium_timing='grant',
+                      option_grant_since=2025, option_grant_basis='trade')
+        self.assertFalse(any(r.get('grant') for r in res['transactions']))
+        by_trade = {}
+        for r in res['transactions']:
+            by_trade[r['date'][:4]] = round(by_trade.get(r['date'][:4], 0.0)
+                                            + r['gain'], 2)
+        self.assertEqual(by_trade, {'2025': 30.0})
+        # Settle basis (default): the write settles in 2025 -> grant.
+        res, _ = _run(CanadaTaxRules(), txs, option_premium_timing='grant',
+                      option_grant_since=2025)
+        self.assertTrue(any(r.get('grant') for r in res['transactions']))
+
+    def test_quoted_booleans_are_refused_everywhere(self):
+        # S021-07 / S076-17.
+        from taxjson.lib.config_check import account_type_problems
+        from taxjson.lib.pipeline import option_timing_from_settings
+        cfg = {'settings': {'option_buyback_loss_superficial': 'false'},
+               'accounts': {'rbc': {'type': 'taxable', 'crypto': 'false'}}}
+        probs = account_type_problems(cfg)
+        self.assertEqual(len(probs), 2, probs)
+        with self.assertRaises(ValueError):
+            option_timing_from_settings(cfg['settings'])
+        ok = {'settings': {'option_buyback_loss_superficial': False},
+              'accounts': {'rbc': {'type': 'taxable', 'crypto': False}}}
+        self.assertEqual(account_type_problems(ok), [])
+        self.assertFalse(option_timing_from_settings(ok['settings'])
+                         ['option_buyback_loss_superficial'])
+
+    def test_standalone_close_default_is_announced(self):
+        # R1-177.
+        import json
+        import tempfile
+        from pathlib import Path
+        p = Path(tempfile.mkdtemp()) / 'b.json'
+        p.write_text(json.dumps([t.to_dict() for t in _tt(
+            "BUYSELL 2025-01-02 10:00:00 ZZQ.TO 100 CAD 10 1000")]))
+        r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada', p)
+        self.assertIn('--option-premium-timing not given', r.stderr)
+        r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
+                 '--option-premium-timing', 'grant', p)
+        self.assertNotIn('--option-premium-timing not given', r.stderr)
+        r = _cli('taxjson.bin.taxjson_explain', '--list', p)
+        self.assertIn('--option-premium-timing not given', r.stderr)

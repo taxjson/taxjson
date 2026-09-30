@@ -1,4 +1,4 @@
-"""The account-type check every config reader applies.
+"""The account-type (and quoted-boolean) checks every config reader applies.
 
 Every filing command partitions accounts with an exact match on
 `type == "taxable"` / `"sheltered"`. A typo'd or missing type matches
@@ -44,4 +44,28 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
                 f"[accounts.{name}] type must be \"taxable\" or "
                 f"\"sheltered\", got {atype!r} — this account would "
                 f"otherwise be silently dropped from the run{hint}")
+    return out + bool_setting_problems(cfg)
+
+
+def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
+    """A quoted boolean (`= "false"`) is truthy: every command but `run`
+    read it as ON (audit S021-07 / S076-17 — carryover, check-filed,
+    audit and close-year applied the strict buy-back rule; a crypto =
+    "false" account was treated as crypto). Refused by every config
+    reader, like `run` does."""
+    out: List[str] = []
+    settings = cfg.get("settings") or {}
+    if isinstance(settings, dict):
+        v = settings.get("option_buyback_loss_superficial")
+        if v is not None and not isinstance(v, bool):
+            out.append(f"[settings] option_buyback_loss_superficial must "
+                       f"be true or false, unquoted (got {v!r})")
+    accounts = cfg.get("accounts") or {}
+    if isinstance(accounts, dict):
+        for name, acfg in accounts.items():
+            if isinstance(acfg, dict):
+                v = acfg.get("crypto")
+                if v is not None and not isinstance(v, bool):
+                    out.append(f"[accounts.{name}] crypto must be true or "
+                               f"false, unquoted (got {v!r})")
     return out
