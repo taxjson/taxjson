@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- **Filing commands refuse partial or broken books.** A taxable account
+  whose stage failed (inputs but no books) now stops `form-export`,
+  `t1135`, `close-year` and `reconcile-slips` instead of a one-line
+  warning with the account left out. A truncated taxable gains file stops
+  `sum`, `estimate`, `instalments`, `t1135`, `form-export` and
+  `close-year` with the file named (no traceback); an unreadable native
+  file stops `fx-cash`, and `sum` says why the line-15300 FX note is
+  missing. `sum`, `estimate`, `form-export`, `t1135`, `carryover` and
+  `check-filed` warn when the books are not the clean result of the
+  current inputs (validation errors, pending elections, inputs changed
+  since the last full run); `close-year` refuses such books without
+  `--force`, and refuses per-account (unblended) books from
+  `run --account`. The checklist counts one validation error once.
+- **instalments passes the estimate's warnings through** (unreadable or
+  other-year books, excluded tainted sales) and prints the rate-vintage
+  note for a year before the built-in tables.
+- **tax_date is honoured everywhere.** `form-export`, the FOR THE RETURN
+  block, `carryover` and `t1135` use the project's `tax_date` (a
+  Canada project on "trade" dropped a Dec-31 sale settling in January).
+- **carryover flags a locked year it disagrees with** (and the moving
+  option_grant_timing_since default).
+- **t1135:** an assigned written put's premium reduces the shares' cost
+  and an exercised call's cost is added; same-timestamp rows follow the
+  engine's order (buy before sell) so the threshold test no longer depends
+  on file order; a split inside a trade's settle lag no longer strands
+  cost; `t1135.map` survives a BOM, follows a ticker change and names an
+  override that matches nothing; denied superficial losses missing from
+  the cost columns are named. Books built for another year are warned
+  about. The other user map files (distributions.map, yf_ticker.map,
+  crypto_ticker.map, security overrides) read a BOM too.
+- **audit:** `--year` for another year and `--all-years` no longer call
+  fresh books stale (the saved gains files hold one year); a crypto fee
+  priced by the fill stage ties out; a large book's per-row 4-dp rounding
+  no longer fails the totals.
+- **`crypto = "false"` (quoted) is refused** by every command instead of
+  moving an equity book to the crypto line.
+- **The account .sum lists phantom-basis sales** in a MANUAL REPORTING
+  section. `option-boundary` applies phantoms.json (a phantom long option
+  sold to close is not a write). `wash-sales --explain` traces the
+  blended books the table comes from.
+
 - **reconcile-slips reads real slips.** A blank proceeds cell beside a
   cost (an option that expired worthless) is nil proceeds, and a
   worthless expiry with no slip row no longer fails the check. A written

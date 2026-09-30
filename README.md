@@ -726,7 +726,15 @@ from the same books the rest of the pipeline reports on, with the project's
 Registered accounts are excluded by law and never read. A plain futures
 contract has no cost amount (nothing is paid to open one), so its notional
 stays out of the cost columns and the threshold test; an option on futures
-counts at its premium. `--json` for machine-readable output.
+counts at its premium. An assigned written put's premium is deducted from the
+shares' cost and an exercised call's cost added to them (s.49(3)/(3.1)), rows
+sharing a timestamp follow the engine's order, a split inside a trade's settle
+lag re-denominates it like the engine, and the gain column and year-end
+position follow the project's `tax_date`. Denied superficial losses still in a
+position's ACB (s.53(1)(f)) are NOT added to the cost columns yet — the report
+names them and says when they could flip the filing verdict. A configured
+taxable account with inputs but no books is refused, and books built for
+another year are warned about. `--json` for machine-readable output.
 
 ```
 $ taxjson t1135
@@ -744,7 +752,9 @@ AAPL.US | USA     |      98,000.00 |      49,000.00 | 132.00 |  12,000.00 |
 Domicile is classified by market suffix (`.US` → USA, `.L` → GBR, `.AX` → AUS;
 `.TO`/`.V`/`.CN`/`.NE` → Canadian, i.e. not foreign property). Since domicile —
 not listing exchange — is what T1135 cares about, interlisted names can need a
-`t1135.map` override in the project root:
+`t1135.map` override in the project root (a BOM is fine; an override follows
+the symbol through a ticker change, and one that matches nothing in the books
+is warned about):
 
 ```
 # t1135.map — SYMBOL COUNTRY (ISO-3 code, or CA/EXCLUDE for "not foreign")

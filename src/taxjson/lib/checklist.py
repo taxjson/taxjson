@@ -425,7 +425,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     sums = sorted(ctx.reports.glob("*.sum")) if ctx.reports.is_dir() else []
     if not sums:
         return Result("run-clean", "blocked", "no reports — run `taxjson run`")
-    errors = 0
+    per_account: Dict[str, int] = {}
     empty_parse: List[str] = []
     for s in sums:
         try:
@@ -434,13 +434,19 @@ def d_run_clean(ctx: Ctx) -> Result:
             continue
         m = re.search(r"validation: (\d+) error", head)
         if m:
-            errors += int(m.group(1))
+            # <acct>.sum and <acct>_wash.sum carry the SAME account's
+            # diagnostics: one error was counted twice (R1-252).
+            acct = s.stem[:-len("_wash")] if s.stem.endswith("_wash") \
+                else s.stem
+            per_account[acct] = max(per_account.get(acct, 0),
+                                    int(m.group(1)))
         # A non-empty export that parsed to nothing dropped a whole
         # file from the books (R1-247).
         for f in re.findall(r"warning: (\S+) parsed to 0 transactions",
                             head):
             if f not in empty_parse:
                 empty_parse.append(f)
+    errors = sum(per_account.values())
     pend = [p for p in ctx.cache.glob("*pending_elections.json")
             if p.is_file() and p.stat().st_size > 2]
     oldest_report = min(s.stat().st_mtime for s in sums)

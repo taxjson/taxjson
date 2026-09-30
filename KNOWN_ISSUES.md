@@ -234,6 +234,11 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 
 ---
 
+### T1135 cost amounts leave out denied superficial losses
+- **Where:** `src/taxjson/bin/taxjson_t1135.py` `walk_costs` (its own average-cost replay of the base books).
+- **Current behavior:** the engine adds a denied superficial loss to the replacement shares' ACB (s.53(1)(f)); the T1135 walk does not, so the max-cost / Dec-31 cost columns (and the threshold test) are low by the deferred amount while those shares are held. The report names the deferred amounts from the gains files and says when they could lift the maximum over the threshold.
+- **Why deferred:** the add-backs live only in the engine's run (virtual ADJUST rows); the year-scoped gains files do not carry prior years' add-backs. Sketch: run one full-history `run_gains` pass in `cmd_t1135` (as `carryover` does) and feed each disposition's `wash_trigger.adjust_amount` / `adjust_date` into the walk as ADJUST rows (needs the landing symbol recorded in `wash_trigger`).
+
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`TRANSFER` in `_NON_CAPITAL`; taxable books post-sidecar contain no TRANSFER rows at all).
 - **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history listed in `phantoms.json` shows as a phantom opening (`taxjson t1135` applies the project's phantoms.json the way the gains stage does, and flags a still-held phantom "cost understated") — the threshold test can understate until the true history is declared.

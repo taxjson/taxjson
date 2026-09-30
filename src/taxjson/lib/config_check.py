@@ -44,4 +44,12 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
                 f"[accounts.{name}] type must be \"taxable\" or "
                 f"\"sheltered\", got {atype!r} — this account would "
                 f"otherwise be silently dropped from the run{hint}")
+        if "crypto" in acfg and not isinstance(acfg["crypto"], bool):
+            # Every reader tests `crypto` for truthiness: a quoted
+            # "false" moved a whole equity book to Schedule 3's
+            # crypto-asset line and its dividends to staking income
+            # (S005-00).
+            out.append(
+                f"[accounts.{name}] crypto must be true or false (no "
+                f"quotes), got {acfg['crypto']!r}")
     return out
