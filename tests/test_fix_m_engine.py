@@ -1025,3 +1025,71 @@ class TestPhantomWalks(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([e['symbol'] for e in json.loads(out.read_text())],
                          ['COVR.TO'])
+
+
+class TestPriceChain(unittest.TestCase):
+
+    def test_yahoo_spellings(self):
+        # S077-09 / R1-150 / R1-228.
+        from taxjson.lib.price_chain import yf_symbol_for
+        self.assertEqual(yf_symbol_for('DLR.U.TO'), 'DLR-U.TO')
+        self.assertEqual(yf_symbol_for('DIR.UN.TO'), 'DIR-UN.TO')
+        self.assertEqual(yf_symbol_for('BF.B.US'), 'BF-B')
+        self.assertEqual(yf_symbol_for('LEN.B.US'), 'LEN-B')
+        self.assertEqual(yf_symbol_for('BRK.B.US'), 'BRK-B')
+        self.assertEqual(yf_symbol_for('RCI.B.TO'), 'RCI-B.TO')
+        self.assertEqual(yf_symbol_for('ETH'), 'ETH-USD')
+        self.assertEqual(yf_symbol_for('TAO'), 'TAO22974-USD')
+
+    def test_quote_currency(self):
+        # R1-150 / S077-00.
+        from taxjson.lib.price_chain import quote_currency
+        self.assertEqual(quote_currency('DLR.U.TO'), 'USD')
+        self.assertEqual(quote_currency('DLR-U.TO'), 'USD')
+        self.assertEqual(quote_currency('DIR-UN.TO'), 'CAD')
+        self.assertEqual(quote_currency('ZSP.U.TO'), 'USD')
+        self.assertEqual(quote_currency('AAPL'), 'USD')
+        self.assertEqual(quote_currency('ETH-CAD'), 'CAD')
+        self.assertEqual(quote_currency('ETH-USD'), 'USD')
+        self.assertIsNone(quote_currency('EUNL.DE'))
+        self.assertIsNone(quote_currency('7203.T'))
+
+    def test_lse_pence_normalized(self):
+        # S077-04: a Yahoo 'GBp' quote comes back in pounds.
+        import sys
+        import types
+        import pandas as pd
+        from taxjson.lib import price_chain as pc
+
+        class _T:
+            def __init__(self, sym):
+                self.history_metadata = {'currency': 'GBp'}
+
+            def history(self, **kw):
+                return pd.DataFrame({'Close': [70.0]})
+        fake = types.SimpleNamespace(Ticker=_T)
+        saved = sys.modules.get('yfinance')
+        sys.modules['yfinance'] = fake
+        try:
+            got = pc._yfinance_fetcher({'VOD.L': 'VOD.L'}, verbose=False)
+        finally:
+            if saved is not None:
+                sys.modules['yfinance'] = saved
+            else:
+                sys.modules.pop('yfinance', None)
+        self.assertEqual(got, {'VOD.L': (0.7, 'GBP')})
+
+    def test_offline_option_lookup_refuses(self):
+        # R1-343: no gateway request; a cache miss refuses.
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from taxjson.lib import price_chain as pc
+        cache = Path(tempfile.mkdtemp()) / '.price_cache.json'
+        with mock.patch.dict(os.environ, {'TAXJSON_OFFLINE': '1'}), \
+                mock.patch.object(pc, '_ibkr_option_fetcher',
+                                  side_effect=AssertionError('network')):
+            with self.assertRaises(SystemExit):
+                pc.fetch_option_prices(['XYZ261120C00050000.US'],
+                                       cache_path=cache)

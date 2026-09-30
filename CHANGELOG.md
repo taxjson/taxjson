@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Harvest prices the right thing in the right currency.** USD-traded
+  TSX units (`DLR.U.TO`) are valued in USD and spelled `DLR-U.TO` for
+  Yahoo; trust units (`DIR.UN.TO` -> `DIR-UN.TO`) and US class shares
+  (`BF.B` -> `BF-B`) get Yahoo's spelling; an LSE quote Yahoo gives in
+  pence is converted to pounds (it was valued 100x); a quote whose
+  currency cannot be told (a `yf_ticker.map` override to `.DE`, `.T`,
+  ...) is omitted with a warning instead of treated as USD; and
+  `harvest --crypto` looks coins up as Yahoo crypto pairs (`ETH-USD`),
+  never as stock tickers, and skips IBKR for them. `TAXJSON_OFFLINE`
+  now also stops the IBKR option-price lookup, and a cache miss refuses
+  as for stocks.
 - **Missing-history and phantom tools agree with the engine.**
   `find-missing-history`, `--gen-phantoms`/`--suggest-phantoms` and the
   phantom openings now: order same-moment rows buys first and put a trade

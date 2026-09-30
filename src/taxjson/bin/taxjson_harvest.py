@@ -637,7 +637,17 @@ def main(argv: Optional[List[str]] = None,
             _qs = opt_quote.get(r["symbol"]) or r["symbol"]
             qcur = quote_currency(parse_option_underlying(_qs) or _qs)
         else:
-            qcur = quote_currency(yf_map.get(r["symbol"], r["symbol"]))
+            # The source's own currency when it reports one (Yahoo's
+            # metadata; minor units already normalized), else the quote
+            # spelling's (audit S077-00/-04, R1-150).
+            qcur = q.currency or quote_currency(
+                yf_map.get(r["symbol"], r["symbol"]))
+        if qcur is None:
+            warn(PROG, f"cannot tell which currency the quote for "
+                       f"{r['symbol']} ({yf_map.get(r['symbol'], r['symbol'])}"
+                       f") is in — omitted. Map it in yf_ticker.map to a "
+                       f"listing with a known suffix (.US/.TO/.L/...).")
+            continue
         fx = 1.0
         if qcur != base:
             fx, rate_date = latest_rate(fx_history, qcur, today_iso)
