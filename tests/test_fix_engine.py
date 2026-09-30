@@ -365,5 +365,65 @@ class TestPhantomsReachTheShelteredContext(unittest.TestCase):
                          [('spouse', True)])
 
 
+class TestDistributionsSizedWithPhantoms(unittest.TestCase):
+    """S000-08: distributions.map ADJUSTs were sized on the record-date
+    balance of the phantom-less base book, so a phantom-backed position
+    got the wrong ACB change (or none: 'no shares held')."""
+
+    BOOK = {"transactions": [
+        # 100 pre-window shares (phantoms.json) sold in February.
+        {"action": "BUYSELL", "date": "2025-02-03",
+         "date_settle": "2025-02-04", "time": "10:00:00",
+         "symbol": "XAW.TO", "quantity": -100.0, "price": 30.0,
+         "net_amount": 3000.0, "currency": "CAD", "account": "margin",
+         "id": "a"},
+        {"action": "BUYSELL", "date": "2025-03-03",
+         "date_settle": "2025-03-04", "time": "10:00:00",
+         "symbol": "XAW.TO", "quantity": 200.0, "price": 31.0,
+         "net_amount": 6200.0, "currency": "CAD", "account": "margin",
+         "id": "b"},
+    ]}
+
+    def _apply(self, phantoms):
+        import contextlib
+        import copy
+        import io
+        from taxjson.bin.taxjson_apply_distributions import (
+            apply_distributions)
+        with contextlib.redirect_stderr(io.StringIO()):
+            doc, n = apply_distributions(
+                copy.deepcopy(self.BOOK), [("XAW.TO", "2025-12-29", 0.5)],
+                "margin", "settle", phantoms=phantoms)
+        return [t["net_amount"] for t in doc["transactions"]
+                if t["action"] == "ADJUST"]
+
+    def test_record_date_balance_includes_the_phantom_opening(self):
+        self.assertEqual(self._apply({("XAW.TO", "margin")}), [100.0])
+        # The opening rows are for sizing only — never written.
+        self.assertEqual(self._apply(None), [50.0])
+
+    def test_cli_takes_incomplete_history(self):
+        from taxjson.bin.taxjson_apply_distributions import main
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "margin_base.json"
+            base.write_text(json.dumps(self.BOOK))
+            mp = Path(tmp) / "distributions.map"
+            mp.write_text("XAW.TO 2025-12-29 0.5\n")
+            ph = Path(tmp) / "phantoms.json"
+            ph.write_text(json.dumps([{"symbol": "XAW.TO",
+                                       "account": "margin"}]))
+            with contextlib.redirect_stderr(io.StringIO()):
+                rc = main([str(base), "--map", str(mp), "--account",
+                           "margin", "--incomplete-history", str(ph)])
+            self.assertEqual(rc, 0)
+            doc = json.loads(base.read_text())
+        self.assertEqual([t["net_amount"] for t in doc["transactions"]
+                          if t["action"] == "ADJUST"], [100.0])
+        self.assertFalse(any(t["action"] == "OPENING_BALANCE"
+                             for t in doc["transactions"]))
+
+
 if __name__ == '__main__':
     unittest.main()

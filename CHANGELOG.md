@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`distributions.map` counts `phantoms.json` shares.** The record-date
+  balance was taken from the book without the phantom openings, so a
+  position with pre-window history got too small an ACB adjustment (or
+  none, "no shares held"). Removing `phantoms.json` now rebuilds the
+  adjusted books under `--fast` too.
 - **`phantoms.json` openings reach the superficial-loss context.** An
   opening for a registered (or affiliated) account was applied to that
   account's own report but not to the context the taxable gains are

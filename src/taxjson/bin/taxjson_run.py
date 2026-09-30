@@ -1463,7 +1463,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _apply_dists = is_taxable and dist_map.exists()
         deps = list(sources) + [rates, src_manifest] \
             + ([ticker_map] if ticker_map else []) \
-            + ([dist_map] if _apply_dists else [])
+            + ([dist_map] if _apply_dists else []) \
+            + ([incomplete_history]
+               if _apply_dists and incomplete_history else [])
         if force or needs_rebuild(base_json, *deps):
             print("  merge2 (sort, dedup, ticker-map, convert-currency, validate)")
             if not _apply_dists:
@@ -1487,7 +1489,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                             # Record-date balance = holder of record,
                             # i.e. the SETTLED position under CRA
                             # timing; the project's tax_date decides.
-                            "--date-basis", tax_date],
+                            "--date-basis", tax_date]
+                        # Size record-date balances WITH the phantom
+                        # openings the gains stage synthesizes (S000-08).
+                        + (["--incomplete-history",
+                            str(incomplete_history)]
+                           if incomplete_history else []),
                         capture_output=True)
                     if _dres.stderr:
                         sys.stderr.write(_dres.stderr)
@@ -2260,6 +2267,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         import os as _os
         for _f in cache.glob("*_base.json"):
             _os.utime(_f)
+        # distributions.map ADJUSTs in the taxable base books were
+        # sized WITH the phantom openings (S000-08): drop those books
+        # so the merge stage rebuilds them, not just the gains.
+        if (root / "distributions.map").exists():
+            for _n, _c in accounts.items():
+                if isinstance(_c, dict) and _c.get("type") == "taxable":
+                    (cache / f"{_n}_base.json").unlink(missing_ok=True)
 
     # Same deletion-blindness class for the project-root map files:
     # needs_rebuild only sees deps that EXIST, so deleting ticker.map /
