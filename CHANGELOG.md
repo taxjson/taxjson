@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Instalment interest keeps compounding after you catch up.**
+  `taxjson instalments` now computes interest the way CRA publishes it:
+  interest on each required instalment from its due date, minus
+  interest on each payment from its date (or January 1), both to the
+  balance-due date and compounded daily. The old running balance
+  stopped compounding the accrued charge once payments caught up,
+  which understated interest by a few percent and could drop a charge
+  under the $25 threshold.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

@@ -21,10 +21,12 @@ Three bases, all of which CRA accepts (ITA 156):
                   reminder amounts on time is always interest-free,
                   whatever the year turns out to be.
 
-Interest (ITA 161(2)) uses the OFFSET method: charge interest accrues
-daily on any shortfall, credit interest accrues daily on early or
-excess payments, and the two net out. Credit interest can only reduce
-a charge, never produce a refund.
+Interest (ITA 161(2)) follows CRA's published A - B method: A is
+interest on each required instalment from its due date to the
+balance-due date, B is interest on each payment from the later of the
+payment date and January 1 to the same date, both compounded daily;
+the net (C = A - B) is charged. Credit interest can only reduce a
+charge, never produce a refund.
 
 CRA resets the prescribed rate QUARTERLY and applies the rate in
 effect on each individual day — a balance spanning a quarter boundary
@@ -176,45 +178,47 @@ def _accrue(required: List[Dict[str, Any]],
             payments: List[Dict[str, Any]],
             rates: List[Tuple[Optional[str], float]],
             end: date) -> Tuple[float, float]:
-    """(charge, credit) interest by the offset method: walk one day at a
-    time from the first due date to `end`, accruing daily-compounded
-    interest on whichever side the running balance sits, at the rate
-    in force THAT day."""
+    """(A, B) — CRA's instalment-interest method, compounded daily at
+    the rate in force each day (interest-penalty-charges page cited in
+    the module docstring):
+
+      A = interest on each required instalment from the day it was due
+          to the balance-due date (`end`);
+      B = interest on each payment from the LATER of the payment date
+          and January 1 of the tax year, to the same date;
+      net = A - B (charged only if over $25; credit never refunds).
+
+    The earlier walk kept separate charge and credit totals, each
+    compounding only while the running balance sat on its side, so the
+    accrued charge interest FROZE the day the balance was caught up —
+    unpaid interest keeps compounding until paid (ITA s.248(11)).
+    That understated interest by 2.6-24% whenever instalments were
+    caught up before the balance-due date (audit R1-42)."""
     if not required:
         return 0.0, 0.0
-    start = date.fromisoformat(required[0]["date"])
-    if payments:
-        # CRA's contra interest runs from the DATE OF PAYMENT, so a
-        # prepayment made before the first due date must start the
-        # walk — anchoring on the first due date silently discarded
-        # its credit. But never before January 1 of the tax year: CRA
-        # computes credit "from the date the payment was made or
-        # January 1 (whichever date is later)" (interest-penalty-
-        # charges page cited in the module docstring).
-        start = min(start,
-                    min(date.fromisoformat(p["date"])
-                        for p in payments))
-        start = max(start, date(date.fromisoformat(
-            required[0]["date"]).year, 1, 1))
-    if end < start:
+    jan1 = date(date.fromisoformat(required[0]["date"]).year, 1, 1)
+    if end < jan1:
         return 0.0, 0.0
-    charge = credit = 0.0
-    d = start
-    while d <= end:
-        daily = rate_on(d, rates) / 365.0
-        due_to_date = sum(r["amount"] for r in required
-                          if date.fromisoformat(r["date"]) <= d)
-        paid_to_date = sum(p["amount"] for p in payments
-                           if date.fromisoformat(p["date"]) <= d)
-        balance = due_to_date - paid_to_date
-        # Compound on the accrued interest as well as the principal —
-        # CRA compounds daily.
-        if balance > 0:
-            charge += (balance + charge) * daily
-        elif balance < 0:
-            credit += (-balance + credit) * daily
-        d += timedelta(days=1)
-    return charge, credit
+    # growth[i] = prod over days jan1+i .. end of (1 + rate/365) - 1:
+    # what one dollar outstanding from that day earns by `end`.
+    days = (end - jan1).days + 1
+    growth = [0.0] * days
+    factor = 1.0
+    for i in range(days - 1, -1, -1):
+        factor *= 1 + rate_on(jan1 + timedelta(days=i), rates) / 365.0
+        growth[i] = factor - 1.0
+
+    def _interest(amount: float, on: date) -> float:
+        on = max(on, jan1)          # credit never before January 1
+        if on > end:
+            return 0.0
+        return amount * growth[(on - jan1).days]
+
+    a = sum(_interest(r["amount"], date.fromisoformat(r["date"]))
+            for r in required)
+    b = sum(_interest(p["amount"], date.fromisoformat(p["date"]))
+            for p in payments)
+    return a, b
 
 
 def interest_and_penalty(*, required: List[Dict[str, Any]],
