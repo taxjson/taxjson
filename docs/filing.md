@@ -49,6 +49,14 @@ the open steps one at a time; `--quick` skips the slow detectors.
       what is unrecoverable.
 - [ ] `taxjson elect --pending` — no unresolved merger or spin-off
       election.
+- [ ] `taxjson crypto-sends` — every crypto send that did not arrive on
+      another of your exchanges is decided: `self` (your own wallet),
+      `gift` or `payment` (a disposition at fair value). `taxjson run`
+      asks at a terminal; headless, `--set ID=...`. The gifts and
+      payments are written to `inputs/<account>/crypto_sends.tt` (`--write`,
+      or the next run); commit it with `sends.json`. Stablecoin gifts
+      show a currency gain instead of a sale — add it to the `fx-cash`
+      figure.
 - [ ] `taxjson audit` — every disposition traced and tied, zero mismatched.
 - [ ] `taxjson wash-sales` — read every denial. A **permanently** denied
       loss (repurchase in a registered account) is money gone; make sure

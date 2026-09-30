@@ -314,9 +314,11 @@ Examples:
                             f"send(s) among them — if any left your "
                             f"ownership (gift or payment), each is a "
                             f"taxable DISPOSITION at fair market "
-                            f"value: declare it as a .tt BUYSELL sell "
-                            f"at FMV on the send date (self-custody "
-                            f"moves need nothing).", file=sys.stderr)
+                            f"value: `taxjson crypto-sends` lists "
+                            f"them with the fair value and writes the "
+                            f".tt sale for each gift/payment "
+                            f"(self-custody moves need nothing).",
+                            file=sys.stderr)
             transactions = [tx for tx in transactions if tx.get('action', '').upper() != 'TRANSFER']
 
         # Per-file count so the user can see at a glance how many

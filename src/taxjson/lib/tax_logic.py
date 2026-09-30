@@ -189,8 +189,20 @@ def _canada(s: Dict[str, Any]) -> List[Section]:
             "coin. A trade fee taken in a coin reduces the coins bought "
             "or adds to the coins sold.",
             "Moving coins between your own wallets is not a sale. A gift "
-            "or a payment in crypto is a sale at fair value: declare it "
-            "in a .tt file.",
+            "or a payment in crypto is a sale at fair value. A send that "
+            "arrives on another of your exchanges within 3 days is treated "
+            "as your own move; for every other send, `taxjson crypto-sends` "
+            "records whether it was your own wallet, a gift or a payment, "
+            "and writes a sale at fair value for each gift or payment to "
+            "crypto_sends.tt: the exchange's price when the row has one, "
+            "otherwise the Yahoo daily close times the Bank of Canada rate "
+            "of the send date.",
+            "A gift or payment of a stablecoin is not written as a sale "
+            "(stablecoins are cash in the books). It is a currency "
+            "disposition: the value at the send date's Bank of Canada rate "
+            "minus the average cost of the US-dollar and stablecoin pool. "
+            "A loss is superficial when US dollars or stablecoins were "
+            "acquired within 30 days and are still held.",
         ]),
         ("Reports", [
             "`taxjson t1135`: Form T1135 is required when the total cost "
@@ -252,6 +264,12 @@ def _usa(s: Dict[str, Any]) -> List[Section]:
             "only (\"option to acquire\" is not enforced by the US "
             "engine).",
             "Crypto is not subject to the wash-sale rule.",
+        ]),
+        ("Crypto sends", [
+            "Paying with crypto is a sale at fair value; `taxjson "
+            "crypto-sends` records it (`payment`) and writes the sale to "
+            "crypto_sends.tt. A gift is not a sale for the donor, so "
+            "`gift` is refused in a US project: record it as `self`.",
         ]),
         ("Options", [
             "Premiums are taxed when the position closes (§1234). "

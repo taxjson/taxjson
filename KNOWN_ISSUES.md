@@ -328,7 +328,16 @@ pricing. Kraken Earn shuffles (`hybridearnwithdrawal` etc.) remain
 ignored — internal moves. Tax semantics still not assumed: only the
 user knows gift vs self-custody move; genuine gifts are declared as
 `.tt` sells at FMV. Pinned by tests/test_transfer_sidecar.py
-(TestCryptoSendsBecomeEvidence).
+(TestCryptoSendsBecomeEvidence). Since then `taxjson crypto-sends`
+pairs each send with its arrival on another exchange, asks about the
+rest (self / gift / payment, saved in `inputs/<acct>/sends.json`) and
+generates the FMV sells into `inputs/<acct>/crypto_sends.tt`
+(tests/test_fix_sends.py). Limits: pairing reads the crypto accounts'
+sidecars only (a send to an equity or `transfers = true` account looks
+unmatched); the stablecoin pool is rebuilt from Kraken ledgers and
+Coinbase exports (a Kraken trades export without its ledger is not
+read for it) and does not add a superficial loss back into the pool's
+cost.
 
 - **2026-09 (crypto blended pass):** a Canadian project with two or more taxable `crypto = true` accounts now runs ONE blended crypto pass as well (s.47 averaging and the superficial-loss rule across exchanges); each exchange's book was computed alone before, while the run's overlap note claimed the blend covered them. `audit` and `check-filed` recompute the same way; US crypto (no §1091) stays per account. Tests: `tests/test_crypto_blend.py`.
 - **2026-08 (blended taxable pass):** the multi-account gap is fixed. One combined gains run now produces the canonical wash-adjusted artifacts for all taxable equity accounts: Canada ACB blends across non-registered accounts (ITA s.47) and US §1091 matches cross-account while FIFO basis stays per account (`taxjson-gains --per-account-basis`); `taxjson-split-gains` rebuilds the per-account files, so every consumer reads its usual filenames. The per-account `<name>.sum` remains the isolated pre-blend baseline (deliberate diagnostic pair). Tests: `tests/test_blended_taxable.py`.
