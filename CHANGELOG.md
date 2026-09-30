@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **IB corporate actions nobody books are loud.** An unhandled Corporate
+  Actions row is now an UNBOOKED warning (console; fatal under `run
+  --strict`) that points at a `.tt` booking instead of a manual TRANSFER
+  row (dropped in taxable accounts). The same goes for an option or
+  futures contract adjustment (it used to become an equity SPLIT on an
+  invented symbol), a spin-off debit on a short parent, and a tender
+  whose allocation delivers another security (a share-for-share exchange
+  offer was reported as a no-op). An IB stock dividend books its shares
+  at $0 cost with a console note, like Questrade's; an Options
+  Expirations row keeps its own asset category (a futures-option expiry
+  closes the `F:` position) (audit S058-16, S058-22, S058-24, S013-06,
+  R1-56).
 - **IB statements that do not cover the year are reported.** `taxjson
   run` now says on the console when an account's IB statements stop
   before Dec 31 of a finished year (the 2024 statement ending Dec 27) or

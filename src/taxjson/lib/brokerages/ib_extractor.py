@@ -131,6 +131,15 @@ FUTURES_CATEGORIES = ('Futures', 'Options On Futures')
 # lines with this prefix to the console (they used to live only in the
 # .diag / .sum DIAGNOSTICS banner).
 ATTENTION_PREFIX = "warning: ATTENTION:"
+# Known tax events the parser could not book (same prefix Kraken uses):
+# echoed to the console by `taxjson run`, fatal under `run --strict`.
+UNBOOKED_PREFIX = "warning: UNBOOKED:"
+# The security an IB tender allocation DELIVERS: the first token of the
+# row's trailing `(TICKER, NAME, ISIN)` parenthetical.
+_IB_DELIVERED_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .]*?)\s*,[^()]*\)\s*$')
+_IB_STOCK_DIV_RE = re.compile(
+    r'^\s*([A-Z0-9][A-Z0-9 .]*?)\s*\([^)]*\)\s+Stock\s+Dividend\b',
+    re.IGNORECASE)
 
 
 def get_ib_settlement(date_str: str, asset_cat: str,
@@ -816,6 +825,12 @@ class IbBrokerage(BaseBrokerage):
         # taxjson-corp-actions — one note each at end of parse.
         cash_takeovers: List[str] = []
         corp_owned_rows: List[str] = []
+        # Corporate Actions rows that are real events nothing books (an
+        # option adjustment, a spin-off debit on a short parent, a
+        # share-for-share tender): one UNBOOKED line each at the end.
+        unbooked_ca: List[str] = []
+        # Stock dividends booked at $0 cost: one ATTENTION line each.
+        stock_dividends: List[str] = []
 
         # Fee rows that lack both a Date column and a "for Mmm YYYY" hint
         # in the description. Collected and reported as one summary line
@@ -958,6 +973,12 @@ class IbBrokerage(BaseBrokerage):
             elif kind in ('corp_owned', 'spinoff'):
                 if eff['desc'] in corp_owned_rows:
                     corp_owned_rows.remove(eff['desc'])
+            elif kind == 'unbooked':
+                if eff['msg'] in unbooked_ca:
+                    unbooked_ca.remove(eff['msg'])
+            elif kind == 'stockdiv':
+                if eff['msg'] in stock_dividends:
+                    stock_dividends.remove(eff['msg'])
             elif kind == 'unhandled':
                 t = eff['ticker']
                 unhandled_ca_tickers[t] = unhandled_ca_tickers.get(t, 0) - 1
@@ -1064,7 +1085,14 @@ class IbBrokerage(BaseBrokerage):
                     asset_cat = self._cell(row, header_map,
                                            'Asset Category')
                 else:
-                    asset_cat = 'Equity and Index Options'
+                    # The row's own Asset Category when the section has
+                    # one: a futures-option expiry read as an equity
+                    # option became a phantom non-F: contract while the
+                    # real position never closed (audit R1-56).
+                    asset_cat = (self._cell(row, header_map,
+                                            'Asset Category')
+                                 if 'Asset Category' in header_map
+                                 else 'Equity and Index Options')
 
                 # Roll-up rows carry the asset category of what
                 # they sum (`Total,Forex,...`), so they must be
@@ -1938,6 +1966,32 @@ class IbBrokerage(BaseBrokerage):
                 # corporate action does.
                 _eff = {'desc': description, 'date': date, 'qty': qty,
                         'kind': 'none', 'txs': [], 'consumed': False}
+
+                def _unbooked(msg, _eff=_eff):
+                    unbooked_ca.append(msg)
+                    _eff.update(kind='unbooked', msg=msg)
+                    self.count_skip(f"{section} row not booked (see "
+                                    f"UNBOOKED warning)")
+                    _ca_record(_eff)
+
+                # Every branch below builds STOCK symbols (ticker + the
+                # currency suffix, multiplier 1). An option or futures
+                # row (a contract adjustment on a split) booked there
+                # became an equity SPLIT on an invented symbol while the
+                # real contract never rolled (audit S058-16).
+                if _ca_cat and _ca_cat not in ('Stocks', 'Warrants'):
+                    if qty != 0 or abs(proceeds) > 0.005:
+                        _unbooked(
+                            f"{path.name} {date}: {_ca_cat} corporate "
+                            f"action {description[:90]!r} (quantity "
+                            f"{qty:g}) — contract adjustments are not "
+                            f"translated; book the old and the adjusted "
+                            f"contract by hand in a .tt file.")
+                    else:
+                        self.count_nonevent(f"{section} zero-quantity row")
+                        _ca_record(_eff)
+                    continue
+
                 _troot = ib_tender_root(description)
                 if _troot is not None:
                     _tsym = f"{_troot}.{ext}"
@@ -1958,6 +2012,25 @@ class IbBrokerage(BaseBrokerage):
                                        or (not _tender_in and qty < 0))
                     _eff.update(kind='tender', tender=_tl,
                                 parked=qty if _is_placeholder else 0.0)
+                    # An allocation that DELIVERS another security (a
+                    # share-for-share exchange offer) is a merger, not a
+                    # journal: it used to be netted as a no-op, the old
+                    # shares staying in the book and the acquirer's
+                    # never arriving (audit S013-06).
+                    _dm = _IB_DELIVERED_RE.search(description)
+                    _delivered = (_dm.group(1).strip().replace(' ', '.')
+                                  if _dm else '')
+                    if (not _tender_in and qty > 0 and _delivered
+                            and _delivered.upper() != _troot.upper()):
+                        _tl['foreign'] = True
+                        _unbooked(
+                            f"{path.name} {date}: tender/exchange offer "
+                            f"for {_tsym} delivered {qty:g} {_delivered} "
+                            f"(another security) — a share-for-share "
+                            f"exchange is a disposition of {_tsym} (or a "
+                            f"s.85.1 rollover): book it by hand in a .tt "
+                            f"file.")
+                        continue
                     if abs(proceeds) < 0.005:
                         if _is_placeholder:
                             _tl['parked'] += qty
@@ -2103,6 +2176,19 @@ class IbBrokerage(BaseBrokerage):
                 # as the broker FMV. This branch used to book every
                 # one as a dividend at |Value| with no election
                 # (2026-09 audit). Recognized, not booked, here.
+                # A spin-off DEBIT (negative quantity) is a short
+                # parent's delivery obligation for the spun-off shares.
+                # taxjson-corp-actions books only the long side, so it
+                # used to fall into the unhandled tally as a
+                # "non-spin-off" row (audit S058-22).
+                if (qty < 0 and not handled
+                        and ib_spinoff_parts(description) is not None):
+                    _unbooked(
+                        f"{path.name} {date}: spin-off debit of {qty:g} on "
+                        f"a SHORT parent position ({description[:90]!r}, "
+                        f"Value {val:,.2f}) — the short spun-off position "
+                        f"is not booked; add it by hand in a .tt file.")
+                    continue
                 if (qty > 0 and not handled
                         and ib_spinoff_parts(description) is not None):
                     _eff.update(kind='spinoff')
@@ -2151,6 +2237,40 @@ class IbBrokerage(BaseBrokerage):
                     _ca_record(_eff)
                     continue
 
+                # A stock dividend: new shares delivered in kind. They
+                # used to be dropped (a phantom short at the next full
+                # sale — audit S058-24). Booked the way the Questrade
+                # parser books one: at $0 cost, with IB's Value shown so
+                # a taxable account can add the declared amount.
+                _sd = _IB_STOCK_DIV_RE.match(description)
+                if _sd and not handled:
+                    if qty > 0:
+                        _sym = f"{_sd.group(1).strip().replace(' ', '.')}.{ext}"
+                        _stx = {
+                            'action': 'BUYSELL', 'date': date, 'time': time,
+                            'date_settle': date, 'symbol': _sym,
+                            'quantity': qty, 'currency': currency,
+                            'price': 0.0, 'fee': 0.0, 'net_amount': 0.0,
+                            'gross_amount': 0.0, 'multiplier': 1.0,
+                            'account': 'IB', 'description': description,
+                        }
+                        transactions.append(_stx)
+                        _msg = (f"{_sym}: stock dividend of {qty:g} "
+                                f"share(s) on {date} booked at $0 cost (IB "
+                                f"Value {val:,.2f} {currency}) — in a "
+                                f"taxable account, add the dividend amount "
+                                f"(distributions.map or a .tt ADJUST) for "
+                                f"the correct ACB and income.")
+                        stock_dividends.append(_msg)
+                        _eff.update(kind='stockdiv', txs=[_stx], msg=_msg)
+                        self.note_row_consumed()
+                        _ca_record(_eff)
+                    else:
+                        _unbooked(f"{path.name} {date}: stock dividend row "
+                                  f"with quantity {qty:g} "
+                                  f"({description[:90]!r}) — not booked.")
+                    continue
+
                 # A share-for-share merger (or a merger shape nothing
                 # can book, which becomes a blocking `unsupported`
                 # event): taxjson-corp-actions owns it, after the
@@ -2176,7 +2296,7 @@ class IbBrokerage(BaseBrokerage):
                     ticker = m.group(1) if m else '<unknown>'
                     unhandled_ca_tickers[ticker] = unhandled_ca_tickers.get(ticker, 0) + 1
                     self.count_skip(f"{section} row not translated "
-                                    f"(see NOTE)")
+                                    f"(see UNBOOKED warning)")
                     _eff.update(kind='unhandled', ticker=ticker)
                 else:
                     self.count_nonevent(f"{section} zero-quantity row")
@@ -2401,7 +2521,7 @@ class IbBrokerage(BaseBrokerage):
                     f"({_dates}) — the offer's outcome (shares returned "
                     f"or cash paid) is in a later statement; nothing was "
                     f"booked for them here.", file=sys.stderr)
-            elif _tl['cash_qty'] == 0:
+            elif _tl['cash_qty'] == 0 and not _tl.get('foreign'):
                 print(
                     f"note: {_tsym}: {_tl['rows']} tender/voluntary-offer "
                     f"journal row(s) ({_dates}) moved shares to and from "
@@ -2445,15 +2565,25 @@ class IbBrokerage(BaseBrokerage):
                   f"Corporate Action row(s) in {path.name} are booked by "
                   f"taxjson-corp-actions after the tax election (`taxjson "
                   f"run` runs it), not by this parser.", file=sys.stderr)
+        for _m in stock_dividends:
+            print(f"{ATTENTION_PREFIX} {_m}", file=sys.stderr)
+        for _m in unbooked_ca:
+            print(f"{UNBOOKED_PREFIX} {_m}", file=sys.stderr)
         if unhandled_ca_tickers:
             total = sum(unhandled_ca_tickers.values())
             tickers = ', '.join(sorted(unhandled_ca_tickers.keys()))
+            # UNBOOKED (console; fatal under run --strict): a row that
+            # moved shares and nothing booked. The old advice — a
+            # manual TRANSFER row — is dropped in a taxable account and
+            # double-booked what corp-actions already books (R1-140).
             print(
-                f"NOTE: {total} unhandled Corporate Action row(s) in {path.name} "
-                f"for: {tickers}. Only splits, cash in lieu, tenders and cash "
-                f"takeovers are booked here (mergers and spin-offs by "
-                f"taxjson-corp-actions). For other events that affect basis, "
-                f"add a manual TRANSFER entry to your *_in.tt file.",
+                f"{UNBOOKED_PREFIX} {total} unhandled Corporate Action "
+                f"row(s) in {path.name} for: {tickers}. Only splits, cash "
+                f"in lieu, stock dividends, tenders and cash takeovers are "
+                f"booked here (mergers and spin-offs by "
+                f"taxjson-corp-actions). If the event changed your "
+                f"position or basis, book it by hand in a .tt file "
+                f"(BUYSELL / SPLIT rows).",
                 file=sys.stderr,
             )
 

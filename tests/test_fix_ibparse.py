@@ -444,5 +444,108 @@ class TestIbTransferWithoutQuantity(unittest.TestCase):
         self.assertIn('Qty', str(cm.exception))
 
 
+# ------------------------------------------------ IB corporate actions
+FII_H = ('Financial Instrument Information,Header,Asset Category,Symbol,'
+         'Description,Conid,Security ID,Underlying,Listing Exch,Multiplier,'
+         'Expiry,Delivery Month,Type,Strike,Code\n')
+
+
+class TestIbOptionsExpirationsCategory(unittest.TestCase):
+    """R1-56: the section's rows were all read as equity options, so a
+    futures-option expiry became a phantom equity option."""
+
+    def test_row_category_is_honoured(self):
+        fii = (FII_H + 'Financial Instrument Information,Data,Options On '
+               'Futures,QZCL JAN26 52 P,QZCL JAN26 52 P,990000071,,QZCL,'
+               'NYMEX,1000,2025-12-16,2026-01,P,52,\n')
+        body = (HEAD + TRADES_H
+                + _trade('QZCL JAN26 52 P', '2025-11-03, 10:00:00', 1, 1.5,
+                         -1500, -2, cat='Options On Futures')
+                + 'Options Expirations,Header,Asset Category,Currency,'
+                  'Symbol,Date/Time,Quantity,Code\n'
+                + 'Options Expirations,Data,Options On Futures,USD,'
+                  'QZCL JAN26 52 P,"2025-12-16, 16:20:00",-1,C;Ep\n'
+                + fii)
+        _, txs, _ = _parse_ib(body)
+        self.assertEqual({t['symbol'] for t in txs},
+                         {'F:QZCL251216P00052000.US'})
+
+
+class TestIbCorporateActionsNotBooked(unittest.TestCase):
+    """Rows neither this parser nor taxjson-corp-actions books are an
+    UNBOOKED warning (console, fatal under run --strict), never an
+    equity SPLIT on an invented symbol or a silent no-op."""
+
+    def test_option_adjustment_row_is_not_an_equity_split(self):
+        # S058-16
+        body = (HEAD + CA_H + _ca(
+            'QZNV 21JUN24 1200 C(QZNV 240621C01200000) Split 10 for 1 '
+            '(QZNV 21JUN24 1200 C, QZNV CORP, US9990000401)', -1,
+            cat='Equity and Index Options'))
+        _, txs, err = _parse_ib(body)
+        self.assertEqual(txs, [])
+        self.assertIn('warning: UNBOOKED:', err)
+        self.assertIn('Equity and Index Options', err)
+
+    def test_stock_dividend_books_the_shares(self):
+        # S058-24: the delivered shares were dropped (phantom short).
+        body = (HEAD + CA_H + _ca(
+            'QZSD(US9990000999) Stock Dividend US9990000999 1 for 20 '
+            '(QZSD, QZSD CORP, US9990000999)', 5, value=100))
+        _, txs, err = _parse_ib(body)
+        self.assertEqual([(t['action'], t['symbol'], t['quantity'],
+                           t['net_amount']) for t in txs],
+                         [('BUYSELL', 'QZSD.US', 5.0, 0.0)])
+        self.assertIn('stock dividend', err)
+        self.assertIn('warning: ATTENTION:', err)
+
+    def test_spinoff_on_a_short_parent_is_unbooked(self):
+        # S058-22: the debit leg (qty < 0) was an "unhandled non-spinoff".
+        body = (HEAD + CA_H + _ca(
+            'QZPA(CA9990000001) Spinoff  1 for 5 (QZSP, SPINCO CORP, '
+            'CA9990000002)', -20, value=-900, cur='CAD'))
+        _, txs, err = _parse_ib(body)
+        self.assertEqual(txs, [])
+        self.assertIn('warning: UNBOOKED:', err)
+        self.assertIn('short', err)
+
+    def test_share_for_share_tender_is_unbooked(self):
+        # S013-06: an allocation delivering ANOTHER security was a no-op.
+        rows = (_ca('QZTG(CA9990000011) Tendered to 99999999 1 FOR 1 '
+                    '(QZTG.TEN, QZTG CORP - TENDER, CA9990000011)', -1000,
+                    cur='CAD')
+                + _ca('QZTG.TEN(CA9990000011) Tendered to 99999999 1 FOR 1 '
+                      '(QZTG.TEN, QZTG CORP - TENDER, CA9990000011)', 1000,
+                      cur='CAD')
+                + _ca('QZTG.TEN(99999999) Merged(Voluntary Offer Allocation)'
+                      ' WITH CA8880000001 1 for 2 (QZAQ, ACQUIRER INC, '
+                      'CA8880000001)', 500, value=25000, cur='CAD')
+                + _ca('QZTG.TEN(99999999) Merged(Voluntary Offer Allocation)'
+                      ' WITH CA8880000001 1 for 2 (QZTG.TEN, QZTG CORP - '
+                      'TENDER, CA9990000011)', -1000, cur='CAD'))
+        _, txs, err = _parse_ib(HEAD + CA_H + rows)
+        self.assertEqual(txs, [])
+        self.assertIn('warning: UNBOOKED:', err)
+        self.assertIn('QZAQ', err)
+
+    def test_same_security_tender_round_trip_stays_a_no_op(self):
+        rows = (_ca('QZAU(CA9990000021) Tendered to 99999998 1 FOR 1 '
+                    '(QZAU.TEN, QZAU CORP - TENDER, CA9990000021)', -100,
+                    cur='CAD')
+                + _ca('QZAU.TEN(CA9990000021) Tendered to 99999998 1 FOR 1 '
+                      '(QZAU.TEN, QZAU CORP - TENDER, CA9990000021)', 100,
+                      cur='CAD')
+                + _ca('QZAU.TEN(99999998) Merged(Voluntary Offer Allocation)'
+                      ' WITH CA9990000021 1 for 1 (QZAU, QZAU CORP, '
+                      'CA9990000021)', 100, cur='CAD')
+                + _ca('QZAU.TEN(99999998) Merged(Voluntary Offer Allocation)'
+                      ' WITH CA9990000021 1 for 1 (QZAU.TEN, QZAU CORP - '
+                      'TENDER, CA9990000021)', -100, cur='CAD'))
+        _, txs, err = _parse_ib(HEAD + CA_H + rows)
+        self.assertEqual(txs, [])
+        self.assertNotIn('UNBOOKED', err)
+        self.assertIn('recognized no-op', err)
+
+
 if __name__ == '__main__':
     unittest.main()

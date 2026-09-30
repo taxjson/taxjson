@@ -75,9 +75,12 @@ class TestUnhandledCorporateActionWarning(unittest.TestCase):
         _, stderr = _run_parser_capture_stderr(_IB_WITH_UNKNOWN)
         self.assertIn('unhandled Corporate Action', stderr)
         self.assertIn('QZX', stderr)
-        # Hint at the manual workaround.
-        self.assertIn('TRANSFER', stderr)
-        self.assertIn('*_in.tt', stderr)
+        # Console-visible (echoed by `taxjson run`, fatal under
+        # --strict) and pointing at a .tt booking — a manual TRANSFER
+        # row is dropped in a taxable account (audit R1-140).
+        self.assertIn('warning: UNBOOKED:', stderr)
+        self.assertIn('.tt file', stderr)
+        self.assertNotIn('TRANSFER', stderr)
 
     def test_split_only_no_warning(self):
         txs, stderr = _run_parser_capture_stderr(_IB_WITH_SPLIT_ONLY)
