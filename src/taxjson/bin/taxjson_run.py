@@ -8743,6 +8743,20 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     # failed) was left out of the lock without a word, and then never
     # drift-checked (S006-07).
     _require_taxable_books(root, cfg, files, "gains file")
+    # The lock certifies the filing numbers: books from a run with
+    # validation ERRORs, a pending-election deferral or inputs changed
+    # since (a failed run) are not locked without --force (S048-23,
+    # S049-11).
+    _state = _run_state_problems(root, cfg)
+    if _state and not args.force:
+        sys.exit("taxjson close-year: the books are not the clean result "
+                 "of the current inputs — " + "; ".join(_state)
+                 + ". Fix and re-run `taxjson run`, then close (or pass "
+                 "--force to lock them anyway). Nothing was written.")
+    if _state:
+        print("taxjson close-year: WARNING: locking books with open "
+              "problems (--force): " + "; ".join(_state),
+              file=sys.stderr)
     # Equity taxable accounts always get the blended cross-account pass
     # in a full run; a plain <acct>_gains.json means only `run --account`
     # ran (or an account is deferred) — per-account, unblended numbers
@@ -8758,20 +8772,6 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  f"the cross-account pass of a full `taxjson run` never "
                  f"ran. Run `taxjson run` with no --account first. "
                  f"Nothing was written.")
-    # The lock certifies the filing numbers: books from a run with
-    # validation ERRORs, a pending-election deferral or inputs changed
-    # since (a failed run) are not locked without --force (S048-23,
-    # S049-11).
-    _state = _run_state_problems(root, cfg)
-    if _state and not args.force:
-        sys.exit("taxjson close-year: the books are not the clean result "
-                 "of the current inputs — " + "; ".join(_state)
-                 + ". Fix and re-run `taxjson run`, then close (or pass "
-                 "--force to lock them anyway). Nothing was written.")
-    if _state:
-        print("taxjson close-year: WARNING: locking books with open "
-              "problems (--force): " + "; ".join(_state),
-              file=sys.stderr)
     # Staleness guard: after `run --account X` the wash file predates
     # the just-rebuilt plain gains (the blend pass was skipped).
     # `taxjson sum` merely notes this; close-year WRITES the filing
