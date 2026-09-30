@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **`taxjson fetch` covers the superficial-loss window and keeps
+  tokens out of error messages.** The default Questrade window for a
+  tax year now runs Dec 1 of the prior year through Jan 31 of the next
+  (was Dec 15 .. Jan 15): a repurchase on Jan 16-30 or Dec 1-14 in a
+  fetch-only account (an RRSP buying back what the margin account sold
+  at a loss) was never seen, so a permanently denied loss was allowed.
+  An activity with no `netAmount`/`grossAmount`/`commission` is written
+  with a blank cell, so the parser refuses it instead of dropping a
+  dividend as a "zero-net" row. A refused redirect no longer prints the
+  redirect URL's query (the Flex token or Questrade refresh token). The
+  live-holdings snapshot takes an option's suffix from the account's
+  books when they hold that contract, so a CDR such as AMZN.TO no longer
+  makes the account's US AMZN option look Montreal-listed (a false
+  verify/sanity mismatch).
 - **taxjson-merge never emits a partial merge.** The legacy merge that
   builds the crypto books, the blended base, `sheltered_base.json` and
   the audit tie-out printed "cannot read" and exited 0 with the

@@ -9266,30 +9266,29 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             positions = F.qt_positions(qt_session, number, http)
         except RuntimeError as e:
             _die(f"{a}: {e}")
-        # Montreal options: learn Canadian-listed roots from the
-        # account's own BOOKS too — a cash-secured put has no equity
-        # leg in the live payload, so its live symbol was suffixed
-        # .US while the books say .TO (phantom verify mismatch,
-        # 2026-09 audit).
-        _book_to_roots = set()
+        # The account's BOOK symbols decide a live option's suffix when
+        # the books hold that exact contract, and the books' .TO
+        # OPTIONS teach Montreal roots (a cash-secured put has no
+        # equity leg in the live payload — 2026-09 audit). A .TO
+        # EQUITY in the books no longer does: a CDR (AMZN.TO) made the
+        # account's US AMZN option .TO live vs .US in the books, a
+        # phantom verify mismatch every run (S031-12).
+        _book_syms = set()
         try:
             import json as _json
             _bp = cache / f"{a}_base.json"
             if _bp.exists():
                 for _r in (_json.loads(_bp.read_text(encoding="utf-8"))
                            .get("transactions") or []):
-                    _sym = str(_r.get("symbol") or "")
-                    if _sym.endswith(".TO"):
-                        _root = _sym.rsplit(".", 1)[0]
-                        from taxjson.lib.core import parse_option_underlying
-                        _u = parse_option_underlying(_sym)
-                        _book_to_roots.add((_u or _root).split(".")[0])
+                    _sym = str(_r.get("symbol") or "").upper()
+                    if _sym:
+                        _book_syms.add(_sym)
         except Exception:
             pass
         text = F.positions_to_holdings_toml(
             positions, a, number,
             _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-            extra_to_roots=_book_to_roots)
+            book_symbols=_book_syms)
         toml_path = cache / f"{a}_live_holdings.toml"
         F.write_private(toml_path, text)
         n = sum(1 for pz in positions if pz.get("openQuantity"))
@@ -11376,8 +11375,8 @@ def main() -> None:
                               "account declaring a `brokerage`)")
     p_fetch.add_argument("--year", type=int, default=None, metavar="N",
                          help="Questrade: backfill a PAST tax year — "
-                              "fetch its whole window (Dec 15 of N-1 "
-                              "through Jan 15 of N+1) into "
+                              "fetch its whole window (Dec 1 of N-1 "
+                              "through Jan 31 of N+1) into "
                               "questrade_N.csv. Not combinable with "
                               "--from/--days")
     p_fetch.add_argument("--json", action="store_true",
@@ -11388,7 +11387,8 @@ def main() -> None:
     p_fetch.add_argument("--days", type=int, default=None, metavar="N",
                          help="Questrade: fetch only the last N days "
                               "(default: the whole tax-year window "
-                              "from Dec 15 of the prior year; "
+                              "Dec 1 of the prior year to Jan 31 "
+                              "of the next; "
                               "trailing 90 days when the config has "
                               "no year)")
     p_fetch.add_argument("--from", dest="from_date", default=None,
