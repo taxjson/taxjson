@@ -77,10 +77,13 @@ def _parse_args():
     parser.add_argument("--year", type=int, help="Tax year to calculate (optional)")
     parser.add_argument(
         "--as-of", metavar="YYYY-MM-DD", default=None,
-        help="Drop transactions TRADED after this date before computing "
+        help="Drop transactions dated after this date before computing "
              "— the books as they stood then (inventory = positions at "
-             "that date, incl. ACB and deferred wash). Trade-date "
-             "cutoff regardless of the settle/trade basis setting.")
+             "that date, incl. ACB and deferred wash). The cutoff reads "
+             "the --tax-date basis: the SETTLEMENT date on a settle "
+             "basis (a sale traded Dec 31 that settles in January is "
+             "still held at Dec 31, as the gains year and t1135 see "
+             "it), the trade date on a trade basis.")
     parser.add_argument(
         "--option-premium-timing", choices=["grant", "close"], default=None,
         help="Canada: recognise a written option's premium on the write "
@@ -321,8 +324,18 @@ def _main():
         else:
             transactions = load_stdin_transactions()
         if args.as_of:
-            transactions = [t for t in transactions
-                            if (t.date or "9999") <= args.as_of]
+            # The same date basis as the year filter (R1-10): a
+            # trade-date cutoff on a settle project dropped a Dec-31
+            # sale that is a next-year disposition everywhere else.
+            _basis = GainsRequest(country=args.country,
+                                  tax_date=args.tax_date).effective_tax_date()
+            if _basis == "settle":
+                transactions = [t for t in transactions
+                                if (t.date_settle or t.date or "9999")
+                                <= args.as_of]
+            else:
+                transactions = [t for t in transactions
+                                if (t.date or "9999") <= args.as_of]
 
         sheltered_transactions = []
         for sheltered_path in args.sheltered:

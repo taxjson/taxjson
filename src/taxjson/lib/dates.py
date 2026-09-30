@@ -48,13 +48,24 @@ def noon_utc(dt: datetime) -> datetime:
 # One home for the settlement-lag convention. Equities settled T+3 until
 # 2017-09-05 (US and Canada moved together), T+2 until the 2024 cutover
 # (US 2024-05-28; Canada 2024-05-27, a TSX trading day the US spent
-# closed for Memorial Day) and T+1 since; options are T+1 in every era.
+# closed for Memorial Day) and T+1 since; other markets per _T1_CUTOVER;
+# options are T+1 in every era.
 # The lag is counted in SETTLEMENT days of the trade's market
 # (lib/market_calendar: US = NYSE + Federal Reserve holidays, Canada =
 # TSX + Remembrance Day + Truth and Reconciliation), so a holiday inside
 # the lag moves the settle date later, as the clearing houses do.
 
 T3_TO_T2 = '2017-09-05'
+
+# The T+1 cutovers, by trade currency (standing in for the market: the
+# callers key the calendar on currency). North America moved in May
+# 2024 (Mexico with Canada); the UK, the EU and Switzerland move on
+# 2027-10-11. Every other market (the ASX, Hong Kong, Japan, ...) is
+# T+2 (audit G5-0: LSE and ASX fills settled on the US T+1 cycle, so a
+# sale on the second-to-last trading day landed in the wrong year).
+_T1_CUTOVER = {'USD': '2024-05-28', 'CAD': '2024-05-27',
+               'MXN': '2024-05-27', 'GBP': '2027-10-11',
+               'EUR': '2027-10-11', 'CHF': '2027-10-11'}
 
 
 def settlement_lag_days(trade_iso: str, currency: str = 'USD',
@@ -65,8 +76,10 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
         return 1
     if trade_iso < T3_TO_T2:
         return 3
-    cutover = ('2024-05-27' if (currency or '').upper() == 'CAD'
-               else '2024-05-28')
+    cur = (currency or '').upper() or 'USD'
+    cutover = _T1_CUTOVER.get(cur)
+    if cutover is None:
+        return 2
     return 2 if trade_iso < cutover else 1
 
 

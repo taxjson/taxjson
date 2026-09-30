@@ -410,6 +410,14 @@ def load_config(root: Path) -> Dict[str, Any]:
                          f"name — use letters, digits, '_', '-' or "
                          f"'.' (must start with a letter, digit or "
                          f"'_'); it becomes file and directory names.")
+                if str(_n).upper() == "COMBINED":
+                    # reports/wash_radar_COMBINED.* is the cross-account
+                    # radar: an account of that name had its own radar
+                    # replaced by it (S038-10).
+                    _die(f"[accounts.{_n}]: the name COMBINED is "
+                         f"reserved for the cross-account wash radar — "
+                         f"rename the account (and its inputs/{_n}/ "
+                         f"folder).")
         except Exception as e:
             _die(f"{path} is not valid TOML: {e}")
     _refuse_bad_account_types(cfg)
@@ -438,6 +446,109 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     if tax_date is not None and tax_date not in ("settle", "trade"):
         _die(f"[settings] tax_date must be settle|trade, "
              f"got {tax_date!r}")
+    # base_currency: " CAD" / "Cad " passed validation and failed later
+    # as a misdiagnosed "rows still carry a non-CAD currency — fix the
+    # rates file" error, and "cad" silently priced every native-CAD fee
+    # at the default FX rate in fees.rpt (R1-153). One canonical,
+    # checked spelling for every reader.
+    base = settings.get("base_currency")
+    if base is not None:
+        if not isinstance(base, str) \
+                or not re.fullmatch(r"[A-Za-z]{3}", base.strip()):
+            _die(f"[settings] base_currency must be a 3-letter currency "
+                 f"code such as \"CAD\" or \"USD\", got {base!r}")
+        settings["base_currency"] = base.strip().upper()
+    srcs = settings.get("source_currencies")
+    if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
+        settings["source_currencies"] = [c.strip().upper() for c in srcs]
+    # year: a typo'd 2204 / 1850 / 0 built empty books and every filing
+    # total read 0 with exit 0; `true` failed minutes later inside the
+    # gains stage (R1-256). Same plausible range `taxjson init` enforces.
+    year = settings.get("year")
+    if year is not None:
+        if isinstance(year, bool) or not isinstance(year, int):
+            _die(f"[settings] year must be an integer tax year, "
+                 f"got {year!r}")
+        _max_year = date_cls.today().year + 1
+        if not 1900 <= year <= _max_year:
+            _die(f"[settings] year = {year} is not a plausible tax year "
+                 f"(expected 1900..{_max_year})")
+
+
+# Top-level tables taxjson.toml may carry. Anything else is ignored —
+# which is why a misspelled [estimates] / [Estimate] / [instalment]
+# silently fell back to 0 other income or no instalment schedule
+# (R1-216, R1-257).
+_TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate")
+_INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
+                     "withheld", "prescribed_rate", "prescribed_rates",
+                     "paid")
+
+
+def _did_you_mean(key: str, valid) -> str:
+    import difflib
+    close = difflib.get_close_matches(str(key).lower(), list(valid), n=1)
+    return f" (did you mean {close[0]!r}?)" if close else ""
+
+
+def _config_table_warnings(cfg: Dict[str, Any]) -> List[str]:
+    """Unknown top-level tables/keys and unknown [estimate] /
+    [instalments] keys. Shared by `run` (validate_config) and by the
+    commands that READ those tables (estimate, sum, instalments), which
+    used to use 0 for a misspelled key with no word (S038-13)."""
+    out: List[str] = []
+    for key in cfg:
+        if key in _TOP_LEVEL_TABLES:
+            continue
+        if key == "fetch" and isinstance(cfg[key], dict):
+            out.append("the retired [fetch.<account>] tables are "
+                       "ignored — `taxjson fetch` reads `brokerage` + "
+                       "`account` / `query_id` under [accounts.<name>]")
+            continue
+        what = ("table" if isinstance(cfg[key], dict) else "key")
+        out.append(f"unknown top-level {what} "
+                   f"{'[' + key + ']' if what == 'table' else repr(key)} "
+                   f"is ignored{_did_you_mean(key, _TOP_LEVEL_TABLES)}")
+    for table, allowed in (("instalments", _INSTALMENTS_KEYS),
+                           ("estimate", _ESTIMATE_KEYS)):
+        tbl = cfg.get(table)
+        if not isinstance(tbl, dict):
+            continue
+        for key in tbl:
+            if key not in allowed:
+                out.append(f"unknown [{table}] key {key!r} is "
+                           f"ignored{_did_you_mean(key, allowed)}")
+    return out
+
+
+_CONFIG_WARNED: set = set()
+
+
+def _warn_config_tables(root: Path) -> None:
+    """Print _config_table_warnings once per process (estimate reads
+    [estimate] twice; instalments reads both tables)."""
+    for msg in _config_table_warnings(_soft_config(root)):
+        if msg in _CONFIG_WARNED:
+            continue
+        _CONFIG_WARNED.add(msg)
+        _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
+        print(f"{_pfx}: warning: taxjson.toml: {msg}", file=sys.stderr)
+
+
+def _nonneg_money(value: Any, what: str) -> float:
+    """A config money figure: a finite, non-negative number (a TOML
+    boolean is refused — float(True) is 1.0). Dies naming `what`."""
+    import math as _math
+    if isinstance(value, bool):
+        _die(f"{what} must be a number, got {value!r}")
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        _die(f"{what} must be a number, got {value!r}")
+    if not _math.isfinite(f) or f < 0:
+        _die(f"{what} must be a non-negative finite number (enter it as "
+             f"a positive amount), got {value!r}")
+    return f
 
 
 def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
@@ -490,6 +601,7 @@ def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
     other_income stays >= 0: deductions are their own input, not a
     negative income (R1-213)."""
     import math as _math
+    _warn_config_tables(root)
     cfg = _soft_config(root).get("estimate") or {}
     out = []
     for key in ("deductions", "carrying_charges"):
@@ -497,6 +609,8 @@ def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
         src = f"--{key.replace('_', '-')}"
         if v is None:
             v, src = cfg.get(key), f"[estimate] {key}"
+        if isinstance(v, bool):
+            _die(f"{src} must be a number, got {v!r}")
         try:
             f = float(v or 0.0)
         except (TypeError, ValueError):
@@ -515,6 +629,7 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
     estimate, and without a common resolution the two commands
     reported different net tax owing for anyone with employment
     income (5.5x on the auditor's fixture)."""
+    _warn_config_tables(root)
     cfg = _soft_config(root).get("estimate") or {}
     oi = getattr(args, "other_income", None)
     ol = getattr(args, "other_losses", None)
@@ -522,6 +637,10 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
         oi = cfg.get("other_income")
     if ol is None:
         ol = cfg.get("other_losses")
+    # float(True) is 1.0: `other_income = true` was read as $1 (R1-217).
+    for _k, _v in (("other_income", oi), ("other_losses", ol)):
+        if isinstance(_v, bool):
+            _die(f"[estimate] {_k} must be a number, got {_v!r}")
     try:
         oi_f, ol_f = float(oi or 0.0), float(ol or 0.0)
     except (TypeError, ValueError):
@@ -613,22 +732,24 @@ def validate_config(cfg: Dict[str, Any],
             "share loss (s.54 'a right to acquire'); shares never replace "
             "an option, and only the identical contract replaces an "
             "option. Delete the line.")
+    _base = settings.get("base_currency")
+    if (_base and _base != "CAD" and _normalize_country(
+            str(settings.get("country", "canada"))) == "canada"):
+        warnings.append(
+            f"[settings] base_currency is {_base!r} but country is "
+            f"canada — a Canadian return is filed in CAD, so every "
+            f"FOR THE RETURN figure would be in the wrong currency "
+            f"(R1-153)")
     src = settings.get("source_currencies")
     if src is not None and (not isinstance(src, list)
                             or not all(isinstance(c, str) for c in src)):
         _die(f"[settings] source_currencies must be a list of "
                  f"currency codes, got {src!r}")
 
-    for table, allowed in (("instalments",
-                           ("basis", "prior_year_net_tax",
-                            "second_prior_net_tax", "withheld",
-                            "prescribed_rate", "prescribed_rates",
-                            "paid")),
-                          ("estimate", _ESTIMATE_KEYS)):
-        for key in (cfg.get(table) or {}):
-            if key not in allowed:
-                warnings.append(f"unknown [{table}] key {key!r} is "
-                                f"ignored{_suggest(key, allowed)}")
+    # Unknown top-level tables ([estimates]) and unknown [estimate] /
+    # [instalments] keys — the same check the commands reading those
+    # tables print (R1-216, R1-257, S038-13).
+    warnings.extend(_config_table_warnings(cfg))
     accounts = cfg.get("accounts", {})
     for name, acfg in accounts.items():
         if not isinstance(acfg, dict):
@@ -665,13 +786,16 @@ def validate_config(cfg: Dict[str, Any],
             for sub in sorted(adir.iterdir()):
                 if not sub.is_dir() or sub.name.startswith("."):
                     continue
+                # Spreadsheets too: an .xlsx here got no word at all
+                # (S043-13).
                 n_csv = sum(1 for f in sub.rglob("*")
                             if f.is_file() and f.suffix.lower()
-                            in (".csv", ".tt"))
+                            in (".csv", ".tt") + SPREADSHEET_SUFFIXES)
                 if n_csv:
                     warnings.append(
                         f"inputs/{name}/{sub.name}/ holds {n_csv} "
-                        f"CSV/.tt file(s) that are NOT read — only files "
+                        f"CSV/.tt/spreadsheet file(s) that are NOT read "
+                        f"— only CSV and .tt files "
                         f"directly in inputs/{name}/ are processed; move "
                         f"them up a level (or out of inputs/ if they are "
                         f"not meant for this account)")
@@ -815,26 +939,92 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
         diag.unlink(missing_ok=True)
 
 
+def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
+                               year: Any) -> None:
+    """An option still open in the books after its expiry date: the
+    export dropped the expiry / assignment / exercise row. For a LONG
+    contract the premium paid is a capital loss of the expiry year that
+    the books never realize (R1-37); option-boundary covers written
+    contracts only. Loud on every run and, through a `.diag` sidecar,
+    in the account's .sum. Cutoff: the earlier of the project's year end
+    and today — a contract expiring later is simply open."""
+    import json as _json
+    from datetime import date as _date
+    from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    diag = cache / f"{name}_expired_options.diag"
+    cutoff = min(f"{year}-12-31", _date.today().isoformat())
+    lines: List[str] = []
+    try:
+        inv = _json.loads(gains_json.read_text(encoding="utf-8")).get(
+            "inventory") or []
+    except (OSError, ValueError, AttributeError):
+        inv = []
+    for h in inv:
+        sym = str(h.get("symbol") or "")
+        try:
+            qty = float(h.get("qty") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(qty) < 1e-9 or not is_option_symbol(sym):
+            continue
+        exp = parse_option_expiry(sym)
+        if not exp or exp >= cutoff:
+            continue
+        side = "long" if qty > 0 else "written"
+        lines.append(
+            f"warning: {name}: {sym} expired {exp} but the books still "
+            f"hold {qty:g} ({side}) — the export is missing its expiry, "
+            f"assignment or exercise row"
+            + (f"; the {abs(float(h.get('total_cost') or 0.0)):,.2f} paid "
+               f"is a loss of {exp[:4]} that is not booked"
+               if qty > 0 else "")
+            + ". Add the missing row (an expiry is a BUYSELL closing "
+              "the position at 0 on the expiry date) and re-run.")
+    if lines:
+        diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        for ln in lines:
+            print(f"  ! {ln}", file=sys.stderr)
+    else:
+        diag.unlink(missing_ok=True)
+
+
 def detect_broker(csv_path: Path) -> Optional[str]:
-    """Filename hint first (covers coinbase/kraken whose CSV shapes aren't
-    distinctive enough for content detection), then content detection
-    (ib/rbc_direct/questrade/webull). The hint wins because Kraken ledgers
-    look superficially like an rbc_direct activity export."""
+    """Which parser reads this CSV. In order:
+
+    1. a documented name PREFIX — generic_, cb_, kr_ — is the user's
+       explicit routing and always wins;
+    2. a positive content match on an equity export's structure (IB's
+       Statement header, Questrade's columns, Webull's Action Code)
+       wins over a word in the name;
+    3. the venue WORDS coinbase / kraken in the name (their CSV shapes
+       aren't distinctive enough for content detection, and a Kraken
+       ledger looks superficially like an RBC activity export);
+    4. whatever content detection found (rbc_direct), else None.
+
+    The word hints used to be checked first, so generic_kraken_export.csv
+    and kr_trades_moved_from_coinbase.csv went to the wrong crypto
+    parser (0 rows, exit 0) and an IB export named after Kraken Robotics
+    was refused as crypto data (R1-127, S044-01, S044-02)."""
     lower = csv_path.name.lower()
     for hint, broker in _FILENAME_HINTS:
-        # Underscore-style hints (cb_, kr_) match only at the START of
-        # the filename — the documented convention ("rename to start
-        # with cb_/kr_"). A substring match routed ibkr_statement.csv
-        # (contains "kr_") to the Kraken parser, which emitted 0
-        # transactions while the run exited 0 (REVIEW-2026-07-ui #3).
-        # Word hints (coinbase, kraken) stay substring matches.
-        if hint.endswith("_"):
-            if lower.startswith(hint):
-                return broker
-        elif hint in lower:
+        # Underscore-style hints match only at the START of the name:
+        # a substring match routed ibkr_statement.csv (contains "kr_")
+        # to the Kraken parser (REVIEW-2026-07-ui #3).
+        if hint.endswith("_") and lower.startswith(hint):
             return broker
     from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
-    return detect_brokerage(csv_path)
+    by_content = detect_brokerage(csv_path)
+    if by_content in _STRUCTURAL_BROKERS:
+        return by_content
+    for hint, broker in _FILENAME_HINTS:
+        if not hint.endswith("_") and hint in lower:
+            return broker
+    return by_content
+
+
+# Content matches strong enough to beat a venue word in the file name
+# (structural markers a crypto export never carries).
+_STRUCTURAL_BROKERS = ("ib", "questrade", "webull")
 
 
 def input_files(dirpath: Path, suffix: str) -> List[Path]:
@@ -923,32 +1113,47 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
 
 # ---------------------------------------------------------------- stages
 
-def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None) -> bool:
+def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None,
+                          currencies: Optional[List[str]] = None) -> bool:
     """Whether to_base.csv's DATA has aged out. Freshness is a property of
     the data, not the file's mtime: coverage ends at the generation date,
     so on a stable install (no package/config mtime bumps to invalidate
     the cache) the file would otherwise be reused forever and every trade
     after its last row would silently convert at the --default-rate.
     Stale when the newest rate row is more than 3 days old (tolerates
-    weekends/short holidays without refetching daily)."""
+    weekends/short holidays without refetching daily) — judged PER
+    CURRENCY when `currencies` is given: the file concatenates one block
+    per source currency, and a USD block cut short by a failed download
+    hid behind a fresh AUD last line (S046-06)."""
     today = today or date_cls.today()
+    newest: Dict[str, date_cls] = {}
     try:
-        last_line = ""
         with rates_path.open("r", encoding="utf-8") as f:
             for line in f:
-                if line.strip():
-                    last_line = line
-        if not last_line:
-            return True                      # sources configured, no rows
-        last_date = datetime.strptime(last_line.split()[0], "%Y-%m-%d").date()
+                parts = line.split()
+                if not parts:
+                    continue
+                d = datetime.strptime(parts[0], "%Y-%m-%d").date()
+                cur = parts[2].upper() if len(parts) > 2 else ""
+                for key in (cur, "*"):
+                    if key not in newest or d > newest[key]:
+                        newest[key] = d
     except (OSError, ValueError, IndexError):
         return True                          # unreadable/malformed: refetch
-    return (today - last_date).days > 3
+    if "*" not in newest:
+        return True                          # sources configured, no rows
+    keys = [c.upper() for c in currencies] if currencies else ["*"]
+    return any(k not in newest or (today - newest[k]).days > 3
+               for k in keys)
 
 
 def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     """Build to_base.csv by appending taxjson-to-base-curr output for each
-    configured source currency. Caches across runs."""
+    configured source currency. Caches across runs while every source
+    currency's rates reach the last few days: a refresh whose download
+    failed for one currency (its block ends early) is refetched on the
+    next run instead of being served for days behind another currency's
+    fresh last line (S046-06)."""
     base = settings["base_currency"]
     sources = [c for c in settings.get("source_currencies", ["USD"]) if c != base]
     # Ensure the cache dir exists before any write — applies to both
@@ -973,7 +1178,8 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # this, switching from CAD-base to USD-base silently reused the
     # old rates. The coverage check catches the inverse failure: an
     # mtime-fresh file whose data ends in the past.
-    if not needs_rebuild(rates_path) and not _rates_coverage_stale(rates_path):
+    if (not needs_rebuild(rates_path)
+            and not _rates_coverage_stale(rates_path, currencies=sources)):
         return rates_path
     had_previous = rates_path.exists() and rates_path.stat().st_size > 0
     parts: List[bytes] = []
@@ -1232,6 +1438,71 @@ def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
             == "usa" else "dividend")
 
 
+def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
+    """Rename corp-action rows the way the security overrides renamed
+    the same broker's parsed rows ((symbol, currency) -> new symbol).
+    A pair the overrides renamed for some rows and not others is
+    ambiguous (two securities share the broker's spelling): a corporate
+    action on it is refused rather than booked on a guess."""
+    import json as _json
+    if not log.exists() or not corp_json.exists():
+        return
+    try:
+        doc = _json.loads(log.read_text(encoding="utf-8"))
+        corp = _json.loads(corp_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    renamed = {k: v for k, v in (doc.get("renamed") or {}).items() if v}
+    kept = set(doc.get("kept") or [])
+    if not renamed:
+        return
+    changed = False
+    for t in corp.get("transactions", []) or []:
+        cur = str(t.get("currency") or "").upper()
+        for fld in ("symbol", "symbol_new"):
+            sym = t.get(fld) or ""
+            key = f"{sym}|{cur}"
+            if key not in renamed:
+                continue
+            targets = renamed[key]
+            if len(targets) > 1 or key in kept:
+                _die(f"{account}: a corporate action on {sym} ({cur}), "
+                     f"but ticker_extraction_overrides.txt renames some "
+                     f"{sym} rows (to {', '.join(targets)}) and not "
+                     f"others — two securities share that spelling, so "
+                     f"the event cannot be assigned. Record it with a "
+                     f".tt file (and `taxjson elect {account} --set "
+                     f"<event>=ignore`).")
+            t[fld] = targets[0]
+            changed = True
+    if changed:
+        tmp = corp_json.with_name(corp_json.name + ".part")
+        tmp.write_text(_json.dumps(corp, indent=2, sort_keys=True) + "\n",
+                       encoding="utf-8")
+        tmp.replace(corp_json)
+
+
+# Project-root files the per-account stages read (their content is part
+# of each account's input fingerprint).
+_PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
+                        "distributions.map", "phantoms.json",
+                        "crypto_ticker.map")
+
+
+def _inputs_fingerprint(paths: List[Path]) -> str:
+    """One line per existing file: name, size and SHA-256 of the
+    content (mtimes deliberately left out — see R1-253)."""
+    lines = []
+    for p in sorted(set(paths), key=str):
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        lines.append(f"{p.name} {len(data)} "
+                     f"{hashlib.sha256(data).hexdigest()}")
+    return "\n".join(lines) + "\n"
+
+
 def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   inputs_dir: Path, cache: Path, reports_dir: Path,
                   rates: Path, ticker_map: Optional[Path],
@@ -1290,9 +1561,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                    {b for b in grouped if b not in _CRYPTO_BROKERS})
     if _mismatched:
         flag = "crypto = true" if is_crypto else "no crypto flag"
+        _which = ", ".join(f"inputs/{name}/{p.name} ({b})"
+                           for b in sorted(_mismatched)
+                           for p in grouped[b])
         sys.exit(
             f"taxjson: account '{name}' has {flag} in taxjson.toml but "
             f"its inputs contain {', '.join(sorted(_mismatched))} files "
+            f"[{_which}; routed by a cb_/kr_/generic_ name prefix, the "
+            f"file's content, or a coinbase/kraken word in its name] "
             f"— the {'equity' if is_crypto else 'crypto'} data would be "
             f"routed through the wrong pipeline. Move the files to an "
             f"account of the matching type, or fix the account's "
@@ -1342,6 +1618,26 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if (not src_manifest.exists()
             or src_manifest.read_text(encoding="utf-8") != src_txt):
         src_manifest.write_text(src_txt, encoding="utf-8")
+    # Content, not just membership: `run --fast` compared mtimes only,
+    # so a CSV replaced by a corrected export carrying an OLDER mtime
+    # (cp -p, rsync -a, unzip) — or a ticker.map restored the same way
+    # — kept the previous parse at exit 0 (R1-253, R1-294). A digest of
+    # every input and project-root map file; when it changes, the
+    # sources manifest (a dep of every parse/corp/merge stage) is
+    # touched so the rebuild cascades.
+    _fp_file = cache / f"{name}_inputs.fingerprint"
+    _fp_txt = _inputs_fingerprint(
+        [p for csvs in grouped.values() for p in csvs]
+        + list(input_files(acct_dir, ".tt"))
+        + [_c.with_name(_c.name + ".toml")
+           for _c in grouped.get("generic", [])]
+        + [acct_dir / "generic.toml"]
+        + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS])
+    if (not _fp_file.exists()
+            or _fp_file.read_text(encoding="utf-8") != _fp_txt):
+        _fp_file.write_text(_fp_txt, encoding="utf-8")
+        import os as _os
+        _os.utime(src_manifest)
 
     # 1. brokerage parse per broker
     parsed: List[Path] = []
@@ -1387,7 +1683,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # is exactly what explains a confusing position later.
                 cmd += ["--transfers-out", str(_sidecar)]
             if security_overrides:
-                cmd += ["--security-overrides", str(security_overrides)]
+                cmd += ["--security-overrides", str(security_overrides),
+                        "--override-log",
+                        str(out.with_name(out.stem + ".overrides"))]
+            else:
+                out.with_name(out.stem + ".overrides").unlink(
+                    missing_ok=True)
             cmd += [str(p) for p in csvs]
             run_to_file(cmd, out)
             # Surface per-file transaction counts (and any 0-tx
@@ -1503,6 +1804,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     if e.returncode == 3 and pending_path.exists():
                         raise PendingElectionsError(name, pending_path)
                     raise
+            # ticker_extraction_overrides.txt renamed this broker's
+            # trade rows; the corp-action rows of the same security must
+            # follow, or a merger consumed an empty un-overridden pool
+            # while the real position stayed put (S004-00).
+            _apply_override_log(out, cache / f"{name}_{broker}.overrides",
+                                name)
             corp_files.append(out)
         _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
 
@@ -1514,7 +1821,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     tt_jsons: List[Path] = []
     for tt in input_files(acct_dir, ".tt"):
         out = tt_json_path(cache, name, tt.name)
-        if force or needs_rebuild(out, tt):
+        if force or needs_rebuild(out, tt, src_manifest):
             print(f"  convert-tt {tt.name}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
                         out)
@@ -1790,6 +2097,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    if is_taxable:
+        _warn_expired_open_options(name, gains_json, cache, year)
 
     # 5b. Raw holdings: merge + sort + dedup, NO currency conversion and
     # NO validation; then gains with no options. The same ticker.map is
@@ -2275,7 +2584,11 @@ def stage_cross_reports(all_gains: List[Path],
         sheltered_arg = (["--sheltered", str(sheltered_base)]
                          if sheltered_base else [])
         for tb in taxable_equity_base:
-            stem = tb.stem.replace("_base", "")
+            # Strip only the trailing "_base": replace() removed EVERY
+            # "_base", so account a_base_x wrote account a_x's radar
+            # (S038-10).
+            stem = (tb.name[:-len("_base.json")]
+                    if tb.name.endswith("_base.json") else tb.stem)
             # --json-out: structured sidecar next to the .rpt; the web UI
             # reads it and computes countdowns at view time.
             run_to_file(_cmd("taxjson-wash-radar") + [
@@ -2377,6 +2690,37 @@ def _refuse_phantoms_for_unknown_accounts(phantoms: Path,
         "change silently. Edit the \"account\" of each entry to the "
         "current account name (or delete the entries if the account "
         "is gone), then run again.")
+
+
+def _warn_year_without_activity(year: Any, bases: List[Path]) -> None:
+    """Warn when no row of this run's books is dated in [settings]
+    year. A typo'd in-range year (2015 for 2025) built all-zero filing
+    totals with exit 0 and no word (R1-256)."""
+    import json as _json
+    if not year or not bases:
+        return
+    ys = str(year)
+    lo = hi = None
+    for b in bases:
+        try:
+            txs = _json.loads(Path(b).read_text(encoding="utf-8")).get(
+                "transactions", [])
+        except (OSError, ValueError, AttributeError):
+            return                   # unreadable: other checks say so
+        for t in txs:
+            for d in (str(t.get("date") or "")[:10],
+                      str(t.get("date_settle") or "")[:10]):
+                if d.startswith(ys):
+                    return
+                if len(d) == 10:
+                    lo = d if lo is None or d < lo else lo
+                    hi = d if hi is None or d > hi else hi
+    if lo is None:
+        return                       # empty books: said elsewhere
+    print(f"taxjson: warning: no transaction in any account's books is "
+          f"dated {ys} (the books run {lo} .. {hi}) — every {ys} filing "
+          f"total will be 0. Is [settings] year in taxjson.toml right?",
+          file=sys.stderr)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -2605,6 +2949,20 @@ def cmd_run(args: argparse.Namespace) -> None:
               f"last-built books"
               + (f" (missing: {', '.join(_missing)} — never built; "
                  f"run without --account)" if _missing else ""))
+    _pending_sheltered = {pe.account for pe in pending_accounts}
+    if (not _sheltered_merge_inputs and not args.account
+            and not _pending_sheltered):
+        # No sheltered account produced books in this FULL run (the last
+        # one was removed, or its inputs emptied): the previous run's
+        # combined book must go, or the filed-year lock, check-filed and
+        # the radar keep reading registered holdings that no longer
+        # exist — a false OK on a moved filed number (S004-05).
+        for _ghost in (cache / "sheltered_base.json",
+                       cache / "sheltered_base.json.diag"):
+            if _ghost.exists():
+                _ghost.unlink()
+                print(f"  removed stale {_ghost.name} (no sheltered "
+                      f"account has books)")
     if _sheltered_merge_inputs:
         print("==> merge sheltered accounts → sheltered_base.json")
         sheltered_base = cache / "sheltered_base.json"
@@ -2714,6 +3072,22 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 reports_dir, sheltered_base,
                                 incomplete_history=phantoms_arg,
                                 tag="cryptoblend")
+    if not args.account and not pending_accounts:
+        # A sheltered account never gets a wash pass. One re-typed from
+        # taxable kept its old <name>_gains_wash.json / _wash.sum, which
+        # resolve_gains_files prefers forever — the "run a full `taxjson
+        # run`" remedy never cleared them (S038-19).
+        for _n, _c in accounts.items():
+            if (_c or {}).get("type") != "sheltered":
+                continue
+            for _stale in (cache / f"{_n}_gains_wash.json",
+                           cache / f"{_n}_gains_wash.traces",
+                           cache / f"{_n}_gains_wash.json.diag",
+                           reports_dir / f"{_n}_wash.sum"):
+                if _stale.exists():
+                    _stale.unlink()
+                    print(f"  removed stale {_stale.name} ({_n} is "
+                          f"sheltered — no wash pass)")
 
     if pending_accounts:
         # Some account(s) stopped at unresolved corp-action elections.
@@ -2816,6 +3190,10 @@ def cmd_run(args: argparse.Namespace) -> None:
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],
                 settings)
     stage_fees(cache, settings, rates, reports_dir)
+    _warn_year_without_activity(
+        settings.get("year"),
+        [o["base"] for _, o in sheltered_outputs]
+        + [o["base"] for _, o, _c in taxable_outputs])
 
     # Filed-year lock: recompute every closed year from the fresh books
     # and shout if a filed number moved (warn-only; --strict aborts).
@@ -2878,7 +3256,18 @@ def cmd_run(args: argparse.Namespace) -> None:
             _mp = _manifest_path_for(inputs_dir / _name, cache, _name)
             if not _mp.exists():
                 continue
-            for _rec in Manifest.load(_mp).records.values():
+            try:
+                _recs = list(Manifest.load(_mp).records.values())
+            except (OSError, ValueError, AttributeError) as _e:
+                # One unreadable manifest used to discard every
+                # account's reminder in silence (S038-23): name it and
+                # keep going.
+                print(f"taxjson: warning: could not read {_mp} ({_e}) — "
+                      f"its elections are not checked for a FILING "
+                      f"REQUIRED reminder; fix the file (`taxjson elect "
+                      f"{_name}` reads it too).", file=sys.stderr)
+                continue
+            for _rec in _recs:
                 _todo = FILING_REQUIRED_ELECTIONS.get(_rec.election)
                 if not _todo:
                     continue
@@ -3018,8 +3407,10 @@ _TEMPLATE_INSTALMENTS = """
 # [instalments]
 # basis                = "current_year"   # current_year | prior_year | cra_reminder
 # withheld             = 0                # tax withheld at source this year
-# # Last two years' net tax owing (line 48500 minus withholding, from
-# # each Notice of Assessment). Supply BOTH even on current_year: CRA
+# # Last two years' net tax owing, as CRA's instalment chart defines it:
+# # lines 42000 + 42200 + 42800 (+ 43200) minus 43700 (tax deducted) and
+# # the refundable credits — NOT line 48500, which also subtracts the
+# # instalments you paid. Supply BOTH even on current_year: CRA
 # # assesses interest on the least of the methods your figures support,
 # # and they decide whether instalments are owed at all. Leaving a 0
 # # here reads as "I owed nothing" and suppresses both.
@@ -3422,6 +3813,14 @@ def cmd_elect(args: argparse.Namespace) -> None:
             k, v = h.split("=", 1)
             try:
                 hints[k.strip()] = float(v)
+                from taxjson.lib.corp_actions import hint_value_problem
+                _prob = hint_value_problem(k.strip(), hints[k.strip()])
+                if _prob:
+                    # A negative allocated ACB created basis from
+                    # nothing and a negative FMV booked negative
+                    # dividend income, saved at exit 0; nan/inf failed
+                    # only on the next run (S039-00).
+                    sys.exit(f"taxjson elect --hint: {_prob}")
             except ValueError:
                 # Every hint consumer float()s its value — storing the
                 # raw string reported "Election saved" and then crashed
@@ -3479,6 +3878,13 @@ def cmd_elect(args: argparse.Namespace) -> None:
         print(f"Election saved: {event_id} = {election}"
               + (f" (hints: {hints})" if hints else "")
               + f" → {manifest_path}")
+        if ("fmv_per_share" in hints and abs(hints["fmv_per_share"]) < 1e-12
+                and election.startswith("taxable_")):
+            # 0 is the documented "defer" value (R1-11): say what it books.
+            print(f"taxjson elect: warning: fmv_per_share=0 books this "
+                  f"{election} at $0 — no income and a $0 cost for the "
+                  f"new shares. Every `taxjson run` and the checklist "
+                  f"flag it until a value is set.", file=sys.stderr)
         return
 
     if not (args.redo or args.reset):
@@ -4425,6 +4831,20 @@ def _leaps_contracts(root: Path, account: Optional[str],
                "books).")
     leaps: set = set()
     qty_by_symbol: Dict[str, float] = {}
+    # The native books carry the broker's listing (pre-TOBASE: BCE...US)
+    # while the gains files carry the ticker.map spelling (BCE...TO);
+    # without the rename a genuine LEAPS never matched a gains row and
+    # vanished from both views (R1-237).
+    _renames: Dict[str, str] = {}
+    _tm = root / "ticker.map"
+    if _tm.exists():
+        try:
+            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                        merge_renames)
+            _renames = merge_renames(_parse_map_file(_tm)[0], True)
+        except Exception:                               # noqa: BLE001
+            _renames = {}
+    from taxjson.bin.taxjson_ticker_map import map_symbol as _map_sym
     for acct in accounts:
         native = _native_tx_file(cache, acct)
         if native is None:
@@ -4449,8 +4869,9 @@ def _leaps_contracts(root: Path, account: Optional[str],
             qty = float(tx.get("quantity") or 0.0)
             prev_bal = acct_bal.get(sym, 0.0)
             acct_bal[sym] = prev_bal + qty
-            qty_by_symbol[sym] = qty_by_symbol.get(sym, 0.0) + qty
-            if sym in leaps or tx.get("action") != "BUYSELL" or qty <= 0:
+            msym = _map_sym(sym, _renames) if _renames else sym
+            qty_by_symbol[msym] = qty_by_symbol.get(msym, 0.0) + qty
+            if msym in leaps or tx.get("action") != "BUYSELL" or qty <= 0:
                 continue                       # entry must be a LONG buy
             if prev_bal < -1e-9:
                 # A BUY against THIS ACCOUNT'S short position is a
@@ -4466,7 +4887,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
             if not expiry or not _ISO_DATE_RE.match(d):
                 continue
             if expiry > _add_months(d, _LEAPS_MONTHS):
-                leaps.add(sym)
+                leaps.add(msym)
     return {sym: qty_by_symbol.get(sym, 0.0) for sym in leaps}
 
 
@@ -4502,10 +4923,13 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
 
     entries.sort(key=lambda ae: (ae[1].get("date") or "",
                                  ae[1].get("symbol") or ""))
+    _split = _scope_split(root, [(a, e.get("gain")) for a, e in entries])
     if getattr(args, "json", False):
         _json_out({"rows": [dict(e, account=acct) for acct, e in entries],
                    "total_gain": round(sum(float(e.get("gain") or 0)
                                            for _a, e in entries), 2),
+                   "taxable_gain": _split["taxable"],
+                   "sheltered_gain": _split["sheltered"],
                    "currency": base_cur, "basis": basis})
         return
     out_lines = ["DATE CONTRACT QTY PROCEEDS COST GAIN DAYS_HELD"]
@@ -4524,9 +4948,35 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
+    _print_scope_split(_split, base_cur)
     print(f"Amounts are the engine's allowed figures — lot-matched, "
           f"basis: {basis}. Partial closes of a contract "
           f"appear as they are realized; still-open contracts are absent.")
+
+
+def _scope_split(root: Path, pairs) -> Dict[str, float]:
+    """{'taxable': x, 'sheltered': y} over (account, gain) pairs, by
+    the config's account types (an unknown account counts as taxable,
+    the side that must never be understated). The cross-account views
+    added registered-account P&L into one headline total with no
+    account column (R1-182)."""
+    _acfg = _soft_config(root).get("accounts") or {}
+    out = {"taxable": 0.0, "sheltered": 0.0}
+    for acct, gain in pairs:
+        scope = ("sheltered" if (_acfg.get(acct) or {}).get("type")
+                 == "sheltered" else "taxable")
+        out[scope] += float(gain or 0.0)
+    return {k: round(v, 2) for k, v in out.items()}
+
+
+def _print_scope_split(split: Dict[str, float], base_cur: str) -> None:
+    if abs(split.get("sheltered", 0.0)) < 0.005:
+        return
+    money = fmt_money
+    print(f"  TAXABLE accounts:   {money(split['taxable'])} {base_cur}")
+    print(f"  SHELTERED accounts: {money(split['sheltered'])} {base_cur}"
+          f"  (registered — not taxable events; the return uses the "
+          f"taxable figure)")
 
 
 def _leaps_empty_doc(root: Path, account: Optional[str],
@@ -4574,6 +5024,12 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
                 continue
             if "gain" not in e or "qty" not in e or e.get("tainted"):
                 continue
+            # LONG dispositions only: the write (grant record) and the
+            # buy-back of a contract that qualified through a long entry
+            # are covered-call legs — counted in ccd-sum, and counted a
+            # second time here (R1-172).
+            if e.get("direction") == "SHORT" or e.get("grant"):
+                continue
             d = _gains_row_date(e, keep, _settle)
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
@@ -4614,6 +5070,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
 
     money = fmt_money               # shared report-layer formatter
 
+    _split = _scope_split(root, [(a, e.get("gain")) for a, e in entries])
     agg: Dict[str, Dict[str, float]] = {}
     for _acct, e in entries:
         sym = str(e.get("symbol") or "?")
@@ -4637,6 +5094,8 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
                                                    key=sort_key)],
                    "total_gain": round(sum(r2["gain"]
                                            for r2 in agg.values()), 2),
+                   "taxable_gain": _split["taxable"],
+                   "sheltered_gain": _split["sheltered"],
                    "currency": base_cur, "basis": basis})
         return
     for sym, rec in sorted(agg.items(), key=sort_key):
@@ -4650,6 +5109,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
+    _print_scope_split(_split, base_cur)
     print(f"Engine-allowed amounts (lot-matched, basis: {basis}, "
           f"base currency); closed portions only — still-open "
           f"contracts carry no mark-to-market here.")
@@ -4682,6 +5142,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     basis = gains_basis_label(resolved)
 
     agg: Dict[str, Dict[str, float]] = {}
+    _ccd_pairs: List[Tuple[str, float]] = []
     tainted_skipped = 0
     for acct, f in resolved.items():
         data = _load_json_or_die(f)
@@ -4741,6 +5202,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             premium, buyback = ((cost, proceeds) if inferred
                                 else (-cost, -proceeds))
             und = parse_option_underlying(sym) or sym
+            _ccd_pairs.append((acct, gain))
             rec = agg.setdefault(und, {"contracts": 0, "qty": 0.0,
                                        "proceeds": 0.0, "cost": 0.0,
                                        "gain": 0.0})
@@ -4761,6 +5223,10 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
                             for und, rec in sorted(agg.items())],
                    "total_gain": round(sum(r["gain"]
                                            for r in agg.values()), 2),
+                   "taxable_gain": _scope_split(root, _ccd_pairs)[
+                       "taxable"],
+                   "sheltered_gain": _scope_split(root, _ccd_pairs)[
+                       "sheltered"],
                    "tainted_skipped": tainted_skipped,
                    "currency": base_cur, "scope": scope,
                    "basis": basis})
@@ -4783,6 +5249,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL COVERED-CALL GAIN: {money(total)} {base_cur}")
+    _print_scope_split(_scope_split(root, _ccd_pairs), base_cur)
     print("PREMIUM = proceeds of the sold calls; BUYBACK = cost to "
           "close (0 for expiries); assignments' share gains are NOT "
           "here — they land in the stock's own rows.")
@@ -6507,6 +6974,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 print("FX on foreign cash (s.39(1.1)) is not in the rows "
                       "above — T4037 puts it on line 15300; see `taxjson "
                       "fx-cash`.")
+            # Slip capital gains are part of line 19700 too (R1-44).
+            print("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
+                  "slips are not in the rows above — Schedule 3 lines "
+                  "17600 and 17400, entered from the slips (the books "
+                  "carry those distributions as dividends).")
 
     if want_estimate:
         _print_tax_estimate(
@@ -6528,6 +7000,7 @@ def _instalment_config(root: Path,
     """Validated [instalments] table ({} when absent). Loud on bad
     input: these figures move money."""
     from taxjson.bin.taxjson_instalments import BASES
+    _warn_config_tables(root)
     cfg = (_soft_config(root).get("instalments") or {})
     if not cfg:
         return {}
@@ -6542,10 +7015,11 @@ def _instalment_config(root: Path,
         v = cfg.get(key)
         if v is None:
             continue
-        try:
-            out[key] = float(v)
-        except (TypeError, ValueError):
-            _die(f"[instalments] {key} must be a number, got {v!r}")
+        # Sign, finiteness and type, like paid[].amount: withheld = -5000
+        # overstated net tax owing by 10,000, withheld = nan waived the
+        # instalments, a negative rate zeroed the interest, and `true`
+        # read as 1.0 — all at exit 0 (R1-217).
+        out[key] = _nonneg_money(v, f"[instalments] {key}")
     # CRA resets the prescribed rate quarterly and charges each day at
     # the rate in force that day — so a dated schedule is accepted and
     # applied per day. A scalar prescribed_rate stays valid.
@@ -6554,7 +7028,7 @@ def _instalment_config(root: Path,
         _die("[instalments] set prescribed_rate OR prescribed_rates, "
              "not both — the dated schedule would silently win and "
              "the single rate be discarded.")
-    if out.get("prescribed_rate", 0) > 1.0:
+    if out.get("prescribed_rate", 0) >= 1.0:
         _die(f"[instalments] prescribed_rate is a DECIMAL fraction "
              f"(0.08 = 8%), got {out['prescribed_rate']} — that would "
              f"charge {out['prescribed_rate'] * 100:.0f}% a year.")
@@ -6574,8 +7048,10 @@ def _instalment_config(root: Path,
                 # wrong as a string ("2026-9-01" > "2026-12-31"), so
                 # the segment silently applied to the wrong window.
                 frm = date_cls.fromisoformat(str(row["from"])).isoformat()
-                r = float(row["rate"])
-                if r > 1.0:
+                r = _nonneg_money(row["rate"],
+                                  f"[instalments] prescribed_rates[{i}]"
+                                  f".rate")
+                if r >= 1.0:
                     _die(f"[instalments] prescribed_rates[{i}].rate is "
                          f"a DECIMAL fraction (0.08 = 8%), got {r}.")
                 sched.append({"from": frm, "rate": r})
@@ -6612,7 +7088,12 @@ def _instalment_config(root: Path,
             # walk parses with it, so an unpadded date accepted here
             # crashed later behind a misleading error.
             d = date_cls.fromisoformat(str(d)).isoformat()
+            if isinstance(a, bool):
+                raise TypeError("boolean amount")
             a = float(a)
+            import math as _math
+            if not _math.isfinite(a):
+                raise ValueError("non-finite amount")
         except (TypeError, ValueError):
             _die(f"[instalments] paid[{i}] needs a YYYY-MM-DD `date` "
                  f"and a numeric `amount`, got {row!r}")
@@ -8192,11 +8673,11 @@ def cmd_positions(args: argparse.Namespace) -> None:
     as_of = getattr(args, "date", None)
     if as_of:
         # Positions AS OF a date: recompute each account's books from
-        # its base.json with the engine's --as-of cutoff. Deferred wash
-        # within the account is kept, but it is PER-ACCOUNT ACB (no s.47
-        # blend across taxable accounts), PRE-WASH and PRE-ticker.map
-        # (the cross-account pass only exists for full runs) — the
-        # basis label says so (2026-09 audit S044-21).
+        # its base.json (already ticker.map-consolidated) up to the
+        # date. Deferred wash within the account is kept, but it is
+        # PER-ACCOUNT ACB (no s.47 blend across taxable accounts) and
+        # before the cross-account wash pass (that exists only for full
+        # runs) — the basis label says so (S044-21, R1-282).
         import re as _re
         if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
             sys.exit("taxjson list: --date expects YYYY-MM-DD")
@@ -8228,9 +8709,17 @@ def cmd_positions(args: argparse.Namespace) -> None:
                      f"taxjson.toml")
         names = ([args.account] if args.account
                  else sorted(accounts_cfg))
+        # The cutoff reads the project's date basis, like the gains
+        # year and t1135 (R1-10).
+        _asof_basis_set = str(settings.get("tax_date") or "").strip().lower() \
+            in ("trade", "settle")
+        _asof_basis = (str(settings.get("tax_date")).strip().lower()
+                       if _asof_basis_set else
+                       ("trade" if country in ("us", "usa") else "settle"))
         files = {}
         tmp_docs = {}
         _no_input = _accounts_skipped_for_no_inputs(root)
+        _phantoms = root / "phantoms.json"
         for n in names:
             b = cache / f"{n}_base.json"
             if not b.exists():
@@ -8249,8 +8738,15 @@ def cmd_positions(args: argparse.Namespace) -> None:
                    "--country", country, "--year", year,
                    "--as-of", as_of, "--no-wash"] + option_timing_flags(
                        settings)
+            if _asof_basis_set:
+                cmd += ["--tax-date", _asof_basis]
             if accounts_cfg.get(n, {}).get("type") == "taxable":
                 cmd.append("--taxable")
+            # The same phantom openings every other recompute applies:
+            # without them each phantom-backed position showed as a
+            # large short (R1-187).
+            if _phantoms.exists():
+                cmd += ["--incomplete-history", str(_phantoms)]
             res = _run_cmd(cmd + [str(b)], capture_output=True)
             if res.returncode != 0:
                 print(f"taxjson: warning: as-of compute failed for "
@@ -8262,8 +8758,13 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             sys.exit(f"taxjson list: no base files in {cache} "
                      f"(run `taxjson run` first).")
-        basis = (f"as of {as_of} (per-account ACB, pre-wash, "
-                 f"pre-ticker.map)")
+        # The base books are already ticker.map-consolidated; what the
+        # recompute lacks is the s.47 blend and the cross-account wash
+        # pass (R1-282, S044-21).
+        _asof_word = ("settlement date" if _asof_basis == "settle"
+                      else "trade date")
+        basis = (f"as of {as_of} by {_asof_word} (per-account ACB, "
+                 f"before the cross-account wash pass)")
         # A symbol held in two taxable accounts has ONE s.47 ACB on the
         # return (plain `list` shows it); this view recomputes each
         # account alone, so its cost differs — say so rather than
@@ -8344,8 +8845,13 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
     negative_only = getattr(args, "negative", False)
 
+    # What the rows are AS OF: the --date, or the end of the books
+    # (plain `list` is end-of-data, not the tax year's Dec 31 — its
+    # header said "as of tax year 2025" over 2026 positions, R1-282).
+    horizon = as_of or _books_horizon(cache, list(files))
     if getattr(args, "json", False):
         doc = {"rows": json_rows, "basis": basis, "year": year,
+               "as_of": horizon,
                "currency": _base_currency(root),
                "totals": {"positions": n_pos,
                           "book_cost": round(total_cost, 2),
@@ -8365,7 +8871,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
     base = _base_currency(root)
     title = "NEGATIVE POSITIONS" if negative_only else "OPEN POSITIONS"
-    print(f"{title} — {base}, as of tax year {year}, basis: {basis}  "
+    when = (f"as of {as_of}" if as_of else
+            f"as of the latest data in the books"
+            + (f" ({horizon})" if horizon else ""))
+    print(f"{title} — {base}, {when}, basis: {basis}  "
           f"(after ticker.map + base-currency conversion; COST is book cost)")
     print()
     _print_report_table(out_lines)
@@ -8375,6 +8884,23 @@ def cmd_positions(args: argparse.Namespace) -> None:
               f"cost is denied superficial losses parked in these "
               f"positions (recovered when sold without a rebuy in the "
               f"window).")
+
+
+def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
+    """Latest transaction date across these accounts' base books."""
+    import json as _json
+    last = None
+    for a in accounts:
+        try:
+            txs = _json.loads((cache / f"{a}_base.json").read_text(
+                encoding="utf-8")).get("transactions", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        for t in txs:
+            d = str(t.get("date") or "")[:10]
+            if len(d) == 10 and (last is None or d > last):
+                last = d
+    return last
 
 
 def _soft_config(root: Path) -> Dict[str, Any]:
@@ -9696,6 +10222,20 @@ def _radar_taxable_bases(root: Path, cache: Path,
     if names:
         bases = [cache / f"{n}_base.json" for n in sorted(names)
                  if (cache / f"{n}_base.json").exists()]
+        # A configured taxable account without books used to vanish
+        # from the checks in silence — a sibling's recent buy then read
+        # as "SAFE — no tracked position" (S046-11).
+        _skipped = _accounts_skipped_for_no_inputs(root)
+        _missing = [n for n in sorted(names)
+                    if not (cache / f"{n}_base.json").exists()
+                    and n not in _skipped]
+        if _missing and bases:
+            print(f"{prog}: WARNING: no books for taxable account(s) "
+                  f"{', '.join(_missing)} (work/<account>_base.json "
+                  f"missing) — their trades are INVISIBLE to these "
+                  f"window checks, so a SAFE/CLEAR verdict here can be "
+                  f"wrong. Run `taxjson run` to build them.",
+                  file=sys.stderr)
     else:
         bases = [p for p in sorted(cache.glob("*_base.json"))
                  if not p.name.endswith("_raw_base.json")
@@ -10078,7 +10618,10 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
     coexisting coverage double-counts the books."""
     hits: List[Tuple[Path, int]] = []
     import csv as _csv
-    for sib in sorted(acct_dir.glob("*.csv")):
+    # input_files, not glob("*.csv"): `run` reads QT_MANUAL.CSV too, so
+    # a case-sensitive glob let an overlapping upper-case export double
+    # the books with no warning (S046-14).
+    for sib in input_files(acct_dir, ".csv"):
         if sib == out:
             continue
         if re.fullmatch(r"questrade_\d{4}\.csv", sib.name):
@@ -10095,11 +10638,23 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
                 rows = list(_csv.reader(f))
         except Exception:
             continue
-        n = sum(1 for r in rows[1:] if r and _row_date_in_window(
-            r[0], start_iso, end_iso))
+        col = _qt_date_col(rows[0] if rows else [])
+        n = sum(1 for r in rows[1:] if len(r) > col and _row_date_in_window(
+            r[col], start_iso, end_iso))
         if n:
             hits.append((sib, n))
     return hits
+
+
+def _qt_date_col(header: List[str]) -> int:
+    """Index of Questrade's "Transaction Date" column, by header name.
+    The window is a TRADE-date window (the API's own); reading r[0]
+    trimmed by Settlement Date when a manual export had that column
+    first, deleting a trade the fetched file does not hold (R1-74)."""
+    for i, h in enumerate(header):
+        if h.strip().lstrip("\ufeff").lower() == "transaction date":
+            return i
+    return 0
 
 
 def _row_date_in_window(first_field: str, start_iso: str,
@@ -10124,11 +10679,13 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
     rows removed; unparseable rows are kept (safe side)."""
     import csv as _csv
     import io as _io
+    from taxjson.bin import taxjson_fetch as F
     with path.open(encoding="utf-8", errors="replace") as f:
         rows = list(_csv.reader(f))
+    col = _qt_date_col(rows[0] if rows else [])
     keep = [rows[0]] + [r for r in rows[1:]
-                        if not (r and _row_date_in_window(
-                            r[0], start_iso, end_iso))]
+                        if not (len(r) > col and _row_date_in_window(
+                            r[col], start_iso, end_iso))]
     removed = len(rows) - len(keep)
     if removed:
         # Never clobber an existing backup: a second --trim-overlap
@@ -10139,11 +10696,44 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
         while bak.exists():
             bak = path.with_name(f"{path.name}.bak{n}")
             n += 1
-        path.replace(bak)
+        # Copy, then write the trimmed file atomically and private
+        # (0600) like every fetched file — replace-then-write_text left
+        # a 0664 file, and no file at all if the write failed (R1-74).
+        shutil.copy2(path, bak)
         buf = _io.StringIO()
         _csv.writer(buf, lineterminator="\n").writerows(keep)
-        path.write_text(buf.getvalue(), encoding="utf-8")
+        F.write_private(path, buf.getvalue())
     return removed
+
+
+_FLEX_DATE_RE = re.compile(r"(?<!\d)(20\d{2})-?(0[1-9]|1[0-2])-?"
+                           r"(0[1-9]|[12]\d|3[01])(?!\d)")
+
+
+def _flex_dates(text: str) -> List[str]:
+    """Sorted ISO dates found on an IB statement's data rows (the
+    Statement section — generation time, period — is skipped)."""
+    out = set()
+    for line in text.splitlines():
+        if line.lstrip('"').startswith("Statement"):
+            continue
+        for m in _FLEX_DATE_RE.finditer(line):
+            out.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+    return sorted(out)
+
+
+def _flex_lost_dates(existing: str, new: str, year: Any) -> List[str]:
+    """Dates of `year` the existing ib_flex.csv covers but the new
+    download's date range does not: overwriting would delete those
+    rows. A Flex query set to 'Year to date' re-fetched in January
+    replaced a whole year of activity at exit 0 (S007-00)."""
+    if not year or not existing:
+        return []
+    old = [d for d in _flex_dates(existing) if d[:4] == str(year)]
+    got = _flex_dates(new)
+    if not got:
+        return old
+    return [d for d in old if not got[0] <= d <= got[-1]]
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -10365,16 +10955,56 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                          f"line descriptor', then re-fetch.")
             results[a] = {"source": "ibkr_flex", "file": out.name,
                           "lines": len(text.splitlines())}
+            _pyear = cfg.get("settings", {}).get("year")
+            _existing = (out.read_text(encoding="utf-8", errors="replace")
+                         if out.exists() else "")
+            _lost = _flex_lost_dates(_existing, text, _pyear)
+            _got = _flex_dates(text)
+            _span = f"{_got[0]}..{_got[-1]}" if _got else "no dated rows"
+            if _lost:
+                _new = out.with_name(out.name + ".new")
+                if not getattr(args, "dry_run", False):
+                    F.write_private(_new, text)
+                sys.exit(f"taxjson fetch: {a}: the Flex download covers "
+                         f"{_span}, but {out.name} holds {len(_lost)} "
+                         f"{_pyear} activity date(s) outside it "
+                         f"({_lost[0]}..{_lost[-1]}) — replacing it "
+                         f"would delete that activity from the books. "
+                         + ("" if getattr(args, "dry_run", False) else
+                            f"The download was saved as {_new.name} "
+                            f"(not read by `taxjson run`). ")
+                         + f"Set the Flex query's period to cover "
+                         f"{_pyear}, or move {out.name} aside to accept "
+                         f"the new file.")
             if getattr(args, "dry_run", False):
                 say(f"  would write {out.name} "
-                    f"({len(text.splitlines())} lines)")
+                    f"({len(text.splitlines())} lines, {_span})")
                 continue
+            if _existing and _existing != text:
+                # Never lose the previous statement: numbered backups,
+                # like --trim-overlap's (not read by `taxjson run`).
+                bak = out.with_name(out.name + ".bak")
+                n = 2
+                while bak.exists():
+                    bak = out.with_name(f"{out.name}.bak{n}")
+                    n += 1
+                F.write_private(bak, _existing)
             # Atomic like the Questrade path: a crash mid-write must
             # not leave a truncated statement for the next run.
             F.write_private(out, text)
-            say(f"  {out.name}: {len(text.splitlines())} lines "
+            say(f"  {out.name}: {len(text.splitlines())} lines, {_span} "
                 f"(overwritten — a Flex query re-covers its whole "
-                f"configured period)")
+                f"configured period"
+                + (f"; previous copy kept as {bak.name}"
+                   if _existing and _existing != text else "") + ")")
+            if (_pyear and _got and int(_pyear) < date_cls.today().year
+                    and (_got[0] > f"{_pyear}-01-10"
+                         or _got[-1] < f"{_pyear}-12-20")):
+                print(f"taxjson fetch: WARNING: {a}: the Flex download "
+                      f"covers {_span}, not the whole tax year "
+                      f"{_pyear} — set the query's period to the full "
+                      f"year (Jan 1 to Dec 31, plus January for "
+                      f"year-end settlements).", file=sys.stderr)
         else:
             sys.exit(f"taxjson fetch: [accounts.{a}] brokerage must be "
                      f"'questrade' or 'ibkr_flex', got {source!r}.")
@@ -10586,8 +11216,38 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             if _new and _old and _new.upper() != _old.upper():
                 _union(_old, _new, f"SPLIT-rename in {_bp.name}")
 
+    # An option root that names no share listing in the books but
+    # matches exactly ONE class share of that root on the same exchange
+    # is that class: RBC books Rogers' Montreal options under the root
+    # RCI (RCI270115C00046000.TO) while the shares are RCI.B.TO, and the
+    # call — a right to acquire those shares — fell into an empty
+    # RCI.TO class, so buy-check said SAFE (S047-01).
+    from taxjson.lib.core import is_option_symbol as _is_opt
+    _shares = {t.strip().upper() for t in radar if not _is_opt(t)}
+    for _bp in bases:
+        try:
+            for _t in _json.loads(_bp.read_text(encoding="utf-8")).get(
+                    "transactions", []) or []:
+                _sy = str(_t.get("symbol") or "").strip().upper()
+                if _sy and not _is_opt(_sy):
+                    _shares.add(_sy)
+        except (OSError, ValueError, AttributeError):
+            continue
+    _by_root: Dict[str, set] = {}
+    for _sy in _shares:
+        _m = re.fullmatch(r"(.+)\.([A-Z]{1,2})\.([A-Z]{1,3})", _sy)
+        if _m:
+            _by_root.setdefault(f"{_m.group(1)}.{_m.group(3)}",
+                                set()).add(_find(_sy))
+    _class_alias = {r: next(iter(cs)) for r, cs in _by_root.items()
+                    if len(cs) == 1 and r not in _shares
+                    and _find(r) == r}
+
     def canon(t: str) -> str:
-        return _find(_root(t))
+        r = _find(_root(t))
+        if _is_opt(t.strip().upper()) and r in _class_alias:
+            return _class_alias[r]
+        return r
 
     _acct_cfg = _soft_config(root).get("accounts") or {}
     _taxable = {a for a, c in _acct_cfg.items()
@@ -10618,6 +11278,20 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
                                  "gain": round(_g, 2),
                                  "account": _t.get("account") or _a}
     return radar, canon, last_loss
+
+
+def _fold_class_separator(symbol: str) -> str:
+    """A share-class ticker typed the broker/Yahoo way (RCI-B, 'RCI B',
+    RCI/B, RCI-B.TO) in the books' dotted spelling (RCI.B, RCI.B.TO).
+    Unfolded, the query matched nothing and buy-check answered SAFE
+    while a loss on RCI.B.TO sat inside the window (S007-02). Option
+    symbols pass through unchanged."""
+    from taxjson.lib.core import is_option_symbol
+    s = " ".join(str(symbol).split()).upper()
+    if is_option_symbol(s):
+        return s
+    m = re.fullmatch(r"([A-Z0-9]+)[-/ ]([A-Z]{1,2})((?:\.[A-Z]{1,3})?)", s)
+    return f"{m.group(1)}.{m.group(2)}{m.group(3)}" if m else s
 
 
 def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
@@ -10716,6 +11390,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     unsafe = 0
     results = []
     for want in args.symbol:
+        want = _fold_class_separator(want)
         wroot, matches, _note = _class_matches(radar, _canon, want)
         matches = _replacement_rows(want, matches, "buy")
         # Worst verdict across the class (cross-listings included).
@@ -10818,6 +11493,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     unsafe = 0
     results = []
     for want in args.symbol:
+        want = _fold_class_separator(want)
         wroot, matches, _note = _class_matches(radar, _canon, want)
         matches = _replacement_rows(want, matches, "sell")
         verdict, lines = "SAFE", ([_note] if _note else [])
@@ -11062,6 +11738,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
     crypto_blend = country not in ("us", "usa") and len(crypto) >= 2
 
     _no_input = _accounts_skipped_for_no_inputs(root)
+    # Configured accounts (with inputs) the audit could not cover: the
+    # tie-out printed "✓" over the rest and exited 0, and the checklist
+    # marked every disposition traced (S047-16).
+    _uncovered: List[str] = []
 
     def _blended_invocation(names: List[str], *, is_crypto: bool) -> None:
         bases = [cache / f"{n}_base.json" for n in names
@@ -11069,6 +11749,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         missing = [n for n in names
                    if not (cache / f"{n}_base.json").exists()
                    and n not in _no_input]
+        _uncovered.extend(missing)
         if missing:
             print(f"taxjson audit: note: no books yet for "
                   f"{', '.join(missing)} — run `taxjson run` to include "
@@ -11122,6 +11803,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         base = cache / f"{n}_base.json"
         if not base.exists():
             if n not in _no_input:
+                _uncovered.append(n)
                 print(f"taxjson audit: note: no books yet for {n} — run "
                       f"`taxjson run` to include it.", file=sys.stderr)
             continue
@@ -11202,6 +11884,12 @@ def cmd_audit(args: argparse.Namespace) -> None:
                            for d in json_docs), 2),
                    "failed": any(d.get("failed") for d in json_docs)}
         _json_out(doc)
+    if _uncovered and not _acct:
+        print(f"taxjson audit: WARNING: not audited — no books for "
+              f"{', '.join(sorted(set(_uncovered)))}; their dispositions "
+              f"are not in the tie-out above. Run `taxjson run`.",
+              file=sys.stderr)
+        rc = max(rc, 1)
     if rc:
         raise SystemExit(rc)
 
@@ -11440,11 +12128,22 @@ def cmd_init(args: argparse.Namespace) -> None:
     # The config is (re)written — the guard above already enforces --force.
     config_text, account_names = _render_init_config(
         country, getattr(args, "year", None))
+    bak_name = "taxjson.toml.bak"
     if cfg.exists():
         # --force re-templates: keep the user's previous config (their
-        # accounts, holdings, instalments) recoverable.
-        shutil.copy2(cfg, cfg.with_name("taxjson.toml.bak"))
-        written.append("taxjson.toml.bak (your previous config)")
+        # accounts, holdings, instalments) recoverable. Never overwrite
+        # an earlier backup: a second --force (fixing the --country)
+        # replaced the only copy of the user's config with the first
+        # template (R1-255). Same numbering as fetch's .bak files.
+        bak = cfg.with_name(bak_name)
+        n = 1
+        while bak.exists() and bak.read_bytes() != cfg.read_bytes():
+            bak = cfg.with_name(f"{bak_name}{n}")
+            n += 1
+        if not bak.exists():
+            shutil.copy2(cfg, bak)
+        bak_name = bak.name
+        written.append(f"{bak_name} (your previous config)")
     cfg.write_text(config_text)
     written.append("taxjson.toml")
     if country == "usa":
@@ -11478,7 +12177,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     if _orphans:
         print(f"  note: inputs/ has folder(s) with no [accounts.*] "
               f"section in the new config: {', '.join(_orphans)} — "
-              f"re-add their sections (see taxjson.toml.bak) or remove "
+              f"re-add their sections (see {bak_name}) or remove "
               f"the folders.")
     import shlex as _shlex
     print("\nNext:")
@@ -11876,10 +12575,14 @@ def main() -> None:
     p_pos.add_argument("account", nargs="?", help="Account (default: all)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
                        help="Positions AS OF this date — each account's "
-                            "books recomputed alone with the engine's "
-                            "--as-of cutoff (per-account ACB: no s.47 "
-                            "blend across taxable accounts; pre-wash, "
-                            "pre-ticker.map)")
+                            "books (already ticker.map-consolidated) "
+                            "recomputed alone with the engine's --as-of "
+                            "cutoff on the project's date basis "
+                            "(settlement date unless tax_date = "
+                            "\"trade\"); phantoms.json applied; "
+                            "per-account ACB (no s.47 blend across "
+                            "taxable accounts), before the cross-account "
+                            "wash pass")
     p_pos.add_argument("--negative", action="store_true",
                        help="Show only positions with negative quantity "
                             "(short positions — or, in accounts that "

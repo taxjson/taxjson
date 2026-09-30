@@ -280,11 +280,11 @@ class TestRedactIdentifierShapes(unittest.TestCase):
                 '2025-01-01,call (604) 555-0199 or +1 416 555 0123,0\n'
                 '2025-01-02,mail ' + _POSTAL2 + ' and ' + _POSTAL3 + ',0\n'
                 '2025-01-03,ship to ' + _STREET2 + ',0\n'
-                '2025-01-04,SIN 046 454 286 SSN ' + _SSN + ',0\n'
-                '2025-01-05,SIN: 046454286,0\n')
+                '2025-01-04,SIN 046 454 286 SSN ' + _SSN + ',0\n'  # pii-ok (CRA sample SIN)
+                '2025-01-05,SIN: 046454286,0\n')  # pii-ok (CRA sample SIN)
         out, rep = redact_text(text)
         for gone in ("604", "416", _POSTAL2, _POSTAL3, "Example Crescent",
-                     "046 454 286", "046454286", _SSN):
+                     "046 454 286", "046454286", _SSN):  # pii-ok (CRA sample SIN)
             self.assertNotIn(gone, out, gone)
         self.assertEqual((rep.phones, rep.postal_codes, rep.addresses, rep.sins),
                          (2, 2, 1, 3))

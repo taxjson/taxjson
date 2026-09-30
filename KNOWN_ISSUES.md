@@ -127,10 +127,10 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Impact:** registered accounts — none. Taxable accounts — ACB is understated (gain overstated at sale) until the declared amount is supplied; the zero-basis walk also surfaces the position via `taxjson find-missing-history`.
 - **Workaround (the intended flow):** add the fund's declared per-share amount for the record date to `distributions.map`; `taxjson run` converts it into the ACB-raising ADJUST.
 
-### IB settlement T+2→T+1 cutoff is hardcoded to the US/CA date `2024-05-28`
-- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — per-currency cutovers (US 2024-05-28 / CA 2024-05-27) hardcoded in the settle-date back-computation.
-- **Current behavior:** the US/Canada T+1 transition date is applied to all IB venues. EU moved to T+1 on 2027-10-11, so non-US/CA IB trades get T+1 settle dates years too early, which can shift a Dec/Jan trade into the wrong tax year under `--tax-date settle`.
-- **Why deferred:** only US/CA IB venues have been exercised in practice, so it hasn't fired; a real fix needs a per-venue settlement calendar.
+### Settlement cycles outside North America are keyed on currency, with weekends-only calendars
+- **Where:** `src/taxjson/lib/dates.py` (`_T1_CUTOVER`), `src/taxjson/lib/market_calendar.py`.
+- **Current behavior:** the settlement lag follows the trade currency: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other currency (the ASX's AUD, HKD, JPY, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. IB stamps ASX fills in US Eastern time, which is already the next day in Sydney; the trade date is taken as stamped.
+- **Why deferred:** per-market holiday calendars and venue time zones for markets the books rarely touch.
 
 ---
 ---
@@ -271,15 +271,15 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 
 ---
 
-### T1135 cost amounts leave out denied superficial losses
-- **Where:** `src/taxjson/bin/taxjson_t1135.py` `walk_costs` (its own average-cost replay of the base books).
-- **Current behavior:** the engine adds a denied superficial loss to the replacement shares' ACB (s.53(1)(f)); the T1135 walk does not, so the max-cost / Dec-31 cost columns (and the threshold test) are low by the deferred amount while those shares are held. The report names the deferred amounts from the gains files and says when they could lift the maximum over the threshold.
-- **Why deferred:** the add-backs live only in the engine's run (virtual ADJUST rows); the year-scoped gains files do not carry prior years' add-backs. Sketch: run one full-history `run_gains` pass in `cmd_t1135` (as `carryover` does) and feed each disposition's `wash_trigger.adjust_amount` / `adjust_date` into the walk as ADJUST rows (needs the landing symbol recorded in `wash_trigger`).
-
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`TRANSFER` in `_NON_CAPITAL`; taxable books post-sidecar contain no TRANSFER rows at all).
 - **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history listed in `phantoms.json` shows as a phantom opening (`taxjson t1135` applies the project's phantoms.json the way the gains stage does, and flags a still-held phantom "cost understated") — the threshold test can understate until the true history is declared.
 - **Why this is the design:** T1135 cost amount IS adjusted cost base; the tool refuses to invent one from a transfer's arrival market value. Declare the real history (the same `custody_fixes.tt` pattern the wash engine prescribes) and the threshold is right.
+
+### T1135 cost carries superficial losses denied in the project year only
+- **Where:** `src/taxjson/bin/taxjson_t1135.py` (`wash_adjustments`, `_deferred_wash`).
+- **Current behavior:** the cost walk adds each s.53(1)(f) amount the engine denied in the project year (the gains files' `wash_sales`) to the replacement's cost, at the later of the losing sale and the replacement purchase. A loss denied in an EARLIER year onto a position still held is not in the year-scoped gains files, so the walk carries it only if the project's own rows do (a hand-off `margin_start.tt` needs the `ADJUST` line — see the hand-off check); the report names what the engine's inventory still defers beyond the year's additions and says when it could lift the maximum over the threshold.
+- **Why deferred:** replaying every earlier year's wash pass (with its registered-account context) inside `t1135` re-runs the engine. Sketch: one full-history `run_gains` pass in `cmd_t1135` (as `carryover` does), feeding each earlier year's `wash_sales` through the same `wash_adjustments`.
 
 ### Futures are booked on their settled P/L (Canadian books)
 - **Where:** `src/taxjson/lib/futures.py` (applied by convert-currency / merge2 for a CAD target), `core._trade_money`, `taxjson_form_export.build_schedule3`.
@@ -332,6 +332,11 @@ reported manually" instead of counting them as missing.
 
 ### A merger's per-account empirical ratios are blended
 - **Where:** `lib/core.py` folds one merger's rename SPLITs with different per-account ratios into a single holdings-weighted ratio (2026-09). Totals and the shared ACB pool are right; each account's wash-walk balance can be a fraction of a share off.
+
+### Canadian payments in lieu are estimated as ordinary income
+- **Where:** `lib/tax_estimate.py` `estimate_canada` adds every payment in lieu (`dil-sum`) to ordinary income, and the README calls them ordinary income with no gross-up or credit.
+- **Question:** ITA s.260(5)/(5.1)(a) deems a dealer's compensation payment for a public corporation's taxable dividend to be a taxable dividend (eligible where s.260(1.1) applies), and IB's T5 box 24 includes it; a trust unit's (s.260(5.1)(b)) follows the trust income instead. Whether to split PIL by the issuer's type (which the exports do not state) is an owner decision.
+- **Current behaviour:** the Canada estimate overstates tax slightly (about $113 on the owner's 2025 books); filed and fileable numbers are unaffected (form-export carries no income). Treat the `dil-sum` total for Canadian issuers as dividends when entering it (2026-09 audit S049-18).
 
 ### `wash-sales --explain` traces each account on its own
 - The explain trace predates the blended passes; the numbers in the table are the blended ones.

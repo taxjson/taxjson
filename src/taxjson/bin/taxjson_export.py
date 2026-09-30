@@ -546,6 +546,15 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
     src = ", ".join(Path(p).name for p in args.inputs) or "<stdin>"
     lines.append(f"source = {_toml_str(src)}")
     lines.append(f"holdings_count = {len(rows)}")
+    if base_agg:
+        # base_total_cost comes from a separate per-account, per-listing
+        # engine pass with no superficial-loss adjustment and no s.47
+        # blend across taxable accounts: a denied loss's bump and the
+        # blended cost are NOT in it, so it can call a position a gain
+        # that is a tax loss (S037-24). Said in the file itself.
+        lines.append('base_cost_basis = "per-account, per-listing, before '
+                     'superficial-loss adjustments and the s.47 blend '
+                     '(the filing ACB is `taxjson list`)"')
     lines.append("")
 
     for sym, qty, total_cost, currency, position_start_date, b in rows:

@@ -483,6 +483,23 @@ def d_run_clean(ctx: Ctx) -> Result:
         problems.append(f"no reports/<account>.sum for {', '.join(unreported)} "
                         f"— the last run did not finish them (run `taxjson run` "
                         f"with no --account)")
+    # Two or more taxable equity accounts are filed on ONE blended
+    # (s.47 ACB / cross-account wash) pass. `run --account` and a run
+    # stopped at pending elections skip it, and with no wash files at
+    # all every filing view read the per-account books as Schedule 3
+    # figures in silence (S004-07).
+    equity = _accounts_of(ctx, "taxable")
+    if len(equity) >= 2:
+        unblended = [n for n in equity
+                     if (ctx.reports / f"{n}.sum").is_file()
+                     and not (ctx.cache / f"{n}_gains_wash.json").is_file()]
+        if unblended:
+            problems.append(
+                f"no blended (s.47) pass for {', '.join(unblended)} — "
+                f"the last run was per-account (`run --account`) or "
+                f"stopped at pending elections, so the filing figures "
+                f"are unblended per-account books (run `taxjson run` "
+                f"with no --account)")
     if empty_parse:
         problems.append(f"{', '.join(empty_parse)} parsed to 0 "
                         f"transactions (its rows are not in the books)")
@@ -619,8 +636,29 @@ def d_missing_history(ctx: Ctx) -> Result:
     return Result("missing-history", "done", "nothing affects the year")
 
 
+def _zero_value_elections(ctx: Ctx) -> int:
+    """Taxable spin-offs/mergers the last run booked at $0 (the "0 to
+    defer" FMV): `run` names each in <acct>_corp_spinoff_value.diag."""
+    n = 0
+    for p in ctx.cache.glob("*_corp_spinoff_value.diag"):
+        try:
+            n += sum(1 for ln in p.read_text(encoding="utf-8").splitlines()
+                     if ln.startswith("warning:"))
+        except OSError:
+            continue
+    return n
+
+
 def d_elections(ctx: Ctx) -> Result:
     code, out, err = ctx.sub("elect", "--pending")
+    # A deferred FMV is an unresolved election too: booked at $0 it
+    # carries no income and a $0 cost for the new shares (R1-11).
+    zero = _zero_value_elections(ctx)
+    if zero:
+        return Result("elections", "attention",
+                      f"{zero} spin-off/merger(s) booked at $0 — set "
+                      f"fmv_per_share with `taxjson elect` (see the .sum "
+                      f"DIAGNOSTICS)")
     if "No pending elections" in out or (code == 0 and not out.strip()):
         return Result("elections", "done", "none pending")
     if code != 0 and not out:

@@ -179,8 +179,22 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
             candidates.append("COMBINED")
         with_reports = [a for a in candidates
                         if (cur().reports / f"wash_radar_{a}.rpt").exists()]
-        acct = account or (with_reports[0] if with_reports
-                           else (candidates[0] if candidates else ""))
+        # The COMBINED radar (written only when there are two or more
+        # taxable accounts) is the default: a per-account report sees
+        # only its own book, so it said "CLEAR — safe to sell at a
+        # loss" while a sibling account's recent buy made the loss
+        # superficial (R1-229).
+        default = ("COMBINED" if "COMBINED" in with_reports
+                   else (with_reports[0] if with_reports
+                         else (candidates[0] if candidates else "")))
+        acct = account or default
+        scope_note = None
+        if acct and acct != "COMBINED" and "COMBINED" in with_reports:
+            scope_note = (
+                f"This is {acct}'s own book only. A buy in another "
+                f"taxable account inside the 30-day window also makes a "
+                f"loss here superficial (the blended pass denies it) — "
+                f"the COMBINED view has the cross-account verdicts.")
         sections, error, status = [], None, 200
         if acct:
             try:
@@ -192,7 +206,7 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
         stale = data.radar_staleness(cur(), acct) if acct else None
         return page("wash_radar.html", request, status_code=status,
                     errors=[stale] if stale else [],
-                    account=acct,
+                    account=acct, scope_note=scope_note,
                     radar_accounts=(with_reports or candidates),
                     sections=sections, error=error)
 

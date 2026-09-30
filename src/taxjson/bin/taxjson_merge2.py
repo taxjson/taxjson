@@ -39,6 +39,7 @@ from taxjson.lib.core import (
 from taxjson.bin.taxjson_sort import sort_transactions, deduplicate
 from taxjson.bin.taxjson_ticker_map import (
     load_map_file, apply_mapping, apply_drops, merge_renames,
+    guard_option_listing_collisions,
 )
 from taxjson.bin.taxjson_convert_currency import (
     abort_if_currency_uncovered, emit_fallback_summary,
@@ -391,6 +392,10 @@ def main():
         # deleted FOO, so one map file meant two things (stage-tools
         # audit). DELETE lines nuke a ticker's transactions (audited).
         txs = apply_drops(txs, tmap.delete)
+        # An option the underlying rule would move onto a contract the
+        # book already trades natively keeps its own symbol (R1-16).
+        renames = guard_option_listing_collisions(
+            [t.symbol for t in txs], renames, prog="taxjson-merge2")
         # apply_mapping mutates and returns the same tx; that's fine here
         # because we built fresh TaxTransaction instances above.
         txs = [apply_mapping(t, renames) for t in txs]
