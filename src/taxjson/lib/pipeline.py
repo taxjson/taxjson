@@ -1149,6 +1149,16 @@ def run_gains(transactions, sheltered_transactions=(),
     return round_floats(results)
 
 
+def tt_json_path(cache: Path, account: str, tt_name: str) -> Path:
+    """Where `taxjson run` writes the converted JSON of one account's
+    .tt file: `<cache>/<account>_tt_<stem>.json`. The `tt_` namespace
+    keeps a .tt named after a broker group (`questrade.tt`) or a
+    pipeline intermediate (`base.tt`) from overwriting that file —
+    the old `<account>_<stem>.json` did, silently dropping the whole
+    broker parse (R1-116). Every reader of a .tt's JSON uses this."""
+    return Path(cache) / f"{account}_tt_{Path(tt_name).stem}.json"
+
+
 def option_timing_from_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """The engine kwargs for `[settings] option_premium_timing` /
     `option_grant_timing_since` (Canada). Default: statutory grant timing

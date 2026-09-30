@@ -54,6 +54,46 @@
   and currency opens with a sale they cover (ORCC to OBDC in 2023), the
   parser warns and prints the `GLOBAL` line for `ticker.map`.
 
+- **The Canada estimate takes deductions.** `--deductions` (RRSP 20800,
+  FHSA, RPP ...) and `--carrying-charges` (line 22100), or
+  `deductions`/`carrying_charges` in `[estimate]` (which `instalments`
+  reads too), lower net and taxable income; the AMT base takes the
+  deductions in full and carrying charges at 50%. Before, a year with
+  an RRSP deduction and little other income was overstated (the
+  owner's filed 2025 mix: +16,082 before, +1,354 after) and a binding
+  AMT could read as not binding.
+- **A malformed `ticker.map` line stops the run.** A typo such as
+  `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
+  ACB pools and the Schedule 3 gain, and the warning reached only
+  `reports/*.sum` while `run` and `run --strict` exited 0. `taxjson run`
+  now refuses the map, listing each bad line as `ticker.map:<line>`.
+- **An export that parses to 0 transactions is loud, and fatal under
+  `--strict`.** A Coinbase file with a renamed header, or a `kr_`-named
+  file that is not a Kraken ledger, dropped its whole book with exit 0
+  even under `run --strict`, and the checklist called the run clean.
+  Every run (cached or not) now prints a WARNING naming the file on
+  stderr, `run --strict` stops, and the checklist's `run-clean` step
+  needs attention.
+- **An Excel export in `inputs/<account>/` stops the run.** Only `.csv`
+  and `.tt` files are read, so a Questrade `.xlsx` dropped in unconverted
+  lost every trade in it with exit 0 and no mention. `taxjson run` now
+  names each unconverted spreadsheet and stops (a spreadsheet next to
+  its converted CSV only warns); an input folder with only a spreadsheet
+  and no `[accounts.*]` section is named too; the checklist no longer
+  counts `.xlsx`/`.txt` files as account activity and its `run-clean`
+  step flags an unread spreadsheet.
+- **Every command refuses an invalid account type, not only `run`.** An
+  account `type` edited after the run (`"Taxable"`, or deleted) silently
+  dropped that account from `estimate`, `instalments`, `sum`,
+  `form-export`, `carryover` and `close-year` (which locked the wrong
+  total), all with exit 0. Every command that reads `taxjson.toml`, and
+  `taxjson serve`, now stops with the same message `run` gives.
+- **A .tt file named after a broker no longer erases that broker's
+  trades.** `questrade.tt` (or `webull.tt`, `ib.tt`, `generic.tt` ...)
+  wrote its converted JSON over the broker's parse in `work/`, so every
+  trade in that broker's CSVs vanished with exit 0. Converted .tt files
+  now live at `work/<account>_tt_<stem>.json`; the first run after
+  upgrading removes the old `<account>_<stem>.json` copies as stale.
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
   new shares' cost), flagging a taxable spin-off booked at $0 and showing

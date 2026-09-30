@@ -338,9 +338,10 @@ Examples:
         elif not transactions and file_size > 0:
             print(
                 f"warning: {input_path.name} parsed to 0 transactions "
-                f"({file_size} bytes input, brokerage={brokerage_id}). "
-                f"Check the CSV header / format — silent zero-tx output "
-                f"is usually a parser regression.",
+                f"({file_size} bytes input, brokerage={brokerage_id}): "
+                f"NONE of its rows are in the books. Check the CSV "
+                f"header / format — silent zero-tx output is usually a "
+                f"changed export layout or a parser regression.",
                 file=sys.stderr,
             )
         else:

@@ -15,7 +15,11 @@ and disclosed by the caller:
     with no withholding and no FTC; --other-losses are prior-year
     capital losses in FULL dollars, netted against gains before the
     50% inclusion (deducted at line 25300, so they do not lower the
-    NET income the federal BPA phase-down reads); the federal enhanced
+    NET income the federal BPA phase-down reads); --deductions (lines
+    20700-23500 the AMT allows in full: RRSP 20800, FHSA, RPP ...) and
+    --carrying-charges (line 22100, allowed at 50% in the post-2024
+    AMT base) lower NET and taxable income, other income first, then
+    investment income; net income floors at zero; the federal enhanced
     BPA phase-down, the Ontario surtax and the Ontario Health Premium
     are modelled; QC abatement and low-income reductions are NOT.
   - USA: single filer, standard deduction; dividends assumed QUALIFIED
@@ -208,6 +212,7 @@ CA_INCLUSION = .50
 CA_AMT_RATE = .205
 CA_AMT_CREDIT_ALLOWANCE = .50          # of modeled non-refundable credits
 CA_AMT_LOSS_ALLOWANCE = .50            # loss carryforwards deduct at 50%
+CA_AMT_CARRYING_CHARGE_ALLOWANCE = .50  # line 22100 deducts at 50%
 
 
 def ca_amt_exemption() -> float:
@@ -393,8 +398,10 @@ def _canada_tax(ordinary: float, taxable_gain: float,
     Returns totals PLUS the per-step detail the --verbose trace
     prints."""
     grossed = eligible_div * CA_ELIGIBLE_GROSSUP
-    ti = ordinary + taxable_gain + foreign_div + grossed
-    net = ti if net_income is None else net_income
+    # Deductions enter `ordinary` as a negative; income never goes
+    # below zero (a return does not carry a negative net income).
+    ti = max(0.0, ordinary + taxable_gain + foreign_div + grossed)
+    net = ti if net_income is None else max(0.0, net_income)
 
     fed_gross = _bracket_tax(ti, CA_FED_BRACKETS)
     fed_bpa_amount = ca_fed_bpa(net)
@@ -434,7 +441,8 @@ def _amt_canada(*, realized: float, eligible_div: float,
                 foreign_div: float, pil: float, other_income: float,
                 other_losses: float, ftc: float, regular_fed: float,
                 prov: Dict[str, Any], fed_bpa_amount=None,
-                prov_basic: float = 0.0) -> Dict[str, Any]:
+                prov_basic: float = 0.0, deductions: float = 0.0,
+                carrying_charges: float = 0.0) -> Dict[str, Any]:
     """The post-2024 federal AMT check plus the provincial piggyback.
     Pure arithmetic on figures estimate_canada already holds — nothing
     outside this module learns AMT exists. Always returned (binding or
@@ -446,8 +454,14 @@ def _amt_canada(*, realized: float, eligible_div: float,
     # unused balance that changes nothing in regular tax silently
     # erase a real AMT liability.
     claimable_losses = min(max(0.0, realized), max(0.0, other_losses))
-    ati = (max(0.0, realized - CA_AMT_LOSS_ALLOWANCE * claimable_losses)
-           + eligible_div + foreign_div + pil + other_income)
+    # Deductions: RRSP/FHSA/RPP-type amounts in full; interest and
+    # carrying charges to earn property income (line 22100) at 50%
+    # under the post-2024 rules.
+    ati = max(0.0,
+              max(0.0, realized - CA_AMT_LOSS_ALLOWANCE * claimable_losses)
+              + eligible_div + foreign_div + pil + other_income
+              - deductions
+              - CA_AMT_CARRYING_CHARGE_ALLOWANCE * carrying_charges)
     exemption = ca_amt_exemption()
     base = max(0.0, ati - exemption)
     gross = base * CA_AMT_RATE
@@ -552,7 +566,8 @@ CA_ASSUMPTIONS = (
     "dividends would be taxed higher); foreign withholding creditable "
     "up to 15%; crypto staking is ordinary income; no QC abatement or "
     "low-income reductions; interest income not included — see "
-    "divs/fees views.")
+    "divs/fees views; deductions below line 15000 only as entered "
+    "(--deductions, --carrying-charges).")
 
 
 def estimate_canada(*, realized: float, eligible_div: float,
@@ -561,7 +576,23 @@ def estimate_canada(*, realized: float, eligible_div: float,
                     other_income: float, other_losses: float,
                     province: str,
                     actual_withheld=None,
-                    staking: float = 0.0) -> Dict[str, Any]:
+                    staking: float = 0.0,
+                    deductions: float = 0.0,
+                    carrying_charges: float = 0.0) -> Dict[str, Any]:
+    """`deductions`: amounts deducted at lines 20700-23500 that the
+    AMT allows in full (RRSP 20800, FHSA 20805, RPP 20700, ...);
+    `carrying_charges`: line 22100 interest and carrying charges,
+    allowed at 50% in the post-2024 AMT base. Both lower net and
+    taxable income, other income first."""
+    import math
+    for _n, _v in (("deductions", deductions),
+                   ("carrying_charges", carrying_charges)):
+        if not math.isfinite(float(_v)) or float(_v) < 0:
+            raise ValueError(f"{_n} must be a non-negative finite "
+                             f"amount, got {_v!r}")
+    deductions = float(deductions)
+    carrying_charges = float(carrying_charges)
+    ded_total = deductions + carrying_charges
     pick = apply_vintage(year)
     prov_key = province.strip().upper()
     if prov_key not in CA_PROVINCES:
@@ -592,13 +623,13 @@ def estimate_canada(*, realized: float, eligible_div: float,
     # Net income (line 23600) = taxable income + the carryforward
     # losses deducted below it at line 25300 (x50%).
     grossed = eligible_div * CA_ELIGIBLE_GROSSUP
-    net_income = (other_income + pil + staking + taxable_gain
-                  + foreign_div + grossed
+    net_income = (other_income + pil + staking - ded_total
+                  + taxable_gain + foreign_div + grossed
                   + CA_INCLUSION * losses_applied)
-    with_inv = _canada_tax(other_income + pil + staking, taxable_gain,
-                           eligible_div, foreign_div, prov, ftc=ftc,
-                           net_income=net_income)
-    base = _canada_tax(other_income, 0.0, 0.0, 0.0, prov)
+    with_inv = _canada_tax(other_income + pil + staking - ded_total,
+                           taxable_gain, eligible_div, foreign_div, prov,
+                           ftc=ftc, net_income=net_income)
+    base = _canada_tax(other_income - ded_total, 0.0, 0.0, 0.0, prov)
     est = max(0.0, with_inv["total"] - base["total"])
     inv_income = realized + eligible_div + foreign_div + pil + staking
 
@@ -611,7 +642,9 @@ def estimate_canada(*, realized: float, eligible_div: float,
                       other_losses=other_losses, ftc=ftc,
                       regular_fed=with_inv["federal"], prov=prov,
                       fed_bpa_amount=with_inv["detail"]["fed_bpa_amount"],
-                      prov_basic=with_inv["detail"]["prov_basic"])
+                      prov_basic=with_inv["detail"]["prov_basic"],
+                      deductions=deductions,
+                      carrying_charges=carrying_charges)
     notes = (vintage_notes(year, pick)
              + _canada_notes(prov_key, prov, with_inv, base, amt,
                              staking))
@@ -627,6 +660,8 @@ def estimate_canada(*, realized: float, eligible_div: float,
         "losses_unused": round(losses_unused, 2),
         "grossed_eligible": round(grossed, 2),
         "staking": round(staking, 2),
+        "deductions": round(deductions, 2),
+        "carrying_charges": round(carrying_charges, 2),
         "ftc_assumed": round(ftc, 2),
         "ftc_source": ftc_source,
         "tax_with": _totals(with_inv),
