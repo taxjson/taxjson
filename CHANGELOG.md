@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Instalment interest on the least amount due by each date.** ITA
+  161(4.01) deems the requirement on each due date to be the least
+  cumulative amount any method (current-year, prior-year, CRA reminder)
+  calls for by that day. `taxjson instalments` priced each method as a
+  whole year and took the cheapest, which overstated interest and the
+  s.163.1 penalty whenever the cheapest method changed between dates.
+  The report now shows the mixed schedule when no single method
+  governs.
 - **Instalment rates for 2023 and a flag before the table.** The
   built-in CRA overdue-tax rates now start with 2023 (Q1 8%, Q2-Q4 9%).
   A 2023 year was charged 2024's 10% all year and the report called it

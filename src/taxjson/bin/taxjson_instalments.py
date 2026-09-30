@@ -289,6 +289,44 @@ def candidate_schedules(*, year: int, current_net_tax: float,
     return out
 
 
+LEAST_PER_DATE = "least_per_date"
+
+
+def least_cumulative_schedule(cands: Dict[str, List[Dict[str, Any]]]
+                              ) -> Tuple[str, List[Dict[str, Any]]]:
+    """The deemed instalment schedule of ITA 161(4.01): on EACH due date
+    the individual is deemed liable for the amount computed by
+    "whichever of the methods ... gives rise to the least total amount
+    of such parts or instalments required to be paid by the individual
+    by that day" (https://laws-lois.justice.gc.ca/eng/acts/I-3.3/
+    section-161.html). That is a per-date minimum of the CUMULATIVE
+    requirement, not one whole-year method: pricing each method alone
+    and taking the cheapest over-stated interest whenever the cheapest
+    method changes between dates (audit S034-16).
+
+    Returns (name, schedule): `name` is the candidate the minimum
+    equals on every date (current_year first, then prior_year, then
+    cra_reminder), else LEAST_PER_DATE."""
+    order = [n for n in BASES if n in cands]
+    cums = {n: [] for n in order}
+    for n in order:
+        run = 0.0
+        for r in cands[n]:
+            run += r["amount"]
+            cums[n].append(run)
+    dates = [r["date"] for r in cands[order[0]]]
+    least = [min(cums[n][i] for n in order) for i in range(len(dates))]
+    for n in order:
+        if all(abs(cums[n][i] - least[i]) < 0.005
+               for i in range(len(dates))):
+            return n, cands[n]
+    sched, prev = [], 0.0
+    for d, cum in zip(dates, least):
+        sched.append({"date": d, "amount": round(cum - prev, 2)})
+        prev = cum
+    return LEAST_PER_DATE, sched
+
+
 def build(*, year: int, basis: str, current_net_tax: float,
           payments: List[Dict[str, Any]], annual_rate=None,
           prior_net_tax: Optional[float] = None,
@@ -310,18 +348,20 @@ def build(*, year: int, basis: str, current_net_tax: float,
     if annual_rate is None:
         annual_rate = published_rates(date(year, 1, 1), end)
         rate_source = "published"
-    # Interest is assessed on the CHEAPEST basis the figures support,
-    # not necessarily the one being followed for payments.
+    # Interest is assessed on the LEAST cumulative requirement by each
+    # due date across the methods the figures support (ITA 161(4.01)),
+    # not necessarily the basis being followed for payments. The same
+    # deemed schedule prices the s.163.1 no-payment base (161(4.01)
+    # applies "for the purposes of subsection (2) and section 163.1").
     cands = candidate_schedules(
         year=year, current_net_tax=current_net_tax,
         prior_net_tax=prior_net_tax,
         second_prior_net_tax=second_prior_net_tax)
-    scored = {name: interest_and_penalty(
-        required=sched, payments=payments, annual_rate=annual_rate,
-        end=end) for name, sched in cands.items()}
-    interest_basis = min(scored, key=lambda k: scored[k]["net_interest"])
-    ip = scored[interest_basis]
+    interest_basis, governing = least_cumulative_schedule(cands)
+    ip = interest_and_penalty(required=governing, payments=payments,
+                              annual_rate=annual_rate, end=end)
     ip["interest_basis"] = interest_basis
+    ip["governing_schedule"] = governing
     ip["rate_source"] = rate_source
     ip["rate_extrapolated_after"] = (rate_source == "published"
                                      and end.isoformat() > PUBLISHED_THROUGH)
@@ -330,7 +370,7 @@ def build(*, year: int, basis: str, current_net_tax: float,
         and date(year, 1, 1).isoformat() < PUBLISHED_FROM)
     ip["rate_extrapolated"] = (ip["rate_extrapolated_after"]
                                or ip["rate_extrapolated_before"])
-    ip["interest_bases_considered"] = sorted(scored)
+    ip["interest_bases_considered"] = sorted(cands)
     paid_total = sum(p["amount"] for p in payments
                      if date.fromisoformat(p["date"]) <= today)
     req_total = sum(r["amount"] for r in required)
@@ -386,8 +426,7 @@ def build(*, year: int, basis: str, current_net_tax: float,
         prior_test = "not_met"
     else:
         prior_test = "unknown"
-    governing_total = round(
-        sum(r["amount"] for r in cands[interest_basis]), 2)
+    governing_total = round(sum(r["amount"] for r in governing), 2)
     return {
         "year": year, "basis": basis,
         "payments": list(payments),
@@ -548,6 +587,13 @@ def render(doc: Dict[str, Any], base: str) -> str:
             f"that is a placeholder rather than your real prior-year "
             f"figure, replace it — otherwise this report understates "
             f"what CRA would charge."))
+    elif gov == LEAST_PER_DATE:
+        per = ", ".join(fmt_money(r["amount"])
+                        for r in doc.get("governing_schedule") or [])
+        lines.append(_wrap_line(
+            f"Interest is assessed on the least total required BY EACH "
+            f"due date across the methods your figures support (ITA "
+            f"161(4.01)) — here no single method: {per}."))
     elif gov and gov != doc["basis"]:
         lines.append(_wrap_line(
             f"Interest is assessed on the {gov.replace('_', '-')} "
