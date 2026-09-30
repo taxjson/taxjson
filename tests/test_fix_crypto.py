@@ -289,5 +289,165 @@ class TestKrakenLedgerTradeCoverage(unittest.TestCase):
             self.assertNotEqual(rf.returncode, 0)
 
 
+# ---------------------------------------------------- R1-105 / S000-00
+class _Resp:
+    def __init__(self, payload):
+        self._b = json.dumps(payload).encode()
+
+    def read(self):
+        return self._b
+
+
+def _chart(closes):
+    return {"chart": {"result": [{"indicators": {"quote": [
+        {"close": closes}]}}]}}
+
+
+class TestFillCryptoFailureIsLoud(unittest.TestCase):
+    def _price(self, payload):
+        from taxjson.bin import fill_crypto_prices as fcp
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"TAXJSON_OFFLINE": "0"}), \
+                mock.patch("urllib.request.urlopen",
+                           return_value=_Resp(payload)), \
+                contextlib.redirect_stderr(err):
+            p = fcp.get_crypto_price("SOL", "2026-03-02")
+        return p, err.getvalue()
+
+    def test_null_close_warns(self):
+        p, err = self._price(_chart([None]))
+        self.assertEqual(p, 0.0)
+        self.assertIn("failed to fetch crypto price", err)
+
+    def test_empty_close_warns(self):
+        p, err = self._price(_chart([]))
+        self.assertEqual(p, 0.0)
+        self.assertIn("failed to fetch crypto price", err)
+
+    def test_good_close(self):
+        p, err = self._price(_chart([None, 140.0]))
+        self.assertEqual(p, 140.0)
+        self.assertEqual(err, "")
+
+    def test_fill_reports_unpriced_rows(self):
+        import taxjson.bin.fill_crypto_prices as fc
+        with tempfile.TemporaryDirectory() as tmp:
+            inp = Path(tmp) / "in.json"
+            inp.write_text(json.dumps({"transactions": [
+                {"action": "DIVIDEND", "date": "2026-03-02",
+                 "symbol": "SOL", "quantity": 1.5, "price": 0.0,
+                 "net_amount": 0.0, "currency": "USD"}]}))
+            saved = (fc.CACHE_FILE, fc.get_crypto_price, sys.argv,
+                     fc.time.sleep)
+            fc.CACHE_FILE = str(Path(tmp) / "cache.json")
+            fc.get_crypto_price = lambda s, d: 0.0
+            fc.time.sleep = lambda s: None
+            sys.argv = ["fill-crypto", str(inp)]
+            out, err = io.StringIO(), io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out), \
+                        contextlib.redirect_stderr(err):
+                    fc.main()
+            finally:
+                (fc.CACHE_FILE, fc.get_crypto_price, sys.argv,
+                 fc.time.sleep) = saved
+        self.assertIn("UNPRICED", err.getvalue())
+        self.assertIn("SOL", err.getvalue())
+
+    def test_validator_require_prices_flags_unpriced_rows(self):
+        from taxjson.bin.taxjson_validate import validate_transactions
+        rows = [{"action": "DIVIDEND", "date": "2026-03-02", "symbol": "SOL",
+                 "quantity": 1.5, "price": 0.0, "net_amount": 0.0,
+                 "currency": "CAD"},
+                {"action": "BUYSELL", "date": "2026-03-02", "symbol": "SOL",
+                 "quantity": 1.5, "price": 0.0, "net_amount": 0.0,
+                 "currency": "CAD"},
+                {"action": "BUYSELL", "date": "2026-03-02", "symbol": "ETH",
+                 "quantity": 1.0, "price": 10.0, "net_amount": 10.0,
+                 "currency": "CAD"}]
+        issues, _ = validate_transactions(rows, require_prices=True)
+        self.assertEqual(sum(len(v) for v in issues.values()), 2)
+        self.assertTrue(any("unpriced" in e.lower()
+                            for v in issues.values() for e in v))
+        issues, _ = validate_transactions(rows)
+        self.assertEqual(sum(len(v) for v in issues.values()), 0)
+
+    def test_run_with_dead_network_is_loud_and_strict_fatal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _project(td)
+            (root / "inputs" / "crypto" / "kr_ledgers_2026.csv").write_text(
+                KR_LEDGER_H
+                + "LX1,RX1,2026-03-02 12:00:00,earn,reward,currency,crypto,"
+                  "SOL,spot / main,1.5,0,1.5\n")
+            dead = "http://127.0.0.1:9"
+            env = _env(Path(td), https_proxy=dead, HTTPS_PROXY=dead,
+                       http_proxy=dead, HTTP_PROXY=dead)
+            r = _run_cli(root, "run", "--no-input", env=env)
+            self.assertIn("validation ERROR", r.stderr + r.stdout)
+            self.assertIn("nprice", r.stderr + r.stdout)
+            rs = _run_cli(root, "run", "--strict", "--no-input", env=env)
+            self.assertNotEqual(rs.returncode, 0)
+
+
+# ---------------------------------------------------------------- R1-106
+class TestCryptoTickerMapFromProjectRoot(unittest.TestCase):
+    LEDGER = (KR_LEDGER_H
+              + "LX1,RX1,2026-03-02 12:00:00,earn,reward,currency,crypto,"
+                "SOL,spot / main,1.0,0,1\n")
+
+    def _filled_price(self, root):
+        rows = json.loads((root / "work" / "crypto_filled.json")
+                          .read_text())["transactions"]
+        return [r["price"] for r in rows if r["action"] == "DIVIDEND"][0]
+
+    def test_root_map_honoured_from_any_cwd_and_fast_reprices(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / ".crypto_price_cache.json").write_text(json.dumps(
+                {"SOL-2026-03-02": 5.0, "SOLFIX-2026-03-02": 100.0,
+                 "SOLOTHER-2026-03-02": 7.0}))
+            root = _project(td)
+            (root / "inputs" / "crypto" / "kr_ledgers_2026.csv").write_text(
+                self.LEDGER)
+            elsewhere = Path(td) / "elsewhere"
+            elsewhere.mkdir()
+            # A map in the unrelated cwd must NOT leak into this project.
+            (elsewhere / "crypto_ticker.map").write_text("SOL SOLOTHER\n")
+            env = _env(home, TAXJSON_OFFLINE="1")
+
+            r = _run_cli(root, "run", "--no-input", cwd=elsewhere, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertEqual(self._filled_price(root), 5.0)
+
+            (root / "crypto_ticker.map").write_text("SOL SOLFIX\n")
+            r = _run_cli(root, "run", "--fast", "--no-input", cwd=elsewhere,
+                         env=env)
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertEqual(self._filled_price(root), 100.0)
+
+            # Deleting the map re-prices under --fast too.
+            (root / "crypto_ticker.map").unlink()
+            r = _run_cli(root, "run", "--fast", "--no-input", cwd=elsewhere,
+                         env=env)
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertEqual(self._filled_price(root), 5.0)
+
+    def test_in_process_overrides_do_not_leak_between_runs(self):
+        import taxjson.bin.fill_crypto_prices as fc
+        before = dict(fc.SYMBOL_OVERRIDES)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "crypto_ticker.map").write_text("ZZQ ZZQ999\n")
+            inp = Path(tmp) / "in.json"
+            inp.write_text(json.dumps({"transactions": []}))
+            saved = sys.argv
+            sys.argv = ["fill-crypto", "--project-root", tmp, str(inp)]
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    fc.main()
+            finally:
+                sys.argv = saved
+        self.assertEqual(fc.SYMBOL_OVERRIDES, before)
+
+
 if __name__ == "__main__":
     unittest.main()

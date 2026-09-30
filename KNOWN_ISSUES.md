@@ -19,6 +19,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Where:** `src/taxjson/lib/brokerages/kraken.py:_build_staking_reward`.
 - **Current behavior:** Kraken's `kr_ledgers.csv` has no price column on staking-reward rows, so the parser can't populate `net_amount` from the CSV alone. Staking rows ship with `price=0` / `net_amount=0`.
 - **Why this is the design (not a bug):** the pipeline runs `taxjson-fill-crypto` between `taxjson-sort` and `taxjson-convert-currency` precisely to backfill these from a historical-price cache. The filler at `fill_crypto_prices.py` only fills when `abs(tx.price) < 1e-8`, so non-Kraken rows with a real price are left alone.
+- **When the lookup fails (2026-09 audit R1-105):** a Yahoo error, outage or rate limit, or an HTTP 200 with a null/empty close, leaves the row at price 0. That is never silent any more: fill-crypto warns (per lookup, plus an `UNPRICED` summary), and the crypto path runs `taxjson-validate --require-prices`, so each unpriced row is a validation ERROR on the console and fatal under `taxjson run --strict`. Re-run online (a failed price is never cached).
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — `isin_map = {... 'IE': 'L' ...}` in the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead — corrected 2026-09 round-five audit).

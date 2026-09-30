@@ -18,6 +18,17 @@
   masked refids), and `taxjson run --strict` stops on it. A ledger whose
   trades are all matched no longer prints the "parsed to 0 transactions"
   warning.
+- **Crypto price lookups that fail are no longer $0.** A Yahoo error, or
+  a reply with no usable close, left staking income and cost basis at $0
+  and the run said "Validation passed". Now fill-crypto warns, each
+  unpriced row is a validation ERROR on the console, and `run --strict`
+  stops. A crypto validation error also no longer crashes `taxjson run`
+  with a TypeError.
+- **`crypto_ticker.map` at the project root is always read.** It was
+  ignored unless the cwd was the project root, and a map in the cwd
+  applied to whatever project was run. `run --fast` now re-prices after
+  the map is added, edited or deleted.
+
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
   new shares' cost), flagging a taxable spin-off booked at $0 and showing

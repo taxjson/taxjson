@@ -32,6 +32,7 @@ Subcommands:
 """
 
 import argparse
+import hashlib
 import re
 import shutil
 import subprocess
@@ -1277,9 +1278,28 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         elif (cache / f"{name}_mapped.json").exists():
             (cache / f"{name}_mapped.json").unlink()
         filled = cache / f"{name}_filled.json"
-        if force or needs_rebuild(filled, mapped):
+        # The project-root crypto_ticker.map (README) is resolved from
+        # the project, never the cwd: `-C <proj>` from anywhere used to
+        # ignore it (and a map in the cwd leaked into other projects).
+        # Its state (content, or absence) is a rebuild dep through a
+        # stamp that changes only when the map does, so `run --fast`
+        # re-prices after the map is added, edited, or deleted.
+        _cmap = inputs_dir.parent / "crypto_ticker.map"
+        try:
+            _cstate = ("sha256:" + hashlib.sha256(
+                _cmap.read_bytes()).hexdigest()) if _cmap.is_file() \
+                else "absent"
+        except OSError:
+            _cstate = "unreadable"
+        _cstamp = cache / f"{name}_crypto_ticker_map.state"
+        if (not _cstamp.exists()
+                or _cstamp.read_text(encoding="utf-8").strip() != _cstate):
+            _cstamp.write_text(_cstate + "\n", encoding="utf-8")
+        if force or needs_rebuild(filled, mapped, _cstamp):
             print("  fill-crypto-prices")
-            run_to_file(_cmd("taxjson-fill-crypto") + [str(mapped)], filled)
+            run_to_file(_cmd("taxjson-fill-crypto") + [
+                "--project-root", str(inputs_dir.parent), str(mapped)],
+                filled)
         if force or needs_rebuild(base_json, filled, rates):
             print(f"  convert-currency → {base_currency}")
             run_to_file(_cmd("taxjson-convert-currency") + [
@@ -1291,7 +1311,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # merge2-validated equity accounts.
         validate_diag = cache / f"{name}_validate.diag"
         from taxjson.lib.dispatch import run_cmd as _run_cmd
-        vres = _run_cmd(_cmd("taxjson-validate") + [str(base_json)],
+        # --require-prices: a row fill-crypto could not price is an
+        # ERROR here (R1-105), not a silent $0 income/cost.
+        vres = _run_cmd(_cmd("taxjson-validate") + ["--require-prices",
+                                                    str(base_json)],
                         capture_output=True)
         report = (vres.stdout or "") + (vres.stderr or "")
         if report.strip():
@@ -1301,10 +1324,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # Quiet on success (the report is in the .diag → .sum); only
         # surface to the console if validation actually failed.
         if vres.returncode != 0:
-            sys.stderr.buffer.write(report)
+            # `report` is text (run_cmd captures with text=True);
+            # stderr.buffer.write(str) raised TypeError and crashed the
+            # run instead of printing the report.
+            sys.stderr.write(report)
             if strict:
                 sys.exit(f"taxjson run --strict: {name}: validation "
                          f"ERROR(s) in the crypto books — aborting.")
+            print(f"  !! {name}: validation ERROR(s) in the crypto books "
+                  f"— numbers may be wrong. Details: reports/{name}.sum "
+                  f"DIAGNOSTICS (or {validate_diag.name}).",
+                  file=sys.stderr)
     else:
         cmd = _cmd("taxjson-merge2") + [
             "--sort", "--dedup", "--require-inputs",
