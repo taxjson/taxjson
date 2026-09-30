@@ -338,5 +338,64 @@ class TestFxCashSkipsShelteredAccounts(unittest.TestCase):
         self.assertEqual({e["account"] for e in ledger["events"]}, {"margin"})
 
 
+_ESTIMATE_BOOK = """\
+BUYSELL 2025-01-15 09:30:00 XEI.TO 100.00000000 CAD 10.00000000 1000.00000 0.00000
+BUYSELL 2025-06-20 10:15:00 XEI.TO -100.00000000 CAD 15.00000000 1500.00000 0.00000
+BUYSELL 2025-02-03 10:00:00 XEI250321C00016000.TO -2.00000000 CAD 1.50000000 300.00000 0.00000
+BUYSELL 2025-02-20 10:00:00 XEI250321C00016000.TO 2.00000000 CAD 0.40000000 80.00000 0.00000
+DIVIDEND 2025-04-01 09:30:00 XEI.TO 0.00000000 CAD 0.00000000 120.00000
+DIVIDEND 2025-04-02 09:30:00 ZZQ.US 0.00000000 CAD 0.00000000 200.00000
+DIVIDEND_IN_LIEU 2025-05-01 09:30:00 XEI.TO 0.00000000 CAD 0.00000000 70.00000
+"""
+
+
+class TestEstimateInputsEndToEnd(unittest.TestCase):
+    """G1-4: `taxjson estimate` gathers stock + option gains, Canadian and
+    foreign dividends and PIL from the books, and taxes them exactly."""
+
+    def test_estimate_from_a_run(self):
+        import json
+        import os
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        repo = Path(__file__).resolve().parent.parent
+        env = dict(os.environ, TAXJSON_OFFLINE="1",
+                   PYTHONPATH=str(repo / "src"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (root / "inputs" / "margin" / "book.tt").write_text(_ESTIMATE_BOOK)
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\nsource_currencies = []\nprovince = "ON"\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+
+            def cli(*args):
+                return subprocess.run(
+                    [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root), *args],
+                    capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+            r = cli("run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            r = cli("estimate", "--json", "--other-income", "150000")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            doc = json.loads(r.stdout)
+        self.assertEqual(doc["totals"]["stock"], 500.0)
+        self.assertEqual(doc["totals"]["option"], 220.0)
+        self.assertEqual(doc["totals"]["pil"], 70.0)
+        e = doc["estimate"]
+        # realized 720 (500 stock + 220 option) + 120 CA + 200 foreign + 70 PIL
+        self.assertEqual(e["investment_income"], 1110.0)
+        self.assertEqual(e["taxable_gain"], 360.0)
+        self.assertEqual(e["grossed_eligible"], 165.6)
+        self.assertEqual(e["ftc_assumed"], 30.0)
+        self.assertEqual(e["tax_with"], {"federal": 27059.53, "provincial": 15522.76,
+                                         "total": 42582.29})
+        self.assertEqual(e["tax_base"], {"federal": 26907.54, "provincial": 15388.4,
+                                         "total": 42295.95})
+        self.assertEqual(e["estimated_tax"], 286.35)
+
+
 if __name__ == "__main__":
     unittest.main()
