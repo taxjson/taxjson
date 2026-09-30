@@ -4412,6 +4412,16 @@ class USATaxRules(TaxRules):
             # engine's _trade_money).
             tx_net = (abs(tx.net_amount) if tx.quantity > 0
                       else float(tx.net_amount))
+            if (tx.type or '') == 'futures_settlement':
+                # A futures fill on the settlement basis (lib/futures.py):
+                # net_amount is the realized P/L, SIGNED (+ received,
+                # - paid), 0 on an opening. A sell's proceeds are it; a
+                # buy (a short's cover) costs its negation, so a short
+                # closed at a profit realizes exactly the P/L — abs()
+                # booked a +5,000 cover as a 5,000 cost (partition
+                # ENGINE-02; the Canada engine's _trade_money twin).
+                tx_net = (float(tx.net_amount) if tx.quantity < 0
+                          else -float(tx.net_amount))
             # Commission and fee are split separately on each gain entry
             # (see make_gain_entry below) — apportioned by chunk_qty share.
 

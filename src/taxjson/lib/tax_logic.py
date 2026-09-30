@@ -108,6 +108,7 @@ PARTITION_RULES = frozenset({
     "CA-OPT-01",       # s.49(1) grant timing
     "CA-RPT-01",       # T1135
     "CA-FX-07",        # fx-cash s.39(1.1) $200 exemption
+    "CA-FX-04",        # futures P/L on average cost
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
     "CA-DATE-04",      # computed T+1 settlement default
@@ -126,6 +127,7 @@ PARTITION_RULES = frozenset({
     "US-DATE-01",      # trade-date tax year by default
     "US-CTRY-02",      # Canada-only settings/commands/flags refused
     "US-CTRY-03",      # base currency USD
+    "US-FUT-01",       # futures P/L FIFO
 })
 
 
@@ -304,8 +306,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
                  "is paid to open one, so its notional is never converted. "
-                 "Each close's P/L (commissions included, average cost) is "
-                 "converted at that closing leg's rate;"),
+                 "Each close's P/L (commissions included, average cost of "
+                 "the open contracts) is converted at that closing leg's "
+                 "rate;"),
             Rule("CA-FX-05",
                  "Schedule 3 shows a gain as proceeds and a loss as ACB.",
                  cont=True),
@@ -652,6 +655,19 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-OPT-04",
                  "Not modelled: §1256 60/40 contracts, §1233 and §1259."),
+        ]),
+        ("Futures", [
+            Rule("US-FUT-01",
+                 "A futures contract is booked on its settled P/L: nothing "
+                 "is paid to open one, so its notional is never converted "
+                 "or reported. A close's P/L (commissions included) is "
+                 "taken first in, first out from the open contracts, and "
+                 "a non-USD contract's P/L is converted at the closing "
+                 "leg's rate."),
+            Rule("US-FUT-02",
+                 "Not modelled: §1256 year-end marking to market and the "
+                 "60/40 split; report them on Form 6781 by hand.",
+                 cont=True),
         ]),
         ("Reports", [
             Rule("US-RPT-01",

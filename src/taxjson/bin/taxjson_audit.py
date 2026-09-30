@@ -103,14 +103,15 @@ def build_source_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
-                        base_index: Dict[str, Dict[str, Any]]
-                        ) -> Dict[str, float]:
+                        base_index: Dict[str, Dict[str, Any]],
+                        country: str) -> Dict[str, float]:
     """id -> native settled net of every futures fill the base book
     carries on the settlement basis, RE-DERIVED from the parsed broker
     rows (lib/futures.settle_futures over them, under the book's own
     symbols) — so the FX cross-check of a futures close compares the
     base row with the parsed rows, not with itself."""
-    from taxjson.lib.futures import FUTURES_SETTLEMENT, settle_futures_dicts
+    from taxjson.lib.futures import (FUTURES_SETTLEMENT, method_for,
+                                     settle_futures_dicts)
     rows = []
     for rid, hits in source_index.items():
         b = base_index.get(rid)
@@ -121,7 +122,7 @@ def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
         r["account"] = "book"                  # one book: this base file
         rows.append(r)
     try:
-        settled = settle_futures_dicts(rows)
+        settled = settle_futures_dicts(rows, method_for(country))
     except ValueError:
         return {}
     out: Dict[str, float] = {}
@@ -868,7 +869,7 @@ def main(argv=None) -> int:
     merged.sort(key=lambda g: (g.get(date_key) or g.get("date") or "",
                                g.get("symbol") or ""))
 
-    futures_native = futures_native_nets(source_index, base_index)
+    futures_native = futures_native_nets(source_index, base_index, country)
     filled_index: Dict[str, Dict[str, Any]] = {}
     for fp in args.filled:
         for row in (_load_doc(Path(fp)).get("transactions") or []):

@@ -1967,6 +1967,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             print(f"  convert-currency → {base_currency}")
             run_to_file(_cmd("taxjson-convert-currency") + [
                 str(filled), "--to", base_currency, "--rates", str(rates),
+                "--country", country,
             ], base_json)
         # The crypto path has no merge2 stage, so it never validates its
         # output. Run taxjson-validate explicitly and persist the report
@@ -2002,6 +2003,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         cmd = _cmd("taxjson-merge2") + [
             "--sort", "--dedup", "--require-inputs",
             "--to", base_currency, "--rates", str(rates), "--validate",
+            "--country", country,
         ]
         if ticker_map:
             cmd += ["--map", str(ticker_map)]
@@ -2202,6 +2204,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # it to the .diag surfaces any missing-rate fallback in the .sum.
                 run_to_file(_cmd("taxjson-convert-currency") + [
                     str(raw_json), "--to", base_currency, "--rates", str(rates),
+                    "--country", country,
                 ], raw_base_json)
             raw_base_gains = cache / f"{name}_raw_base_gains.json"
             if force or needs_rebuild(raw_base_gains, raw_base_json):
@@ -11100,7 +11103,7 @@ def _fx_cash_doc(root: Path, cache: Path):
         sys.exit(f"taxjson fx-cash: no native transaction files in "
                  f"{cache} (run `taxjson run` first).")
     fx = load_fx_history(cache / "to_base.csv", base)
-    ledger = FX.build_ledger(txs, base, fx, int(year))
+    ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
     verdict = FX.apply_jurisdiction(ledger["net_gain"], country)
     return ledger, verdict, base, int(year), country
 

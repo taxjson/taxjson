@@ -123,11 +123,14 @@ def _flows(tx: Dict[str, Any]) -> Optional[float]:
 
 def build_ledger(transactions: List[Dict[str, Any]], base: str,
                  fx_history: Dict[str, Dict], year: int,
-                 rate_of=None) -> Dict[str, Any]:
+                 rate_of=None, country: Optional[str] = None
+                 ) -> Dict[str, Any]:
     """Walk the FULL history (the currency pool's ACB needs it), report
     the tax year's dispositions. Returns per-currency summaries plus
     diagnostics. `rate_of(cur, date) -> rate|None` overrides the
-    fx_history lookup (tests)."""
+    fx_history lookup (tests). `country` picks the futures settlement's
+    lot rule (lib/futures.method_for); a book with plain futures and no
+    country raises ValueError."""
     from taxjson.lib.price_chain import latest_rate
 
     def _rate(cur: str, on: str) -> Optional[float]:
@@ -145,8 +148,15 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
 
     # Plain futures on the settlement basis (native books carry each
     # fill's notional).
-    from taxjson.lib.futures import settle_futures_dicts
-    transactions = settle_futures_dicts(list(transactions))
+    from taxjson.lib.futures import (has_plain_futures, method_for,
+                                     settle_futures_dicts)
+    if has_plain_futures(transactions):
+        if not country:
+            raise ValueError("fx-cash: a book with futures needs the "
+                             "project's country (its lot rule settles "
+                             "each close's P/L)")
+        transactions = settle_futures_dicts(list(transactions),
+                                            method_for(country))
     rows = sorted(transactions,
                   key=lambda t: (str(t.get("date_settle")
                                      or t.get("date") or ""),

@@ -289,11 +289,12 @@ RATES = {"USD": {"2025-10-20": Decimal("1.4036"),
                  "2025-11-10": Decimal("1.3500")}}
 
 
-def _convert(rows, to="CAD"):
+def _convert(rows, to="CAD", country="canada"):
     from taxjson.bin.taxjson_convert_currency import (
         process_transactions, reset_fallback_tally)
     reset_fallback_tally()
-    return process_transactions(rows, to, RATES, Decimal("1.35"))
+    return process_transactions(rows, to, RATES, Decimal("1.35"),
+                                country=country)
 
 
 def _gains(rows):
@@ -312,7 +313,7 @@ class TestSettleFutures(unittest.TestCase):
 
     @rule("CA-FX-04")
     def test_open_carries_nothing_close_carries_native_pl(self):
-        rows, st = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
+        rows, st = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)], "average")
         self.assertEqual([r.type for r in rows], [FUTURES_SETTLEMENT] * 2)
         self.assertEqual(rows[0].net_amount, 0.0)
         self.assertAlmostEqual(rows[1].net_amount, 4325.26, places=6)
@@ -324,7 +325,8 @@ class TestSettleFutures(unittest.TestCase):
         rows, st = settle_futures([
             f("2025-11-03", 1.0, 100.0, "10:00:00"),
             f("2025-11-03", -2.0, 220.0, "11:00:00"),   # close 1, short 1
-            f("2025-11-10", 1.0, 105.0, "10:00:00")])  # cover at a gain
+            f("2025-11-10", 1.0, 105.0, "10:00:00")],  # cover at a gain
+            "average")
         self.assertEqual(st["split"], 1)
         self.assertEqual([r.quantity for r in rows], [1.0, -1.0, -1.0, 1.0])
         self.assertEqual([round(r.net_amount, 6) for r in rows],
@@ -337,12 +339,12 @@ class TestSettleFutures(unittest.TestCase):
                              symbol="F:CLZ5.US", quantity=1.0,
                              currency="USD", net_amount=57000.0)
         with self.assertRaises(ValueError) as cm:
-            settle_futures([bad])
+            settle_futures([bad], "average")
         self.assertIn("F:CLZ5.US", str(cm.exception))
 
     def test_idempotent(self):
-        once, _ = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
-        twice, _ = settle_futures(once)
+        once, _ = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)], "average")
+        twice, _ = settle_futures(once, "average")
         self.assertEqual([r.to_dict() for r in once],
                          [r.to_dict() for r in twice])
 
@@ -376,14 +378,18 @@ class TestFuturesGainAtCloseRate(unittest.TestCase):
         self.assertAlmostEqual(g[0]["gain"], 10 * 1.40, places=6)
         self.assertAlmostEqual(g[1]["gain"], -5 * 1.35, places=6)
 
-    def test_futures_options_and_usd_books_untouched(self):
+    def test_futures_options_untouched_and_no_country_refused(self):
         fop = _fut("2025-10-20", 1.0, 2500.0, 2.5,
                    symbol="F:CL251117C00070000.US")
         conv = _convert([fop])
         self.assertEqual(conv[0].type, "")
         self.assertAlmostEqual(conv[0].net_amount, 2500.0 * 1.4036, places=6)
-        usd = _convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)], to="USD")
-        self.assertEqual([r.net_amount for r in usd], [57402.37, 61727.63])
+        # The settlement basis no longer depends on a CAD target
+        # (partition ENGINE-02): a book with futures needs the country.
+        with self.assertRaises(ValueError) as cm:
+            _convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)], to="USD",
+                     country=None)
+        self.assertIn("--country", str(cm.exception))
 
 
 class TestFuturesScheduleThree(unittest.TestCase):
@@ -417,7 +423,7 @@ class TestFuturesAudit(unittest.TestCase):
         source_index = {r.id: [{"label": "ib.csv", "row": r.to_dict()}]
                         for r in raw}
         base_index = {r.id: r.to_dict() for r in base}
-        nets = futures_native_nets(source_index, base_index)
+        nets = futures_native_nets(source_index, base_index, "canada")
         self.assertAlmostEqual(nets[raw[1].id], 4325.26, places=6)
         self.assertAlmostEqual(nets[raw[1].id] * 1.4014,
                                base_index[raw[1].id]["net_amount"],
@@ -430,7 +436,8 @@ class TestFuturesFxCash(unittest.TestCase):
         rows = [r.to_dict() for r in (_fut(*CL_OPEN), _fut(*CL_CLOSE))]
         rates = {"2025-10-20": 1.4036, "2025-10-24": 1.4014}
         led = build_ledger(rows, "CAD", {}, 2025,
-                           rate_of=lambda c, d: rates.get(d))
+                           rate_of=lambda c, d: rates.get(d),
+                           country="canada")
         usd = led["per_currency"]["USD"]
         self.assertAlmostEqual(usd["acquired"], 4325.26, places=2)
         self.assertAlmostEqual(usd["disposed"], 0.0, places=2)

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Futures follow the country, not the base currency.** The settled-P/L
+  booking of futures (no notional, each close's P/L at its own rate) ran
+  only for a CAD target, so a US project kept FX on the notional of a
+  non-USD contract, and the US engine booked a settlement row with its
+  sign inverted (a short closed at +5,000 was -5,000). Both countries now
+  use the settlement basis, chosen by the project's country
+  (`taxjson-convert-currency` / `taxjson-merge2 --country`, required when
+  a book has futures); a partial close takes average cost in Canada and
+  FIFO in the US. Canadian numbers are unchanged. tax-logic US-FUT-01/02.
 - **Canadian and US law no longer mix through the country setting.**
   Every command, the web UI and every standalone tool read the country
   through one resolver: `[settings] country` is required (a missing one
