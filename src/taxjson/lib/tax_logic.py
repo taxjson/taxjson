@@ -116,6 +116,9 @@ PARTITION_RULES = frozenset({
     "CA-DATE-01",      # settle-date tax year by default
     "CA-CTRY-02",      # US-only settings/commands/flags refused
     "CA-CTRY-03",      # base currency CAD
+    "CA-INC-03",       # s.260 payment in lieu as a dividend (D3)
+    "CA-INC-DATE-ROC-TRUST",  # trust ROC on the record date (D4)
+    "CA-INC-DATE-TRUST",      # trust distribution by record date (D5)
     # United States
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
@@ -134,12 +137,31 @@ PARTITION_RULES = frozenset({
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
+    "US-INC-DATE-RIC", # §852(b)(7) January dividends: warn + list (D8)
     # Planning tools (partition COMMANDS-01/02/05)
     "CA-PLAN-01",      # radar: settle dates, still-held rescue
     "CA-PLAN-02",      # radar: a long call is a replacement
     "US-PLAN-01",      # radar: the US engine's verdict, no rescue
     "US-PLAN-02",      # radar: a long call is a note only
 })
+
+
+def _split_share_roots():
+    from taxjson.lib.income_dating import SPLIT_SHARE_ROOTS
+    return SPLIT_SHARE_ROOTS
+
+
+def _corp_list(s: Dict[str, Any]) -> List[str]:
+    """[settings] corporate_distributions as the engine reads it."""
+    from taxjson.lib.income_dating import SETTING_CORPORATE, _symbols
+    return list(_symbols(s.get(SETTING_CORPORATE), SETTING_CORPORATE))
+
+
+def _ric_list(s: Dict[str, Any]) -> List[str]:
+    """[settings] ric_january_dividends as the engine reads it."""
+    from taxjson.lib.income_dating import parse_ric_entries
+    return [f"{a} {b}".strip() for a, b in
+            parse_ric_entries(s.get("ric_january_dividends"))]
 
 
 def _options(country: str, settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -303,26 +325,41 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Interest and other income belong to the year they are "
                  "PAID."),
             Rule("CA-INC-DATE-DIV",
-                 "Dividends from corporations, Canadian and foreign, "
-                 "belong to the year they are PAID, not the record or "
+                 "A corporation's dividend, Canadian or foreign, belongs "
+                 "to the year it is PAID (s.82(1)), not the record or "
                  "ex-dividend date."),
             Rule("CA-INC-DATE-PIL",
                  "A payment in lieu of a dividend belongs to the year it "
                  "is paid."),
             Rule("CA-INC-DATE-ROC",
-                 "A return of capital lowers the ACB on the date it is "
-                 "paid."),
+                 "A corporation's return of capital (s.53(2)(a)) and a "
+                 "foreign issuer's lower the ACB on the date they are "
+                 "PAID."),
             Rule("CA-INC-DATE-ROC-TRUST",
                  "A Canadian trust's return of capital (T3 box 42) lowers "
-                 "the ACB, by law, when it becomes payable; taxjson uses "
-                 "the pay date, so one payable in December and paid in "
-                 "January lowers the ACB a year late (check a sale made "
-                 "between the two dates by hand).", cont=True),
+                 "the ACB when it becomes PAYABLE (s.53(2)(h)): on the "
+                 "record date the export prints (Questrade and RBC \"REC "
+                 "mm/dd/yy\"), so a sale between the record date and a "
+                 "January pay date is on the reduced ACB. IB prints no "
+                 "record date: the pay date is used, and a January-paid "
+                 "one is warned about (check the prior year's T3 box 42 "
+                 "and move it to Dec 31 with a .tt ADJUST pair).",
+                 keys=("corporate_distributions",)),
             Rule("CA-INC-DATE-TRUST",
-                 "A trust's income distribution is dated by its pay date. "
-                 "By law (s.104(13)) it belongs to the year it becomes "
-                 "payable: one payable in December and paid in January is "
-                 "not moved back yet, so take its year from the T3 slip."),
+                 "A Canadian trust's distribution belongs to the year it "
+                 "became PAYABLE (s.104(13)): a row the broker calls a "
+                 "distribution (\"DIST ON\", RBC \"Distribution\") on a "
+                 "Canadian issuer (a Canadian listing or a CA ISIN) is "
+                 "dated by its printed record date — in divs-sum, the "
+                 ".sum, the estimate and instalments. Split-share "
+                 "corporations say \"Distribution\" too but are "
+                 "corporations (paid date): "
+                 + ", ".join(sorted(_split_share_roots())) + ", and the "
+                 "symbols in corporate_distributions"
+                 + (f" ({', '.join(_corp_list(s))})" if _corp_list(s)
+                    else "") + ". A foreign fund, and a row with no record "
+                 "date (IB), keep the pay date. The T3 slip is "
+                 "authoritative.", keys=("corporate_distributions",)),
             Rule("CA-DATE-12",
                  f"Crypto is dated in local time: {tz} ([settings] "
                  f"local_timezone; outside a project TAXJSON_LOCAL_TZ). "
@@ -400,6 +437,17 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "held on its record date — the settled position. Its "
                  "income is on the T3/T5 slip; taxjson does not count "
                  "it."),
+            Rule("CA-DIST-02",
+                 "An RBC \"NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST\" "
+                 "row raises the ACB by its amount (a reinvested "
+                 "distribution); the distribution itself is income on the "
+                 "fund's T3 (usually box 21) and is NOT counted — the "
+                 "parse warns: take it from the slip."),
+            Rule("CA-DIST-03",
+                 "A reinvested cash distribution (DRIP: Questrade REI, RBC "
+                 "REI or \"Reinvest @\") is the income row plus a purchase "
+                 "of the new units at the amount reinvested — their cost, "
+                 "and an acquisition for the superficial-loss rule."),
             Rule("CA-ACB-06", "Return of capital lowers the ACB."),
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
@@ -544,7 +592,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Take the return's line numbers from your slips.",
                  cont=True),
             Rule("CA-INC-03",
-                 "Payments in lieu of dividends are ordinary income."),
+                 "A payment in lieu of a dividend is ordinary income (no "
+                 "gross-up or credit), EXCEPT one on a Canadian issuer's "
+                 "share (a Canadian listing or a CA ISIN) paid by a "
+                 "Canadian dealer (the export names it: IB's statement "
+                 "says Interactive Brokers Canada Inc.): ITA "
+                 "s.260(5)/(5.1) deems that a taxable dividend — "
+                 "eligible in the estimate, counted in divs-sum, and on "
+                 "the dealer's T5 box 24. The slip is authoritative."),
             Rule("CA-INC-04",
                  "Crypto staking rewards are income at fair value when "
                  "received; that value is the coins' cost."),
@@ -723,7 +778,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "paid."),
             Rule("US-INC-DATE-DIV",
                  "Dividends and payments in lieu belong to the year they "
-                 "are paid, not the record or ex-dividend date."),
+                 "are paid, not the record or ex-dividend date (the "
+                 "January fund and REIT dividends below aside)."),
             Rule("US-INC-DATE-ROC",
                  "A return of capital (nondividend distribution) lowers "
                  "basis on the date it is paid."),
@@ -737,10 +793,18 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  f"TAXJSON_LOCAL_TZ). Changing it re-dates the rows and "
                  f"re-keys crypto sends.", keys=("local_timezone",)),
             Rule("US-INC-DATE-RIC",
-                 "Not applied yet: a mutual-fund or REIT dividend declared "
-                 "in October-December and paid in January belongs to the "
-                 "declaration year (§852(b)(7), §857(b)(9)); taxjson dates "
-                 "it by the pay date, so use the year on Form 1099-DIV."),
+                 "A fund (RIC) or REIT dividend declared in October-"
+                 "December, payable to holders of record then, and paid in "
+                 "January is received on Dec 31 (§852(b)(7), §857(b)(9)). "
+                 "The exports do not say which payer is a fund: taxjson "
+                 "keeps the pay date, WARNS about a January dividend whose "
+                 "ex or record date is in October-December, and dates the "
+                 "payments listed in ric_january_dividends (\"SYMBOL\" or "
+                 "\"SYMBOL YYYY-01-DD\""
+                 + (f"; now: {', '.join(_ric_list(s))}" if _ric_list(s)
+                    else "") + ") on Dec 31 of the prior year. Form "
+                 "1099-DIV is authoritative.",
+                 keys=("ric_january_dividends",)),
         ]),
         ("Currency", [
             Rule("US-FX-01", "Amounts are in USD.",
@@ -790,6 +854,16 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "factor) becomes a basis adjustment sized on the shares "
                  "held on its record date — the settled position. Its "
                  "income is on Form 1099-DIV; taxjson does not count it."),
+            Rule("US-DIST-02",
+                 "An RBC \"NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST\" "
+                 "row raises the basis by its amount (a reinvested "
+                 "distribution); the distribution itself is income on Form "
+                 "1099-DIV and is NOT counted — the parse warns."),
+            Rule("US-DIST-03",
+                 "A reinvested cash dividend (DRIP: Questrade REI, RBC REI "
+                 "or \"Reinvest @\") is the income row plus a purchase of "
+                 "the new shares at the amount reinvested — their basis, "
+                 "and a purchase for the wash-sale rule."),
             Rule("US-ROC-01",
                  "A return of capital (nondividend distribution, "
                  "§301(c)(2)) lowers the basis of the shares held, pro rata "
@@ -888,8 +962,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
         ]),
         ("Income", [
             Rule("US-INC-01",
-                 "Payments in lieu of dividends are ordinary income (their "
-                 "own entry, never a basis reduction)."),
+                 "A payment in lieu of a dividend (a substitute payment) "
+                 "is ordinary, non-qualified income (its own entry, never "
+                 "a basis reduction), whoever the issuer or the dealer. "
+                 "Form 1099-MISC / 1099-DIV is authoritative."),
             Rule("US-INC-02",
                  "Crypto staking rewards are ordinary income at fair value "
                  "when received; that value is the coins' cost."),

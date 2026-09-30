@@ -327,6 +327,16 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 #                                   # issuer: "dividend" (Canada default — ITA s.90(2)) or
 #                                   # "acb". Canada-only: a US project always
 #                                   # lowers basis (IRC s.301(c)(2)).
+# corporate_distributions = ["XYZ.TO"] # Canada-only: Canadian issuers whose
+#                                   # "Distribution" / "DIST ON" rows are a
+#                                   # CORPORATION's payout (dated when paid), beyond
+#                                   # the built-in split-share list — see
+#                                   # "Income dating" below
+# ric_january_dividends = ["SPY.US 2026-01-30"] # US-only: January fund/REIT
+#                                   # dividends received on Dec 31 of the prior
+#                                   # year (IRC s.852(b)(7) / s.857(b)(9)):
+#                                   # "SYMBOL" (every January one) or
+#                                   # "SYMBOL YYYY-01-DD" (that payment)
 
 # Optional — inputs `taxjson estimate` (and the instalments
 # current-year basis) uses when the flags aren't given. Only these
@@ -417,7 +427,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson transfers [ACCOUNT]` | Custody-transfer **evidence** view: depot flips, listing journals, broker migrations, and crypto withdrawals/sends (a send that arrived on another of your exchanges is a self-custody move; the rest are gift/payment candidates — see `taxjson crypto-sends`) — the TRANSFER rows the books deliberately exclude (basis comes from buy/sell history). Reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`) plus in-book TRANSFERs from `transfers = true` accounts, with the broker's transfer type (InterDepot / Internal / ATON). `--json` for machines. |
 | `taxjson crypto-sends [ACCOUNT] [--json]` | Every crypto withdrawal/send that did **not** arrive on another of your exchanges (a send is paired with an arrival of the same coin on another exchange within 3 days, losing at most 10% to the network fee), with your decision — `self` (your own wallet: no tax event), `gift` or `payment` (a disposition at fair market value; a gift under ITA s.69(1)(b)) — or PENDING. For each: the fair value per coin and in CAD with its source (the exchange's spot price when the row carries one — Coinbase; otherwise the Yahoo daily close `fill-crypto` uses, at the send date, times the Bank of Canada rate), and the ready line `BUYSELL <date> <local time> <COIN> -<qty> CAD <price> <proceeds> 0`. A Kraken network fee taken in the coin is already booked by the parser and is not in the quantity. Stablecoins (USDC/USDT/DAI; PYUSD/GUSD on Coinbase) are US-dollar cash in the books, so a gift/payment of one gets no sale line: the command shows the **currency gain** instead — value at the send-date Bank of Canada rate minus the average CAD cost of the USD-cash/stablecoin pool rebuilt from the ledgers — flagged when likely superficial (USD/stablecoins acquired within 30 days and still held), with the year's total. `--set ID=self\|gift\|payment [--note TEXT] [--price P]` records a decision (repeatable; `--price` when the price lookup fails), `--write` regenerates `inputs/<acct>/crypto_sends.tt` (idempotent; it warns when another `.tt` already sells the same coin, date and quantity). `taxjson run` asks at a terminal (self / gift / payment / skip) after the crypto parse and refreshes the file; headless it prints one note. Ids carry exchange, local date/time, coin and quantity — never a txid or address; refs are masked (`LG***`). A `checklist` step. |
 | `taxjson roc-sum` | Return-of-capital / ACB-adjustment total per ticker (default: tax year). |
-| `taxjson dil-sum` | Payment-in-lieu total per symbol (default: tax year) — DIVIDEND_IN_LIEU rows only, split out because they are ordinary income (no dividend gross-up/credit or qualified rate). |
+| `taxjson dil-sum` | Payment-in-lieu total per symbol (default: tax year) — DIVIDEND_IN_LIEU rows only, with each row's treatment: ordinary income (no dividend gross-up/credit or qualified rate), except, in a Canada project, a Canadian dealer's payment on a Canadian issuer's share, which ITA s.260 deems a taxable dividend (on the dealer's T5 box 24; counted in `divs-sum` and the estimate's eligible dividends). |
 | `taxjson winners [PERIOD] [--top N]` | Per-ticker realized gains RANKED — biggest winners and losers over a window (default: tax year); options grouped under their underlying. A tax-year window (default, `tax_year`, `2025`) follows the project's `tax_date` in `winners`, `gains`, `ccd-sum`, `leaps` and `leaps-sum`: on the settle basis a Dec-31 trade that settles in January belongs to the next year, as in `sum`. These views refuse when `work/` was built for another year than `[settings] year`. |
 | `taxjson ccd-sum` | Covered-call (short call) realized-gain summary per underlying over a window (default: tax year) — the windowed query twin of `reports/ccd.rpt`. Covers every account; the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
 | `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year); only the long position's dispositions (a later write/buy-back of the same contract is covered-call P&L, in `ccd-sum`); the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
@@ -426,7 +436,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (each account's books recomputed alone via the engine's `--as-of` cutoff, on the project's date basis — the settlement date unless `tax_date = "trade"`, so a sale traded Dec 31 that settles in January is still held at Dec 31, as in the gains year and `t1135`: per-account ACB — not the s.47 blend across taxable accounts that plain `list` and the return use — with in-account deferred wash and phantoms.json applied; the books are already ticker.map-consolidated, and the cross-account wash pass is not in it); plain `list` shows the positions at the end of the books (the header names the date); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block over the taxable accounts — Canada: one row per Schedule 3 line (line 4 shares & fund units 13199/13200; line 6 options, futures & other properties 15199/15300; line 7 crypto-assets 15200/15301 — 15199/15300 before 2025) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (short sales as |amounts|, sell commissions as outlays; a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the allowed gain, the denial going onto the replacement's ACB), plus the `fx-cash` estimate for line 15300; USA: Form 8949's own Part I/II (d) proceeds, (e) cost, (g) adjustment, (h) gain. Rows equal `form-export`'s line totals; `--json` adds the per-account split. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
-| `taxjson tax-logic [--country canada\|usa] [--ids] [--json]` | A short statement of every rule taxjson applies for the project's country, one line per rule, with the project's own settings filled in (`tax_date`, option premium timing and `option_grant_timing_since`, `futures_settle`, `foreign_return_of_capital`, `option_buyback_loss_superficial`) — read through the same resolvers the engine uses, so a value the run reads differently or refuses is refused here too: tax-year dating and settle dates (income, return of capital and trust distributions by pay date), currency conversion, ACB pooling and identity, Schedule 3 lines, the superficial-loss rule including options, option premium timing and exercise, corporate-action elections, income lines, crypto, the reports, and which settings and commands the project's country refuses. tax-logic is the spec the code is tested against: every statement has a stable rule id (`CA-SL-02`, `US-WASH-01`, ...) that `--ids` shows and `--json` lists, and that the tests cite (see CONTRIBUTING.md). Outside a project, pass `--country`. |
+| `taxjson tax-logic [--country canada\|usa] [--ids] [--json]` | A short statement of every rule taxjson applies for the project's country, one line per rule, with the project's own settings filled in (`tax_date`, option premium timing and `option_grant_timing_since`, `futures_settle`, `foreign_return_of_capital`, `option_buyback_loss_superficial`) — read through the same resolvers the engine uses, so a value the run reads differently or refuses is refused here too: tax-year dating and settle dates (income by pay date; in Canada a Canadian trust's distribution and return of capital by the record date the export prints; in the US the January fund/REIT dividends you list on Dec 31), currency conversion, ACB pooling and identity, Schedule 3 lines, the superficial-loss rule including options, option premium timing and exercise, corporate-action elections, income lines, crypto, the reports, and which settings and commands the project's country refuses. tax-logic is the spec the code is tested against: every statement has a stable rule id (`CA-SL-02`, `US-WASH-01`, ...) that `--ids` shows and `--json` lists, and that the tests cite (see CONTRIBUTING.md). Outside a project, pass `--country`. |
 | `taxjson spinoffs [ACCOUNT] [--json]` | Every spin-off in the books: parent and new security, ratio, the election (`taxable_deemed_dividend` is the Canadian default: a dividend equal to the new shares' fair market value, which is also their cost; `rollover_s_86_1` splits the parent's cost with no income, filed with the return, for spin-offs on CRA's list; you give the CAD cost moved to the new shares as `--hint allocated_acb_cad=`), the value per share used, what was booked (income and the new shares' cost), the broker's own value when it reported one (the default uses it when no value is given), and what is held now. Flags a taxable spin-off booked at $0, a missing election or an ignored event; exit 1 when a taxable one needs attention. |
 | `taxjson splits [ACCOUNT] [--json]` | Every split, consolidation and rename with holdings just before and after. Flags a split recorded twice (two sources, close dates), a no-op row, a result with a fractional share (expect cash in lieu), and events that also mention a cash or return-of-capital leg. Exit 1 on a likely double application. |
 | `taxjson check-dates [ACCOUNT] [--all] [--json]` | Checks every trade and settlement date the parsers produced against what was traded: crypto any day and hour; futures and futures options Sunday evening to Friday afternoon (no Saturday); US stocks on NYSE days plus the overnight session (Sunday to Thursday from 20:00); options and Canadian listings on exchange days. Settlement: never before the trade or on a weekend, and normally the standard cycle on either the US or Canadian calendar (a broker's own cycle is a note; corporate events, expiry-day options and `.tt` lines are exempt from the cycle check). ERROR for impossible dates (exit 1), WARN for exchange holidays, NOTE for unusual but explainable dates. A `checklist` step. |
@@ -623,10 +633,49 @@ they need an annual refresh, and the output says so. These are
 planning estimates, never filing numbers.
 
 **`taxjson divs-sum [PERIOD] [ACCOUNT]`** — dividends received per ticker over
-the window (DIVIDEND rows; payments in lieu are in `dil-sum`), with
+the window (DIVIDEND rows, plus in a Canada project the payments in lieu
+ITA s.260 deems dividends; the others are in `dil-sum`), with
 per-currency totals split TAXABLE / SHELTERED when a registered account
 contributes — the TAXABLE line is the figure to compare with the T5/T3 slips.
-`winners` prints the same taxable/sheltered split under its ranking.
+Each row counts in its tax year (see "Income dating"), so a Canadian ETF's
+December-record distribution paid in January is in the December year, as on
+the T3. `winners` prints the same taxable/sheltered split under its ranking.
+
+**Income dating** (`taxjson tax-logic` states each rule with its id):
+
+- A corporation's dividend, Canadian or foreign, and every payment in lieu
+  belong to the year they are PAID (ITA s.82(1); US: the pay date).
+- Canada: a **Canadian trust's distribution** belongs to the year it became
+  PAYABLE (s.104(13)). A row the broker calls a distribution (Questrade/RBC
+  "DIST ON ...", RBC activity "Distribution") on a Canadian issuer (a
+  Canadian listing, or a CA ISIN) is dated by the record date it prints
+  ("REC 12/30/24 PAY 01/06/25" is 2024 income) — in `divs-sum`, the .sum,
+  the estimate and instalments. Split-share corporations (BK, DF, DFN, DGS,
+  ENS, FFN, FTN, LBS, LFE, PDV, SBC, XMF, YCM) also say "Distribution" but
+  are corporations: dated when paid, like any symbol you list in
+  `[settings] corporate_distributions`. A foreign fund, and a row with no
+  record date (IB), keeps its pay date.
+- Canada: a **Canadian trust's return of capital** (T3 box 42) lowers the
+  ACB when it becomes payable (s.53(2)(h)): on its printed record date, so
+  a sale between the record date and a January pay date is on the reduced
+  ACB (and any s.40(3) gain is in the record year). A corporation's
+  (s.53(2)(a)) or a foreign issuer's return of capital lowers it when paid.
+  IB prints no record date: a January-paid ROC on a Canadian trust is
+  warned about — check the prior year's T3 box 42 and move it to Dec 31
+  with the two `.tt` ADJUST lines the warning prints.
+- Canada: a **payment in lieu** on a Canadian issuer's share paid by a
+  Canadian dealer (IB's statement names Interactive Brokers Canada Inc.) is
+  a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24 reports
+  it; any other payment in lieu is ordinary income. US: a substitute
+  payment is ordinary, non-qualified income.
+- US: a fund (RIC) or REIT dividend declared in October–December and paid
+  in January is received on Dec 31 (IRC §852(b)(7), §857(b)(9)). The
+  exports cannot tell a fund from a company, so taxjson keeps the pay date,
+  warns when a January dividend has an October–December ex or record date,
+  and moves the payments you list in `[settings] ric_january_dividends` to
+  Dec 31 of the prior year.
+- The slips (T5/T3, 1099-DIV) are authoritative; these rules make the
+  planning numbers and the slip tie-outs agree with them.
 
 **`taxjson trades-sum [PERIOD] [ACCOUNT]`** — per ticker: buy/sell counts, value
 bought/sold, and fees, with per-currency totals.
@@ -982,6 +1031,12 @@ cases differently:
    ```
    ADJUST 2025-12-31 12:00:00 XEI.TO CAD -184.23   # T3 box 42 ROC
    ```
+
+**When a ROC lowers the ACB** (see "Income dating"): a Canadian trust's ROC
+on the record date the Questrade/RBC row prints (s.53(2)(h), payable); a
+corporation's or a foreign issuer's on the pay date; in a US project always
+the pay date. IB rows carry no record date, so a January-paid ROC on a
+Canadian trust stays on its pay date with a warning.
 
 Inspect what's recorded with `taxjson roc <period>` (every ADJUST row,
 taxtext, including the `distributions.map` adjustments `run` books) and

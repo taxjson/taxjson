@@ -95,6 +95,19 @@ def _parse_args():
              "option as a superficial loss when identical options are acquired "
              "within 30 days and held (strict reading; default off — a "
              "closing purchase is not a disposition s.54 reaches).")
+    parser.add_argument(
+        "--corporate-distribution", action="append", default=None,
+        metavar="SYMBOL",
+        help="Canada: a Canadian issuer whose \"distribution\" rows are "
+             "a corporation's payout (dated when paid), beyond the "
+             "built-in split-share list; repeatable ([settings] "
+             "corporate_distributions).")
+    parser.add_argument(
+        "--ric-january-dividend", action="append", default=None,
+        metavar="\"SYMBOL [YYYY-01-DD]\"",
+        help="USA: a January fund/REIT dividend received on Dec 31 of "
+             "the prior year (§852(b)(7), §857(b)(9)); repeatable "
+             "([settings] ric_january_dividends).")
     # Retired (2026-09-29): long calls vs share losses are enforced by
     # the Canada engine and always warned by the US engine; nothing is
     # opt-in any more. Accepted so old scripts keep working.
@@ -274,6 +287,26 @@ def _timing_default_note(args, prog):
         args.option_premium_timing = 'close'
 
 
+def _request(args) -> GainsRequest:
+    """The GainsRequest of the parsed flags (an invalid income-dating
+    override raises ValueError)."""
+    return GainsRequest(
+        country=args.country,
+        year=args.year,
+        taxable=args.taxable,
+        tax_date=args.tax_date,
+        incomplete_history=args.incomplete_history,
+        trace=bool(args.full_traces),
+        no_wash=args.no_wash,
+        per_account_basis=args.per_account_basis,
+        option_premium_timing=args.option_premium_timing,
+        option_grant_since=args.option_grant_since,
+        option_buyback_loss_superficial=args.option_buyback_wash,
+        corporate_distributions=tuple(args.corporate_distribution or ()),
+        ric_january_dividends=tuple(args.ric_january_dividend or ()),
+    )
+
+
 def main():
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
@@ -340,19 +373,11 @@ def _main():
         print(f"taxjson-gains: error: {e}", file=sys.stderr)
         raise SystemExit(2)
 
-    req = GainsRequest(
-        country=args.country,
-        year=args.year,
-        taxable=args.taxable,
-        tax_date=args.tax_date,
-        incomplete_history=args.incomplete_history,
-        trace=bool(args.full_traces),
-        no_wash=args.no_wash,
-        per_account_basis=args.per_account_basis,
-        option_premium_timing=args.option_premium_timing,
-        option_grant_since=args.option_grant_since,
-        option_buyback_loss_superficial=args.option_buyback_wash,
-    )
+    try:
+        req = _request(args)
+    except ValueError as e:
+        print(f"taxjson-gains: error: {e}", file=sys.stderr)
+        raise SystemExit(2)
 
     if args.suggest_phantoms:
         # Transfer handling runs first, exactly as the normal path would —

@@ -219,6 +219,8 @@ SETTING_COUNTRY: Dict[str, str] = {
     "option_grant_timing_since": CANADA,
     "option_buyback_loss_superficial": CANADA,
     "foreign_return_of_capital": CANADA,
+    "corporate_distributions": CANADA,
+    "ric_january_dividends": USA,
 }
 
 SETTING_WHY: Dict[str, str] = {
@@ -232,6 +234,11 @@ SETTING_WHY: Dict[str, str] = {
     "foreign_return_of_capital": "ITA s.90(2) (a foreign issuer's return "
                                  "of capital is a dividend); in the US "
                                  "it reduces basis (§301(c)(2))",
+    "corporate_distributions": "ITA s.104(13): which Canadian "
+                               "\"distributions\" are a corporation's "
+                               "(dated when paid) rather than a trust's",
+    "ric_january_dividends": "IRC §852(b)(7) / §857(b)(9) January "
+                             "dividends received on Dec 31",
 }
 
 # Config paths outside [settings] owned by one country.
@@ -259,6 +266,8 @@ FLAG_COUNTRY: Dict[str, str] = {
     "--province": CANADA,
     "--deductions": CANADA,
     "--carrying-charges": CANADA,
+    "--corporate-distribution": CANADA,
+    "--ric-january-dividend": USA,
 }
 
 FLAG_WHY: Dict[str, str] = {
@@ -270,6 +279,8 @@ FLAG_WHY: Dict[str, str] = {
     "--province": "provincial tax in the Canadian estimate",
     "--deductions": "lines 20700-23500 of the Canadian return",
     "--carrying-charges": "line 22100 of the Canadian return",
+    "--corporate-distribution": "ITA s.104(13) trust income dating",
+    "--ric-january-dividend": "IRC §852(b)(7) / §857(b)(9)",
 }
 
 # `taxjson` subcommands (or command:variant) owned by one country.
@@ -440,7 +451,9 @@ _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
                "--per-account-basis": "per_account_basis",
                "--province": "province",
                "--deductions": "deductions",
-               "--carrying-charges": "carrying_charges"}
+               "--carrying-charges": "carrying_charges",
+               "--corporate-distribution": "corporate_distribution",
+               "--ric-january-dividend": "ric_january_dividend"}
 
 
 def given_flags(args) -> Dict[str, Any]:

@@ -42,7 +42,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note
-from taxjson.lib.pipeline import option_timing_flags, tt_json_path
+from taxjson.lib.pipeline import (income_dating_flags,
+                                  option_timing_flags, tt_json_path)
 from taxjson.lib.report_model import (align_columns, fmt_money,
                                       fmt_qty, format_report_table)
 
@@ -731,6 +732,10 @@ def validate_config(cfg: Dict[str, Any],
     _fs = settings.get("futures_settle")
     if _fs is not None and _fs not in ("trade", "next_day"):
         _die(f"[settings] futures_settle must be \"trade\" or \"next_day\" (got {_fs!r}).")
+    try:
+        _income_rules(settings)
+    except ValueError as e:
+        _die(str(e))
     if "cross_asset" in settings:
         warnings.append(
             "[settings] cross_asset is retired and ignored: a long call "
@@ -1682,6 +1687,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         + _map_entries
         + (["setting/foreign_return_of_capital=acb"] if _froc_acb else [])
         + (["setting/futures_settle=next_day"] if _fut_next else [])
+        # Income dating overrides move ROC dates (the ACB) and income
+        # years: a change re-runs the books.
+        + [f"setting/income_dating={' '.join(income_dating_flags(settings))}"]
+        * bool(income_dating_flags(settings))
         # The crypto parsers date UTC stamps in this zone: a change
         # re-parses.
         + ([f"setting/local_timezone={settings['local_timezone']}"]
@@ -2165,6 +2174,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
               "as property, not a security (§1091 does not reach it); "
               "losses are allowed in full.")
     cmd += option_timing_flags(settings)
+    cmd += income_dating_flags(settings)
     # Project-wide phantom opening-balances (from `find-missing-history
     # --gen-phantoms`). load_phantoms filters by (symbol, account), so passing
     # the whole file to every account's gains run is safe — non-matching pairs
@@ -2232,7 +2242,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # symbol on the holdings.toml handoff.
                 run_to_file(_cmd("taxjson-gains") + [
                     "--country", country,
-                ] + option_timing_flags(settings) + [str(raw_json)],
+                ] + option_timing_flags(settings)
+                    + income_dating_flags(settings) + [str(raw_json)],
                             raw_gains, capture_diag=False)
             # Base-currency companion: convert the SAME raw merge to the base
             # currency (per-transaction FX, no ticker consolidation — so symbols
@@ -2257,7 +2268,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 print("  raw base gains")
                 run_to_file(_cmd("taxjson-gains") + [
                     "--country", country,
-                ] + option_timing_flags(settings) + [str(raw_base_json)],
+                ] + option_timing_flags(settings)
+                    + income_dating_flags(settings) + [str(raw_base_json)],
                             raw_base_gains, capture_diag=False)
             # Machine-readable holdings handoff (TOML) for live-pricing /
             # trading tools. ticker.map's JOURNAL lines net offsetting
@@ -2317,8 +2329,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             out.write(_diagnostics_banner(cache, name))
             out.write(run_capture(_cmd("taxjson-sum-gains") + [str(gains_json)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
-                "--year", str(year), str(base_json),
-            ]))
+                "--year", str(year), "--country", country,
+            ] + income_dating_flags(settings) + [str(base_json)]))
             if not is_crypto:
                 # The portfolio-snapshot report is equity-specific; crypto skips it.
                 out.write(run_capture(_cmd("taxjson-export") + [
@@ -2340,12 +2352,19 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         report_json.write_text(
             _json_dumps_report(build_account_report(
                 load_report_json(gains_json), name, basis="pre-wash",
-                base_transactions=_base_rows)))
+                base_transactions=_base_rows,
+                rules=_income_rules(settings))))
     except Exception as e:                      # advisory artifact only
         print(f"taxjson: warning: could not write {name}_report.json: {e}",
               file=sys.stderr)
 
     return {"base": base_json, "gains": gains_json, "sum": sum_path}
+
+
+def _income_rules(settings: Dict[str, Any]):
+    """The project's lib/income_dating rules (country + overrides)."""
+    from taxjson.lib.income_dating import IncomeRules
+    return IncomeRules.from_settings(settings)
 
 
 def _json_dumps_report(payload) -> str:
@@ -2382,6 +2401,7 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
         "--full-traces", str(wash_traces),
     ]
     cmd += option_timing_flags(settings)
+    cmd += income_dating_flags(settings)
     # Same phantom opening-balances as the main gains pass — without this the
     # wash-adjusted books (which `taxjson wash-sales` PREFERS when present)
     # were computed on different, phantom-less books than <account>.sum.
@@ -2407,8 +2427,9 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
             out.write(_diagnostics_banner(cache, name))
             out.write(run_capture(_cmd("taxjson-sum-gains") + [str(wash_gains)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
-                "--year", str(settings["year"]), str(base_json),
-            ]))
+                "--year", str(settings["year"]),
+                "--country", _normalize_country(settings["country"]),
+            ] + income_dating_flags(settings) + [str(base_json)]))
             out.write(run_capture(_cmd("taxjson-export") + [
                 "--report", "--futures", str(wash_gains),
             ]))
@@ -2430,7 +2451,8 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
             _json_dumps_report(build_account_report(
                 load_report_json(wash_gains), name,
                 basis="wash-adjusted",
-                base_transactions=_base_rows)))
+                base_transactions=_base_rows,
+                rules=_income_rules(settings))))
     except Exception as e:                      # advisory artifact only
         print(f"taxjson: warning: could not write {name}_report.json: {e}",
               file=sys.stderr)
@@ -2486,6 +2508,7 @@ def stage_blended_wash_pass(names: List[str],
     if sheltered_base is not None:
         cmd += ["--sheltered", str(sheltered_base)]
     cmd += option_timing_flags(settings)
+    cmd += income_dating_flags(settings)
     if incomplete_history is not None:
         cmd += ["--incomplete-history", str(incomplete_history)]
     cmd.append(str(combined_base))
@@ -5514,13 +5537,29 @@ def _tx_fee(tx: dict) -> float:
     return float(tx.get("fee") or 0.0) + float(tx.get("commission") or 0.0)
 
 
-def _collect_period_txs(args: argparse.Namespace, label: str, actions):
+def _view_income_rules(root: Path):
+    """The project's lib/income_dating rules for the income views, or
+    None outside a project (every row then keeps its pay date). A
+    project whose settings the rules refuse stops the view."""
+    settings = _soft_settings(root)
+    if not settings.get("country"):
+        return None
+    try:
+        return _income_rules(settings)
+    except ValueError as e:
+        _die(str(e))
+
+
+def _collect_period_txs(args: argparse.Namespace, label: str, actions,
+                        date_of=None):
     """Read native per-account transactions over a window, for the period-aware
     summaries (`fees`/`divs-sum`/`trades-sum`). The lone positional is a period
     (30d/6w/…) when it looks like one, else an account name; with no period the
     scope defaults to the config tax year. Returns (rows, scope_label, bad,
     keep) — `keep(iso_date) -> bool` is the window predicate, for callers
-    that must apply the SAME window to a second data source."""
+    that must apply the SAME window to a second data source. `date_of`
+    (row -> ISO date) picks the date a row is windowed on (the income
+    views pass lib/income_dating's tax date); default: its `date`."""
     import json
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -5553,7 +5592,7 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions):
             if not _ISO_DATE_RE.match(d):
                 bad += 1
                 continue
-            if not keep(d):
+            if not keep(date_of(tx) if date_of else d):
                 continue
             rows.append((acct, tx))
     return rows, scope, bad, keep
@@ -5671,12 +5710,22 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     """Dividend summary over a window (default: the tax year): total received
     per ticker, plus a per-currency grand total. `PERIOD` is 30d/6w/3m/1y/all;
     omit it for the tax year."""
-    # DIVIDEND rows only: a payment in lieu is ordinary income (no
-    # gross-up/credit), is not on the T5, and `dil-sum` reports it — the
-    # old {DIVIDEND, DIVIDEND_IN_LIEU} set counted it twice across the
-    # two views and put it in the slip tie-out (audit R1-272).
+    # DIVIDEND rows, plus (Canada) a payment in lieu that ITA s.260
+    # deems a dividend — a Canadian dealer's payment on a Canadian
+    # issuer's share, on the dealer's T5 box 24. Every other payment in
+    # lieu is ordinary income, reported by `dil-sum` only (counting it
+    # in both views put it in the slip tie-out, audit R1-272). Rows are
+    # windowed on their tax date (lib/income_dating: a Canadian trust's
+    # distribution by its record date).
+    _rules = _view_income_rules(Path(args.dir).resolve())
     rows, scope, bad, _keep = _collect_period_txs(
-        args, "divs-sum", actions={"DIVIDEND"})
+        args, "divs-sum", actions={"DIVIDEND", "DIVIDEND_IN_LIEU"},
+        date_of=_rules.income_date if _rules else None)
+    rows = [(a, t) for a, t in rows
+            if t.get("action") == "DIVIDEND"
+            or (_rules is not None and _rules.pil_is_dividend(t))]
+    n_pil_div = sum(1 for _a, t in rows
+                    if t.get("action") == "DIVIDEND_IN_LIEU")
 
     money = fmt_money               # shared report-layer formatter
     groups = _account_group_of(Path(args.dir).resolve())
@@ -5710,6 +5759,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
                    "totals_sheltered": {c: round(v, 2) for c, v
                                         in by_group["sheltered"].items()},
                    "sheltered_included": sorted(shel_accts),
+                   "payments_in_lieu_as_dividends": n_pil_div,
                    "scope": scope})
         return
     if not agg:
@@ -5718,8 +5768,13 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     out_lines = ["SYMBOL CUR DIVIDEND"]
     for (sym, cur), amt in sorted(agg.items()):
         out_lines.append(" ".join([sym, cur, money(amt)]))
-    print(f"DIVIDENDS — {scope}  (DIVIDEND rows; payments in lieu are "
-          f"in `dil-sum`)")
+    if n_pil_div:
+        print(f"DIVIDENDS — {scope}  (DIVIDEND rows and {n_pil_div} "
+              f"payment(s) in lieu deemed dividends by ITA s.260; other "
+              f"payments in lieu are in `dil-sum`)")
+    else:
+        print(f"DIVIDENDS — {scope}  (DIVIDEND rows; payments in lieu "
+              f"are in `dil-sum`)")
     print()
     _print_report_table(out_lines)
 
@@ -5743,47 +5798,79 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
     """Payment-in-lieu summary over a window (default: the tax year):
     DIVIDEND_IN_LIEU rows only — payments received while shares were lent
     out (or short) over the ex-date. Split out from `divs-sum` because
-    the tax treatment differs: a payment in lieu is ordinary income, NOT
-    an eligible dividend (no CA gross-up/credit; no US qualified rate)."""
+    the tax treatment differs: a payment in lieu is ordinary income (no
+    CA gross-up/credit; no US qualified rate) — except, in a Canada
+    project, a Canadian dealer's payment on a Canadian issuer's share,
+    which ITA s.260 deems a dividend (shown as such, and counted in
+    `divs-sum`)."""
+    _rules = _view_income_rules(Path(args.dir).resolve())
     rows, scope, bad, _keep = _collect_period_txs(
-        args, "dil-sum", actions={"DIVIDEND_IN_LIEU"})
+        args, "dil-sum", actions={"DIVIDEND_IN_LIEU"},
+        date_of=_rules.income_date if _rules else None)
 
     money = fmt_money               # shared report-layer formatter
 
-    agg: Dict[Tuple[str, str], Dict[str, float]] = {}
+    # Treatment per row (lib/income_dating): Canada — a Canadian
+    # dealer's payment on a Canadian issuer's share is a taxable
+    # dividend (ITA s.260; T5 box 24, counted in `divs-sum`); every
+    # other payment in lieu is ordinary income (US: non-qualified).
+    agg: Dict[Tuple[str, str, str], Dict[str, float]] = {}
     totals: Dict[str, float] = {}
+    by_treat: Dict[str, Dict[str, float]] = {"dividend": {}, "ordinary": {}}
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         # Signed: reversal rows (negative) net against the original posting.
         amt = (float(tx.get("gross_amount") or 0.0)
                or float(tx.get("net_amount") or 0.0))
-        key = (str(tx.get("symbol") or "?"), cur)
+        treat = ("dividend" if _rules is not None
+                 and _rules.pil_is_dividend(tx) else "ordinary")
+        key = (str(tx.get("symbol") or "?"), cur, treat)
         rec = agg.setdefault(key, {"amount": 0.0, "rows": 0})
         rec["amount"] += amt
         rec["rows"] += 1
         totals[cur] = totals.get(cur, 0.0) + amt
+        by_treat[treat][cur] = by_treat[treat].get(cur, 0.0) + amt
     _warn_bad_dates(bad)
     if getattr(args, "json", False):
         _json_out({"rows": [{"symbol": sym, "currency": cur,
                              "in_lieu": round(rec["amount"], 2),
-                             "rows": int(rec["rows"])}
-                            for (sym, cur), rec in sorted(agg.items())],
+                             "rows": int(rec["rows"]),
+                             "treatment": treat}
+                            for (sym, cur, treat), rec
+                            in sorted(agg.items())],
                    "totals": {c: round(v, 2) for c, v in totals.items()},
+                   "totals_ordinary": {c: round(v, 2) for c, v
+                                       in by_treat["ordinary"].items()},
+                   "totals_dividend": {c: round(v, 2) for c, v
+                                       in by_treat["dividend"].items()},
                    "scope": scope})
         return
     if not agg:
         print(f"No dividends in lieu in {scope}.")
         return
-    out_lines = ["SYMBOL CUR IN_LIEU ROWS"]
-    for (sym, cur), rec in sorted(agg.items()):
-        out_lines.append(" ".join([sym, cur, money(rec["amount"]),
-                                   str(int(rec["rows"]))]))
-    print(f"DIVIDENDS IN LIEU — {scope}  (ordinary income: no dividend "
-          f"gross-up/credit or qualified rate)")
+    out_lines = ["SYMBOL CUR IN_LIEU ROWS TREATMENT"]
+    for (sym, cur, treat), rec in sorted(agg.items()):
+        out_lines.append(" ".join([
+            sym, cur, money(rec["amount"]), str(int(rec["rows"])),
+            "dividend(s.260)" if treat == "dividend" else "ordinary"]))
+    if by_treat["dividend"]:
+        print(f"DIVIDENDS IN LIEU — {scope}  (ordinary income, except a "
+              f"Canadian dealer's payment on a Canadian issuer's share: "
+              f"a taxable dividend under ITA s.260, on the T5 and in "
+              f"`divs-sum`; the slip is authoritative)")
+    else:
+        print(f"DIVIDENDS IN LIEU — {scope}  (ordinary income: no dividend "
+              f"gross-up/credit or qualified rate)")
     print()
     _print_report_table(out_lines)
-    tot = ", ".join(f"{money(v)} {c}" for c, v in sorted(totals.items()))
-    print(f"\nTOTAL DIVIDEND IN LIEU: {tot}")
+
+    def _tot(d):
+        return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
+    if by_treat["dividend"]:
+        print(f"\nORDINARY INCOME: {_tot(by_treat['ordinary']) or '0.00'}")
+        print(f"DEEMED DIVIDENDS (s.260, in divs-sum): "
+              f"{_tot(by_treat['dividend'])}")
+    print(f"\nTOTAL DIVIDEND IN LIEU: {_tot(totals)}")
 
 
 def cmd_roc_sum(args: argparse.Namespace) -> None:
@@ -5792,8 +5879,12 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     vs manual row counts, plus per-currency totals. Reads ADJUST rows —
     broker-classified ROC carries type='roc'; manual .tt adjustments (e.g.
     T3 box 42 entries) count too."""
-    rows, scope, bad, _keep = _collect_period_txs(args, "roc-sum",
-                                           actions={"ADJUST"})
+    # A Canadian trust's ROC counts in the year it became payable (its
+    # record date, lib/income_dating — the year of T3 box 42).
+    _rules = _view_income_rules(Path(args.dir).resolve())
+    rows, scope, bad, _keep = _collect_period_txs(
+        args, "roc-sum", actions={"ADJUST"},
+        date_of=_rules.roc_date if _rules else None)
     _root = Path(args.dir).resolve()
     _accts = sorted({a for a, _t in rows}
                     | set(_discover_tx_accounts(_root / "work")))
@@ -9849,7 +9940,8 @@ def _handoff_gains_flags(settings: Dict[str, Any]) -> List[str]:
     flags = ["--country", country, "--tax-date", _tax_date(settings)]
     if country in ("us", "usa"):
         flags.append("--per-account-basis")
-    return flags + option_timing_flags(settings)
+    return (flags + option_timing_flags(settings)
+            + income_dating_flags(settings))
 
 
 def _prior_record_path(root: Path, settings: Dict[str, Any],
@@ -12670,7 +12762,8 @@ def main() -> None:
     # config tax year. A lone non-period positional is read as an account.
     p_dsum = sub.add_parser(
         "divs-sum",
-        help="Dividend total per ticker over a window (default: tax year)")
+        help="Dividend total per ticker over a window (default: tax "
+             "year), each row in its tax year (lib/income_dating)")
     p_dsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_dsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_dsum.add_argument("--json", action="store_true",
@@ -12680,7 +12773,9 @@ def main() -> None:
     p_dilsum = sub.add_parser(
         "dil-sum",
         help="Payment-in-lieu total per symbol over a window (default: "
-             "tax year) — ordinary income, split out from divs-sum")
+             "tax year) with each row's treatment — ordinary income, or "
+             "(Canada) a Canadian dealer's payment on a Canadian share, "
+             "a dividend under ITA s.260 (also in divs-sum)")
     p_dilsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_dilsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_dilsum.add_argument("--json", action="store_true",

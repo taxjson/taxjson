@@ -474,7 +474,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'cash_currencies': set(), 'has_cash_report': False,
         'has_order_level': False, 'order_levels': {},
         'stock_isins': {}, 'stock_conid_syms': {}, 'opt_underlying': {},
-        'held_rows': [],
+        'held_rows': [], 'broker_name': '',
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -523,6 +523,12 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             out['accounts'].add(acct)
         if sec == 'Statement' and g('Field Name') == 'Title':
             out['title'] = g('Field Value')
+        elif sec == 'Statement' and g('Field Name') == 'BrokerName':
+            # The IB entity that carries the account ("Interactive
+            # Brokers Canada Inc.", "Interactive Brokers LLC"): the
+            # payer of a payment in lieu (a neutral fact; s.260 is a
+            # Canada-project rule in lib/income_dating).
+            out['broker_name'] = g('Field Value')
         elif sec == 'Account Information':
             fn = g('Field Name')
             if fn == 'Account':
@@ -1027,6 +1033,8 @@ class IbBrokerage(BaseBrokerage):
         # Payment-in-Lieu rows carry no rate in their own description, but the
         # accrual for the same dividend does — used to back-fill PIL qty/price.
         accrual_rate: Dict[tuple, float] = {}
+        # (symbol, pay_date) -> ex date, from the same section.
+        accrual_ex: Dict[tuple, str] = {}
         # (ticker, date) of every posted Dividends row in this file, used
         # to suppress an accrual warning when the cash dividend is already
         # present. The Dividends row's Date is the dividend's pay date.
@@ -1216,6 +1224,12 @@ class IbBrokerage(BaseBrokerage):
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']
+        # Neutral payer fact for income rows (lib/income_dating decides
+        # what it means): the IB entity named in the statement header.
+        _bn = (pre.get('broker_name') or '').lower()
+        dealer_country = ('CA' if 'canada' in _bn
+                          else 'US' if _bn.rstrip('. ').endswith('llc')
+                          else '')
         root_alias = pre['root_alias']
         aliased_roots: Dict[str, str] = {}
         if len(pre['accounts']) > 1:
@@ -1656,6 +1670,9 @@ class IbBrokerage(BaseBrokerage):
                             date=date, desc=description, amount=amount,
                             account='IB'))
                         transactions[-1]['_isin'] = isin
+                        if len(isin) >= 2:
+                            transactions[-1]['issuer_country'] = \
+                                isin[:2].upper()
                         self.note_row_consumed()
                         continue
                 action = 'DIVIDEND_IN_LIEU' if is_pil else 'DIVIDEND'
@@ -1689,6 +1706,10 @@ class IbBrokerage(BaseBrokerage):
                     'description': description,
                     '_isin': isin,      # income rebind check; popped
                 })
+                if len(isin) >= 2:
+                    transactions[-1]['issuer_country'] = isin[:2].upper()
+                if dealer_country:
+                    transactions[-1]['dealer_country'] = dealer_country
                 self.note_row_consumed()
 
             elif section == 'Open Positions':
@@ -1836,6 +1857,12 @@ class IbBrokerage(BaseBrokerage):
                         r = 0.0
                     if r and (symbol, pay_date) not in accrual_rate:
                         accrual_rate[(symbol, pay_date)] = r
+                # The ex-dividend date of the dividend paid on pay_date
+                # (a neutral fact on the posted Dividends row below; a
+                # US project reads it for §852(b)(7), lib/income_dating).
+                if (pay_date and re.fullmatch(r'\d{4}-\d{2}-\d{2}',
+                                              ex_date or '')):
+                    accrual_ex.setdefault((symbol, pay_date), ex_date)
 
             elif section == 'Withholding Tax':
                 # Required columns — see the Dividends section.
@@ -2728,6 +2755,10 @@ class IbBrokerage(BaseBrokerage):
         for tx in transactions:
             if tx.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
                 continue
+            _ex = accrual_ex.get(((tx.get('symbol') or '').rsplit('.', 1)[0],
+                                  tx.get('date')))
+            if _ex and _ex <= (tx.get('date') or ''):
+                tx['ex_date'] = _ex
             if tx.get('price'):          # description already gave a rate
                 continue
             ticker = (tx.get('symbol') or '').rsplit('.', 1)[0]

@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 
+from taxjson.lib.country import country_arg, refuse_foreign_flags
+from taxjson.lib.income_dating import IncomeRules, parse_ric_entries
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib.ticker_map import get_underlying, is_option_ticker
 
@@ -49,8 +51,13 @@ def get_base_ticker(symbol: str) -> str:
     return symbol
 
 
-def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None) -> Dict[str, Any]:
-    """Process income data and create summary."""
+def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None,
+                     rules=None) -> Dict[str, Any]:
+    """Process income data and create summary. `rules` (a
+    lib/income_dating.IncomeRules) dates each income row by its
+    country's rule and (Canada) counts a s.260 payment in lieu as a
+    dividend; without it every row is dated by its pay date and every
+    payment in lieu is kept in its own column."""
     ticker_stats: Dict[str, Dict] = {}
     interest_totals: Dict[str, float] = {}
     
@@ -60,7 +67,8 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
         # the [:4] slice would have crashed. Use `or ''` to fold both
         # missing-and-None into the empty-string path which the year
         # filter below already tolerates.
-        date = str((tx.get('date') or '')[:4])
+        date = str(((rules.income_date(tx) if rules is not None
+                     else tx.get('date')) or '')[:4])
         
         # Filter by year if specified
         if target_year and not date.startswith(str(target_year)):
@@ -86,11 +94,16 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
 
         # DIVIDEND_IN_LIEU (Payment-in-Lieu): the broker had your shares
         # loaned out, so the issuer's dividend was paid to someone else and
-        # you got a substitute payment. CRA treats PIL as ordinary income
-        # (no dividend tax credit); IRS treats it as a non-qualified
-        # dividend (ordinary rate). Bucket it per-ticker in its own column
-        # so reconciliation against broker statements stays easy without
-        # inflating the eligible-dividend total used for T5 / Schedule B.
+        # you got a substitute payment. US: ordinary (non-qualified)
+        # income. Canada: ordinary income, EXCEPT a Canadian dealer's
+        # payment on a Canadian issuer's share, which s.260 deems a
+        # taxable dividend (moved to the dividend column above). The
+        # rest stays per-ticker in its own column.
+        if rules is not None and rules.pil_is_dividend(tx):
+            # Canada, ITA s.260: a Canadian dealer's payment in lieu on
+            # a Canadian issuer's share is a taxable dividend (T5 box
+            # 24), so it is in the dividend column.
+            action, type_ = 'DIVIDEND', 'dividend'
         if action == 'DIVIDEND_IN_LIEU' or type_ == 'dividend_in_lieu':
             if base_ticker not in ticker_stats:
                 ticker_stats[base_ticker] = {}
@@ -279,18 +292,48 @@ def main():
         help="Input JSON files from taxjson_income.py"
     )
     
+    parser.add_argument(
+        "--country", type=country_arg, default=None,
+        metavar="{canada,ca,usa,us}",
+        help="Apply that country's income dating and payment-in-lieu "
+             "rules (lib/income_dating); without it every row is dated "
+             "by its pay date and every payment in lieu is its own "
+             "column")
+    parser.add_argument("--corporate-distribution", action="append",
+                        default=None, metavar="SYMBOL",
+                        help="Canada: see taxjson-gains")
+    parser.add_argument("--ric-january-dividend", action="append",
+                        default=None, metavar="\"SYMBOL [YYYY-01-DD]\"",
+                        help="USA: see taxjson-gains")
+
     args = parser.parse_args()
+    rules = None
+    if args.country:
+        refuse_foreign_flags(args, "taxjson-sum-income")
+        try:
+            rules = IncomeRules(
+                country=args.country,
+                corporate_distributions=tuple(
+                    s.upper() for s in args.corporate_distribution or ()),
+                ric_january_dividends=parse_ric_entries(
+                    args.ric_january_dividend or [],
+                    key="--ric-january-dividend"))
+        except ValueError as e:
+            parser.error(str(e))
+    elif args.corporate_distribution or args.ric_january_dividend:
+        parser.error("--corporate-distribution / --ric-january-dividend "
+                     "need --country")
     
     file_paths = [Path(f) for f in args.files]
     
     if not file_paths:
         transactions = load_income_data(None)
-        report_data = summarize_income(transactions, args.year)
+        report_data = summarize_income(transactions, args.year, rules)
     else:
         all_txs = []
         for fp in file_paths:
             all_txs.extend(load_income_data(fp))
-        report_data = summarize_income(all_txs, args.year)
+        report_data = summarize_income(all_txs, args.year, rules)
 
     if args.json:
         print(json.dumps(report_data, indent=2, sort_keys=True))
