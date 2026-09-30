@@ -887,9 +887,11 @@ def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
 # election with their return — consumed by `taxjson run`'s end-of-run
 # reminder and the `elect` listing (the option text says this at
 # choose time, but a March election is forgotten by filing season).
+#
+# NOT the s.85.1 share-for-share rollover: it applies automatically
+# unless the vendor reports the gain in its return (s.85.1(1)(a) and
+# (5)); there is no election form (audit R1-138).
 FILING_REQUIRED_ELECTIONS: Dict[str, str] = {
-    'rollover_s_85_1_5': "file the s. 85.1(5) election with your "
-                         "return for the exchange year",
     'rollover_s_86_1': "file the s. 86.1 election with your return "
                        "(spinoff must be on CRA's eligibility list)",
     'reorg_368': "attach the Reg. §1.368-3 statement to your return",
@@ -2424,13 +2426,18 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
             return amount, from_cur
         return conv, to_cur
 
-    if value <= 0 and cil_amt <= 0:
+    # Keyed on the SHARE consideration: cash-in-lieu of a fraction is
+    # not a value for the whole exchange, and gating on it let the
+    # documented "0 to defer" book a near-full-ACB fake loss silently
+    # whenever RBC paid cash in lieu (audits S020-06, S074-00).
+    if value <= 0:
         print(
             f"warning: taxable merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has NO fair market "
-            f"value (broker booked $0 and no fmv_per_share hint was "
-            f"given) — emitting zero-valued rows: the SELL realizes a "
-            f"fake full-ACB loss and the BUY enters at $0 basis. Re-run "
+            f"value for the new shares (broker booked $0 and no "
+            f"fmv_per_share hint was given) — emitting zero-valued rows: "
+            f"the SELL realizes a fake loss (proceeds are only the "
+            f"cash-in-lieu, if any) and the BUY enters at $0 basis. Re-run "
             f"`taxjson elect --redo` and supply the FMV.",
             file=sys.stderr,
         )
@@ -2510,7 +2517,7 @@ def _canada_merger_taxable(event: CorporateAction, option: str, hints: dict) -> 
         event, hints,
         description_base=(
             f"Merger {event.source_symbol}→{event.target_symbol} "
-            f"(taxable disposition; no CRA election filed)"
+            f"(taxable disposition; gain reported — no s. 85.1 rollover)"
         ),
     )
 
@@ -2597,13 +2604,14 @@ def _emit_basis_carryover_rename(event: CorporateAction, hints: dict,
 
 
 def _canada_merger_rollover(event: CorporateAction, option: str, hints: dict) -> List[dict]:
-    """Canada wrapper: s. 85.1(5) cross-border share-for-share rollover.
-    The user must actually file the election with their return; this is
-    purely the accounting side."""
+    """Canada wrapper: the s. 85.1 share-for-share rollover (s. 85.1(1)
+    Canadian purchaser, s. 85.1(5) foreign-for-foreign). Automatic when
+    it applies — no election is filed; the vendor opts out by reporting
+    the gain. The key keeps its historical name for saved manifests."""
     return _emit_basis_carryover_rename(
         event, hints,
-        statute_note="s. 85.1(5) rollover elected",
-        cil_note="s. 85.1(5) rollover",
+        statute_note="s. 85.1 rollover (automatic; no gain reported)",
+        cil_note="s. 85.1 rollover",
     )
 
 
@@ -2627,19 +2635,27 @@ CANADA_MERGER = RuleSpec(
     options=[
         (
             'taxable_disposition',
-            "Report the merger as a sale — the treatment that applies "
-            "if you file nothing with CRA. Realizes your capital "
-            "gain/loss on the old shares THIS year; the new shares "
-            "start at FMV cost. No paperwork.",
+            "Report the merger as a sale: realizes your capital gain/loss "
+            "on the old shares THIS year; the new shares start at FMV "
+            "cost. Required when s. 85.1 does not apply — e.g. a Canadian "
+            "company acquired by a FOREIGN purchaser for its shares, or "
+            "consideration other than the purchaser's shares beyond a "
+            "fractional-share payout. Where s. 85.1 does apply, reporting "
+            "the gain (or loss) in your return is how you opt out of the "
+            "rollover.",
         ),
         (
             'rollover_s_85_1_5',
-            "Defer the gain (s. 85.1(5) cross-border share-for-share "
-            "rollover): the new shares inherit your old cost basis, so "
-            "no gain this year — you pay when you sell them. You MUST "
-            "file the s. 85.1(5) election with your return for the "
-            "exchange year (CRA can deny it, e.g. if you received "
-            "cash beyond a fractional-share payout).",
+            "Defer the gain (s. 85.1 share-for-share exchange): the new "
+            "shares inherit your old cost basis, so no gain this year — "
+            "you pay when you sell them. The rollover is AUTOMATIC when "
+            "it applies — there is no election form; you simply do not "
+            "report a gain for the exchange. It applies to a Canadian "
+            "purchaser issuing its own shares (s. 85.1(1)) or to one "
+            "foreign corporation's shares exchanged for another foreign "
+            "corporation's shares (s. 85.1(5)); NOT to a Canadian target "
+            "acquired by a foreign purchaser, and not when you received "
+            "other consideration beyond a fractional-share payout.",
         ),
     ],
     apply=lambda ev, opt, hints: (
@@ -2897,6 +2913,18 @@ def _emit_distribution(event: CorporateAction, hints: dict,
     return rows
 
 
+def zero_value_merger_rows(rows: List[dict]) -> List[dict]:
+    """New-share BUY rows of taxable merger elections booked at $0 —
+    the deferred-FMV state (with or without cash-in-lieu) `taxjson run`
+    keeps loud on every run, like a $0 spin-off."""
+    return [r for r in rows
+            if r.get('action') == 'BUYSELL'
+            and float(r.get('quantity') or 0.0) > 0
+            and r.get('corp_election') in ('taxable_disposition',
+                                           'taxable_exchange')
+            and abs(float(r.get('net_amount') or 0.0)) < 0.005]
+
+
 def zero_value_spinoff_rows(rows: List[dict]) -> List[dict]:
     """DIVIDEND rows of taxable spin-off elections booked at $0 — the
     deferred-FMV state `taxjson run` keeps loud on every run."""
@@ -2923,8 +2951,20 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     """Country-neutral basis-allocated spinoff: part of the parent's cost
     basis moves to the spun-off position (via the `allocated_acb` hint);
     no current-year tax. Canada wraps this as the s. 86.1 rollover; the
-    US as the §355 tax-free spinoff (basis allocation per §358(b))."""
-    allocated_acb = float(hints.get('allocated_acb') or 0.0)
+    US as the §355 tax-free spinoff (basis allocation per §358(b)).
+
+    `allocated_acb_cad` (Canada, s.86.1(3)) is the parent's CAD cost
+    amount times the spin-off's share of the combined FMV: booked in CAD,
+    so the pools get exactly that figure. The legacy `allocated_acb` is
+    in the event's currency and converts at the spin-off date's rate —
+    which moves the FX drift since purchase between the pools (audits
+    S019-09, S072-15)."""
+    alloc_cur = event.currency
+    if 'allocated_acb_cad' in (hints or {}):
+        allocated_acb = float(hints.get('allocated_acb_cad') or 0.0)
+        alloc_cur = 'CAD'
+    else:
+        allocated_acb = float(hints.get('allocated_acb') or 0.0)
     # Snap fractional residue to broker-style cash-in-lieu. Unlike the
     # taxable / deemed-dividend paths — where the target is acquired at
     # FRESH FMV, so the dropped fraction is genuine zero-gain cash — a
@@ -2948,7 +2988,7 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
             'action': 'BUYSELL',
             'date': event.date, 'time': event.time, 'date_settle': event.date,
             'symbol': event.target_symbol,
-            'quantity': whole_qty, 'currency': event.currency,
+            'quantity': whole_qty, 'currency': alloc_cur,
             'price': price, 'net_amount': adjusted_acb, 'fee': 0.0,
             'account': event.account, 'description': description,
         })
@@ -2960,7 +3000,7 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
         rows.append({
             'action': 'ADJUST',
             'date': event.date, 'time': event.time, 'date_settle': event.date,
-            'symbol': event.source_symbol, 'currency': event.currency,
+            'symbol': event.source_symbol, 'currency': alloc_cur,
             'net_amount': -adjusted_acb,
             'account': event.account,
             'description': description + ' (parent ACB reduction)',
@@ -2972,6 +3012,16 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
     """Canada wrapper: s. 86.1 foreign-spinoff rollover. Only valid if
     the spinoff is on CRA's eligibility list (Income Tax Folio S4-F8-C1)
     AND the user files the election with their return."""
+    if 'allocated_acb_cad' not in hints and (event.currency or 'CAD'
+                                             ).upper() != 'CAD':
+        print(f"warning: s.86.1 spin-off {event.source_symbol}→"
+              f"{event.target_symbol} on {event.date}: the election "
+              f"carries the legacy `allocated_acb` in {event.currency}, "
+              f"converted at the spin-off date's rate. s.86.1(3) splits "
+              f"the parent's CAD cost amount: re-elect with "
+              f"`--hint allocated_acb_cad=<CAD amount>` (parent ACB in "
+              f"CAD x the spin-off's share of the combined FMV).",
+              file=sys.stderr)
     return _emit_allocated_basis_spinoff(
         event, hints,
         description_base=(
@@ -2998,9 +3048,12 @@ CANADA_SPINOFF = RuleSpec(
             "of the parent's cost basis moves to the spun-off shares, "
             "no tax this year. Only valid if the spinoff is on CRA's "
             "s. 86.1 eligibility list AND you file the election with "
-            "your return. You supply the ACB to allocate (parent ACB — "
-            "see `taxjson list` — times the allocation percentage the "
-            "company publishes). A Canadian parent's tax-deferred "
+            "your return. You supply the CAD cost to allocate: the "
+            "parent's ACB in CAD immediately before the distribution "
+            "(`taxjson list` shows it) times the spin-off's share of the "
+            "combined fair market value right after it (s. 86.1(3)). A "
+            "company's Form 8937 percentage is a US figure and can "
+            "differ. A Canadian parent's tax-deferred "
             "spin-off (a butterfly reorganization) is booked the same "
             "way: pick this and enter the allocated ACB.",
         ),
@@ -3076,10 +3129,12 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
          lambda ev: spinoff_broker_value(ev)[0] <= 0),
     ],
     'rollover_s_86_1': [
-        ('allocated_acb',
-         "ACB amount (in source currency) allocated from the parent to "
-         "the spunoff position. CRA's published spinoff record usually "
-         "gives the allocation percentage; multiply by your parent ACB."),
+        ('allocated_acb_cad',
+         "Cost (in CAD) moved from the parent to the spun-off shares, per "
+         "s. 86.1(3): the parent's ACB in CAD immediately before the "
+         "distribution (`taxjson list`) x FMV of the spun-off shares / "
+         "(FMV of the parent + FMV of the spun-off shares) right after "
+         "it. Booked in CAD — never converted at the spin-off date."),
     ],
     # --- US elections -----------------------------------------------------
     'taxable_exchange': [
@@ -3162,6 +3217,55 @@ def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
     return applied
 
 
+# Hint keys older manifests carry that the emitters still honour.
+LEGACY_HINT_KEYS: Dict[str, Dict[str, str]] = {
+    # key -> the current key it stands in for
+    'rollover_s_86_1': {'allocated_acb': 'allocated_acb_cad'},
+}
+
+
+def check_hints(event: CorporateAction, election_key: str,
+                hints: Optional[dict]) -> None:
+    """Refuse a saved election whose hints the emitters would not read —
+    an unknown key (`fmv` for `fmv_per_share`, `allocated_ACB`) — and
+    warn about a missing needed one. Every consumer reads `hints.get(key) or 0`, so a
+    misspelled key in a hand-edited manifest silently booked a $0
+    dividend, a $0-cost lot or a rollover moving no cost — while `taxjson
+    elect --hint` refuses the same key (audit S072-07)."""
+    import difflib
+    specs = HINTS_BY_ELECTION.get(election_key, [])
+    legacy = LEGACY_HINT_KEYS.get(election_key, {})
+    allowed = {h[0] for h in specs} | set(legacy)
+    given = {k for k in (hints or {}) if k != FX_HINT}
+    unknown = sorted(given - allowed)
+    if unknown:
+        tips = []
+        for k in unknown:
+            near = difflib.get_close_matches(k, sorted(allowed), n=1,
+                                             cutoff=0.5) \
+                or difflib.get_close_matches(k.lower(), sorted(allowed),
+                                             n=1, cutoff=0.5)
+            tips.append(f"{k!r}" + (f" (did you mean {near[0]!r}?)"
+                                    if near else ""))
+        raise ValueError(
+            f"election {election_key!r} for event {event.event_id} has "
+            f"unknown hint(s) {', '.join(tips)} — it takes: "
+            f"{', '.join(sorted(h[0] for h in specs)) or 'none'}. Fix the "
+            f"manifest or re-elect with `taxjson elect --set`.")
+    have = given | {legacy[k] for k in given if k in legacy}
+    missing = [h[0] for h in specs
+               if h[0] not in have and (len(h) < 3 or h[2](event))]
+    if missing:
+        # Loud, not fatal: a missing value books the documented $0
+        # "deferred" rows, which `taxjson run` keeps warning about.
+        print(f"warning: election {election_key!r} for event "
+              f"{event.event_id} has no {', '.join(missing)} — the rows "
+              f"are booked at $0 until you set it: `taxjson elect --set "
+              f"{event.event_id}={election_key} "
+              + ' '.join(f'--hint {k}=<value>' for k in missing) + "`.",
+              file=sys.stderr)
+
+
 def resolve_event(
     event: CorporateAction,
     election_key: str,
@@ -3188,6 +3292,7 @@ def resolve_event(
             f"unknown election '{election_key}' for {country}/{event.action_type}; "
             f"valid: {sorted(valid | {IGNORE_ELECTION[0]})}"
         )
+    check_hints(event, election_key, hints)
     hints = dict(hints or {})
     if fx is not None:
         hints[FX_HINT] = fx

@@ -691,5 +691,109 @@ class TestIbMergers(unittest.TestCase):
                               for e in evs], [('SSX.TO', 'RGX.US')], err)
 
 
+# ============================================================= elections
+def _event(**kw):
+    from taxjson.lib.corp_actions import CorporateAction
+    base = dict(date='2025-06-02', time='09:30:00', action_type='spinoff',
+                source_symbol='PAR.US', source_isin='US0000000901',
+                target_symbol='SPN.US', target_isin='US0000000902',
+                ratio_new=1, ratio_old=5, qty_disposed=0, qty_received=20,
+                fmv=0.0, currency='USD', target_currency='USD',
+                account='margin')
+    base.update(kw)
+    return CorporateAction(**base)
+
+
+class TestElections(unittest.TestCase):
+    def test_r1_138_s85_1_rollover_described_as_automatic(self):
+        from taxjson.lib.corp_actions import (CANADA_MERGER,
+                                              FILING_REQUIRED_ELECTIONS)
+        self.assertNotIn('rollover_s_85_1_5', FILING_REQUIRED_ELECTIONS)
+        text = dict(CANADA_MERGER.options)
+        self.assertNotIn('file nothing', text['taxable_disposition'])
+        self.assertNotIn('MUST file', text['rollover_s_85_1_5'])
+        self.assertIn('automatic', text['rollover_s_85_1_5'].lower())
+        # s.85.1 needs a Canadian purchaser or a foreign target.
+        self.assertIn('foreign', text['rollover_s_85_1_5'].lower())
+
+    def test_s072_15_s019_09_s86_1_allocates_cad_cost(self):
+        from taxjson.lib.corp_actions import (HINTS_BY_ELECTION,
+                                              resolve_event)
+        keys = [h[0] for h in HINTS_BY_ELECTION['rollover_s_86_1']]
+        self.assertEqual(keys, ['allocated_acb_cad'])
+        self.assertIn('CAD', HINTS_BY_ELECTION['rollover_s_86_1'][0][1])
+        rows = resolve_event(_event(), 'rollover_s_86_1',
+                             hints={'allocated_acb_cad': 1300.0})
+        buy = next(r for r in rows if r['action'] == 'BUYSELL')
+        adj = next(r for r in rows if r['action'] == 'ADJUST')
+        self.assertEqual((buy['currency'], buy['net_amount']),
+                         ('CAD', 1300.0))
+        self.assertEqual((adj['symbol'], adj['currency'],
+                          adj['net_amount']), ('PAR.US', 'CAD', -1300.0))
+
+    def test_legacy_source_currency_allocation_still_books_and_warns(self):
+        from taxjson.lib.corp_actions import resolve_event
+        rows, err = _quiet(resolve_event, _event(), 'rollover_s_86_1',
+                           hints={'allocated_acb': 1000.0})
+        buy = next(r for r in rows if r['action'] == 'BUYSELL')
+        self.assertEqual((buy['currency'], buy['net_amount']),
+                         ('USD', 1000.0))
+        self.assertIn('allocated_acb_cad', err)
+
+    def test_s072_07_unknown_or_missing_hint_is_refused(self):
+        from taxjson.lib.corp_actions import resolve_event
+        with self.assertRaises(ValueError) as cm:
+            resolve_event(_event(), 'taxable_deemed_dividend',
+                          hints={'fmv': 1.5})
+        self.assertIn('fmv_per_share', str(cm.exception))
+        with self.assertRaises(ValueError):
+            resolve_event(_event(), 'rollover_s_86_1',
+                          hints={'allocated_ACB': 2000})
+        _rows, err = _quiet(resolve_event, _event(),
+                            'taxable_deemed_dividend', hints={})
+        self.assertIn('no fmv_per_share', err)
+        # A broker-reported value makes the hint optional.
+        rows = resolve_event(_event(target_fmv=30.0),
+                             'taxable_deemed_dividend', hints={})
+        self.assertTrue(rows)
+
+    def test_s072_07_cli_exits_cleanly(self):
+        from taxjson.lib.corp_actions import Manifest, ElectionRecord
+        d = ('SSX(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for '
+             '16 ({t}, {n}, {i})')
+        with tempfile.TemporaryDirectory() as tmp:
+            csvp = Path(tmp) / "ib.csv"
+            csvp.write_text(_IB_HEAD + _IB_CA + _ib_ca(_OUT, -1600, -25920)
+                            + _ib_ca(_IN, 100, 25840, cur='USD'))
+            from taxjson.lib.corp_actions import parse_ib_corporate_actions
+            ev = parse_ib_corporate_actions(csvp, 'margin')[0]
+            mp = Path(tmp) / "m.json"
+            m = Manifest()
+            m.set(ElectionRecord(ev.event_id, ev.summary(),
+                                 'taxable_disposition',
+                                 hints={'fmv_per_shar': 5.0}))
+            m.save(mp)
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
+                 "--brokerage", "ib", "--account-name", "margin",
+                 "--manifest", str(mp), "--no-input", str(csvp)],
+                cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("fmv_per_share", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_s020_06_s074_00_zero_fmv_with_cash_in_lieu_warns(self):
+        from taxjson.lib.corp_actions import (resolve_event,
+                                              zero_value_merger_rows)
+        ev = _event(action_type='merger', source_symbol='HES.US',
+                    target_symbol='CVX.US', qty_disposed=15,
+                    qty_received=15, ratio_new=1.025, ratio_old=1,
+                    cash_in_lieu=55.82, cash_in_lieu_currency='USD')
+        rows, err = _quiet(resolve_event, ev, 'taxable_disposition',
+                           hints={'fmv_per_share': 0.0})
+        self.assertIn('NO fair market value', err)
+        self.assertEqual(len(zero_value_merger_rows(rows)), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

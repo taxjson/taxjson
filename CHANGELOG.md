@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Corporate-action elections say what the law says.** The s.85.1
+  share-for-share rollover is automatic when it applies (you opt out by
+  reporting the gain); taxjson described it backwards and printed a
+  FILING REQUIRED reminder for a form that does not exist. The option
+  text now says when s.85.1 applies (not to a Canadian company bought
+  by a foreign purchaser) and the reminder is gone for it. An s.86.1
+  spin-off now takes the allocated cost in CAD (`--hint
+  allocated_acb_cad=`, the parent's CAD ACB times the spin-off's share of
+  the combined FMV, s.86.1(3)); the old source-currency `allocated_acb`
+  still works but warns, since converting it at the spin-off date moved
+  FX drift between the pools. A misspelled hint in a hand-edited
+  `manifest.json` (`fmv`, `allocated_ACB`) now stops the run by name
+  instead of booking $0, and a taxable merger at $0 FMV warns on every
+  run even when cash-in-lieu was paid.
 - **IB mergers are never dropped half-way.** A merger whose out-leg and
   in-leg sit in two statements (a year-end event split across yearly
   downloads) or carry Date/Times a day apart was skipped with no warning:
