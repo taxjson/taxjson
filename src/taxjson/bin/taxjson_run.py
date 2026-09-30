@@ -134,6 +134,8 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
 # so a keen eye can spot a 0-object parse of a non-empty file before
 # downstream stages silently propagate the empty data.
 _PARSE_COUNT_RE = re.compile(r'^\s+\S+: \d+ tax objects$')
+# taxjson-brokerage's zero-row warning (captured in the parse .diag).
+_ZERO_TX_RE = re.compile(r'^warning: (.+?) parsed to 0 transactions\b')
 
 
 def _load_holdings_summary(toml_path: Path) -> Dict[str, Tuple[float, float]]:
@@ -1150,6 +1152,37 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # of rows.
             echo_parse_stats(out)
         parsed.append(out)
+
+    # A non-empty export that parsed to 0 transactions (a renamed
+    # header, a kr_-named file that is not a Kraken ledger) drops that
+    # whole file from the books. Read from the persisted .diag on EVERY
+    # run — cached or not — so the console warning and the --strict
+    # gate cannot be skipped by a warm cache (R1-247).
+    _empty_files: List[str] = []
+    for _out in parsed:
+        _d = _out.with_name(_out.name + ".diag")
+        try:
+            _lines = _d.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for _ln in _lines:
+            _m = _ZERO_TX_RE.match(_ln.strip())
+            if _m:
+                _empty_files.append(_m.group(1))
+    if _empty_files:
+        _which = ", ".join(f"inputs/{name}/{f}" for f in _empty_files)
+        if strict:
+            sys.exit(f"taxjson run --strict: {name}: {_which} parsed to 0 "
+                     f"transactions — every row in it would be missing "
+                     f"from the books. Check the file's header/format (or "
+                     f"its name: cb_/kr_/coinbase/kraken route it to a "
+                     f"crypto parser), or remove it from inputs/.")
+        for _f in _empty_files:
+            print(f"taxjson: WARNING: {name}: inputs/{name}/{_f} parsed to "
+                  f"0 transactions — NONE of its rows are in the books. "
+                  f"Check the file's header/format (or its name: cb_/kr_/"
+                  f"coinbase/kraken route it to a crypto parser); "
+                  f"`run --strict` refuses this.", file=sys.stderr)
 
     # 2. corp-actions per equity broker. taxjson-corp-actions requires
     # --manifest when multiple CSVs are passed, so always provide one.

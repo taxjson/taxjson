@@ -230,5 +230,64 @@ class TestSpreadsheetInputsRefused(unittest.TestCase):
         self.assertIn("Activity_2025.xlsx", res.detail)
 
 
+_CRYPTO_CONFIG = _CONFIG + """
+[accounts.crypto]
+type = "taxable"
+crypto = true
+"""
+
+
+class TestZeroTransactionParse(unittest.TestCase):
+    """R1-247: a non-empty export that parses to 0 transactions (a
+    renamed header, a kr_-named file that is not a Kraken ledger) only
+    warned in the .sum; run and run --strict exited 0 and the checklist
+    called the run clean."""
+
+    def _proj(self, tmp):
+        root = _project(tmp, _CRYPTO_CONFIG)
+        (root / "inputs" / "crypto").mkdir()
+        (root / "inputs" / "crypto" / "kr_2025.csv").write_text(
+            "time,asset,amount,note\n2025-01-01 00:00:00,BTC,0.1,x\n")
+        return root
+
+    def test_default_run_warns_loudly_on_stderr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._proj(tmp)
+            r = _run_cli(root, "run", "--no-input")
+            summ = (root / "reports" / "crypto.sum").read_text()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("kr_2025.csv parsed to 0 transactions", r.stderr)
+        self.assertIn("NONE of its rows are in the books", r.stderr)
+        self.assertIn("kr_2025.csv parsed to 0 transactions", summ)
+
+    def test_strict_run_fails_even_from_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._proj(tmp)
+            r = _run_cli(root, "run", "--no-input", "--strict")
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn("kr_2025.csv", r.stderr)
+            self.assertIn("--strict", r.stderr)
+            # The parse is cached now: the gate must still fire.
+            r2 = _run_cli(root, "run", "--no-input", "--strict", "--fast")
+            self.assertNotEqual(r2.returncode, 0, r2.stdout)
+            self.assertIn("kr_2025.csv", r2.stderr)
+
+    def test_checklist_run_clean_needs_attention(self):
+        from datetime import date as _date
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._proj(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
+                             0)
+            cfg = {"accounts": {"margin": {"type": "taxable"},
+                                "crypto": {"type": "taxable",
+                                           "crypto": True}}}
+            ctx = cl.Ctx(root=root, cfg=cfg, year=2025, today=_date.today(),
+                         run_sub=None)
+            res = cl.d_run_clean(ctx)
+        self.assertEqual(res.status, "attention")
+        self.assertIn("0 transactions", res.detail)
+
+
 if __name__ == "__main__":
     unittest.main()

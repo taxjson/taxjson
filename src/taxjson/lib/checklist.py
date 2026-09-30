@@ -407,6 +407,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     if not sums:
         return Result("run-clean", "blocked", "no reports — run `taxjson run`")
     errors = 0
+    empty_parse: List[str] = []
     for s in sums:
         try:
             head = s.read_text(encoding="utf-8", errors="replace")[:20000]
@@ -415,6 +416,12 @@ def d_run_clean(ctx: Ctx) -> Result:
         m = re.search(r"validation: (\d+) error", head)
         if m:
             errors += int(m.group(1))
+        # A non-empty export that parsed to nothing dropped a whole
+        # file from the books (R1-247).
+        for f in re.findall(r"warning: (\S+) parsed to 0 transactions",
+                            head):
+            if f not in empty_parse:
+                empty_parse.append(f)
     pend = [p for p in ctx.cache.glob("*pending_elections.json")
             if p.is_file() and p.stat().st_size > 2]
     newest_input = 0.0
@@ -430,6 +437,9 @@ def d_run_clean(ctx: Ctx) -> Result:
         problems.append("pending elections (`taxjson elect --pending`)")
     if newest_input > oldest_report + 1:
         problems.append("inputs changed since the last run")
+    if empty_parse:
+        problems.append(f"{', '.join(empty_parse)} parsed to 0 "
+                        f"transactions (its rows are not in the books)")
     # An unconverted spreadsheet is never read; `taxjson run` refuses
     # it (R1-248) — the checklist must not call that run clean.
     sheets = []

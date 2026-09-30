@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **An export that parses to 0 transactions is loud, and fatal under
+  `--strict`.** A Coinbase file with a renamed header, or a `kr_`-named
+  file that is not a Kraken ledger, dropped its whole book with exit 0
+  even under `run --strict`, and the checklist called the run clean.
+  Every run (cached or not) now prints a WARNING naming the file on
+  stderr, `run --strict` stops, and the checklist's `run-clean` step
+  needs attention.
 - **An Excel export in `inputs/<account>/` stops the run.** Only `.csv`
   and `.tt` files are read, so a Questrade `.xlsx` dropped in unconverted
   lost every trade in it with exit 0 and no mention. `taxjson run` now
