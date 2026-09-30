@@ -1097,7 +1097,7 @@ BUYSELL  <date>  <time>  <symbol>  <qty>  <currency>  <price>  <total>  <fee>
 | --- | --- |
 | `date` / `time` | `YYYY-MM-DD` / `HH:MM:SS` (time REQUIRED — the parser's field positions depend on it; `09:30:00` is fine). A `.tt` line has a **single date**, used as both the trade and settlement date — enter the date matching your `tax_date` setting (**settlement date** when `tax_date = "settle"`). |
 | ADJUST lines | `ADJUST date time symbol CURRENCY amount` — FIVE payload fields, not the BUYSELL shape (negative amount = ACB reduction, e.g. T3 box-42 ROC). |
-| `symbol` | with exchange suffix — `AGI.TO`, `XYZ.US` (match how the account labels it; options use OCC, e.g. `ALA250117C00036000.TO`) |
+| `symbol` | with exchange suffix — `AGI.TO`, `XYZ.US` (match how the account labels it; options use OCC, e.g. `ALA250117C00036000.TO`). Upper-cased on read (`agi.to` is `AGI.TO`); a suffix that is not a market (`XYZ.TSX`, `XYZ.CA`) is a warning naming the line, since it would be a separate ACB pool. Futures lines (`F:`/`/`) skip the total-vs-qty×price typo check (the contract size is not on the line). |
 | `qty` | shares — **positive = buy, negative = sell** |
 | `price` | per-share price |
 | `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount), written as a positive number. A negative sell total is refused (a cash-signed `-2000` used to be booked as negative proceeds); if the commission exceeds the proceeds, enter `0`. |
@@ -1120,7 +1120,13 @@ taxjson find-missing-history margin     # the fixed tickers should drop off
 starting with `#` are comments. Numbers use a decimal point; a thousands comma
 (`1,234.56`) is fine, a decimal comma (`48,24`) is refused. Validate a single file first with
 `taxjson-convert-tt --account margin inputs/margin/margin_start.tt` (it
-prints the parsed JSON and errors loudly on a malformed line).
+prints the parsed JSON and errors loudly on a malformed line). The reverse
+direction, `taxjson-convert-tt book.json out.tt`, writes each row's
+**settlement** date (`--date-basis trade` for a trade-basis project) and
+counts the rows whose two dates differ; `taxjson events PERIOD ACCOUNT` (one
+account, pure taxtext) does the same on a settle-basis project. Two identical
+`ACQUIRED` lots arriving the same day are two arrival legs (their counter
+transfers are combined, not de-duplicated away).
 
 ### When you can't get the real cost basis
 
