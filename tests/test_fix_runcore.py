@@ -910,6 +910,8 @@ class TestUnblendedBooksAreNotRunClean(unittest.TestCase):
                                   lambda *a, **k: (0, "", "")))
             self.assertEqual(res.status, "attention", res.detail)
             self.assertIn("blended", res.detail)
+            # ... and the filing commands say so (run-state banner).
+            self.assertIn("blended", _run_cli(root, "sum").stderr)
             self.assertEqual(_run_cli(root, "run", "--no-input")
                              .returncode, 0)
             res = d_run_clean(Ctx(root, cfg, 2025, date.today(),
