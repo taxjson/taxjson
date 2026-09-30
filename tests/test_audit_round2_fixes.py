@@ -220,13 +220,13 @@ class TestSynthesizeRenameChain(unittest.TestCase):
         self.assertAlmostEqual(qty, 0.0, places=6)
 
 
-def _radar(taxable_txs, date):
+def _radar(taxable_txs, date, *extra):
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "t.json"
         f.write_text(json.dumps({"transactions": taxable_txs}))
         r = subprocess.run(
             [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
-             "--taxable", str(f), "--date", date],
+             "--taxable", str(f), "--date", date, *extra],
             cwd=REPO_ROOT, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         return r.stdout
@@ -276,16 +276,22 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
         self.assertNotIn("VIOLATION: Sell", line)
 
     def test_reshort_in_window_is_cover_violation(self):
-        # Cover at a loss then RE-SHORT in the window while still short:
-        # direction-matched trigger → VIOLATION with "Cover" wording.
+        # Cover at a loss then RE-SHORT in the window while still short.
+        # US s.1091(e): direction-matched trigger -> VIOLATION with
+        # "Cover" wording. Canada s.54: a new short acquires nothing, so
+        # the loss stands (medium audit S054-00; this test used to pin
+        # the US rule for every project).
         txs = [
             _row("BUYSELL", "2026-05-01", "RSH.TO", -100, 1000.0),  # short open
             _row("BUYSELL", "2026-06-10", "RSH.TO", 40, 800.0),     # cover @loss
             _row("BUYSELL", "2026-06-12", "RSH.TO", -40, 400.0),    # re-short
         ]
-        out = _radar(txs, "2026-06-15")
+        out = _radar(txs, "2026-06-15", "--country", "usa")
         line = next(l for l in out.splitlines() if l.startswith("RSH.TO"))
         self.assertIn("VIOLATION: Cover", line)
+        out = _radar(txs, "2026-06-15")
+        line = next(l for l in out.splitlines() if l.startswith("RSH.TO"))
+        self.assertNotIn("VIOLATION", line)
 
     def test_duplicate_same_account_split_rows_apply_once(self):
         # One account fed by two brokers → the same split arrives twice.

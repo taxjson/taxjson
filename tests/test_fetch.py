@@ -106,13 +106,15 @@ class TestQuestradeCsv(unittest.TestCase):
 class TestQtWindow(unittest.TestCase):
     def test_default_covers_the_tax_year_window_every_time(self):
         # The pipeline is tax-year scoped — every fetch re-covers the
-        # whole window (like a manual YTD export), starting mid-Dec of
+        # whole window (like a manual YTD export), starting Dec 1 of
         # the PRIOR year: a late-December trade settles in January and
         # belongs to the new year under settle-date rules, so a hard
         # Jan 1 start would miss it at the boundary.
         s, e = qt_window(None, None, today=date(2026, 8, 20),
                          year=2026)
-        self.assertEqual(s.isoformat(), "2025-12-15")
+        # Dec 1 (not Dec 15): the superficial-loss window of an early-
+        # January disposition reaches back 30 days (S002-05).
+        self.assertEqual(s.isoformat(), "2025-12-01")
         self.assertEqual(e.isoformat(), "2026-08-20")
 
     def test_prior_tax_year_covered_in_filing_season(self):
@@ -120,7 +122,7 @@ class TestQtWindow(unittest.TestCase):
         # 2026 window (plus its own boundary margin).
         s, _e = qt_window(None, None, today=date(2027, 2, 10),
                           year=2026)
-        self.assertEqual(s.isoformat(), "2025-12-15")
+        self.assertEqual(s.isoformat(), "2025-12-01")
 
     def test_without_year_falls_back_90_days(self):
         s, e = qt_window(None, None, today=date(2026, 8, 20))
@@ -527,11 +529,13 @@ class TestOverlapTrim(unittest.TestCase):
 
 
 class TestYearBackfillAndJson(unittest.TestCase):
-    def test_past_year_window_capped_at_jan_15(self):
+    def test_past_year_window_capped_at_jan_31(self):
+        # Jan 31 (not Jan 15): a Dec-31 disposition's 30-day
+        # superficial-loss window runs to Jan 30 (S031-13).
         s, e = qt_window(None, None, today=date(2026, 8, 20),
                          year=2024)
-        self.assertEqual(s.isoformat(), "2023-12-15")
-        self.assertEqual(e.isoformat(), "2025-01-15")
+        self.assertEqual(s.isoformat(), "2023-12-01")
+        self.assertEqual(e.isoformat(), "2025-01-31")
 
     def test_current_year_window_still_ends_today(self):
         s, e = qt_window(None, None, today=date(2026, 8, 20),

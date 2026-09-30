@@ -470,6 +470,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="The project's tax year: earlier rows are "
                              "flagged as rebuilt from this project's "
                              "books and possibly partial.")
+    parser.add_argument("--filed", action="append", default=[],
+                        metavar="YEAR=REALIZED",
+                        help="A filed year's locked realized total "
+                             "(filed/<year>.json; the wrapper passes "
+                             "them): a ledger row that disagrees is "
+                             "flagged — the return, not this recompute, "
+                             "is what CRA's balance is built on.")
     parser.add_argument("--base-currency", default="CAD",
                         help="Label for amounts (default: CAD)")
     parser.add_argument("--json", action="store_true",
@@ -580,6 +587,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         ledger['project_year'] = args.project_year
         for r in ledger['rows']:
             r['prior_year'] = r['year'] < args.project_year
+    filed: Dict[int, float] = {}
+    for item in args.filed:
+        try:
+            y, v = item.split("=", 1)
+            filed[int(y)] = float(v)
+        except ValueError:
+            print(f"taxjson-carryover: --filed expects YEAR=AMOUNT, got "
+                  f"{item!r}", file=sys.stderr)
+            return 2
+    for r in ledger['rows']:
+        if r['year'] not in filed:
+            continue
+        net = float(r.get('net_gain') or 0.0)
+        r['filed_realized'] = round(filed[r['year']], 2)
+        if abs(float(net) - filed[r['year']]) > 0.01:
+            r['differs_from_filed'] = True
+            print(f"warning: {r['year']}: the ledger's net "
+                  f"{float(net):,.2f} differs from the filed lock's "
+                  f"realized {filed[r['year']]:,.2f} "
+                  f"(filed/{r['year']}.json). This ledger recomputes "
+                  f"every year with this project's settings (option "
+                  f"premium timing and option_grant_timing_since, "
+                  f"tax_date); the lock is what was filed and what "
+                  f"CRA's loss balance is built on — check the settings "
+                  f"or use `taxjson check-filed`.", file=sys.stderr)
     if results.get('manual_reporting_required'):
         n = len(results['manual_reporting_required'])
         print(f"warning: {n} tainted disposition(s) with phantom cost basis "

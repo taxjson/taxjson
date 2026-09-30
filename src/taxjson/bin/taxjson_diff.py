@@ -55,17 +55,31 @@ def load_json(path: Path) -> Dict[str, Any]:
     return load_report_json(path)
 
 
+_MANUAL = 'manual_reporting_required'
+
+
 def extract_records(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     # Both transactions JSON and taxjson-gains output use the same top-level
     # key. Be defensive: also accept a bare list.
     if isinstance(doc, list):
         return doc
-    return doc.get('transactions', []) or []
+    recs = list(doc.get('transactions', []) or [])
+    # The pipeline moves phantom-basis dispositions OUT of transactions
+    # into manual_reporting_required; a diff that read only transactions
+    # said "no change" when such a hand-reported disposition appeared,
+    # vanished or moved (2026-09 audit S029-16). They are compared too,
+    # matched only against each other (the section is part of the key).
+    for r in doc.get(_MANUAL) or []:
+        if isinstance(r, dict):
+            recs.append({**r, '_section': _MANUAL})
+    return recs
 
 
 def make_key(rec: Dict[str, Any], fields: List[str]) -> Tuple:
-    """Composite match key. Floats get rounded so 100.00000001 == 100.00."""
-    parts = []
+    """Composite match key. Floats get rounded so 100.00000001 == 100.00.
+    The record's section (transactions vs manual_reporting_required)
+    always leads the key."""
+    parts = [rec.get('_section') if isinstance(rec, dict) else None]
     for f in fields:
         v = rec.get(f)
         if isinstance(v, float):
@@ -113,7 +127,11 @@ def short_label(rec: Dict[str, Any]) -> str:
     for k in ('action', 'date', 'symbol', 'quantity', 'qty', 'price', 'account'):
         if k in rec and rec[k] not in (None, ''):
             parts.append(f"{k}={fmt_val(rec[k])}")
-    return "  ".join(parts) if parts else f"id={(rec.get('id') or '')[:10]}"
+    label = ("  ".join(parts) if parts
+             else f"id={(rec.get('id') or '')[:10]}")
+    if rec.get('_section'):
+        label = f"[{rec['_section']}]  {label}"
+    return label
 
 
 def parse_args():

@@ -43,13 +43,16 @@ from taxjson.lib.phantom_holdings import (
 
 
 def _load_all(paths):
+    """(transactions, [paths that failed to load])."""
     txs = []
+    failed = []
     for p in paths:
         try:
             txs.extend(load_transactions(Path(p)))
         except (OSError, ValueError) as e:
             print(f"error loading {p}: {e}", file=sys.stderr)
-    return txs
+            failed.append(str(p))
+    return txs, failed
 
 
 def _print_section(title, rows, *, show_year_cols):
@@ -108,14 +111,34 @@ def main(argv=None):
                          "every short position with no year scope")
     ap.add_argument("--account", metavar="NAME",
                     help="only report this account")
+    ap.add_argument("--unchecked-account", action="append", default=[],
+                    metavar="NAME",
+                    help="an account the caller could not supply a book "
+                         "for (repeatable): reported as NOT checked, so "
+                         "the run never ends in an all-clear")
     ap.add_argument("--include-options", action="store_true",
                     help="also include OCC option symbols (a negative option "
                          "position is normal sell-to-open, so skipped by default)")
     args = ap.parse_args(argv)
 
-    txs = _load_all(args.files)
+    txs, failed = _load_all(args.files)
     if not txs:
         print("No transactions loaded.", file=sys.stderr)
+        return 1
+    # Anything not read is anything not checked: an all-clear (exit 0)
+    # after a load error read as "nothing affects the year" in the
+    # checklist (2026-09 audit R1-336, S047-18).
+    unchecked = ([Path(f).name for f in failed]
+                 + [f"account {a} (no book)"
+                    for a in args.unchecked_account])
+
+    def _incomplete(rc):
+        if not unchecked:
+            return rc
+        print(f"\nINCOMPLETE: not checked: {', '.join(unchecked)} — "
+              f"missing basis there is not reported.")
+        print(f"taxjson-missing-history: {len(unchecked)} input(s) not "
+              f"checked: {', '.join(unchecked)}", file=sys.stderr)
         return 1
 
     # --- 0. Reconstruct split-across-symbols mergers first, so the two halves
@@ -158,6 +181,10 @@ def main(argv=None):
 
     if not short_rows and not zero_rows and not links:
         scope = f" (account {args.account})" if args.account else ""
+        if unchecked:
+            print(f"No missing-cost-basis issues found{scope} in the "
+                  f"books that loaded.")
+            return _incomplete(0)
         print(f"No missing-cost-basis issues found{scope}: no negative "
               "holdings, no $0-cost corp-action shares sold, no mergers.")
         return 0
@@ -220,7 +247,7 @@ def main(argv=None):
               "re-run with --incomplete-history phantoms.json.\nTo fix a $0-cost "
               "corp action: declare it (merger/spinoff basis) so the received "
               "shares carry the correct ACB.")
-    return 0
+    return _incomplete(0)
 
 
 if __name__ == "__main__":

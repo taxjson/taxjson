@@ -104,7 +104,10 @@ class TestScan(unittest.TestCase):
                 ticker_map="DISTINCT AEM.US AEM.TO\n")
             r = _run(root)
         self.assertNotIn("MAP-GAP", r.stdout)
-        self.assertIn("US-LISTING", r.stdout)   # unrelated check lives
+        # ...and US-LISTING too: DISTINCT says AEM.TO is another
+        # instrument, so "hold AEM.TO instead" would be wrong advice
+        # (audit S042-06; this line used to assert the opposite).
+        self.assertNotIn("US-LISTING", r.stdout)
 
     def test_us_domiciled_payer_in_tfsa(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -293,6 +296,14 @@ class TestMapUnusedIsRootAware(unittest.TestCase):
             r = _run(root, "--json")
         doc = json.loads(r.stdout)
         rules = [n["rule"] for n in doc["notes"]]
-        self.assertEqual(rules, ["ZZZ.US -> ZZZ.TO"], rules)
+        # The suffix-less `GLOBAL D056068 DFDVW.US` is NOT live against
+        # D056068.US: the engine matches a rule's FROM exactly, so scan
+        # reports it with a hint to write the suffixed form (S053-12 —
+        # this test used to pin the scan calling it live).
+        self.assertEqual(len(rules), 2, rules)
+        self.assertTrue(rules[0].startswith("D056068 -> DFDVW.US (the "
+                                            "books only have D056068.US"),
+                        rules)
+        self.assertEqual(rules[1], "ZZZ.US -> ZZZ.TO")
         self.assertEqual(r.returncode, 0, "notes never fail the scan")
 

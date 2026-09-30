@@ -20,6 +20,8 @@ currency = "Currency"
 
 [formats]
 date = "%Y-%m-%d"
+# fee_sign = "cash"          # FEE rows: negative Amount = charged (default);
+#                             # "charged" if your export shows charges positive
 
 [actions]
 "BUY"       = "buy"

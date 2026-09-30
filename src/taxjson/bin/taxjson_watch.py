@@ -50,7 +50,13 @@ def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                           # in-window buy makes a violation
                           # permanent rather than rescueable.
                           "taxable_qty": r.get("taxable_qty"),
-                          "sheltered_qty": r.get("sheltered_qty")}
+                          "sheltered_qty": r.get("sheltered_qty"),
+                          # Per-holder rule: who backs a VIOLATION
+                          # (rescue) and how much of a LOCKED position
+                          # a loss sale today would lose (at_risk_qty).
+                          "rescue": r.get("rescue"),
+                          "denied_qty": r.get("denied_qty"),
+                          "at_risk_qty": r.get("at_risk_qty")}
     return out
 
 

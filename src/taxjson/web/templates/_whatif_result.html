@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>What-if sell</h1>
+<h1>What-if {% if result.side == "cover" %}buy to cover{% else %}sell{% endif %}</h1>
 {% if result.ok %}
 <p><a href="/holdings/{{ result.account }}/{{ result.symbol }}">← {{ result.symbol }}</a></p>
-<p>Sell <b>{{ result.qty }}</b> {{ result.symbol }} @ {{ result.price }} {{ result.price_currency }}{% if result.multiplier and result.multiplier != 1 %} &times; {{ result.multiplier }} per contract{% endif %} on {{ result.date }}
+<p>{% if result.side == "cover" %}Buy to cover{% else %}Sell{% endif %} <b>{{ result.qty }}</b> {{ result.symbol }} @ {{ result.price }} {{ result.price_currency }}{% if result.multiplier and result.multiplier != 1 %} &times; {{ result.multiplier }} per contract{% endif %} on {{ result.date }}{% if result.settle_date %}, settling {{ result.settle_date }} (tax year {{ result.tax_year }}){% endif %}
    {% if result.price_currency != result.currency %}
    <span class="muted">(≈ {{ result.price_base }} {{ result.currency }} @ FX {{ result.fx_rate }})</span>
    {% endif %}
@@ -11,7 +11,7 @@
 {% if result.fx_note %}<p class="err">FX: {{ result.fx_note }}</p>{% endif %}
 {% for w in result.warnings or [] %}<p class="err">Warning: {{ w }}</p>{% endfor %}
 <table>
-  <tr><td>Proceeds</td><td class="num">{{ result.proceeds }} {{ result.currency }}</td></tr>
+  <tr><td>{% if result.side == "cover" %}Cost to cover{% else %}Proceeds{% endif %}</td><td class="num">{{ result.proceeds }} {{ result.currency }}</td></tr>
   <tr><td>Cost basis</td><td class="num">{{ result.cost_basis }}</td></tr>
   <tr><td>Economic gain/loss</td>
       <td class="num {{ 'neg' if result.economic_gain < 0 else 'pos' }}">{{ result.economic_gain }}</td></tr>
@@ -23,12 +23,13 @@
   <tr><td>Deductible now</td>
       <td><b class="neg">not deductible (registered account)</b> — gains and losses in a sheltered account are not taxable events</td></tr>
   {% else %}
-  <tr><td>Deductible now</td>
+  <tr><td>Deductible{% if result.tax_year %} in {{ result.tax_year }}{% else %} now{% endif %}</td>
       <td class="num {{ 'neg' if result.allowed_gain < 0 else 'pos' }}">{{ result.allowed_gain }}</td></tr>
   {% endif %}
   <tr><td>Term / days held</td><td>{{ result.term or '—' }} / {{ result.days_held if result.days_held is not none else '—' }}</td></tr>
 </table>
-{% if result.basis %}<p class="note">Basis: {{ result.basis }} — this simulates one account's book; the filed numbers blend taxable accounts, and a recent buy in a sibling taxable account (a wash trigger this view can't see) can change the outcome. The COMBINED wash radar has the cross-account view.</p>{% endif %}
+{% if result.basis and 'blended' in result.basis %}<p class="note">Basis: {{ result.basis }} — the same ACB pool and superficial-loss context the filing uses.</p>
+{% elif result.basis %}<p class="note">Basis: {{ result.basis }} — this simulates one account's book. A Canadian project with two or more taxable accounts is simulated on the blended pool; here the account's own book is the filing basis only when it is the sole account of its kind. The COMBINED wash radar has the cross-account view.</p>{% endif %}
 {% else %}
 <p class="err">Could not simulate: {{ result.reason }}</p>
 {% for w in result.warnings or [] %}<p class="err">Warning: {{ w }}</p>{% endfor %}

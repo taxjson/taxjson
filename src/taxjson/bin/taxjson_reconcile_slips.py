@@ -20,8 +20,18 @@ Headers are matched loosely, so common broker/T5008 spellings work as-is:
     cost:      cost | cost or other basis | book value | acb | box 20
                (optional — omit the column to skip basis comparison)
 
-Comparison is per symbol with market suffixes stripped (slip `AAPL` matches
-computed `AAPL.US`). taxjson proceeds are net of sell-side commissions;
+Comparison is per symbol. A slip symbol without a market suffix matches the
+computed listing of that root (slip `AAPL` matches computed `AAPL.US`); when
+the books hold two listings of one root (a CDR `AMZN.TO` and `AMZN.US`) the
+row is AMBIGUOUS_LISTING until the slip CSV names the suffix. Broker option
+descriptions (`XYZ 21MAR25 50 C`, `CALL XYZ03/21/25 50`) and share classes
+(`BRK B`, `BRK/B`) are read as the books spell them, and the project's
+ticker.map renames (KGC -> K) are applied to slip symbols. A blank proceeds
+cell beside a cost is nil proceeds (an option that expired worthless);
+computed worthless expiries with no slip row are NO_SLIP_EXPECTED and do not
+fail the check. Slips aggregated per type code (SHS/OPC/FUT, 'Various')
+cannot be compared: transcribe a per-security CSV.
+taxjson proceeds are net of sell-side commissions;
 slips are usually gross — the tool compares against gross first and falls
 back to net, telling you which one matched. Amounts must be in the same
 currency as the project's base currency; the tool cannot convert slips.
@@ -42,22 +52,83 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.bin.taxjson_form_export import load_json
 
 _SUFFIX_RE = re.compile(r"\.(US|TO|AX|L|V|CN|NE)$", re.IGNORECASE)
 
 _HEADER_SYNONYMS = {
-    "symbol": ("symbol", "ticker", "security symbol", "security", "sym"),
+    "symbol": ("symbol", "ticker", "security symbol", "security", "sym",
+               # T5008 box 17 heading (R1-1) and French slips (R1-209).
+               "identification of securities", "box 17", "symbole",
+               "identification des titres", "désignation des titres"),
     "quantity": ("quantity", "qty", "shares", "number of shares", "box 16",
-                 "quantity of securities"),
+                 "quantity of securities", "quantité",
+                 "quantité de titres", "nombre de titres"),
     "proceeds": ("proceeds of disposition", "gross proceeds", "proceeds",
-                 "box 21", "proceeds of disposition or settlement amount"),
+                 "box 21", "proceeds of disposition or settlement amount",
+                 "produit de disposition",
+                 "produit de disposition ou montant de règlement"),
     "cost": ("cost or other basis", "cost basis", "book value",
              "cost/book value", "adjusted cost base", "acb", "box 20",
-             "cost"),
+             "cost", "cost or book value", "coût ou valeur comptable",
+             "valeur comptable", "prix de base rajusté"),
 }
+
+# Broker option descriptions -> OCC (R1-209): IB prints
+# "XYZ 21MAR25 50 C", Webull "CALL XYZ03/21/25 50"; the books carry
+# XYZ250321C00050000.
+_MONTHS = {m: i for i, m in enumerate(
+    ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
+     "NOV", "DEC"), 1)}
+_IB_OPT_RE = re.compile(
+    r"^([A-Z][A-Z0-9.]*)\s+(\d{1,2})([A-Z]{3})(\d{2})\s+"
+    r"(\d+(?:\.\d+)?)\s+([CP])$")
+_WB_OPT_RE = re.compile(
+    r"^(CALL|PUT)\s+([A-Z][A-Z0-9.]*?)\s*(\d{2})/(\d{2})/(\d{2})\s+"
+    r"(\d+(?:\.\d+)?)$")
+_PADDED_OCC_RE = re.compile(r"^([A-Z][A-Z0-9.]*)\s+(\d{6}[CP]\d{8})$")
+
+
+def _occ(root: str, yy: str, mm: int, dd: int, cp: str,
+         strike: str) -> str:
+    return (f"{root}{yy}{mm:02d}{dd:02d}{cp}"
+            f"{int(round(float(strike) * 1000)):08d}")
+
+
+def split_listing(sym: str) -> Tuple[str, str]:
+    """(root, market suffix or '') of a normalized symbol."""
+    m = _SUFFIX_RE.search(sym or "")
+    if not m:
+        return sym, ""
+    return sym[:m.start()], m.group(1).upper()
+
+
+def slip_symbol(raw: str) -> str:
+    """A slip cell as a book-style symbol, KEEPING any listing suffix
+    the slip wrote (AMZN.TO stays apart from AMZN.US — R1-292): upper-
+    cased, broker option descriptions rewritten to OCC and share-class
+    separators ('BRK B', 'BRK/B', 'BRK-B') to the books' dot form."""
+    s = (raw or "").replace("\ufeff", "").strip().upper().lstrip(".")
+    s = re.sub(r"\s+", " ", s)
+    if not s:
+        return ""
+    m = _IB_OPT_RE.match(s)
+    if m and m.group(3) in _MONTHS:
+        return _occ(m.group(1), m.group(4), _MONTHS[m.group(3)],
+                    int(m.group(2)), m.group(6), m.group(5))
+    m = _WB_OPT_RE.match(s)
+    if m:
+        return _occ(m.group(2), m.group(5), int(m.group(3)),
+                    int(m.group(4)), m.group(1)[0], m.group(6))
+    m = _PADDED_OCC_RE.match(s)
+    if m:
+        return m.group(1) + m.group(2)
+    root, sfx = split_listing(s)
+    if re.fullmatch(r"[A-Z0-9]+(?:[ /\-.][A-Z0-9]+)+", root):
+        root = re.sub(r"[ /\-.]", ".", root)
+    return f"{root}.{sfx}" if sfx else root
 
 
 def norm_symbol(sym: str) -> str:
@@ -79,38 +150,113 @@ def _clean_amount(raw: str) -> Optional[float]:
         return None
 
 
-def _map_headers(fieldnames: List[str]) -> Dict[str, str]:
-    """Map our canonical keys to the CSV's actual column names. Longest
-    synonym wins so 'proceeds of disposition' beats bare 'proceeds'."""
+class AmbiguousHeader(SystemExit):
+    pass
+
+
+def _map_headers(fieldnames: List[str], path: Optional[Path] = None
+                 ) -> Dict[str, str]:
+    """Map our canonical keys to the CSV's actual column names. An EXACT
+    label wins; otherwise the first synonym (in priority order) that
+    exactly ONE unclaimed column contains. Two columns containing the
+    same synonym is refused as ambiguous, and no column serves two keys
+    (S036-02): first-substring-wins let a blank box-23 'Quantity of
+    securities received on settlement' column silently switch the
+    quantity check off, and 'Proceeds (USD)' before '(CAD)' compared
+    the wrong currency."""
     mapping: Dict[str, str] = {}
     lowered = {f.strip().lower(): f for f in fieldnames if f}
+    claimed: set = set()
+    where = f"{path}: " if path else ""
     for key, synonyms in _HEADER_SYNONYMS.items():
+        free = {low: orig for low, orig in lowered.items()
+                if orig not in claimed}
+        exact = [free[syn] for syn in synonyms if syn in free]
+        if exact:
+            mapping[key] = exact[0]
+            claimed.add(exact[0])
+            continue
         for syn in synonyms:
-            for low, orig in lowered.items():
-                if syn == low or syn in low:
-                    mapping.setdefault(key, orig)
-                    break
-            if key in mapping:
+            hits = [orig for low, orig in free.items() if syn in low]
+            if len(hits) > 1:
+                raise AmbiguousHeader(
+                    f"taxjson-reconcile-slips: {where}ambiguous header — "
+                    f"{', '.join(repr(h) for h in hits)} all look like "
+                    f"the {key!r} column. Rename or delete the extra "
+                    f"column(s) so exactly one matches (e.g. keep only "
+                    f"the CAD amounts).")
+            if hits:
+                mapping[key] = hits[0]
+                claimed.add(hits[0])
                 break
     return mapping
 
 
-def load_slip(path: Path) -> Dict[str, Dict[str, Any]]:
-    """Aggregate the slip CSV per normalized symbol:
-    {SYM: {qty, proceeds, cost (or None), rows}}."""
+def _read_text(path: Path) -> str:
+    raw = path.read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        # Excel "Unicode text" exports (R1-209): read as UTF-16 instead
+        # of reporting mojibake headers as an unrecognized column.
+        return raw.decode("utf-16")
     try:
-        text = path.read_text(encoding="utf-8-sig")
+        return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         # Québec-broker T5008 exports (Desjardins, NBDB, RBC French)
         # are commonly cp1252/latin-1 — the utf-8-only open crashed
         # with a raw UnicodeDecodeError traceback (REVIEW #22).
-        text = path.read_text(encoding="cp1252")
+        return raw.decode("cp1252")
+
+
+def _rename_fn(renames: Optional[Dict[str, str]]):
+    """Slip symbol -> the project's consolidated symbol, through the
+    ticker.map GLOBAL/TOBASE/JOURNAL renames the pipeline applied to the
+    books (R1-19: the slip says KGC / RCI, the books K.TO / RCI.B.TO,
+    options included). A bare slip symbol is tried as .US then .TO."""
+    if not renames:
+        return lambda sym: sym
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+
+    def _fn(sym: str) -> str:
+        root, sfx = split_listing(sym)
+        if sfx:
+            return map_symbol(sym, renames)
+        for trial in (".US", ".TO"):
+            got = map_symbol(root + trial, renames)
+            if got != root + trial:
+                # Keep the slip bare: the listing it names is unknown.
+                return split_listing(got)[0]
+        return sym
+    return _fn
+
+
+def _bump(rec: Dict[str, Any], sfx: str, **vals) -> None:
+    """Add vals to rec and to rec['listings'][sfx]."""
+    sub = rec["listings"].setdefault(
+        sfx, {k: (None if k == "cost" else 0.0) for k in rec
+              if k != "listings"})
+    for tgt in (rec, sub):
+        for k, v in vals.items():
+            if k == "cost":
+                if v is not None:
+                    tgt["cost"] = (tgt["cost"] or 0.0) + v
+            else:
+                tgt[k] += v
+
+
+def load_slip(path: Path, renames: Optional[Dict[str, str]] = None
+              ) -> Dict[str, Dict[str, Any]]:
+    """Aggregate the slip CSV per symbol root:
+    {ROOT: {qty, proceeds, cost (or None), rows, listings}}, where
+    listings splits the root by the listing suffix the slip wrote
+    ('' when it wrote none)."""
+    text = _read_text(path)
+    rename = _rename_fn(renames)
     import io
     with io.StringIO(text, newline="") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames:
             raise SystemExit(f"taxjson-reconcile-slips: {path} is empty")
-        cols = _map_headers(list(reader.fieldnames))
+        cols = _map_headers(list(reader.fieldnames), path)
         for required in ("symbol", "proceeds"):
             if required not in cols:
                 raise SystemExit(
@@ -120,35 +266,54 @@ def load_slip(path: Path) -> Dict[str, Dict[str, Any]]:
                     f"accepted spellings.")
         out: Dict[str, Dict[str, Any]] = {}
         dropped = 0
-        for row in reader:
-            sym = norm_symbol(row.get(cols["symbol"], ""))
+
+        def _drop(what: str) -> None:
+            nonlocal dropped
+            # A slip row the tool cannot read is a row it cannot
+            # RECONCILE — silently dropping it certified a disagreeing
+            # slip as fully reconciled at exit 0 (REVIEW #21, R1-201).
+            dropped += 1
+            print(f"taxjson-reconcile-slips: warning: {path.name}: "
+                  f"{what} — row NOT reconciled; fix the slip CSV cell.",
+                  file=sys.stderr)
+
+        for lineno, row in enumerate(reader, 2):
+            cells = {k: (row.get(cols[k]) or "").strip()
+                     for k in ("symbol", "quantity", "proceeds", "cost")
+                     if k in cols}
+            sym = rename(slip_symbol(cells["symbol"]))
             if not sym:
+                if any(cells.get(k) for k in ("quantity", "proceeds",
+                                              "cost")):
+                    # A row with amounts but no symbol (a CUSIP-only or
+                    # bond row) was skipped silently (R1-201).
+                    _drop(f"line {lineno}: amounts but no symbol")
                 continue
-            proceeds = _clean_amount(row.get(cols["proceeds"], ""))
+            raw_p = cells["proceeds"]
+            proceeds = _clean_amount(raw_p)
+            if proceeds is None and not raw_p and cells.get("cost"):
+                # A blank box 21 beside a box 20 is how brokers print an
+                # option that expired worthless: nil proceeds (R1-17).
+                proceeds = 0.0
             if proceeds is None:
-                # A slip row the tool cannot read is a row it cannot
-                # RECONCILE — silently dropping it certified a
-                # disagreeing slip as fully reconciled at exit 0
-                # (REVIEW #21).
-                dropped += 1
-                print(f"taxjson-reconcile-slips: warning: {path.name}: "
-                      f"unreadable proceeds for {sym} "
-                      f"({row.get(cols['proceeds'], '')!r}) — row NOT "
-                      f"reconciled; fix the slip CSV cell.",
-                      file=sys.stderr)
+                _drop(f"unreadable proceeds for {sym} ({raw_p!r})")
                 continue
-            rec = out.setdefault(sym, {"qty": 0.0, "proceeds": 0.0,
-                                       "cost": None, "rows": 0})
-            rec["rows"] += 1
-            rec["proceeds"] += proceeds
-            if "quantity" in cols:
-                q = _clean_amount(row.get(cols["quantity"], ""))
-                if q is not None:
-                    rec["qty"] += abs(q)
-            if "cost" in cols:
-                c = _clean_amount(row.get(cols["cost"], ""))
-                if c is not None:
-                    rec["cost"] = (rec["cost"] or 0.0) + c
+            q = None
+            if cells.get("quantity"):
+                q = _clean_amount(cells["quantity"])
+                if q is None:
+                    # An unreadable quantity turned the quantity check
+                    # off for the symbol and still exited 0 (R1-201).
+                    _drop(f"unreadable quantity for {sym} "
+                          f"({cells['quantity']!r})")
+                    continue
+            c = _clean_amount(cells["cost"]) if cells.get("cost") else None
+            root, sfx = split_listing(sym)
+            rec = out.setdefault(root, {"qty": 0.0, "proceeds": 0.0,
+                                        "cost": None, "rows": 0,
+                                        "listings": {}})
+            _bump(rec, sfx, rows=1, proceeds=proceeds,
+                  qty=abs(q) if q is not None else 0.0, cost=c)
         if dropped:
             out["__dropped_rows__"] = dropped   # consumed (popped) in main
         return out
@@ -157,13 +322,17 @@ def load_slip(path: Path) -> Dict[str, Dict[str, Any]]:
 def load_computed(gains_paths: List[Path],
                   year: Optional[int],
                   date_basis: str = "settle") -> Dict[str, Dict[str, Any]]:
-    """Aggregate computed dispositions per normalized symbol:
-    {SYM: {qty, proceeds_net, proceeds_gross, cost, rows, tainted_rows}}.
+    """Aggregate computed dispositions per symbol root:
+    {ROOT: {qty, proceeds_net, proceeds_gross, cost, rows, tainted_rows,
+    listings}} (listings: the same per listing suffix — AMZN.TO and
+    AMZN.US are different securities, R1-292).
     Tainted rows are INCLUDED in the counts here (the broker's slip will
     include those sales too) but flagged so a basis mismatch on a tainted
     symbol reads as expected, not alarming."""
     out: Dict[str, Dict[str, Any]] = {}
     ystr = str(year) if year else None
+    grant_qty: Dict[Tuple[str, str], float] = {}
+    short_close_qty: Dict[Tuple[str, str], float] = {}
     for p in gains_paths:
         data = load_json(p)
         # Tainted (phantom-basis) dispositions live in
@@ -196,17 +365,20 @@ def load_computed(gains_paths: List[Path],
                 date = e.get("date_settle") or e.get("date") or ""
             if ystr and not date.startswith(ystr):
                 continue
-            sym = norm_symbol(e.get("symbol") or "")
-            if not sym:
+            full = (e.get("symbol") or "").strip().upper().lstrip(".")
+            root, sfx = split_listing(full)
+            if not root:
                 continue
-            rec = out.setdefault(sym, {"qty": 0.0, "proceeds_net": 0.0,
-                                       "proceeds_gross": 0.0, "cost": 0.0,
-                                       "rows": 0, "tainted_rows": 0})
+            rec = out.setdefault(root, {"qty": 0.0, "proceeds_net": 0.0,
+                                        "proceeds_gross": 0.0, "cost": 0.0,
+                                        "rows": 0, "tainted_rows": 0,
+                                        "listings": {}})
             proceeds = float(e.get("proceeds") or 0.0)
             cost = float(e.get("cost") or 0.0)
             outlays = float(e.get("commission") or 0.0) + \
                 float(e.get("fee") or 0.0)
-            if (e.get("direction") or "LONG") == "SHORT":
+            short = (e.get("direction") or "LONG") == "SHORT"
+            if short:
                 # Engine short convention: `cost` holds the (negated)
                 # short-sale proceeds and `proceeds` the (negated)
                 # cover cost — the SWAP form-export performs. Merely
@@ -215,70 +387,164 @@ def load_computed(gains_paths: List[Path],
                 # (2026-09 audit).
                 proceeds, cost = abs(cost), abs(proceeds)
                 outlays = 0.0
-            rec["qty"] += abs(float(e.get("qty") or 0.0))
-            rec["proceeds_net"] += proceeds
-            rec["proceeds_gross"] += proceeds + outlays
-            rec["cost"] += cost
-            rec["rows"] += 1
-            if e.get("tainted"):
-                rec["tainted_rows"] += 1
+            q = abs(float(e.get("qty") or 0.0))
+            # Grant timing books a written option twice — the WRITE
+            # record and its buy-back/expiry — while the slip reports
+            # ONE disposition of those contracts: quantity counts once
+            # (R1-18). Settled after the loop.
+            key = (root, sfx)
+            if e.get("grant"):
+                grant_qty[key] = grant_qty.get(key, 0.0) + q
+                q = 0.0
+            elif short:
+                short_close_qty[key] = short_close_qty.get(key, 0.0) + q
+            _bump(rec, sfx, qty=q, proceeds_net=proceeds,
+                  proceeds_gross=proceeds + outlays, cost=cost, rows=1,
+                  tainted_rows=1 if e.get("tainted") else 0)
+    for (root, sfx), gq in grant_qty.items():
+        extra = max(0.0, gq - short_close_qty.get((root, sfx), 0.0))
+        if extra:
+            # Written this year, still open (or closed next year): the
+            # write itself is the year's disposition.
+            _bump(out[root], sfx, qty=extra)
     return out
+
+
+def _sum_listings(recs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not recs:
+        return None
+    agg: Dict[str, Any] = {}
+    for r in recs:
+        for k, v in r.items():
+            if k in ("listings", "cost"):
+                continue
+            agg[k] = agg.get(k, 0.0) + v
+    costs = [r.get("cost") for r in recs if r.get("cost") is not None]
+    agg["cost"] = sum(costs) if costs else None
+    return agg
+
+
+def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
+             tolerance: float) -> Dict[str, Any]:
+    problems: List[str] = []
+    notes: List[str] = []
+    d_gross = s["proceeds"] - c["proceeds_gross"]
+    d_net = s["proceeds"] - c["proceeds_net"]
+    if abs(d_gross) <= tolerance:
+        pass
+    elif abs(d_net) <= tolerance:
+        notes.append("matches NET proceeds (slip appears net of "
+                     "commissions)")
+    else:
+        closer = d_gross if abs(d_gross) <= abs(d_net) else d_net
+        problems.append(f"proceeds off by {closer:+,.2f} "
+                        f"(slip {s['proceeds']:,.2f} vs computed "
+                        f"gross {c['proceeds_gross']:,.2f} / net "
+                        f"{c['proceeds_net']:,.2f})")
+    if s["qty"] > 0 and abs(s["qty"] - c["qty"]) > 1e-4:
+        problems.append(f"quantity off by {s['qty'] - c['qty']:+,.4f} "
+                        f"(slip {s['qty']:,.4f} vs computed "
+                        f"{c['qty']:,.4f})")
+    if s.get("cost") is not None:
+        d_cost = s["cost"] - c["cost"]
+        if abs(d_cost) > tolerance:
+            notes.append(f"slip cost differs by {d_cost:+,.2f} — often "
+                         f"legitimate (per-broker book value vs blended "
+                         f"ACB / lot method); document the reason")
+    if c.get("tainted_rows"):
+        notes.append(f"{c['tainted_rows']} tainted disposition(s) with "
+                     f"phantom basis included")
+    return {"symbol": label, "status": "MISMATCH" if problems else "OK",
+            "detail": "; ".join(problems + notes)}
+
+
+def _missing_from_slip(label: str, c: Dict[str, Any],
+                       tolerance: float) -> Dict[str, Any]:
+    if abs(c["proceeds_gross"]) <= min(tolerance, 0.005):
+        # Nil proceeds — a long option that expired worthless. IB
+        # issues no T5008 row for it; that is expected, not a gap
+        # (R1-1), so it does not fail the reconciliation.
+        return {"symbol": label, "status": "NO_SLIP_EXPECTED",
+                "detail": f"computed {c['rows']} disposition(s) with nil "
+                          f"proceeds (expired option) — brokers usually "
+                          f"issue no slip row"}
+    return {"symbol": label, "status": "MISSING_FROM_SLIP",
+            "detail": f"computed {c['rows']} disposition(s), "
+                      f"proceeds {c['proceeds_gross']:,.2f} — "
+                      f"no slip row (missing slip, or a "
+                      f"non-slip disposition like a corp action)"}
+
+
+def _label(root: str, sfx: str) -> str:
+    return f"{root}.{sfx}" if sfx else root
 
 
 def reconcile(slip: Dict[str, Dict[str, Any]],
               computed: Dict[str, Dict[str, Any]],
               tolerance: float) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
-    for sym in sorted(set(slip) | set(computed)):
-        s, c = slip.get(sym), computed.get(sym)
+    for root in sorted(set(slip) | set(computed)):
+        s, c = slip.get(root), computed.get(root)
         if s is None:
-            rows.append({"symbol": sym, "status": "MISSING_FROM_SLIP",
-                         "detail": f"computed {c['rows']} disposition(s), "
-                                   f"proceeds {c['proceeds_gross']:,.2f} — "
-                                   f"no slip row (missing slip, or a "
-                                   f"non-slip disposition like an option "
-                                   f"expiry or corp action)"})
+            rows.append(_missing_from_slip(root, c, tolerance))
             continue
         if c is None:
-            rows.append({"symbol": sym, "status": "MISSING_FROM_COMPUTED",
+            rows.append({"symbol": root, "status": "MISSING_FROM_COMPUTED",
                          "detail": f"slip has {s['rows']} row(s), proceeds "
                                    f"{s['proceeds']:,.2f} — nothing "
-                                   f"computed (dropped CSV rows or a "
-                                   f"missing statement?)"})
+                                   f"computed (dropped CSV rows, a "
+                                   f"missing statement, or a symbol the "
+                                   f"books spell differently?)"})
             continue
-
-        problems: List[str] = []
-        notes: List[str] = []
-        d_gross = s["proceeds"] - c["proceeds_gross"]
-        d_net = s["proceeds"] - c["proceeds_net"]
-        if abs(d_gross) <= tolerance:
-            pass
-        elif abs(d_net) <= tolerance:
-            notes.append("matches NET proceeds (slip appears net of "
-                         "commissions)")
+        s_list = s.get("listings") or {"": s}
+        c_list = c.get("listings") or {"": c}
+        named = sorted(x for x in s_list if x)
+        for sfx in named:
+            label = _label(root, sfx)
+            if sfx in c_list:
+                rows.append(_compare(label, s_list[sfx], c_list[sfx],
+                                     tolerance))
+            else:
+                rows.append({"symbol": label,
+                             "status": "MISSING_FROM_COMPUTED",
+                             "detail": f"slip has {s_list[sfx]['rows']} "
+                                       f"row(s), proceeds "
+                                       f"{s_list[sfx]['proceeds']:,.2f} — "
+                                       f"nothing computed for this "
+                                       f"listing"})
+        rest = {x: v for x, v in c_list.items() if x not in named}
+        if "" in s_list:
+            agg = _sum_listings(list(rest.values()))
+            if agg is None:
+                rows.append({"symbol": root,
+                             "status": "MISSING_FROM_COMPUTED",
+                             "detail": f"slip has {s_list['']['rows']} "
+                                       f"row(s) without a listing "
+                                       f"suffix, proceeds "
+                                       f"{s_list['']['proceeds']:,.2f} — "
+                                       f"nothing computed"})
+                continue
+            row = _compare(root, s_list[""], agg, tolerance)
+            if len(rest) > 1:
+                # Two securities that share a root (a CDR and its US
+                # parent, EFX.TO vs EFX.US) folded into one bare slip
+                # symbol: offsetting errors between them cancel and
+                # reconciled "OK" (R1-292). Make the user say which.
+                names = ", ".join(_label(root, x) for x in sorted(rest))
+                row["detail"] = "; ".join(filter(None, [
+                    f"computed has {len(rest)} listings ({names}) but the "
+                    f"slip names none — write the suffix in the slip CSV "
+                    f"so each listing is checked on its own",
+                    row["detail"]]))
+                if row["status"] == "OK":
+                    row["status"] = "AMBIGUOUS_LISTING"
+            rows.append(row)
         else:
-            closer = d_gross if abs(d_gross) <= abs(d_net) else d_net
-            problems.append(f"proceeds off by {closer:+,.2f} "
-                            f"(slip {s['proceeds']:,.2f} vs computed "
-                            f"gross {c['proceeds_gross']:,.2f} / net "
-                            f"{c['proceeds_net']:,.2f})")
-        if s["qty"] > 0 and abs(s["qty"] - c["qty"]) > 1e-4:
-            problems.append(f"quantity off by {s['qty'] - c['qty']:+,.4f} "
-                            f"(slip {s['qty']:,.4f} vs computed "
-                            f"{c['qty']:,.4f})")
-        if s["cost"] is not None:
-            d_cost = s["cost"] - c["cost"]
-            if abs(d_cost) > tolerance:
-                notes.append(f"slip cost differs by {d_cost:+,.2f} — often "
-                             f"legitimate (per-broker book value vs blended "
-                             f"ACB / lot method); document the reason")
-        if c["tainted_rows"]:
-            notes.append(f"{c['tainted_rows']} tainted disposition(s) with "
-                         f"phantom basis included")
-        status = "MISMATCH" if problems else "OK"
-        rows.append({"symbol": sym, "status": status,
-                     "detail": "; ".join(problems + notes)})
-    mismatches = [r for r in rows if r["status"] != "OK"]
+            for sfx in sorted(rest):
+                rows.append(_missing_from_slip(_label(root, sfx),
+                                               rest[sfx], tolerance))
+    failing = [r for r in rows
+               if r["status"] not in ("OK", "NO_SLIP_EXPECTED")]
     return {"rows": rows,
             "counts": {
                 "ok": sum(1 for r in rows if r["status"] == "OK"),
@@ -289,8 +555,12 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
                     if r["status"] == "MISSING_FROM_COMPUTED"),
                 "missing_from_slip": sum(
                     1 for r in rows if r["status"] == "MISSING_FROM_SLIP"),
+                "no_slip_expected": sum(
+                    1 for r in rows if r["status"] == "NO_SLIP_EXPECTED"),
+                "ambiguous_listing": sum(
+                    1 for r in rows if r["status"] == "AMBIGUOUS_LISTING"),
             },
-            "clean": not mismatches}
+            "clean": not failing}
 
 
 def render(rep: Dict[str, Any], tolerance: float) -> str:
@@ -308,13 +578,25 @@ def render(rep: Dict[str, Any], tolerance: float) -> str:
     lines.append("")
     lines.append(f"{c['ok']} OK, {c['mismatch']} mismatch, "
                  f"{c['missing_from_computed']} missing from computed, "
-                 f"{c['missing_from_slip']} missing from slip "
-                 f"(tolerance ±{tolerance:,.2f}).")
+                 f"{c['missing_from_slip']} missing from slip"
+                 + (f", {c['ambiguous_listing']} ambiguous listing"
+                    if c.get("ambiguous_listing") else "")
+                 + (f", {c['no_slip_expected']} expired with no slip "
+                    f"row (not a failure)"
+                    if c.get("no_slip_expected") else "")
+                 + f" (tolerance ±{tolerance:,.2f}).")
     lines.append("")
     lines.append("Notes:")
-    lines.append("  - MISSING_FROM_SLIP is often benign: option expiries, "
-                 "corp-action dispositions, and crypto don't get T5008/"
-                 "1099-B rows.")
+    lines.append("  - MISSING_FROM_SLIP can be benign: corp-action "
+                 "dispositions don't always get T5008/1099-B rows. "
+                 "Worthless option expiries are listed as "
+                 "NO_SLIP_EXPECTED and do not fail the check.")
+    lines.append("  - A slip symbol without a listing suffix matches every "
+                 "listing of that root; when the books hold two (AMZN.TO "
+                 "CDR and AMZN.US), write the suffix in the slip CSV.")
+    lines.append("  - Slips aggregated per type code (IB's SHS/OPC/FUT "
+                 "rows identified 'Various') cannot be compared per "
+                 "security: transcribe a per-security CSV.")
     lines.append("  - Slip cost (T5008 box 20) is per-broker book value; a "
                  "difference from blended ACB is expected when you hold the "
                  "security at more than one broker — document it, don't "
@@ -351,6 +633,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "(default: 1.00)")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    parser.add_argument("--ticker-map", type=Path, default=None,
+                        help="The project's ticker.map: slip symbols are "
+                             "renamed the way the books were (KGC -> K, "
+                             "RCI -> RCI.B). The `taxjson reconcile-slips` "
+                             "wrapper passes it automatically.")
     args = parser.parse_args(argv)
 
     for sp in args.slip_csv:
@@ -366,19 +653,29 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # One slip per broker is the norm (R1-207): each file on its own
     # reported every other broker's sales as MISSING_FROM_SLIP.
+    renames = None
+    if args.ticker_map is not None:
+        from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                    merge_renames)
+        renames = merge_renames(load_map_file(args.ticker_map),
+                                to_base=True)
     slip: Dict[str, Dict[str, Any]] = {}
     dropped_rows = 0
-    for sp in args.slip_csv:
-        one = load_slip(sp)
-        dropped_rows += int(one.pop("__dropped_rows__", 0) or 0)
-        for sym, rec in one.items():
-            acc = slip.setdefault(sym, {"qty": 0.0, "proceeds": 0.0,
-                                        "cost": None, "rows": 0})
-            acc["qty"] += rec["qty"]
-            acc["proceeds"] += rec["proceeds"]
-            acc["rows"] += rec["rows"]
-            if rec["cost"] is not None:
-                acc["cost"] = (acc["cost"] or 0.0) + rec["cost"]
+    try:
+        for sp in args.slip_csv:
+            one = load_slip(sp, renames)
+            dropped_rows += int(one.pop("__dropped_rows__", 0) or 0)
+            for root, rec in one.items():
+                acc = slip.setdefault(root, {"qty": 0.0, "proceeds": 0.0,
+                                             "cost": None, "rows": 0,
+                                             "listings": {}})
+                for sfx, sub in rec["listings"].items():
+                    _bump(acc, sfx, qty=sub["qty"],
+                          proceeds=sub["proceeds"], rows=sub["rows"],
+                          cost=sub["cost"])
+    except AmbiguousHeader as e:
+        print(e.code, file=sys.stderr)
+        return 2
     computed = load_computed(args.gains, args.year, args.date_basis)
     rep = reconcile(slip, computed, args.tolerance)
     if dropped_rows:
