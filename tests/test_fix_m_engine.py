@@ -774,3 +774,70 @@ class TestDiagnosticsReachTheUser(unittest.TestCase):
                   account='rothira')
         res, err = _run(USATaxRules(), main, sheltered_transactions=sh)
         self.assertNotIn('beyond its recorded balance', err)
+
+
+class TestPerAccountSplit(unittest.TestCase):
+    """taxjson-split-gains apportioning a blended Canada pool."""
+
+    def _row(self, sym, qty, cost, **kw):
+        return {'symbol': sym, 'qty': qty, 'total_cost': cost,
+                'currency': 'CAD', **kw}
+
+    def _b(self, content, account):
+        return [t.to_dict() for t in _tt(content, account=account)]
+
+    def test_deferred_wash_is_apportioned(self):
+        # R1-160: 1000 deferred in a 100-share pool held 50/50.
+        from taxjson.bin.taxjson_split_gains import split_for_account
+        comb = {'inventory': [self._row('XYZ.TO', 100, 2000.0,
+                                        deferred_wash=1000.0)]}
+        tot = 0.0
+        for a in ('a', 'b'):
+            base = self._b("BUYSELL 2025-01-02 10:00:00 XYZ.TO 50 CAD 20 1000", a)
+            inv = split_for_account(comb, a, base)['inventory']
+            self.assertAlmostEqual(inv[0]['deferred_wash'], 500.0)
+            tot += inv[0]['deferred_wash']
+        self.assertAlmostEqual(tot, 1000.0)
+
+    def test_phantom_openings_reach_the_account(self):
+        # R1-275 / R1-322: a phantom opening of 380 is in the pool but
+        # not in the base book.
+        from taxjson.bin.taxjson_split_gains import split_for_account
+        comb = {'inventory': [self._row('SPY.US', 0.6724, 581.35),
+                              self._row('BK.TO', 1000, 10766.95)],
+                'phantom_application_log': [
+                    {'symbol': 'SPY.US', 'account': 'margin',
+                     'opening_qty': 380.0, 'inserted': True,
+                     'anchor_date': '2024-01-05', 'anchor_symbol': 'SPY.US'},
+                    {'symbol': 'BK.TO', 'account': 'margin',
+                     'opening_qty': 1000.0, 'inserted': True,
+                     'anchor_date': '2024-04-15', 'anchor_symbol': 'BK.TO'}]}
+        base = self._b("""
+            BUYSELL 2024-01-05 10:00:00 SPY.US -380 CAD 500 190000
+            BUYSELL 2024-06-03 10:00:00 SPY.US 0.6724 CAD 864 581.35
+        """, 'margin')
+        inv = {r['symbol']: r for r in
+               split_for_account(comb, 'margin', base)['inventory']}
+        self.assertAlmostEqual(inv['SPY.US']['qty'], 0.6724, places=4)
+        self.assertAlmostEqual(inv['SPY.US']['total_cost'], 581.35, places=2)
+        self.assertAlmostEqual(inv['BK.TO']['qty'], 1000.0)
+
+    def test_settle_lagged_sale_across_a_split(self):
+        # S050-18: margX sold 500 pre-split (settling after the split).
+        from taxjson.bin.taxjson_split_gains import split_for_account
+        comb = {'inventory': [self._row('ABC.TO', 3000, 150000.0)]}
+
+        def book(a, sell):
+            rows = self._b("BUYSELL 2025-01-02 10:00:00 ABC.TO 1000 CAD 100 100000", a)
+            if sell:
+                rows += self._b("BUYSELL 2025-06-10 10:00:00 ABC.TO -500 CAD 110 55000 0 2025-06-11", a)
+            rows.append(TaxTransaction(action='SPLIT', date='2025-06-10',
+                                       time='20:25:00', symbol='ABC.TO',
+                                       quantity=2.0, currency='CAD',
+                                       account=a).to_dict())
+            return rows
+        x = split_for_account(comb, 'margX', book('margX', True))['inventory']
+        y = split_for_account(comb, 'margY', book('margY', False))['inventory']
+        self.assertAlmostEqual(x[0]['qty'], 1000.0)
+        self.assertAlmostEqual(x[0]['total_cost'], 50000.0)
+        self.assertAlmostEqual(y[0]['qty'], 2000.0)

@@ -35,6 +35,20 @@ from taxjson.bin.taxjson_apply_distributions import balance_on
 PROG = "taxjson-split-gains"
 
 
+def _phantom_openings(combined: Dict[str, Any], account: str) -> List[dict]:
+    out = []
+    for e in combined.get("phantom_application_log") or []:
+        if (e.get("account") == account and e.get("inserted")
+                and float(e.get("opening_qty") or 0.0) > 0):
+            d = e.get("anchor_date") or "1970-01-01"
+            out.append({"action": "OPENING_BALANCE", "date": d,
+                        "date_settle": d, "time": "00:00:00",
+                        "symbol": e.get("anchor_symbol") or e.get("symbol"),
+                        "quantity": float(e["opening_qty"]),
+                        "net_amount": 0.0, "account": account})
+    return out
+
+
 def split_for_account(combined: Dict[str, Any], account: str,
                       base_txs: Optional[List[dict]]) -> Dict[str, Any]:
     txs = [e for e in combined.get("transactions", [])
@@ -51,6 +65,11 @@ def split_for_account(combined: Dict[str, Any], account: str,
             if (w.get("loss_tx") or {}).get("account") == account
             or w.get("loss_tx_id") in _entry_ids]
 
+    # Phantom openings the blended pass synthesized for THIS account
+    # (phantoms.json): they are in the pool but not in the base book
+    # (audit R1-275 / R1-322 — SPY showed -379 shares at a negative cost,
+    # BK.TO vanished).
+    openings = _phantom_openings(combined, account)
     inventory: List[Dict[str, Any]] = []
     for row in combined.get("inventory", []):
         row_acct = row.get("account")
@@ -62,15 +81,20 @@ def split_for_account(combined: Dict[str, Any], account: str,
         # own share count at the blended ACB per share.
         if base_txs is None:
             continue
-        qty = balance_on(base_txs, row.get("symbol", ""), "9999-12-31")
+        qty = balance_on(list(base_txs) + openings,
+                         row.get("symbol", ""), "9999-12-31")
         total_qty = float(row.get("qty") or 0.0)
         if abs(qty) < 1e-9 or abs(total_qty) < 1e-9:
             continue
         share = qty / total_qty
         r = dict(row)
         r["qty"] = round(qty, 6)
-        r["total_cost"] = round(float(row.get("total_cost") or 0.0)
-                                * share, 6)
+        # Every ADDITIVE field scales with the account's share — the
+        # deferred superficial loss too (audit R1-160: copied whole into
+        # every account, it was counted once per account).
+        for _f in ("total_cost", "deferred_wash", "base_total_cost"):
+            if _f in row:
+                r[_f] = round(float(row.get(_f) or 0.0) * share, 6)
         r["account"] = account
         r["blended_pool"] = True    # ACB/share is the s.47 blended figure
         inventory.append(r)

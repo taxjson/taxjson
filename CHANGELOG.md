@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Per-account holdings include phantom openings and split the deferred
+  loss.** In a blended taxable pass each account's `_gains_wash.json`
+  inventory (read by `list`, `shares`, `harvest`) was apportioned from
+  the account's own book, which lacks the openings `phantoms.json`
+  adds: a position could show as a short at a negative cost or vanish.
+  The openings now count. The deferred superficial loss parked in a
+  blended pool is apportioned with the shares instead of being copied
+  whole into every account.
 - **Phantom-basis superficial-loss warnings are shown.** A clean loss
   within 30 days of a phantom-basis sale, and a phantom-basis loss with
   a rebuy in its window, were written only into the gains JSON (and
