@@ -86,7 +86,7 @@ class TestFeesIncludesFeeRows(unittest.TestCase):
                      "currency": "CAD"},
                     # Standalone fee (e.g. IB market-data): amount lives in
                     # net_amount, POSITIVE = charged (the parsers'
-                    # convention; R1-124 — this test used to pin the
+                    # convention; R1-124, R1-54 — this test used to pin the
                     # inverted sign).
                     {"action": "FEE", "date": "2026-03-05",
                      "time": "09:30:00", "symbol": "CASH", "quantity": 0.0,

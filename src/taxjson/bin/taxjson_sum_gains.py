@@ -319,6 +319,14 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         lines.append("")
         lines.append(f"TOTAL COST:                 {totals['cost']:17,.2f} {currency}")
         lines.append(f"TOTAL PROCEEDS:             {totals['proceeds']:17,.2f} {currency}")
+        # These two are the ENGINE's signed figures (a short's cover
+        # cost is negative proceeds, its opening proceeds negative
+        # cost; sell-side outlays netted) — not Schedule 3 lines. The
+        # gains below are the same under both conventions (2026-09
+        # audit R1-208).
+        lines.append("  (engine sign convention: shorts/written options "
+                     "negated — for Schedule 3 proceeds and ACB use "
+                     "`taxjson form-export`)")
         lines.append("-" * 54)
         lines.append(f"TOTAL REALIZED STOCK GAIN:  {color_val(totals['cap'], is_cost=False)} {currency}")
         lines.append(f"TOTAL REALIZED OPTION GAIN: {color_val(totals['opt'], is_cost=False)} {currency}")

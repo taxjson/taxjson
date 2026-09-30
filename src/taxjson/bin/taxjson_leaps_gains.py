@@ -2,7 +2,8 @@
 """
 taxjson_leaps_gains.py
 
-Summarize Long Option (LEAPS) gains by underlying from taxjson_gains.py output.
+Summarize LONG option gains (every tenor; `taxjson leaps-sum` is the
+LEAPS-only view) by underlying from taxjson_gains.py output.
 Ported from tt_leaps_gains.pl.
 """
 
@@ -38,6 +39,13 @@ def process_data(data, leaps_by_underlying):
         if direction != 'LONG':
             continue
             
+        if tx.get('tainted'):
+            # Phantom-basis rows carry a fabricated cost: excluded (and
+            # counted) exactly as ccd-sum / leaps-sum and every
+            # filing-facing consumer do (audit R1-173).
+            leaps_by_underlying.setdefault('_tainted', 0)
+            leaps_by_underlying['_tainted'] += 1
+            continue
         underlying = get_underlying(symbol)
         if not underlying:
             continue
@@ -53,7 +61,7 @@ def process_data(data, leaps_by_underlying):
         leaps_by_underlying[underlying]['total_gain'] += gain
 
 def main():
-    parser = argparse.ArgumentParser(description="Summarize Long Option (LEAPS) gains.")
+    parser = argparse.ArgumentParser(description="Summarize LONG option gains (every tenor).")
     parser.add_argument("files", nargs="*", metavar="FILE",
                         help="Input JSON files from taxjson_gains.py "
                              "(default: stdin)")
@@ -76,10 +84,14 @@ def main():
         for input_path in args.files:
             try:
                 data = load_report_json(input_path)
-                process_data(data, leaps_by_underlying)
-            except (json.JSONDecodeError, FileNotFoundError) as e:
+            except (OSError, ValueError) as e:
+                # A report missing an input is not a report: the old
+                # code printed TOTAL 0.00 and exited 0 (audit R1-173).
                 cli_diag.error(PROG, f"cannot load {input_path}: {e}")
+                sys.exit(1)
+            process_data(data, leaps_by_underlying)
 
+    tainted = leaps_by_underlying.pop('_tainted', 0)
     # Re-calculate grand total from aggregated data
     grand_total = sum(und_data['total_gain'] for und_data in leaps_by_underlying.values())
 
@@ -87,7 +99,7 @@ def main():
     sorted_underlyings = sorted(leaps_by_underlying.keys())
 
     for und in sorted_underlyings:
-        print(f"LONG OPTIONS (LEAPS) — {und}")
+        print(f"LONG OPTIONS — {und}")
         print()
 
         headers = ["DATE", "SYMBOL", "QTY", "CUR", "COST/SH", "PROC/SH", "GAIN/SH", "COST", "PROCEEDS", "GAIN", "DAYS"]
@@ -112,9 +124,13 @@ def main():
         print(f"\nTOTAL {und} LONG OPTION GAIN: {leaps_by_underlying[und]['total_gain']:,.2f}\n")
 
     # Summary
-    print("LONG OPTIONS SUMMARY")
+    # Every LONG option close of any tenor — not only LEAPS (a buy placed
+    # >3 months to expiry). The old "(LEAPS)" title disagreed with
+    # `taxjson leaps-sum` from the same run by 42k (audit R1-173).
+    print("LONG OPTIONS SUMMARY (every long option close, any tenor; "
+          "`taxjson leaps-sum` is the LEAPS-only view)")
     print()
-    print(f"{'SYMBOL':<15} {'LEAPS_GAIN':>20}")
+    print(f"{'SYMBOL':<15} {'LONG_OPT_GAIN':>20}")
     print("-" * 36)
 
     # Sort summary descending by gain
@@ -124,6 +140,10 @@ def main():
 
     print("-" * 36)
     print(f"{'TOTAL':<15} {grand_total:20,.2f}")
+    if tainted:
+        print(f"\nNOTE: {tainted} tainted disposition(s) with phantom cost "
+              f"basis excluded (report them by hand; form-export lists "
+              f"them).")
 
 if __name__ == "__main__":
     main()

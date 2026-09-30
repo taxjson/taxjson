@@ -112,7 +112,8 @@ class TestJsonOutputs(unittest.TestCase):
 
     def test_roll_ups(self):
         ds = self._json("divs-sum")
-        self.assertEqual(ds["rows"][0]["dividend"], 45.0)  # div + PIL
+        # DIVIDEND only: PIL is dil-sum's (audit R1-272).
+        self.assertEqual(ds["rows"][0]["dividend"], 30.0)
         dil = self._json("dil-sum")
         self.assertEqual(dil["rows"][0]["in_lieu"], 15.0)
         roc = self._json("roc-sum")

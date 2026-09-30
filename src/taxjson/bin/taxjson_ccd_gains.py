@@ -42,6 +42,13 @@ def process_data(data, ccd_by_underlying):
         if direction != 'SHORT':
             continue
             
+        if tx.get('tainted'):
+            # Phantom-basis rows carry a fabricated cost: excluded (and
+            # counted) exactly as ccd-sum / leaps-sum and every
+            # filing-facing consumer do (audit R1-173).
+            ccd_by_underlying.setdefault('_tainted', 0)
+            ccd_by_underlying['_tainted'] += 1
+            continue
         underlying = get_underlying(symbol)
         if not underlying:
             continue
@@ -80,10 +87,14 @@ def main():
         for input_path in args.files:
             try:
                 data = load_report_json(input_path)
-                process_data(data, ccd_by_underlying)
-            except (json.JSONDecodeError, FileNotFoundError) as e:
+            except (OSError, ValueError) as e:
+                # A report missing an input is not a report: the old
+                # code printed TOTAL 0.00 and exited 0 (audit R1-173).
                 cli_diag.error(PROG, f"cannot load {input_path}: {e}")
+                sys.exit(1)
+            process_data(data, ccd_by_underlying)
 
+    tainted = ccd_by_underlying.pop('_tainted', 0)
     # Re-calculate grand total from aggregated data
     grand_total = sum(und_data['total_gain'] for und_data in ccd_by_underlying.values())
 
@@ -128,6 +139,10 @@ def main():
 
     print("-" * 36)
     print(f"{'TOTAL':<15} {grand_total:20,.2f}")
+    if tainted:
+        print(f"\nNOTE: {tainted} tainted disposition(s) with phantom cost "
+              f"basis excluded (report them by hand; form-export lists "
+              f"them).")
 
 if __name__ == "__main__":
     main()

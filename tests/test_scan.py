@@ -104,7 +104,10 @@ class TestScan(unittest.TestCase):
                 ticker_map="DISTINCT AEM.US AEM.TO\n")
             r = _run(root)
         self.assertNotIn("MAP-GAP", r.stdout)
-        self.assertIn("US-LISTING", r.stdout)   # unrelated check lives
+        # ...and US-LISTING too: DISTINCT says AEM.TO is another
+        # instrument, so "hold AEM.TO instead" would be wrong advice
+        # (audit S042-06; this line used to assert the opposite).
+        self.assertNotIn("US-LISTING", r.stdout)
 
     def test_us_domiciled_payer_in_tfsa(self):
         with tempfile.TemporaryDirectory() as tmp:

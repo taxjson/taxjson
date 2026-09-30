@@ -77,7 +77,7 @@ the open steps one at a time; `--quick` skips the slow detectors.
       `taxjson reconcile-slips inputs/slips/*.csv` (all brokers' slips
       together) exits clean. The CRA matches Schedule 3 proceeds against
       these; this is the step that prevents a review letter.
-- [ ] **T5 / T3 / NR4 slips** against `taxjson divs-sum` and
+- [ ] **T5 / T3 / NR4 slips** against the TAXABLE line of `taxjson divs-sum` and
       `taxjson roc-sum`. Trust units and split-share corps report on a
       T3, often weeks after the T5s.
 - [ ] **Foreign tax withheld** from the slips (not the broker rows) for

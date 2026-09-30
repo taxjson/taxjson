@@ -186,8 +186,18 @@ def main():
                              "balances the gains engine applies, so "
                              "phantom-backed positions are not shown as "
                              "shorts")
+    parser.add_argument("--country", default="canada",
+                        help="Project country (default: canada). Canada "
+                             "(s.54): only a LONG acquisition still held "
+                             "by the SAME holder at day 30 backs a denial "
+                             "(taxable pool, or each registered account on "
+                             "its own). usa (s.1091): a re-short triggers a "
+                             "short-cover loss and an IRA purchase in the "
+                             "window denies the loss even after the IRA "
+                             "sold (Rev. Rul. 2008-5)")
 
     args = parser.parse_args()
+    us_mode = str(args.country or "").strip().lower() in ("us", "usa")
 
     orig_stdout = sys.stdout
     if args.json:
@@ -276,11 +286,49 @@ def main():
     # "acquisition" that turned a pure custody move into a VIOLATION.
     from taxjson.lib.pipeline import (_drop_self_cancelling_transfers,
                                       _net_cross_account_transfers)
+    # A trade executed BEFORE a split that settles AFTER it: the walk
+    # orders by settle date, so the pool splits first and the executed
+    # (pre-split) quantity must be re-denominated into post-split units
+    # (qty x ratio; money untouched) — the engine's rule (core.py, the
+    # settle-lag straddle). Without it a pre-split sale of 84 left 8.4
+    # phantom post-split shares held (real FFN.TO 11-for-10, 2026-07).
+    _lag_splits = [t for t in transactions if t.action == 'SPLIT' and t.date]
+    if _lag_splits:
+        for t in transactions:
+            if not (t.action in ('BUYSELL', 'ASSIGN') and t.date
+                    and t.date_settle and t.date < t.date_settle):
+                continue
+            _f = 1.0
+            for sp in _lag_splits:
+                _spd = sp.date_settle or sp.date
+                if (sp.symbol == t.symbol
+                        and (t.date, t.time or '00:00:00')
+                        < (_spd, sp.time or '00:00:00')
+                        and _spd < t.date_settle
+                        # a RENAME-split straddle is refused by the
+                        # engine; the radar leaves the row as booked
+                        and (getattr(sp, 'symbol_new', '') or '')
+                        in ('', sp.symbol)
+                        and float(sp.quantity or 0)):
+                    _f *= float(sp.quantity)
+            if abs(_f - 1.0) > 1e-12:
+                t.quantity = float(t.quantity) * _f
+
     _tax_rows = [t for t in transactions if t._group == 'TAXABLE']
     _shl_rows = [t for t in transactions if t._group != 'TAXABLE']
     _tax_rows, _ = _drop_self_cancelling_transfers(_tax_rows)
-    _shl_rows, _ = _drop_self_cancelling_transfers(_shl_rows)
-    _shl_rows = _net_cross_account_transfers(_shl_rows)
+    # The sheltered book gets the same treatment the engine's wash
+    # context does (lib/pipeline._handle_transfers): moves near a
+    # taxable trade of the symbol are not netted, and a netted own-
+    # account move (rrsp -> rrsp2) stays as balance-only TRANSFER rows —
+    # dropping both legs left the receiver short and the sender long,
+    # so per-account holdings (and who bought what) came out wrong.
+    _shl_rows, _ = _drop_self_cancelling_transfers(
+        _shl_rows, main_transactions=_tax_rows)
+    _own_moves: list = []
+    _shl_rows = _net_cross_account_transfers(
+        _shl_rows, main_transactions=_tax_rows, netted_out=_own_moves)
+    _shl_rows = _shl_rows + _own_moves
 
     # Phantom openings (phantoms.json): the SAME OPENING_BALANCE rows
     # the gains pass synthesizes (lib/pipeline.prepare_books), or a
@@ -337,15 +385,25 @@ def main():
 
     account_pool_qty = {} # (symbol, group, account) -> qty
     account_pool_acb = {} # (symbol, group, account) -> total_cost
-    global_lacq = {}      # alias class -> {group -> {epoch, account}} latest buy per group
     recent_losses = {}    # alias class -> [loss dicts] (ALL in-window losses)
-    open_events = {}      # alias class -> [(epoch, direction)] opening events, all history
+    # Every OPENING, all history, per alias class: who acquired how many
+    # units when. The superficial-loss test is PER HOLDER (the engine,
+    # core.py): the taxable book is one holder (one s.47 pool across
+    # the taxable accounts), each registered account is its own, and a
+    # holder backs a denial only with units it ACQUIRED inside the
+    # window and still holds at its end — min(acquired, held). Units a
+    # registered account held before the window neither create nor
+    # back a denial. Canada counts LONG acquisitions only (a new short
+    # sale or written option acquires nothing, s.54); the US keeps the
+    # direction-matched s.1091(e) re-short rule.
+    acq_events = {}       # alias class -> [acquisition dicts]
     # s.54 para (i): a LONG CALL is a right to acquire the underlying
     # shares, so opening one is a trigger for a LONG SHARE loss (never
     # for an option loss: options wash only against the identical
     # contract). Keyed by the UNDERLYING's alias class.
-    call_open_events = {}  # underlying class -> [epoch] long-call openings
-    from taxjson.lib.core import parse_option_right, parse_option_underlying
+    call_acq = {}         # underlying class -> [acquisition dicts]
+    from taxjson.lib.core import (OPTION_CONTRACT_SHARES, parse_option_expiry,
+                                  parse_option_right, parse_option_underlying)
 
     def _call_underlying_cls(sym):
         if parse_option_right(sym) != 'C':
@@ -354,9 +412,25 @@ def main():
         return alias_of(und) if und else None
     seen_splits = set()   # (symbol, account, date, ratio, symbol_new) dedup
 
+    def _holder(group, pool_acct):
+        return ('TAXABLE', '') if group == 'TAXABLE' else ('SHELTERED',
+                                                           pool_acct)
+
+    def _record_acq(cls, tx, pool_acct, qty, direction):
+        ev = {'epoch': tx._epoch, 'qty': qty, 'dir': direction,
+              'holder': _holder(tx._group, pool_acct),
+              'account': (getattr(tx, 'account', '') or '').strip(),
+              'tx_obj': id(tx),
+              'symbol': tx.symbol}
+        acq_events.setdefault(cls, []).append(ev)
+        _u = _call_underlying_cls(tx.symbol) if direction == 'LONG' else None
+        if _u:
+            call_acq.setdefault(_u, []).append(ev)
+
     engine = _EngineLosses.load(args.gains)
 
     def _record_loss(cls, tx, loss):
+        loss.setdefault('tx_obj', id(tx))
         recent_losses.setdefault(cls, []).append(loss)
 
     def _engine_record(cls, tx):
@@ -489,46 +563,14 @@ def main():
                 account_pool_qty[key] += qty_raw
                 continue
             
-            # Track acquisitions globally, keeping the latest buy in EACH group
-            # (taxable vs sheltered) separately. A buy in a sheltered/registered
-            # account is a superficial-loss trigger too (affiliated person, CRA
-            # ITA 54), but it is permanently denied, whereas a taxable buy can be
-            # rescued by a full exit. So the advisory below must know about BOTH
-            # recent buys, not just whichever happened to land last — keeping
-            # only the single latest would drop the group distinction (and its
-            # very different tax consequence) when both account types bought
-            # inside the window.
-            grp_acq = global_lacq.setdefault(cls, {})
-            prev = grp_acq.get(tx._group)
-            if prev is None or tx._epoch > prev['epoch']:
-                grp_acq[tx._group] = {
-                    'epoch': tx._epoch,
-                    'account': (getattr(tx, 'account', '') or '').strip(),
-                }
-
-            # Record EVERY opening event (not just the last 30 days from
-            # today): the superficial-loss trigger test is against the CRA
-            # ±30-day window around the LOSS SALE (ITA 54), which is anchored
-            # to the sale date, not to today. Gating on today's window made a
-            # trigger bought shortly before the loss "age out" as the report
-            # date advanced, silently downgrading VIOLATION → BLOCKED and
-            # hiding the sell-by rescue deadline. Direction is recorded so a
-            # short-OPENING sale is never treated as a trigger for a LONG
-            # loss (and vice versa) — it previously produced "VIOLATION:
-            # Sell N shares" advice on a short position, i.e. telling the
-            # user to increase the short.
-            open_events.setdefault(cls, []).append(
-                (tx._epoch, 'LONG' if qty_raw > 0 else 'SHORT'))
-            _ucls = _call_underlying_cls(ticker) if qty_raw > 0 else None
-            if _ucls:
-                call_open_events.setdefault(_ucls, []).append(tx._epoch)
-                _ga = global_lacq.setdefault(_ucls, {})
-                _pv = _ga.get(tx._group)
-                if _pv is None or tx._epoch > _pv['epoch']:
-                    _ga[tx._group] = {
-                        'epoch': tx._epoch,
-                        'account': (getattr(tx, 'account', '')
-                                    or '').strip()}
+            # Record EVERY opening (not just the last 30 days from today):
+            # the trigger test is against the ±30-day window around the
+            # LOSS SALE, anchored to the sale date, not to today. Holder
+            # and direction are kept: a short OPENING is never an
+            # acquisition in Canada, and a registered account's buy
+            # backs a denial only while THAT account still holds.
+            _record_acq(cls, tx, acct, abs_qty,
+                        'LONG' if qty_raw > 0 else 'SHORT')
         else:
             # Closing
             avg_cost_unit = account_pool_acb[key] / abs(current_inv) if abs(current_inv) > 1e-6 else 0.0
@@ -544,7 +586,14 @@ def main():
             # rows outside the engine's tax year.
             if _engine_record(cls, tx):
                 pass
-            elif tx._group == 'TAXABLE' and tx.action != 'TRANSFER':
+            elif (tx._group == 'TAXABLE' and tx.action != 'TRANSFER'
+                  # An exercise/assignment leg of an OPTION is not a
+                  # disposition at a loss: the option's cost or premium
+                  # folds into the share leg (s.49(3)/(3.1)). Booked
+                  # here as "sold for 0", it invented a loss equal to
+                  # the option's cost (2026-09 audit: DELL, IMG, QQQ).
+                  and not (tx.action == 'ASSIGN'
+                           and is_option_ticker(ticker))):
                 # Prorate proceeds to the CLOSED portion: a sale that
                 # crosses zero (sell 150 holding 100) otherwise nets the
                 # FULL proceeds against only the closed shares' cost —
@@ -560,7 +609,7 @@ def main():
                     # loss used to overwrite an older loss whose VIOLATION
                     # was still active, silently dropping its rescue
                     # deadline from the report.
-                    recent_losses.setdefault(cls, []).append({
+                    _record_loss(cls, tx, {
                         'date': tx.date,
                         'epoch': tx._epoch,
                         'qty': closing_qty,
@@ -582,17 +631,8 @@ def main():
                 # record it like any opening, or the new short/long is
                 # invisible to the trigger walk (2026-09 audit).
                 if tx.action not in ('TRANSFER', 'OPENING_BALANCE'):
-                    _dir = 'LONG' if qty_raw > 0 else 'SHORT'
-                    grp_acq = global_lacq.setdefault(cls, {})
-                    prev = grp_acq.get(tx._group)
-                    if prev is None or tx._epoch > prev['epoch']:
-                        grp_acq[tx._group] = {
-                            'epoch': tx._epoch,
-                            'account': (getattr(tx, 'account', '')
-                                        or '').strip(),
-                        }
-                    open_events.setdefault(cls, []).append(
-                        (tx._epoch, _dir))
+                    _record_acq(cls, tx, acct, leftover_qty,
+                                'LONG' if qty_raw > 0 else 'SHORT')
         
         account_pool_qty[key] += qty_raw
         if abs(account_pool_qty[key]) < 1e-6:
@@ -620,25 +660,8 @@ def main():
             if (today_epoch - l['epoch']) / 86400 <= 30
         ]
 
-        def _loss_has_trigger(l):
-            # Superficial-loss trigger: a DIRECTION-MATCHED opening inside
-            # the CRA ±30-day window AROUND THE LOSS SALE ([sale-30d,
-            # sale+30d], ITA 54) — not "the last 30 days from today", and
-            # never a short-opening sale triggering a LONG loss (or vice
-            # versa).
-            if any(abs(e - l['epoch']) <= window_sec
-                   and d == l.get('direction', 'LONG')
-                   for e, d in open_events.get(cls, [])):
-                return True
-            return (not l.get('is_option')
-                    and l.get('direction', 'LONG') == 'LONG'
-                    and any(abs(e - l['epoch']) <= window_sec
-                            for e in call_open_events.get(cls, [])))
-
-        triggered = [l for l in in_window_losses if _loss_has_trigger(l)]
-
         # Class-level totals drive the still-held decisions (the engine
-        # sums bal_at_end over the whole rename class); the per-ticker
+        # sums balances over the whole rename class); the per-ticker
         # tax_q / shl_q are what the row displays. They coincide unless
         # a rename was booked in one account but not another.
         cls_tax_q = 0.0
@@ -646,8 +669,6 @@ def main():
         for (t, grp, acct), qty in account_pool_qty.items():
             if alias_of(t) != cls:
                 continue
-            # Group ('TAXABLE'/'SHELTERED') is carried in the pool key now,
-            # so no file-path lookup is needed.
             if grp == 'TAXABLE':
                 cls_tax_q += qty
                 if t == ticker:
@@ -657,42 +678,134 @@ def main():
                 if t == ticker:
                     shl_q += qty
 
-        held_qty = sum(abs(qty) for (t, grp, acct), qty
-                       in account_pool_qty.items()
-                       if alias_of(t) == cls and abs(qty) > 0.01)
-        # Long calls on these shares are still-held substituted property
-        # for a share loss (100 shares per contract).
-        held_calls = 0.0
+        def _held_by_holder(direction='LONG'):
+            """{holder: units} of the class each holder holds NOW on
+            `direction`'s side. The engine's still-held threshold
+            (1e-6): a 0.009 BTC rebuy still backs a denial."""
+            h = {}
+            for (t, grp, pacct), qty in account_pool_qty.items():
+                if alias_of(t) != cls:
+                    continue
+                k = _holder(grp, pacct)
+                h[k] = h.get(k, 0.0) + qty
+            sgn = 1.0 if direction == 'LONG' else -1.0
+            return {k: sgn * v for k, v in h.items() if sgn * v > 1e-6}
+
+        long_held = _held_by_holder('LONG')
+        calls_held = {}          # (holder, call symbol) -> contracts
         if not is_option_ticker(ticker):
-            held_calls = sum(qty for (t, grp, acct), qty
-                             in account_pool_qty.items()
-                             if qty > 0.01 and _call_underlying_cls(t) == cls)
+            for (t, grp, pacct), qty in account_pool_qty.items():
+                if _call_underlying_cls(t) != cls:
+                    continue
+                k = (_holder(grp, pacct), t)
+                calls_held[k] = calls_held.get(k, 0.0) + qty
+            calls_held = {k: v for k, v in calls_held.items() if v > 1e-6}
+
+        def _backing(lo, hi, crit, share_loss, exclude=None, end_date=None):
+            """Per-holder units backing a denial for a loss whose window
+            is [lo, hi]: min(acquired in the window, held now) for each
+            holder (the forward view of the engine's day-30 balance);
+            a US IRA's purchase backs it whatever it holds now. Long
+            calls (share losses only) back it per (holder, series),
+            unless the series expires before the window's end."""
+            held = long_held if crit == 'LONG' else _held_by_holder(crit)
+            acq, last = {}, {}
+            for e in acq_events.get(cls, []):
+                if e['dir'] != crit or not (lo <= e['epoch'] <= hi):
+                    continue
+                if exclude is not None and e.get('tx_obj') == exclude:
+                    continue       # the loss row's own leftover leg
+                h = e['holder']
+                acq[h] = acq.get(h, 0.0) + e['qty']
+                if e['epoch'] >= last.get(h, (-1e18, ''))[0]:
+                    last[h] = (e['epoch'], e['account'])
+            back = {}
+            for h, a in acq.items():
+                cap = (a if (us_mode and h[0] == 'SHELTERED')
+                       else min(a, held.get(h, 0.0)))
+                if cap > 1e-6:
+                    back[h] = {'units': cap, 'held': held.get(h, 0.0),
+                               'last': last[h][0], 'account': last[h][1]}
+            calls = {}
+            if share_loss and crit == 'LONG':
+                cacq, clast = {}, {}
+                for e in call_acq.get(cls, []):
+                    if not (lo <= e['epoch'] <= hi):
+                        continue
+                    if exclude is not None and e.get('tx_obj') == exclude:
+                        continue
+                    if end_date and (parse_option_expiry(e['symbol'])
+                                     or '9999') < end_date:
+                        continue
+                    k = (e['holder'], e['symbol'])
+                    cacq[k] = cacq.get(k, 0.0) + e['qty']
+                    if e['epoch'] >= clast.get(k, (-1e18, ''))[0]:
+                        clast[k] = (e['epoch'], e['account'])
+                for k, a in cacq.items():
+                    cap = min(a, calls_held.get(k, 0.0))
+                    if cap > 1e-6:
+                        calls[k] = {'contracts': cap,
+                                    'held': calls_held.get(k, 0.0),
+                                    'last': clast[k][0],
+                                    'account': clast[k][1]}
+            return back, calls
+
+        def _units(back, calls):
+            return (sum(b['units'] for b in back.values())
+                    + OPTION_CONTRACT_SHARES
+                    * sum(c['contracts'] for c in calls.values()))
+
+        def _who(h, acct_label=''):
+            if h[0] == 'TAXABLE':
+                return 'taxable'
+            return f"sheltered '{acct_label or h[1] or 'unknown'}'"
+
+        # The engine's verdict, loss by loss: the units a holder acquired
+        # inside the loss's ±30-day window AND still holds (the Canada
+        # rule; LONG acquisitions only — a re-short or a new written
+        # option never triggers). Denied units = min(sold, backing).
+        violations = []
+        for l in in_window_losses:
+            crit = (l.get('direction', 'LONG') if us_mode else 'LONG')
+            back, calls = _backing(
+                l['epoch'] - window_sec, l['epoch'] + window_sec, crit,
+                share_loss=(not l.get('is_option')
+                            and l.get('direction', 'LONG') == 'LONG'),
+                exclude=l.get('tx_obj'),
+                end_date=epoch_to_date(l['epoch'] + window_sec))
+            denied = min(float(l.get('qty') or 0.0), _units(back, calls))
+            if denied > 1e-6:
+                violations.append((l, denied, back, calls))
+
+        # Anything held on either side (display threshold): a recent
+        # loss with a position left is BLOCKED (don't add), else COOLING.
+        held_any = (sum(abs(qty) for (t, grp, acct), qty
+                        in account_pool_qty.items()
+                        if alias_of(t) == cls and abs(qty) > 0.01)
+                    + sum(calls_held.values()))
 
         adv = ""
         is_relevant = False
         clear_in = "-"
         clears_at = None   # ABSOLUTE clear date for --json-out consumers
         settle_deadline = None   # VIOLATION only: the engine's settle bound
+        rescue_j = None          # VIOLATION only: who must sell what
+        denied_j = None          # VIOLATION only: units denied as things stand
+        at_risk_j = None         # LOCKED only: taxable units a loss sale today
+        #                          would lose to a registered holder
 
         if in_window_losses:
             is_relevant = True
-            if triggered and (held_qty > 0.01 or held_calls > 0.01):
-                # Trigger acquired in the window AND still holding: already
-                # superficial — rescue needs a full exit that SETTLES on
-                # or before loss_settle+30, the engine's own held-at-end
-                # boundary (core.py end_window_date = loss sort/settle
-                # date + 30d; a transaction whose settle date is <= that
-                # counts toward bal_at_end). The other branches use +31
-                # because they answer a DIFFERENT question — the first
-                # safe day to re-enter — where the boundary flips.
-                # Printing +31 here told the user a sell-by date one day
-                # past the rescue window; printing the SETTLE bound as
-                # the trade date did the same thing one lag later: a
-                # user who traded ON it settled T+1 and the loss was
-                # denied (permanently, for a registered-account trigger).
-                # So the date the user acts on is the last TRADE date
-                # that settles in time; the settle bound is shown too.
-                worst = min(triggered, key=lambda l: l['epoch'])
+            if violations:
+                # Already superficial: a replacement acquired in the
+                # window is still held. Rescue = every backing holder
+                # exits its WHOLE holding (min(acquired, held) reaches 0
+                # only at a zero balance), settling on or before
+                # loss_settle+30 — the engine's held-at-end boundary. The
+                # date the user acts on is the last TRADE date that
+                # settles in time; the settle bound is shown too.
+                worst = min((v[0] for v in violations),
+                            key=lambda l: l['epoch'])
                 settle_d = epoch_to_date(worst['epoch'] + 30 * 86400)
                 safe_d = last_trade_date_settling_by(
                     settle_d, worst.get('currency') or 'USD',
@@ -702,141 +815,193 @@ def main():
                 clear_in = f"{safe_d} ({days_left}d)"
                 clears_at = safe_d
                 settle_deadline = settle_d
-                verb = ("Sell" if worst.get('direction', 'LONG') == 'LONG'
-                        else "Cover")
-                _what = f"{held_qty:.4f} shares (globally)"
-                if held_calls > 0.01:
-                    _what = (f"{held_qty:.4f} shares and {held_calls:g} long "
-                             f"call contract(s) (globally)"
-                             if held_qty > 0.01 else
-                             f"{held_calls:g} long call contract(s) "
-                             f"(globally)")
+                rescue: Dict[Any, dict] = {}
+                rescue_calls: Dict[Any, dict] = {}
+                for _l, _d, back, calls in violations:
+                    for h, b in back.items():
+                        rescue[h] = b
+                    for k, c in calls.items():
+                        rescue_calls[k] = c
+                verb = ("Cover" if (us_mode and worst.get('direction',
+                                                          'LONG') == 'SHORT')
+                        else "Sell")
+                unit_word = ("contract(s)" if is_option_ticker(ticker)
+                             else "shares")
+                share_units = sum(b['held'] for b in rescue.values())
+                parts = [f"{_who(h, b['account'])} {_qfmt(b['held'])}"
+                         for h, b in sorted(rescue.items())]
+                _what = (f"{share_units:.4f} {unit_word} ({', '.join(parts)})"
+                         if rescue else "")
+                if rescue_calls:
+                    _cparts = [f"{_who(k[0], c['account'])} {k[1]} "
+                               f"{_qfmt(c['held'])}"
+                               for k, c in sorted(rescue_calls.items())]
+                    _cw = (f"{sum(c['held'] for c in rescue_calls.values()):g}"
+                           f" long call contract(s) ({', '.join(_cparts)})")
+                    _what = f"{_what} and {_cw}" if _what else _cw
+                _shl = any(h[0] == 'SHELTERED' for h in rescue) or any(
+                    k[0][0] == 'SHELTERED' for k in rescue_calls)
+                denied_j = round(sum(v[1] for v in violations), 6)
+                rescue_j = (
+                    [{"holder": ('taxable' if h[0] == 'TAXABLE'
+                                 else 'sheltered'),
+                      "account": ('' if h[0] == 'TAXABLE'
+                                  else (b['account'] or h[1])),
+                      "symbol": ticker, "qty": b['held']}
+                     for h, b in sorted(rescue.items())]
+                    + [{"holder": ('taxable' if k[0][0] == 'TAXABLE'
+                                   else 'sheltered'),
+                        "account": ('' if k[0][0] == 'TAXABLE'
+                                    else (c['account'] or k[0][1])),
+                        "symbol": k[1], "qty": c['held'], "call": True}
+                       for k, c in sorted(rescue_calls.items())])
                 adv = (f"VIOLATION: {verb} {_what} "
                        f"by {safe_d} (last TRADE date — the sale must "
-                       f"SETTLE by {settle_d}) to rescue the loss.")
+                       f"SETTLE by {settle_d}) to rescue the loss"
+                       f" ({_qfmt(denied_j)} units denied as things "
+                       f"stand)"
+                       + ("; the part a registered account backs is "
+                          "denied PERMANENTLY unless that account sells "
+                          "too" if _shl else "")
+                       + ".")
             else:
-                # No active trigger: the binding constraint is the LATEST
-                # loss's window (re-entry before it closes disallows).
+                # No held in-window replacement: the binding constraint
+                # is the LATEST loss's window (re-entry before it closes
+                # disallows).
                 last = max(in_window_losses, key=lambda l: l['epoch'])
                 safe_d = epoch_to_date(last['epoch'] + 31 * 86400)
                 days_left = int(31 - (today_epoch - last['epoch']) / 86400)
                 clear_in = f"{safe_d} ({days_left}d)"
                 clears_at = safe_d
                 loss_amt = sum(l['loss'] for l in in_window_losses)
-                if held_qty > 0.01:
-                    # Still holding, but no in-window acquisition: the loss
-                    # is allowed so far — buying MORE before the window
-                    # closes would disallow it.
+                if held_any > 0.01:
+                    # Still holding, but no replacement bought in the
+                    # window is held: the loss is allowed so far —
+                    # buying MORE before the window closes would disallow.
                     adv = f"BLOCKED: Recent loss of ${loss_amt:.4f} on {last['date']}. Re-entry before {safe_d} will disallow the loss."
                 else:
                     # Fully exited at a loss: safe, just don't re-enter
                     # until the window closes.
                     adv = f"COOLING: Loss of ${loss_amt:.4f} on {last['date']}. Safe to re-enter on {safe_d}."
-        
+
         if not adv and abs(tax_q) > 0.01:
-            grp_acq = global_lacq.get(cls) or {}
-            tax_acq = grp_acq.get('TAXABLE')
-            shl_acq = grp_acq.get('SHELTERED')
-            # Drop acquisitions that have already aged out of the 30-day window.
-            if tax_acq and (today_epoch - tax_acq['epoch']) > window_sec:
-                tax_acq = None
-            if shl_acq and (today_epoch - shl_acq['epoch']) > window_sec:
-                shl_acq = None
-            # s. 40(2)(g) still-held test: the loss is superficial
-            # only if IDENTICAL property is still held by the
-            # affiliated group at the end of the 30-day period. Shares
-            # are fungible — the test is against the GROUP's total
-            # holding of the ticker, NOT the acquiring account's own
-            # pool (checking only the acquirer flagged a bare CAUTION
-            # on ALK.TO while OTHER sheltered accounts held 17,200
-            # sh). Downgrade only when the ENTIRE sheltered side is
-            # flat; a taxable in-window buy keeps its LOCKED "exit
-            # FULL position" advice regardless (the seller's own
-            # retained shares are identical property too).
+            # Forward view: a loss sale of the taxable position TODAY.
+            # Its window reaches back 30 days; each holder's backing is
+            # what it bought in that span and still holds.
+            crit = ('SHORT' if (us_mode and cls_tax_q < 0) else 'LONG')
+            lo = today_epoch - window_sec
+            back, calls = _backing(
+                lo, today_epoch + window_sec, crit,
+                share_loss=(crit == 'LONG' and not is_option_ticker(ticker)),
+                end_date=epoch_to_date(today_epoch + window_sec))
+            shl_back = {h: b for h, b in back.items() if h[0] == 'SHELTERED'}
+            shl_calls = {k: c for k, c in calls.items()
+                         if k[0][0] == 'SHELTERED'}
+            tax_long = abs(cls_tax_q)
+            at_risk = min(tax_long, _units(shl_back, shl_calls))
+            # Taxable acquisitions in the window (a PARTIAL sale is
+            # superficial; a full exit is not) and registered buyers
+            # that have since sold out (no backing today; re-arms only
+            # through a new buy).
+            tax_evs = [e for e in acq_events.get(cls, [])
+                       if e['holder'][0] == 'TAXABLE' and e['dir'] == crit
+                       and e['epoch'] >= lo]
+            tax_evs += [e for e in call_acq.get(cls, [])
+                        if crit == 'LONG' and not is_option_ticker(ticker)
+                        and e['holder'][0] == 'TAXABLE' and e['epoch'] >= lo
+                        and calls_held.get((e['holder'], e['symbol']), 0.0)
+                        > 1e-6]
+            tax_acq = max(tax_evs, key=lambda e: e['epoch']) if tax_evs else None
+            gone = [e for e in acq_events.get(cls, [])
+                    if e['holder'][0] == 'SHELTERED' and e['dir'] == crit
+                    and e['epoch'] >= lo and e['holder'] not in shl_back]
+            gone_last = max(gone, key=lambda e: e['epoch']) if gone else None
             shl_caveat = None
-            if shl_acq and abs(cls_shl_q) <= 0.01:
-                # Group flat: the sheltered leg cannot make the loss
-                # superficial TODAY (fungibility satisfied — nothing
-                # identical is held sheltered); it only re-arms via a
-                # re-buy within 30 days after the sale. Drop the leg
-                # whether or not a taxable in-window buy remains — the
-                # combined branch used to keep claiming "permanently
-                # denied" (real SLV.US case: margin bought 06-29,
-                # lira bought 07-08 then ALL sheltered exited).
+            if gone_last is not None:
                 shl_caveat = (
                     f"NOTE: SHELTERED "
-                    f"'{shl_acq['account'] or 'unknown'}' bought "
-                    f"{epoch_to_date(shl_acq['epoch'])} but all "
-                    f"sheltered accounts are now at 0 — that leg "
-                    f"re-arms only if an affiliated account re-buys "
-                    f"within 30 days AFTER your sale.")
-                shl_acq = None
-            if shl_caveat and not tax_acq:
+                    f"'{gone_last['account'] or 'unknown'}' bought "
+                    f"{epoch_to_date(gone_last['epoch'])} but holds none "
+                    f"of it now — that leg re-arms only if an affiliated "
+                    f"account re-buys within 30 days AFTER your sale.")
+            pre_window_shl = (abs(cls_shl_q) > 0.01 and not shl_back)
+            if at_risk > 1e-6:
                 is_relevant = True
+                latest = max([b['last'] for b in shl_back.values()]
+                             + [c['last'] for c in shl_calls.values()]
+                             + ([tax_acq['epoch']] if tax_acq else []))
+                safe_d = epoch_to_date(latest + 31 * 86400)
+                days_left = int(31 - (today_epoch - latest) / 86400)
+                clear_in = f"{safe_d} ({days_left}d)"
+                clears_at = safe_d
+                at_risk_j = round(at_risk, 6)
+                who = "; ".join(
+                    [f"'{b['account'] or h[1] or 'unknown'}' bought "
+                     f"{epoch_to_date(b['last'])} and still holds "
+                     f"{_qfmt(b['units'])} of those shares"
+                     for h, b in sorted(shl_back.items())]
+                    + [f"'{c['account'] or k[0][1] or 'unknown'}' bought "
+                       f"{_qfmt(c['contracts'])} {k[1]} call(s) on "
+                       f"{epoch_to_date(c['last'])}"
+                       for k, c in sorted(shl_calls.items())])
+                if us_mode:
+                    keep = ("that portion is permanently denied (an IRA "
+                            "purchase in the window denies it even if the "
+                            "IRA has sold)")
+                else:
+                    keep = ("that portion is permanently denied unless the "
+                            "registered account sells them within 30 days "
+                            "after your sale")
+                adv = (f"LOCKED: Recent buy in SHELTERED account(s): {who}. "
+                       f"Selling the taxable position at a loss before "
+                       f"{safe_d} is a superficial loss for up to "
+                       f"{_qfmt(at_risk)} of your {_qfmt(tax_long)} "
+                       f"shares — {keep}; the rest of the loss stands.")
+                if tax_acq:
+                    adv += (f" A PARTIAL loss sale is also superficial for "
+                            f"the taxable buy on "
+                            f"{epoch_to_date(tax_acq['epoch'])} (deferred "
+                            f"into the remaining shares).")
+            elif tax_acq:
+                is_relevant = True
+                safe_d = epoch_to_date(tax_acq['epoch'] + 31 * 86400)
+                days_left = int(31 - (today_epoch - tax_acq['epoch']) / 86400)
+                clear_in = f"{safe_d} ({days_left}d)"
+                clears_at = safe_d
+                _full = ("the FULL position (shares AND the long calls "
+                         "bought in the window)" if any(
+                             _call_underlying_cls(e['symbol']) == cls
+                             and alias_of(e['symbol']) != cls
+                             for e in tax_evs) else "the FULL position")
+                # Taxable-only in-window buy: NOT a hard lock — the
+                # still-held test fails if the ENTIRE position (incl. the
+                # recent buy) is disposed, so a full exit realizes the
+                # loss today. Only a PARTIAL loss sale is superficial.
+                adv = (f"EXITABLE: Recent buy in "
+                       f"'{tax_acq['account'] or 'unknown'}' on "
+                       f"{epoch_to_date(tax_acq['epoch'])}. Selling "
+                       f"{_full} at a loss is fine now; a PARTIAL loss "
+                       f"sale before {safe_d} is superficial (basis "
+                       f"defers into the remaining shares).")
+                if pre_window_shl:
+                    adv += (f" Sheltered accounts hold "
+                            f"{_qfmt(abs(cls_shl_q))} sh bought before the "
+                            f"window — they do not make this loss "
+                            f"superficial, but a sheltered buy (a DRIP too) "
+                            f"within 30 days AFTER the sale would, "
+                            f"permanently.")
+                if shl_caveat:
+                    adv += f" {shl_caveat}"
+            elif shl_caveat:
+                is_relevant = True
+                safe_d = epoch_to_date(gone_last['epoch'] + 31 * 86400)
+                days_left = int(31 - (today_epoch - gone_last['epoch'])
+                                / 86400)
+                clear_in = f"{safe_d} ({days_left}d)"
+                clears_at = safe_d
                 adv = (f"CAUTION: a loss sale is NOT superficial IF "
                        f"you exit your FULL taxable position. "
                        f"{shl_caveat}")
-            if tax_acq or shl_acq:
-                is_relevant = True
-                # The lock clears only once the MOST RECENT in-window buy (in
-                # any account) ages past 30 days.
-                latest_epoch = max(a['epoch'] for a in (tax_acq, shl_acq) if a)
-                days_since = (today_epoch - latest_epoch) / 86400
-                days_left = int(31 - days_since)
-                safe_d = epoch_to_date(latest_epoch + 31 * 86400)
-                clear_in = f"{safe_d} ({days_left}d)"
-                clears_at = safe_d
-                tax_d = (epoch_to_date(tax_acq['epoch'])
-                         if tax_acq else None)
-                shl_d = (epoch_to_date(shl_acq['epoch'])
-                         if shl_acq else None)
-                if tax_acq and shl_acq:
-                    adv = (f"LOCKED: Recent buys — taxable '{tax_acq['account'] or 'unknown'}' "
-                           f"on {tax_d} and SHELTERED '{shl_acq['account'] or 'unknown'}' on {shl_d}. "
-                           f"Selling the taxable position at a loss before {safe_d} is a superficial "
-                           f"loss; the portion matched to the registered-account buy is permanently "
-                           f"denied (cannot be rescued by selling).")
-                elif shl_acq:
-                    adv = (f"LOCKED: Recent buy in SHELTERED account '{shl_acq['account'] or 'unknown'}' "
-                           f"on {shl_d}. Selling the taxable position at a loss before {safe_d} is a "
-                           f"superficial loss (permanently denied — a registered-account buy cannot be "
-                           f"rescued by selling).")
-                elif abs(cls_shl_q) > 0.01:
-                    # Taxable in-window buy AND a standing sheltered
-                    # holding (however old): a full TAXABLE exit does
-                    # NOT fully rescue the loss. CRA's denial is
-                    # min(sold, acquired-in-window, held at +30) and
-                    # the sheltered shares keep the still-held term
-                    # alive — up to that many shares' loss is denied
-                    # PERMANENTLY (registered basis is unrecoverable).
-                    # The plain "full exit is fine" advisory encoded
-                    # exactly the heuristic a real FFH.TO trade
-                    # disproved (2026-09).
-                    adv = (f"EXITABLE: Recent buy in "
-                           f"'{tax_acq['account'] or 'unknown'}' on "
-                           f"{tax_d}, and sheltered accounts still "
-                           f"hold {abs(cls_shl_q):.4f} sh. Even a FULL "
-                           f"taxable exit leaves up to that many "
-                           f"shares' loss PERMANENTLY denied "
-                           f"(still-held via the sheltered side); a "
-                           f"PARTIAL loss sale before {safe_d} is "
-                           f"superficial too. Fully clear only after "
-                           f"{safe_d}, or accept the denied portion.")
-                else:
-                    # Taxable-only in-window buy: NOT a hard lock — the
-                    # still-held test fails if the ENTIRE position
-                    # (incl. the recent buy) is disposed, so a full
-                    # exit realizes the loss today. Only a PARTIAL
-                    # loss sale before safe_d is superficial. A bare
-                    # "LOCKED(clears:...)" in harvest read as "cannot
-                    # sell at all" (real TA.TO case).
-                    adv = (f"EXITABLE: Recent buy in "
-                           f"'{tax_acq['account'] or 'unknown'}' on "
-                           f"{tax_d}. Selling the FULL position at a "
-                           f"loss is fine now; a PARTIAL loss sale "
-                           f"before {safe_d} is superficial (basis "
-                           f"defers into the remaining shares)."
-                           + (f" {shl_caveat}" if shl_caveat else ""))
 
         if not adv and abs(tax_q) > 0.01 and abs(cls_shl_q) > 0.01:
             # No acquisition on EITHER side within the past 30 days:
@@ -871,6 +1036,14 @@ def main():
                 # VIOLATION only: the engine's settle-date bound behind
                 # the trade-date clears_at (None elsewhere).
                 "settle_deadline": settle_deadline,
+                # VIOLATION only: units denied as things stand, and who
+                # must sell what to rescue the loss (every backing
+                # holder exits its whole holding of the class).
+                "denied_qty": denied_j,
+                "rescue": rescue_j,
+                # LOCKED only: taxable units whose loss a sale TODAY
+                # would lose to a registered holder's in-window buy.
+                "at_risk_qty": at_risk_j,
                 "clears_in_at_generation": clear_in,
                 "advisory": adv,
                 "category": _advisory_category(adv),
@@ -953,9 +1126,9 @@ def main():
 
     print("-" * head_w)
     print("Definitions:")
-    print("  VIOLATION: You sold at a loss but still hold the same security. Sell it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (the printed date already allows for the T+1 lag and any settlement holiday inside it).")
+    print("  VIOLATION: You sold at a loss and a holder that BOUGHT the same security inside the ±30-day window still holds it (your taxable accounts, or a registered account). That holder sells ALL of it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (the printed date already allows for the T+1 lag and any settlement holiday inside it). Shares a registered account held before the window never make a loss superficial.")
     print("  BLOCKED: You sold at a loss in the last 30 days. Buying now cancels that loss.")
-    print("  LOCKED: A sheltered/registered account bought in the last 30 days and the sheltered side still holds. Selling taxable at a loss is superficial; the registered-matched portion is denied for good.\n  EXITABLE: You bought in the last 30 days in a taxable account. Selling the FULL position at a loss is fine; a partial loss sale is superficial (basis defers into the rest).\n  CAUTION: A sheltered account bought recently but all sheltered accounts are now at 0. A full-exit loss sale stands unless an affiliated account re-buys within 30 days after.")
+    print("  LOCKED: A registered account bought in the last 30 days and still holds those shares. A taxable loss sale is superficial for up to that many shares (the rest of the loss stands) — permanently denied unless that account sells them within 30 days after your sale.\n  EXITABLE: You bought in the last 30 days in a taxable account. Selling the FULL position at a loss is fine; a partial loss sale is superficial (basis defers into the rest).\n  CAUTION: A registered account bought recently but has since sold what it bought. A full-exit loss sale stands unless an affiliated account re-buys within 30 days after.")
     print("  COOLING: You recently sold out at a loss. Wait 30 days from the sale before buying back.")
     print("  RISK: Sellable at a loss NOW — but a sheltered account still holds, so an affiliated buy (e.g. a DRIP) within 30 days AFTER the sale denies the loss permanently. Pause sheltered adds for 30 days.")
     print("  CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 days).")

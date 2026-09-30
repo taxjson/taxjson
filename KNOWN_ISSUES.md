@@ -256,7 +256,7 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
   - **`<account>.sum`** — gains computed WITHOUT cross-account `--sheltered` context. The engine's intra-account wash-sale logic (ITA s. 40(2)(g) for Canada; IRC §1091 for US) still fires on the account's own losses.
   - **`<account>_wash.sum`** — gains re-computed WITH the merged sheltered accounts passed as `--sheltered` context. Adds Rev. Rul. 2008-5 (US) / affiliated-balance (Canada) matching: a sheltered acquisition within ±30 days of a taxable loss disallows the loss.
 - **Why this is intentional:** the pair is a deliberate debug check. Comparing the two files line-by-line surfaces which losses got disallowed only because of a cross-account match — useful for sanity-checking the data (and catching wrong-account-tagging errors before filing).
-- **Which one do I file from?** **`<account>_wash.sum` is canonical.** It includes the full cross-account wash treatment. `<account>.sum` is the pre-comparison baseline.
+- **Which one do I file from?** **`<account>_wash.sum` is canonical** for the gains and the wash treatment: it includes the full cross-account wash treatment. `<account>.sum` is the pre-comparison baseline. Its TOTAL PROCEEDS / TOTAL COST lines are the engine's signed figures (short covers and written-option buy-backs count as negative proceeds), not Schedule 3 proceeds/ACB — take those from `taxjson form-export` (or the FOR THE RETURN block of `taxjson sum`).
 - **Why not collapse them:** the pre/post comparison is the design's value-add. Future change candidate: bake the "POST-WASH (FILE FROM THIS)" / "PRE-WASH (DIAGNOSTIC)" label into a header line at the top of each file so the role is unambiguous when a user opens one in isolation.
 
 ---

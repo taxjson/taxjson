@@ -582,6 +582,13 @@ def d_sanity(ctx: Ctx) -> Result:
                       "no `holdings = [...]` in taxjson.toml — run "
                       "`taxjson sanity ACCOUNT=FILE.toml` by hand")
     code, out, err = ctx.sub("sanity")
+    incomplete = [ln for ln in out.splitlines()
+                  if ln.startswith("INCOMPLETE")]
+    if code == 0 and incomplete:
+        # An account whose configured holdings file is missing was
+        # never compared: exit 0 covers the other groups only (2026-09
+        # audit R1-324).
+        return Result("sanity", "attention", incomplete[0])
     if code == 0:
         return Result("sanity", "done", "positions tie to the holdings files")
     return Result("sanity", "attention", _last_line(out) or _last_line(err) or f"exit {code}")
@@ -1059,7 +1066,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "option-boundary": d_option_boundary,
     "handoff": d_handoff,
     "t5008": d_t5008,
-    "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with `taxjson divs-sum` / `roc-sum`"),
+    "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with the TAXABLE line of `taxjson divs-sum` / `roc-sum`"),
     "foreign-tax": lambda ctx: Result("foreign-tax", "manual", "from the slips"),
     "form-export": d_form_export,
     "t1135": d_t1135,
