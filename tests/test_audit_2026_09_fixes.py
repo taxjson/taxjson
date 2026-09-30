@@ -340,8 +340,10 @@ class TestVentureSuffix(unittest.TestCase):
     def test_vn_normalizes_to_v(self):
         from taxjson.lib.brokerages.questrade import QuestradeBrokerage
         b = QuestradeBrokerage()
+        # Canonical Canadian spelling is ROOT.TO (audit S010-05): the
+        # IB/RBC/Webull parsers cannot name the venue.
         self.assertEqual(b.apply_currency_suffix('ABC.VN', 'CAD'),
-                         'ABC.V')
+                         'ABC.TO')
         self.assertEqual(b.apply_currency_suffix('SHOP.TO', 'CAD'),
                          'SHOP.TO')
 

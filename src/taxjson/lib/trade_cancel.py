@@ -1,0 +1,85 @@
+"""Broker trade cancellations (IB code `Ca`) netted against their original.
+
+IB lists a cancelled trade as the ORIGINAL row plus a reversing row coded
+`Ca` (same symbol, date/time and price; opposite quantity), and books the
+corrected trade as a new row. Read as ordinary trades, the pair is a
+phantom round trip: a cancelled loss sale followed by its rebooking turns
+into two denied superficial losses, a gain sale overstates the gain, and
+the remaining shares' ACB is wrong (audit R1-51).
+
+The IB parser marks each `Ca` trade row with `type = TRADE_CANCEL_TYPE`
+and drops it together with its original when both are in the same
+statement. The original may sit in an EARLIER statement (a real RRSP
+statement for 2026 cancelled a 2025-10-22 fill booked in the 2025 one),
+so taxjson-merge2 runs the same pairing over every input of the account.
+A cancellation whose original is in none of the inputs stays booked as a
+reversing trade, with a warning.
+
+Rows may be dicts (parser output) or TaxTransaction objects (merge2).
+"""
+
+from typing import Any, List, Tuple
+
+TRADE_CANCEL_TYPE = 'trade_cancel'
+
+
+def _g(t: Any, key: str, default: Any = None) -> Any:
+    if isinstance(t, dict):
+        return t.get(key, default)
+    return getattr(t, key, default)
+
+
+def is_trade_cancel(t: Any) -> bool:
+    return _g(t, 'type') == TRADE_CANCEL_TYPE
+
+
+def cancels(orig: Any, ca: Any) -> bool:
+    """True when `ca` (a cancellation row) reverses `orig`: same account,
+    symbol, currency and trade date, the negated quantity and the same
+    price."""
+    if is_trade_cancel(orig) or _g(orig, 'action') not in ('BUYSELL',
+                                                            'ASSIGN'):
+        return False
+    if (_g(orig, 'symbol') != _g(ca, 'symbol')
+            or _g(orig, 'currency') != _g(ca, 'currency')
+            or _g(orig, 'date') != _g(ca, 'date')
+            or (_g(orig, 'account') or '') != (_g(ca, 'account') or '')):
+        return False
+    q_o = float(_g(orig, 'quantity') or 0.0)
+    q_c = float(_g(ca, 'quantity') or 0.0)
+    if abs(q_c) < 1e-12 or abs(q_o + q_c) > 1e-9 * max(1.0, abs(q_c)):
+        return False
+    p_o = float(_g(orig, 'price') or 0.0)
+    p_c = float(_g(ca, 'price') or 0.0)
+    return abs(p_o - p_c) <= 1e-6 * max(1.0, abs(p_c))
+
+
+def pair_cancellations(txs: List[Any]) -> Tuple[List[Any], List[Tuple[Any, Any]],
+                                                List[Any]]:
+    """Drop every cancellation row together with the original it reverses.
+
+    Returns (kept, pairs, unmatched): `kept` in the input order, `pairs`
+    as (original, cancellation), `unmatched` the cancellation rows whose
+    original is not in `txs` (they stay in `kept`). Among several
+    candidate originals the one with the same time wins, else the latest
+    one before the cancellation in the list, else the first after it."""
+    used = set()
+    pairs = []
+    unmatched = []
+    for ci, ca in enumerate(txs):
+        if not is_trade_cancel(ca):
+            continue
+        cands = [i for i, t in enumerate(txs)
+                 if i not in used and i != ci and cancels(t, ca)]
+        if not cands:
+            unmatched.append(ca)
+            continue
+        same_time = [i for i in cands
+                     if (_g(txs[i], 'time') or '') == (_g(ca, 'time') or '')]
+        pool = same_time or cands
+        before = [i for i in pool if i < ci]
+        oi = before[-1] if before else pool[0]
+        used.update((oi, ci))
+        pairs.append((txs[oi], ca))
+    kept = [t for i, t in enumerate(txs) if i not in used]
+    return kept, pairs, unmatched

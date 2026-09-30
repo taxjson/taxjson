@@ -253,6 +253,56 @@ def parse_strict_number(raw, *, field: str = 'value', where: str = '',
     return -val if neg else val
 
 
+# Canadian listing identity (audit S010-05 / S014-07). A security's
+# symbol is its ACB pool and superficial-loss key, so every parser must
+# spell one Canadian listing the same way. The canonical form is
+# ROOT.TO for EVERY Canadian venue (TSX, TSX Venture, CSE, NEO):
+#   * IB, RBC and Webull cannot (RBC/Webull) or do not (IB) put the venue
+#     in the symbol -- they stamp every CAD listing .TO, and real books
+#     (ticker.map TOBASE rules, yf_ticker.map price aliases) are keyed on
+#     that; Questrade alone named the venue (.VN/.CN/.NE), so a Venture
+#     name bought at Questrade and sold at IB split into two pools and a
+#     cross-account superficial loss was missed.
+#   * TSX and TSX Venture share one symbol namespace (TMX), so ROOT.TO is
+#     unambiguous for a Venture listing; price lookups that need the venue
+#     go through yf_ticker.map (PNG.TO -> PNG.V).
+# TSX preferred shares are dotted per series: Questrade's FTN.PRA.TO is
+# the FTN.PR.A.TO every other parser emits.
+_CA_VENUE_SUFFIX_RE = re.compile(r'\.(VN|CN|NE)$', re.IGNORECASE)
+_CA_PREF_UNDOTTED_RE = re.compile(r'^([A-Z0-9]+)\.(PR|PF)([A-Z]{1,2})$',
+                                  re.IGNORECASE)
+
+
+def canonical_ca_root(root: str) -> str:
+    """Dot a TSX preferred-share series (FTN.PRA -> FTN.PR.A,
+    TD.PFB -> TD.PF.B); any other root is returned unchanged. `root` is
+    the symbol WITHOUT its .TO suffix."""
+    m = _CA_PREF_UNDOTTED_RE.match(root or '')
+    if not m:
+        return root
+    return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+
+
+def canonical_ca_listing(symbol: str, currency: str = 'CAD') -> Optional[str]:
+    """The canonical spelling of a symbol that names a CANADIAN venue
+    (.TO, .V in CAD, .VN, .CN, .NE): ROOT.TO with a dotted preferred
+    series. None when the symbol carries no Canadian venue suffix (the
+    caller then suffixes it from the currency). A bare `.V` counts as
+    TSX Venture only in CAD -- in another currency it may be a class
+    letter."""
+    sym = (symbol or '').strip()
+    up = sym.upper()
+    if up.endswith('.TO') and len(up) > 3:
+        return f"{canonical_ca_root(sym[:-3])}.TO"
+    if (up.endswith('.V') and len(up) > 2
+            and (currency or '').upper() == 'CAD'):
+        return f"{canonical_ca_root(sym[:-2])}.TO"
+    m = _CA_VENUE_SUFFIX_RE.search(sym)
+    if m and m.start() > 0:
+        return f"{canonical_ca_root(sym[:m.start()])}.TO"
+    return None
+
+
 class BaseBrokerage:
     # 100 for options (each contract = 100 shares); 1 for equities/crypto.
     OPTION_MULTIPLIER = 100
@@ -401,19 +451,23 @@ class BaseBrokerage:
         if not symbol:
             return symbol
         sym = symbol.replace(' ', '.')
-        # Questrade spells TSX-Venture listings `.VN`; the live-position
-        # side (qt_position_symbol) and the rest of the pipeline use
-        # `.V`. Without normalizing here, a Venture trade parsed to the
-        # junk symbol `ABC.VN.TO` (the trailing `.TO` from the CAD
-        # suffix passed schema validation) while verify/sanity said
-        # `ABC.V` — a guaranteed phantom mismatch and a fragmented
-        # identity no default ticker.map folds.
-        if sym.upper().endswith('.VN'):
-            return f"{sym[:-3]}.V"
-        if sym.upper().endswith('.V') and currency.upper() == 'CAD':
-            return sym[:-2] + '.V'
+        # A Canadian venue suffix (Questrade's .VN / .CN / .NE, a .V)
+        # is one Canadian listing: canonical ROOT.TO, the spelling every
+        # other parser emits (see canonical_ca_listing). It used to give
+        # ABC.V, CCC.CN.TO and XYZ.NE.TO -- three identities IB, RBC and
+        # Webull never produce, so pools split across brokers and a
+        # cross-account superficial loss was missed (audit S010-05). A
+        # .TO listing traded in USD (DLR.U.TO) keeps the currency rule
+        # below.
+        if not sym.upper().endswith('.TO'):
+            ca = canonical_ca_listing(sym, currency)
+            if ca is not None:
+                return ca
         sym = self._CURRENCY_SUFFIX_RE.sub('', sym)
         ext = self.CURRENCY_EXT_MAP.get(currency, self.CURRENCY_EXT_FALLBACK or currency)
+        if ext == 'TO':
+            # FTN.PRA -> FTN.PR.A (audit S014-07).
+            sym = canonical_ca_root(sym)
         return f"{sym}.{ext}"
 
     def tx_roc_adjust(self, *, symbol: str, currency: str, date: str,
@@ -526,6 +580,10 @@ class BaseBrokerage:
         implicit = abs(theoretical_gross - abs(net_amount))
         if implicit < min_fee:
             return 0.0
+        # net == 0 is exempt on purpose: a real RBC sale of 30 contracts
+        # at 0.01 nets $0 because the commission ate the whole $30 gross.
+        # A $0 net that is a MISSING cell (audit R1-91) must be refused
+        # by the parser before it gets here (Webull does).
         if abs(net_amount) > 1e-9 and implicit > sanity_ratio * abs(net_amount):
             return 0.0
         return round(implicit, 4)

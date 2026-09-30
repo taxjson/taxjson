@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
-from taxjson.lib.brokerages.base import BaseBrokerage
+from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         parse_strict_number)
 
 
 # Webull's option descriptions run the ticker directly into the date with
@@ -63,9 +64,14 @@ class WebullBrokerage(BaseBrokerage):
             j = cols.get(key)
             return row[j].strip() if j is not None and j < len(row) else ""
 
+        width = len(header_row)
         for row in reader:
             if not row or len(row) < 3:
                 continue
+            # File line of this record (the header record is the first
+            # one the reader returns; line_num counts physical lines
+            # read so far, so a record's LAST physical line).
+            where = f"{path.name} line {header_index + reader.line_num}"
             currency = cell(row, 'currency')
             if currency not in ('USD', 'CAD'):
                 continue            # repeated page headers, preamble
@@ -79,6 +85,18 @@ class WebullBrokerage(BaseBrokerage):
                 continue
 
             data_rows += 1
+            if len(row) != width:
+                # A row wider or narrower than its header (a 2025-layout
+                # row under the 9-column 2024 header, a hand edit) reads
+                # every cell after the gap from the wrong column: the
+                # Proceeds of a priced sale came back blank -> $0
+                # (audit R1-91).
+                raise BrokerageParseError(
+                    f"{where}: {action_raw} row has {len(row)} cells but "
+                    f"the header has {width} — misaligned columns "
+                    f"(two export layouts mixed in one file, or a hand "
+                    f"edit); refusing to read Proceeds from the wrong "
+                    f"column.")
             symbol_raw = cell(row, 'symbol')
             description_raw = cell(row, 'description')
             qty_raw = cell(row, 'quantity')
@@ -102,13 +120,29 @@ class WebullBrokerage(BaseBrokerage):
             dt = self.parse_date(date_raw, "%d-%m-%Y")
             date_str = dt.strftime("%Y-%m-%d") if dt else date_raw
 
-            qty = self.clean_number(qty_raw)
-            price = self.clean_number(price_raw)
+            # Strict parses named by file line (audit R1-91): a blank,
+            # garbage ('N/A') or decimal-comma cell is an error, never a
+            # silent 0. Price and Proceeds may be blank only together —
+            # an option expiry row. A priced trade with no Proceeds used
+            # to book $0 (the back-computed fee then absorbed the whole
+            # gross, so even --strict passed).
+            qty = parse_strict_number(qty_raw, field='Quantity',
+                                      where=where)
+            price = parse_strict_number(price_raw, field='Price',
+                                        where=where, allow_blank=True,
+                                        blank=0.0)
+            if abs(price) > 1e-9 and not proceeds_raw:
+                raise BrokerageParseError(
+                    f"{where}: {action_raw} {qty_raw} @ {price_raw} has a "
+                    f"blank Proceeds cell — a priced trade must carry its "
+                    f"cash; refusing to book it at $0.")
             # Webull prints a buy's proceeds in accounting parentheses
-            # ("(1,352.97)"); clean_number reads those as NEGATIVE, and
-            # the trade convention wants the magnitude (direction lives
-            # in the quantity sign), so take abs() here.
-            net_amount = abs(self.clean_number(proceeds_raw))
+            # ("(1,352.97)"); read as NEGATIVE, and the trade convention
+            # wants the magnitude (direction lives in the quantity
+            # sign), so take abs() here.
+            net_amount = abs(parse_strict_number(
+                proceeds_raw, field='Proceeds', where=where,
+                allow_blank=True, blank=0.0))
             qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'SELL'))
 
             opt = self.parse_option_from_description(current_description)

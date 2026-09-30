@@ -120,6 +120,35 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal):
     return findings
 
 
+_CA_VENUES = ("TO", "V", "CN", "NE")
+
+
+def venue_splits(taxable_txs, sheltered_txs):
+    """Roots held under two CANADIAN venue suffixes (ABC.TO and ABC.V /
+    .CN / .NE). The broker parsers spell every Canadian listing ROOT.TO
+    (base.canonical_ca_listing); a .V/.CN/.NE row comes from a .tt file
+    or a ticker.map rule, and it splits one security into two ACB pools
+    that the superficial-loss check never links (audit S010-05).
+    Returns [{root, symbols, taxable}] sorted by root."""
+    seen: Dict[str, Dict[str, bool]] = {}
+    for txs, taxable in ((taxable_txs, True), (sheltered_txs, False)):
+        for t in txs:
+            s = t.get("symbol", "") or ""
+            if _is_option(s) or "." not in s:
+                continue
+            root, ex = s.rsplit(".", 1)
+            if ex.upper() not in _CA_VENUES:
+                continue
+            d = seen.setdefault(root, {})
+            d[s] = d.get(s, False) or taxable
+    out = []
+    for root in sorted(seen):
+        if len(seen[root]) > 1:
+            out.append({"root": root, "symbols": sorted(seen[root]),
+                        "taxable": any(seen[root].values())})
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(
         description="Flag cross-listed securities the wash radar may not "
@@ -141,16 +170,33 @@ def main():
     args = p.parse_args()
 
     tobase, journal = _load_map(args.map_file)
-    findings = analyze(_load_txs(args.taxable), _load_txs(args.sheltered),
-                       tobase, journal)
+    taxable_txs = _load_txs(args.taxable)
+    sheltered_txs = _load_txs(args.sheltered)
+    findings = analyze(taxable_txs, sheltered_txs, tobase, journal)
+    splits = venue_splits(taxable_txs, sheltered_txs)
+
+    actionable = 0
+    if splits:
+        print("CANADIAN VENUE SPLIT — one root under two Canadian suffixes")
+        print("(taxjson books every Canadian listing as ROOT.TO; add "
+              "`GLOBAL ROOT.V ROOT.TO` to ticker.map, or fix the .tt line)")
+        for v in splits:
+            flag = "WARN ‼" if v["taxable"] else "WARN"
+            if v["taxable"]:
+                actionable += 1
+            print(f"  [{flag}] {v['root']}: {', '.join(v['symbols'])}")
+        print()
 
     print("CROSS-LISTING LINT — roots present on both .TO and .US")
     print()
     if not findings:
         print("No cross-listed roots found in the input. (Clean.)")
+        if args.strict and actionable:
+            print(f"\nstrict: {actionable} Canadian venue split(s) with "
+                  f"taxable exposure.", file=sys.stderr)
+            return 1
         return 0
 
-    actionable = 0
     order = {"WARN": 0, "REVIEW": 1, "OK": 2}
     for f in sorted(findings, key=lambda x: (order[x["severity"]], x["root"])):
         tax_exposed = abs(f["tax_to"]) > 1e-6 or abs(f["tax_us"]) > 1e-6

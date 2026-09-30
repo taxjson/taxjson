@@ -45,6 +45,18 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** same reason as the IB item above — foreign-cash gains live in `taxjson fx-cash`, which does not read conversion rows yet. Stablecoin↔USD swaps are additionally a wash by construction (folded 1:1 for pricing).
 - **Coinbase follows the same model:** `Buy USDC` / `Sell USDC` rows are counted as stablecoin conversions (non-events) and the USDC leg of an Advanced Trade on a `*-USDC` pair is cash, not a position. An Advanced Trade on a crypto-quoted pair (`ETH-BTC`) is a swap: the quote coin's leg is booked too, at the fill's stated value (2026-09 audit R1-102). Strictly (CRA) a stablecoin is a crypto-asset, so the USD/CAD movement while USDC is held is an unbooked gain/loss — a few dollars a year on real data.
 
+### Canadian listings carry no venue (`ROOT.TO` for TSX, TSXV, CSE and NEO)
+- **Where:** `src/taxjson/lib/brokerages/base.py` — `canonical_ca_listing`, used by `apply_currency_suffix` (Questrade, RBC, Webull, generic) and `taxjson_fetch.qt_position_symbol`; IB stamps every CAD listing `.TO`.
+- **Current behavior:** one Canadian security has one symbol whichever broker reports it: `ROOT.TO`, with a TSX preferred series dotted (`FTN.PR.A.TO`). RBC and Webull exports do not name the venue, and real books (ticker.map `TOBASE` rules) are keyed on `.TO`, so the venue suffixes `.V` / `.CN` / `.NE` are not used as identities. A `.tt` line or map rule that writes `ROOT.V` splits the pool from `ROOT.TO`; `taxjson-lint-crosslistings` flags it (CANADIAN VENUE SPLIT).
+- **Why this is the choice:** the alternative (venue suffixes everywhere) needs every parser to know the venue; RBC and Webull cannot, and IB would rename the owner's Venture/CSE holdings. TSX and TSX Venture share one symbol namespace, so `.TO` is unambiguous for Venture names; a CSE/NEO ticker that duplicates a different TSX ticker would share a pool (as it already did in IB statements).
+- **Workaround:** price lookups that need the venue use `yf_ticker.map` (`PNG.TO PNG.V`).
+
+### Trade reversals across export files
+- **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI).
+- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. A Questrade CIL/REI reversal must find its original in the SAME export file, else the parse is refused.
+- **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
+- **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
+
 ### Questrade `commission` vs everyone else `fee`
 - **Where:** `src/taxjson/lib/brokerages/questrade.py`.
 - **Current behavior:** Questrade transactions emit a `commission` key; IB / RBC / Webull / Kraken / Coinbase all emit `fee`.

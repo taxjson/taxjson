@@ -246,8 +246,10 @@ class TestGenericExplicitSuffix(unittest.TestCase):
         cases = [("DLR.U.TO", "USD", "DLR.U.TO"),
                  ("SHOP.TO", "USD", "SHOP.TO"),
                  ("AAPL.US", "CAD", "AAPL.US"),
-                 ("ABC.V", "USD", "ABC.V"),
-                 ("ABC.VN", "CAD", "ABC.V"),
+                 # A Canadian venue is spelled .TO like every broker
+                 # parser spells it (audit S010-05).
+                 ("ABC.V", "USD", "ABC.TO"),
+                 ("ABC.VN", "CAD", "ABC.TO"),
                  ("XEI", "CAD", "XEI.TO"),
                  ("DLR.U", "USD", "DLR.U.US"),
                  ("BRK B", "USD", "BRK.B.US")]

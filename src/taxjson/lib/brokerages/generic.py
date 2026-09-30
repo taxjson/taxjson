@@ -43,8 +43,9 @@ buy/sell targets require `quantity` plus `price` or `amount`.
 Conventions match the hand-written parsers: quantity is stored
 magnitude-signed by direction (buys positive, sells negative), amounts
 keep their CSV sign (a negative dividend is a reversal — never abs()).
-A symbol written with an exchange suffix (.TO/.V/.CN/.NE/.US/.AX/.L)
-keeps it; a bare symbol takes the suffix of the row's currency
+A symbol written with an exchange suffix (.TO/.US/.AX/.L) keeps it,
+and a Canadian venue (.V/.VN/.CN/.NE) is spelled .TO like every broker
+parser spells it; a bare symbol takes the suffix of the row's currency
 (CAD -> .TO, USD -> .US). Numbers accept a thousands comma (1,234.56)
 and refuse a decimal comma (1234,56). Trade rows settle on the mapped
 `settle` column when filled, else on the standard cycle from the
@@ -87,6 +88,7 @@ from typing import Any, Dict, List, Optional
 from taxjson.lib.tomlcompat import tomllib
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         canonical_ca_listing,
                                          parse_strict_number)
 from taxjson.lib.core import is_option_symbol
 from taxjson.lib.dates import settlement_date
@@ -334,8 +336,14 @@ class GenericBrokerage(BaseBrokerage):
         the currency (XEI in CAD -> XEI.TO)."""
         sym = symbol_raw.strip().replace(" ", ".")
         up = sym.upper()
-        if up.endswith(".VN"):             # Questrade's Venture spelling
-            return f"{sym[:-3]}.V"
+        # A Canadian venue (.TO/.V/.VN/.CN/.NE) is one Canadian listing,
+        # spelled ROOT.TO by every broker parser (base.canonical_ca_
+        # listing, audit S010-05): an explicit .V here must not split
+        # the pool from the same shares bought at IB. The venue, not the
+        # row currency, decides -- DLR.U.TO bought in USD stays .TO.
+        for suf in ("TO", "V", "VN", "CN", "NE"):
+            if up.endswith("." + suf) and len(up) > len(suf) + 1:
+                return canonical_ca_listing(sym, "CAD")
         for suf in _KNOWN_SUFFIXES:
             if up.endswith("." + suf) and len(up) > len(suf) + 1:
                 return sym[:-len(suf)] + suf

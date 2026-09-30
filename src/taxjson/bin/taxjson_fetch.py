@@ -289,7 +289,8 @@ _MONTHS = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04",
 
 def qt_position_symbol(sym: str, to_roots=frozenset()) -> str:
     """Questrade position symbol -> taxjson convention. Equities:
-    '.TO' passes through, '.VN' (TSX Venture) maps to '.V', bare
+    Canadian venues ('.TO', '.VN' TSX Venture, '.CN', '.NE') all map
+    to '.TO' with a dotted preferred series, as the parsers do; bare
     symbols are US listings ('.US'), and a trailing CLASS letter
     ('BRK.B') is not an exchange — it takes '.US' too. Options ('BMO20Jan26C88.00')
     become OCC ('BMO260120C00088000.TO') — suffixed .TO when the
@@ -316,8 +317,13 @@ def qt_position_symbol(sym: str, to_roots=frozenset()) -> str:
     if "." not in sym:
         return f"{sym}.US"
     base, _, ext = sym.rpartition(".")
-    if ext == "VN":
-        return f"{base}.V"
+    if ext.upper() in ("TO", "V", "VN", "CN", "NE"):
+        # One spelling per Canadian listing, the parsers' own
+        # (base.canonical_ca_listing): ABC.VN / CCC.CN -> ABC.TO /
+        # CCC.TO, FTN.PRA.TO -> FTN.PR.A.TO. A different spelling here
+        # than in the parsed books is a phantom verify mismatch.
+        from taxjson.lib.brokerages.base import canonical_ca_listing
+        return canonical_ca_listing(sym, "CAD") or sym
     if ext.upper() not in KNOWN_SUFFIXES:
         # A class share, not an exchange: 'BRK.B' is the US listing
         # BRK.B.US. Passing it through unsuffixed made every live
