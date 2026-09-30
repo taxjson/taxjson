@@ -91,17 +91,24 @@ class CaPriority(IntEnum):
     leg of an assignment sorts before its STOCK leg: the option leg
     stages the premium the stock leg consumes, and with one shared
     rung a same-timestamp pair's order was input order — stock-first
-    silently dropped the premium (2026-09 US-engine audit)."""
+    silently dropped the premium (2026-09 US-engine audit).
+
+    Plain trades — buys AND sells — share ONE rung, so trades at the
+    same moment keep the order the rows arrive in, which is the
+    export's row order (tax-logic CA-DATE-14 / US-DATE-13; the US
+    ladder never split them). Webull prints no clock time and
+    Questrade stamps 00:00:00, so a day's trades tie; a separate BUY
+    rung ahead of SELL turned a write listed before its same-day
+    buy-back into a long round trip (audit R1-30, owner decision D7)."""
     OPENING_BALANCE = -1    # pre-window position: a same-timestamp SPLIT
     #                         must scale it (parsers stamp splits 00:00:00,
     #                         the OB anchor time)
     DISALLOW = 0
     ASSIGN_OPTION = 1
     ASSIGN_STOCK_OR_SPLIT = 2
-    BUY = 3
-    SELL = 4
-    ADJUST = 5              # after BUY/SELL
-    OTHER = 6
+    TRADE = 3               # buys and sells: input (export) order
+    ADJUST = 4              # after the trades
+    OTHER = 5
 
 
 class UsPriority(IntEnum):
@@ -157,10 +164,8 @@ def _ca_priority(tx: Any) -> int:
         # doesn't forbid it) must still ledger as an ADJUST, not
         # masquerade as a BUY/SELL in the tie-break.
         return CaPriority.ADJUST
-    if tx.quantity > 0:
-        return CaPriority.BUY
-    if tx.quantity < 0:
-        return CaPriority.SELL
+    if tx.quantity:
+        return CaPriority.TRADE
     return CaPriority.OTHER
 
 
@@ -182,9 +187,14 @@ def _walk_rest(tx: Any) -> Tuple:
     (core.py settle-lag rule; audit S021-00: the walk applied the split
     first and invented a short). group 1: every other same-day
     execution (post-split: splits are effective at market open).
-    Rung: at one moment a SPLIT first, then buys before sells — the
-    engines' buy-before-sell convention, so no walk depends on the
-    order of tied rows (audit S075-12 / S076-04)."""
+    Rung: at one moment a SPLIT first, then buys before sells, so no
+    walk depends on the order of tied rows (audit S075-12 / S076-04).
+    DELIBERATE divergence from the engines, which take tied trades in
+    the export's row order (CA-DATE-14 / US-DATE-13): these walks ask
+    whether history is MISSING, and a same-moment sell + buy is no
+    evidence of that in either order — reading it buys first never
+    invents a phantom short (or a larger synthesized opening) out of
+    two rows that net to nothing."""
     act = tx.action
     if act == 'OPENING_BALANCE':
         return (WalkPriority.OPENING_BALANCE, tx.time or '00:00:00', 0)
@@ -219,11 +229,12 @@ class RadarPriority(IntEnum):
     already adjusted, while the engine ledgers ADJUST after BUY/SELL.
     Radar's historical semantics, unchanged — hosting the ladder here just
     means ordering definitions live in ONE file (the radar's fix history
-    was dominated by engine ordering fixes never mirrored into its copy)."""
+    was dominated by engine ordering fixes never mirrored into its copy).
+    Trades share one rung, as in the engines: tied trades replay in the
+    export's row order (CA-DATE-14 / US-DATE-13)."""
     ADJUST = 0
     ASSIGN_OR_SPLIT = 1
-    BUY = 2
-    SELL = 3
+    TRADE = 2
 
 
 def radar_priority(tx: Any) -> int:
@@ -235,7 +246,7 @@ def radar_priority(tx: Any) -> int:
         return RadarPriority.ADJUST
     if action in ('ASSIGN', 'SPLIT'):
         return RadarPriority.ASSIGN_OR_SPLIT
-    return RadarPriority.BUY if tx.quantity > 0 else RadarPriority.SELL
+    return RadarPriority.TRADE
 
 
 def event_sort_key(tx: Any, *, profile: str,

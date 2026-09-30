@@ -33,10 +33,11 @@ class TestLadders(unittest.TestCase):
         self.assertEqual(CaPriority.DISALLOW, 0)
         self.assertEqual(CaPriority.ASSIGN_OPTION, 1)
         self.assertEqual(CaPriority.ASSIGN_STOCK_OR_SPLIT, 2)
-        self.assertEqual(CaPriority.BUY, 3)
-        self.assertEqual(CaPriority.SELL, 4)
-        self.assertEqual(CaPriority.ADJUST, 5)
-        self.assertEqual(CaPriority.OTHER, 6)
+        # Buys and sells share one rung: tied trades keep the export's
+        # row order (CA-DATE-14, audit R1-30).
+        self.assertEqual(CaPriority.TRADE, 3)
+        self.assertEqual(CaPriority.ADJUST, 4)
+        self.assertEqual(CaPriority.OTHER, 5)
 
     def test_us_priority_ladder_values(self):
         self.assertEqual(UsPriority.OPENING_BALANCE, -1)

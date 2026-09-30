@@ -2630,8 +2630,8 @@ class CanadaTaxRules(TaxRules):
             # phase ladder; this one must too.
             # No content-hash rung (audit S069-16): current_tx_list is
             # already in main-pass order, so the stable sort keeps the
-            # main pass's tie order (its BUY-before-SELL rung, then the
-            # export's row order) — a one-cent price change used to flip
+            # main pass's tie order (its fixed rungs, then the export's
+            # row order — CA-DATE-14) — a one-cent price change used to flip
             # which of two same-moment rows came first here, and with it
             # a superficial-loss denial.
             for _t in sorted(current_tx_list,

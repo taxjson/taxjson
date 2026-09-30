@@ -226,10 +226,10 @@ def _tx_date(tx: Dict[str, Any], tax_date: str = "settle") -> str:
 
 def _sort_key(tx: Dict[str, Any], tax_date: str = "settle") -> Tuple:
     """The Canada engine's own ladder (ca_main): at one stamp an
-    assignment's option leg precedes its stock leg, buys precede sells,
-    and a settle-lagged execution precedes a SPLIT on its settle date.
-    Input order decided the threshold test and the per-property maxima
-    before (S008-05)."""
+    assignment's option leg precedes its stock leg, trades keep the
+    book's row order (the export's, CA-DATE-14), and a settle-lagged
+    execution precedes a SPLIT on its settle date — the same order the
+    engine walked (S008-05)."""
     from taxjson.lib.corporate_timeline import event_sort_key
     if tax_date == "trade":
         return event_sort_key(_Ev(tx), profile="ca_main",
