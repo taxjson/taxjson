@@ -26,7 +26,7 @@ class HolderNameShapes(unittest.TestCase):
                 "Transactions\nUser,Zelda Quixote,12345678-1234-1234-1234-123456789abc\n"
                 "Timestamp,Transaction Type,Asset,Quantity Transacted\n2025-01-01,Buy,BTC,0.1\n",
                 "Account,Header,AccountNumber,AccountAlias,Name,BaseCurrency\n"
-                "Account,Data,U24681357,Options,Zelda Quixote,CAD\n",
+                "Account,Data,U24681357,Options,Zelda Quixote,CAD\n",  # pii-ok
                 "Account #,Name,Symbol,Quantity\n55512345,Zelda Quixote,XYZ.TO,100\n"):  # pii-ok
             out, rep = redact_text(text)
             self.assertNotIn("Zelda", out)

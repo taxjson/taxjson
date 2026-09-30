@@ -430,7 +430,7 @@ def _collect_ids(lines: List[str]) -> List[str]:
         if not cells:
             continue
         low = [c.strip().lower() for c in cells]
-        # `Account Number:,,,,555123456,` (Webull preamble): the id is
+        # `Account Number:,,,,<id>,` (Webull preamble): the id is
         # the next non-empty cell after the label cell.
         labelled = False
         for i, c in enumerate(cells):
