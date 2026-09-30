@@ -231,16 +231,19 @@ class TestFetchCli(unittest.TestCase):
         self.assertIn("refresh token", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
-    def test_fetch_config_does_not_warn_as_unknown(self):
-        # [fetch.*] must not trip validate_config's unknown-key warnings
-        # on a normal run.
+    def test_retired_fetch_tables_point_at_the_account_keys(self):
+        # The v0.3.0 [fetch.*] tables are no longer read (fetch config
+        # lives on the account). Unknown top-level tables now warn
+        # (R1-216); the retired one says where its settings went.
         from taxjson.bin.taxjson_run import validate_config
         warnings = validate_config(
             {"settings": {"year": 2026},
              "accounts": {"margin": {"type": "taxable"}},
              "fetch": {"margin": {"source": "questrade",
                                   "number": "1"}}})
-        self.assertFalse([w for w in warnings if "fetch" in w], warnings)
+        hits = [w for w in warnings if "fetch" in w]
+        self.assertEqual(len(hits), 1, warnings)
+        self.assertIn("brokerage", hits[0])
 
 
 class TestMergeCsvText(unittest.TestCase):

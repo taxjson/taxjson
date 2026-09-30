@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **taxjson.toml is checked the same way by every command.**
+  `base_currency` is trimmed and upper-cased (" CAD" failed later with a
+  misleading "fix the rates file" error; "cad" priced CAD fees at the
+  default FX rate) and must be a 3-letter code; a Canada project with a
+  non-CAD base warns. `[settings] year` must be a plausible tax year
+  (1900 to next year, like `init`), and `run` warns when no transaction
+  in the books falls in the configured year. A misspelled top-level
+  table (`[estimates]`, `[instalment]`) and an unknown `[estimate]` /
+  `[instalments]` key now warn in `estimate`, `sum` and `instalments`,
+  not only (or never) in `run`. `[instalments]` withheld, prior-year
+  figures and prescribed rates must be non-negative finite numbers
+  (rates below 1); a TOML boolean is refused there and in `[estimate]`
+  (audit R1-153, R1-256, R1-216, R1-257, S038-13, R1-217).
+- **Net tax owing guidance names the right lines.** The init template,
+  README and the instalments report said "line 48500 minus withholding";
+  48500 also subtracts the instalments paid, so following it read "no
+  instalments required". They now give CRA's instalment-chart
+  definition (42000 + 42200 + 42800 (+ 43200) minus 43700 and the
+  refundable credits) (audit R1-215).
+- **`init --force` never overwrites an earlier backup.** A second
+  `--force` replaced taxjson.toml.bak (the user's config) with the first
+  template; later backups are numbered (audit R1-255).
 - **RBC books what it used to drop, and says what it cannot book.** A
   stock dividend (`DIS - ... STK DIV ON N SHS`) enters at $0 cost like
   Questrade's; an RBC Dominion Securities "Reinvest @ $p" distribution

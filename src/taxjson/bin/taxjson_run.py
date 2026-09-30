@@ -438,6 +438,109 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     if tax_date is not None and tax_date not in ("settle", "trade"):
         _die(f"[settings] tax_date must be settle|trade, "
              f"got {tax_date!r}")
+    # base_currency: " CAD" / "Cad " passed validation and failed later
+    # as a misdiagnosed "rows still carry a non-CAD currency — fix the
+    # rates file" error, and "cad" silently priced every native-CAD fee
+    # at the default FX rate in fees.rpt (R1-153). One canonical,
+    # checked spelling for every reader.
+    base = settings.get("base_currency")
+    if base is not None:
+        if not isinstance(base, str) \
+                or not re.fullmatch(r"[A-Za-z]{3}", base.strip()):
+            _die(f"[settings] base_currency must be a 3-letter currency "
+                 f"code such as \"CAD\" or \"USD\", got {base!r}")
+        settings["base_currency"] = base.strip().upper()
+    srcs = settings.get("source_currencies")
+    if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
+        settings["source_currencies"] = [c.strip().upper() for c in srcs]
+    # year: a typo'd 2204 / 1850 / 0 built empty books and every filing
+    # total read 0 with exit 0; `true` failed minutes later inside the
+    # gains stage (R1-256). Same plausible range `taxjson init` enforces.
+    year = settings.get("year")
+    if year is not None:
+        if isinstance(year, bool) or not isinstance(year, int):
+            _die(f"[settings] year must be an integer tax year, "
+                 f"got {year!r}")
+        _max_year = date_cls.today().year + 1
+        if not 1900 <= year <= _max_year:
+            _die(f"[settings] year = {year} is not a plausible tax year "
+                 f"(expected 1900..{_max_year})")
+
+
+# Top-level tables taxjson.toml may carry. Anything else is ignored —
+# which is why a misspelled [estimates] / [Estimate] / [instalment]
+# silently fell back to 0 other income or no instalment schedule
+# (R1-216, R1-257).
+_TOP_LEVEL_TABLES = ("settings", "accounts", "instalments", "estimate")
+_INSTALMENTS_KEYS = ("basis", "prior_year_net_tax", "second_prior_net_tax",
+                     "withheld", "prescribed_rate", "prescribed_rates",
+                     "paid")
+
+
+def _did_you_mean(key: str, valid) -> str:
+    import difflib
+    close = difflib.get_close_matches(str(key).lower(), list(valid), n=1)
+    return f" (did you mean {close[0]!r}?)" if close else ""
+
+
+def _config_table_warnings(cfg: Dict[str, Any]) -> List[str]:
+    """Unknown top-level tables/keys and unknown [estimate] /
+    [instalments] keys. Shared by `run` (validate_config) and by the
+    commands that READ those tables (estimate, sum, instalments), which
+    used to use 0 for a misspelled key with no word (S038-13)."""
+    out: List[str] = []
+    for key in cfg:
+        if key in _TOP_LEVEL_TABLES:
+            continue
+        if key == "fetch" and isinstance(cfg[key], dict):
+            out.append("the retired [fetch.<account>] tables are "
+                       "ignored — `taxjson fetch` reads `brokerage` + "
+                       "`account` / `query_id` under [accounts.<name>]")
+            continue
+        what = ("table" if isinstance(cfg[key], dict) else "key")
+        out.append(f"unknown top-level {what} "
+                   f"{'[' + key + ']' if what == 'table' else repr(key)} "
+                   f"is ignored{_did_you_mean(key, _TOP_LEVEL_TABLES)}")
+    for table, allowed in (("instalments", _INSTALMENTS_KEYS),
+                           ("estimate", _ESTIMATE_KEYS)):
+        tbl = cfg.get(table)
+        if not isinstance(tbl, dict):
+            continue
+        for key in tbl:
+            if key not in allowed:
+                out.append(f"unknown [{table}] key {key!r} is "
+                           f"ignored{_did_you_mean(key, allowed)}")
+    return out
+
+
+_CONFIG_WARNED: set = set()
+
+
+def _warn_config_tables(root: Path) -> None:
+    """Print _config_table_warnings once per process (estimate reads
+    [estimate] twice; instalments reads both tables)."""
+    for msg in _config_table_warnings(_soft_config(root)):
+        if msg in _CONFIG_WARNED:
+            continue
+        _CONFIG_WARNED.add(msg)
+        _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
+        print(f"{_pfx}: warning: taxjson.toml: {msg}", file=sys.stderr)
+
+
+def _nonneg_money(value: Any, what: str) -> float:
+    """A config money figure: a finite, non-negative number (a TOML
+    boolean is refused — float(True) is 1.0). Dies naming `what`."""
+    import math as _math
+    if isinstance(value, bool):
+        _die(f"{what} must be a number, got {value!r}")
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        _die(f"{what} must be a number, got {value!r}")
+    if not _math.isfinite(f) or f < 0:
+        _die(f"{what} must be a non-negative finite number (enter it as "
+             f"a positive amount), got {value!r}")
+    return f
 
 
 def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
@@ -490,6 +593,7 @@ def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
     other_income stays >= 0: deductions are their own input, not a
     negative income (R1-213)."""
     import math as _math
+    _warn_config_tables(root)
     cfg = _soft_config(root).get("estimate") or {}
     out = []
     for key in ("deductions", "carrying_charges"):
@@ -497,6 +601,8 @@ def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
         src = f"--{key.replace('_', '-')}"
         if v is None:
             v, src = cfg.get(key), f"[estimate] {key}"
+        if isinstance(v, bool):
+            _die(f"{src} must be a number, got {v!r}")
         try:
             f = float(v or 0.0)
         except (TypeError, ValueError):
@@ -515,6 +621,7 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
     estimate, and without a common resolution the two commands
     reported different net tax owing for anyone with employment
     income (5.5x on the auditor's fixture)."""
+    _warn_config_tables(root)
     cfg = _soft_config(root).get("estimate") or {}
     oi = getattr(args, "other_income", None)
     ol = getattr(args, "other_losses", None)
@@ -522,6 +629,10 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
         oi = cfg.get("other_income")
     if ol is None:
         ol = cfg.get("other_losses")
+    # float(True) is 1.0: `other_income = true` was read as $1 (R1-217).
+    for _k, _v in (("other_income", oi), ("other_losses", ol)):
+        if isinstance(_v, bool):
+            _die(f"[estimate] {_k} must be a number, got {_v!r}")
     try:
         oi_f, ol_f = float(oi or 0.0), float(ol or 0.0)
     except (TypeError, ValueError):
@@ -613,22 +724,24 @@ def validate_config(cfg: Dict[str, Any],
             "share loss (s.54 'a right to acquire'); shares never replace "
             "an option, and only the identical contract replaces an "
             "option. Delete the line.")
+    _base = settings.get("base_currency")
+    if (_base and _base != "CAD" and _normalize_country(
+            str(settings.get("country", "canada"))) == "canada"):
+        warnings.append(
+            f"[settings] base_currency is {_base!r} but country is "
+            f"canada — a Canadian return is filed in CAD, so every "
+            f"FOR THE RETURN figure would be in the wrong currency "
+            f"(R1-153)")
     src = settings.get("source_currencies")
     if src is not None and (not isinstance(src, list)
                             or not all(isinstance(c, str) for c in src)):
         _die(f"[settings] source_currencies must be a list of "
                  f"currency codes, got {src!r}")
 
-    for table, allowed in (("instalments",
-                           ("basis", "prior_year_net_tax",
-                            "second_prior_net_tax", "withheld",
-                            "prescribed_rate", "prescribed_rates",
-                            "paid")),
-                          ("estimate", _ESTIMATE_KEYS)):
-        for key in (cfg.get(table) or {}):
-            if key not in allowed:
-                warnings.append(f"unknown [{table}] key {key!r} is "
-                                f"ignored{_suggest(key, allowed)}")
+    # Unknown top-level tables ([estimates]) and unknown [estimate] /
+    # [instalments] keys — the same check the commands reading those
+    # tables print (R1-216, R1-257, S038-13).
+    warnings.extend(_config_table_warnings(cfg))
     accounts = cfg.get("accounts", {})
     for name, acfg in accounts.items():
         if not isinstance(acfg, dict):
@@ -2363,6 +2476,37 @@ def _refuse_phantoms_for_unknown_accounts(phantoms: Path,
         "is gone), then run again.")
 
 
+def _warn_year_without_activity(year: Any, bases: List[Path]) -> None:
+    """Warn when no row of this run's books is dated in [settings]
+    year. A typo'd in-range year (2015 for 2025) built all-zero filing
+    totals with exit 0 and no word (R1-256)."""
+    import json as _json
+    if not year or not bases:
+        return
+    ys = str(year)
+    lo = hi = None
+    for b in bases:
+        try:
+            txs = _json.loads(Path(b).read_text(encoding="utf-8")).get(
+                "transactions", [])
+        except (OSError, ValueError, AttributeError):
+            return                   # unreadable: other checks say so
+        for t in txs:
+            for d in (str(t.get("date") or "")[:10],
+                      str(t.get("date_settle") or "")[:10]):
+                if d.startswith(ys):
+                    return
+                if len(d) == 10:
+                    lo = d if lo is None or d < lo else lo
+                    hi = d if hi is None or d > hi else hi
+    if lo is None:
+        return                       # empty books: said elsewhere
+    print(f"taxjson: warning: no transaction in any account's books is "
+          f"dated {ys} (the books run {lo} .. {hi}) — every {ys} filing "
+          f"total will be 0. Is [settings] year in taxjson.toml right?",
+          file=sys.stderr)
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     # Full rebuild is the DEFAULT: stale cached artifacts must never
     # feed a filing decision. `--fast` opts back into the mtime cache.
@@ -2788,6 +2932,10 @@ def cmd_run(args: argparse.Namespace) -> None:
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],
                 settings)
     stage_fees(cache, settings, rates, reports_dir)
+    _warn_year_without_activity(
+        settings.get("year"),
+        [o["base"] for _, o in sheltered_outputs]
+        + [o["base"] for _, o, _c in taxable_outputs])
 
     # Filed-year lock: recompute every closed year from the fresh books
     # and shout if a filed number moved (warn-only; --strict aborts).
@@ -2982,8 +3130,10 @@ _TEMPLATE_INSTALMENTS = """
 # [instalments]
 # basis                = "current_year"   # current_year | prior_year | cra_reminder
 # withheld             = 0                # tax withheld at source this year
-# # Last two years' net tax owing (line 48500 minus withholding, from
-# # each Notice of Assessment). Supply BOTH even on current_year: CRA
+# # Last two years' net tax owing, as CRA's instalment chart defines it:
+# # lines 42000 + 42200 + 42800 (+ 43200) minus 43700 (tax deducted) and
+# # the refundable credits — NOT line 48500, which also subtracts the
+# # instalments you paid. Supply BOTH even on current_year: CRA
 # # assesses interest on the least of the methods your figures support,
 # # and they decide whether instalments are owed at all. Leaving a 0
 # # here reads as "I owed nothing" and suppresses both.
@@ -6204,6 +6354,7 @@ def _instalment_config(root: Path,
     """Validated [instalments] table ({} when absent). Loud on bad
     input: these figures move money."""
     from taxjson.bin.taxjson_instalments import BASES
+    _warn_config_tables(root)
     cfg = (_soft_config(root).get("instalments") or {})
     if not cfg:
         return {}
@@ -6218,10 +6369,11 @@ def _instalment_config(root: Path,
         v = cfg.get(key)
         if v is None:
             continue
-        try:
-            out[key] = float(v)
-        except (TypeError, ValueError):
-            _die(f"[instalments] {key} must be a number, got {v!r}")
+        # Sign, finiteness and type, like paid[].amount: withheld = -5000
+        # overstated net tax owing by 10,000, withheld = nan waived the
+        # instalments, a negative rate zeroed the interest, and `true`
+        # read as 1.0 — all at exit 0 (R1-217).
+        out[key] = _nonneg_money(v, f"[instalments] {key}")
     # CRA resets the prescribed rate quarterly and charges each day at
     # the rate in force that day — so a dated schedule is accepted and
     # applied per day. A scalar prescribed_rate stays valid.
@@ -6230,7 +6382,7 @@ def _instalment_config(root: Path,
         _die("[instalments] set prescribed_rate OR prescribed_rates, "
              "not both — the dated schedule would silently win and "
              "the single rate be discarded.")
-    if out.get("prescribed_rate", 0) > 1.0:
+    if out.get("prescribed_rate", 0) >= 1.0:
         _die(f"[instalments] prescribed_rate is a DECIMAL fraction "
              f"(0.08 = 8%), got {out['prescribed_rate']} — that would "
              f"charge {out['prescribed_rate'] * 100:.0f}% a year.")
@@ -6250,8 +6402,10 @@ def _instalment_config(root: Path,
                 # wrong as a string ("2026-9-01" > "2026-12-31"), so
                 # the segment silently applied to the wrong window.
                 frm = date_cls.fromisoformat(str(row["from"])).isoformat()
-                r = float(row["rate"])
-                if r > 1.0:
+                r = _nonneg_money(row["rate"],
+                                  f"[instalments] prescribed_rates[{i}]"
+                                  f".rate")
+                if r >= 1.0:
                     _die(f"[instalments] prescribed_rates[{i}].rate is "
                          f"a DECIMAL fraction (0.08 = 8%), got {r}.")
                 sched.append({"from": frm, "rate": r})
@@ -6288,7 +6442,12 @@ def _instalment_config(root: Path,
             # walk parses with it, so an unpadded date accepted here
             # crashed later behind a misleading error.
             d = date_cls.fromisoformat(str(d)).isoformat()
+            if isinstance(a, bool):
+                raise TypeError("boolean amount")
             a = float(a)
+            import math as _math
+            if not _math.isfinite(a):
+                raise ValueError("non-finite amount")
         except (TypeError, ValueError):
             _die(f"[instalments] paid[{i}] needs a YYYY-MM-DD `date` "
                  f"and a numeric `amount`, got {row!r}")
@@ -10707,11 +10866,22 @@ def cmd_init(args: argparse.Namespace) -> None:
     # The config is (re)written — the guard above already enforces --force.
     config_text, account_names = _render_init_config(
         country, getattr(args, "year", None))
+    bak_name = "taxjson.toml.bak"
     if cfg.exists():
         # --force re-templates: keep the user's previous config (their
-        # accounts, holdings, instalments) recoverable.
-        shutil.copy2(cfg, cfg.with_name("taxjson.toml.bak"))
-        written.append("taxjson.toml.bak (your previous config)")
+        # accounts, holdings, instalments) recoverable. Never overwrite
+        # an earlier backup: a second --force (fixing the --country)
+        # replaced the only copy of the user's config with the first
+        # template (R1-255). Same numbering as fetch's .bak files.
+        bak = cfg.with_name(bak_name)
+        n = 1
+        while bak.exists() and bak.read_bytes() != cfg.read_bytes():
+            bak = cfg.with_name(f"{bak_name}{n}")
+            n += 1
+        if not bak.exists():
+            shutil.copy2(cfg, bak)
+        bak_name = bak.name
+        written.append(f"{bak_name} (your previous config)")
     cfg.write_text(config_text)
     written.append("taxjson.toml")
     if country == "usa":
@@ -10745,7 +10915,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     if _orphans:
         print(f"  note: inputs/ has folder(s) with no [accounts.*] "
               f"section in the new config: {', '.join(_orphans)} — "
-              f"re-add their sections (see taxjson.toml.bak) or remove "
+              f"re-add their sections (see {bak_name}) or remove "
               f"the folders.")
     import shlex as _shlex
     print("\nNext:")

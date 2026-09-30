@@ -326,8 +326,12 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # prescribed_rates = [{ from = "2025-04-01", rate = 0.08 },
 #                     { from = "2025-07-01", rate = 0.07 }]
 # withheld = 0                 # tax already withheld at source this year
-# prior_year_net_tax = 55000   # last year's net tax owing (line 48500
-# second_prior_net_tax = 41000 #   minus withholding, per the NOA).
+# prior_year_net_tax = 55000   # last year's net tax owing, as CRA's
+# second_prior_net_tax = 41000 #   instalment chart defines it: lines
+#                              #   42000 + 42200 + 42800 (+ 43200)
+#                              #   minus 43700 and the refundable
+#                              #   credits — NOT line 48500, which also
+#                              #   subtracts the instalments you paid.
 #                              # Supply BOTH even on current_year: CRA
 #                              # assesses interest on the least amount
 #                              # the methods your figures support
