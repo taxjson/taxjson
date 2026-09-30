@@ -1389,8 +1389,15 @@ def _rbc_same_account(a, b) -> bool:
     covering two RBC accounts that both hold the security must not pair
     one account's removal with the other's receipt. Unknown ('' — no
     Account column) matches anything."""
-    x, y = getattr(a, 'account', '') or '', getattr(b, 'account', '') or ''
+    x, y = _rbc_account(a), _rbc_account(b)
     return not x or not y or x == y
+
+
+def _rbc_account(row) -> str:
+    """The row's RBC account, normalized like rbc_direct._norm_account
+    (digits only, so '12345678' and '1234-5678' are one account)."""
+    s = (getattr(row, 'account', '') or '').strip()
+    return re.sub(r'\D', '', s) or s.upper()
 
 
 def _rbc_stock_score(rem, rc) -> Tuple[float, float]:
@@ -1632,7 +1639,7 @@ def parse_rbc_corporate_actions(
             cash_in_lieu=cil_amount,
             cash_in_lieu_currency=(ev.cil[0].currency if ev.cil else ''),
             raw_descriptions=[rem.desc, rc.desc] + [c.desc for c in ev.cil],
-            broker_account=getattr(rem, 'account', '') or '',
+            broker_account=_rbc_account(rem),
         ))
 
     # Spin-offs: a tax election (s.86.1 or an FMV dividend in kind).
@@ -1676,7 +1683,7 @@ def parse_rbc_corporate_actions(
             fmv=0.0, currency=r.currency or 'USD',
             target_currency=r.currency or 'USD',
             account=account, raw_descriptions=[r.desc],
-            broker_account=getattr(r, 'account', '') or '',
+            broker_account=_rbc_account(r),
         ))
     events.sort(key=lambda e: (e.date, e.source_symbol))
     return events
