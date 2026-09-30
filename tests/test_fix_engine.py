@@ -324,5 +324,46 @@ class TestCheckFiledSeesAccountsOutsideTheLock(unittest.TestCase):
         self.assertFalse(any(l.startswith("idle:") for l in lines), lines)
 
 
+class TestPhantomsReachTheShelteredContext(unittest.TestCase):
+    """S021-09: phantom openings were applied to the taxable book only,
+    never to the sheltered/affiliated wash context — a TFSA with
+    truncated history looked short, its in-window rebuy was not 'held
+    at day 30', and a permanent denial was missed."""
+
+    def test_tfsa_phantom_backs_a_permanent_denial(self):
+        margin = [
+            _t('BUYSELL', '2025-01-03', 100, 'margin', price=30.0),
+            _t('BUYSELL', '2025-03-11', -100, 'margin', price=20.0),
+        ]
+        tfsa = [
+            _t('BUYSELL', '2025-01-16', -100, 'tfsa', price=29.0),
+            _t('BUYSELL', '2025-03-13', 50, 'tfsa', price=20.0),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            ph = Path(tmp) / "phantoms.json"
+            ph.write_text(json.dumps([{"symbol": "XYZ.TO",
+                                       "account": "tfsa"}]))
+            g, dis, perm = _gains(margin, tfsa, incomplete_history=ph)
+        self.assertEqual((g, dis, perm), (-500.0, 500.0, 500.0))
+
+    def test_affiliated_context_gets_openings_too(self):
+        from taxjson.lib.pipeline import prepare_books
+        import contextlib
+        import io
+        aff = [_t('BUYSELL', '2025-01-16', -100, 'spouse', price=29.0)]
+        with tempfile.TemporaryDirectory() as tmp:
+            ph = Path(tmp) / "phantoms.json"
+            ph.write_text(json.dumps([{"symbol": "XYZ.TO",
+                                       "account": "spouse"}]))
+            with contextlib.redirect_stderr(io.StringIO()):
+                _m, _s, a, log = prepare_books(
+                    [], [], aff, taxable=True, incomplete_history=ph)
+        self.assertEqual([(t.action, t.quantity) for t in a
+                          if t.action == 'OPENING_BALANCE'],
+                         [('OPENING_BALANCE', 100.0)])
+        self.assertEqual([(e['account'], e['inserted']) for e in log],
+                         [('spouse', True)])
+
+
 if __name__ == '__main__':
     unittest.main()

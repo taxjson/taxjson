@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`phantoms.json` openings reach the superficial-loss context.** An
+  opening for a registered (or affiliated) account was applied to that
+  account's own report but not to the context the taxable gains are
+  tested against, so a TFSA with truncated history looked short and its
+  in-window rebuy did not deny the taxable loss (permanently, as s.54
+  requires). The openings now apply to every book.
 - **`check-filed` compares every taxable account, not only the locked
   ones.** An account added (or renamed) after `close-year` was never
   recomputed, so its dispositions were missing from the comparison and

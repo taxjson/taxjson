@@ -826,6 +826,27 @@ def prepare_books(transactions, sheltered_transactions=(),
     if incomplete_history:
         phantoms = load_phantoms(Path(incomplete_history))
         transactions, phantom_application_log = synthesize_openings(transactions, phantoms)
+        # The wash context too (audit S021-09): a registered or
+        # affiliated account with truncated history otherwise looks
+        # short here, so its in-window rebuy is not "still held at day
+        # 30" and a permanent superficial-loss denial is missed. Each
+        # pair's opening is sized on its own account's rows, so the
+        # three books never double-apply one entry.
+        sheltered_transactions, _sh_log = synthesize_openings(
+            sheltered_transactions, phantoms)
+        affiliated_transactions, _af_log = synthesize_openings(
+            affiliated_transactions, phantoms)
+        _ctx = {}
+        for _label, _log in (('sheltered', _sh_log),
+                             ('affiliated', _af_log)):
+            for _e in _log:
+                if _e.get('inserted'):
+                    _ctx[(_e['symbol'], _e['account'])] = dict(
+                        _e, context=_label)
+        phantom_application_log = [
+            _ctx.get((_e['symbol'], _e['account']), _e)
+            if not _e.get('inserted') else _e
+            for _e in phantom_application_log]
     elif phantom_hint:
         # No phantom file supplied — but if the data has positions that go
         # negative, the user may have truncated history they haven't told
