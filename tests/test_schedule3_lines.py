@@ -144,7 +144,7 @@ class TestFooting(unittest.TestCase):
             out_csv = Path(td) / "s3.csv"
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
-                rc = main([str(g), str(c), "--crypto", str(c), "--form",
+                rc = main([str(g), str(c), "--crypto", str(c), "--country", "canada", "--form",
                            "schedule3", "--year", "2025", "--csv",
                            str(out_csv)])
             self.assertEqual(rc, 0)
@@ -161,7 +161,7 @@ class TestFooting(unittest.TestCase):
             self.assertEqual(by["NVDA.US"]["acb"], "1954.12")
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
-                main([str(g), "--crypto", str(c), "--form", "schedule3",
+                main([str(g), "--crypto", str(c), "--country", "canada", "--form", "schedule3",
                       "--year", "2025", "--json"])
             rep = json.loads(out.getvalue())
             self.assertEqual([ln["line"] for ln in rep["lines"]],

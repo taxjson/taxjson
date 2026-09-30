@@ -29,7 +29,7 @@ STATE_VERSION = 1
 # Categories worth announcing on first sight. CLEAR is tracked in
 # state (so LOCKED->CLEAR transitions can be reported) but a NEW
 # ticker that is already CLEAR is noise.
-_ACTIONABLE = ("VIOLATION", "BLOCKED", "LOCKED", "EXITABLE",
+_ACTIONABLE = ("VIOLATION", "WASHED", "BLOCKED", "LOCKED", "EXITABLE",
                "CAUTION", "COOLING", "RISK")
 
 

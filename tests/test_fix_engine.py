@@ -457,7 +457,9 @@ class TestManualRowsReachFormExport(unittest.TestCase):
         from taxjson.bin.taxjson_form_export import main
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = main(list(argv))
+            rc = main(["--country", "canada"] + list(argv)
+                      if "schedule3" in argv else
+                      ["--country", "usa"] + list(argv))
         return rc, out.getvalue(), err.getvalue()
 
     def test_schedule3_lists_manual_rows_and_warns(self):

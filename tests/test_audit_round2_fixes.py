@@ -277,8 +277,9 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
 
     def test_reshort_in_window_is_cover_violation(self):
         # Cover at a loss then RE-SHORT in the window while still short.
-        # US s.1091(e): direction-matched trigger -> VIOLATION with
-        # "Cover" wording. Canada s.54: a new short acquires nothing, so
+        # US s.1091(e): direction-matched trigger -> the US engine
+        # washes it (WASHED; no rescue, partition COMMANDS-01). Canada
+        # s.54: a new short acquires nothing, so
         # the loss stands (medium audit S054-00; this test used to pin
         # the US rule for every project).
         txs = [
@@ -288,7 +289,7 @@ class TestRadarMultiLossAndDirection(unittest.TestCase):
         ]
         out = _radar(txs, "2026-06-15", "--country", "usa")
         line = next(l for l in out.splitlines() if l.startswith("RSH.TO"))
-        self.assertIn("VIOLATION: Cover", line)
+        self.assertIn("WASHED:", line)
         out = _radar(txs, "2026-06-15")
         line = next(l for l in out.splitlines() if l.startswith("RSH.TO"))
         self.assertNotIn("VIOLATION", line)

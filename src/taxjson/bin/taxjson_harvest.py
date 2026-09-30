@@ -338,7 +338,7 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
             if loss <= 1e-9:
                 continue
         if cat in ("CLEAR", "RISK", "VIOLATION", "EXITABLE", "CAUTION",
-                   "BLOCKED"):
+                   "BLOCKED", "WASHED"):
             # RISK = sellable now with a forward-window caveat — the
             # loss is claimable today; only a sheltered add in the 30
             # days AFTER the sale would (permanently) deny it.
@@ -354,6 +354,9 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
             # its clears_at is the "don't REBUY before" date, not a
             # lock on selling. Treating it like LOCKED pushed the
             # loss into the 30d bucket (2026-09 audit).
+            # WASHED (US §1091) = an EARLIER loss was disallowed into
+            # this holding's basis; selling the holding now realizes it
+            # (its clears_at is a no-rebuy date).
             days = 0
         elif clears:
             try:

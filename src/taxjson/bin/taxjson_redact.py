@@ -24,7 +24,8 @@ What it changes, and nothing else:
     line (quoted or not), names after `Initiated by`,
     `Payee:`, `Beneficiary:` and honorifics (`Mrs. …`), the name after
     an `Account: …,` header, name / street / city lines in a statement
-    preamble (Webull), e-mail addresses, phone numbers, Canadian postal
+    preamble (Webull), e-mail addresses, phone numbers, US city/state/ZIP
+    lines, Canadian postal
     codes, street addresses, SIN-shaped (Luhn-valid) and SSN-shaped
     numbers;
   * crypto — wallet addresses (bc1…, legacy 1…/3… base58, 0x + 40 hex),
@@ -198,6 +199,17 @@ _NAME_FROM_TO = re.compile(
 _POSTAL = re.compile(
     r"(?<![A-Za-z0-9-])[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z][ -]?\d"
     r"[ABCEGHJ-NPRSTV-Z]\d(?![A-Za-z0-9-])")
+# A US "City, ST 12345" / "City, ST 12345-6789" line (USPS state and
+# territory codes). A bare ZIP is only redacted after a state code: a
+# lone 5-digit number is an amount or a quantity far more often.
+_US_STATES = ("AL|AK|AZ|AR|CA|CO|CT|DE|DC|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME"
+              "|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA"
+              "|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|AS|GU|MP|PR|VI|AA|AE"
+              "|AP")
+_US_ZIP_LINE = re.compile(
+    r"(?<![\w-])(?:(?-i:[A-Z][A-Za-z.'’-]*)(?:[ ](?-i:[A-Z][A-Za-z.'’-]*))"
+    r"{0,3},?\s+)?(?-i:(?:" + _US_STATES + r"))\s+\d{5}(?:-\d{4})?"
+    r"(?![\w-])")
 _PHONE = re.compile(
     r"(?<![\w.+-])(?:\+?1[ .-]?)?(?:\(\d{3}\)[ ]?|\d{3}[ .-])\d{3}[ .-]\d{4}(?![\w-])")
 _PHONE_CTX = re.compile(
@@ -584,6 +596,8 @@ def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     rep.phones += k
     line, k = _POSTAL.subn("REDACTED", line)
     rep.postal_codes += k
+    line, k = _US_ZIP_LINE.subn("REDACTED", line)
+    rep.postal_codes += k
 
     def sin_sep(m: re.Match) -> str:
         d = re.sub(r"\D", "", m.group(0))
@@ -789,7 +803,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
             kind = _name_line_kind(joined)
             if (kind == "name" or _STREET.search(joined)
                     or _STREET_FR.search(joined)
-                    or _POSTAL.search(joined) or _PO_BOX.search(joined)):
+                    or _POSTAL.search(joined) or _PO_BOX.search(joined)
+                    or _US_ZIP_LINE.search(joined)):
                 line = _blank_cells(line)
                 rep.identity_rows += 1
             elif kind == "mixed":

@@ -563,7 +563,8 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
             "clean": not failing}
 
 
-def render(rep: Dict[str, Any], tolerance: float) -> str:
+def render(rep: Dict[str, Any], tolerance: float,
+           country: Optional[str] = None) -> str:
     lines = ["SLIP RECONCILIATION — computed dispositions vs broker tax "
              "slips", ""]
     if not rep["rows"]:
@@ -597,10 +598,17 @@ def render(rep: Dict[str, Any], tolerance: float) -> str:
     lines.append("  - Slips aggregated per type code (IB's SHS/OPC/FUT "
                  "rows identified 'Various') cannot be compared per "
                  "security: transcribe a per-security CSV.")
-    lines.append("  - Slip cost (T5008 box 20) is per-broker book value; a "
-                 "difference from blended ACB is expected when you hold the "
-                 "security at more than one broker — document it, don't "
-                 "'fix' it.")
+    if country == "usa":
+        lines.append("  - Slip cost (1099-B box 1e) is the broker's basis "
+                     "for the lots it sold; it can differ from taxjson's "
+                     "when a wash sale crossed accounts (box 1g covers "
+                     "only the broker's own) or shares came in by "
+                     "transfer — document it, don't 'fix' it.")
+    else:
+        lines.append("  - Slip cost (T5008 box 20) is per-broker book value; a "
+                     "difference from blended ACB is expected when you hold the "
+                     "security at more than one broker — document it, don't "
+                     "'fix' it.")
     lines.append("  - Amounts are compared in the project base currency; "
                  "slips in another currency will not reconcile.")
     return "\n".join(lines)
@@ -628,6 +636,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "'trade' (IRS/1099-B). The `taxjson "
                              "reconcile-slips` wrapper passes the "
                              "project's convention automatically.")
+    from taxjson.lib.country import country_arg
+    parser.add_argument("--country", type=country_arg, default=None,
+                        help="The project's country (wording of the "
+                             "slip notes only: T5008 vs 1099-B). The "
+                             "`taxjson reconcile-slips` wrapper passes it.")
     parser.add_argument("--tolerance", type=float, default=1.00,
                         help="Absolute per-symbol amount tolerance "
                              "(default: 1.00)")
@@ -688,7 +701,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         json.dump(rep, sys.stdout, indent=2, sort_keys=True)
         print()
     else:
-        print(render(rep, args.tolerance))
+        print(render(rep, args.tolerance, args.country))
         if dropped_rows:
             print(f"\nNOT RECONCILED: {dropped_rows} slip row(s) had "
                   f"unreadable proceeds (see warnings above).")

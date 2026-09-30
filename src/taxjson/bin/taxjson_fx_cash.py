@@ -248,6 +248,7 @@ def apply_jurisdiction(net_gain: float, country: str) -> Dict[str, Any]:
 
 def render_report(doc: Dict[str, Any], base: str, year: int,
                   country: str, verdict: Dict[str, Any]) -> str:
+    from taxjson.lib.country import is_usa as _is_usa
     from taxjson.lib.report_model import fmt_money, render_table
     lines = [f"FX GAINS ON CASH — {base}, tax year {year}, "
              f"{verdict['rule']}",
@@ -298,7 +299,8 @@ def render_report(doc: Dict[str, Any], base: str, year: int,
                 "deposits/withdrawals are not in the ledger, so this "
                 "figure can be wrong in either direction — not only "
                 "understated. Treat it as a starting point for the "
-                "s.39(1.1) calculation, not the answer.")
+                + ("§988" if _is_usa(country) else "s.39(1.1)")
+                + " calculation, not the answer.")
     if doc["unrated"]:
         counts = ", ".join(f"{c} {n}" for c, n
                            in sorted(doc["unrated"].items()))
