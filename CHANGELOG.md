@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The `.sum` TOTAL PROCEEDS / TOTAL COST are labelled.** They are the
+  engine's signed figures (shorts and written options negated), not the
+  Schedule 3 proceeds and ACB; the report and KNOWN_ISSUES now point to
+  `taxjson form-export` for those (audit R1-208).
 - **Holdings TOML states its option cost unit.** `cost_per_share` in
   `reports/<account>_holdings.toml` is `total_cost / quantity` (per
   contract for an option, the convention the broker holdings files

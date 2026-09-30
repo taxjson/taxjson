@@ -256,5 +256,84 @@ class TestHoldingsTomlOptionUnits(unittest.TestCase):
         self.assertIn("contract_multiplier", text)
 
 
+# ------------------------------------------------------ R1-208 .sum label
+class TestSumTotalsConvention(unittest.TestCase):
+    def test_short_round_trip_totals_are_labelled(self):
+        tt = ("BUYSELL 2025-02-03 10:00:00 LNG.TO 100 CAD 10.00 -1000.00 0.00\n"
+              "BUYSELL 2025-03-03 10:00:00 LNG.TO -100 CAD 12.00 1200.00 0.00\n"
+              "BUYSELL 2025-04-01 10:00:00 SHT.TO -100 CAD 50.00 5000.00 0.00\n"
+              "BUYSELL 2025-05-01 10:00:00 SHT.TO 100 CAD 40.00 -4000.00 0.00\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, [("margin", "taxable")], {"margin": tt},
+                            year=2025)
+            r = _cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            text = (root / "reports" / "margin.sum").read_text()
+        i = text.index("TOTAL PROCEEDS:")
+        self.assertIn("taxjson form-export", text[i:i + 400])
+
+
+# ------------------------------------------------- R1-310 sum-income pins
+class TestSumIncomeYearPin(unittest.TestCase):
+    """A multi-year base book (as `taxjson run` passes it) summarised for
+    one year: the year filter, the withholding subtraction and the
+    interest in the grand total are each pinned."""
+    ROWS = [
+        # other years: must be ignored
+        {"action": "DIVIDEND", "date": "2024-06-01", "symbol": "AAA.TO",
+         "currency": "CAD", "gross_amount": 1000.0, "net_amount": 1000.0},
+        {"action": "DIVIDEND", "date": "2026-02-01", "symbol": "AAA.TO",
+         "currency": "CAD", "gross_amount": 2000.0, "net_amount": 2000.0},
+        {"action": "INTEREST", "date": "2026-02-01", "symbol": "CASH",
+         "currency": "CAD", "net_amount": 500.0},
+        # 2025
+        {"action": "DIVIDEND", "date": "2025-03-01", "symbol": "AAA.TO",
+         "currency": "CAD", "gross_amount": 100.0, "net_amount": 100.0},
+        {"action": "DIVIDEND", "date": "2025-06-01", "symbol": "BBB.TO",
+         "currency": "CAD", "gross_amount": 40.0, "net_amount": 40.0},
+        {"action": "TAX", "date": "2025-06-01", "symbol": "BBB.TO",
+         "currency": "CAD", "net_amount": 6.0},
+        {"action": "DIVIDEND_IN_LIEU", "date": "2025-07-01",
+         "symbol": "BBB.TO", "currency": "CAD", "gross_amount": 5.0,
+         "net_amount": 5.0},
+        {"action": "INTEREST", "date": "2025-12-31", "symbol": "CASH",
+         "currency": "CAD", "net_amount": 10.0},
+    ]
+
+    def test_library(self):
+        from taxjson.bin.taxjson_sum_income import (format_report,
+                                                    summarize_income)
+        data = summarize_income(self.ROWS, target_year=2025)
+        st = data["ticker_stats"]
+        self.assertAlmostEqual(st["AAA.TO"]["CAD"]["div"], 100.0)
+        self.assertAlmostEqual(st["BBB.TO"]["CAD"]["tax"], 6.0)
+        self.assertAlmostEqual(data["interest_totals"]["CAD"], 10.0)
+        text = format_report(data)
+        self._check_text(text)
+
+    def _check_text(self, text):
+        lines = {ln.split()[0] + (" " + ln.split()[1] if ln.startswith(("CASH", "TOTAL")) else ""): ln
+                 for ln in text.splitlines() if ln.strip() and not ln.startswith("-")}
+        nums = lambda ln: [float(x.replace(",", "")) for x in ln.split()  # noqa: E731
+                           if x.replace(",", "").replace(".", "").lstrip("-").isdigit()]
+        self.assertEqual(nums(lines["AAA.TO"]), [100.0, 0.0, 0.0, 100.0])
+        # net = div + pil - tax = 40 + 5 - 6
+        self.assertEqual(nums(lines["BBB.TO"]), [40.0, 5.0, 6.0, 39.0])
+        self.assertEqual(nums(lines["SUBTOTAL"]), [140.0, 5.0, 6.0, 139.0])
+        self.assertEqual(nums(lines["CASH INTEREST"]), [10.0])
+        self.assertEqual(nums(lines["TOTAL NET"]), [149.0])
+
+    def test_cli_as_run_invokes_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "margin_base.json"
+            p.write_text(json.dumps({"transactions": self.ROWS}))
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_sum_income",
+                 "--year", "2025", str(p)],
+                cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self._check_text(r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
