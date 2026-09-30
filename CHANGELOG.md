@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **`list --date` follows the project's tax_date and applies
+  phantoms.json.** On the settle basis a Dec-31 trade settling in January
+  is no longer counted as held at Dec 31 (the view disagreed with T1135
+  and the books), and phantom-backed positions no longer show as large
+  shorts. Plain `list` is labelled with the date the books run to, not
+  "as of tax year" (it shows end-of-data positions), and `--date` no
+  longer claims "pre-ticker.map" (audit R1-4, R1-187, R1-282).
 - **`fetch` never loses input activity.** `--trim-overlap` finds the
   trade date by the "Transaction Date" header (a manual export with
   Settlement Date first lost a trade the API file did not hold) and

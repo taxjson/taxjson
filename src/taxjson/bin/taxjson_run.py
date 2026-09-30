@@ -8124,10 +8124,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
     as_of = getattr(args, "date", None)
     if as_of:
         # Positions AS OF a date: recompute each account's books from
-        # its base.json with the engine's --as-of cutoff. Full ACB
-        # fidelity (incl. deferred wash) but PRE-WASH and PRE-ticker.map
-        # (the cross-account pass only exists for full runs) — the
-        # basis label says so.
+        # its base.json (already ticker.map-consolidated) up to the
+        # date. Deferred wash within the account is kept; the
+        # cross-account wash pass only exists for full runs — the basis
+        # label says so.
         import re as _re
         if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
             sys.exit("taxjson list: --date expects YYYY-MM-DD")
@@ -8162,6 +8162,14 @@ def cmd_positions(args: argparse.Namespace) -> None:
         files = {}
         tmp_docs = {}
         _no_input = _accounts_skipped_for_no_inputs(root)
+        # The project's tax_date decides the cutoff, as it does for the
+        # books and T1135: on the settle basis a Dec-31 trade settling
+        # in January is NOT yet held at Dec 31. The engine's --as-of is
+        # a trade-date cutoff, so a settle-basis project pre-filters
+        # the rows by settlement date instead (R1-4).
+        tax_date = settings.get("tax_date") or (
+            "trade" if country in ("us", "usa") else "settle")
+        _phantoms = root / "phantoms.json"
         for n in names:
             b = cache / f"{n}_base.json"
             if not b.exists():
@@ -8178,11 +8186,42 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 continue
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
-                   "--as-of", as_of, "--no-wash"] + option_timing_flags(
-                       settings)
+                   "--tax-date", tax_date,
+                   "--no-wash"] + option_timing_flags(settings)
             if accounts_cfg.get(n, {}).get("type") == "taxable":
                 cmd.append("--taxable")
-            res = _run_cmd(cmd + [str(b)], capture_output=True)
+            # The same phantom openings every other recompute applies:
+            # without them each phantom-backed position showed as a
+            # large short (R1-187).
+            if _phantoms.exists():
+                cmd += ["--incomplete-history", str(_phantoms)]
+            _tmp_base = None
+            if tax_date == "settle":
+                import tempfile as _tf
+                try:
+                    _bdoc = json.loads(b.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as e:
+                    print(f"taxjson: warning: could not read {b}: {e}",
+                          file=sys.stderr)
+                    continue
+                _bdoc["transactions"] = [
+                    t for t in _bdoc.get("transactions", [])
+                    if str(t.get("date_settle") or t.get("date")
+                           or "9999")[:10] <= as_of]
+                _fd, _tmp_name = _tf.mkstemp(suffix=".json",
+                                             prefix=".asof_", dir=cache)
+                _tmp_base = Path(_tmp_name)
+                with open(_fd, "w", encoding="utf-8") as _fh:
+                    json.dump(_bdoc, _fh)
+                src_book = _tmp_base
+            else:
+                cmd += ["--as-of", as_of]
+                src_book = b
+            try:
+                res = _run_cmd(cmd + [str(src_book)], capture_output=True)
+            finally:
+                if _tmp_base is not None:
+                    _tmp_base.unlink(missing_ok=True)
             if res.returncode != 0:
                 print(f"taxjson: warning: as-of compute failed for "
                       f"{n}: {(res.stderr or '').strip()[:200]}",
@@ -8193,7 +8232,13 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             sys.exit(f"taxjson list: no base files in {cache} "
                      f"(run `taxjson run` first).")
-        basis = f"as of {as_of} (pre-wash, pre-ticker.map)"
+        # The base books are already ticker.map-consolidated; what the
+        # recompute lacks is the cross-account (blended) wash pass
+        # (R1-282).
+        basis = (f"as of {as_of}, "
+                 f"{'settlement' if tax_date == 'settle' else 'trade'}-"
+                 f"date cutoff (per-account, before the cross-account "
+                 f"wash pass)")
     else:
         files = resolve_gains_files(cache, args.account or None)
         if not files:
@@ -8258,8 +8303,13 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
     negative_only = getattr(args, "negative", False)
 
+    # What the rows are AS OF: the --date, or the end of the books
+    # (plain `list` is end-of-data, not the tax year's Dec 31 — its
+    # header said "as of tax year 2025" over 2026 positions, R1-282).
+    horizon = as_of or _books_horizon(cache, list(files))
     if getattr(args, "json", False):
         doc = {"rows": json_rows, "basis": basis, "year": year,
+               "as_of": horizon,
                "currency": _base_currency(root),
                "totals": {"positions": n_pos,
                           "book_cost": round(total_cost, 2),
@@ -8279,7 +8329,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
     base = _base_currency(root)
     title = "NEGATIVE POSITIONS" if negative_only else "OPEN POSITIONS"
-    print(f"{title} — {base}, as of tax year {year}, basis: {basis}  "
+    when = (f"as of {as_of}" if as_of else
+            f"as of the latest data in the books"
+            + (f" ({horizon})" if horizon else ""))
+    print(f"{title} — {base}, {when}, basis: {basis}  "
           f"(after ticker.map + base-currency conversion; COST is book cost)")
     print()
     _print_report_table(out_lines)
@@ -8289,6 +8342,23 @@ def cmd_positions(args: argparse.Namespace) -> None:
               f"cost is denied superficial losses parked in these "
               f"positions (recovered when sold without a rebuy in the "
               f"window).")
+
+
+def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
+    """Latest transaction date across these accounts' base books."""
+    import json as _json
+    last = None
+    for a in accounts:
+        try:
+            txs = _json.loads((cache / f"{a}_base.json").read_text(
+                encoding="utf-8")).get("transactions", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        for t in txs:
+            d = str(t.get("date") or "")[:10]
+            if len(d) == 10 and (last is None or d > last):
+                last = d
+    return last
 
 
 def _soft_config(root: Path) -> Dict[str, Any]:
@@ -11596,10 +11666,13 @@ def main() -> None:
              "after ticker.map consolidation and base-currency conversion")
     p_pos.add_argument("account", nargs="?", help="Account (default: all)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
-                       help="Positions AS OF this date — books recomputed "
-                            "with the engine's --as-of cutoff (full "
-                            "ACB/deferred fidelity; pre-wash, "
-                            "pre-ticker.map)")
+                       help="Positions AS OF this date — each account's "
+                            "books (already ticker.map-consolidated) "
+                            "recomputed up to the date: settlement-date "
+                            "cutoff on the settle basis, trade date on "
+                            "the trade basis; phantoms.json applied; "
+                            "per-account, before the cross-account wash "
+                            "pass")
     p_pos.add_argument("--negative", action="store_true",
                        help="Show only positions with negative quantity "
                             "(short positions — or, in accounts that "

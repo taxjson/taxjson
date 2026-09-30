@@ -710,5 +710,72 @@ class TestFlexReplaceKeepsTheYear(unittest.TestCase):
         self.assertEqual(_flex_lost_dates("", self._YTD, 2025), [])
 
 
+class TestListAsOf(unittest.TestCase):
+    """R1-4: `list --date` cut by TRADE date in a settle-basis project.
+    R1-187: it ignored phantoms.json (phantom-backed positions showed as
+    large shorts). R1-282: the headers mislabelled both views."""
+
+    _CSV = _QT_HEADER + (
+        "2025-03-03 09:30:00 AM,2025-03-04 12:00:00 AM,Buy,SELLX.TO,S,"
+        "50,10.00,500.00,0.00,-500.00,CAD,55500001,Trades,Individual\n"
+        "2025-03-03 09:30:00 AM,2025-03-04 12:00:00 AM,Buy,BUYX.TO,B,"
+        "10,10.00,100.00,0.00,-100.00,CAD,55500001,Trades,Individual\n"
+        "2025-12-31 09:30:00 AM,2026-01-02 12:00:00 AM,Sell,SELLX.TO,S,"
+        "-50,12.00,600.00,0.00,600.00,CAD,55500001,Trades,Individual\n"
+        "2025-12-31 09:30:00 AM,2026-01-02 12:00:00 AM,Buy,BUYX.TO,B,"
+        "30,10.00,300.00,0.00,-300.00,CAD,55500001,Trades,Individual\n")
+
+    def _rows(self, root, *args):
+        r = _run_cli(root, "list", *args, "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(r.stdout)
+        return doc, {x["symbol"]: x["qty"] for x in doc["rows"]}
+
+    def test_settle_basis_cutoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=self._CSV)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            doc, rows = self._rows(root, "--date", "2025-12-31")
+            self.assertEqual(rows, {"SELLX.TO": 50.0, "BUYX.TO": 10.0})
+            self.assertIn("settlement", doc["basis"])
+            self.assertNotIn("pre-ticker.map", doc["basis"])
+            # A trade-basis project keeps the trade-date cutoff.
+            _set_config(root, _CONFIG.replace(
+                'source_currencies = []',
+                'source_currencies = []\ntax_date = "trade"'))
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            doc, rows = self._rows(root, "--date", "2025-12-31")
+            self.assertEqual(rows, {"BUYX.TO": 40.0})
+            self.assertIn("trade", doc["basis"])
+
+    def test_phantoms_are_applied(self):
+        csv = _QT_HEADER + (
+            "2025-06-20 10:15:00 AM,2025-06-23 12:00:00 AM,Sell,ZZZ.TO,Z,"
+            "-100,15.00,1500.00,0.00,1500.00,CAD,55500001,Trades,"
+            "Individual\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=csv)
+            (root / "phantoms.json").write_text(
+                '[{"symbol": "ZZZ.TO", "account": "margin"}]')
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            _doc, rows = self._rows(root, "--date", "2025-12-31")
+            self.assertNotIn("ZZZ.TO", rows)
+
+    def test_plain_list_is_labelled_by_the_data_horizon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=self._CSV)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "list")
+            self.assertNotIn("as of tax year", r.stdout)
+            self.assertIn("2025-12-31", r.stdout)
+            r = _run_cli(root, "list", "--date", "2025-06-30")
+            self.assertNotIn("as of tax year", r.stdout)
+            self.assertIn("as of 2025-06-30", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
