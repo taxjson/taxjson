@@ -156,6 +156,7 @@ class RbcRow:
     settle_raw: str = ''
     cls: str = ''             # classify_rbc_row()
     k: int = 0                # intra-day ordinal: 0 = the day's earliest row
+    account: str = ''         # the export's Account column ('' if absent)
 
     def label(self) -> str:
         return (f"line {self.line}: {self.date_raw} {self.activity or '?'} "
@@ -402,6 +403,7 @@ def read_rbc_rows(path: Path) -> RbcExport:
             date_raw=cell.get('Date', ''),
         )
         r.settle_raw = cell.get('Settlement Date', '')
+        r.account = cell.get('Account', '')
         if not r.date_raw:
             raise _err(path, line, "row has no Date")
         if r.currency and not re.fullmatch(r'[A-Z]{3}', r.currency):

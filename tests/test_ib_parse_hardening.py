@@ -352,13 +352,15 @@ class TestCorporateActionCancellation(unittest.TestCase):
         _, txs, _ = _parse(body)
         self.assertEqual(txs, [])
 
-    def test_cancelled_merger_leaves_the_unhandled_note(self):
+    def test_cancelled_merger_leaves_the_corp_actions_note(self):
+        # Merger rows are taxjson-corp-actions' (not "unhandled"); a
+        # cancelled leg drops out of the count.
         m = ('"QZM(US9990000401) Merged(Acquisition) WITH US9990000402 '
              '1 for 1 (QZM, QZM CORP, US9990000401)"')
         body = (HEAD + CA_H + self._ca(m, -10) + self._ca(m, 10, 'Ca')
                 + self._ca(m, -10, when='2026-03-03, 20:25:00'))
         parser, _, err = _parse(body)
-        self.assertIn('NOTE: 1 unhandled Corporate Action row', err,
+        self.assertIn('note: 1 merger/spin-off Corporate Action row', err,
                       "the cancelled leg no longer counts")
 
     def test_unmatched_cancellation_is_loud(self):

@@ -34,7 +34,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from taxjson.lib.corp_actions import (
     CorporateAction,
@@ -44,10 +44,12 @@ from taxjson.lib.corp_actions import (
     IGNORE_ELECTION,
     Manifest,
     RULES_BY_COUNTRY,
+    combine_broker_copies,
     options_for,
     parse_ib_corporate_actions,
     parse_questrade_corporate_actions,
     parse_rbc_corporate_actions,
+    rates_converter,
     resolve_event,
 )
 
@@ -65,6 +67,26 @@ EXTRACTORS = {
     'rbc': parse_rbc_corporate_actions,
     'rbc_direct': parse_rbc_corporate_actions,
 }
+
+
+def extract_events(extractor, csv_paths: List[Path],
+                   account: Optional[str] = None) -> List[CorporateAction]:
+    """Run `extractor` over every file of one broker group of an
+    account. Extractors that resolve securities by name (Questrade and
+    RBC spin-off parents, RBC merger placeholders) see ALL the group's
+    files as context: the parent was usually bought in another export.
+    The one extraction definition for the CLI, `taxjson elect` and
+    `taxjson spinoffs`, so all three compute the same event ids."""
+    events: List[CorporateAction] = []
+    paths = [Path(p) for p in csv_paths]
+    for csv_path in paths:
+        kw = ({'context_files': paths}
+              if getattr(extractor, 'accepts_context', False) else {})
+        if account is None:
+            events.extend(extractor(csv_path, **kw))
+        else:
+            events.extend(extractor(csv_path, account, **kw))
+    return events
 
 
 def _default_manifest_path(csv_path: Path) -> Path:
@@ -184,7 +206,8 @@ def _load_manifest_or_die(path: Path) -> Manifest:
         raise SystemExit(2)
 
 
-def _emit_resolved(events: List[CorporateAction], manifest: Manifest, country: str) -> dict:
+def _emit_resolved(events: List[CorporateAction], manifest: Manifest,
+                   country: str, fx=None) -> dict:
     """Emit taxjson rows for every event. Events whose election is
     `ignore` produce no rows (resolve_event returns an empty list).
     Hints stored on the manifest record (FMV, ACB allocation, etc.)
@@ -192,21 +215,20 @@ def _emit_resolved(events: List[CorporateAction], manifest: Manifest, country: s
     transactions = []
     emitted_event_count = 0
     ignored = 0
-    emitted_ids: set = set()
+    # Overlapping statement CSVs (partial-year + full-year downloads)
+    # surface the same corporate event once per file: emitting each copy
+    # scaled the pool by the ratio twice (or disposed the source twice).
+    # But the same event in a SECOND broker account is a second holding,
+    # not a duplicate — combine_broker_copies tells the two apart (it is
+    # idempotent; main() already applied it and printed its notes).
+    import io
+    events = combine_broker_copies(events, stream=io.StringIO())
     for ev in events:
-        # Overlapping statement CSVs (partial-year + full-year downloads)
-        # surface the same corporate event once per file. Emit each event_id
-        # once — double emission scaled the pool by the ratio twice (or
-        # disposed the source twice on a taxable election). Byte-identical
-        # dedup downstream can't be relied on: IB rows carry statement-
-        # specific times.
-        if ev.event_id in emitted_ids:
-            continue
-        emitted_ids.add(ev.event_id)
         rec = manifest.get(ev.event_id)
         if rec is None:
             raise RuntimeError(f"event {ev.event_id} unresolved at emit time")
-        rows = resolve_event(ev, rec.election, country=country, hints=rec.hints)
+        rows = resolve_event(ev, rec.election, country=country,
+                             hints=rec.hints, fx=fx)
         if rows:
             emitted_event_count += 1
             transactions.extend(rows)
@@ -331,6 +353,16 @@ def main():
         ),
     )
     parser.add_argument(
+        '--rates', metavar='FILE', default=None,
+        help="Rates file (the conversion stage's `DATE TIME FROM TO RATE` "
+             "lines) used to express a cross-currency exchange's value in "
+             "each leg's own currency at the event date.",
+    )
+    parser.add_argument(
+        '--base-currency', metavar='CUR', default='CAD',
+        help="The rates file's target (base) currency (default: CAD).",
+    )
+    parser.add_argument(
         '--list', dest='list_only', action='store_true',
         help="Just print extracted events; don't prompt, don't write, don't emit JSON.",
     )
@@ -372,16 +404,19 @@ def main():
         raise SystemExit(2)
 
     extractor = EXTRACTORS[args.brokerage_id]
-    events = []
-    for csv_path in csv_paths:
-        # Only override the extractor's own default account label when
-        # the user explicitly passed --account-name. Mirrors the same
-        # change made to taxjson-brokerage so a forgotten flag doesn't
-        # clobber a meaningful default with the literal string 'default'.
-        if args.account_name is None:
-            events.extend(extractor(csv_path))
-        else:
-            events.extend(extractor(csv_path, args.account_name))
+    # Only override the extractor's own default account label when
+    # the user explicitly passed --account-name. Mirrors the same
+    # change made to taxjson-brokerage so a forgotten flag doesn't
+    # clobber a meaningful default with the literal string 'default'.
+    from taxjson.lib.brokerages.base import BrokerageParseError
+    try:
+        events = extract_events(extractor, csv_paths, args.account_name)
+    except BrokerageParseError as e:
+        print(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
+        raise SystemExit(2)
+    # One event per id across the account's broker accounts (overlapping
+    # statements kept once; a second broker account's holding added).
+    events = combine_broker_copies(events)
 
     if args.list_only:
         for ev in events:
@@ -467,7 +502,16 @@ def main():
             manifest.save(manifest_path)   # atomic; never lose answers
         print(f"\nManifest saved to {manifest_path}\n", file=sys.stderr)
 
-    out = _emit_resolved(events, manifest, args.country)
+    fx = None
+    if args.rates:
+        try:
+            fx = rates_converter(Path(args.rates), args.base_currency)
+        except (OSError, ValueError) as e:
+            print(f"taxjson-corp-actions: warning: rates file "
+                  f"{args.rates} unusable ({e}); cross-currency "
+                  f"exchanges are booked in the consideration's "
+                  f"currency.", file=sys.stderr)
+    out = _emit_resolved(events, manifest, args.country, fx=fx)
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 
