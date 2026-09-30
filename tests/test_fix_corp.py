@@ -235,7 +235,7 @@ class TestIbSpinoffElection(unittest.TestCase):
             eid = pend[0]["event_id"]
             e = _run_cli(root, "elect", "margin", "--set",
                          f"{eid}=rollover_s_86_1", "--hint",
-                         "allocated_acb=1000")
+                         "allocated_acb_cad=1000")
             self.assertEqual(e.returncode, 0, e.stderr + e.stdout)
             r = _run_cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

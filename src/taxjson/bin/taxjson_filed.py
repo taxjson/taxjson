@@ -43,6 +43,7 @@ def aggregates_from_gains(doc: Dict[str, Any],
     optionally restricted to one account's entries (used when the
     document is a blended combined run)."""
     realized = disallowed = income = 0.0
+    dividend = pil = 0.0
     proceeds = st_gain = lt_gain = 0.0
     dispositions = tainted = 0
     for e in doc.get("transactions", []):
@@ -50,8 +51,8 @@ def aggregates_from_gains(doc: Dict[str, Any],
             continue
         action = e.get("action") or ""
         if action in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
-            income += float(e.get("dividend") or 0.0)
-            income += float(e.get("pil") or 0.0)
+            dividend += float(e.get("dividend") or 0.0)
+            pil += float(e.get("pil") or 0.0)
             continue
         if "gain" not in e or "qty" not in e:
             continue
@@ -75,11 +76,18 @@ def aggregates_from_gains(doc: Dict[str, Any],
         if account is not None and e.get("account") != account:
             continue
         tainted += 1
+    income = dividend + pil
     return {
         "realized": round(realized, 2),
         "disallowed": round(disallowed, 2),
         "dispositions": dispositions,
         "income": round(income, 2),
+        # A dividend and a payment in lieu go on different lines (a PIL
+        # is not a taxable dividend: no gross-up, no dividend tax
+        # credit), so a reclassification between them moves the filed
+        # return even when their sum does not (S032-06).
+        "dividend": round(dividend, 2),
+        "pil": round(pil, 2),
         "tainted": tainted,
         # Round-five audit: gain-total-preserving drift still moves
         # FILED figures — Schedule 3 line 13199 / 8949 (d) move with
@@ -112,11 +120,12 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     path.parent.mkdir(parents=True, exist_ok=True)
     totals = {
         k: round(sum(a.get(k, 0) for a in accounts.values()), 2)
-        if k in ("realized", "disallowed", "income", "proceeds",
-                 "st_gain", "lt_gain")
+        if k in ("realized", "disallowed", "income", "dividend", "pil",
+                 "proceeds", "st_gain", "lt_gain")
         else sum(a.get(k, 0) for a in accounts.values())
         for k in ("realized", "disallowed", "dispositions", "income",
-                  "tainted", "proceeds", "st_gain", "lt_gain")
+                  "dividend", "pil", "tainted", "proceeds", "st_gain",
+                  "lt_gain")
     }
     doc = {
         "schema_version": 1,
@@ -143,10 +152,54 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     return path
 
 
+def _canonical_country(settings: Dict[str, Any]) -> str:
+    c = str(settings.get("country") or "canada").strip().lower()
+    return {"ca": "canada", "us": "usa"}.get(c, c)
+
+
+def _tax_date(settings: Dict[str, Any], country: str) -> str:
+    """[settings] tax_date as the gains engine spells it. An explicit
+    value that is not settle/trade (any case) is refused by name — it
+    reached the engine raw and died with an argparse usage line that
+    the checklist then reported as drift (S031-21)."""
+    raw = settings.get("tax_date")
+    if raw in (None, ""):
+        return "trade" if country in ("us", "usa") else "settle"
+    td = str(raw).strip().lower()
+    if td not in ("settle", "trade"):
+        raise ValueError(f"[settings] tax_date must be settle|trade, "
+                         f"got {raw!r}")
+    return td
+
+
+def _lock_timing_flags(settings: Dict[str, Any], year: int,
+                       option_timing: Optional[Dict[str, Any]]
+                       ) -> List[str]:
+    """The written-option timing flags for recomputing locked `year`:
+    the timing its lock RECORDED when it has one, else the current
+    settings. Recomputing a year filed on grant timing since 2025 with a
+    later project's default (since = that project's year) moved the
+    filed year's gains and advised amending a correct return (R1-188)."""
+    if isinstance(option_timing, dict) \
+            and option_timing.get("option_premium_timing"):
+        s = dict(settings)
+        s["option_premium_timing"] = option_timing["option_premium_timing"]
+        since = option_timing.get("option_grant_since")
+        s["option_grant_timing_since"] = since if since is not None \
+            else year
+        if "option_buyback_loss_superficial" in option_timing:
+            s["option_buyback_loss_superficial"] = bool(
+                option_timing["option_buyback_loss_superficial"])
+        return option_timing_flags(s)
+    return option_timing_flags(settings)
+
+
 def recompute_accounts(cache: Path, equity_accounts: List[str],
                        crypto_accounts: List[str], year: int,
                        settings: Dict[str, Any], basis: str,
-                       run_gains_cmd) -> Dict[str, Optional[Dict[str, Any]]]:
+                       run_gains_cmd, *,
+                       option_timing: Optional[Dict[str, Any]] = None
+                       ) -> Dict[str, Optional[Dict[str, Any]]]:
     """Recompute a filed year's aggregates the way the pipeline
     computed them at close time: equity accounts via ONE blended
     combined run (Canada s.47 ACB blending; US --per-account-basis) —
@@ -162,21 +215,25 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
     if not crypto_no_wash and len(crypto_accounts) >= 2:
         out.update(_recompute_blended(cache, crypto_accounts, year,
                                       settings, basis, run_gains_cmd,
-                                      per_account_basis=False))
+                                      per_account_basis=False,
+                                      option_timing=option_timing))
     else:
         for a in crypto_accounts:
             out[a] = recompute_year(cache, a, year, settings, basis,
                                     run_gains_cmd,
-                                    no_wash=crypto_no_wash)
+                                    no_wash=crypto_no_wash,
+                                    option_timing=option_timing)
     out.update(_recompute_blended(cache, equity_accounts, year, settings,
-                                  basis, run_gains_cmd))
+                                  basis, run_gains_cmd,
+                                  option_timing=option_timing))
     return out
 
 
 def _recompute_blended(cache: Path, accounts: List[str], year: int,
                        settings: Dict[str, Any], basis: str,
                        run_gains_cmd, *,
-                       per_account_basis: Optional[bool] = None
+                       per_account_basis: Optional[bool] = None,
+                       option_timing: Optional[Dict[str, Any]] = None
                        ) -> Dict[str, Optional[Dict[str, Any]]]:
     """ONE combined gains run over `accounts`' base books, split back
     into per-account aggregates (the pipeline's blended pass)."""
@@ -195,10 +252,8 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
         combined["transactions"].extend(
             json.loads(b.read_text(encoding="utf-8"))
             .get("transactions", []))
-    country = str(settings["country"]).strip().lower()
-    country = {"ca": "canada", "us": "usa"}.get(country, country)
-    tax_date = settings.get("tax_date") or (
-        "trade" if str(country).lower() in ("us", "usa") else "settle")
+    country = _canonical_country(settings)
+    tax_date = _tax_date(settings, country)
     cmd = ["--country", str(country), "--year", str(year),
            "--tax-date", tax_date, "--taxable"]
     if per_account_basis is None:
@@ -208,7 +263,7 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     sheltered = cache / "sheltered_base.json"
     if basis == "wash-adjusted" and sheltered.exists():
         cmd += ["--sheltered", str(sheltered)]
-    cmd += option_timing_flags(settings)
+    cmd += _lock_timing_flags(settings, year, option_timing)
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
     # phantom openings and check-filed recompute WITHOUT them: a
@@ -231,7 +286,9 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
 def recompute_year(cache: Path, account: str, year: int,
                    settings: Dict[str, Any], basis: str,
                    run_gains_cmd, *,
-                   no_wash: bool = False) -> Optional[Dict[str, Any]]:
+                   no_wash: bool = False,
+                   option_timing: Optional[Dict[str, Any]] = None
+                   ) -> Optional[Dict[str, Any]]:
     """Aggregates for `account`/`year` recomputed from the CURRENT base
     book via the gains engine. `run_gains_cmd(cmd_argv, out_path)`
     executes the CLI (injected so the wrapper supplies its dispatch).
@@ -241,9 +298,10 @@ def recompute_year(cache: Path, account: str, year: int,
         cli_diag.warn(PROG, f"{account}: no {base.name} in {cache} — "
                             f"cannot recompute; run `taxjson run` first.")
         return None
-    country = settings["country"]
-    tax_date = settings.get("tax_date") or (
-        "trade" if str(country).lower() in ("us", "usa") else "settle")
+    # Canonical spelling: "Canada"/"CA" passed raw died in the engine's
+    # argparse and disabled the drift guard (S031-24).
+    country = _canonical_country(settings)
+    tax_date = _tax_date(settings, country)
     cmd = ["--country", str(country), "--year", str(year),
            "--tax-date", tax_date, "--taxable"]
     if no_wash:
@@ -251,7 +309,7 @@ def recompute_year(cache: Path, account: str, year: int,
     sheltered = cache / "sheltered_base.json"
     if basis == "wash-adjusted" and sheltered.exists():
         cmd += ["--sheltered", str(sheltered)]
-    cmd += option_timing_flags(settings)
+    cmd += _lock_timing_flags(settings, year, option_timing)
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
     # phantom openings and check-filed recompute WITHOUT them: a
@@ -268,7 +326,8 @@ def recompute_year(cache: Path, account: str, year: int,
 
 
 def diff_snapshot(snapshot: Dict[str, Any],
-                  recomputed: Dict[str, Optional[Dict[str, Any]]]
+                  recomputed: Dict[str, Optional[Dict[str, Any]]],
+                  unconfigured: Optional[set] = None
                   ) -> List[str]:
     """Human-readable drift lines ([] == clean).
 
@@ -296,14 +355,21 @@ def diff_snapshot(snapshot: Dict[str, Any],
                 f"(added or renamed after close-year?)")
     for acct, filed in sorted(locked.items()):
         cur = recomputed.get(acct)
+        if unconfigured and acct in unconfigured:
+            lines.append(f"{acct}: in the filed lock but no longer a "
+                         f"taxable account in taxjson.toml (renamed or "
+                         f"removed?) — not recomputed from its old "
+                         f"work/{acct}_base.json; restore the name or "
+                         f"re-close the year")
+            continue
         if cur is None:
             lines.append(f"{acct}: in the filed lock but could not "
                          f"recompute (missing book — account renamed "
                          f"or removed?)")
             continue
-        for key in ("realized", "disallowed", "income", "proceeds",
-                    "st_gain", "lt_gain"):
-            if key not in filed:
+        for key in ("realized", "disallowed", "income", "dividend",
+                    "pil", "proceeds", "st_gain", "lt_gain"):
+            if key not in filed or key not in cur:
                 continue        # pre-upgrade lock: field not recorded
             if abs(float(filed[key]) - float(cur[key])) > _TOL:
                 lines.append(
@@ -314,7 +380,9 @@ def diff_snapshot(snapshot: Dict[str, Any],
             if key == "tainted" and not snapshot.get(
                     "tainted_counts_manual"):
                 continue        # pre-fix lock: its count missed them
-            if int(filed[key]) != int(cur[key]):
+            if key not in filed:
+                continue        # not recorded (hand-written lock)
+            if int(filed[key]) != int(cur.get(key) or 0):
                 lines.append(f"{acct}: {key} filed {filed[key]} -> now "
                              f"{cur[key]}")
     return lines

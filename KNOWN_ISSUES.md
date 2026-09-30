@@ -39,6 +39,11 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** `taxjson fx-cash` (`src/taxjson/bin/taxjson_fx_cash.py`) reconstructs foreign-cash ACB from the security cash flows in the taxable books, and its docstring assumes broker CSVs carry no explicit conversions — IB's do (this section), so on an IB account the ledger is asked to spend currency it saw acquired only through trades and overdrafts on the conversion side. Consuming Forex rows properly means booking each as a disposition of the sold currency at the conversion rate AND an acquisition of the bought one, together with the cash deposits/withdrawals the same statement lists — half of that (conversions only) would still overdraft.
 - **Evidence / work needed:** extend the fx-cash ledger to read Forex rows plus the `Deposits & Withdrawals` section as currency acquisitions/dispositions; until then the IB Forex count in the parse note is the size of the gap.
 
+### fx-cash: cash folded into a corporate-action sale leg is not ledgered
+- **Where:** `src/taxjson/bin/taxjson_fx_cash.py` — `_non_cash`.
+- **Current behavior:** rows emitted by the corp-actions stage (`corp_event_id` set: share-for-share mergers, taxable exchanges at FMV, spin-off ACB allocations) move no foreign cash and are left out of the s.39(1.1) ledger; so are crypto-for-crypto legs (Kraken swaps, Coinbase Convert) and staking rewards paid in a coin. A standalone cash-in-lieu leg is ledgered. Cash-in-lieu or §356 boot FOLDED into a taxable exchange's sale leg (`_emit_taxable_exchange`, `_emit_boot_exchange`) is not — the row does not say how much of its proceeds was cash. A cash takeover is a sale the broker parser books and is ledgered normally.
+- **Evidence / work needed:** emit the cash part of a taxable exchange as its own leg (or a `cash_amount` field) so the ledger can count it; the amounts are fractional-share dust in practice.
+
 ### Kraken fiat conversions are not modeled
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose BASE is fiat after stablecoin folding: `USD/CAD`, `USDC/USD`, `USDT/CAD`) and `_build_instant_trade` (a `spend`/`receive` pair whose both legs are fiat: USDC dust swept to USD, USD → CAD).
 - **Current behavior:** counted as recognized non-events (`forex conversion … not modeled — KNOWN_ISSUES`). Previously each emitted a BUYSELL of a phantom `USD` / `CAD` asset (the fiat base treated as the traded security), which put a fake position in the crypto book and a nonsense trade in the gains report.
@@ -166,6 +171,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ### Estimate classifies dividends by listing suffix
 - **Where:** `taxjson estimate` / `lib/tax_estimate.py`.
 - **Current behavior:** a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign (15% FTC assumed). A Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson scan` flags the cross-listing case. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
+
+### Estimate has no input for a minimum tax carryover
+- **Where:** `taxjson estimate` / `taxjson instalments` (`lib/tax_estimate.py`).
+- **Current behavior:** minimum tax (AMT) paid in the 7 preceding years is creditable against regular tax above the minimum (ITA s.120.2; T691 Part 8, T1 line 40427, and the provincial piggyback such as ON428 line 59). The estimate cannot take that carryover, so in a year where regular tax exceeds the minimum it overstates tax — and the current-year instalment basis, which uses total tax, overstates by the full credit. When AMT does not bind, the estimate prints a NOTE with the headroom a carryover could use.
+- **Workaround:** subtract the carryover you can apply (from your T691 / notice of assessment) by hand.
 
 ### Interest expense and carrying charges are not surfaced
 - **Where:** IB `INTEREST` rows keep their sign; `sum-income` nets debit against credit interest.

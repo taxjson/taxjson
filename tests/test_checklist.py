@@ -42,6 +42,9 @@ def _project(root: Path, *, activity_to="2026-02-02", with_reports=True):
     if with_reports:
         (root / "reports").mkdir()
         (root / "reports" / "margin.sum").write_text("DIAGNOSTICS\nvalidation: 0 error(s)\n")
+        # run-clean now requires a report for every account with inputs
+        # (S018-02) — a full run writes crypto.sum too.
+        (root / "reports" / "crypto.sum").write_text("DIAGNOSTICS\nvalidation: 0 error(s)\n")
 
 
 class FakeSub:
@@ -149,7 +152,10 @@ class TestDetectors(unittest.TestCase):
             root = Path(td); _project(root)
             self.assertEqual(cl.d_filed_lock(_ctx(root, {})).status, "todo")
             (root / "filed").mkdir(); (root / "filed" / "2025.json").write_text("{}")
-            self.assertEqual(cl.d_filed_lock(_ctx(root, {"check-filed": (1, "DRIFT", "")})).status, "attention")
+            # check-filed prints its drift report on stderr ("!! filed <y> DRIFTED");
+            # a non-zero exit WITHOUT one is a failed check, not drift (S031-21).
+            self.assertEqual(cl.d_filed_lock(_ctx(root, {"check-filed": (1, "", "  !! filed 2025 DRIFTED vs 2025.json:")})).status, "attention")
+            self.assertEqual(cl.d_filed_lock(_ctx(root, {"check-filed": (1, "", "taxjson_gains: error: argument --tax-date: invalid choice")})).status, "blocked")
             self.assertEqual(cl.d_filed_lock(_ctx(root, {})).status, "done")
             self.assertEqual(cl.d_lock_committed(_ctx(root, {})).status, "attention")  # not a repo
 
