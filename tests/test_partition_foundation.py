@@ -836,18 +836,33 @@ class TestEnginePartition(unittest.TestCase):
 
     @rule("CA-ACB-07")
     @rule_absent("CA-ACB-07", country="usa")
-    def test_roc_beyond_cost_is_a_gain_in_canada_only(self):
+    @rule("US-ROC-02", "US-ROC-03")
+    @rule_absent("US-ROC-03", country="canada")
+    def test_roc_beyond_cost_and_after_exit(self):
         book = [tx("BUYSELL", "2025-01-02", "DDD.US", 100, 1000),
                 tx("ADJUST", "2025-03-01", "DDD.US", 0, -1500, type="roc"),
                 tx("BUYSELL", "2025-04-01", "DDD.US", -100, 1200)]
         r = gains_both(book)
-        # Canada s.40(3): 500 deemed gain + 1200 on the sale (nil ACB).
-        self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 1700.0,
+        # Beyond the cost: a deemed gain in both countries — Canada
+        # s.40(3), the US §301(c)(3) (booked since partition phase B) —
+        # then 1200 on the sale at a nil/zero basis.
+        for c in C.COUNTRIES:
+            self.assertAlmostEqual(r[c]["summary"]["total_gain"], 1700.0,
+                                   places=2)
+            self.assertEqual([round(t["gain"], 2) for t in
+                              r[c]["transactions"] if t.get("deemed")],
+                             [500.0])
+        # Received with no shares held: Canada books it (s.40(3)); the
+        # US does not apply it (a warning: report by hand).
+        after = [tx("BUYSELL", "2025-01-02", "DDE.US", 100, 1000),
+                 tx("BUYSELL", "2025-03-01", "DDE.US", -100, 1200),
+                 tx("ADJUST", "2025-04-01", "DDE.US", 0, -300, type="roc")]
+        r = gains_both(after)
+        self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 500.0,
                                places=2)
-        # US: §301(c)(3) is not computed (warning only): the sale's basis
-        # floors at zero, no deemed row.
-        self.assertTrue(all(not t.get("deemed")
-                            for t in r["usa"]["transactions"]))
+        self.assertAlmostEqual(r["usa"]["summary"]["total_gain"], 200.0,
+                               places=2)
+        self.assertIn("no open long lots", r["usa"]["_stderr"])
 
     @rule("US-WASH-05")
     @rule_absent("US-WASH-05", country="canada")

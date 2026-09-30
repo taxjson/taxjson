@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **US: a return of capital beyond basis is booked (§301(c)(3)).** It
+  was a warning only, and the excess came back as extra gain when the
+  shares were sold — right total, wrong year. Now the part beyond each
+  lot's basis is a capital gain on the distribution date (short- or
+  long-term by that lot's holding period) and the basis stays at zero;
+  Form 8949 describes the row as a nondividend distribution in excess of
+  basis. A return of capital received with no shares held is still a
+  warning (report it by hand). tax-logic US-ROC-01/02/03.
 - **Shared helpers no longer carry one country's law.** The warrant /
   right replacement warning said "the loss may be superficial" in US runs
   (now "may be a wash sale"); the §355 tax-free spin-off could book

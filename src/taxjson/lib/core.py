@@ -4394,9 +4394,12 @@ class USATaxRules(TaxRules):
             # delta in net_amount, no share movement. US treatment (IRC
             # §301(c)(2), Pub 550): a nondividend distribution reduces
             # stock basis — apportioned per share across the open long
-            # lots. Excess over basis is capital gain in the distribution
-            # year (§301(c)(3)), which — like Canada's s.40(3) — is
-            # flagged for manual reporting, not silently computed.
+            # lots. The excess of a lot's share over its basis is capital
+            # gain in the distribution year (§301(c)(3)): booked as a
+            # deemed row per lot (term from that lot's holding period)
+            # and the lot's basis stays at zero (tax-logic US-ROC-02;
+            # it used to be a warning only, and the excess came back as
+            # extra gain at the sale — right total, wrong year).
             # Before this branch, ADJUST rows fell through to the
             # qty-epsilon skip below and were silently dropped, leaving
             # lot basis unreduced and understating gains at sale.
@@ -4415,7 +4418,7 @@ class USATaxRules(TaxRules):
                     continue
                 delta = D(tx.net_amount)
                 applied = Decimal(0)
-                went_negative = False
+                excess_total = Decimal(0)
                 for i, lot in enumerate(lots):
                     if i == len(lots) - 1:
                         # Last lot absorbs the division remainder so the
@@ -4426,17 +4429,56 @@ class USATaxRules(TaxRules):
                     lot['cost_basis'] += share
                     applied += share
                     if lot['cost_basis'] < D('-0.005'):
-                        went_negative = True
-                if went_negative:
+                        # §301(c)(3): the part beyond this lot's basis is
+                        # gain now; the basis stays at zero.
+                        excess = -lot['cost_basis']
+                        lot['cost_basis'] = Decimal(0)
+                        excess_total += excess
+                        _acq = lot.get('effective_acq_date', lot['date'])
+                        try:
+                            _held = (datetime.strptime(tx.date, '%Y-%m-%d')
+                                     - datetime.strptime(_acq, '%Y-%m-%d')
+                                     ).days
+                        except ValueError:
+                            _held = 0
+                        _x = float(excess)
+                        realized_gains.append({
+                            'date': tx.date,
+                            'date_settle': tx.date_settle or tx.date,
+                            'symbol': symbol, 'qty': 0.0,
+                            'cost': 0.0, 'proceeds': _x,
+                            'gain': _x, 'raw_gain': _x,
+                            'disallowed_amount': 0.0,
+                            'permanently_disallowed': 0.0,
+                            'replacement_lot_ids': [],
+                            'days_held': max(0, _held),
+                            'acquired_date': lot['date'],
+                            'account': tx.account,
+                            'currency': tx.currency,
+                            'commission': 0.0, 'fee': 0.0,
+                            'is_wash_sale': False,
+                            'is_option': is_option_symbol(symbol),
+                            'id': tx.id, 'trace': [],
+                            'direction': 'LONG',
+                            'term': ('LONG_TERM'
+                                     if held_more_than_one_year(_acq,
+                                                                tx.date)
+                                     else 'SHORT_TERM'),
+                            'wash_trigger': None, 'wash_window': None,
+                            'wash_replacements': None,
+                            'tainted': bool(lot.get('tainted')),
+                            'deemed': True,
+                            'note': ('DEEMED GAIN — nondividend '
+                                     'distribution in excess of basis '
+                                     '(§301(c)(3)); basis reset to zero'),
+                        })
+                if excess_total > D('0.005'):
                     print(
-                        f"warning: {symbol} lot basis went NEGATIVE after "
-                        f"ADJUST on {tx.date} — under IRC §301(c)(3) the "
-                        f"excess of a nondividend distribution over basis "
-                        f"is capital gain in that year, which this engine "
-                        f"does NOT compute. Verify the ROC amounts and "
-                        f"report the deemed gain manually.",
-                        file=sys.stderr,
-                    )
+                        f"NOTE: {symbol}: nondividend distribution on "
+                        f"{tx.date} exceeded the basis by "
+                        f"{float(excess_total):.2f} — booked as capital "
+                        f"gain in that year (§301(c)(3)); the basis is "
+                        f"zero.", file=sys.stderr)
                 if trace:
                     symbol_traces[symbol].append(
                         f"# {tx.date} ADJUST   {tx.net_amount:10.4f} | "

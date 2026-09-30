@@ -132,6 +132,7 @@ PARTITION_RULES = frozenset({
     "US-FUT-01",       # futures P/L FIFO
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
+    "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
 })
 
 
@@ -621,6 +622,18 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-HOLD-03", "A stand-alone short sale is short-term.",
                  cont=True),
+            Rule("US-ROC-01",
+                 "A return of capital (nondividend distribution, "
+                 "§301(c)(2)) lowers the basis of the shares held, pro rata "
+                 "over the open lots, for every issuer."),
+            Rule("US-ROC-02",
+                 "The part beyond a lot's basis is a capital gain in the "
+                 "year received (§301(c)(3)), short- or long-term by that "
+                 "lot's holding period; the basis stays at zero.",
+                 cont=True),
+            Rule("US-ROC-03",
+                 "Received with no shares held, it is not applied: taxjson "
+                 "warns, and you report it by hand.", cont=True),
             Rule("US-BASIS-04",
                  "Shares with missing buy history go in phantoms.json: "
                  "sales that draw on them are listed for manual reporting "

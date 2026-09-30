@@ -359,6 +359,7 @@ class TestUsEngineRocAdjust(unittest.TestCase):
             res = USATaxRules().compute_gains(txs)
         return res, err.getvalue()
 
+    @rule("US-ROC-01")
     def test_roc_reduces_basis_before_sale(self):
         res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
@@ -402,18 +403,37 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         self.assertEqual(len(inv), 1)
         self.assertAlmostEqual(inv[0]['total_cost'], 5700.0, places=2)
 
-    def test_negative_lot_basis_flags_301c3(self):
-        _, err = self._run([
+    @rule("US-ROC-02")
+    def test_excess_over_basis_is_a_gain_in_the_distribution_year(self):
+        # §301(c)(3): 1,200 on a 1,000 basis -> 200 capital gain on the
+        # distribution date (short-term: held < 1 year), basis zero, so
+        # the later sale's gain is its whole proceeds.
+        res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
             self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-1200.0,
                      type='roc'),
+            self._tx(action='BUYSELL', date='2026-03-02', symbol='PRFD.US',
+                     quantity=-100, currency='USD', price=3.0,
+                     net_amount=300.0),
         ])
-        self.assertIn("NEGATIVE", err)
         self.assertIn("301(c)(3)", err)
+        deemed = [g for g in res['transactions'] if g.get('deemed')]
+        self.assertEqual([(g['date'], round(g['gain'], 2), g['term'],
+                           g['acquired_date']) for g in deemed],
+                         [('2025-06-30', 200.0, 'SHORT_TERM', '2025-01-10')])
+        sale = [g for g in res['transactions'] if g.get('qty')]
+        self.assertAlmostEqual(sale[0]['cost'], 0.0, places=2)
+        self.assertAlmostEqual(sale[0]['gain'], 300.0, places=2)
+        # Form 8949 names it for what it is (no shares were sold).
+        from taxjson.bin.taxjson_form_export import build_8949
+        text = repr(build_8949(deemed))
+        self.assertIn("nondividend distribution in excess of basis", text)
+        self.assertIn("200.0", text)
 
+    @rule("US-ROC-03")
     def test_roc_after_full_exit_warns_and_skips(self):
         res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
