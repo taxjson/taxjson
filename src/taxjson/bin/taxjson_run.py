@@ -6348,6 +6348,39 @@ def cmd_tax_logic(args: argparse.Namespace) -> None:
     print(render(country, settings))
 
 
+def cmd_spinoffs(args: argparse.Namespace) -> None:
+    """`taxjson spinoffs`: every spin-off, its election, the value per
+    share used and what was booked (lib/corp_views). Exit 1 when one
+    needs attention (zero value, no election, ignored)."""
+    from taxjson.lib.corp_views import render_spinoffs, spinoffs
+    root = Path(args.dir).resolve()
+    items = spinoffs(root, load_config(root), args.account)
+    if getattr(args, "json", False):
+        _json_out({"spinoffs": items})
+    else:
+        for ln in render_spinoffs(items):
+            print(ln)
+    if any(s["flags"] and not s["sheltered"] for s in items):
+        raise SystemExit(1)
+
+
+def cmd_splits(args: argparse.Namespace) -> None:
+    """`taxjson splits`: every split, consolidation and rename in the
+    books with holdings before and after, flagging a split applied twice,
+    a no-op row and a fractional result (lib/corp_views). Exit 1 on a
+    likely double application."""
+    from taxjson.lib.corp_views import render_splits, splits
+    root = Path(args.dir).resolve()
+    items = splits(root, load_config(root), args.account)
+    if getattr(args, "json", False):
+        _json_out({"splits": items})
+    else:
+        for ln in render_splits(items):
+            print(ln)
+    if any("TWICE?" in s["flags"] for s in items):
+        raise SystemExit(1)
+
+
 def cmd_check_dates(args: argparse.Namespace) -> None:
     """`taxjson check-dates`: every trade and settlement date the parsers
     produced, checked against the trading calendar of what was traded
@@ -10311,6 +10344,24 @@ def main() -> None:
     p_cd.add_argument("--json", action="store_true",
                       help="Emit JSON instead of text")
     p_cd.set_defaults(func=cmd_check_dates)
+
+    p_spin = sub.add_parser(
+        "spinoffs",
+        help="Every spin-off: election, value per share used, income and "
+             "new-share cost booked; flags a zero value or missing election")
+    p_spin.add_argument("account", nargs="?", help="Account (default: all)")
+    p_spin.add_argument("--json", action="store_true",
+                        help="Emit JSON instead of text")
+    p_spin.set_defaults(func=cmd_spinoffs)
+
+    p_split = sub.add_parser(
+        "splits",
+        help="Every split, consolidation and rename with holdings before "
+             "and after; flags a split applied twice or a fractional result")
+    p_split.add_argument("account", nargs="?", help="Account (default: all)")
+    p_split.add_argument("--json", action="store_true",
+                         help="Emit JSON instead of text")
+    p_split.set_defaults(func=cmd_splits)
 
     p_logic = sub.add_parser(
         "tax-logic",

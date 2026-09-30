@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
+  election, the value per share used and what was booked (income and the
+  new shares' cost), flagging a taxable spin-off booked at $0 and showing
+  the broker's own value when it reported one; every split,
+  consolidation and rename with holdings before and after, flagging a
+  split recorded twice, a no-op row and a fractional result.
 - **`taxjson check-dates`.** Every trade and settlement date the parsers
   produced, checked against the calendar of what was traded: crypto 24/7,
   futures 23/5 (Sunday evening to Friday), US stocks on exchange days plus
