@@ -32,7 +32,7 @@ from pathlib import Path
 
 from taxjson.lib.core import (register_brokerage, TaxTransaction,
                               load_brokerage, is_option_symbol)
-from taxjson.lib.brokerages.base import BrokerageParseError
+from taxjson.lib.brokerages.base import BaseBrokerage, BrokerageParseError
 from taxjson.lib.brokerages.schema import validate_transactions
 from taxjson.lib.brokerages import ib_extractor
 from taxjson.lib.brokerages import questrade
@@ -329,6 +329,7 @@ Examples:
             print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
             sys.exit(1)
 
+    parsed_files = []
     for input_path in input_paths:
         # Fresh extractor per file so any extractor-level state (e.g.
         # IB's `unhandled_ca_tickers` warning bucket) doesn't bleed
@@ -342,7 +343,6 @@ Examples:
             extractor.futures_settle = args.futures_settle
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
-        _kept_this_file = 0     # TRANSFER evidence rows set aside below
         try:
             transactions = extractor.parse_file(input_path)
         except csv.Error as e:
@@ -363,6 +363,21 @@ Examples:
             print(f"taxjson-brokerage: error: {input_path.name}: {e}",
                   file=sys.stderr)
             sys.exit(1)
+        parsed_files.append((input_path, extractor, transactions))
+
+    # An option trade on its expiry day is clamped to the expiry by each
+    # parser — but only against the expiry rows of ITS file. The expiry
+    # of a Dec-31 0DTE contract posts the next business day, i.e. in the
+    # NEXT yearly export, so the clamp runs again over all of the
+    # account's files (audit S055-22).
+    _all_expiries = [e for _, _ex, _ in parsed_files
+                     for e in getattr(_ex, 'expiry_rows', None) or ()]
+    if len(parsed_files) > 1 and _all_expiries:
+        BaseBrokerage.clamp_settlement_across(
+            [t for _, _, _txs in parsed_files for t in _txs], _all_expiries)
+
+    for input_path, extractor, transactions in parsed_files:
+        _kept_this_file = 0     # TRANSFER evidence rows set aside below
 
         # Correct mislabeled tickers FIRST — before the TRANSFER rows
         # are set aside (the sidecar used to keep the un-overridden

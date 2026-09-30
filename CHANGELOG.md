@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Settle dates that pair across legs and files.** An IB assignment's
+  option leg now settles with its stock leg (before the 2024 T+1 cutover
+  the option settled a day earlier, and a same-day trade could consume
+  the premium), and a Dec-31 0DTE option trade is clamped to its expiry
+  even when the expiry row sits in the next yearly export (audit S058-01,
+  S055-22).
 - **IB security identity across statements and issuers.** Income is
   moved to the held listing of its ticker only when the ISINs match (an
   AT&T dividend no longer lands on Telus `T.TO`), and the holding may

@@ -671,9 +671,20 @@ class BaseBrokerage:
             return exp.strftime("%Y-%m-%d")
         return posting_iso
 
-    @staticmethod
-    def clamp_settlement_to_expiry(transactions: List[Dict[str, Any]],
+    def clamp_settlement_to_expiry(self, transactions: List[Dict[str, Any]],
                                    expiries: List[Dict[str, Any]]) -> None:
+        """Clamp this file's trades (see `clamp_settlement_across`) and
+        remember the expiry rows: taxjson-brokerage re-runs the clamp over
+        ALL of an account's files, so a Dec-31 0DTE trade whose expiry row
+        sits in the NEXT yearly export (Questrade/RBC/Webull post it the
+        next business day) is clamped too (audit S055-22)."""
+        self.expiry_rows = list(getattr(self, 'expiry_rows', [])) + list(
+            expiries)
+        self.clamp_settlement_across(transactions, expiries)
+
+    @staticmethod
+    def clamp_settlement_across(transactions: List[Dict[str, Any]],
+                                expiries: List[Dict[str, Any]]) -> None:
         """An option expiry has no settlement cycle: the contract ceases
         to exist on its expiry date, so the expiry row is booked with
         date_settle == date (parsers set that themselves). A trade in
@@ -685,7 +696,7 @@ class BaseBrokerage:
         followed by a buy-to-close, and a Dec-31 0DTE trade's settle
         crossed the tax year while its expiry did not. Clamp such a
         trade's settle to the expiry date (never before its own trade
-        date). Only contracts with an expiry row in this file are
+        date). Only contracts with an expiry row in `expiries` are
         touched; everything else keeps its broker/computed settle.
 
         Mutates `transactions` in place."""

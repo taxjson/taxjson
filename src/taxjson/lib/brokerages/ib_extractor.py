@@ -1037,6 +1037,10 @@ class IbBrokerage(BaseBrokerage):
         # same-contract trades whose T+1 settle falls after the expiry
         # (BaseBrokerage.clamp_settlement_to_expiry).
         expiry_txs: List[Dict[str, Any]] = []
+        # Assignment / exercise legs: the option side (ASSIGN) and the
+        # stock side (a BUYSELL coded A or Ex), paired after the loop.
+        assign_option_legs: List[Dict[str, Any]] = []
+        assign_stock_legs: List[Dict[str, Any]] = []
 
         # `Transaction Fees` rows (UK Stamp Tax, SEC/FINRA-style
         # levies) are a per-fill BREAKDOWN of charges IB ALREADY
@@ -1530,6 +1534,11 @@ class IbBrokerage(BaseBrokerage):
                 transactions.append(_trade_tx)
                 if is_expiry:
                     expiry_txs.append(_trade_tx)
+                if action == 'ASSIGN' and asset_cat == 'Equity and Index Options':
+                    assign_option_legs.append(_trade_tx)
+                elif (asset_cat in ('Stocks', 'Warrants')
+                      and ('A' in code_tokens or 'Ex' in code_tokens)):
+                    assign_stock_legs.append(_trade_tx)
                 # Cash Report: futures settle daily through "Cash
                 # Settling MTM", never through Trades (Sales/Purchase).
                 if asset_cat != 'Futures':
@@ -2852,6 +2861,23 @@ class IbBrokerage(BaseBrokerage):
                       f"this statement confirms that listing. Check the "
                       f"symbol (a ticker.map rule fixes it).",
                       file=sys.stderr)
+
+        # An assignment's option leg settles with its STOCK leg: the
+        # premium rolls into the delivered shares, so the pair must share
+        # a settle date or an unrelated same-underlying trade sorting
+        # between them consumes the staged premium. Before the T+1
+        # cutover the option class settled T+1 and the stock T+2 (audit
+        # S058-01). Cash-settled contracts have no stock leg: unchanged.
+        _stock_by_key = {}
+        for _st in assign_stock_legs:
+            _root, _ext = _split_known_ext(_st['symbol'])
+            _stock_by_key.setdefault((_root, _ext, _st['date']), _st)
+        for _ol in assign_option_legs:
+            _om = re.match(r'^(.+?)\d{6}[CP]\d{8}\.(\w+)$', _ol['symbol'])
+            _st = (_stock_by_key.get((_om.group(1), _om.group(2),
+                                      _ol['date'])) if _om else None)
+            if _st is not None:
+                _ol['date_settle'] = _st['date_settle']
 
         self.clamp_settlement_to_expiry(transactions, expiry_txs)
 

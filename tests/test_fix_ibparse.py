@@ -715,5 +715,49 @@ class TestIbStockSymbolAliases(unittest.TestCase):
         self.assertIn('GLOBAL', err)
 
 
+# ------------------------------------------------ settlement pairing
+class TestIbAssignLegsShareASettleDate(unittest.TestCase):
+    """S058-01: before the T+1 cutover the option leg settled T+1 and
+    the stock leg T+2, so a same-day trade could consume the premium."""
+
+    def test_pre_cutover_option_leg_takes_the_stock_leg_settle(self):
+        body = (HEAD + TRADES_H
+                + _trade('QZX 16JUN23 50 P', '2023-06-16, 16:20:00', 1, 0, 0,
+                         0, code='A;C', cat='Equity and Index Options',
+                         cur='CAD')
+                + _trade('QZX', '2023-06-16, 16:20:00', 100, 50, -5000, 0,
+                         code='A;O', cur='CAD'))
+        _, txs, _ = _parse_ib(body)
+        leg = next(t for t in txs if t['action'] == 'ASSIGN')
+        stock = next(t for t in txs if t['action'] == 'BUYSELL')
+        self.assertEqual(stock['date_settle'], '2023-06-20')
+        self.assertEqual(leg['date_settle'], '2023-06-20')
+
+
+WB_HEAD = (',,,,,,,,,\n'
+           '"Currency\nDevise",Date,"Action Code\nCode d\'action","Symbol\n'
+           'Symbole","Security Description\nDescription des titres",'
+           'Type Code of Securities Code de genre de titres,"Quantity of '
+           'Securities Quantité\nde titres","Price\nPrix",,Proceeds of '
+           'Disposition or Settlement Amount Produits de disposition\n'
+           ',,,,,,,,,\n')
+
+
+class TestExpiryClampAcrossFiles(unittest.TestCase):
+    """S055-22: a Dec-31 0DTE trade was clamped to its expiry only when
+    the expiry row sat in the same yearly export."""
+
+    def test_expiry_in_the_other_export_still_clamps(self):
+        a = WB_HEAD + 'USD,31-12-2025,SELL,,CALL QZQ12/31/25 511,,-4,,,\n'
+        b = (WB_HEAD + 'USD,02-01-2026,BUY,,CALL QZQ12/31/25 511,,4,2.35,,'
+                       '(943.96)\n')
+        rc, out, err, _ = _brokerage_cli({'wb_2025.csv': a, 'wb_2026.csv': b},
+                                         brokerage='webull')
+        self.assertEqual(rc, 0, err)
+        buy = next(t for t in out['transactions'] if t['quantity'] == 4)
+        self.assertEqual(buy['date'], '2025-12-31')
+        self.assertEqual(buy['date_settle'], '2025-12-31')
+
+
 if __name__ == '__main__':
     unittest.main()
