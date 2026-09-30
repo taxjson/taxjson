@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Same-moment replacements: taxable first, then registered.** When a
+  taxable rebuy and a TFSA/RRSP buy carried the same timestamp (common
+  with Webull and Questrade stamps), a hash of the rows decided whether
+  a superficial loss was deferred into the taxable ACB or lost for good,
+  so a one-cent change on the TFSA row could move the taxable gain.
+  At a tie the taxable acquisition now takes the denial first, then
+  sheltered, then affiliated accounts (both engines; `taxjson
+  tax-logic` lists the rule).
 - **Moving shares between your own registered accounts no longer flips
   a superficial loss.** A custody move such as rrsp -> rrsp2 was netted
   out of the superficial-loss context, but the "still held at day 30"

@@ -161,5 +161,56 @@ class TestOwnRegisteredMoveKeepsHolderBalances(unittest.TestCase):
         self.assertAlmostEqual(g, 0.0, places=2)
 
 
+class TestSameStampTaxableBeforeRegistered(unittest.TestCase):
+    """S018-06: a taxable rebuy and a TFSA buy at the SAME timestamp were
+    ordered by the rows' content-hash id, so a one-cent change in the
+    TFSA price decided whether the superficial loss was deferred into
+    the taxable ACB or lost for good. At a tie the taxpayer's own
+    (taxable) acquisition now comes first, then registered, then
+    affiliated accounts — by account label, never by hash."""
+
+    def _run(self, engine, sfx, cur, p):
+        taxable = [
+            _tx(action='BUYSELL', date='2025-01-06', time='09:30:00',
+                symbol=f'XYZ.{sfx}', quantity=100.0, price=20.0,
+                net_amount=2000.0, currency=cur),
+            _tx(action='BUYSELL', date='2025-03-03', time='09:30:00',
+                symbol=f'XYZ.{sfx}', quantity=-100.0, price=10.0,
+                net_amount=1000.0, currency=cur),
+            _tx(action='BUYSELL', date='2025-03-10', time='09:30:00',
+                symbol=f'XYZ.{sfx}', quantity=100.0, price=10.5,
+                net_amount=1050.0, currency=cur),
+            _tx(action='BUYSELL', date='2025-06-02', time='09:30:00',
+                symbol=f'XYZ.{sfx}', quantity=-100.0, price=12.0,
+                net_amount=1200.0, currency=cur),
+        ]
+        tfsa = [
+            _tx(action='BUYSELL', date='2025-03-10', time='09:30:00',
+                symbol=f'XYZ.{sfx}', quantity=100.0, price=p,
+                net_amount=round(100 * p, 2), currency=cur,
+                account='tfsa'),
+        ]
+        res = engine().compute_gains(taxable, sheltered_transactions=tfsa)
+        gain = sum((g.get('gain') if g.get('gain') is not None
+                    else g.get('raw_gain') or 0.0)
+                   for g in res['transactions']
+                   if g.get('raw_gain') is not None)
+        perm = sum(g.get('permanently_disallowed') or 0.0
+                   for g in res['transactions'])
+        return round(gain, 2), round(perm, 2)
+
+    def test_canada_same_stamp_is_deferred_whatever_the_price(self):
+        seen = {self._run(CanadaTaxRules, 'TO', 'CAD', p / 100)
+                for p in range(1045, 1065)}
+        self.assertEqual(seen, {(-850.0, 0.0)},
+                         "the row hash decided deferral vs permanent")
+
+    def test_usa_same_stamp_is_deferred_whatever_the_price(self):
+        seen = {self._run(USATaxRules, 'US', 'USD', p / 100)[1]
+                for p in range(1045, 1065)}
+        self.assertEqual(seen, {0.0},
+                         "the row hash decided deferral vs permanent")
+
+
 if __name__ == '__main__':
     unittest.main()

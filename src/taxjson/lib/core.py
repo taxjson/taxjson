@@ -2374,6 +2374,10 @@ class CanadaTaxRules(TaxRules):
                     if t.id in sheltered_ids or t.id in affiliated_ids:
                         return ('other', t.account)
                     return ('taxable',)
+
+                def _holder_rank(t):
+                    return (2 if t.id in affiliated_ids
+                            else 1 if t.id in sheltered_ids else 0)
                 _bal_end_h: Dict[Any, float] = {}
                 for t in current_tx_list:
                     if (alias_of(t.symbol) == loss_alias
@@ -2465,11 +2469,25 @@ class CanadaTaxRules(TaxRules):
                                  if _ev_key(t) > _loss_key]
                     pre_loss = [t for t in potential_triggers
                                 if t not in post_loss]
-                    ordered = (sorted(post_loss,
-                                      key=lambda x: (_ev_key(x), x.id))
-                               + sorted(pre_loss,
-                                        key=lambda x: (_ev_key(x), x.id),
-                                        reverse=True))
+                    # Triggers at the SAME moment have no acquisition
+                    # order. The tie goes to the taxpayer's own (taxable)
+                    # acquisition first, then registered, then
+                    # affiliated accounts, then by account label — never
+                    # by the rows' content-hash id, which let a one-cent
+                    # change on a TFSA row flip a deferral into a
+                    # permanent denial (audit S018-06). Rationale: the
+                    # denial is permanent only for property an
+                    # affiliated person acquires (s.40(2)(g)(i)); with
+                    # no order between the two acquisitions the
+                    # taxpayer's own substituted property is the one
+                    # s.53(1)(f) reaches first.
+                    def _tie(x):
+                        return (_holder_rank(x), x.account or '',
+                                x.id or '')
+                    ordered = (sorted(sorted(post_loss, key=_tie),
+                                      key=_ev_key)
+                               + sorted(sorted(pre_loss, key=_tie),
+                                        key=_ev_key, reverse=True))
                     per_share_loss = loss['loss_amount'] / loss['qty']
                     allocations = []      # (trigger, qty, amount)
                     perm_amt = 0.0
@@ -3548,8 +3566,15 @@ class USATaxRules(TaxRules):
             # deferred loss + holding period was effectively random — and a
             # sheltered same-date lot could beat an earlier-acquired taxable
             # one, flipping a deferral into a permanent denial. Tie-break by
-            # intra-day time, then id for determinism.
-            out.sort(key=lambda r: (r['date'], r['tx'].time or '', r['tx'].id))
+            # intra-day time; at the SAME moment the taxpayer's own
+            # (taxable) lot first, then sheltered, then affiliated, then
+            # by account label — never by the content-hash id alone,
+            # which let a one-cent change on an IRA row flip a deferral
+            # into a permanent denial (audit S018-06).
+            out.sort(key=lambda r: (r['date'], r['tx'].time or '',
+                                    2 if r['is_affiliated']
+                                    else 1 if r['is_sheltered'] else 0,
+                                    r['tx'].account or '', r['tx'].id))
             return out
 
         # === MAIN PASS ===
