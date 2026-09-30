@@ -8239,6 +8239,14 @@ def _check_filed_years(root: Path, cache: Path,
     for year, path in snaps:
         snap = _json.loads(path.read_text(encoding="utf-8"))
         _snap_accts = list(snap.get("accounts", {}))
+        # Taxable accounts the BOOKS have but the lock does not (added
+        # or renamed after close-year) are recomputed too — in the same
+        # blend — so diff_snapshot can report them instead of saying OK.
+        _snap_accts += sorted(
+            a for a, c in _acct_cfg.items()
+            if isinstance(c, dict) and c.get("type") == "taxable"
+            and a not in _snap_accts
+            and (cache / f"{a}_base.json").exists())
         _crypto = [a for a in _snap_accts
                    if (_acct_cfg.get(a) or {}).get("crypto")]
         _equity = [a for a in _snap_accts if a not in _crypto]

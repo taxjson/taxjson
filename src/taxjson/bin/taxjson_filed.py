@@ -259,12 +259,36 @@ def recompute_year(cache: Path, account: str, year: int,
 def diff_snapshot(snapshot: Dict[str, Any],
                   recomputed: Dict[str, Optional[Dict[str, Any]]]
                   ) -> List[str]:
-    """Human-readable drift lines ([] == clean)."""
+    """Human-readable drift lines ([] == clean).
+
+    Covers BOTH directions: a locked account the books no longer have
+    (missing book), and an account in `recomputed` that the lock does
+    not list but that has activity in the filed year (added after
+    close-year, renamed, or left out) — its dispositions were never on
+    the locked totals, so check-filed must not say OK."""
     lines: List[str] = []
-    for acct, filed in sorted(snapshot.get("accounts", {}).items()):
+    locked = snapshot.get("accounts", {})
+    for acct, cur in sorted(recomputed.items()):
+        if acct in locked or cur is None:
+            continue
+        active = (int(cur.get("dispositions") or 0)
+                  or int(cur.get("tainted") or 0)
+                  or any(abs(float(cur.get(k) or 0.0)) > _TOL
+                         for k in ("realized", "disallowed", "income",
+                                   "proceeds")))
+        if active:
+            lines.append(
+                f"{acct}: in the books but not in the filed lock — "
+                f"{int(cur.get('dispositions') or 0)} disposition(s), "
+                f"realized {float(cur.get('realized') or 0.0):,.2f}, "
+                f"income {float(cur.get('income') or 0.0):,.2f} "
+                f"(added or renamed after close-year?)")
+    for acct, filed in sorted(locked.items()):
         cur = recomputed.get(acct)
         if cur is None:
-            lines.append(f"{acct}: could not recompute (missing book)")
+            lines.append(f"{acct}: in the filed lock but could not "
+                         f"recompute (missing book — account renamed "
+                         f"or removed?)")
             continue
         for key in ("realized", "disallowed", "income", "proceeds",
                     "st_gain", "lt_gain"):

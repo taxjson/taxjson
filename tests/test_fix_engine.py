@@ -274,5 +274,55 @@ class TestPhantomsNameUnknownAccount(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
 
 
+class TestCheckFiledSeesAccountsOutsideTheLock(unittest.TestCase):
+    """diff_snapshot only walked the lock's accounts: a taxable account
+    added to the books after close-year was never recompared, and
+    check-filed said OK."""
+
+    def test_new_taxable_account_with_year_activity_is_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            margin = [
+                "BUYSELL 2025-02-03 10:00:00 XEI.TO 100 CAD 20.00 2000.00 0",
+                "BUYSELL 2025-05-01 10:00:00 XEI.TO -100 CAD 25.00 2500.00 0",
+            ]
+            _project(root, {"margin": "taxable"}, {"margin": margin},
+                     extra_settings="option_grant_timing_since = 2025\n")
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = _run_cli(root, "close-year")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = _run_cli(root, "check-filed")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            # A second taxable account appears after filing.
+            _project(root, {"margin": "taxable", "cash2": "taxable"},
+                     {"margin": margin, "cash2": [
+                         "BUYSELL 2025-03-03 10:00:00 ABC.TO 10 CAD 10.00 100.00 0",
+                         "BUYSELL 2025-04-01 10:00:00 ABC.TO -10 CAD 30.00 300.00 0",
+                     ]}, extra_settings="option_grant_timing_since = 2025\n")
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = _run_cli(root, "check-filed")
+        self.assertEqual(r.returncode, 1,
+                         "an account outside the lock was never compared")
+        self.assertIn("cash2", r.stdout + r.stderr)
+        self.assertIn("not in the filed lock", r.stdout + r.stderr)
+
+    def test_diff_snapshot_lists_both_directions(self):
+        from taxjson.bin.taxjson_filed import diff_snapshot
+        agg = {"realized": 0.0, "disallowed": 0.0, "dispositions": 0,
+               "income": 0.0, "tainted": 0, "proceeds": 0.0,
+               "st_gain": 0.0, "lt_gain": 0.0}
+        snap = {"accounts": {"a": dict(agg), "gone": dict(agg)}}
+        rec = {"a": dict(agg), "gone": None,
+               "new": dict(agg, realized=200.0, dispositions=1,
+                           proceeds=300.0),
+               "idle": dict(agg)}
+        lines = diff_snapshot(snap, rec)
+        self.assertTrue(any(l.startswith("gone:") for l in lines), lines)
+        self.assertTrue(any(l.startswith("new:") for l in lines), lines)
+        self.assertFalse(any(l.startswith("idle:") for l in lines), lines)
+
+
 if __name__ == '__main__':
     unittest.main()

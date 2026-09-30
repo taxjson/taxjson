@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`check-filed` compares every taxable account, not only the locked
+  ones.** An account added (or renamed) after `close-year` was never
+  recomputed, so its dispositions were missing from the comparison and
+  the check said OK. It is now recomputed in the same blend and reported
+  as drift when it has activity in the filed year.
 - **`phantoms.json` entries for an unknown account stop the run.** The
   file is keyed by account name, so renaming an account silently dropped
   its openings and changed the filed gain. `taxjson run` now names each
