@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A crypto `gift` saved in sends.json is refused in a US project when
+  the .tt is written, not only at `--set`.** A decision carried over
+  from a Canada project, copied or hand-edited was written to
+  crypto_sends.tt as a sale at fair value under the Canadian rule and
+  landed on Form 8949. Now it is never written; `crypto-sends --write`
+  and `taxjson run` stop naming the send, the listing marks it REFUSED
+  and the checklist flags it. The generated file's header cites only the
+  project country's rule.
+- **A crypto send booked twice is easier to spot.** The warning when a
+  hand-written .tt already sells what crypto_sends.tt sells now names
+  both files (with the line number), the coin, quantity and timestamp,
+  and says how to keep either line; it searches every account's inputs.
+  Nothing is deleted.
 - **Standalone `taxjson-brokerage` no longer applies Canadian law by
   default.** Its `--foreign-roc` defaulted to `dividend` (ITA s.90(2)),
   so the documented manual pipeline for a US book turned a US issuer's

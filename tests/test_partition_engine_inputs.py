@@ -340,5 +340,90 @@ class TestStandaloneBrokerageRoc(unittest.TestCase):
         self.assertIn("s.90(2)", r.stderr)
 
 
+# ------------------------------------------------------ SPEC-01 / INPUTS-04
+class TestSavedCryptoGift(unittest.TestCase):
+    """A `gift` already saved in sends.json (carried over from a Canada
+    project, copied, hand-edited) is booked as a sale in Canada and
+    refused at WRITE time in a US project — not only at --set."""
+
+    @rule("CA-CRYPTO-05")
+    @rule_absent("CA-CRYPTO-05", country="usa")
+    @rule("US-SEND-02")
+    @rule_absent("US-SEND-02", country="canada")
+    def test_saved_gift_by_country(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from test_fix_sends import TAO_ID, _cli, _project
+        out = {}
+        for c in C.COUNTRIES:
+            with tempfile.TemporaryDirectory() as td:
+                root, home = _project(td, country=c)
+                if c == "usa":
+                    (root / "taxjson.toml").write_text(
+                        '[settings]\nyear = 2026\ncountry = "usa"\n'
+                        'base_currency = "USD"\nsource_currencies = []\n'
+                        '[accounts.crypto]\ntype = "taxable"\n'
+                        'crypto = true\n')
+                    (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
+                r = _cli(root, home, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                # The decision as a carried-over / hand-edited manifest.
+                man = root / "inputs" / "crypto" / "sends.json"
+                man.write_text(json.dumps(
+                    {"sends": {TAO_ID: {"decision": "gift"}}}))
+                w = _cli(root, home, "crypto-sends", "crypto", "--write")
+                tt = root / "inputs" / "crypto" / "crypto_sends.tt"
+                body = tt.read_text() if tt.exists() else ""
+                run = _cli(root, home, "run", "--no-input")
+                chk = _cli(root, home, "crypto-sends", "crypto")
+                out[c] = (w, body, run, chk)
+        w, body, run, _ = out["canada"]
+        self.assertEqual(w.returncode, 0, w.stderr)
+        self.assertIn("TAO -0.1 CAD", body)
+        self.assertIn("ITA s.69(1)(b)", body)
+        self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+        w, body, run, chk = out["usa"]
+        self.assertNotEqual(w.returncode, 0)
+        self.assertIn("not a sale for a US donor", w.stderr)
+        self.assertNotIn("TAO -0.1", body)
+        self.assertNotIn("s.69", body)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn(TAO_ID, run.stderr)
+        self.assertIn("REFUSED", chk.stdout)
+
+
+class TestCryptoSendBookedTwice(unittest.TestCase):
+    """A send booked by a hand-written .tt AND the generated
+    crypto_sends.tt is counted twice: the run and `crypto-sends` warn
+    with both file names and the timestamp, and delete nothing."""
+
+    def test_warns_with_both_files_and_keeps_them(self):
+        import tempfile
+        from test_fix_sends import TAO_ID, _cli, _project
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _project(td)
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            _cli(root, home, "crypto-sends", "crypto", "--set",
+                 f"{TAO_ID}=payment")
+            mine = root / "inputs" / "crypto" / "tao_payment_2026.tt"
+            line = ("BUYSELL 2026-05-04 18:50:14 TAO -0.1 CAD 387.813 "
+                    "38.78 0\n")
+            mine.write_text(line)
+            run = _cli(root, home, "run", "--no-input")
+            lst = _cli(root, home, "crypto-sends", "crypto")
+            for text in (run.stderr, lst.stdout):
+                self.assertIn("inputs/crypto/tao_payment_2026.tt line 1",
+                              text)
+                self.assertIn("inputs/crypto/crypto_sends.tt", text)
+                self.assertIn("2026-05-04 18:50:14", text)
+                self.assertIn("counted twice", text)
+            # Nothing deleted.
+            self.assertEqual(mine.read_text(), line)
+            self.assertIn("TAO -0.1", (root / "inputs" / "crypto" /
+                                       "crypto_sends.tt").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

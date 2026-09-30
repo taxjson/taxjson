@@ -660,7 +660,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "to crypto_sends.tt."),
             Rule("US-SEND-02",
                  "A gift is not a sale for the donor, so `gift` is refused "
-                 "in a US project: record it as `self`.", cont=True),
+                 "in a US project: record it as `self`. A gift already "
+                 "saved in sends.json (carried over, copied or edited) is "
+                 "never written as a sale: `crypto-sends --write` and "
+                 "`taxjson run` stop until it is reclassified.",
+                 cont=True),
         ]),
         ("Options", [
             Rule("US-OPT-01",

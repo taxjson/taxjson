@@ -6,4 +6,3 @@ CA-CRYPTO-02    USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on Coinbas
 CA-DATE-04      Computed cycle: T+1 from 2024-05-27 CAD / 2024-05-28 USD, T+2 from 2017-09-05, T+3 before;
 CA-FX-07        FX gains on foreign cash (s.39(1.1)) NOT in Schedule 3 totals; `fx-cash` estimates the net
 US-RPT-04       `estimate`: federal tax only (single filer, standard deduction, NIIT), for planning.
-US-SEND-02      A gift is refused in a US project.

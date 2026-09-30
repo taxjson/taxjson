@@ -1380,13 +1380,17 @@ def _is_us(cfg: Dict[str, Any]) -> bool:
 
 
 def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
-                     ) -> Tuple[str, List[Tuple[str, str]]]:
+                     ) -> Tuple[str, List[Dict[str, Any]]]:
     """(Re)write inputs/<acct>/crypto_sends.tt from the report. Returns
     (write status, duplicate hand-written lines). Raises ValueError when
-    a gift/payment cannot be priced (nothing is written then)."""
+    a gift/payment cannot be priced (nothing is written then), and
+    crypto_sends.RefusedDecision AFTER writing the file without them
+    when a saved decision is one the country refuses (a US gift:
+    partition SPEC-01/INPUTS-04)."""
     from taxjson.lib import crypto_sends as CS
     adoc = report["accounts"][acct]
     entries, unpriced = CS.tt_entries(adoc)
+    refused = CS.refused_entries(adoc)
     if unpriced:
         raise ValueError(
             "no fair value for " + ", ".join(e["id"] for e in unpriced)
@@ -1396,15 +1400,34 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
               f"crypto-sends {acct} --set ID=gift|payment --price P`. "
               f"crypto_sends.tt was not changed.")
     status = CS.write_tt(Path(adoc["tt_file"]),
-                         CS.render_tt(acct, entries))
+                         CS.render_tt(acct, entries, report["country"]))
+    if refused:
+        raise CS.RefusedDecision(
+            f"inputs/{acct}/{CS.MANIFEST_NAME}: "
+            + "; ".join(e["refused"] for e in refused)
+            + f" (inputs/{acct}/{CS.TT_NAME} {status} without it)")
     return status, CS.duplicate_lines(root / "inputs" / acct, entries)
 
 
-def _dup_warning(acct: str, dups: List[Tuple[str, str]]) -> List[str]:
-    return [f"inputs/{acct}/{f} already sells what {sid} sells (same date, "
-            f"coin and quantity) — with crypto_sends.tt that disposition "
-            f"is counted twice; delete the hand-written line (the "
-            f"generated file now carries it)." for f, sid in dups]
+def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
+    """One line per hand-written .tt line that books a send the
+    generated crypto_sends.tt also books — both file names, the send
+    and its timestamp. Nothing is deleted: the owner picks the line."""
+    from taxjson.lib import crypto_sends as CS
+    out = []
+    for d in dups:
+        when = (d["timestamp"] if d["same_time"]
+                else f"{d['timestamp'][:10]} (the hand-written line has "
+                     f"another time)")
+        out.append(
+            f"{d['file']} line {d['line']} and inputs/{acct}/{CS.TT_NAME} "
+            f"both sell {CS.fmt_qty(d['quantity'])} {d['symbol']} on "
+            f"{when} (send {d['id']}) — that disposition is counted "
+            f"twice. Delete the hand-written line (crypto_sends.tt is "
+            f"generated from sends.json), or, to keep it, record the send "
+            f"as `self`: `taxjson crypto-sends {acct} --set "
+            f"{d['id']}=self`.")
+    return out
 
 
 def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
@@ -1451,6 +1474,10 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
             print(f"  crypto-sends: inputs/{name}/{CS.TT_NAME} {status}")
         for w in _dup_warning(name, dups):
             print(f"taxjson: WARNING: {w}", file=sys.stderr)
+    except CS.RefusedDecision as e:
+        # A saved decision the country refuses (a US gift): not booked,
+        # and the run stops until sends.json says what it was.
+        sys.exit(f"taxjson run: {name}: crypto sends: {e}")
     except ValueError as e:
         print(f"taxjson: WARNING: {name}: crypto sends: {e}",
               file=sys.stderr)
@@ -4706,9 +4733,12 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                 print(f"  {lead}: {e['tt']}")
             if e["note"]:
                 print(f"  note: {e['note']}")
+            if e.get("refused"):
+                print(f"  REFUSED: {e['refused']}")
         entries, unpriced = CS.tt_entries(adoc)
         tt = Path(adoc["tt_file"])
-        want = CS.render_tt(acct, entries) if not unpriced else None
+        want = (CS.render_tt(acct, entries, report["country"])
+                if not unpriced else None)
         have = tt.read_text(encoding="utf-8") if tt.is_file() else None
         print()
         if unpriced:
