@@ -72,22 +72,29 @@ def _current_events(root: Path, acct: str) -> Dict[str, Any]:
     books). Elections saved under ids no current event has are stale."""
     import contextlib
     import io
-    from taxjson.bin.taxjson_corp_actions import EXTRACTORS
+    from taxjson.bin.taxjson_corp_actions import EXTRACTORS, extract_events
+    from taxjson.lib.corp_actions import combine_broker_copies
     out: Dict[str, Any] = {}
     try:
         lines = (root / "work" / f"{acct}_sources.list").read_text(
             encoding="utf-8").splitlines()
     except OSError:
         return out
+    groups: Dict[str, List[Path]] = {}
     for ln in lines:
         kind, _, name = ln.partition("/")
-        ext = EXTRACTORS.get(kind)
         path = root / "inputs" / acct / name
-        if ext is None or not path.exists():
+        if EXTRACTORS.get(kind) is None or not path.exists():
             continue
+        groups.setdefault(kind, []).append(path)
+    for kind, paths in groups.items():
+        # The run's own extraction (every file of the group as context,
+        # broker-account copies combined), so the ids match its books.
         try:
             with contextlib.redirect_stderr(io.StringIO()):
-                evs = ext(path, acct)
+                evs = combine_broker_copies(
+                    extract_events(EXTRACTORS[kind], paths, acct),
+                    stream=io.StringIO())
         except Exception:
             continue
         for ev in evs:
@@ -147,6 +154,13 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                            getattr(ev, "currency", "")) if ev else "")
             hints = rec.get("hints") or {}
             fmv_ps = hints.get("fmv_per_share")
+            # The value the booking used: a positive hint, else the
+            # broker's own value (taxable_deemed_dividend defaults to it).
+            from_broker = False
+            if not fmv_ps and broker_fmv and ev is not None \
+                    and ev.qty_received:
+                fmv_ps = broker_fmv / ev.qty_received
+                from_broker = True
             income = sum(float(r.get("net_amount") or 0) for r in booked
                          if r.get("action") == "DIVIDEND")
             buys = [r for r in booked if r.get("action") == "BUYSELL"
@@ -201,7 +215,8 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 "account": acct, "sheltered": sheltered, "event_id": eid,
                 "date": date, "parent": parent, "child": child,
                 "ratio": ratio, "election": election,
-                "fmv_per_share": fmv_ps, "broker_fmv": broker_fmv,
+                "fmv_per_share": fmv_ps, "value_from_broker": from_broker,
+                "broker_fmv": broker_fmv,
                 "broker_currency": broker_cur, "income": round(income, 2),
                 "new_qty": new_qty, "new_cost": round(new_cost, 2),
                 "held_now": round(now, 6), "currency": base_cur,
@@ -296,6 +311,8 @@ def render_spinoffs(doc: Dict[str, Any]) -> List[str]:
                  f"{s['child']}  {s['ratio']}  election: "
                  f"{s['election']}{tag}")
         fmv = (f"{s['fmv_per_share']:g} per share"
+               + (" (the broker's value)" if s.get("value_from_broker")
+                  else "")
                if s["fmv_per_share"] else "0")
         L.append(f"      value used: {fmv}; booked: income "
                  f"{s['income']:,.2f} {s['currency']}, {s['new_qty']:g} new "

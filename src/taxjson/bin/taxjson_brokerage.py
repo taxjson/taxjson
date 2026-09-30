@@ -234,11 +234,32 @@ Examples:
     lint_problems = 0
     kept_aside: list = []
 
+    # Account-wide context: a parser that learns identities (a symbol's
+    # listing, an option code's contract, a temporary code's company)
+    # or de-duplicates overlapping downloads needs ALL of the account's
+    # files at once — per-file state made the answer depend on how the
+    # rows were split across yearly exports (RBC, 2026-09 audit).
+    shared_context = None
+    _prepare = getattr(extractor_class, 'prepare_files', None)
+    if _prepare is not None:
+        try:
+            shared_context = _prepare(input_paths)
+        except csv.Error as e:
+            print(f"taxjson-brokerage: error: the CSV module refused an "
+                  f"input file ({e}) — see the per-file error below by "
+                  f"parsing the files one at a time.", file=sys.stderr)
+            sys.exit(2)
+        except BrokerageParseError as e:
+            print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
+            sys.exit(1)
+
     for input_path in input_paths:
         # Fresh extractor per file so any extractor-level state (e.g.
         # IB's `unhandled_ca_tickers` warning bucket) doesn't bleed
         # across files and emit confused diagnostics.
         extractor = extractor_class()
+        if shared_context is not None:
+            extractor.account_context = shared_context
         if hasattr(extractor, 'foreign_return_of_capital'):
             extractor.foreign_return_of_capital = args.foreign_roc
         if hasattr(extractor, 'futures_settle'):
@@ -314,12 +335,22 @@ Examples:
             print(f"  {input_path.name}: 0 tax objects "
                   f"({_kept_this_file} TRANSFER row(s) kept aside)",
                   file=sys.stderr)
+        elif (not transactions and file_size > 0
+              and getattr(extractor, 'zero_tx_reason', None)):
+            # The parser knows why this file books nothing (a Kraken
+            # ledger whose trade rows are all booked from the trades
+            # export) — not the regression the warning below is for,
+            # and a warning on every correct run trains users to
+            # ignore real ones.
+            print(f"  {input_path.name}: 0 tax objects "
+                  f"({extractor.zero_tx_reason})", file=sys.stderr)
         elif not transactions and file_size > 0:
             print(
                 f"warning: {input_path.name} parsed to 0 transactions "
-                f"({file_size} bytes input, brokerage={brokerage_id}). "
-                f"Check the CSV header / format — silent zero-tx output "
-                f"is usually a parser regression.",
+                f"({file_size} bytes input, brokerage={brokerage_id}): "
+                f"NONE of its rows are in the books. Check the CSV "
+                f"header / format — silent zero-tx output is usually a "
+                f"changed export layout or a parser regression.",
                 file=sys.stderr,
             )
         else:

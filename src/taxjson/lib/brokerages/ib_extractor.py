@@ -163,7 +163,8 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          encode_occ_strike,
                                          is_roc_description,
                                          parse_strict_number)
-from taxjson.lib.corp_actions import ib_tender_root
+from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
+                                      ib_spinoff_parts, ib_tender_root)
 from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE, pair_cancellations
 
 # Statement sections that are statement METADATA or roll-ups of rows the
@@ -682,6 +683,10 @@ class IbBrokerage(BaseBrokerage):
         # surface a warning at end of parse, prompting the user to add a
         # manual TRANSFER entry if the event affects taxable basis.
         unhandled_ca_tickers: Dict[str, int] = {}
+        # Cash takeovers booked as sales, and merger rows left to
+        # taxjson-corp-actions — one note each at end of parse.
+        cash_takeovers: List[str] = []
+        corp_owned_rows: List[str] = []
 
         # Fee rows that lack both a Date column and a "for Mmm YYYY" hint
         # in the description. Collected and reported as one summary line
@@ -821,6 +826,9 @@ class IbBrokerage(BaseBrokerage):
                 if eff.get('cash'):
                     tl['cash_qty'] -= -eff['qty']
                     tl['cash'] -= eff['cash']
+            elif kind in ('corp_owned', 'spinoff'):
+                if eff['desc'] in corp_owned_rows:
+                    corp_owned_rows.remove(eff['desc'])
             elif kind == 'unhandled':
                 t = eff['ticker']
                 unhandled_ca_tickers[t] = unhandled_ca_tickers.get(t, 0) - 1
@@ -1912,47 +1920,74 @@ class IbBrokerage(BaseBrokerage):
 
                 # Spinoff 1 for 10. Gated on `not handled` so a
                 # description that happens to contain both "Split"
-                # and "Spinoff" keywords doesn't emit duplicate
-                # transactions (the split branch above already
-                # consumed it).
-                spinoff_match = re.search(r'Spinoff.*?\((\w+),', description, re.IGNORECASE)
-                if spinoff_match and qty > 0 and not handled:
-                    ticker = spinoff_match.group(1).replace(' ', '.')
-                    price = round(abs(val / qty), 8) if qty != 0 else 0.0
-                    symbol = f"{ticker}.{ext}"
+                # and "Spinoff" keywords is not read twice (the split
+                # branch above already consumed it). A spin-off is a
+                # TAX ELECTION (a dividend in kind at FMV, or s.86.1 /
+                # a Canadian butterfly's ACB allocation), so its rows
+                # are taxjson-corp-actions' — which carries IB's Value
+                # as the broker FMV. This branch used to book every
+                # one as a dividend at |Value| with no election
+                # (2026-09 audit). Recognized, not booked, here.
+                if (qty > 0 and not handled
+                        and ib_spinoff_parts(description) is not None):
+                    _eff.update(kind='spinoff')
+                    corp_owned_rows.append(description)
+                    self.count_nonevent(
+                        f"{section} spin-off row (booked by "
+                        f"taxjson-corp-actions after the election)")
+                    _ca_record(_eff)
+                    continue
 
-                    # Output DIVIDEND and BUYSELL for the new shares
-                    _sd = {
-                        'action': 'DIVIDEND',
-                        'date': date,
-                        'time': time,
-                        'date_settle': date,
-                        'symbol': symbol,
-                        'quantity': 0.0,
-                        'currency': currency,
-                        'net_amount': abs(val),
-                        'gross_amount': abs(val),
-                        'type': 'dividend',
-                        'account': 'IB',
-                        'description': description
-                    }
-                    _sb = {
-                        'action': 'BUYSELL',
-                        'date': date,
-                        'time': time,
-                        'date_settle': date,
-                        'symbol': symbol,
-                        'quantity': qty,
-                        'currency': currency,
-                        'price': price,
-                        'net_amount': abs(val),
-                        'multiplier': 1.0,
-                        'account': 'IB',
-                        'description': description
-                    }
-                    transactions.extend((_sd, _sb))
-                    _eff.update(kind='spinoff', txs=[_sd, _sb])
-                    handled = True
+                # A cash takeover ('Merged(Acquisition) FOR USD 30.00
+                # PER SHARE'): the shares are bought out for cash — a
+                # disposition at the cash amount, booked as a sale. It
+                # used to fall into the unhandled NOTE and the position
+                # stayed in inventory forever (2026-09 audit).
+                _cash_m = ib_cash_merger(description)
+                if _cash_m is not None and not handled:
+                    _ticker, _ccur, _per_sh = _cash_m
+                    if qty < 0:
+                        _cash = abs(proceeds) or round(_per_sh * -qty, 2)
+                        _ttx = {
+                            'action': 'BUYSELL',
+                            'date': date,
+                            'time': time,
+                            'date_settle': date,
+                            'symbol': f"{_ticker}.{ext}",
+                            'quantity': qty,
+                            'currency': currency,
+                            'price': round(_cash / -qty, 8),
+                            'fee': 0.0,
+                            'net_amount': _cash,
+                            'gross_amount': _cash,
+                            'multiplier': 1.0,
+                            'account': 'IB',
+                            'description': description,
+                        }
+                        transactions.append(_ttx)
+                        cash_takeovers.append(
+                            f"{_ticker}.{ext} {-qty:g} sh for {_cash:.2f} "
+                            f"{currency} on {date}")
+                        _eff.update(kind='cash_takeover', txs=[_ttx])
+                        self.note_row_consumed()
+                    else:
+                        self.count_skip(f"{section} cash-takeover row "
+                                        f"with a positive quantity")
+                    _ca_record(_eff)
+                    continue
+
+                # A share-for-share merger (or a merger shape nothing
+                # can book, which becomes a blocking `unsupported`
+                # event): taxjson-corp-actions owns it, after the
+                # election. Not an unhandled row.
+                if not handled and ib_merger_owned(description):
+                    corp_owned_rows.append(description)
+                    _eff.update(kind='corp_owned')
+                    self.count_nonevent(
+                        f"{section} merger row (booked by "
+                        f"taxjson-corp-actions after the election)")
+                    _ca_record(_eff)
+                    continue
 
                 # Anything else (Merger/Acquisition, name change, etc.)
                 # — IB's row format varies by event type and matching
@@ -2222,13 +2257,22 @@ class IbBrokerage(BaseBrokerage):
                     q = float(nearest)
                 tx['quantity'] = q
 
+        for _ct in cash_takeovers:
+            print(f"NOTE: cash takeover booked as a sale: {_ct} "
+                  f"({path.name}).", file=sys.stderr)
+        if corp_owned_rows:
+            print(f"note: {len(corp_owned_rows)} merger/spin-off "
+                  f"Corporate Action row(s) in {path.name} are booked by "
+                  f"taxjson-corp-actions after the tax election (`taxjson "
+                  f"run` runs it), not by this parser.", file=sys.stderr)
         if unhandled_ca_tickers:
             total = sum(unhandled_ca_tickers.values())
             tickers = ', '.join(sorted(unhandled_ca_tickers.keys()))
             print(
                 f"NOTE: {total} unhandled Corporate Action row(s) in {path.name} "
-                f"for: {tickers}. Only SPLIT and Spinoff rows are auto-translated. "
-                f"For mergers, name changes, or other events that affect basis, "
+                f"for: {tickers}. Only splits, cash in lieu, tenders and cash "
+                f"takeovers are booked here (mergers and spin-offs by "
+                f"taxjson-corp-actions). For other events that affect basis, "
                 f"add a manual TRANSFER entry to your *_in.tt file.",
                 file=sys.stderr,
             )

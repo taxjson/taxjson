@@ -19,6 +19,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Where:** `src/taxjson/lib/brokerages/kraken.py:_build_staking_reward`.
 - **Current behavior:** Kraken's `kr_ledgers.csv` has no price column on staking-reward rows, so the parser can't populate `net_amount` from the CSV alone. Staking rows ship with `price=0` / `net_amount=0`.
 - **Why this is the design (not a bug):** the pipeline runs `taxjson-fill-crypto` between `taxjson-sort` and `taxjson-convert-currency` precisely to backfill these from a historical-price cache. The filler at `fill_crypto_prices.py` only fills when `abs(tx.price) < 1e-8`, so non-Kraken rows with a real price are left alone.
+- **When the lookup fails (2026-09 audit R1-105):** a Yahoo error, outage or rate limit, or an HTTP 200 with a null/empty close, leaves the row at price 0. That is never silent any more: fill-crypto warns (per lookup, plus an `UNPRICED` summary), and the crypto path runs `taxjson-validate --require-prices`, so each unpriced row is a validation ERROR on the console and fatal under `taxjson run --strict`. Re-run online (a failed price is never cached).
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — `isin_map = {... 'IE': 'L' ...}` in the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead — corrected 2026-09 round-five audit).
@@ -42,7 +43,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose BASE is fiat after stablecoin folding: `USD/CAD`, `USDC/USD`, `USDT/CAD`) and `_build_instant_trade` (a `spend`/`receive` pair whose both legs are fiat: USDC dust swept to USD, USD → CAD).
 - **Current behavior:** counted as recognized non-events (`forex conversion … not modeled — KNOWN_ISSUES`). Previously each emitted a BUYSELL of a phantom `USD` / `CAD` asset (the fiat base treated as the traded security), which put a fake position in the crypto book and a nonsense trade in the gains report.
 - **Why deferred:** same reason as the IB item above — foreign-cash gains live in `taxjson fx-cash`, which does not read conversion rows yet. Stablecoin↔USD swaps are additionally a wash by construction (folded 1:1 for pricing).
-- **Coinbase follows the same model:** `Buy USDC` / `Sell USDC` rows are counted as stablecoin conversions (non-events) and the USDC leg of an Advanced Trade on a `*-USDC` pair is cash, not a position. Strictly (CRA) a stablecoin is a crypto-asset, so the USD/CAD movement while USDC is held is an unbooked gain/loss — a few dollars a year on real data.
+- **Coinbase follows the same model:** `Buy USDC` / `Sell USDC` rows are counted as stablecoin conversions (non-events) and the USDC leg of an Advanced Trade on a `*-USDC` pair is cash, not a position. An Advanced Trade on a crypto-quoted pair (`ETH-BTC`) is a swap: the quote coin's leg is booked too, at the fill's stated value (2026-09 audit R1-102). Strictly (CRA) a stablecoin is a crypto-asset, so the USD/CAD movement while USDC is held is an unbooked gain/loss — a few dollars a year on real data.
 
 ### Canadian listings carry no venue (`ROOT.TO` for TSX, TSXV, CSE and NEO)
 - **Where:** `src/taxjson/lib/brokerages/base.py` — `canonical_ca_listing`, used by `apply_currency_suffix` (Questrade, RBC, Webull, generic) and `taxjson_fetch.qt_position_symbol`; IB stamps every CAD listing `.TO`.
@@ -77,6 +78,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `src/taxjson/lib/brokerages/questrade.py` — strips `TAX WITHHELD`/`NON-RES` only as description-key noise; no TAX/INTEREST emission.
 - **Current behavior:** IB and RBC emit dedicated TAX (foreign withholding) and INTEREST records; Questrade does not, so a Questrade account's non-resident-tax-withheld dividend or interest credit is not recorded as such (foreign-tax-credit / interest income under-reported).
 - **Why deferred:** needs a Questrade CSV showing the interest and withholding row formats to parse them correctly.
+
+### RBC identity across projects (one year's export per project)
+- **Where:** `src/taxjson/lib/brokerages/rbc_direct.py` (`build_rbc_account_context`).
+- **Current behavior:** the RBC parser learns identities from ALL of an account's RBC exports in the project: a symbol's listing, an option code's contract, a temporary reorganization code's company, and overlapping re-downloads of the same RBC account. When a project holds only the current year's export and the earlier years come in through a hand-written `.tt` (`margin_start.tt`), the earlier rows are not there to learn from. What the parser does then: income on a symbol that no file trades keeps the payment currency's listing (a USD return of capital there is a warning); a temporary removal code it cannot name is assumed to be the receipt's ticker, with a warning and the `ticker.map` line to fix it; an option that RBC re-describes between years (RCI vs RCI.B, an XCH-adjusted TRP1) keeps the description of this year's rows, so the `.tt` must use the same symbol. A ticker change RBC applied without a reorganization row (ORCC to OBDC) is only a warning with a ready `GLOBAL` line, because the export carries no CUSIP to prove the two symbols are one security.
+- **Workaround:** keep the earlier years' RBC exports in the project's `inputs/<account>/`, or add the suggested `ticker.map` line.
 
 ### RBC in-kind transfers are emitted but excluded from taxable accounts (by design)
 - **Where:** `src/taxjson/lib/brokerages/rbc_direct.py:_build_transfer` (added 2026-06); `taxjson-brokerage` drops TRANSFER rows unless `--transfers`, driven by `transfers` in `[accounts.<name>]`.
@@ -163,11 +169,15 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Interest expense and carrying charges are not surfaced
 - **Where:** IB `INTEREST` rows keep their sign; `sum-income` nets debit against credit interest.
-- **Current behavior:** margin interest paid (deductible under s.20(1)(c), line 22100; only 50% for the 2024+ AMT) disappears into the income total instead of being reported as a deduction. The estimate excludes interest entirely.
+- **Current behavior:** margin interest paid (deductible under s.20(1)(c), line 22100; only 50% for the 2024+ AMT) disappears into the income total instead of being reported as a deduction. The estimate does not read interest from the books; enter the year's carrying charges yourself (`taxjson estimate --carrying-charges`, or `[estimate] carrying_charges`), which it deducts in full from regular income and at 50% in the AMT base.
 
 ### Spin-off default wording
 - **Where:** `lib/corp_actions.py` spin-off default.
-- **Current behavior:** every spin-off distribution is labelled a "foreign dividend at FMV"; a Canadian parent's in-kind distribution is an eligible dividend (or a s.86 reorganisation), and the estimate then classifies it by the target's suffix.
+- **Current behavior:** the default books a spin-off as a dividend at FMV; the estimate then classifies it by the target's suffix (a Canadian parent's in-kind distribution is an eligible dividend). A Canadian parent's tax-deferred spin-off (a butterfly / s.86 reorganisation) has no election of its own: book it with `rollover_s_86_1` and the allocated ACB, which moves cost the same way.
+
+### IB stock-plus-cash mergers are not booked
+- **Where:** `lib/corp_actions.py` `_ib_unsupported_events`.
+- **Current behavior:** an IB merger paying shares AND cash (`WITH <id> 1 for 2 AND USD 5.00`), or any other merger row the parser does not recognise, becomes an `unsupported` corporate-action event: `taxjson run` stops (exit 3) naming it until the exchange is recorded by hand in a `.tt` file and the event is elected `ignore`. Cash takeovers (`FOR USD 30.00 PER SHARE`) are booked as sales; share-for-share mergers (including decimal ratios and class-share tickers) go through the merger election.
 
 ### Carryover has no inclusion-rate adjustment for pre-2001 losses
 - **Where:** `bin/taxjson_carryover.py`.

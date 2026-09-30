@@ -25,15 +25,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.lib.brokerages.base import (BaseBrokerage, _parse_div_qty_rate,
+from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         _parse_div_qty_rate,
                                          is_roc_description)
 from taxjson.lib.corp_actions import (
     RBC_REORG_CODES, pair_rbc_reorganizations, rbc_norm_company,
     rbc_is_temp_symbol, rbc_is_option_code, rbc_rights_key,
+    rbc_name_similarity, _rbc_removal_names, _rbc_receipt_name,
 )
 
 
-class RbcFormatError(ValueError):
+class RbcFormatError(BrokerageParseError):
     """An RBC export the parser refuses to guess about (missing header
     columns, an unparseable number, ambiguous dates, an income row that
     carries shares). Raised instead of silently mis-reading the file."""
@@ -156,6 +158,7 @@ class RbcRow:
     settle_raw: str = ''
     cls: str = ''             # classify_rbc_row()
     k: int = 0                # intra-day ordinal: 0 = the day's earliest row
+    account: str = ''         # the Account column ('' when absent)
 
     def label(self) -> str:
         return (f"line {self.line}: {self.date_raw} {self.activity or '?'} "
@@ -400,6 +403,7 @@ def read_rbc_rows(path: Path) -> RbcExport:
             code=m.group(1).upper() if m else '',
             qty=num('Quantity'), price=num('Price'), value=value,
             date_raw=cell.get('Date', ''),
+            account=cell.get('Account', ''),
         )
         r.settle_raw = cell.get('Settlement Date', '')
         if not r.date_raw:
@@ -576,6 +580,356 @@ def classify_rbc_row(r) -> str:
     return 'unknown'
 
 
+# ------------------------------------------------------- account context
+#
+# `taxjson run` hands every RBC export of one account to ONE
+# taxjson-brokerage call, but each file used to be parsed with identity
+# maps learned from that file alone: a symbol's market currency, an
+# option code's contract, a temporary code's company. Split the same rows
+# across yearly downloads and the answer changed (a TSX stock's USD
+# dividend became .US, an option's close became a new written option, a
+# name change stranded the old pool). The context below is built ONCE
+# from all of an account's files and shared by every per-file parse; a
+# lone file gets a context of its own, so one file and many files follow
+# the same rules.
+
+# Rows that move (or prove) a position in a listed security.
+_POSITION_CLASSES = ('trade', 'expiry', 'assignment', 'retraction',
+                     'reinvest', 'rights', 'transfer', 'reorg')
+# How long before an income row a listing's activity still counts as
+# "held" for it (record date → pay date, plus a sale after the record
+# date).
+_HELD_WINDOW_DAYS = 45
+
+
+def _norm_account(acct: str) -> str:
+    s = (acct or '').strip()
+    digits = re.sub(r'\D', '', s)
+    return digits or s.upper()
+
+
+def _mask_account(acct: str) -> str:
+    return (acct[:2] + '***') if acct else '(no Account column)'
+
+
+def _squash(text: str) -> str:
+    return ' '.join((text or '').split()).upper()
+
+
+def _row_content_key(r) -> Tuple:
+    """What makes two rows of two downloads the SAME broker row: every
+    column except the position in the file (and the intra-day time
+    derived from it)."""
+    return (r.date, r.activity.strip().lower(), r.symbol.strip().upper(),
+            _squash(r.symdesc), _squash(r.desc), r.currency, r.qty, r.price,
+            r.value, r.settle)
+
+
+def _signed_qty(r) -> float:
+    q = r.qty
+    a = (r.activity or '').strip().lower()
+    if a == 'sell' or r.cls == 'retraction':
+        return -abs(q)
+    if r.cls == 'transfer':
+        du = (r.desc or '').upper()
+        if q > 0 and (du.startswith(('TFO', 'TFW')) or 'TRANSFER OUT' in du
+                      or 'DELIVER' in du):
+            return -q
+    return q
+
+
+def _days(a: str, b: str) -> int:
+    return (datetime.strptime(a, '%Y-%m-%d')
+            - datetime.strptime(b, '%Y-%m-%d')).days
+
+
+@dataclass
+class _Listing:
+    """One (bare symbol, currency) line as the account's rows show it."""
+    symbol: str
+    currency: str
+    names: Dict[str, str] = field(default_factory=dict)   # norm → raw
+    events: List[Tuple[str, int, int, float]] = field(default_factory=list)
+
+    def finish(self) -> None:
+        self.events.sort()
+
+    @property
+    def first(self) -> str:
+        return self.events[0][0]
+
+    @property
+    def last(self) -> str:
+        return self.events[-1][0]
+
+    def position_on(self, date: str) -> float:
+        return sum(q for d, _k, _f, q in self.events if d <= date)
+
+    def held_on(self, date: str) -> bool:
+        if abs(self.position_on(date)) > 1e-9:
+            return True
+        return any(0 <= _days(date, d) <= _HELD_WINDOW_DAYS
+                   for d, _k, _f, _q in self.events)
+
+
+@dataclass
+class RbcAccountContext:
+    """Identity maps and the overlap plan for ALL of an account's RBC
+    exports (see the section comment above)."""
+    files: List[str]                                   # resolved paths
+    exports: Dict[str, 'RbcExport']
+    # file → {row.order: the earlier file already holding that row}
+    duplicate_of: Dict[str, Dict[int, str]]
+    # file → {row.order: tag} for an identical row the earlier download
+    # holds FEWER copies of (kept, tagged so its id stays distinct)
+    extra_tag: Dict[str, Dict[int, str]]
+    pairings: Dict[str, Any]
+    occ_own: Dict[str, str]          # option code → first own row's OCC
+    occ_by_code: Dict[str, str]      # ... plus codes that inherit via XCH
+    names: Dict[str, List[Tuple[str, bool, str]]]      # key → (date, reorg?, sym)
+    listings: Dict[str, Dict[str, _Listing]]           # symbol → cur → line
+    messages: List[str] = field(default_factory=list)
+    emitted: bool = False
+
+    def rows(self, key: str) -> List['RbcRow']:
+        dup = self.duplicate_of.get(key, {})
+        return [r for r in self.exports[key].rows if r.order not in dup]
+
+    def emit(self) -> None:
+        if self.emitted:
+            return
+        self.emitted = True
+        for m in self.messages:
+            print(m, file=sys.stderr)
+
+    def ticker_for_name(self, key: str, date: str, *,
+                        before_only: bool = False) -> Optional[str]:
+        """The listed ticker a security name traded under around `date`:
+        the latest row strictly before it, else (for a trade row under a
+        temporary code) a non-reorganization row that day, else the
+        earliest after. `before_only` (a reorganization's REMOVAL leg,
+        whose old ticker must predate the event) stops after step 1."""
+        ent = self.names.get(key) if key else None
+        if not ent:
+            return None
+        before = [e for e in ent if e[0] < date]
+        if before:
+            return max(before, key=lambda e: e[0])[2]
+        if before_only:
+            return None
+        same = [e for e in ent if e[0] == date and not e[1]]
+        if same:
+            return same[0][2]
+        after = [e for e in ent if e[0] > date]
+        return min(after, key=lambda e: e[0])[2] if after else None
+
+
+def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
+    """Read every export of one account and build the shared maps."""
+    helper = helper or RbcBrokerage()
+    keys = [str(Path(p).resolve()) for p in paths]
+    exports = {}
+    for k, p in zip(keys, paths):
+        if k not in exports:
+            exports[k] = read_rbc_rows(Path(p))
+    files = list(dict.fromkeys(keys))
+    name_of = {k: exports[k].path.name for k in files}
+    ctx = RbcAccountContext(files=files, exports=exports, duplicate_of={},
+                            extra_tag={}, pairings={}, occ_own={},
+                            occ_by_code={}, names={}, listings={})
+    _plan_overlaps(ctx, name_of)
+
+    live = [(fi, r) for fi, k in enumerate(files) for r in ctx.rows(k)]
+    chrono = sorted(live, key=lambda x: (x[1].date, x[1].k, x[0],
+                                         -x[1].order))
+
+    # Option code → contract: its chronologically FIRST description in
+    # ANY of the account's files (RBC re-describes a contract over time,
+    # 8D*** "CALL .RCI" later "CALL .RCI.B"; keying each file on its own
+    # text split one position across two symbols).
+    where: Dict[str, str] = {}
+    others: Dict[str, Dict[str, str]] = {}
+    for fi, r in chrono:
+        if not r.symbol or r.cls == 'reorg':
+            continue
+        occ = helper._row_occ(r)
+        if not occ:
+            continue
+        if r.symbol not in ctx.occ_own:
+            ctx.occ_own[r.symbol] = occ
+            where[r.symbol] = name_of[files[fi]]
+        elif occ != ctx.occ_own[r.symbol]:
+            others.setdefault(r.symbol, {}).setdefault(occ, name_of[files[fi]])
+    ctx.occ_by_code.update(ctx.occ_own)
+    for code, oth in sorted(others.items()):
+        span = ', '.join(f"{o} in {f}" for o, f in sorted(oth.items()))
+        ctx.messages.append(
+            f"warning: {where[code]}: RBC code {code} is described as more "
+            f"than one contract ({ctx.occ_own[code]} first, in "
+            f"{where[code]}; then {span}) — keeping the FIRST so the "
+            f"position stays one symbol across every file of the account. "
+            f"Check the contract terms.")
+
+    # Reorganization pairing per file (legs of one event sit in one
+    # download); an option adjustment's new code inherits the old
+    # contract unless its own trade rows describe another — resolved in
+    # date order across files so a later file's close finds it.
+    adjusts = []
+    for k in files:
+        ctx.pairings[k] = pair_rbc_reorganizations(ctx.rows(k))
+        adjusts += [ev for ev in ctx.pairings[k].events
+                    if ev.kind == 'option_adjust']
+    for ev in sorted(adjusts, key=lambda e: (e.removal.date, e.removal.k)):
+        rem, rc = ev.removal, ev.receipt
+        old = ctx.occ_by_code.get(rem.symbol) or helper._row_occ(rem)
+        if old and rc.symbol not in ctx.occ_own:
+            ctx.occ_by_code[rc.symbol] = old
+
+    # Security name → ticker, with dates (temporary-code resolution).
+    for fi, r in chrono:
+        if not r.symbol or rbc_is_temp_symbol(r.symbol) \
+                or rbc_is_option_code(r.symbol):
+            continue
+        for key in (rbc_norm_company(r.symdesc), rbc_rights_key(r.desc),
+                    rbc_rights_key(r.symdesc)):
+            if key:
+                ent = ctx.names.setdefault(key, [])
+                e = (r.date, r.cls == 'reorg', r.symbol)
+                if e not in ent:
+                    ent.append(e)
+
+    # Listings: which (symbol, currency) lines the account actually
+    # trades/holds, under which security names, with a position timeline.
+    for fi, r in chrono:
+        if r.cls not in _POSITION_CLASSES or not r.symbol or not r.currency:
+            continue
+        if rbc_is_temp_symbol(r.symbol) or rbc_is_option_code(r.symbol) \
+                or helper._row_occ(r):
+            continue
+        li = ctx.listings.setdefault(r.symbol, {}).setdefault(
+            r.currency, _Listing(r.symbol, r.currency))
+        nm = rbc_norm_company(r.symdesc)
+        if nm:
+            li.names.setdefault(nm, ' '.join(r.symdesc.split()))
+        li.events.append((r.date, r.k, fi, _signed_qty(r)))
+    for per in ctx.listings.values():
+        for li in per.values():
+            li.finish()
+    _detect_ticker_changes(ctx, helper)
+    return ctx
+
+
+def _plan_overlaps(ctx: RbcAccountContext, name_of: Dict[str, str]) -> None:
+    """Overlapping downloads of the SAME RBC account (a re-download of a
+    15-month window next to last year's file): a row already in an
+    earlier file is skipped in a later one. The match ignores the row's
+    position in the file (RBC re-orders a day's rows between downloads,
+    and the intra-day time comes from that position), and counts copies:
+    two genuinely identical fills on one day stay two. Only rows that
+    carry the same non-blank Account are ever matched."""
+    kept: Dict[Tuple, int] = {}          # (acct, content key) → copies kept
+    kept_in: Dict[Tuple, str] = {}
+    blank: Dict[str, Dict[Tuple, int]] = {}
+    for k in ctx.files:
+        exp = ctx.exports[k]
+        groups: Dict[Tuple, List] = {}
+        for r in exp.rows:
+            groups.setdefault((_norm_account(r.account), _row_content_key(r)),
+                              []).append(r)
+        dup: Dict[int, str] = {}
+        tag: Dict[int, str] = {}
+        spans: Dict[str, List[str]] = {}
+        for gkey, rs in groups.items():
+            acct = gkey[0]
+            if not acct:
+                blank.setdefault(k, {})[gkey[1]] = len(rs)
+                continue
+            have = kept.get(gkey, 0)
+            n_dup = min(have, len(rs))
+            for r in rs[:n_dup]:
+                dup[r.order] = kept_in[gkey]
+                spans.setdefault(kept_in[gkey], []).append(r.date)
+            if have and len(rs) > have:
+                for r in rs[n_dup:]:
+                    tag[r.order] = (f"[extra copy, not in overlapping "
+                                    f"{name_of[kept_in[gkey]]}]")
+            if len(rs) > have:
+                kept[gkey] = len(rs)
+                kept_in.setdefault(gkey, k)
+        if dup:
+            ctx.duplicate_of[k] = {o: name_of[f] for o, f in dup.items()}
+        if tag:
+            ctx.extra_tag[k] = tag
+        for other, dates in sorted(spans.items()):
+            accts = sorted({_mask_account(_norm_account(r.account))
+                            for r in exp.rows
+                            if r.order in dup and dup[r.order] == other})
+            ctx.messages.append(
+                f"note: {name_of[k]}: {len(dates)} row(s) dated "
+                f"{min(dates)}..{max(dates)} are already in "
+                f"{name_of[other]} (an overlapping download of the same RBC "
+                f"account {', '.join(accts)}) — skipped, not booked twice")
+    # Files without an Account column: two downloads of one account and
+    # two accounts look the same, so nothing is matched — say so when
+    # they share rows.
+    bk = [k for k in ctx.files if k in blank]
+    for i, a in enumerate(bk):
+        for b in bk[i + 1:]:
+            common = sum(min(n, blank[b].get(ck, 0))
+                         for ck, n in blank[a].items())
+            if common:
+                ctx.messages.append(
+                    f"warning: {name_of[a]} and {name_of[b]} share {common} "
+                    f"identical row(s) on the same dates but have no Account "
+                    f"column, so an overlapping re-download of ONE account "
+                    f"cannot be told from two accounts — NOTHING was "
+                    f"de-duplicated. If they are the same account, trim the "
+                    f"overlap from one file (or re-export with the Account "
+                    f"column).")
+
+
+def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
+    """A ticker change RBC applied WITHOUT a reorganization row
+    (ORCC → OBDC in 2023): the old symbol stops with shares still open
+    and a new symbol with the same Symbol Description and currency opens
+    with a SALE those shares cover. The export carries no CUSIP, so this
+    is not certain enough to merge silently: warn with the ticker.map
+    line that merges them."""
+    by_name: Dict[Tuple[str, str], List[_Listing]] = {}
+    for per in ctx.listings.values():
+        for li in per.values():
+            for nm in li.names:
+                by_name.setdefault((li.currency, nm), []).append(li)
+    seen = set()
+    for (cur, nm), lis in sorted(by_name.items()):
+        for a in lis:
+            for b in lis:
+                if a is b or (a.symbol, b.symbol, cur) in seen:
+                    continue
+                if not a.events or not b.events or a.last > b.first:
+                    continue
+                open_a = a.position_on(a.last)
+                first_b = next((q for d, _k, _f, q in b.events
+                                if abs(q) > 1e-9), 0.0)
+                if open_a <= 1e-9 or first_b >= -1e-9 \
+                        or -first_b > open_a + 1e-6:
+                    continue
+                seen.add((a.symbol, b.symbol, cur))
+                sa = helper.apply_currency_suffix(a.symbol, cur)
+                sb = helper.apply_currency_suffix(b.symbol, cur)
+                fb = ctx.exports[ctx.files[b.events[0][2]]].path.name
+                ctx.messages.append(
+                    f"warning: {fb}: RBC symbol {a.symbol} ({cur}) stops on "
+                    f"{a.last} with {open_a:g} share(s) still open, and "
+                    f"{b.symbol} — same Symbol Description "
+                    f"{a.names[nm]!r} — first appears on {b.first} with a "
+                    f"SALE of {-first_b:g}. That is a ticker change RBC "
+                    f"booked without a reorganization row: as exported it is "
+                    f"a stranded long {sa} and a short {sb}. If they are the "
+                    f"same security, add this line to ticker.map:\n"
+                    f"    GLOBAL {sa} {sb}")
+
+
 # ------------------------------------------------------------------ parser
 
 class RbcBrokerage(BaseBrokerage):
@@ -593,32 +947,50 @@ class RbcBrokerage(BaseBrokerage):
     def _note(self, msg: str) -> None:
         print(f"note: {self._fname}: {msg}", file=sys.stderr)
 
+    # Set by taxjson-brokerage (see `prepare_files`) to share identity
+    # maps across all of an account's RBC exports; None = this file alone.
+    account_context: Optional[RbcAccountContext] = None
+
+    @classmethod
+    def prepare_files(cls, paths) -> RbcAccountContext:
+        """Read ALL of one account's RBC exports once and build the
+        identity maps every per-file parse shares (market currency per
+        symbol, option code → contract, name → ticker) plus the overlap
+        plan for re-downloads. Account-level warnings print here, once."""
+        ctx = build_rbc_account_context(list(paths), helper=cls())
+        ctx.emit()
+        return ctx
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         path = Path(path)
         self._fname = path.name
         self.lint_findings: List[str] = []
-        exp = read_rbc_rows(path)
-        rows = exp.rows
+        key = str(path.resolve())
+        ctx = self.account_context
+        if ctx is None or key not in ctx.exports:
+            ctx = build_rbc_account_context([path], helper=self)
+            ctx.emit()
+        self._ctx = ctx
+        exp = ctx.exports[key]
+        dups = ctx.duplicate_of.get(key, {})
+        self._extra_tag = ctx.extra_tag.get(key, {})
+        rows = ctx.rows(key)
         for n in exp.notes:
             self._note(n)
-        self._rows_seen = len(rows) + exp.n_footers
+        self._rows_seen = len(exp.rows) + exp.n_footers
         for _ in range(exp.n_footers):
             self.count_nonevent(_NONEVENT_CLASSES['footer'])
+        for other in dups.values():
+            self.count_nonevent(f"row already in the overlapping download "
+                                f"{other}")
 
-        # Market currency per symbol, learned from trade rows. Same
-        # regression class as Questrade's BTO/B2GOLD: a Canadian stock
-        # paying a USD dividend would otherwise get a .US suffix from the
-        # dividend row's currency, splitting its identity from the trades.
-        self._symbol_currency: Dict[str, str] = {}
-        for r in rows:
-            if r.cls in ('trade', 'expiry', 'assignment', 'retraction') \
-                    and r.symbol and r.currency:
-                self._symbol_currency.setdefault(r.symbol, r.currency)
+        # Identity maps shared by every file of the account.
+        self._occ_by_code = ctx.occ_by_code
+        self._occ_own = ctx.occ_own
+        self._untraded_income: Dict[str, set] = {}
+        self._listing_warned: set = set()
 
-        self._build_option_map(rows)
-        self._build_name_map(rows)
-
-        pairing = pair_rbc_reorganizations(rows)
+        pairing = ctx.pairings[key]
         reorg_out: Dict[int, List[Dict[str, Any]]] = {}
         owned_by_corp_actions = 0
         leg_done = set()
@@ -683,7 +1055,10 @@ class RbcBrokerage(BaseBrokerage):
                 continue
             self.note_row_consumed()
             out = self._dispatch(r)
+            tag = self._extra_tag.get(r.order)
             for tx in out:
+                if tag:
+                    tx['description'] = f"{tx.get('description') or ''} {tag}"
                 if tx.pop('_expiry', False):
                     expiries.append(tx)
             transactions.extend(out)
@@ -706,6 +1081,7 @@ class RbcBrokerage(BaseBrokerage):
                 f"movements are NOT recorded anywhere — enter them manually "
                 f"via a .tt file.")
 
+        self._report_untraded_income()
         self._check_emitted_symbols(transactions)
         self.clamp_settlement_to_expiry(transactions, expiries)
         # Parser-level disambiguation so a downstream `taxjson-sort
@@ -725,50 +1101,12 @@ class RbcBrokerage(BaseBrokerage):
                                               opt['expiry'], opt['strike'])
         return None
 
-    def _build_option_map(self, rows) -> None:
-        """RBC 7-character option code → the OCC symbol of its
-        chronologically FIRST row in the file. One code is one contract:
-        RBC re-describes contracts over time (8DZQBW7 "CALL .RCI" later
-        "CALL .RCI.B"), and keying each row on its own text split one
-        position across two symbols. Option-adjustment (XCH) rows are
-        excluded — their pairing decides the post-adjustment identity."""
-        self._occ_by_code: Dict[str, str] = {}
-        seen_other: Dict[str, set] = {}
-        chrono = sorted((r for r in rows if r.symbol and r.cls != 'reorg'),
-                        key=lambda r: (r.date, r.k))
-        for r in chrono:
-            occ = self._row_occ(r)
-            if not occ:
-                continue
-            first = self._occ_by_code.setdefault(r.symbol, occ)
-            if occ != first:
-                seen_other.setdefault(r.symbol, set()).add(occ)
-        for code, others in sorted(seen_other.items()):
-            self._warn(
-                f"RBC code {code} is described as more than one contract "
-                f"({self._occ_by_code[code]} first, then "
-                f"{', '.join(sorted(others))}) — keeping the FIRST so the "
-                f"position stays one symbol. Check the contract terms.")
-
-    def _build_name_map(self, rows) -> None:
-        """Security-name keys → the real ticker, to resolve RBC temporary
-        codes (C136042, H015283) on trade rows back to the listed ticker."""
-        self._ticker_by_name: Dict[str, str] = {}
-        for r in rows:
-            if not r.symbol or rbc_is_temp_symbol(r.symbol) \
-                    or rbc_is_option_code(r.symbol):
-                continue
-            for key in (rbc_norm_company(r.symdesc), rbc_rights_key(r.desc),
-                        rbc_rights_key(r.symdesc)):
-                if key:
-                    self._ticker_by_name.setdefault(key, r.symbol)
-
     def _resolve_temp(self, r) -> str:
         if not rbc_is_temp_symbol(r.symbol):
             return r.symbol
         for key in (rbc_norm_company(r.symdesc), rbc_rights_key(r.desc),
                     rbc_rights_key(r.symdesc)):
-            hit = self._ticker_by_name.get(key) if key else None
+            hit = self._ctx.ticker_for_name(key, r.date) if key else None
             if hit:
                 self._note(f"line {r.line}: RBC temporary code {r.symbol} "
                            f"resolved to {hit} by its security name")
@@ -778,16 +1116,95 @@ class RbcBrokerage(BaseBrokerage):
     def _equity_symbol(self, symbol: str, currency: str, r=None, *,
                        market: bool = False) -> str:
         """Suffix a bare equity symbol by the row's currency — or, for
-        income rows (`market=True`), by the symbol's MARKET currency
-        learned from its trade rows — with the built-in USD DLR ETF rule
+        income rows (`market=True`), by the LISTING the account holds
+        (see `_income_currency`) — with the built-in USD DLR ETF rule
         (the USD class of the TSX-listed US-dollar ETF is DLR.U.TO)."""
         if r is not None and currency == 'USD' and symbol.upper() in (
                 'DLR', 'DLR.U') and (_RBC_USD_DLR_RE.search(r.symdesc or '')
                                      or _RBC_USD_DLR_RE.search(r.desc or '')):
             return 'DLR.U.TO'
-        if market:
-            currency = self._symbol_currency.get(symbol, currency) or currency
+        if market and r is not None:
+            currency = self._income_currency(r) or currency
         return self.apply_currency_suffix(symbol, currency)
+
+    def _income_currency(self, r) -> str:
+        """The listing (by currency) an income/withholding/ROC/fee row
+        belongs to, from the account's own trade rows in ALL its files:
+        a TSX stock paying USD keeps .TO; when a bare symbol names two
+        securities (HCA Healthcare in USD and a Hamilton ETF in CAD; the
+        NVIDIA stock and its CAD CDR), the row goes to the line with the
+        same Symbol Description, else the one held at the time, else the
+        one in the row's currency. A symbol the files never trade keeps
+        the payment currency (said once at the end)."""
+        if not r.symbol:
+            return r.currency
+        per = self._ctx.listings.get(r.symbol)
+        if not per:
+            self._untraded_income.setdefault(r.symbol, set()).add(
+                (r.currency, r.cls))
+            return r.currency
+        name = rbc_norm_company(r.symdesc)
+        if len(per) == 1:
+            (cur, li), = per.items()
+            if (cur != r.currency and name and li.names
+                    and name not in li.names
+                    and (r.symbol, cur) not in self._listing_warned):
+                self._listing_warned.add((r.symbol, cur))
+                self._warn(
+                    f"{r.currency} {r.cls} row(s) for {r.symbol} "
+                    f"({' '.join(r.symdesc.split())!r}) booked on the only "
+                    f"listing the account trades, "
+                    f"{self.apply_currency_suffix(r.symbol, cur)} "
+                    f"({', '.join(sorted(map(repr, li.names.values())))}) — "
+                    f"the names differ; if this is another security, map it "
+                    f"with a ticker.map line. First: {r.label()}")
+            return cur
+        named = [c for c, li in per.items() if name and name in li.names]
+        if len(named) == 1:
+            return named[0]
+        pool = named or sorted(per)
+        held = [c for c in pool if per[c].held_on(r.date)]
+        if len(held) == 1:
+            return held[0]
+        if r.currency in (held or pool):
+            return r.currency
+        if (r.symbol, '*') not in self._listing_warned:
+            self._listing_warned.add((r.symbol, '*'))
+            self._warn(
+                f"{r.cls} row for {r.symbol} in {r.currency}: the account "
+                f"trades {r.symbol} as {', '.join(sorted(per))} listings and "
+                f"neither the Symbol Description nor the holdings tell which "
+                f"one this belongs to — booked on "
+                f"{self.apply_currency_suffix(r.symbol, r.currency)}. Check "
+                f"it: {r.label()}")
+        return r.currency
+
+    def _report_untraded_income(self) -> None:
+        """Income on a symbol no file of the account trades: the listing
+        comes from the payment currency alone. A TSX stock paying USD
+        whose buys sit in an earlier year's (absent) export — or in a
+        hand-written .tt — then gets a .US identity; for a ROC or book
+        adjustment that moves ACB on an empty pool, so warn."""
+        for sym, kinds in sorted(self._untraded_income.items()):
+            curs = sorted({c for c, _ in kinds})
+            acb = any(cls in ('roc', 'book-adjust') for _, cls in kinds)
+            listed = ', '.join(self.apply_currency_suffix(sym, c)
+                               for c in curs)
+            alt = 'TO' if 'USD' in curs else 'US'
+            kinds_txt = ', '.join(sorted({k for _, k in kinds}))
+            msg = (f"{sym}: {kinds_txt} row(s) but no trade rows for {sym} "
+                   f"in any RBC file of this account — booked as {listed}, "
+                   f"the payment currency's listing. Only if the position "
+                   f"is really held under the other listing (a TSX stock "
+                   f"paying USD, bought in an export or .tt outside these "
+                   f"inputs), add to ticker.map:  GLOBAL "
+                   f"{self.apply_currency_suffix(sym, curs[0])} "
+                   f"{sym}.{alt}")
+            if acb and curs != ['CAD']:
+                self._warn(msg + " — a return of capital on the wrong "
+                           "listing hits an empty pool and becomes a gain.")
+            elif curs != ['CAD']:
+                self._note(msg)
 
     def _check_emitted_symbols(self, txs) -> None:
         bad: Dict[str, int] = {}
@@ -1180,11 +1597,12 @@ class RbcBrokerage(BaseBrokerage):
         over. RBC's own trade rows keep describing the adjusted contract
         with the ORIGINAL terms (TOU 64 after the $0.50 adjustment to
         63.50; TRP after .TRP1), so the position keeps its original OCC
-        symbol unless the new code's own trade rows in this file describe
-        a different contract, in which case it is renamed (factor 1)."""
+        symbol unless the new code's own trade rows — in ANY file of the
+        account, so a close in next year's export counts — describe a
+        different contract, in which case it is renamed (factor 1)."""
         rem, rc = ev.removal, ev.receipt
         old = self._occ_by_code.get(rem.symbol) or self._row_occ(rem)
-        new_own = self._occ_by_code.get(rc.symbol)
+        new_own = self._occ_own.get(rc.symbol)
         described = self._row_occ(rc)
         if not old:
             self._warn(f"option adjustment on {rem.date}: cannot tell which "
@@ -1203,6 +1621,14 @@ class RbcBrokerage(BaseBrokerage):
         tgt_sym = self.apply_currency_suffix(target, rc.currency)
         adj = (f" (RBC now describes it as {described})"
                if described and described != old else '')
+        if adj and not new_own:
+            # No file of the account trades the new code: a later export
+            # (another project, opened here via .tt) may close it under
+            # the new description — say how to keep one symbol.
+            adj += (f"; if a later export closes it as {described}, add to "
+                    f"ticker.map:  GLOBAL "
+                    f"{self.apply_currency_suffix(described, rc.currency)} "
+                    f"{self.apply_currency_suffix(old, rem.currency)}")
         factor = rc.qty / abs(rem.qty) if rem.qty else 1.0
         if tgt_sym == old_sym and abs(factor - 1.0) < 1e-12:
             self._note(f"option adjustment {rem.date}: {rem.symbol}→{rc.symbol} "
@@ -1238,14 +1664,40 @@ class RbcBrokerage(BaseBrokerage):
         src_raw = rem.symbol
         how = ''
         if rbc_is_temp_symbol(src_raw) or not src_raw:
-            hit = self._ticker_by_name.get(rbc_norm_company(rem.symdesc)) \
-                if rem.symdesc else None
+            # The old company's ticker from any row of the account's
+            # files that predates the event (its buys are usually in an
+            # earlier year's export).
+            old_name, _new_name = _rbc_removal_names(rem)
+            hit = None
+            for nm in (rem.symdesc, old_name):
+                key = rbc_norm_company(nm) if nm else ''
+                hit = self._ctx.ticker_for_name(key, rem.date,
+                                                before_only=True)
+                if hit:
+                    break
             if hit:
                 src_raw, how = hit, f" (temporary code {rem.symbol} = {hit} by name)"
             else:
                 src_raw = rc.symbol
                 how = (f" (temporary code {rem.symbol or '-'} assumed to be "
                        f"the receipt's ticker {rc.symbol})")
+                same_co = rbc_name_similarity(
+                    old_name, _rbc_receipt_name(rc)) >= 0.8
+                if not (same_co and abs(removed - received) > 1e-9):
+                    tgt_guess = self._equity_symbol(rc.symbol, rc.currency, rc)
+                    self._warn(
+                        f"reorganization on {rem.date}: the removal is "
+                        f"booked under RBC temporary code {rem.symbol or '-'} "
+                        f"({old_name or 'no name'!r}) and no row in this "
+                        f"account's RBC files names that company's ticker, "
+                        f"so it is ASSUMED to be the receipt's {tgt_guess}. "
+                        f"If the old position was held under another ticker "
+                        f"(its buys in an export or .tt not in this "
+                        f"account's inputs), that pool is stranded and the "
+                        f"{tgt_guess} sale goes short. Fix: add the export "
+                        f"holding its buys, or add to ticker.map:  GLOBAL "
+                        f"<old ticker>.{tgt_guess.rsplit('.', 1)[-1]} "
+                        f"{tgt_guess}   — {rem.label()}", lint=True)
         src = self._equity_symbol(src_raw, rem.currency, rem)
         tgt = self._equity_symbol(rc.symbol, rc.currency, rc)
         time = rbc_time(max(rem.k, rc.k))

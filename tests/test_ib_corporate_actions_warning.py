@@ -50,11 +50,31 @@ def _run_parser_capture_stderr(content):
         os.remove(f.name)
 
 
+# A Corporate Actions row of a kind nothing books (neither this parser
+# nor taxjson-corp-actions).
+_IB_WITH_UNKNOWN = '''\
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers
+Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
+Corporate Actions,Data,Stocks,CAD,2025-10-29,"2025-10-28, 20:25:00","QZX(CA9990000001) Delisted (QZX, QZX CORP, CA9990000001)",-100,0,0,0
+Corporate Actions,Data,Stocks,USD,2025-10-30,"2025-10-29, 20:25:00","QZY(US9990000002) Delisted (QZY, QZY CORP, US9990000002)",-50,0,0,0
+'''
+
+
 class TestUnhandledCorporateActionWarning(unittest.TestCase):
-    def test_merger_emits_warning(self):
-        _, stderr = _run_parser_capture_stderr(_IB_WITH_MERGER)
+    def test_merger_rows_are_left_to_corp_actions(self):
+        # A share-for-share merger is booked by taxjson-corp-actions
+        # after the election. The old "unhandled ... add a manual
+        # TRANSFER" NOTE here was wrong advice (2026-09 audit).
+        txs, stderr = _run_parser_capture_stderr(_IB_WITH_MERGER)
+        self.assertEqual(txs, [])
+        self.assertNotIn('unhandled Corporate Action', stderr)
+        self.assertIn('taxjson-corp-actions', stderr)
+
+    def test_unknown_row_emits_warning(self):
+        _, stderr = _run_parser_capture_stderr(_IB_WITH_UNKNOWN)
         self.assertIn('unhandled Corporate Action', stderr)
-        self.assertIn('RGLD', stderr)
+        self.assertIn('QZX', stderr)
         # Hint at the manual workaround.
         self.assertIn('TRANSFER', stderr)
         self.assertIn('*_in.tt', stderr)
@@ -70,8 +90,7 @@ class TestUnhandledCorporateActionWarning(unittest.TestCase):
     def test_warning_counts_rows(self):
         """If multiple unhandled rows are present, the warning includes
         the total row count and a deduplicated ticker list."""
-        _, stderr = _run_parser_capture_stderr(_IB_WITH_MERGER)
-        # Two rows in the fixture: one CAD, one USD side of the same merger.
+        _, stderr = _run_parser_capture_stderr(_IB_WITH_UNKNOWN)
         self.assertIn('2 unhandled', stderr)
 
 

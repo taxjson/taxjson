@@ -61,10 +61,17 @@ class ProjectContext:
                 f"no taxjson.toml in {root} — run `taxjson serve` from a "
                 f"project directory (or pass `taxjson -C DIR serve`).")
         cfg = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+        # A missing / typo'd account type used to default to sheltered
+        # here, hiding a taxable account's gains; refuse it like every
+        # CLI command does (R1-268).
+        from taxjson.lib.config_check import account_type_problems
+        problems = account_type_problems(cfg)
+        if problems:
+            raise ValueError(f"{toml_path}: " + "; ".join(problems))
         settings = cfg.get("settings", {})
         accounts = [
             Account(name=name,
-                    type=a.get("type", "sheltered"),
+                    type=a["type"],
                     crypto=bool(a.get("crypto", False)))
             for name, a in (cfg.get("accounts") or {}).items()
         ]

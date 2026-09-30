@@ -249,6 +249,68 @@ def split_event_key(symbol: str, date: str, ratio: Any, symbol_new: Any,
     return (symbol, account, date, rounded, new_sym)
 
 
+# Brokers date one corporate split differently: IB books KLAC's 10:1 on
+# 06-11, Questrade on 06-15. A key on the exact date kept both copies and
+# scaled the pool by ratio**2 (2026-09 audit). Copies of the same split
+# (symbol, ratio, rename target[, account]) within this many calendar
+# days are ONE event — use `split_seen`, not a bare `key in seen`. Two
+# genuine splits of one security at the same ratio a week apart do not
+# happen.
+SPLIT_DATE_WINDOW_DAYS = 7
+
+# Events already noted, so the note prints once per event per process.
+_SPLIT_DATE_NOTES: Set[Tuple] = set()
+
+
+def _shift_date(date: str, days: int) -> Optional[str]:
+    from datetime import datetime, timedelta
+    try:
+        d = datetime.strptime((date or '')[:10], '%Y-%m-%d')
+    except ValueError:
+        return None
+    return (d + timedelta(days=days)).strftime('%Y-%m-%d')
+
+
+def split_seen(seen: Set, symbol: str, date: str, ratio: Any,
+               symbol_new: Any, account: Optional[str] = None,
+               *, window: int = SPLIT_DATE_WINDOW_DAYS) -> Optional[str]:
+    """Split-event membership with a date tolerance. Returns None and
+    records the event when no copy of it is in `seen` yet; returns the
+    date of the copy already recorded (possibly `date` itself) when this
+    row repeats an event within `window` days. `seen` is a plain set of
+    split_event_key tuples, so shared-set call sites keep working."""
+    key = split_event_key(symbol, date, ratio, symbol_new, account=account)
+    if key in seen:
+        return date
+    for off in range(1, window + 1):
+        for sign in (-1, 1):
+            other = _shift_date(date, sign * off)
+            if other is not None and split_event_key(
+                    symbol, other, ratio, symbol_new,
+                    account=account) in seen:
+                return other
+    seen.add(key)
+    return None
+
+
+def note_split_date_conflict(symbol: str, kept: str, dropped: str,
+                             ratio: Any, stream=None) -> None:
+    """One stderr note per event: the same split was booked on two dates
+    and is applied once, on `kept`."""
+    import sys
+    if kept == dropped:
+        return
+    k = (symbol, round(float(ratio or 0), 9), min(kept, dropped),
+         max(kept, dropped))
+    if k in _SPLIT_DATE_NOTES:
+        return
+    _SPLIT_DATE_NOTES.add(k)
+    print(f"note: split {symbol} x{float(ratio or 0):g} is booked on two "
+          f"dates ({min(kept, dropped)} and {max(kept, dropped)}) — one "
+          f"corporate event reported by two sources; applied ONCE, on "
+          f"{kept}.", file=stream or sys.stderr)
+
+
 def cumulative_factor(events: List[Tuple[str, float]],
                       from_date: str, to_date: str) -> float:
     """Cumulative split ratio converting a quantity denominated at
@@ -458,16 +520,22 @@ class SplitTimeline:
         event per account for the walks whose pools are per-account."""
         if seen is None:
             seen = set()
-        out = []
-        for t in txs:
-            if getattr(t, 'action', None) == 'SPLIT':
-                key = split_event_key(
-                    t.symbol, t.date, t.quantity,
-                    getattr(t, 'symbol_new', ''),
-                    account=(getattr(t, 'account', '') if per_account
-                             else None))
-                if key in seen:
-                    continue
-                seen.add(key)
-            out.append(t)
+        # Earliest copy first: a split booked on two dates by two
+        # brokers (split_seen's window) is applied on the EARLIER date,
+        # so post-split trades in between never meet a pre-split pool.
+        keep = set()
+        splits = [t for t in txs if getattr(t, 'action', None) == 'SPLIT']
+        for t in sorted(splits, key=lambda t: t.date or ''):
+            prior = split_seen(
+                seen, t.symbol, t.date, t.quantity,
+                getattr(t, 'symbol_new', ''),
+                account=(getattr(t, 'account', '') if per_account
+                         else None))
+            if prior is None:
+                keep.add(id(t))
+            else:
+                note_split_date_conflict(t.symbol, prior, t.date,
+                                         t.quantity)
+        out = [t for t in txs
+               if getattr(t, 'action', None) != 'SPLIT' or id(t) in keep]
         return out

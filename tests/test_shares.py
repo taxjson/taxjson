@@ -93,12 +93,14 @@ class TestShares(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("no taxable account", r.stderr)
             self.assertNotIn("Traceback", r.stderr)
-            # A non-table [accounts] entry must not traceback.
+            # A non-table [accounts] entry must not traceback; it is a
+            # clear config error like an invalid type (R1-268).
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2026\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts]\nrrsp = "x"\n')
             r = _run(root, "shares", "--sheltered", "--json")
-            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotEqual(r.returncode, 0, r.stderr)
+            self.assertIn("[accounts.rrsp] must be a table", r.stderr)
             self.assertNotIn("Traceback", r.stderr)
             # JSON quantities are rounded, not float noise.
             _gains(root, "rrsp", {"F.US": (0.1, 1.0)})

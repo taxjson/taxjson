@@ -355,12 +355,18 @@ class TestCanadaMergerRules(unittest.TestCase):
         cash-in-lieu (see `_snap_qty_to_whole_shares`), so net_amount
         is `target_fmv × 100/100.0026` — per-share basis preserved."""
         # Event with explicit target_fmv (USD value at acquisition).
+        # ONE valuation (2026-09 audit): the SSL proceeds are the FMV of
+        # the RGLD received — 18,550 USD at the event-date rate — not
+        # the broker's separate out-leg figure (25,920.67 CAD), whose
+        # gap to the in-leg was a permanent phantom gain.
         ev = self._event(target_fmv=18550.0)
-        rows = resolve_event(ev, 'taxable_disposition')
+        fx = lambda a, f, t, d: a * 1.4 if (f, t) == ('USD', 'CAD') \
+            else a / 1.4
+        rows = resolve_event(ev, 'taxable_disposition', fx=fx)
         sell, buy = rows
-        # Sell side stays in source currency.
+        # Sell side stays in source currency, valued from the in-leg.
         self.assertEqual(sell['currency'], 'CAD')
-        self.assertAlmostEqual(sell['net_amount'], 25920.67, places=2)
+        self.assertAlmostEqual(sell['net_amount'], 18550.0 * 1.4, places=2)
         # Buy side flips to target currency and uses target_fmv,
         # proportionally reduced to the whole-share count.
         self.assertEqual(buy['currency'], 'USD')

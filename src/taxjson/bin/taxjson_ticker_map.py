@@ -53,50 +53,76 @@ TickerMap = namedtuple("TickerMap",
                         "distinct"])
 
 
-def load_map_file(file_path: Path) -> "TickerMap":
-    """Parse a keyword-prefixed ticker-map file into a TickerMap."""
+def _parse_map_file(file_path: Path):
+    """(TickerMap, problems, notes). `problems` are the lines that
+    could not be parsed — each rule on them is DROPPED — as
+    `<file>:<lineno>: <message>: '<line>'`; `notes` are harmless
+    no-op lines (a DISTINCT that pairs a symbol with itself)."""
     glob: Dict[str, str] = {}
     tobase: Dict[str, str] = {}
     journal: Dict[str, str] = {}
     delete = set()
     distinct = set()
+    problems: List[str] = []
+    notes: List[str] = []
     buckets = {"GLOBAL": glob, "TOBASE": tobase, "JOURNAL": journal}
     with file_path.open("r", encoding="utf-8") as f:
-        for raw in f:
+        for lineno, raw in enumerate(f, 1):
             line = raw.strip()
             if not line or line.startswith('#'):
                 continue
+            where = f"{file_path.name}:{lineno}"
             parts = line.split()
             kw = parts[0].upper()
             if kw not in _MAP_KEYWORDS:
-                print(f"warning: ticker-map line has no GLOBAL/TOBASE/"
-                      f"JOURNAL/DELETE/DISTINCT keyword, skipping: "
-                      f"{raw.strip()!r}", file=sys.stderr)
+                problems.append(
+                    f"{where}: line has no GLOBAL/TOBASE/JOURNAL/DELETE/"
+                    f"DISTINCT keyword: {line!r}")
                 continue
             if kw == "DELETE":
                 if len(parts) >= 2:
                     delete.add(parts[1])
                 else:
-                    print(f"warning: DELETE line needs a symbol, skipping: "
-                          f"{raw.strip()!r}", file=sys.stderr)
+                    problems.append(f"{where}: DELETE line needs a "
+                                    f"symbol: {line!r}")
             elif kw == "DISTINCT":
                 if len(parts) >= 3:
                     if parts[1] == parts[2]:
-                        print(f"warning: DISTINCT pairs a symbol with "
-                              f"itself (no effect), skipping: "
-                              f"{raw.strip()!r}", file=sys.stderr)
+                        notes.append(f"{where}: DISTINCT pairs a symbol "
+                                     f"with itself (no effect): {line!r}")
                         continue
                     distinct.add(frozenset((parts[1], parts[2])))
                 else:
-                    print(f"warning: DISTINCT line needs `a b`, skipping: "
-                          f"{raw.strip()!r}", file=sys.stderr)
+                    problems.append(f"{where}: DISTINCT line needs "
+                                    f"`a b`: {line!r}")
             else:
                 if len(parts) >= 3:
                     buckets[kw][parts[1]] = parts[2]
                 else:
-                    print(f"warning: {kw} line needs `from to`, skipping: "
-                          f"{raw.strip()!r}", file=sys.stderr)
-    return TickerMap(glob, tobase, journal, delete, distinct)
+                    problems.append(f"{where}: {kw} line needs `from to` "
+                                    f"(two symbols separated by a space): "
+                                    f"{line!r}")
+    return TickerMap(glob, tobase, journal, delete, distinct), problems, notes
+
+
+def map_file_problems(file_path: Path) -> List[str]:
+    """The ticker-map lines that cannot be parsed (their rules would be
+    dropped), each as `<file>:<lineno>: <message>`. `taxjson run`
+    refuses a map with any: a dropped TOBASE/GLOBAL/JOURNAL rule
+    silently changes ACB pools and the Schedule 3 gain (S009-03)."""
+    return _parse_map_file(file_path)[1]
+
+
+def load_map_file(file_path: Path) -> "TickerMap":
+    """Parse a keyword-prefixed ticker-map file into a TickerMap. A
+    malformed line is skipped with a warning naming its line number
+    (`taxjson run` refuses such a map up front — map_file_problems)."""
+    tmap, problems, notes = _parse_map_file(file_path)
+    for msg in problems:
+        print(f"warning: {msg} — skipping", file=sys.stderr)
+    for msg in notes:
+        print(f"warning: {msg} — skipping", file=sys.stderr)
+    return tmap
 
 
 def merge_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:

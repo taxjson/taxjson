@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **One split booked on two dates applies once.** IB and Questrade date
+  the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
+  were applied, scaling the pool by the ratio twice. Copies of one split
+  (same security and ratio) within 7 days are one event, applied on the
+  earlier date, with a note.
+- **IB spin-offs go through the spin-off election.** IB `Spinoff` rows
+  were always booked as a dividend at IB's value, with no s.86.1 choice
+  (and a Canadian parent's tax-deferred spin-off taxed as income). They
+  now ask like every other broker's; the default dividend uses IB's
+  value without asking for it. Existing IB spin-offs need one election.
+- **Spin-offs use the broker's value.** A deemed-dividend spin-off with
+  no (or a 0) `fmv_per_share` hint is booked at the broker's reported
+  value when there is one. A taxable spin-off booked at $0 is warned
+  about on every run and in the account's .sum until a value is set.
+- **IB cash takeovers are booked.** `Merged(Acquisition) FOR USD 30.00
+  PER SHARE` is a sale at the cash amount (it was left in inventory with
+  only a .sum note). Decimal-ratio and class-share (`BRK B`) mergers are
+  parsed; a stock-plus-cash merger stops the run by name for manual
+  booking instead of vanishing.
+- **A taxable merger uses one value for both legs.** The old shares'
+  proceeds and the new shares' cost are now the same fair value (the
+  shares received, plus any cash in lieu); the broker's separate out-leg
+  and in-leg figures left their difference as a permanent phantom gain
+  or loss. Across currencies, each leg is converted at the event date
+  (a hint in USD was booked as CAD proceeds).
+- **A merger or spin-off held in two broker accounts is booked for
+  both.** Two IB sub-account statements, or two RBC accounts, feeding
+  one taxjson account kept only the first account's disposition. Their
+  quantities are now combined under the one election; an overlapping
+  statement of the same broker account still counts once.
+- **Questrade spin-off parents are found in any export of the account,**
+  and a US parent bought from the CAD side (`EXCHANGE RATE` rows) is
+  named with its US listing, as the parser books it. The s.86.1 cost
+  reduction used to land on an empty pool and book a phantom gain. RBC
+  spin-off parents and merger placeholders get the same all-exports
+  lookup.
+
 - **IB: a cancelled trade (`Ca`) nets out.** A Trades row coded `Ca`
   was booked as an ordinary trade, so a cancel-and-rebook was a phantom
   round trip: a loss sale rebooked a cent higher became two denied
@@ -41,6 +78,7 @@
 - **Decimal commas are refused in the IB diagnostics and slip
   reconciliation too** (open-position, dividend-accrual and slip cells
   were still comma-stripped and read 100x too large).
+
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is
@@ -70,6 +108,95 @@
   when mapped; otherwise buy/sell rows get the standard holiday-aware
   cycle (T+1/T+2/T+3 by era, options T+1) on the listing's market.
   `[options] settle_on_trade_date = true` keeps the trade date (crypto).
+- **RBC: one identity across an account's yearly exports.** The parser
+  learned a symbol's listing, an option code's contract and a temporary
+  reorganization code's company from each file alone. Now all of an
+  account's RBC files are read together. A US stock's USD dividend no
+  longer lands on the TSX listing that shares its bare ticker (owner
+  2024: HCA and NVDA dividends and withholding move from .TO to .US; no
+  gain changes). A TSX stock's USD dividend or return of capital in a
+  year with no trades keeps its .TO listing. An option re-described
+  between exports (RCI vs RCI.B, XCH-adjusted TRP1) keeps one symbol, so
+  its close is no longer booked as a new written option. A name change
+  under a temporary code finds the old ticker in an earlier export, and
+  warns with the `ticker.map` line when no file names it.
+- **RBC: overlapping re-downloads are de-duplicated.** A row's time came
+  from its position within the day, so the same trade in two downloads
+  of one account got two ids and was booked twice. Rows already in an
+  earlier file of the same RBC account are now skipped (identical fills
+  on one day are matched by count), with a note; files without an
+  Account column are never matched, and a warning says so.
+- **RBC: ticker change without a reorganization row.** When one symbol
+  stops with shares open and another with the same Symbol Description
+  and currency opens with a sale they cover (ORCC to OBDC in 2023), the
+  parser warns and prints the `GLOBAL` line for `ticker.map`.
+
+- **The Canada estimate takes deductions.** `--deductions` (RRSP 20800,
+  FHSA, RPP ...) and `--carrying-charges` (line 22100), or
+  `deductions`/`carrying_charges` in `[estimate]` (which `instalments`
+  reads too), lower net and taxable income; the AMT base takes the
+  deductions in full and carrying charges at 50%. Before, a year with
+  an RRSP deduction and little other income was overstated (the
+  owner's filed 2025 mix: +16,082 before, +1,354 after) and a binding
+  AMT could read as not binding.
+- **A malformed `ticker.map` line stops the run.** A typo such as
+  `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
+  ACB pools and the Schedule 3 gain, and the warning reached only
+  `reports/*.sum` while `run` and `run --strict` exited 0. `taxjson run`
+  now refuses the map, listing each bad line as `ticker.map:<line>`.
+- **An export that parses to 0 transactions is loud, and fatal under
+  `--strict`.** A Coinbase file with a renamed header, or a `kr_`-named
+  file that is not a Kraken ledger, dropped its whole book with exit 0
+  even under `run --strict`, and the checklist called the run clean.
+  Every run (cached or not) now prints a WARNING naming the file on
+  stderr, `run --strict` stops, and the checklist's `run-clean` step
+  needs attention.
+- **An Excel export in `inputs/<account>/` stops the run.** Only `.csv`
+  and `.tt` files are read, so a Questrade `.xlsx` dropped in unconverted
+  lost every trade in it with exit 0 and no mention. `taxjson run` now
+  names each unconverted spreadsheet and stops (a spreadsheet next to
+  its converted CSV only warns); an input folder with only a spreadsheet
+  and no `[accounts.*]` section is named too; the checklist no longer
+  counts `.xlsx`/`.txt` files as account activity and its `run-clean`
+  step flags an unread spreadsheet.
+- **Every command refuses an invalid account type, not only `run`.** An
+  account `type` edited after the run (`"Taxable"`, or deleted) silently
+  dropped that account from `estimate`, `instalments`, `sum`,
+  `form-export`, `carryover` and `close-year` (which locked the wrong
+  total), all with exit 0. Every command that reads `taxjson.toml`, and
+  `taxjson serve`, now stops with the same message `run` gives.
+- **A .tt file named after a broker no longer erases that broker's
+  trades.** `questrade.tt` (or `webull.tt`, `ib.tt`, `generic.tt` ...)
+  wrote its converted JSON over the broker's parse in `work/`, so every
+  trade in that broker's CSVs vanished with exit 0. Converted .tt files
+  now live at `work/<account>_tt_<stem>.json`; the first run after
+  upgrading removes the old `<account>_<stem>.json` copies as stale.
+- **Coinbase Advanced Trade on a crypto-quoted pair books both coins.**
+  A fill on `ETH-BTC` booked only the ETH; the BTC spent (or received)
+  was never disposed of (or acquired), so its gain went missing and a
+  phantom BTC position stayed in the book. The quote coin's leg is now
+  booked at the fill's stated value; Notes that don't say how much of it
+  moved stop the parse.
+- **Coinbase Buy/Sell with a blank Total.** It booked $0 cost or $0
+  proceeds with no warning. The Total is now rebuilt from Subtotal ± fee
+  (or quantity × price ± fee), with a note; a row with nothing to rebuild
+  it from stops the parse, naming the row.
+- **Kraken ledger trades missing from the trades export.** They were
+  dropped behind the same note a complete run prints. Each unmatched
+  trade is now an `UNBOOKED` warning on the console (count, dates,
+  masked refids), and `taxjson run --strict` stops on it. A ledger whose
+  trades are all matched no longer prints the "parsed to 0 transactions"
+  warning.
+- **Crypto price lookups that fail are no longer $0.** A Yahoo error, or
+  a reply with no usable close, left staking income and cost basis at $0
+  and the run said "Validation passed". Now fill-crypto warns, each
+  unpriced row is a validation ERROR on the console, and `run --strict`
+  stops. A crypto validation error also no longer crashes `taxjson run`
+  with a TypeError.
+- **`crypto_ticker.map` at the project root is always read.** It was
+  ignored unless the cwd was the project root, and a map in the cwd
+  applied to whatever project was run. `run --fast` now re-prices after
+  the map is added, edited or deleted.
 
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the

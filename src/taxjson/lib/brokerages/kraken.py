@@ -496,6 +496,9 @@ class KrakenBrokerage(BaseBrokerage):
         # withdrawal, transfer, margin, ...). Summarized once at end of
         # parse — previously silently dropped.
         ignored_types: Dict[str, int] = {}
+        # refid -> local date of the ledger's `trade` rows; checked
+        # against the trades export after the loop (R1-104).
+        trade_refids: Dict[str, str] = {}
 
         with open(path, 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f)
@@ -667,6 +670,8 @@ class KrakenBrokerage(BaseBrokerage):
                             'usd': usd_v,
                         }
                 else:
+                    if type_raw == 'trade':
+                        trade_refids.setdefault(refid or f'?{txid}', date)
                     ignored_types[type_raw or '?'] = ignored_types.get(type_raw or '?', 0) + 1
 
         # Ledger `trade` rows are NOT parsed here (the trades export is
@@ -675,12 +680,7 @@ class KrakenBrokerage(BaseBrokerage):
         # ledgers-only user whose actual trades were being dropped.
         trade_rows = ignored_types.pop('trade', 0)
         if trade_rows:
-            print(
-                f"note: Kraken ledger {path.name}: {trade_rows} trade "
-                f"row(s) ignored — supply the trades export "
-                f"(trades.csv); the ledger's trade rows are not parsed.",
-                file=sys.stderr,
-            )
+            self._check_trade_coverage(path, trade_rows, trade_refids)
         if ignored_types:
             detail = ', '.join(f"{k} x{v}" for k, v in sorted(ignored_types.items()))
             print(
@@ -695,6 +695,70 @@ class KrakenBrokerage(BaseBrokerage):
             transactions.extend(self._build_instant_trades(sides, refid))
         self.emit_skip_summary(path.name)
         return transactions
+
+    def _check_trade_coverage(self, path: Path, trade_rows: int,
+                              trade_refids: Dict[str, str]) -> None:
+        """Every ledger `trade` refid must be a fill in a trades export
+        beside the ledger — the trades export is what books them. One
+        that covers a shorter date range used to drop every sale in the
+        gap behind the same note a complete run prints (R1-104). Now
+        the gap is an UNBOOKED warning (echoed to the console by
+        `taxjson run`, fatal under `run --strict`) with counts, dates
+        and masked refids."""
+        txids = self._sibling_trades_txids(path)
+        missing = sorted((d, r) for r, d in trade_refids.items()
+                         if txids is None or r not in txids)
+        if not missing:
+            self.zero_tx_reason = (f"its {trade_rows} trade row(s) are "
+                                   f"booked from the trades export")
+            print(f"note: Kraken ledger {path.name}: {trade_rows} trade "
+                  f"row(s) ({len(trade_refids)} trade(s)) are booked from "
+                  f"the trades export beside it — every one matched.",
+                  file=sys.stderr)
+            return
+        dates = [d for d, _ in missing]
+        masked = ', '.join(f"{r[:2]}***" for _, r in missing[:5])
+        more = f" +{len(missing) - 5} more" if len(missing) > 5 else ''
+        why = ("no Kraken trades export (kr_*.csv / *kraken*.csv) is "
+               "in the same folder" if txids is None else
+               "the trades export(s) beside it do not contain them — "
+               "they likely cover a shorter date range")
+        print(f"warning: UNBOOKED: Kraken ledger {path.name}: "
+              f"{len(missing)} trade(s) of {len(trade_refids)} "
+              f"({dates[0]}..{dates[-1]}; refids {masked}{more}) are NOT "
+              f"booked — {why}. The ledger's trade rows are not parsed; "
+              f"supply the trades export covering the ledger's dates, "
+              f"beside it.", file=sys.stderr)
+
+    @staticmethod
+    def _sibling_trades_txids(path: Path) -> Optional[set]:
+        """Every txid in the Kraken TRADES export(s) in the ledger's
+        folder, or None when there is none."""
+        txids: set = set()
+        found = False
+        try:
+            siblings = sorted(path.parent.iterdir())
+        except OSError:
+            return None
+        for p in siblings:
+            if p == path or not p.is_file() or p.suffix.lower() != '.csv':
+                continue
+            n = p.name.lower()
+            if not (n.startswith('kr_') or 'kraken' in n):
+                continue
+            try:
+                with open(p, 'r', encoding='utf-8-sig') as f:
+                    if _classify_header(f.readline()) != 'trades':
+                        continue
+                    f.seek(0)
+                    found = True
+                    for raw in csv.DictReader(f):
+                        t = (_lower_row(raw).get('txid') or '').strip()
+                        if t:
+                            txids.add(t)
+            except UnicodeDecodeError:
+                continue
+        return txids if found else None
 
     def _income_row(self, row, ctx, asset_name, fee_ccy, amount, fee,
                     date, time, txid):

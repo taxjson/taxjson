@@ -92,8 +92,8 @@ def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:
         if kind in ("setting", "map") or not name:
             continue
         if kind == "tt":
-            stem = Path(name).stem
-            out.append(("tt", name, cache / f"{account}_{stem}.json"))
+            from taxjson.lib.pipeline import tt_json_path
+            out.append(("tt", name, tt_json_path(cache, account, name)))
         elif kind not in brokers:
             brokers.append(kind)
     for b in brokers:

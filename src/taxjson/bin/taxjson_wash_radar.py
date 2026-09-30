@@ -21,7 +21,7 @@ from typing import List, Dict, Any
 
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
-                                            split_event_key)
+                                            split_seen)
 from taxjson.lib.ticker_map import is_option_ticker
 
 # UTC-noon epoch helpers: shared home in lib/dates (the DST rationale
@@ -273,12 +273,10 @@ def main():
             # differ so upstream dedup can't collapse them. Keyed by the
             # shared split-event identity (normalized against the mapped
             # ticker, matching this walk's pool keys).
-            _skey = split_event_key(ticker, tx.date, ratio,
-                                    getattr(tx, 'symbol_new', ''),
-                                    account=acct)
-            if _skey in seen_splits:
+            if split_seen(seen_splits, ticker, tx.date, ratio,
+                          getattr(tx, 'symbol_new', ''),
+                          account=acct) is not None:
                 continue
-            seen_splits.add(_skey)
             scaled_qty = account_pool_qty.get(key, 0.0) * ratio
             acb = account_pool_acb.get(key, 0.0)
             new_sym = (getattr(tx, 'symbol_new', '') or '').strip()
