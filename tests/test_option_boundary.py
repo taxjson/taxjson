@@ -23,6 +23,9 @@ class TestStraddling(unittest.TestCase):
             T(date="2026-01-10", date_settle="2026-01-12", symbol=OPT, quantity=1, price=1, net_amount=101.0),
             T(date="2026-01-16", date_settle="2026-01-16", symbol=OPT, quantity=1, price=0, net_amount=0.0),
             TaxTransaction(action="ASSIGN", date="2026-01-16", date_settle="2026-01-16", symbol=OPT, quantity=1, price=0, net_amount=0.0, currency="CAD", account="margin"),
+            # The assignment's share leg: without it the engine (and
+            # option-boundary, S075-09) treats the ASSIGN as cash-settled.
+            TaxTransaction(action="ASSIGN", date="2026-01-16", date_settle="2026-01-19", symbol="Q.TO", quantity=-100, price=50, net_amount=5000.0, currency="CAD", account="margin"),
             T(date="2025-03-01", date_settle="2025-03-03", symbol="Z260116C00010000.TO", quantity=-1, price=2, net_amount=199.0),
             T(date="2025-04-01", date_settle="2025-04-02", symbol="Z260116C00010000.TO", quantity=1, price=1, net_amount=101.0)]
 
@@ -61,7 +64,9 @@ class TestCommand(unittest.TestCase):
             (root / "work").mkdir(); (root / "filed").mkdir()
             (root / "filed" / "2025.json").write_text("{}")
             rows = [{"action": "BUYSELL", "date": "2025-12-15", "time": "09:30:00", "date_settle": "2025-12-16", "symbol": OPT, "quantity": -1, "price": 4.0, "net_amount": 399.0, "currency": "CAD", "account": "margin"},
-                    {"action": "ASSIGN", "date": "2026-01-16", "time": "09:30:00", "date_settle": "2026-01-16", "symbol": OPT, "quantity": 1, "price": 0.0, "net_amount": 0.0, "currency": "CAD", "account": "margin"}]
+                    {"action": "ASSIGN", "date": "2026-01-16", "time": "09:30:00", "date_settle": "2026-01-16", "symbol": OPT, "quantity": 1, "price": 0.0, "net_amount": 0.0, "currency": "CAD", "account": "margin"},
+                    # share leg (S075-09: without one the ASSIGN is cash-settled)
+                    {"action": "ASSIGN", "date": "2026-01-16", "time": "09:30:00", "date_settle": "2026-01-19", "symbol": "Q.TO", "quantity": -100, "price": 50.0, "net_amount": 5000.0, "currency": "CAD", "account": "margin"}]
             (root / "work" / "margin_base.json").write_text(json.dumps({"transactions": rows}))
             (root / "work" / "rrsp_base.json").write_text(json.dumps({"transactions": rows}))   # sheltered: ignored
             def cli(*a):

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **option-boundary: an open write expiring later this year is open.**
+  A written option whose expiry is after today is an ordinary open row
+  (premium recognised in the write year), not "expired … the broker
+  export is missing it"; the checklist no longer turns `[!]` for it.
+- **option-boundary follows renames and keeps the sign.** A ratio-1
+  rename SPLIT of an option carries the written lot to the new symbol,
+  so its buy-back is matched; a write whose commission exceeds the
+  premium shows a negative premium, as the engine books it.
+- **option-boundary: cash-settled index options are not folded.** An
+  assignment whose underlying never trades as stock in the account
+  (XSP, SPX) is reported as a cash settlement — premium in the write
+  year, settlement loss in the close year, no T1-ADJ — instead of
+  advising the removal of a premium the engine keeps.
+- **option-boundary reads a lock's close timing.** When `filed/<year>.json`
+  records close timing but this project puts that year's writes on grant
+  timing, an expiry, buy-back or still-open write is ATTENTION (the
+  premium is in no return: set `option_grant_timing_since` to the next
+  year, or T1-ADJ to add it), and an assignment says no amendment is
+  needed instead of "remove the premium … filed with it".
+
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;
