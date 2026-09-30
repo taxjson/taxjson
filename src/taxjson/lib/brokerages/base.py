@@ -818,6 +818,23 @@ class BaseBrokerage:
             if d and s and d <= exp < s:
                 tx['date_settle'] = exp
 
+    @staticmethod
+    def check_settle_order(date_iso: str, settle_iso: str, *,
+                           where: str = '', what: str = '') -> None:
+        """A broker-printed settlement date EARLIER than the trade date is
+        a garbled cell, not a settlement: the tax year follows the settle
+        date, so it moved the disposition into the prior year with no
+        warning (audit R1-75 / S065-05). Refused (CA-DATE-03 /
+        US-DATE-04)."""
+        if date_iso and settle_iso and settle_iso < date_iso:
+            loc = f"{where}: " if where else ''
+            raise BrokerageParseError(
+                f"{loc}Settlement Date {settle_iso} is before the trade "
+                f"date {date_iso}{f' ({what})' if what else ''} — a "
+                f"settlement never precedes its trade, and the tax year "
+                f"follows the settle date; refusing to guess. Fix the "
+                f"cell (or blank it for the standard cycle).")
+
     def settlement_date_t1(self, date_str: str, *formats: str,
                            currency: str = 'USD') -> str:
         """Add one settlement day (holiday-aware for USD and CAD) to the

@@ -993,6 +993,9 @@ class QuestradeBrokerage(BaseBrokerage):
                     # description too (audit S065-04).
                     date = self.non_option_expiry_booking_date(date, desc)
                 date_settle = date
+            self.check_settle_order(date, date_settle,
+                                    where=self._where(lineno),
+                                    what=repr(desc[:50]))
 
             _tx = {
                 'action': 'ASSIGN' if is_assigned else 'BUYSELL',
@@ -1263,6 +1266,8 @@ class QuestradeBrokerage(BaseBrokerage):
         date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
         sdt = self._date(row, 'Settlement Date', lineno, required=False)
         date_settle = sdt.strftime('%Y-%m-%d') if sdt else date
+        self.check_settle_order(date, date_settle, where=self._where(lineno),
+                                what=repr(desc[:50]))
         m = _REINV_PRICE_RE.search(desc)
         # 'REINV@C$1,234.56' is 1234.56, not 1 (audit S062-20); a
         # decimal comma falls back to the cash / units.

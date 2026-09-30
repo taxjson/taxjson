@@ -6,6 +6,7 @@ import unittest
 
 from taxjson.lib.brokerages.base import (BrokerageParseError,
                                          _parse_div_qty_rate)
+from tax_rules import rule
 from test_fix_rbcqt import q, qdiv, qt_parse, rrow, rbc_parse, of
 
 
@@ -102,6 +103,44 @@ class TestDescriptionNumbers(unittest.TestCase):
         buy = of(txs, action='BUYSELL')[0]
         self.assertAlmostEqual(buy['price'], 1234.56)
         self.assertAlmostEqual(buy['gross_amount'], 2469.12)
+
+
+# ------------------------------------------- settle date before the trade
+
+class TestSettleBeforeTrade(unittest.TestCase):
+    """R1-75 / S065-05: a printed settlement date earlier than the trade
+    date moved the disposition into the prior tax year silently."""
+
+    @rule("CA-DATE-03")
+    @rule("US-DATE-04")
+    def test_questrade_settle_before_trade_is_refused(self):
+        bad = q(td='2025-01-03', sd='2024-12-30', action='Sell', qty='-10',
+                price='50', gross='500', net='495.05')
+        with self.assertRaises(BrokerageParseError) as cm:
+            qt_parse(bad)
+        self.assertIn('2024-12-30', str(cm.exception))
+        txs, _, _ = qt_parse(q(td='2025-01-03', sd='2025-01-06'))
+        self.assertEqual(txs[0]['date_settle'], '2025-01-06')
+
+    @rule("CA-DATE-03")
+    @rule("US-DATE-04")
+    def test_rbc_settle_before_trade_is_refused(self):
+        buy = rrow("June 13, 2024", "Buy", "QZB", "QZB CORP", "100", "10",
+                   "-1009.95", "CAD", "QZB CORP", settle="June 14, 2024")
+        sell = rrow("January 13, 2025", "Sell", "QZB", "QZB CORP", "-100",
+                    "6", "590.05", "CAD", "QZB CORP",
+                    settle="December 30, 2024")
+        with self.assertRaises(BrokerageParseError) as cm:
+            rbc_parse(buy + sell)
+        self.assertIn('2024-12-30', str(cm.exception))
+
+    def test_questrade_blank_settle_option_is_t_plus_1(self):
+        """R1-75's other half (fixed in the medium round, R1-194)."""
+        opt = q(td='2023-12-28', sd='', sym='QZA23Dec29C10.00',
+                desc='CALL QZA 12/29/23 10 QZA CORP', qty='1', price='1',
+                gross='-100', comm='-1', net='-101')
+        txs, _, _ = qt_parse(opt)
+        self.assertEqual(txs[0]['date_settle'], '2023-12-29')
 
 
 if __name__ == '__main__':

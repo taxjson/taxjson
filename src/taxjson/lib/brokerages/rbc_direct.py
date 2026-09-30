@@ -1557,6 +1557,8 @@ class RbcBrokerage(BaseBrokerage):
             # loss moved into the next year (audit S065-04).
             date = self.non_option_expiry_booking_date(date, desc)
             date_settle = date
+        self.check_settle_order(date, date_settle, where=self._at(r),
+                                what=repr(desc[:50]))
 
         qty = r.qty
         is_retraction = r.cls == 'retraction'
@@ -1776,6 +1778,8 @@ class RbcBrokerage(BaseBrokerage):
         if r.qty < 0:
             self._rei_reversals.append((rei_key, r))
             return []
+        self.check_settle_order(r.date, r.settle, where=self._at(r),
+                                what=repr(r.desc[:50]))
         m = _RBC_REINV_PRICE_RE.search(r.desc)
         # 'REINV@C$1,234.56' is 1234.56, not 1 (audit S062-20 /
         # S064-21); a decimal comma falls back to the cash / units.
