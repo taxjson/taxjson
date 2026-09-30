@@ -291,6 +291,12 @@ class QuestradeBrokerage(BaseBrokerage):
         ca_legs: List[str] = []                 # quantity-bearing DIS legs
         net_of_tax: List[str] = []              # NON-RES TAX WITHHELD divs
         no_book_value: List[str] = []           # transfer-ins at $0 cost
+        # CIL / REI reversals (audit R1-66): a same-code row with the
+        # signs negated cancels its original. Originals by key -> list of
+        # emitted leg groups; reversal rows -> (key, lineno), paired at
+        # the end of the parse (the export may list newest first).
+        rev_originals: Dict[tuple, List[List[Dict[str, Any]]]] = {}
+        reversals: List[tuple] = []
         self._rows_seen = 0
         for lineno, row in rows:
             self._rows_seen += 1
@@ -443,7 +449,8 @@ class QuestradeBrokerage(BaseBrokerage):
                 # the same convention as the DIS branch) and sold for
                 # the cash. In a taxable account the cash is the gain;
                 # was a counted skip.
-                legs = self._parse_cash_in_lieu(row, currency, desc, lineno)
+                legs = self._parse_cash_in_lieu(row, currency, desc, lineno,
+                                                rev_originals, reversals)
                 if legs:
                     # Consumed only on emission — the builder counts
                     # its own skip, and consuming AND skipping the same
@@ -461,19 +468,21 @@ class QuestradeBrokerage(BaseBrokerage):
                 # BUYSELL at that cost; the residual dividend cash
                 # (dividend − cost) stays as cash. Was a counted skip —
                 # DRIP shares never entered inventory.
-                tx = self._parse_reinvestment(row, currency, desc, lineno)
+                tx = self._parse_reinvestment(row, currency, desc, lineno,
+                                              rev_originals, reversals)
                 if tx:
                     self.note_row_consumed()   # builder counts its skip
                     transactions.append(tx)
                 continue
 
             is_trade = action_raw in ('Buy', 'Sell')
-            is_expired = action_raw == 'EXP' or ' - EXPIRED' in desc.upper()
-            is_assigned = (
-                action_raw in ('ASN', 'EX')
-                or 'ASSIGNMENT' in desc.upper()
-                or 'EXERCISE' in desc.upper()
-            )
+            _du = desc.upper()
+            code_expired = action_raw == 'EXP'
+            code_assigned = action_raw in ('ASN', 'EX')
+            word_expired = ' - EXPIRED' in _du
+            word_assigned = 'ASSIGNMENT' in _du or 'EXERCISE' in _du
+            is_expired = code_expired or word_expired
+            is_assigned = code_assigned or word_assigned
             if not (is_trade or is_expired or is_assigned):
                 # Previously a silent drop — a new Questrade action code
                 # lost rows with zero signal. Count it; the summary at
@@ -497,17 +506,70 @@ class QuestradeBrokerage(BaseBrokerage):
                     date, currency, "%Y-%m-%d")
 
             qty = self._num(row, 'Quantity', lineno)
-            if is_trade:
-                qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'Sell'))
-            # EXP / ASN / EX rows: the CSV quantity is already signed to
-            # close the open position — a long option expires or is
-            # exercised with a NEGATIVE quantity, a short with a positive
-            # one. signed_quantity() would force it positive and add a
-            # phantom contract instead of netting the position to zero.
             opt = self.parse_option_from_description(desc)
             mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
+            # The row's OWN money decides whether it is a zero-cash
+            # option leg (audit R1-63). A word in the description used
+            # to zero price, cash and commission on ANY row: an ASN
+            # stock leg (100 @ strike, Net -5000) was booked at $0 cost,
+            # a Buy/Sell of "ACME EXERCISE EQUIPMENT" vanished, and a
+            # "... RIGHTS - EXPIRED" sale lost its proceeds. Only a row
+            # with no cash is an expiry / assignment option leg; a row
+            # WITH cash keeps it (an ASN/EX stock leg stays the marked
+            # ASSIGN leg, which consumes the staged premium).
+            _where = self._where(lineno)
+            carries_cash = any(
+                abs(parse_strict_number(row.get(c), field=c, where=_where,
+                                        allow_blank=True, blank=0.0))
+                > 0.005 for c in ('Gross Amount', 'Net Amount'))
+            if carries_cash:
+                if code_expired:
+                    raise BrokerageParseError(
+                        f"{_where}: an EXP (expiry) row carries cash "
+                        f"(Gross {row.get('Gross Amount')!r}, Net "
+                        f"{row.get('Net Amount')!r}; {desc[:50]!r}) — an "
+                        f"expiry has none; refusing to guess whether it "
+                        f"is a sale.")
+                if code_assigned and opt:
+                    raise BrokerageParseError(
+                        f"{_where}: an {action_raw} option leg carries "
+                        f"cash ({desc[:50]!r}) — a cash-settled exercise "
+                        f"is not a shape this parser books; refusing to "
+                        f"guess.")
+                is_expired = False
+                is_assigned = code_assigned       # the marked stock leg
+                if is_assigned:
+                    # Direction from the cash: shares bought (Net < 0)
+                    # or delivered (Net > 0) on the assignment.
+                    _net = parse_strict_number(
+                        row.get('Net Amount'), field='Net Amount',
+                        where=_where)
+                    qty = abs(qty) if _net < 0 else -abs(qty)
+            else:
+                # A zero-cash row: an option's expiry/assignment leg, or
+                # an expiring right (EXP / "- EXPIRED") at $0.
+                is_assigned = code_assigned or (word_assigned and bool(opt))
+                if is_assigned and not opt:
+                    raise BrokerageParseError(
+                        f"{_where}: an {action_raw} row for "
+                        f"{(row.get('Symbol') or '').strip()!r} is not an "
+                        f"option and carries no cash ({desc[:50]!r}) — "
+                        f"booking the shares at $0 would misstate the "
+                        f"ACB; refusing to guess.")
+                if not (is_trade or is_expired or is_assigned):
+                    self.count_skip(
+                        f"action {action_raw or activity_type or '?'!s} "
+                        f"(zero-cash, not an option leg)")
+                    continue
+            if is_trade:
+                qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'Sell'))
+            # EXP / ASN / EX option legs: the CSV quantity is already
+            # signed to close the open position — a long option expires
+            # or is exercised with a NEGATIVE quantity, a short with a
+            # positive one. signed_quantity() would force it positive
+            # and add a phantom contract instead of netting it to zero.
 
-            if is_expired or is_assigned:
+            if (is_expired or is_assigned) and not carries_cash:
                 price = 0.0
                 net = 0.0
                 comm = 0.0
@@ -548,7 +610,7 @@ class QuestradeBrokerage(BaseBrokerage):
             # rate and filed it as AVGO.TO, a CDR-shaped symbol the
             # DISTINCT rule then kept apart from the real pool).
             listing_currency = currency
-            fx_m = _FX_SETTLED_RE.search(desc) if is_trade else None
+            fx_m = _FX_SETTLED_RE.search(desc) if carries_cash else None
             if fx_m and currency.upper() == 'CAD' and float(fx_m.group(1)) > 0:
                 rate = float(fx_m.group(1))
                 listing_currency = 'USD'
@@ -610,6 +672,7 @@ class QuestradeBrokerage(BaseBrokerage):
             transactions.append(_tx)
             if is_expired and not is_assigned:
                 expiries.append(_tx)
+        self._pair_reversals(transactions, rev_originals, reversals)
         self.clamp_settlement_to_expiry(transactions, expiries)
         self.disambiguate_split_fills(transactions)
         if ca_legs:
@@ -672,20 +735,32 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"Commission {abs(comm):,.2f} ({desc[:50]!r}) — a "
                 f"swapped or mislabelled column; refusing to book it.")
 
-    def _parse_cash_in_lieu(self, row, currency, desc, lineno):
+    def _parse_cash_in_lieu(self, row, currency, desc, lineno,
+                            rev_originals, reversals):
+        """CIL -> a same-day pair (the fraction acquired at $0, sold for
+        the cash). SIGNED (audit R1-66): Net Amount > 0 is the cash in
+        lieu; Net Amount < 0 is Questrade REVERSING an earlier CIL,
+        which cancels that original (paired in _pair_reversals) — abs()
+        booked it as a second sale, the cash counted twice as gain."""
         m = _CIL_RE.search(desc)
         frac = float(m.group(1)) if m else 0.0
-        cash = abs(self._num(row, 'Net Amount', lineno))
+        net = self._num(row, 'Net Amount', lineno)
+        cash = abs(net)
         if frac <= 0 or cash <= 0:
             self.count_skip("CIL row with no fraction/cash")
             return []
-        date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
         sym_raw, scur = self._resolve_symbol(row, currency)
         sym = self.apply_currency_suffix(sym_raw, scur)
+        key = ('CIL', sym, round(frac, 6), round(cash, 2))
+        if net < 0:
+            reversals.append((key, lineno, desc))
+            self.note_row_consumed()      # read into parser state
+            return []
+        date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
         base = {'date': date, 'date_settle': date, 'symbol': sym,
                 'currency': currency, 'commission': 0.0,
                 'account': self.DEFAULT_ACCOUNT, 'description': desc}
-        return [
+        legs = [
             {**base, 'action': 'BUYSELL', 'time': '09:30:00',
              'quantity': frac, 'price': 0.0, 'net_amount': 0.0,
              'gross_amount': 0.0},
@@ -693,6 +768,31 @@ class QuestradeBrokerage(BaseBrokerage):
              'quantity': -frac, 'price': round(cash / frac, 8),
              'net_amount': cash, 'gross_amount': cash},
         ]
+        rev_originals.setdefault(key, []).append(legs)
+        return legs
+
+    def _pair_reversals(self, transactions, rev_originals, reversals):
+        """Each CIL/REI reversal row cancels one original with the same
+        symbol, quantity and amount: both drop out. A reversal whose
+        original is not in this file is REFUSED — booking it would
+        either duplicate the event (the old abs()) or invent one."""
+        drop = set()
+        for key, lineno, desc in reversals:
+            groups = rev_originals.get(key) or []
+            if not groups:
+                kind, sym, qty, amt = key
+                raise BrokerageParseError(
+                    f"{self._where(lineno)}: a {kind} reversal "
+                    f"({sym} {qty:g}, {amt:,.2f}; {desc[:50]!r}) whose "
+                    f"original {kind} row is not in this file — refusing "
+                    f"to book it as a second event. If the original is "
+                    f"in an earlier export, delete both rows (they "
+                    f"cancel) or book the correction in a .tt file.")
+            for leg in groups.pop():
+                drop.add(id(leg))
+        if drop:
+            transactions[:] = [t for t in transactions
+                               if id(t) not in drop]
 
     def _parse_fee(self, row, currency, desc, lineno):
         """FCH / 'Fees and rebates' row → FEE. Questrade signs Net
@@ -720,28 +820,49 @@ class QuestradeBrokerage(BaseBrokerage):
             'description': desc,
         }
 
-    def _parse_reinvestment(self, row, currency, desc, lineno):
-        qty = abs(self._num(row, 'Quantity', lineno))
-        net = abs(self._num(row, 'Net Amount', lineno))
+    def _parse_reinvestment(self, row, currency, desc, lineno,
+                            rev_originals, reversals):
+        """REI (DRIP) -> a BUYSELL buy. SIGNED (audit R1-66): shares in
+        (Quantity > 0) paid for (Net Amount < 0) is the purchase; the
+        negated row (Quantity < 0, Net > 0) is Questrade REVERSING it,
+        which cancels the original (paired in _pair_reversals) — abs()
+        booked it as a second buy, phantom shares in the pool."""
+        qty_s = self._num(row, 'Quantity', lineno)
+        net_s = self._num(row, 'Net Amount', lineno)
+        qty, net = abs(qty_s), abs(net_s)
         if qty <= 0 or net <= 0:
             self.count_skip("REI row with no shares/cost")
+            return None
+        if (qty_s > 0) == (net_s > 0):
+            raise BrokerageParseError(
+                f"{self._where(lineno)}: REI row with Quantity {qty_s:g} "
+                f"and Net Amount {net_s:,.2f} of the same sign "
+                f"({desc[:50]!r}) — a reinvestment buys shares for cash "
+                f"(or a reversal returns both); refusing to guess.")
+        sym_raw, scur = self._resolve_symbol(row, currency)
+        key = ('REI', self.apply_currency_suffix(sym_raw, scur),
+               round(qty, 6), round(net, 2))
+        if qty_s < 0:
+            reversals.append((key, lineno, desc))
+            self.note_row_consumed()      # read into parser state
             return None
         date = self._date(row, 'Transaction Date', lineno).strftime('%Y-%m-%d')
         sdt = self._date(row, 'Settlement Date', lineno, required=False)
         date_settle = sdt.strftime('%Y-%m-%d') if sdt else date
         m = _REINV_PRICE_RE.search(desc)
         price = float(m.group(1)) if m else round(net / qty, 8)
-        sym_raw, scur = self._resolve_symbol(row, currency)
-        return {
+        tx = {
             'action': 'BUYSELL',
             'date': date, 'time': '09:30:00', 'date_settle': date_settle,
-            'symbol': self.apply_currency_suffix(sym_raw, scur),
+            'symbol': key[1],
             'quantity': qty, 'currency': currency,
             'price': price, 'net_amount': net, 'gross_amount': net,
             'commission': 0.0,
             'account': self.DEFAULT_ACCOUNT,
             'description': desc,
         }
+        rev_originals.setdefault(key, []).append([tx])
+        return tx
 
     @staticmethod
     def _is_stock_split(action_raw, activity_type, desc):

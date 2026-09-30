@@ -10,6 +10,17 @@
   is in an earlier statement of the same account, `taxjson-merge2`
   (`taxjson run`) pairs them, and a cancellation whose original is in
   no input stays booked with a warning.
+- **Questrade: an assignment stock leg keeps its cash.** A row whose
+  description said ASSIGNMENT or EXERCISE (or ` - EXPIRED`) had its
+  price and cash zeroed even when it carried money: an ASN stock leg was
+  booked at $0 cost, a stock named "... EXERCISE EQUIPMENT" vanished, a
+  sale of expiring rights lost its proceeds. Only zero-cash option legs
+  are zeroed now; an EXP row with cash, or a zero-cash ASN/EX row that is
+  not an option, is refused.
+- **Questrade: CIL / REI reversals cancel.** A negated cash-in-lieu or
+  DRIP row was read with abs() and booked as a second sale or buy (cash
+  counted twice, phantom shares). The reversal now removes its original;
+  a reversal whose original is not in the file is refused.
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is
