@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **IB security identity across statements and issuers.** Income is
+  moved to the held listing of its ticker only when the ISINs match (an
+  AT&T dividend no longer lands on Telus `T.TO`), and the holding may
+  come from the account's other statements (a ROC-only statement no
+  longer books a gain on a phantom listing). Option-root aliases are
+  learned from all of the account's statements, and after a ticker
+  rename the canonical root is the contract's underlying (SQ -> XYZ). A
+  USD trade of a TSX `.U` unit is `X.U.TO`, as RBC books it. One stock
+  listed under two symbols (a ticker change) is an ATTENTION line
+  naming the `ticker.map` GLOBAL rule that joins them (audit S059-24,
+  S060-19, S060-00, S059-15, S059-11, S010-06, S059-13, S060-17).
 - **IB corporate actions nobody books are loud.** An unhandled Corporate
   Actions row is now an UNBOOKED warning (console; fatal under `run
   --strict`) that points at a `.tt` booking instead of a manual TRANSFER

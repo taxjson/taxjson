@@ -79,7 +79,9 @@ def _split_known_ext(symbol: str):
 
 
 def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
-                                    extra_held=None) -> None:
+                                    extra_held=None, fallback_held=None,
+                                    isins_by_root=None,
+                                    mismatches=None) -> None:
     """Rewrite each DIVIDEND/TAX suffix to match the position held for the same
     ticker in this file, correcting ISIN-vs-listing mismatches. Leaves the
     ISIN-derived suffix untouched when the account holds no position for that
@@ -92,7 +94,20 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     fallback (STX.L, BTG.TO) came back every hold-year; (b) an interlisted
     same-ticker name (ENB-class) whose OTHER listing is still held makes the
     root ambiguous, correctly suppressing the rewrite instead of misbinding a
-    .TO dividend onto the .US listing traded in this file."""
+    .TO dividend onto the .US listing traded in this file.
+
+    `fallback_held` (the listings held or traded in the account's OTHER
+    statements) is used only for a root this statement has no position
+    evidence for: a statement with only a dividend or ROC row kept the ISIN
+    suffix and booked the ROC on a phantom listing (audit S060-00).
+
+    `isins_by_root` (the Financial Instrument Information Security IDs per
+    ticker) makes the rebind require the SAME security: a row whose ISIN
+    names a different issuer than the held listing of that root (AT&T's T
+    vs Telus's T.TO, Equifax vs Enerflex EFX.TO) keeps its ISIN-derived
+    suffix (audit S059-24 / S060-19); the (symbol, ISIN) pairs skipped
+    are added to `mismatches`. A row whose ISIN, or whose root's listing
+    ISIN, is unknown is rebound as before."""
     held: Dict[str, set] = {}
     for full in (extra_held or ()):
         root, ext = _split_known_ext(full)
@@ -103,6 +118,12 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
             root, ext = _split_known_ext(t.get('symbol'))
             if ext:
                 held.setdefault(root, set()).add(ext)
+    fb: Dict[str, set] = {}
+    for full in (fallback_held or ()):
+        root, ext = _split_known_ext(full)
+        if ext and root not in held:
+            fb.setdefault(root, set()).add(ext)
+    held.update(fb)
     if not held:
         return
     for t in transactions:
@@ -120,6 +141,13 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
         if suffixes and len(suffixes) == 1:
             want = next(iter(suffixes))
             if want != ext:
+                row_isin = (t.get('_isin') or '').upper()
+                known = (isins_by_root or {}).get(root) or set()
+                if row_isin and known and row_isin not in known:
+                    if mismatches is not None:
+                        mismatches.add((t.get('symbol'), row_isin,
+                                        f"{root}.{want}"))
+                    continue
                 t['symbol'] = f"{root}.{want}"
 
 
@@ -349,6 +377,79 @@ def _canonical_root(roots) -> str:
     return roots[0]
 
 
+def _root_aliases(occ_by_conid, underlying_by_conid):
+    """(root_alias, alias_conids) for conids listed under several option
+    roots (DFDV 251121P..., DFDV1 251121P... after a corporate action
+    renamed the adjusted contract): every alias root maps to the
+    canonical one. The canonical root is the contract's UNDERLYING when
+    it is one of the roots — after a ticker rename (SQ -> XYZ) the
+    shorter old root won and the assigned option never met the
+    delivered shares (audit S059-11); otherwise _canonical_root."""
+    root_alias: Dict[str, str] = {}
+    alias_conids: Dict[str, set] = {}
+    for conid, occs in occ_by_conid.items():
+        roots = {o[0] for o in occs}
+        if len(roots) < 2:
+            continue
+        und = (underlying_by_conid.get(conid) or '').strip()
+        canon = und if und in roots else _canonical_root(roots)
+        for r in roots:
+            if r != canon:
+                root_alias[r] = canon
+                alias_conids.setdefault(r, set()).add(conid)
+    return root_alias, alias_conids
+
+
+# Canadian listing venues as IB's Financial Instrument Information names
+# them (Listing Exch).
+_IB_CA_VENUES = frozenset({'TSE', 'VENTURE', 'TSXV', 'CSE', 'NEO', 'AEQLIT',
+                           'PURE', 'OMEGA', 'CHIXCA', 'ALPHA', 'LYNX'})
+
+
+def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
+                    fii: Dict[tuple, Any]) -> str:
+    """The exchange suffix of a stock/warrant row: from the currency,
+    except a USD-class unit of a TSX-listed fund ('ZSP.U', 'DLR.U'),
+    which is a Canadian listing (X.U.TO — the spelling RBC and the
+    ticker maps use); `.US` made it a fictional US security (audit
+    S010-06). Only the `.U` unit class is re-suffixed: IB's instrument
+    list names a single primary listing per symbol, so a USD trade of an
+    interlisted ordinary share (MDA on the NYSE) must keep `.US`."""
+    ext = _ib_currency_ext(currency)
+    s = (raw_symbol or '').strip()
+    if (ext != 'TO' and asset_cat in ('Stocks', 'Warrants')
+            and re.search(r'[.\s]U$', s)):
+        info = (fii.get((asset_cat, s))
+                or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
+        if (info.get('exch') or '').upper() in _IB_CA_VENUES:
+            return 'TO'
+    return ext
+
+
+def _ib_stock_symbol(asset_cat: str, raw_symbol: str, currency: str,
+                     fii: Dict[tuple, Any]) -> str:
+    sym = (raw_symbol or '').strip().replace(' ', '.')
+    sym = re.sub(r'\.(TO|US|AX|L)$', '', sym, flags=re.IGNORECASE)
+    return f"{sym}.{_ib_listing_ext(asset_cat, raw_symbol, currency, fii)}"
+
+
+def _warn_stock_aliases(conid_syms: Dict[str, set], where: str) -> None:
+    """One stock conid listed under several symbols (a ticker change
+    with no corporate-action row): the parser books each symbol as its
+    own security, so the position splits into two pools (audit S059-13 /
+    S060-17). Said on the console with the ticker.map fix."""
+    for conid, syms in sorted(conid_syms.items()):
+        if len(syms) < 2:
+            continue
+        a, b = sorted(syms)[:2]
+        print(f"{ATTENTION_PREFIX} {where}: IB lists one stock (contract "
+              f"id {conid}) under several symbols: {', '.join(sorted(syms))}"
+              f" — a ticker change. Each symbol is booked as its own "
+              f"security until you join them in ticker.map, e.g. "
+              f"`GLOBAL {a}.US {b}.US` (old symbol first; use the listing's "
+              f"suffix).", file=sys.stderr)
+
+
 def _ib_prescan(rows, where: str) -> Dict[str, Any]:
     """Read the statement-level context every row branch needs BEFORE
     the row walk (these sections sit after Trades in IB's layout):
@@ -361,6 +462,8 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'accounts': set(), 'accounts_included': '', 'cash': {},
         'cash_currencies': set(), 'has_cash_report': False,
         'has_order_level': False, 'order_levels': {},
+        'stock_isins': {}, 'stock_conid_syms': {}, 'opt_underlying': {},
+        'held_rows': [],
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -381,6 +484,14 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
 
         if sec == 'Trades' and g('DataDiscriminator') == 'Order':
             out['has_order_level'] = True
+        if (sec in ('Trades', 'Transfers', 'Open Positions')
+                and g('Asset Category') in ('Stocks', 'Warrants')
+                and g('Symbol') and g('Currency')):
+            # Listings this statement trades or holds (raw symbol,
+            # category, currency) — the account-wide income rebind uses
+            # them (prepare_files).
+            out['held_rows'].append((g('Symbol'), g('Asset Category'),
+                                     g('Currency')))
         if (sec == 'Trades'
                 and g('DataDiscriminator') in ('Order', 'Trade')):
             # Quantity per (category, symbol, trade day) and detail
@@ -422,9 +533,21 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             except BrokerageParseError:
                 mult = None
             info = {'mult': mult, 'expiry': g('Expiry'),
-                    'conid': g('Conid')}
+                    'conid': g('Conid'), 'exch': g('Listing Exch'),
+                    'isin': g('Security ID'), 'underlying': g('Underlying')}
             texts = [s.strip() for s in g('Symbol').split(',')
                      if s.strip()]
+            if cat in ('Stocks', 'Warrants'):
+                for t in texts:
+                    _root = re.sub(r'\s+', '.', t)
+                    if info['isin']:
+                        out['stock_isins'].setdefault(_root, set()).add(
+                            info['isin'].upper())
+                    if info['conid']:
+                        out['stock_conid_syms'].setdefault(
+                            info['conid'], set()).add(_root)
+            elif info['conid'] and info['underlying']:
+                out['opt_underlying'][info['conid']] = info['underlying']
             if g('Description'):
                 texts.append(g('Description'))
             for t in texts:
@@ -455,18 +578,9 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 continue
             out['cash'][(line, cur)] = out['cash'].get((line, cur),
                                                        0.0) + tot
-    # One conid listed under several option roots (DFDV 251121P...,
-    # DFDV1 251121P... after a corporate action renamed the adjusted
-    # contract): every alias root maps to the canonical one.
-    for conid, occs in occ_by_conid.items():
-        roots = {o[0] for o in occs}
-        if len(roots) < 2:
-            continue
-        canon = _canonical_root(roots)
-        for r in roots:
-            if r != canon:
-                out['root_alias'][r] = canon
-                out['alias_conids'].setdefault(r, set()).add(conid)
+    out['occ_by_conid'] = occ_by_conid
+    out['root_alias'], out['alias_conids'] = _root_aliases(
+        occ_by_conid, out['opt_underlying'])
     out['contract_conids'] = contract_conids
     for (_cat, _sym, _day), _lv in out['order_levels'].items():
         if ('Order' in _lv and 'Trade' in _lv
@@ -509,20 +623,45 @@ class IbBrokerage(BaseBrokerage):
         parsed: statement periods (coverage check below) and the facts a
         per-file parse cannot see alone. Account-level warnings print
         here, once."""
-        ctx: Dict[str, Any] = {'periods': []}
+        ctx: Dict[str, Any] = {
+            'periods': [], 'occ_by_conid': {}, 'contract_conids': {},
+            'opt_underlying': {}, 'stock_conid_syms': {},
+            'stock_isins': {}, 'held': set()}
         for path in paths:
+            name = Path(path).name
             try:
                 rows = cls._read_rows(Path(path))
-            except (OSError, UnicodeError):
+                pre = _ib_prescan(rows, name)
+            except (OSError, UnicodeError, BrokerageParseError):
                 continue                 # parse_file reports it
             for row in rows:
                 if (len(row) >= 4 and row[0] == 'Statement'
                         and row[1] == 'Data' and row[2] == 'Period'):
                     span = _ib_period(row[3])
                     if span:
-                        ctx['periods'].append((Path(path).name, *span))
+                        ctx['periods'].append((name, *span))
                     break
+            # Identity facts learned from ANY of the account's
+            # statements: an option root alias listed only in last
+            # year's instrument list (audit S059-15), a stock renamed
+            # between statements (S060-17), the listings held for the
+            # income rebind (S060-00).
+            for conid, occs in pre['occ_by_conid'].items():
+                ctx['occ_by_conid'].setdefault(conid, set()).update(occs)
+            for key, by_root in pre['contract_conids'].items():
+                tgt = ctx['contract_conids'].setdefault(key, {})
+                for root, ids in by_root.items():
+                    tgt.setdefault(root, set()).update(ids)
+            ctx['opt_underlying'].update(pre['opt_underlying'])
+            for conid, syms in pre['stock_conid_syms'].items():
+                ctx['stock_conid_syms'].setdefault(conid, set()).update(syms)
+            for root, ids in pre['stock_isins'].items():
+                ctx['stock_isins'].setdefault(root, set()).update(ids)
+            for sym, cat, cur in pre['held_rows']:
+                ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
         _warn_coverage_gaps(ctx['periods'])
+        _warn_stock_aliases(ctx['stock_conid_syms'],
+                            'the account\'s IB statements')
         return ctx
 
     # ------------------------------------------------------------ helpers
@@ -1040,6 +1179,23 @@ class IbBrokerage(BaseBrokerage):
 
         rows = self._read_rows(path)
         pre = _ib_prescan(rows, path.name)
+        ctx = self.account_context
+        if ctx:
+            # Option-root aliases from ALL of the account's statements
+            # (audit S059-15: next year's instrument list may name only
+            # the adjusted root).
+            occ = {c: set(v) for c, v in pre['occ_by_conid'].items()}
+            for c, v in ctx.get('occ_by_conid', {}).items():
+                occ.setdefault(c, set()).update(v)
+            und = dict(ctx.get('opt_underlying', {}))
+            und.update(pre['opt_underlying'])
+            pre['root_alias'], pre['alias_conids'] = _root_aliases(occ, und)
+            for key, by_root in ctx.get('contract_conids', {}).items():
+                tgt = pre['contract_conids'].setdefault(key, {})
+                for root, ids in by_root.items():
+                    tgt.setdefault(root, set()).update(ids)
+        else:
+            _warn_stock_aliases(pre['stock_conid_syms'], path.name)
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']
@@ -1330,7 +1486,9 @@ class IbBrokerage(BaseBrokerage):
                 # Remove common known exchange extensions to avoid doubling
                 symbol = re.sub(r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE)
 
-                ext = _ib_currency_ext(currency)
+                ext = (_ib_listing_ext(asset_cat, description, currency, fii)
+                       if asset_cat in ('Stocks', 'Warrants')
+                       else _ib_currency_ext(currency))
                 full_symbol = f"{symbol}.{ext}"
 
                 _trade_tx = {
@@ -1475,6 +1633,7 @@ class IbBrokerage(BaseBrokerage):
                             symbol=f"{ticker}.{ext}", currency=currency,
                             date=date, desc=description, amount=amount,
                             account='IB'))
+                        transactions[-1]['_isin'] = isin
                         self.note_row_consumed()
                         continue
                 action = 'DIVIDEND_IN_LIEU' if is_pil else 'DIVIDEND'
@@ -1505,7 +1664,8 @@ class IbBrokerage(BaseBrokerage):
                     'gross_amount': amount,
                     'type': tx_type,
                     'account': 'IB',
-                    'description': description
+                    'description': description,
+                    '_isin': isin,      # income rebind check; popped
                 })
                 self.note_row_consumed()
 
@@ -1540,9 +1700,8 @@ class IbBrokerage(BaseBrokerage):
                 except ValueError:
                     self.count_skip(f"malformed {section} row")
                     continue
-                sym = symbol.strip().replace(' ', '.')
-                sym = re.sub(r'\.(TO|US|AX|L)$', '', sym, flags=re.IGNORECASE)
-                open_position_syms.add(f"{sym}.{_ib_currency_ext(currency)}")
+                open_position_syms.add(_ib_stock_symbol(
+                    asset_cat, symbol, currency, fii))
                 self.note_row_consumed()      # read into parser state
 
             elif section == 'Statement':
@@ -1712,7 +1871,8 @@ class IbBrokerage(BaseBrokerage):
                     'net_amount': amount,
                     'type': 'tax',
                     'account': 'IB',
-                    'description': description
+                    'description': description,
+                    '_isin': isin,      # income rebind check; popped
                 })
                 self.note_row_consumed()
 
@@ -2368,7 +2528,10 @@ class IbBrokerage(BaseBrokerage):
                     symbol = symbol.replace(' ', '.')
 
                 symbol = re.sub(r'\.(TO|US|AX|L)$', '', symbol, flags=re.IGNORECASE)
-                ext = _ib_currency_ext(currency)
+                ext = (_ib_listing_ext(asset_cat, self._cell(
+                           row, header_map, 'Symbol'), currency, fii)
+                       if asset_cat in ('Stocks', 'Warrants')
+                       else _ib_currency_ext(currency))
                 symbol = f"{symbol}.{ext}"
 
                 abs_qty = abs(qty)
@@ -2657,8 +2820,20 @@ class IbBrokerage(BaseBrokerage):
         # for its ticker (fixes ISIN-country vs listing-exchange mismatches on
         # dual-listed names). Runs after the full file is parsed so it sees
         # every position regardless of section order.
-        _reattribute_income_to_holdings(transactions,
-                                        extra_held=open_position_syms)
+        _isin_mismatch: set = set()
+        _reattribute_income_to_holdings(
+            transactions, extra_held=open_position_syms,
+            fallback_held=(ctx or {}).get('held'),
+            isins_by_root={**(ctx or {}).get('stock_isins', {}),
+                           **pre['stock_isins']},
+            mismatches=_isin_mismatch)
+        for t in transactions:
+            t.pop('_isin', None)
+        for _sym, _isin, _held in sorted(_isin_mismatch):
+            print(f"warning: {path.name}: income on {_sym} (ISIN {_isin}) "
+                  f"was NOT moved to the held listing {_held}: that "
+                  f"listing is a different security (another ISIN) with "
+                  f"the same ticker.", file=sys.stderr)
         if isin_fallback:
             _held = set(open_position_syms) | {
                 t.get('symbol') for t in transactions
