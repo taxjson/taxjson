@@ -96,6 +96,7 @@ class TestDistinctConflict(unittest.TestCase):
     the engine pooled them while sell-check said they stay separate."""
 
     @rule("CA-ACB-04")
+    @rule("US-BASIS-06")
     def test_distinct_pair_joined_by_rename_is_a_problem(self):
         probs = map_file_problems(_map("TOBASE UNH.US UNH.TO\n"
                                        "DISTINCT UNH.US UNH.TO\n"))

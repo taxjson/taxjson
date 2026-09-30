@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import BaseBrokerage
-from taxjson.lib.brokerages._crypto_common import strict_money, utc_to_local
+from taxjson.lib.brokerages._crypto_common import (strict_money, utc_to_local,
+                                                   warn_depeg)
 
 
 # Coinbase transaction types we recognize. Matched on substring (case-insensitive)
@@ -328,7 +329,20 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # "Bought 3495.67 USDC for 5000 CAD": fiat -> USD
                     # cash under the stablecoin-as-cash model (see
                     # _STABLECOINS) — a currency conversion, not an
-                    # acquisition of property. Counted, not booked.
+                    # acquisition of property. Counted, not booked —
+                    # but a fill away from the peg is said (the
+                    # approximation drops a de-peg gain or loss:
+                    # partition INPUTS-12).
+                    if (self._col(row, header_map, 'price currency')
+                            or 'USD').strip().upper() in ('USD', ''):
+                        warn_depeg(
+                            asset.upper(),
+                            self._num(row, header_map,
+                                      'price at transaction'),
+                            abs(self._num(row, header_map,
+                                          'quantity transacted')),
+                            dt.strftime('%Y-%m-%d'),
+                            f"Coinbase {type_raw.strip()}")
                     self.count_nonevent(
                         f"stablecoin conversion {type_raw.strip()} "
                         f"{asset.upper()} (USDC treated as USD cash, as "

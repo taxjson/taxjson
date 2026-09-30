@@ -125,3 +125,29 @@ def utc_to_local(dt_utc: datetime, tz_name: Optional[str] = None) -> datetime:
             f"such as America/Toronto.")
     return (dt_utc.replace(tzinfo=timezone.utc).astimezone(tz)
             .replace(tzinfo=None))
+
+
+# A USD stablecoin traded this far from 1.00 USD is said: the parsers
+# book stablecoins as US-dollar cash (an approximation), so a de-peg
+# gain or loss never reaches the books (partition INPUTS-12; tax-logic
+# CA-CRYPTO-02 / US-CRYPTO-02).
+DEPEG_TOLERANCE = 0.02
+
+
+def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
+               where: str) -> bool:
+    """Print a warning when a stablecoin fill's USD price is more than
+    DEPEG_TOLERANCE from 1.00. Returns whether it warned."""
+    import sys
+    try:
+        price = float(usd_price)
+    except (TypeError, ValueError):
+        return False
+    if not price or abs(price - 1.0) <= DEPEG_TOLERANCE:
+        return False
+    print(f"warning: {where}: {coin} traded at {price:.4f} USD on {date} "
+          f"— stablecoins are booked as US-dollar cash (an "
+          f"approximation), so the {abs(price - 1.0) * qty:,.2f} USD "
+          f"de-peg difference on {qty:g} {coin} is not in the gains; "
+          f"report it by hand if it matters.", file=sys.stderr)
+    return True

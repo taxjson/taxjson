@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import BaseBrokerage
-from taxjson.lib.brokerages._crypto_common import strict_money, utc_to_local
+from taxjson.lib.brokerages._crypto_common import (strict_money, utc_to_local,
+                                                   warn_depeg)
 
 
 _FIAT_ASSETS = ('USD', 'CAD', 'EUR', 'GBP', 'USDC', 'USDT', 'DAI')
@@ -435,6 +436,19 @@ class KrakenBrokerage(BaseBrokerage):
                 vol = self._num(row, 'vol', ctx, required=True)
 
                 base, quote = _split_pair(pair, time_raw)
+                # A stablecoin quoted against USD (USDC/USD) away from
+                # the peg: the books fold it to USD cash, so say what
+                # that drops (partition INPUTS-12).
+                _rb = _normalize_asset(base, fold_stable=False)
+                _rq = _normalize_asset(quote, fold_stable=False)
+                if _rb in _STABLECOINS and _rq == 'USD':
+                    warn_depeg(_rb, price, abs(vol),
+                               dt.strftime('%Y-%m-%d'),
+                               f"Kraken trades {path.name}")
+                elif _rq in _STABLECOINS and _rb == 'USD' and price:
+                    warn_depeg(_rq, 1.0 / price, abs(cost),
+                               dt.strftime('%Y-%m-%d'),
+                               f"Kraken trades {path.name}")
                 base = _normalize_asset(base)
                 quote = _normalize_asset(quote)
                 try:

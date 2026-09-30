@@ -193,6 +193,8 @@ class TestIbRoc(unittest.TestCase):
         self.assertAlmostEqual(adjusts[0]['net_amount'], -24.00, places=2)
         self.assertFalse([t for t in txs if t['action'] == 'DIVIDEND'])
 
+    @rule("US-INC-01")
+    @rule("CA-INC-03")
     def test_strc_style_split_posting_pil_is_income(self):
         # Real-data shape (synthetic amounts): a distribution split
         # between "Cash Dividend ... (Return of Capital)" and "Payment in

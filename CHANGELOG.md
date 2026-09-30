@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **tax-logic states what US projects run.** The US section gains the
+  rules its input stages and engine already applied: settlement cycles
+  and holidays, the generic importer's settle column, crypto and expiry
+  dating, `futures_settle`, the FX gap handling, identity and ticker.map,
+  the transfer stop, the corporate-action elections (`taxable_exchange`,
+  `reorg_368`, `reorg_368_boot`, `taxable_distribution_301`,
+  `tax_free_355`), payments in lieu, staking income, dividends booked
+  gross with withholding as its own row, and the crypto parser rules
+  (coin-for-coin trades, fees in coin, the 3-day pairing, stablecoins as
+  US-dollar cash — an approximation). Two Canadian statements were wrong
+  and are corrected: the FX source (Bank of Canada noon rate before March
+  2017 from May 2007; Yahoo only before that) and the rate-gap rule (a
+  longer gap is a validation ERROR that `run --strict` stops on, not an
+  automatic stop). A stablecoin traded more than 2% off 1.00 USD on
+  Coinbase or a Kraken USD pair now prints a warning with the de-peg
+  amount the approximation leaves out.
 - **Crypto local time is a project setting.** `[settings] local_timezone`
   (an IANA zone, both countries) names the zone Kraken and Coinbase UTC
   stamps are dated in; it was only the `TAXJSON_LOCAL_TZ` environment

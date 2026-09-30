@@ -659,8 +659,8 @@ class TestDatingSettings(unittest.TestCase):
     convert-tt writes the project's own tax_date, never a silent
     Canadian settle date."""
 
-    @rule("CA-DATE-12")
-    @rule("US-DATE-11")
+    @rule("CA-DATE-12", "CA-DATE-07")
+    @rule("US-DATE-11", "US-DATE-07")
     def test_local_timezone_setting_dates_crypto_rows(self):
         import os
         import tempfile
@@ -738,6 +738,96 @@ class TestDatingSettings(unittest.TestCase):
             self.assertIn("--date-basis", r.stderr)
             r = convert(loose, "--date-basis", "trade")
             self.assertIn("BUYSELL 2025-12-31 ", r.stdout)
+
+
+# ------------------------------------------ SPEC-14/18/20: shared rules
+class TestRulesBothCountriesState(unittest.TestCase):
+    """Rules the US section did not state although US projects run them
+    (partition SPEC-14, SPEC-18, SPEC-20, INPUTS-12/13)."""
+
+    @rule("US-CORP-01", "US-CORP-02")
+    def test_us_split_and_rename_keep_basis_and_dates(self):
+        from taxjson.lib.core import get_tax_rules
+        book = [tx("BUYSELL", "2023-03-01", "OLD.US", 100, 5000),
+                tx("SPLIT", "2024-02-01", "OLD.US", 2, 0),
+                tx("SPLIT", "2024-06-03", "OLD.US", 1, 0,
+                   symbol_new="NEW.US"),
+                tx("BUYSELL", "2025-01-15", "NEW.US", -200, 6000)]
+        res = get_tax_rules("usa").compute_gains(book)
+        rows = _gain_rows(res)
+        self.assertEqual([(g["symbol"], round(g["qty"], 6), g["term"],
+                           g["acquired_date"]) for g in rows],
+                         [("NEW.US", 200.0, "LONG_TERM", "2023-03-01")])
+        self.assertAlmostEqual(rows[0]["cost"], 5000.0, places=6)
+
+    @rule("CA-CRYPTO-02")
+    @rule("US-CRYPTO-02")
+    def test_stablecoin_fill_off_the_peg_is_warned(self):
+        import contextlib
+        import io
+        import tempfile
+        from pathlib import Path
+        from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
+        from test_fix_sends import CB_CSV
+        head = CB_CSV.splitlines()[0]
+        rows = (head + "\n"
+                "d1,2023-03-11 12:00:00 UTC,Sell,USDC,1000,USD,0.88,880,"
+                "880,0,Sold 1000 USDC\n"
+                "d2,2023-03-20 12:00:00 UTC,Sell,USDC,100,USD,1.00,100,"
+                "100,0,Sold 100 USDC\n")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "cb.csv"
+            p.write_text(rows)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                txs = CoinbaseBrokerage().parse_file(p)
+        # Still USD cash in the books (no position), in both countries —
+        # but the 120.00 de-peg is said, once, for the 0.88 fill.
+        self.assertEqual([t for t in txs if t.get("symbol") == "USDC"], [])
+        self.assertEqual(err.getvalue().count("de-peg"), 1)
+        self.assertIn("0.8800", err.getvalue())
+        self.assertIn("120.00", err.getvalue())
+
+    @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
+    def test_send_paired_with_its_arrival_within_3_days_and_90pct(self):
+        from taxjson.lib import crypto_sends as cs
+
+        def row(acct, ex, date, time, qty):
+            return {"account": acct, "exchange": ex, "date": date,
+                    "time": time, "symbol": "SOL", "quantity": qty,
+                    "kind": "withdrawal" if qty < 0 else "deposit",
+                    "fee": 0.0, "ref": ""}
+        send = row("a", "coinbase", "2025-07-13", "07:13:27", -50.0)
+        ok = row("b", "kraken", "2025-07-13", "07:15:42", 49.9)
+        unmatched, pairs = cs.match_transfers([send, ok])
+        self.assertEqual((len(unmatched), len(pairs)), (0, 1))
+        short = row("b", "kraken", "2025-07-13", "07:15:42", 44.0)
+        unmatched, pairs = cs.match_transfers([dict(send), short])
+        self.assertEqual(len(pairs), 0)          # 88% arrived: not paired
+        late = row("b", "kraken", "2025-07-17", "08:00:00", 50.0)
+        unmatched, pairs = cs.match_transfers([dict(send), late])
+        self.assertEqual(len(pairs), 0)          # 4 days: not paired
+
+    @rule("CA-FX-02")
+    @rule("US-FX-02")
+    def test_rate_gap_uses_5_days_back_then_an_error(self):
+        from taxjson.bin import taxjson_convert_currency as CC
+        hist = {"USD": {"2025-06-02": Decimal("1.37")}}
+        CC.reset_fallback_tally()
+        near = CC.convert_transaction(
+            tx("BUYSELL", "2025-06-06", "AAA.US", 1, 10), "CAD", hist,
+            Decimal("1.35"))
+        self.assertAlmostEqual(near.net_amount, 13.7, places=6)
+        self.assertEqual(CC.fallback_rows(), [])
+        far = CC.convert_transaction(
+            tx("BUYSELL", "2025-06-09", "AAA.US", 1, 10), "CAD", hist,
+            Decimal("1.35"))
+        self.assertAlmostEqual(far.net_amount, 13.5, places=6)
+        issues = CC.fallback_validation_issues("CAD", Decimal("1.35"))
+        CC.reset_fallback_tally()
+        self.assertEqual(len(issues), 1)
+        self.assertIn("default rate", list(issues.values())[0][0])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ import io
 import unittest
 from contextlib import redirect_stderr
 
+from tax_rules import rule
+
 from taxjson.lib.corp_actions import (
     CorporateAction,
     RULES_BY_COUNTRY,
@@ -51,6 +53,7 @@ class TestUsRegistration(unittest.TestCase):
         self.assertIn('merger', RULES_BY_COUNTRY['usa'])
         self.assertIn('spinoff', RULES_BY_COUNTRY['usa'])
 
+    @rule("US-CORP-08")
     def test_options_include_ignore(self):
         keys = [k for k, _ in options_for('usa', 'merger')]
         self.assertEqual(keys, ['taxable_exchange', 'reorg_368',
@@ -67,6 +70,7 @@ class TestUsRegistration(unittest.TestCase):
 
 
 class TestUsMergerTaxable(unittest.TestCase):
+    @rule("US-CORP-03")
     def test_sell_and_buy_at_fmv(self):
         ev = merger_event(fmv=16000.0, target_fmv=16000.0)
         rows = resolve_event(ev, 'taxable_exchange', country='usa')
@@ -81,6 +85,7 @@ class TestUsMergerTaxable(unittest.TestCase):
 
 
 class TestUsMergerReorg368(unittest.TestCase):
+    @rule("US-CORP-04")
     def test_split_rename_carries_basis(self):
         ev = merger_event()
         rows = resolve_event(ev, 'reorg_368', country='usa')
@@ -122,6 +127,7 @@ class TestUsMergerBoot(unittest.TestCase):
         self.assertAlmostEqual(sell['net_amount'], 1100.0, places=2)  # 1000+100
         self.assertAlmostEqual(buy['net_amount'], 900.0, places=2)    # 1000−200+100
 
+    @rule("US-CORP-05")
     def test_loss_recognizes_nothing(self):
         # realized = (600 + 100) − 1000 = −300 → recognized = 0 (§356(c))
         rows, _ = self._rows(basis=1000.0, tgt_fmv=600.0, boot=100.0)
@@ -133,6 +139,7 @@ class TestUsMergerBoot(unittest.TestCase):
         _rows, err = self._rows(basis=0.0, tgt_fmv=1800.0, boot=300.0)
         self.assertIn('source_basis_total', err)
 
+    @rule("US-CORP-05")
     def test_engine_books_exactly_the_recognized_gain(self):
         # End-to-end: engine pool basis == hint → booked gain == 300.
         from taxjson.lib.core import USATaxRules, TaxTransaction
@@ -151,6 +158,7 @@ class TestUsMergerBoot(unittest.TestCase):
 
 
 class TestUsSpinoff(unittest.TestCase):
+    @rule("US-CORP-06")
     def test_301_distribution(self):
         ev = spinoff_event()
         rows = resolve_event(ev, 'taxable_distribution_301', country='usa',
@@ -162,6 +170,7 @@ class TestUsSpinoff(unittest.TestCase):
         self.assertAlmostEqual(buy['net_amount'], 1000.0, places=2)
         self.assertIn('§301', div['description'])
 
+    @rule("US-CORP-07")
     def test_355_allocated_basis(self):
         ev = spinoff_event()
         rows = resolve_event(ev, 'tax_free_355', country='usa',

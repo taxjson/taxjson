@@ -142,6 +142,7 @@ class TestIbExpirySettlement(unittest.TestCase):
         self.assertAlmostEqual(gains[0]['gain'], 79.0)
         self.assertEqual(gains[0]['date_settle'], '2026-12-31')
 
+    @rule("US-DATE-04")
     def test_assignment_option_leg_keeps_stock_leg_settle(self):
         # The premium rolls into the stock leg, which settles T+1: the
         # pair must share a settle date (pinned deliberately).
@@ -237,6 +238,7 @@ class TestQuestradeExpiry(unittest.TestCase):
         self.assertEqual(gains[0]['date_settle'], '2027-12-31')
 
     @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_expiry_date_guard(self):
         from taxjson.lib.brokerages.base import BaseBrokerage
         f = BaseBrokerage.option_expiry_booking_date
@@ -334,6 +336,7 @@ class TestKrakenCoinUnitFees(unittest.TestCase):
         self.assertEqual(txs[0]['description'], 'Staking Reward')
 
     @rule("CA-CRYPTO-04")
+    @rule("US-CRYPTO-04")
     def test_instant_buy_receive_fee_reduces_coins(self):
         csv = KR_HEAD_2025 + (
             '"L1","R1","2025-07-25 18:40:00","spend","","currency","",'
@@ -347,6 +350,7 @@ class TestKrakenCoinUnitFees(unittest.TestCase):
         self.assertAlmostEqual(buy['net_amount'], 100.0)
 
     @rule("CA-CRYPTO-04")
+    @rule("US-CRYPTO-04")
     def test_instant_sell_spend_fee_adds_coins(self):
         csv = KR_HEAD_2025 + (
             '"L1","R1","2025-07-25 18:40:00","spend","","currency","",'

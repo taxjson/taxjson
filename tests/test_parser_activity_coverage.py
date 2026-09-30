@@ -477,6 +477,8 @@ class TestIbActivities(unittest.TestCase):
         # Currency on the record reflects the actual payment.
         self.assertEqual(divs[0]['currency'], 'USD')
 
+    @rule("US-INC-03")
+    @rule("CA-INC-05")
     def test_withholding_tax_uses_isin_market(self):
         """Regression: the IB Withholding Tax row used to hardcode `.US`
         on the emitted TAX symbol, fragmenting it from the matching
@@ -621,6 +623,7 @@ class TestCoinbaseActivities(unittest.TestCase):
         self.assertAlmostEqual(t['quantity'], -0.25)
 
     @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_staking_income(self):
         """Coinbase 'Staking Income' rows are the dominant source of
         crypto-asset dividend income for ADA/AVAX/DOT/ETH/SOL holders
@@ -756,6 +759,7 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertAlmostEqual(t['quantity'], -0.05)
 
     @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_ledgers_staking_reward(self):
         """Kraken ledger format: earn/reward rows produce a DIVIDEND
         plus a zero-cost BUYSELL pair (the rewarded shares become
@@ -882,6 +886,7 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertEqual(t['currency'], 'USD')  # DAI normalized to USD
 
     @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
     def test_ledgers_crypto_to_crypto_emits_two_legs(self):
         """A crypto-to-crypto swap is a taxable disposition of the spent
         crypto at FMV (CRA s. 40(1) / IRS Notice 2014-21). The parser
@@ -928,6 +933,7 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertAlmostEqual(buy['fee'], 0.0)
 
     @rule("CA-CRYPTO-01")
+    @rule("US-CRYPTO-01")
     def test_trades_csv_crypto_to_crypto_two_legs(self):
         """A crypto-to-crypto trades-CSV fill emits the same two-leg
         SELL+BUY as the ledgers path (both USD-denominated, price=0
