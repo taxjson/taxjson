@@ -7,6 +7,8 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+from tax_rules import rule
+
 from taxjson.bin.taxjson_instalments import (build, due_dates,
                                              interest_and_penalty,
                                              required_schedule)
@@ -15,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestDueDates(unittest.TestCase):
+    @rule("CA-RPT-11")
     def test_four_dates_with_weekend_rollover(self):
         # 2026: Mar 15 = Sunday -> Mar 16; Jun 15 = Monday;
         # Sep 15 = Tuesday; Dec 15 = Tuesday.
@@ -27,17 +30,20 @@ class TestDueDates(unittest.TestCase):
 
 
 class TestSchedule(unittest.TestCase):
+    @rule("CA-RPT-11")
     def test_current_year_splits_in_four(self):
         rows = required_schedule(year=2026, basis="current_year",
                                  current_net_tax=80000.0)
         self.assertEqual([r["amount"] for r in rows], [20000.0] * 4)
 
+    @rule("CA-RPT-11")
     def test_prior_year_uses_last_years_tax(self):
         rows = required_schedule(year=2026, basis="prior_year",
                                  current_net_tax=80000.0,
                                  prior_net_tax=40000.0)
         self.assertEqual([r["amount"] for r in rows], [10000.0] * 4)
 
+    @rule("CA-RPT-11")
     def test_cra_reminder_front_loads_the_second_prior_year(self):
         # First two: 1/4 of the second preceding year (40,000 -> 10,000
         # each). Last two: the rest of the prior year (60,000 - 20,000
@@ -128,6 +134,7 @@ class TestInterest(unittest.TestCase):
 
 
 class TestBuild(unittest.TestCase):
+    @rule("CA-RPT-11")
     def test_below_threshold_needs_no_instalments(self):
         doc = build(year=2026, basis="current_year",
                     current_net_tax=2500.0, payments=[],

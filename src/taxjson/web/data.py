@@ -497,12 +497,12 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     if _timing_kw:
         _timing_kw["option_grant_basis"] = basis
 
-    def _simulate(main_rows, context_rows):
+    def _simulate(main_rows, context_rows, **extra_kw):
         try:
             after = rules.compute_gains(
                 main_rows + [synth], sheltered_transactions=context_rows,
                 detect_wash_sales=detect_wash,
-                **_timing_kw)
+                **_timing_kw, **extra_kw)
         except AmbiguousTransferDateError as e:
             # Surface as a structured error instead of a 500.
             raise ValueError(str(e))
@@ -513,7 +513,8 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         # refusal can say what the account actually holds.
         _after_qty = sum(float(r.get("qty") or 0.0)
                          for r in after.get("inventory") or []
-                         if r.get("symbol") == symbol)
+                         if r.get("symbol") == symbol
+                         and (r.get("account") in (None, "", account)))
         return ([t for t in after.get("transactions", [])
                  if t.get("id") == synth.id and t.get("qty")], _after_qty)
 
@@ -566,6 +567,48 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # (R1-258). Crypto blends with crypto (two or more exchanges), as
     # the pipeline does. The US keeps per-account FIFO basis.
     basis_label = "per-account, pre-blend"
+    if (is_usa and detect_wash and acct_cfg is not None
+            and acct_cfg.type == "taxable"):
+        # US: basis stays FIFO per account, but §1091 reaches every
+        # account — a sibling taxable account's purchase in the window
+        # washes the loss (the run's blended pass: --per-account-basis).
+        # IRAs are already in the context books. Crypto is out of
+        # §1091 (detect_wash is False for a US crypto account).
+        # (partition COMMANDS-07)
+        group = [a.name for a in ctx.taxable()
+                 if not a.crypto and a.name != account]
+        if group:
+            blend_raw = list(load_transactions(base))
+            missing = []
+            for name in group:
+                f = ctx.cache / f"{name}_base.json"
+                if f.exists():
+                    blend_raw.extend(load_transactions(f))
+                else:
+                    missing.append(name)
+            btxs, bsh = _prepare(blend_raw)
+            bentries = [t for t in _closing(
+                _simulate(btxs, bsh, per_account_basis=True)[0])
+                if (t.get("account") or account) == account]
+            bclosed = sum(abs(float(t.get("qty", 0) or 0))
+                          for t in bentries)
+            if bentries and bclosed + 1e-6 >= abs(qty):
+                entries = bentries
+                basis_label = ("FIFO per account; wash sales across "
+                               "taxable accounts " + ", ".join(
+                                   [account] + group)
+                               + (" and the IRAs" if ctx.sheltered()
+                                  else ""))
+                if missing:
+                    warnings.append(
+                        f"no work/<account>_base.json for "
+                        f"{', '.join(missing)} — their purchases are not "
+                        f"in the wash-sale check; run `taxjson run`.")
+            else:
+                warnings.append(
+                    "the cross-account (§1091) simulation produced no "
+                    "matching disposition — showing this account's own "
+                    "book, without the other accounts' purchases.")
     if (not is_usa and acct_cfg is not None
             and acct_cfg.type == "taxable"):
         group = [a.name for a in ctx.taxable()
@@ -617,6 +660,9 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     sheltered = acct_cfg is not None and acct_cfg.type != "taxable"
     if sheltered and economic < 0:
         warnings.append(
+            f"{account} is a tax-deferred IRA: the loss is not "
+            f"deductible, and an IRA sale is never a wash-sale loss."
+            if is_usa else
             f"{account} is a registered/sheltered account: the loss is "
             f"not deductible (registered account) and is never a "
             f"superficial-loss event.")
@@ -653,6 +699,11 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         # "superficial loss? no" beside a nonzero disallowed amount
         # (2026-09 audit).
         "is_wash_sale": any(t.get("is_wash_sale") for t in entries),
+        # The rule's name in the project's law, for the renderers
+        # (never "superficial" in a US project; partition COMMANDS-12).
+        "country": ctx.country,
+        "rule_name": ("Wash sale (§1091)" if is_usa
+                      else "Superficial loss (s.54)"),
         "term": _term_label(entries),
         "days_held": entry.get("days_held"),
         "currency": ctx.base_currency,

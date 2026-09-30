@@ -82,6 +82,49 @@
   (`taxjson-convert-currency` / `taxjson-merge2 --country`, required when
   a book has futures); a partial close takes average cost in Canada and
   FIFO in the US. Canadian numbers are unchanged. tax-logic US-FUT-01/02.
+- **The wash radar and the checks built on it apply the US rule in a US
+  project.** `wash-radar`, `sell-check`, `buy-check`, `harvest`, `watch`
+  and the web radar applied Canada's s.54 test to US books: windows on
+  settlement dates, a replacement that "rescues" the loss if sold before
+  day 30 (sell-check said ACTION), and a long call as replacement
+  property. In a US project each recent loss's verdict is now the US
+  engine's own, run on the same books as of the date: trade-date windows,
+  purchases in every account including IRAs, no still-held test. A
+  washed loss shows as WASHED with no rescue advice (no sale undoes a
+  wash sale); a long call is a note. Canada is unchanged (tax-logic
+  CA-PLAN-01/02, US-PLAN-01/02).
+- **Web what-if (US) sees every taxable account.** A US what-if ran on
+  the account's own book only and missed a sibling account's purchase in
+  the window; it now simulates with every taxable account and the IRAs
+  as wash-sale context, on the account's own FIFO basis (US-PLAN-03).
+  The result page names the rule of the project's country.
+- **`edge-cases` explains a US project with §1091.** It printed s.54's
+  still-held reasoning, long calls as replacement property and
+  "Schedule 3" for US books; a US project now gets trade dates, no
+  still-held items, long calls as warnings only, Form 8949, and no
+  written-option (s.49) section (US-RPT-05).
+- **`check-filed` and `handoff` refuse a lock closed under the other
+  country.** A US-filed year was recomputed under Canadian rules and
+  reported as drift with "amend or refresh the lock" advice (a refresh
+  would have overwritten the US record); the lock's country is now
+  compared and named, and a lock is recomputed on the date basis it
+  recorded (CA-RPT-09, US-RPT-06).
+- **No Canadian terms in US output.** `wash-sales`, `carryover`,
+  `crypto-sends`, `fx-cash`, `reconcile-slips`, `buy-check`, `sum`,
+  `checklist`, the radar and the web pages named s.54, "superficial",
+  "registered account", 50% inclusion / T1A, line 22100, T5008 box 20 or
+  s.39(1.1) in US projects; each now names the project's own law.
+- **`taxjson-form-export` needs `--country`** and refuses the other
+  country's form (the standalone tool was not gated), and Schedule 3
+  refuses gains files computed by the US engine.
+- **`redact` removes US city/state/ZIP lines** ("Springfield, IL
+  62704-1234") like Canadian postal-code lines.
+- **tax-logic states fx-cash §988 and the US estimate's assumptions**
+  (US-FX-03, US-RPT-07, US-RPT-08): §988 gains are ordinary and not on
+  Form 8949, with no $200 exemption; the estimate treats every dividend
+  as qualified, gains with no term as short-term, and leaves out foreign
+  tax credits, interest and state tax.
+
 - **Canadian and US law no longer mix through the country setting.**
   Every command, the web UI and every standalone tool read the country
   through one resolver: `[settings] country` is required (a missing one

@@ -133,6 +133,11 @@ PARTITION_RULES = frozenset({
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
+    # Planning tools (partition COMMANDS-01/02/05)
+    "CA-PLAN-01",      # radar: settle dates, still-held rescue
+    "CA-PLAN-02",      # radar: a long call is a replacement
+    "US-PLAN-01",      # radar: the US engine's verdict, no rescue
+    "US-PLAN-02",      # radar: a long call is a note only
 })
 
 
@@ -579,6 +584,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "foreign dividends as ordinary income with withholding "
                  "credited up to 15%;", cont=True),
             Rule("CA-RPT-06", "interest is left out.", cont=True),
+            Rule("CA-RPT-10",
+                 "`taxjson carryover`: the net-capital-loss ledger in 100% "
+                 "amounts (the inclusion rate is applied on the return); a "
+                 "loss carries forward with no time limit and back up to 3 "
+                 "years (form T1A)."),
+            Rule("CA-RPT-11",
+                 "`taxjson instalments`: CRA instalments (ITA s.156) when "
+                 "net tax owing exceeds $3,000 this year and in one of the "
+                 "two previous years — due March, June, September and "
+                 "December 15 (the next business day on a weekend), on the "
+                 "current-year, prior-year or CRA-reminder basis, with "
+                 "s.161 interest at CRA's prescribed rate."),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary."),
@@ -588,6 +605,28 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "January; `taxjson handoff` checks the next year starts "
                  "from exactly that, so no sale is reported twice or "
                  "never."),
+            Rule("CA-RPT-09",
+                 "The record states its country: `check-filed` and "
+                 "`handoff` refuse one closed under US rules instead of "
+                 "recomputing it under Canadian law.", cont=True),
+        ]),
+        ("Planning tools (wash radar, sell-check, buy-check, harvest, "
+         "watch, web)", [
+            Rule("CA-PLAN-01",
+                 "They apply the superficial-loss rule above on settle "
+                 "dates: a loss whose replacement is still held can be "
+                 "rescued by selling the replacement so that it is no "
+                 "longer held when day 30 settles (VIOLATION prints the "
+                 "last trade date that does it)."),
+            Rule("CA-PLAN-02",
+                 "A long call on the shares bought in the window counts "
+                 "as a replacement.", cont=True),
+            Rule("CA-PLAN-03",
+                 "The web what-if runs a taxable sale on the blended s.47 "
+                 "pool of the taxable accounts of its kind, with the "
+                 "registered accounts as context, so a sibling account's "
+                 "purchase in the window denies the loss as the filing "
+                 "would."),
         ]),
         ("Project country", _ownership(c)),
     ]
@@ -637,6 +676,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Other currencies are converted at the Yahoo Finance "
                  "daily rate for the settle date; a day with no rate uses "
                  "a recent previous day.", cont=True),
+            Rule("US-FX-03",
+                 "Gains on holding foreign cash (§988) are ordinary "
+                 "income, not capital gains, and are NOT in the Form 8949 "
+                 "totals: `taxjson fx-cash` estimates the year's net from "
+                 "a pooled average cost per currency (fx_cash_gains = "
+                 "true runs it after `taxjson run`); the §988(e) "
+                 "exclusion for personal transactions is not modelled, "
+                 "and there is no $200 annual exemption.",
+                 keys=("fx_cash_gains",)),
         ]),
         ("Basis and holding period", [
             Rule("US-BASIS-01", "First in, first out per account"),
@@ -771,6 +819,45 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-RPT-04",
                  "`taxjson estimate`: federal tax only (single filer, "
                  "standard deduction, NIIT), for planning."),
+            Rule("US-RPT-07",
+                 "It treats every dividend as qualified, payments in lieu "
+                 "and staking as ordinary income, gains with no term as "
+                 "short-term, and a net capital loss as offsetting up to "
+                 "$3,000 of ordinary income; foreign tax credits, "
+                 "interest and state tax are left out.", cont=True),
+            Rule("US-RPT-08",
+                 "`taxjson carryover`: the short- and long-term capital "
+                 "loss carryover (Schedule D worksheet), assuming the "
+                 "$3,000 ordinary offset is used each year unless "
+                 "claimed_losses.txt records otherwise."),
+            Rule("US-RPT-05",
+                 "`taxjson edge-cases`: every trade whose tax year or "
+                 "wash-sale verdict turns on a boundary, on trade dates; "
+                 "with no still-held test, a sale near day 30 decides "
+                 "nothing, and a long call is listed as a warning only."),
+            Rule("US-RPT-06",
+                 "`taxjson close-year` records each closed year's sales, "
+                 "year-end positions and basis, its country and date "
+                 "basis; `check-filed` and `handoff` refuse a record "
+                 "closed under Canadian rules instead of recomputing it "
+                 "under US law."),
+        ]),
+        ("Planning tools (wash radar, sell-check, buy-check, harvest, "
+         "watch, web)", [
+            Rule("US-PLAN-01",
+                 "Each recent loss's verdict is the US engine's own, as "
+                 "of the date: the window on trade dates, purchases in "
+                 "every account, IRAs included, and no still-held test — "
+                 "a washed loss shows as WASHED, and no later sale "
+                 "undoes it (the disallowed loss is in the replacement's "
+                 "basis)."),
+            Rule("US-PLAN-02",
+                 "A long call bought in the window is a note only.",
+                 cont=True),
+            Rule("US-PLAN-03",
+                 "The web what-if runs a sale with every taxable "
+                 "account's purchases and the IRAs as wash-sale context, "
+                 "on the account's own FIFO basis."),
         ]),
         ("Project country", _ownership(c)),
     ]

@@ -152,6 +152,49 @@ def write_snapshot(root: Path, year, country: str, basis: str,
     return path
 
 
+def lock_country_problem(lock: Dict[str, Any], settings: Dict[str, Any],
+                         label: str) -> Optional[str]:
+    """A refusal message when a filed-year lock (or a prior-year
+    record) was closed under the OTHER country than this project's, else
+    None. Every lock close-year writes records its country; recomputing
+    a US-filed year under Canadian rules (or the reverse) reported every
+    difference between the two laws as drift and advised amending or
+    refreshing the lock — which would overwrite the filed record with
+    the other country's numbers (partition COMMANDS-08). A lock without
+    a country (hand-written, pre-country) is not judged."""
+    from taxjson.lib.country import (CountryError, canonical_country,
+                                     display_name, settings_country)
+    rc = lock.get("country") if isinstance(lock, dict) else None
+    if rc in (None, ""):
+        return None
+    here = settings_country(settings)
+    try:
+        rcc = canonical_country(rc, what=f"{label} country")
+    except CountryError as e:
+        return f"{e} — the lock cannot be checked against this project"
+    if rcc == here:
+        return None
+    return (f"{label} was closed under country = \"{rcc}\" "
+            f"({display_name(rcc)} law) but this project is country = "
+            f"\"{here}\" ({display_name(here)}): a return filed under one "
+            f"country's rules cannot be checked against the other's, so "
+            f"it is not recomputed. Set [settings] country = \"{rcc}\" to "
+            f"check it; do NOT refresh it with `close-year --force` (that "
+            f"would overwrite the filed {display_name(rcc)} record).")
+
+
+def lock_settings(lock: Dict[str, Any], settings: Dict[str, Any]
+                  ) -> Dict[str, Any]:
+    """The settings a lock is recomputed under: this project's, with the
+    date basis the lock RECORDED (close-year writes `date_basis`) — a
+    year filed on settlement dates is checked on settlement dates even
+    after the project switched tax_date."""
+    rb = lock.get("date_basis") if isinstance(lock, dict) else None
+    if rb in ("settle", "trade"):
+        return dict(settings, tax_date=rb)
+    return settings
+
+
 def _canonical_country(settings: Dict[str, Any]) -> str:
     """lib/country.settings_country: missing / unknown raises."""
     from taxjson.lib.country import settings_country

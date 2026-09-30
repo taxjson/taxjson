@@ -21,6 +21,13 @@ the engine pooled (ticker.map already applied): identical property is the
 same symbol, plus a long call on the same shares (s.54 'a right to
 acquire'), which the engine counts as replacement property for a share
 loss.
+
+A US project (tax-logic US-RPT-05) is explained with ITS law: the §1091
+wash-sale window on trade dates with no still-held test (so no "sale
+near day 30" items and no held-on-day-30 reasoning), a long call listed
+as a warning only (the US engine does not deny on it), Form 8949 rather
+than Schedule 3, IRAs rather than registered accounts, and no written-
+option year boundary (premiums are taxed at the close, §1234).
 """
 from __future__ import annotations
 
@@ -89,7 +96,9 @@ class Book:
         self.cache = root / "work"
         settings = cfg.get("settings", {}) or {}
         self.year = int(settings.get("year") or 0)
-        from taxjson.lib.country import settings_tax_date
+        from taxjson.lib.country import settings_country, settings_tax_date
+        self.country = settings_country(settings)
+        self.usa = self.country == "usa"
         self.basis = settings_tax_date(settings)
         self.futures_settle = settings.get("futures_settle") or "trade"
         from taxjson.lib.pipeline import option_timing_from_settings
@@ -210,12 +219,16 @@ def year_straddles(book: Book) -> List[Dict[str, Any]]:
                f"it on the {'settlement' if book.basis == 'settle' else 'trade'}"
                f" date, so it is a {lands} {what}")
         if not taxable:
-            why += (" (registered account: no tax effect, but it counts for "
+            why += (" (IRA: no tax effect, but it counts for wash-sale "
+                    "windows)" if book.usa else
+                    " (registered account: no tax effect, but it counts for "
                     "superficial-loss windows)")
         elif closing:
             why += (f": a disposition whose gain or loss is in {lands}'s "
-                    f"Schedule 3"
+                    f"{'Form 8949' if book.usa else 'Schedule 3'}"
                     + (f" ({float(g['gain']):+,.2f})" if g is not None else ""))
+        elif opt and qty < 0 and book.usa:
+            why += "; the premium is taxed when the option is closed (§1234)"
         elif opt and qty < 0:
             why += (f"; under grant timing the premium is a gain in {lands}"
                     if book.timing == "grant" else
@@ -297,7 +310,7 @@ def option_expiries(book: Book) -> List[Dict[str, Any]]:
             why = (f"{side} {abs(held):g} expiring {exp}: an expiry is a "
                    f"disposition on the expiry date itself, so it lands in "
                    f"{exp.year}")
-            if side == "written":
+            if side == "written" and not book.usa:
                 why += (" (under grant timing the premium was already a gain"
                         " in the year written; see `taxjson option-boundary`)")
             out.append({"account": acct, "symbol": sym, "held": held,
@@ -394,10 +407,15 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
                             for r in other_side[:4])
             if denied > 0.005:
                 verdict = (f"denied {denied:,.2f}"
-                           + (f" ({perm:,.2f} permanently, registered "
+                           + (f" ({perm:,.2f} permanently, "
+                              f"{'IRA' if book.usa else 'registered'} "
                               f"replacement)" if perm > 0.005 else
                               f"; added to the replacement's cost, so it "
                               f"comes back when that lot is sold"))
+            elif book.usa:
+                verdict = ("allowed (the engine matched none of those "
+                           "purchases as a replacement: it was the lot "
+                           "sold, or an earlier loss used it)")
             else:
                 verdict = "allowed (the replacement was not still held on day 30, " \
                           "or it was sold before the window closed)"
@@ -477,7 +495,8 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
     basis = "settlement" if book.basis == "settle" else "trade"
     other = "trade" if basis == "settlement" else "settlement"
     side = "before" if it["day"] < 0 else "after"
-    reg = " (registered)" if it["sheltered"] else ""
+    reg = ((" (IRA)" if book.usa else " (registered)")
+           if it["sheltered"] else "")
     if it["kind"] == "sale":
         txt = (f"sale of {abs(it['qty']):g} in {it['account']}{reg} on "
                f"{it['date']}, day {it['day']} after the loss: "
@@ -490,7 +509,8 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
         txt = (f"{it['kind']} of {it['qty']:g} in {it['account']}{reg} on "
                f"{it['date']}: day {abs(it['day'])} {side} the loss -> "
                f"{where} the window")
-        if it["inside"] and it["day"] < 0 and held_end <= 1e-9:
+        if (it["inside"] and it["day"] < 0 and held_end <= 1e-9
+                and not book.usa):
             txt += (" (but none of it was still held on day 30, so it is "
                     "not a replacement: it is the lot that was sold)")
     if it["other_basis_day"] is not None:
@@ -498,7 +518,11 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
                 f"{abs(it['other_basis_day'])}")
         if it["basis_flip"]:
             txt += " — THE DATE BASIS DECIDES THIS ONE"
-    if it.get("option"):
+    if it.get("option") and book.usa:
+        txt += (f". {it['option']} may be an option to acquire the shares "
+                f"(§1091(a)); the US engine does not deny on it — a "
+                f"warning only, check it by hand")
+    elif it.get("option"):
         txt += (f". {it['option']} is a right to acquire the shares "
                 f"(s.54 para (i)): replacement property if still held on "
                 f"day 30")
@@ -508,7 +532,10 @@ def _describe(book: Book, it: Dict[str, Any], held_end: float) -> str:
 def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
     """For each taxable loss in the project year: acquisitions of the same
     security (any account) within `margin` days of either window edge, and
-    sales within `margin` days of day 30 that decide 'still held'."""
+    (Canada only: s.54's still-held test) sales within `margin` days of
+    day 30 that decide 'still held'. The US (§1091) has no still-held
+    test, so a sale near day 30 decides nothing, and a long call is a
+    warning only (calls_in_windows), never a window item."""
     lo_edge, hi_edge = WINDOW - margin, WINDOW + margin
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
     calls: Dict[str, List[Dict[str, Any]]] = {}
@@ -540,12 +567,12 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
                 items.append(dict(base, kind="acquisition", inside=inside,
                                   basis_flip=(alt is not None and
                                               (abs(alt) <= WINDOW) != inside)))
-            elif q < 0 and lo_edge <= off <= hi_edge:
+            elif q < 0 and lo_edge <= off <= hi_edge and not book.usa:
                 inside = off <= WINDOW
                 items.append(dict(base, kind="sale", inside=inside,
                                   basis_flip=(alt is not None and
                                               (alt <= WINDOW) != inside)))
-        if not _is_option(sym):
+        if not _is_option(sym) and not book.usa:
             for r in calls.get(sym, []):
                 d, od = book.bdate(r), book.other(r)
                 if not d:
@@ -624,6 +651,9 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
             continue
         items = _group(items)
         for it in items:
+            if book.usa:
+                it["why"] = _describe(book, it, 1.0)
+                continue
             it["why"] = (_describe(book, it, 1.0)
                          + ("; still held on day 30, so it backs a denial"
                             if it["held_at_day30"] > 1e-9
@@ -638,16 +668,20 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
 
 def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
             account: Optional[str] = None) -> Dict[str, Any]:
-    from taxjson.lib.option_boundary import straddling
     from taxjson.lib.pipeline import option_timing_from_settings
     from taxjson.lib.core import TaxTransaction
     book = Book(root, cfg, account)
+    if not book.usa:
+        from taxjson.lib.option_boundary import straddling
     settings = cfg.get("settings", {}) or {}
     kw = option_timing_from_settings(settings) or {}
     timing = kw.get("option_premium_timing", "close")
     since = kw.get("option_grant_since")
     written = []
-    for name in book.taxable:
+    # Written options across a year end are an s.49(1) grant-timing
+    # boundary (option-boundary is Canada-only); a US premium is taxed
+    # at the close (§1234), so there is nothing to place.
+    for name in ([] if book.usa else book.taxable):
         if not book.wanted(name):
             continue
         txs = []
@@ -669,7 +703,7 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
             r["account"] = r.get("account") or name
             written.append(r)
     return {
-        "year": book.year, "basis": book.basis,
+        "year": book.year, "basis": book.basis, "country": book.country,
         "futures_settle": book.futures_settle, "margin": margin,
         "missing_books": book.missing,
         "year_boundary": {
@@ -693,9 +727,11 @@ def _money(x: Optional[float]) -> str:
 
 def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
     y, basis = doc["year"], doc["basis"]
+    usa = doc.get("country") == "usa"
+    rule = "Wash-sale" if usa else "Superficial-loss"
     L: List[str] = []
     L.append(f"EDGE CASES — tax year {y}; date basis: {basis}"
-             f"{' (settlement date, CRA)' if basis == 'settle' else ' (trade date)'}"
+             f"{' (settlement date, CRA)' if basis == 'settle' and not usa else (' (settlement date)' if basis == 'settle' else ' (trade date)')}"
              f"; futures: {doc['futures_settle']} date")
     L.append("")
     yb = doc["year_boundary"]
@@ -721,19 +757,20 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
                        f"{r['trade_date']} (settle {r['settle_date']})  gain "
                        f"{_money(r['gain'])}  -> {r['lands_in']}"),
             "None.")
-    L.append(f"== Written options across a year end ({len(yb['written_options'])})")
-    if not yb["written_options"]:
-        L.append("   None open across Dec 31.")
-    for r in yb["written_options"]:
-        L.append(f"   {r['account']:<8} {r['symbol']:<24} written {r['written']}  "
-                 f"premium {_money(r['premium'])}  closed {r['closed'] or 'open'}")
-        L.append(f"      {r['where']}")
-    L.append("")
+    if not usa:
+        L.append(f"== Written options across a year end ({len(yb['written_options'])})")
+        if not yb["written_options"]:
+            L.append("   None open across Dec 31.")
+        for r in yb["written_options"]:
+            L.append(f"   {r['account']:<8} {r['symbol']:<24} written {r['written']}  "
+                     f"premium {_money(r['premium'])}  closed {r['closed'] or 'open'}")
+            L.append(f"      {r['where']}")
+        L.append("")
     section("Options expiring at a year end", yb["option_expiries"],
             lambda r: (f"{r['account']:<8} {r['symbol']:<24} held {r['held']:+g}"
                        f"  expires {r['expiry']}  -> {r['lands_in']}"),
             "None.")
-    section("Superficial-loss windows that span Dec 31", yb["loss_windows"],
+    section(f"{rule} windows that span Dec 31", yb["loss_windows"],
             lambda r: (f"{r['account']:<8} {r['symbol']:<24} loss "
                        f"{_money(r['raw_loss'])} on {r['loss_date']}  denied "
                        f"{_money(r['denied'])}"),
@@ -755,22 +792,29 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
             "None.")
 
     we = doc["window_edges"]
-    L.append(f"== Superficial-loss window edges: {y} losses with activity "
+    L.append(f"== {rule} window edges: {y} losses with activity "
              f"within {doc['margin']} days of day 30 ({len(we)})")
     if not we:
         L.append("   None.")
     for r in we:
         L.append(f"   {r['account']:<8} {r['symbol']:<24} loss "
                  f"{_money(r['raw_loss'])} on {r['loss_date']} "
-                 f"({r['qty']:g} units): {r['verdict']}; held on day 30: "
-                 f"{r['held_at_day30']:g}")
+                 f"({r['qty']:g} units): {r['verdict']}"
+                 + ("" if usa else
+                    f"; held on day 30: {r['held_at_day30']:g}"))
         for it in r["items"]:
             L.append(f"      - {it['why']}")
     L.append("")
     cw = doc.get("calls_in_windows") or []
-    L.append(f"== Long calls bought inside a share loss's window ({len(cw)}): "
-             f"a call is a right to acquire the shares (s.54), so one still "
-             f"held on day 30 is replacement property")
+    if usa:
+        L.append(f"== Long calls bought inside a share loss's window "
+                 f"({len(cw)}): WARNING only — §1091 may treat a call as an "
+                 f"option to acquire the shares, but the US engine does "
+                 f"not deny the loss on it; check these by hand")
+    else:
+        L.append(f"== Long calls bought inside a share loss's window ({len(cw)}): "
+                 f"a call is a right to acquire the shares (s.54), so one still "
+                 f"held on day 30 is replacement property")
     if not cw:
         L.append("   None.")
     for r in cw:
@@ -781,9 +825,16 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
             L.append(f"      - {it['why']}")
     L.append("")
     flips = sum(1 for r in we for it in r["items"] if it.get("basis_flip"))
-    L.append("Day counts use the engine's date basis. The window is the 30 days "
-             "before and after the loss, and the replacement must still be "
-             "held at the end of day 30 (ITA s.54).")
+    if usa:
+        L.append("Day counts use the engine's date basis. The window is the "
+                 "30 days before and after the loss (§1091): a purchase "
+                 "inside it in any account, IRAs included, makes the loss a "
+                 "wash sale whatever is sold later — there is no still-held "
+                 "test.")
+    else:
+        L.append("Day counts use the engine's date basis. The window is the 30 days "
+                 "before and after the loss, and the replacement must still be "
+                 "held at the end of day 30 (ITA s.54).")
     if flips:
         L.append(f"{flips} item(s) are marked THE BASIS DECIDES THIS ONE: the "
                  f"window verdict would differ on the other date basis.")

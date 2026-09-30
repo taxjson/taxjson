@@ -18,17 +18,11 @@ CA-FX-03        wrong           Yahoo is used only before 2017 or for a currency
 CA-INC-01       imprecise       Dividends on Canadian listings (.TO, .V, .CN, .NE) count as Canadian, all others
 CA-INC-02       ok              Take the return's line numbers from your slips.
 CA-INC-03       ok              Payments in lieu of dividends are ordinary income.
-CA-RPT-03       ok              estimate: federal and provincial tax (ON, BC, AB) with AMT on top of other incom
-CA-RPT-04       ok              estimate: Canadian dividends are eligible (38% gross-up and credit).
-CA-RPT-05       imprecise       estimate: foreign dividends are ordinary income with withholding credited up to 
 CA-RPT-06       unpinned        estimate: interest is left out.
-CA-RPT-07       ok              edge-cases: every trade whose year or superficial-loss verdict turns on a bounda
 CA-RPT-08       ok              close-year records each closed year's sales, year-end positions and cost, and tr
 US-BASIS-02     ok              Specific-lot identification is not supported.
 US-BASIS-03     unpinned        Purchase commissions add to basis; sale commissions reduce proceeds.
 US-OPT-04       ok              Not modelled: §1256 60/40 contracts, §1233 and §1259.
-US-RPT-02       ok              Wash sales as code W.
-US-RPT-03       ok              `--form txf` writes a TurboTax TXF file.
 US-SEND-01      imprecise       Paying with crypto is a sale at fair value; `crypto-sends` records `payment` and
 US-WASH-03      ok              The identical option is a replacement.
 US-WASH-07      ok              Look-alike securities are not detected.

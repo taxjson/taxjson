@@ -193,7 +193,9 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
             scope_note = (
                 f"This is {acct}'s own book only. A buy in another "
                 f"taxable account inside the 30-day window also makes a "
-                f"loss here superficial (the blended pass denies it) — "
+                f"loss here "
+                f"{'a wash sale' if cur().country == 'usa' else 'superficial'}"
+                f" (the blended pass denies it) — "
                 f"the COMBINED view has the cross-account verdicts.")
         sections, error, status = [], None, 200
         if acct:

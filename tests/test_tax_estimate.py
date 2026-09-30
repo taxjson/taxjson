@@ -44,6 +44,7 @@ class TestCanadaEstimate(unittest.TestCase):
         base.update(kw)
         return estimate_canada(**base)
 
+    @rule("CA-RPT-03")
     def test_capital_gain_marginal(self):
         # 1,000 gain -> 500 taxable. fed 500*.29 = 145
         #   + BPA phase-down 500*.0031592 = 1.58;
@@ -54,6 +55,7 @@ class TestCanadaEstimate(unittest.TestCase):
         self.assertAlmostEqual(r["estimated_tax"], 366.43, delta=0.02)
         self.assertAlmostEqual(r["avg_rate_pct"], 36.64, delta=0.01)
 
+    @rule("CA-RPT-04")
     def test_eligible_dividend_marginal(self):
         # 1,000 eligible -> grossed 1,380.
         # fed: 1380*.29 - 1380*.150198 = 192.93; BPA 1380*.0031592 = 4.36
@@ -64,6 +66,7 @@ class TestCanadaEstimate(unittest.TestCase):
         self.assertEqual(r["grossed_eligible"], 1380.0)
         self.assertAlmostEqual(r["estimated_tax"], 471.07, delta=0.02)
 
+    @rule("CA-RPT-05")
     def test_foreign_dividend_ftc(self):
         # 1,000 foreign: fed 290 - 150 FTC + BPA 1000*.0031592 = 3.16;
         # ON 121.6*1.56 = 189.70; OHP +150 (taxable 201,000)

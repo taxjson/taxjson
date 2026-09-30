@@ -2,11 +2,22 @@
 """
 taxjson_wash_radar.py
 
-Consolidated Tax-Efficient Holding Advisor (CRA ITA 54 focus).
+Tax-Efficient Holding Advisor: the superficial-loss (Canada, ITA s.54)
+or wash-sale (US, IRC §1091) status of every holding, as of a date.
 Ported from tt_wash_radar.pl.
 
 Analyzes potential wash sales (superficial losses) based on current holdings
 and recent transaction history across taxable and sheltered accounts.
+
+The two countries' rules never mix (tax-logic CA-PLAN-* / US-PLAN-*):
+- canada: windows on SETTLE dates; a replacement backs a denial only
+  while the holder still holds it at day 30, so a denied loss can be
+  rescued (VIOLATION); a long call on the shares is a replacement.
+- usa: windows on TRADE dates; an existing loss's verdict is the US
+  ENGINE's own (lib/core USATaxRules run in-process on the same books,
+  as of the date), so there is no still-held test and no rescue: a
+  washed loss is WASHED (deferred into the replacement's basis, or lost
+  for good through an IRA purchase); a long call is a note only.
 
 Usage:
     python -m taxjson.bin.taxjson_wash_radar --taxable tax1.json --sheltered sh1.json [--date YYYY-MM-DD]
@@ -40,10 +51,21 @@ get_tx_priority = radar_priority
 # Advisory sections, most-actionable first. Each row's category is the keyword
 # before the first ':' in its advisory (e.g. "LOCKED: ..." → "LOCKED"). Rows
 # are grouped into these sections, alphabetical by ticker within each.
-_CATEGORY_ORDER = ["VIOLATION", "BLOCKED", "LOCKED", "EXITABLE",
+_CATEGORY_ORDER = ["VIOLATION", "WASHED", "BLOCKED", "LOCKED", "EXITABLE",
                    "CAUTION", "COOLING", "RISK", "CLEAR"]
+# The sections each country prints (VIOLATION = a rescuable s.54 denial
+# and CAUTION = a registered buyer that sold out are Canadian states;
+# WASHED = a §1091 disallowance nothing can undo is the US one).
+_COUNTRY_ORDER = {
+    "canada": ["VIOLATION", "BLOCKED", "LOCKED", "EXITABLE", "CAUTION",
+               "COOLING", "RISK", "CLEAR"],
+    "usa": ["WASHED", "BLOCKED", "LOCKED", "EXITABLE", "COOLING", "RISK",
+            "CLEAR"],
+}
 _CATEGORY_TITLE = {
-    "VIOLATION": "VIOLATION — wash sale; act to rescue the loss",
+    "VIOLATION": "VIOLATION — superficial loss; act to rescue the loss",
+    "WASHED": "WASHED — wash sale (§1091): loss disallowed; no sale "
+              "undoes it",
     "BLOCKED": "BLOCKED — do not buy",
     "LOCKED": "LOCKED — recent buy; do not sell at a loss",
     "EXITABLE": "EXITABLE — loss OK only if you exit the FULL position",
@@ -129,6 +151,65 @@ class _EngineLosses:
         return None
 
 
+_US_TITLE = {
+    "RISK": "RISK — sellable now; an IRA still holds (pause IRA buys and "
+            "dividend reinvestment 30 days after selling)",
+}
+
+
+def _category_title(cat: str, country: str) -> str:
+    if country == "usa" and cat in _US_TITLE:
+        return _US_TITLE[cat]
+    return _CATEGORY_TITLE.get(cat, cat or "OTHER")
+
+
+def _us_engine_losses(taxable_rows, sheltered_rows):
+    """The US engine's verdict on every loss in these books: {tx id:
+    {qty, loss, disallowed, permanent, denied_units, direction,
+    is_option, replacements}}. It is lib/core USATaxRules itself — the
+    same §1091 window (trade dates, ±30 days), replacement matching
+    (every account, IRAs included; no still-held test; re-shorts) and
+    FIFO-per-account basis `taxjson run` uses — run on the radar's books
+    as of its date, so the radar can never state a second version of
+    the rule (partition COMMANDS-01/02/05)."""
+    import contextlib
+    import copy
+    import io
+    from taxjson.lib.core import get_tax_rules
+    tax = [copy.deepcopy(t) for t in taxable_rows]
+    shl = [copy.deepcopy(t) for t in sheltered_rows]
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            res = get_tax_rules("usa").compute_gains(
+                tax, sheltered_transactions=shl, detect_wash_sales=True,
+                per_account_basis=True)
+    except Exception as e:                                # noqa: BLE001
+        sys.exit(f"taxjson-wash-radar: the US engine could not evaluate "
+                 f"these books ({e}) — fix what it names (`taxjson run` "
+                 f"stops on the same books) before trusting any "
+                 f"wash-sale advice.")
+    out: Dict[str, dict] = {}
+    for r in res.get("transactions") or []:
+        if r.get("action") or not r.get("qty") or not r.get("id"):
+            continue
+        raw = float(r.get("raw_gain", r.get("gain")) or 0.0)
+        if raw >= -0.01:
+            continue
+        o = out.setdefault(str(r["id"]), {
+            "qty": 0.0, "loss": 0.0, "disallowed": 0.0, "permanent": 0.0,
+            "denied_units": 0.0, "direction": r.get("direction") or "LONG",
+            "is_option": bool(r.get("is_option")), "replacements": []})
+        o["qty"] += abs(float(r.get("qty") or 0.0))
+        o["loss"] += -raw
+        o["disallowed"] += float(r.get("disallowed_amount") or 0.0)
+        o["permanent"] += float(r.get("permanently_disallowed") or 0.0)
+        for rep in r.get("wash_replacements") or []:
+            o["denied_units"] += float(rep.get("match_qty") or 0.0)
+            o["replacements"].append(rep)
+    return out
+
+
 def _advisory_category(adv: str) -> str:
     return adv.split(":", 1)[0].strip() if adv else ""
 
@@ -185,17 +266,29 @@ def main():
                              "phantom-backed positions are not shown as "
                              "shorts")
     add_country_argument(parser,
-                         help="Project country (required). Canada "
-                             "(s.54): only a LONG acquisition still held "
-                             "by the SAME holder at day 30 backs a denial "
-                             "(taxable pool, or each registered account on "
-                             "its own). usa (s.1091): a re-short triggers a "
-                             "short-cover loss and an IRA purchase in the "
-                             "window denies the loss even after the IRA "
-                             "sold (Rev. Rul. 2008-5)")
+                         help="Project country (required). canada "
+                             "(s.54, settle dates): only a LONG acquisition "
+                             "(a long call included) still held by the SAME "
+                             "holder at day 30 backs a denial (taxable "
+                             "pool, or each registered account on its "
+                             "own), so a denial can be rescued. usa "
+                             "(§1091, trade dates): the US engine's own "
+                             "verdict — any purchase in the window in any "
+                             "account, IRAs included, with no still-held "
+                             "test, so a washed loss cannot be rescued; a "
+                             "re-short triggers a short-cover loss; a long "
+                             "call is a note only")
 
     args = parser.parse_args()
     us_mode = args.country == "usa"
+
+    def _tax_day(t):
+        """The date a row's window is measured on: the TRADE date under
+        §1091 (the US engine's basis), the SETTLE date under s.54 (the
+        Canadian engine's)."""
+        if us_mode:
+            return t.date or t.date_settle
+        return t.date_settle or t.date
 
     orig_stdout = sys.stdout
     if args.json:
@@ -263,12 +356,12 @@ def main():
             # Restore metadata
             tx_obj._group = t['_group']
             tx_obj._file = t['_file']
-            # SETTLEMENT-basis epochs, matching the gains engine's CRA
-            # window (settle end-to-end). Trade-date windows disagreed
-            # with the engine by 1-2 business days at the ±30d edges: a
-            # 31-trade-day gap that is 29 settle-days showed 0 VIOLATIONS
-            # here while the engine disallowed the full loss.
-            _d = tx_obj.date_settle or tx_obj.date
+            # The engine's own window basis: SETTLEMENT dates for
+            # Canada (the CRA window, settle end-to-end), TRADE dates
+            # for the US (§1091). The wrong basis disagreed with the
+            # engine by 1-2 business days at the ±30d edges (a
+            # 31-trade-day gap that is 29 settle-days).
+            _d = _tax_day(tx_obj)
             tx_obj._epoch = date_to_epoch(_d)
             tx_obj._epoch_full = date_time_to_epoch(_d, tx_obj.time)
             transactions.append(tx_obj)
@@ -290,7 +383,10 @@ def main():
     # (qty x ratio; money untouched) — the engine's rule (core.py, the
     # settle-lag straddle). Without it a pre-split sale of 84 left 8.4
     # phantom post-split shares held (real FFN.TO 11-for-10, 2026-07).
-    _lag_splits = [t for t in transactions if t.action == 'SPLIT' and t.date]
+    # (US: the walk orders by TRADE date, so a pre-split trade is booked
+    # before the split scales it — nothing to re-denominate.)
+    _lag_splits = [t for t in transactions if t.action == 'SPLIT' and t.date
+                   and not us_mode]
     if _lag_splits:
         for t in transactions:
             if not (t.action in ('BUYSELL', 'ASSIGN') and t.date
@@ -349,7 +445,7 @@ def main():
                 if not hasattr(t, '_group'):
                     t._group = group
                     t._file = str(args.incomplete_history)
-                    _d = t.date_settle or t.date
+                    _d = _tax_day(t)
                     t._epoch = date_to_epoch(_d)
                     t._epoch_full = date_time_to_epoch(_d, t.time)
             return new_rows
@@ -362,7 +458,7 @@ def main():
     # old settle-date filter hid every trade made today (T+1) — and
     # Friday's trades all weekend — so buy-check said SAFE right after
     # a loss sale and sell-check said SAFE right after a buy (2026-09
-    # audit). Windows stay settle-based (the rows keep their settle
+    # audit). Windows stay on the country's basis (the rows keep their
     # epochs); only the "is it booked yet" test uses the trade date.
     def _booked(t):
         return date_to_epoch(t.date or t.date_settle) <= today_epoch
@@ -379,7 +475,7 @@ def main():
     # (rows print per ticker); only the MATCHING is class-level.
     alias_of = SplitTimeline.from_transactions(
         [t for t in transactions if _booked(t)],
-        date_of=lambda t: t.date_settle or t.date).canonical
+        date_of=_tax_day).canonical
 
     account_pool_qty = {} # (symbol, group, account) -> qty
     account_pool_acb = {} # (symbol, group, account) -> total_cost
@@ -434,7 +530,11 @@ def main():
     def _engine_record(cls, tx):
         """Record the engine's losses for this row. Returns False when
         the engine does not cover the row (the caller falls back to the
-        radar's own pool), True when it does (losses, if any, recorded)."""
+        radar's own pool), True when it does (losses, if any, recorded).
+        US: every loss comes from the in-process US engine after the
+        walk (_us_engine_losses), never from the radar's own pool."""
+        if us_mode:
+            return True
         if tx._group != 'TAXABLE' or tx.action in ('TRANSFER',
                                                    'OPENING_BALANCE'):
             return False
@@ -637,6 +737,34 @@ def main():
             account_pool_acb[key] = 0.0
             account_pool_qty[key] = 0.0
 
+    if us_mode:
+        # §1091: the US engine's own verdict on every loss, as of the
+        # radar's date (rows booked by then), keyed like the walk's.
+        _booked_rows = [t for t in transactions if _booked(t)]
+        _us = _us_engine_losses(
+            [t for t in _booked_rows if t._group == 'TAXABLE'],
+            [t for t in _booked_rows if t._group != 'TAXABLE'])
+        _seen_ids = set()
+        for t in _booked_rows:
+            v = _us.get(str(t.id)) if t._group == 'TAXABLE' else None
+            if not v or str(t.id) in _seen_ids:
+                continue
+            _seen_ids.add(str(t.id))
+            _record_loss(alias_of(t.symbol), t, {
+                'date': t.date,
+                'epoch': t._epoch,
+                'qty': v['qty'],
+                'loss': v['loss'],
+                'disallowed': v['disallowed'],
+                'permanent': v['permanent'],
+                'denied_units': v['denied_units'],
+                'replacements': v['replacements'],
+                'direction': v['direction'],
+                'currency': (getattr(t, 'currency', '') or '').strip().upper(),
+                'is_option': v['is_option'] or is_option_ticker(t.symbol),
+                'source': 'engine-usa',
+            })
+
     # Reporting
     table_data = []
     row_records = []   # structured twins of table_data rows (for --json-out)
@@ -691,7 +819,9 @@ def main():
 
         long_held = _held_by_holder('LONG')
         calls_held = {}          # (holder, call symbol) -> contracts
-        if not is_option_ticker(ticker):
+        # s.54 para (i) only: a US long call is not replacement
+        # property for the engine (a warning only, US-WASH-12).
+        if not is_option_ticker(ticker) and not us_mode:
             for (t, grp, pacct), qty in account_pool_qty.items():
                 if _call_underlying_cls(t) != cls:
                     continue
@@ -725,7 +855,7 @@ def main():
                     back[h] = {'units': cap, 'held': held.get(h, 0.0),
                                'last': last[h][0], 'account': last[h][1]}
             calls = {}
-            if share_loss and crit == 'LONG':
+            if share_loss and crit == 'LONG' and not us_mode:
                 cacq, clast = {}, {}
                 for e in call_acq.get(cls, []):
                     if not (lo <= e['epoch'] <= hi):
@@ -762,9 +892,11 @@ def main():
         # inside the loss's ±30-day window AND still holds (the Canada
         # rule; LONG acquisitions only — a re-short or a new written
         # option never triggers). Denied units = min(sold, backing).
+        # (US: no radar-side test at all — the verdict is the engine's
+        # disallowed amount on each loss; see the WASHED branch.)
         violations = []
-        for l in in_window_losses:
-            crit = (l.get('direction', 'LONG') if us_mode else 'LONG')
+        for l in ([] if us_mode else in_window_losses):
+            crit = 'LONG'
             back, calls = _backing(
                 l['epoch'] - window_sec, l['epoch'] + window_sec, crit,
                 share_loss=(not l.get('is_option')
@@ -794,7 +926,64 @@ def main():
 
         if in_window_losses:
             is_relevant = True
-            if violations:
+            # US: the engine already disallowed these (§1091). Nothing
+            # the user does now changes it — no still-held test, so no
+            # "rescue" (partition COMMANDS-01).
+            _washed = ([l for l in in_window_losses
+                        if float(l.get('disallowed') or 0.0) > 0.005]
+                       if us_mode else [])
+            if _washed:
+                dis = sum(float(l['disallowed']) for l in _washed)
+                perm = sum(float(l.get('permanent') or 0.0)
+                           for l in _washed)
+                raw = sum(float(l['loss']) for l in _washed)
+                dates = ", ".join(sorted({l['date'] for l in _washed}))
+                reps: Dict[Any, float] = {}
+                for l in _washed:
+                    for r in l.get('replacements') or []:
+                        k = (r.get('date') or '?', r.get('account') or '?',
+                             bool(r.get('is_sheltered')))
+                        reps[k] = reps.get(k, 0.0) + float(
+                            r.get('match_qty') or 0.0)
+                _short = all(l.get('direction') == 'SHORT'
+                             for l in _washed)
+                _verb = "shorted" if _short else "bought"
+                rep_txt = "; ".join(
+                    f"{'IRA ' if sh else ''}'{a}' {_verb} {_qfmt(q)} on {d}"
+                    for (d, a, sh), q in sorted(reps.items()))
+                denied_j = round(sum(float(l.get('denied_units') or 0.0)
+                                     for l in _washed), 6)
+                adv = (f"WASHED: the loss of ${raw:.2f} on {dates} is a "
+                       f"wash sale (§1091): ${dis:.2f} disallowed — a "
+                       f"replacement {'short was opened' if _short else 'was bought'}"
+                       f" within 30 days"
+                       + (f" ({rep_txt})" if rep_txt else "")
+                       + ". There is no still-held test: selling the "
+                         "replacement does not undo it.")
+                if dis - perm > 0.005:
+                    adv += (f" ${dis - perm:.2f} is added to the "
+                            f"replacement's basis and comes back when "
+                            f"that lot is sold.")
+                if perm > 0.005:
+                    adv += (f" ${perm:.2f} matched an IRA purchase and "
+                            f"is lost for good.")
+                _open = [l for l in in_window_losses
+                         if float(l['loss'])
+                         - float(l.get('disallowed') or 0.0) > 0.01]
+                if _open:
+                    last = max(_open, key=lambda l: l['epoch'])
+                    safe_d = epoch_to_date(last['epoch'] + 31 * 86400)
+                    days_left = int(31 - (today_epoch - last['epoch'])
+                                    / 86400)
+                    clear_in = f"{safe_d} ({days_left}d)"
+                    clears_at = safe_d
+                    rem = sum(float(l['loss'])
+                              - float(l.get('disallowed') or 0.0)
+                              for l in _open)
+                    adv += (f" The remaining ${rem:.2f} of loss is "
+                            f"disallowed too if you buy again before "
+                            f"{safe_d}.")
+            elif violations:
                 # Already superficial: a replacement acquired in the
                 # window is still held. Rescue = every backing holder
                 # exits its WHOLE holding (min(acquired, held) reaches 0
@@ -881,6 +1070,23 @@ def main():
                     # Fully exited at a loss: safe, just don't re-enter
                     # until the window closes.
                     adv = f"COOLING: Loss of ${loss_amt:.4f} on {last['date']}. Safe to re-enter on {safe_d}."
+            if us_mode and not is_option_ticker(ticker) and any(
+                    abs(e['epoch'] - l['epoch']) <= window_sec
+                    for l in in_window_losses
+                    if l.get('direction', 'LONG') == 'LONG'
+                    and not l.get('is_option')
+                    for e in call_acq.get(cls, [])):
+                # US-WASH-12: flagged, never enforced.
+                adv += (" NOTE: a long call on these shares was bought "
+                        "inside the window — §1091 may treat it as an "
+                        "option to acquire them; the US engine does not "
+                        "disallow on it (a warning only), so check it by "
+                        "hand.")
+
+        # The rule's name in this project's law.
+        _sl = "a wash sale" if us_mode else "a superficial loss"
+        _sl_adj = "a wash sale" if us_mode else "superficial"
+        _reg = "IRA(s)" if us_mode else "SHELTERED account(s)"
 
         if not adv and abs(tax_q) > 0.01:
             # Forward view: a loss sale of the taxable position TODAY.
@@ -950,13 +1156,13 @@ def main():
                     keep = ("that portion is permanently denied unless the "
                             "registered account sells them within 30 days "
                             "after your sale")
-                adv = (f"LOCKED: Recent buy in SHELTERED account(s): {who}. "
+                adv = (f"LOCKED: Recent buy in {_reg}: {who}. "
                        f"Selling the taxable position at a loss before "
-                       f"{safe_d} is a superficial loss for up to "
+                       f"{safe_d} is {_sl} for up to "
                        f"{_qfmt(at_risk)} of your {_qfmt(tax_long)} "
                        f"shares — {keep}; the rest of the loss stands.")
                 if tax_acq:
-                    adv += (f" A PARTIAL loss sale is also superficial for "
+                    adv += (f" A PARTIAL loss sale is also {_sl_adj} for "
                             f"the taxable buy on "
                             f"{epoch_to_date(tax_acq['epoch'])} (deferred "
                             f"into the remaining shares).")
@@ -979,9 +1185,15 @@ def main():
                        f"'{tax_acq['account'] or 'unknown'}' on "
                        f"{epoch_to_date(tax_acq['epoch'])}. Selling "
                        f"{_full} at a loss is fine now; a PARTIAL loss "
-                       f"sale before {safe_d} is superficial (basis "
+                       f"sale before {safe_d} is {_sl_adj} (basis "
                        f"defers into the remaining shares).")
-                if pre_window_shl:
+                if pre_window_shl and us_mode:
+                    adv += (f" IRAs hold {_qfmt(abs(cls_shl_q))} sh "
+                            f"bought before the window — they do not make "
+                            f"this loss a wash sale, but an IRA buy "
+                            f"(dividend reinvestment too) within 30 days "
+                            f"AFTER the sale would, permanently.")
+                elif pre_window_shl:
                     adv += (f" Sheltered accounts hold "
                             f"{_qfmt(abs(cls_shl_q))} sh bought before the "
                             f"window — they do not make this loss "
@@ -1010,12 +1222,20 @@ def main():
             # within 30 days after the sale denies the loss
             # PERMANENTLY (registered-account basis is unrecoverable).
             is_relevant = True
-            adv = ("RISK: Sellable at a loss NOW (no buys in the last "
-                   "30 days) — but sheltered accounts still hold, so "
-                   "any affiliated buy (including a DRIP) within 30 "
-                   "days AFTER the sale denies the loss PERMANENTLY. "
-                   "Pause DRIPs/sheltered adds for 30 days, or sell "
-                   "the sheltered shares too.")
+            if us_mode:
+                adv = ("RISK: Sellable at a loss NOW (no buys in the last "
+                       "30 days) — but an IRA still holds, so any IRA "
+                       "buy (dividend reinvestment included) within 30 "
+                       "days AFTER the sale disallows the loss "
+                       "PERMANENTLY (Rev. Rul. 2008-5). Pause IRA "
+                       "buys/reinvestment for 30 days.")
+            else:
+                adv = ("RISK: Sellable at a loss NOW (no buys in the last "
+                       "30 days) — but sheltered accounts still hold, so "
+                       "any affiliated buy (including a DRIP) within 30 "
+                       "days AFTER the sale denies the loss PERMANENTLY. "
+                       "Pause DRIPs/sheltered adds for 30 days, or sell "
+                       "the sheltered shares too.")
 
         if not adv:
             if abs(tax_q) > 0.01 or abs(shl_q) > 0.01:
@@ -1059,6 +1279,7 @@ def main():
     total_width = sum(widths) + 3 * (len(widths) - 1)
 
     # Group rows by advisory category (alphabetical by ticker within each).
+    _order = _COUNTRY_ORDER[args.country]
     table_data.sort(key=lambda r: (_category_rank(_advisory_category(r[4])), r[0]))
     by_cat: Dict[str, list] = {}
     for r in table_data:
@@ -1076,12 +1297,12 @@ def main():
     # Always print every advisory section in the fixed order — even empty ones
     # — so a clean `VIOLATION (0)` / `BLOCKED (0)` is visible at a glance rather
     # than silently absent. Any extra category (e.g. OTHER from --all) follows.
-    extras = [c for c in by_cat if c not in _CATEGORY_ORDER]
-    for i, cat in enumerate(_CATEGORY_ORDER + extras):
+    extras = [c for c in by_cat if c not in _order]
+    for i, cat in enumerate(_order + extras):
         rows_c = by_cat.get(cat, [])
         if i:
             print()
-        title = _CATEGORY_TITLE.get(cat, cat or "OTHER")
+        title = _category_title(cat, args.country)
         print(f"--- {title} ({len(rows_c)}) ".ljust(total_width, "-"))
         if rows_c:
             print(header_line)
@@ -1101,14 +1322,15 @@ def main():
                                         r["ticker"]))
         for rec in row_records:
             recs_by_cat.setdefault(rec["category"], []).append(rec)
-        extras_j = [c for c in recs_by_cat if c not in _CATEGORY_ORDER]
+        extras_j = [c for c in recs_by_cat if c not in _order]
         sections_j = [{
             "category": cat,
-            "title": _CATEGORY_TITLE.get(cat, cat or "OTHER"),
+            "title": _category_title(cat, args.country),
             "rows": recs_by_cat.get(cat, []),
-        } for cat in _CATEGORY_ORDER + extras_j]
+        } for cat in _order + extras_j]
         payload = {
             "schema_version": 1,
+            "country": args.country,
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "as_of_date": today_dt.strftime("%Y-%m-%d"),
             "account": args.account,
@@ -1124,6 +1346,47 @@ def main():
 
     print("-" * head_w)
     print("Definitions:")
+    if us_mode:
+        for line in _US_DEFINITIONS:
+            print(f"  {line}")
+        print()
+    else:
+        _print_ca_definitions()
+
+    if args.json:
+        # Discard the buffered text report and emit only the payload.
+        sys.stdout = orig_stdout
+        print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+_US_DEFINITIONS = (
+    "WASHED: You sold at a loss and a replacement was bought within 30 "
+    "days before or after the sale (trade dates) in any of your accounts, "
+    "IRAs included: the US engine disallowed it (§1091). There is no "
+    "still-held test, so no later sale undoes it; the disallowed loss is "
+    "added to the replacement's basis (lost for good when the replacement "
+    "is in an IRA).",
+    "BLOCKED: You sold at a loss in the last 30 days and still hold some. "
+    "Buying again before the printed date disallows the loss.",
+    "LOCKED: An IRA bought in the last 30 days. A taxable loss sale is a "
+    "wash sale for up to that many shares, permanently — even if the IRA "
+    "has sold them since (Rev. Rul. 2008-5).",
+    "EXITABLE: You bought in the last 30 days in a taxable account. "
+    "Selling the FULL position at a loss is fine; a partial loss sale is "
+    "a wash sale (basis defers into the rest).",
+    "COOLING: You recently sold out at a loss. Wait 31 days from the sale "
+    "(trade date) before buying back.",
+    "RISK: Sellable at a loss NOW — but an IRA still holds, so an IRA buy "
+    "(dividend reinvestment too) within 30 days AFTER the sale disallows "
+    "the loss permanently.",
+    "CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 "
+    "days).",
+    "A long call on the shares bought in a loss's window is noted, not "
+    "enforced (the US engine only warns).",
+)
+
+
+def _print_ca_definitions():
     print("  VIOLATION: You sold at a loss and a holder that BOUGHT the same security inside the ±30-day window still holds it (your taxable accounts, or a registered account). That holder sells ALL of it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (the printed date already allows for the T+1 lag and any settlement holiday inside it). Shares a registered account held before the window never make a loss superficial.")
     print("  BLOCKED: You sold at a loss in the last 30 days. Buying now cancels that loss.")
     print("  LOCKED: A registered account bought in the last 30 days and still holds those shares. A taxable loss sale is superficial for up to that many shares (the rest of the loss stands) — permanently denied unless that account sells them within 30 days after your sale.\n  EXITABLE: You bought in the last 30 days in a taxable account. Selling the FULL position at a loss is fine; a partial loss sale is superficial (basis defers into the rest).\n  CAUTION: A registered account bought recently but has since sold what it bought. A full-exit loss sale stands unless an affiliated account re-buys within 30 days after.")
@@ -1132,10 +1395,6 @@ def main():
     print("  CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 days).")
     print()
 
-    if args.json:
-        # Discard the buffered text report and emit only the payload.
-        sys.stdout = orig_stdout
-        print(json.dumps(payload, indent=2, sort_keys=True))
 
 if __name__ == "__main__":
     main()

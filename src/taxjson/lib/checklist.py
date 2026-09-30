@@ -171,7 +171,9 @@ US_STEPS: Dict[str, Any] = {
                   "record each year's Schedule D line 21 deduction, not the "
                   "line 6 / 14 carryover."),
     "fx-cash": ("FX gain on foreign cash reviewed (§988)", "taxjson fx-cash",
-                "Foreign currency gains on personal cash above $200 per transaction are income."),
+                "§988 currency gains on investment cash are ordinary income; "
+                "`taxjson fx-cash` estimates the year's net (the §988(e) "
+                "personal-transaction exclusion is not modelled)."),
     "fees": ("Margin interest collected (Form 4952, if itemizing)",
              "broker statements (`taxjson events` lists the INTEREST rows)",
              "Investment interest is deductible only when itemizing; no taxjson "
@@ -1045,6 +1047,12 @@ def d_fx_cash(ctx: Ctx) -> Result:
 
 
 def d_fees(ctx: Ctx) -> Result:
+    if is_us(ctx.settings.get("country")):
+        return Result("fees", "manual",
+                      "investment interest (Form 4952) is entered by hand "
+                      "from the statements' margin interest (`taxjson "
+                      "fees` lists commissions and fees, which are not "
+                      "investment interest)")
     return Result("fees", "manual",
                   "line 22100 is entered by hand from the statements' margin "
                   "interest (`taxjson fees` lists commissions and fees, which "
