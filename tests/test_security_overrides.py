@@ -80,19 +80,18 @@ class TestLoadSecurityOverrides(unittest.TestCase):
                 ("some fund", "*", "FUND.TO"),
             ])
 
-    def test_malformed_line_refused(self):
-        # S053-04: a malformed line used to be skipped with a warning
-        # that reached only the report banner (the override silently
-        # not applied, even under --strict). Now it names file:line.
+    def test_malformed_line_is_an_error(self):
+        # A skipped rule changes ACB pooling silently (audit S001-01):
+        # the line is refused, named by its number.
+        from taxjson.bin.taxjson_brokerage import SecurityOverrideError
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / 'security_overrides.txt'
             # Missing the symbol field.
-            f.write_text("Good Fund | CAD | GF.TO\n"
-                         "US DLR CURRENCY ETF | USD\n")
-            with self.assertRaisesRegex(ValueError,
-                                        r"security_overrides.txt:2"):
+            f.write_text("US DLR CURRENCY ETF | USD\n"
+                         "Good Fund | CAD | GF.TO\n")
+            with self.assertRaises(SecurityOverrideError) as cm:
                 load_security_overrides(f)
-
+            self.assertIn('line 1', str(cm.exception))
 
 if __name__ == '__main__':
     unittest.main()

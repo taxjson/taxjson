@@ -23,7 +23,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — `isin_map = {... 'IE': 'L' ...}` in the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead — corrected 2026-09 round-five audit).
-- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix.
+- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
 - **Why deferred:** the user holds no IE-domiciled ETFs, so the bug doesn't fire on their data. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
 - **Workaround:** users who hold IE-domiciled ETFs should add a `ticker.map` GLOBAL rule rewriting the parsed `.L` symbol to the correct market suffix.
 
@@ -99,8 +99,8 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** RBC now emits a TRANSFER for an in-kind security move (Activity `Transfers`, e.g. a DTC transfer-in). For sheltered accounts (`transfers = true`) it's kept; for **taxable** accounts `transfers` stays **off**, so the row is dropped.
 - **Why this is intentional (decided 2026-06):** taxable cost basis must be computed from *actual* buys and sells — a transfer-in carries no reliable ACB (RBC ships book value 0), so accepting it would fabricate basis. Dropping it instead leaves the position looking short until the user supplies the real acquisition history; that phantom short is the **correct signal** (surfaced by `taxjson-missing-history`) that actual buys are missing, not something to paper over with a transfer. Do not flip the taxable default.
 
-### Questrade stock dividends enter the book at $0 cost
-- **Where:** `src/taxjson/lib/brokerages/questrade.py` — the `DIS` + stock-dividend branch (added 2026-08, commit 40d51bb).
+### Questrade and IB stock dividends enter the book at $0 cost
+- **Where:** `src/taxjson/lib/brokerages/questrade.py` — the `DIS` + stock-dividend branch (added 2026-08, commit 40d51bb); `ib_extractor.py` — a Corporate Actions `Stock Dividend` row (2026-09; IB's exact wording is modelled, not seen in a real statement). IB's note (an `ATTENTION` line on the console) also shows the row's Value.
 - **Current behavior:** a STOCK DIVIDEND row (split-share corps paying non-cash share dividends) is parsed as a zero-cost, zero-cash BUYSELL so the delivered shares exist in inventory (previously the row was silently discarded and the position went phantom-short at the next full sale). The taxable amount of a stock dividend is the fund's *declared* amount, which the CSV does not carry, so the shares enter at $0 cost and a stderr `NOTE:` names the symbol, date, and share count.
 - **Impact:** registered accounts — none. Taxable accounts — ACB is understated (gain overstated at sale) until the declared amount is supplied; the zero-basis walk also surfaces the position via `taxjson find-missing-history`.
 - **Workaround (the intended flow):** add the fund's declared per-share amount for the record date to `distributions.map`; `taxjson run` converts it into the ACB-raising ADJUST.
@@ -323,7 +323,8 @@ item first shipped charged them twice and was removed in the 2026-09
 parse hardening; `Commission Adjustments` refunds
 are negative FEE rows; tender / voluntary-offer journals are netted
 (zero-proceeds round trip = recognized no-op, cash settlement = a
-booked sale with a NOTE). Kraken `transfer/transferpeertopeer` is
+booked sale with a NOTE; an allocation that delivers ANOTHER security
+is an UNBOOKED warning — book the exchange by hand). Kraken `transfer/transferpeertopeer` is
 custody evidence like a withdrawal; Kraken fiat-base fills and fiat-
 fiat instant trades, IB `Trades/Forex`, and Questrade `FXT` are
 recognized non-events (see the two "conversions are not modeled"

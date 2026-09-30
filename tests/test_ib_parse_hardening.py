@@ -264,9 +264,11 @@ class TestCashReportReconciliation(unittest.TestCase):
                     'Trades (Purchase),USD,-20000',
                     'Trades (Purchase),USD,-21000').replace(
                     'Commissions,USD,-1', 'Commissions,USD,-2'))
+        # The row itself is refused now, before the reconciliation
+        # (audit S060-08: without a Cash Report it was a counted skip).
         with self.assertRaises(BrokerageParseError) as cm:
             _parse(body)
-        self.assertIn('Trades (Sales) + Trades (Purchase)', str(cm.exception))
+        self.assertIn("asset category 'Bonds'", str(cm.exception))
 
 
 class TestUnknownSections(unittest.TestCase):
@@ -367,7 +369,10 @@ class TestCorporateActionCancellation(unittest.TestCase):
         parser, txs, err = _parse(HEAD + CA_H
                                   + self._ca(self.DESC3, -200, 'Ca'))
         self.assertEqual(txs, [])
-        self.assertIn('its original row is not in this statement', err)
+        # Worded for the account: taxjson-brokerage first offers the
+        # row to the account's other statements (audit S059-04).
+        self.assertIn("its original row is not in this account's "
+                      "statements", err)
         self.assertEqual(parser._skip_counts.get(
             'Corporate Actions Ca row whose original is not in this '
             'statement (see warning)'), 1)

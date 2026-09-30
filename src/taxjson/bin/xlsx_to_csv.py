@@ -20,7 +20,10 @@ from taxjson.lib import cli_diag
 
 PROG = "taxjson-xlsx-to-csv"
 
-_GROUPED_NUMBER_RE = re.compile(r'^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?$')
+# A first group of 0 is a decimal comma ('0,125'), never thousands
+# (audit S055-08).
+_GROUPED_NUMBER_RE = re.compile(
+    r'^[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?$')
 
 
 def _clean_numeric_commas(val):

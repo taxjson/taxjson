@@ -129,6 +129,89 @@
   reported with a hint to write the suffixed form. A malformed
   `ticker_extraction_overrides.txt` line now stops the run by
   file:line instead of being skipped.
+- **An IB corporate-action cancellation reaches the other statement.** A
+  split booked in one yearly statement and cancelled (`Ca`) in the next
+  is undone when both are in the account's inputs; it used to stay
+  applied with a "reverse it by hand" warning (audit S059-04).
+- **Generic importer: one spelling per security.** `BRK-B` and `BRK/B`
+  are `BRK.B` (they were separate ACB pools, so a cross-account
+  superficial loss was missed), an OCC symbol padded to 21 characters is
+  compacted, and an option description in the symbol column is refused
+  instead of booked as a share that never expires (audit S010-04).
+- **US projects: an IB return of capital reduces basis by default.** A
+  `country = "usa"` project no longer books an issuer-designated return
+  of capital as a dividend under Canada's s.90(2) rule; it is a
+  nondividend distribution (IRC s.301(c)(2)) unless `[settings]
+  foreign_return_of_capital` says otherwise (audit S013-01).
+- **Settle dates that pair across legs and files.** An IB assignment's
+  option leg now settles with its stock leg (before the 2024 T+1 cutover
+  the option settled a day earlier, and a same-day trade could consume
+  the premium), and a Dec-31 0DTE option trade is clamped to its expiry
+  even when the expiry row sits in the next yearly export (audit S058-01,
+  S055-22).
+- **IB security identity across statements and issuers.** Income is
+  moved to the held listing of its ticker only when the ISINs match (an
+  AT&T dividend no longer lands on Telus `T.TO`), and the holding may
+  come from the account's other statements (a ROC-only statement no
+  longer books a gain on a phantom listing). Option-root aliases are
+  learned from all of the account's statements, and after a ticker
+  rename the canonical root is the contract's underlying (SQ -> XYZ). A
+  USD trade of a TSX `.U` unit is `X.U.TO`, as RBC books it. One stock
+  listed under two symbols (a ticker change) is an ATTENTION line
+  naming the `ticker.map` GLOBAL rule that joins them (audit S059-24,
+  S060-19, S060-00, S059-15, S059-11, S010-06, S059-13, S060-17).
+- **IB corporate actions nobody books are loud.** An unhandled Corporate
+  Actions row is now an UNBOOKED warning (console; fatal under `run
+  --strict`) that points at a `.tt` booking instead of a manual TRANSFER
+  row (dropped in taxable accounts). The same goes for an option or
+  futures contract adjustment (it used to become an equity SPLIT on an
+  invented symbol), a spin-off debit on a short parent, and a tender
+  whose allocation delivers another security (a share-for-share exchange
+  offer was reported as a no-op). An IB stock dividend books its shares
+  at $0 cost with a console note, like Questrade's; an Options
+  Expirations row keeps its own asset category (a futures-option expiry
+  closes the `F:` position) (audit S058-16, S058-22, S058-24, S013-06,
+  R1-56).
+- **IB statements that do not cover the year are reported.** `taxjson
+  run` now says on the console when an account's IB statements stop
+  before Dec 31 of a finished year (the 2024 statement ending Dec 27) or
+  leave a gap between two statements, and when a statement has no Cash
+  Report to reconcile against (audit R1-2, R1-195, R1-53).
+- **IB rows the parser cannot book are refused, not counted.** A Trades
+  row in an asset class without a parser branch (Bonds, Mutual Funds)
+  that moves money, and a security Transfers row with a blank Qty, stop
+  the parse naming the row. An execution-level `Trade` row is skipped
+  only when an `Order` row covers the same symbol and day (a Trade-only
+  fill of another symbol was dropped, a Trade row before its Order row
+  was doubled); levels that disagree are refused (audit S060-08, R1-55,
+  S060-10).
+- **A penny option close no longer stops `taxjson run`.** A sell whose
+  commission exceeds its gross (closing at 0.01) nets negative proceeds;
+  the schema used to refuse it on the always-strict parse, although the
+  engine books it. An assignment stock leg's money is now checked
+  against quantity x strike like any trade (audit S017-00, S017-02).
+- **Comma-grouped numbers read right.** `0,125` is refused as a decimal
+  comma everywhere (it read as 125); an option strike written `5,000.00`
+  keeps its thousands (it was cut to strike 5); an IB `Split 1 for
+  1,000` is 1-for-1000 (audit S055-08, R1-170, S058-19).
+- **UTF-16 exports are routed.** Broker detection decodes a UTF-16 BOM
+  the way the IB, Questrade and RBC parsers do (audit R1-70).
+- **Security overrides are stricter and reach every row.**
+  `ticker_extraction_overrides.txt` keys now match whole words (on IB,
+  where the description is the bare ticker, `BN` no longer rewrites
+  ABNB or BNTX), never rewrite option or futures rows, take the currency
+  case-insensitively, ignore a leading BOM, and a malformed line fails
+  the parse naming its line number instead of being skipped. The
+  override now runs before TRANSFER rows are set aside (the custody
+  sidecar gets the corrected symbol), IB TRANSFER rows carry the
+  security (`ACATS (DLR)`) so the override can match them, and an IB
+  split of an overridden security stays a split (its `symbol_new`
+  follows the rewrite) (audit R1-143, S001-00/01/02, S012-09, S027-01,
+  S059-03).
+- **Transfer sidecar is de-duplicated across overlapping exports.** A
+  re-downloaded or overlapping statement no longer doubles every custody
+  row in `taxjson transfers` or moves twice the shares in the holdings
+  evidence netting (audit S026-23, S027-00).
 - **Corporate-action elections say what the law says.** The s.85.1
   share-for-share rollover is automatic when it applies (you opt out by
   reporting the gain); taxjson described it backwards and printed a

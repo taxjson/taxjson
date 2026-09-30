@@ -186,7 +186,7 @@ class TestRunRefusesContradictoryMaps(unittest.TestCase):
         r = _run_project({"ticker_extraction_overrides.txt":
                           "SOME FUND, USD, FUND.TO\n"})
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("ticker_extraction_overrides.txt:1",
+        self.assertIn("ticker_extraction_overrides.txt line 1",
                       r.stderr + r.stdout)
 
 

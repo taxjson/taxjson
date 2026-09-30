@@ -233,12 +233,20 @@ def echo_parse_stats(out_path: Path) -> None:
             # book (e.g. Kraken ledger trades with no trades-export
             # fill): the tax numbers are missing them. Console, always.
             print(f"  {line}")
+        elif line.startswith(ATTENTION_PREFIX):
+            # Statement coverage / identity the numbers silently depend
+            # on (an IB statement ending before year end, no Cash Report
+            # to reconcile against). Console, always.
+            print(f"  {line}")
 
 
 # Parser warning prefix for rows that are known tax events the parser
 # could NOT book. `taxjson run` echoes these to the console and, under
 # --strict, refuses to publish (R1-104).
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
+# Parser warning prefix for input COVERAGE / identity problems (lib/
+# brokerages/ib_extractor.ATTENTION_PREFIX): echoed to the console.
+ATTENTION_PREFIX = "warning: ATTENTION:"
 
 
 def unbooked_lines(out_path: Path) -> List[str]:
@@ -1209,6 +1217,21 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
               file=sys.stderr)
 
 
+def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
+    """How the IB parser books an issuer-designated '(Return of
+    Capital)' from a non-Canadian issuer: [settings]
+    foreign_return_of_capital when set, else "dividend" in a Canadian
+    project (ITA s.90(2)) and "acb" in a US one — for a US filer a
+    return of capital the issuer designates is a nondividend
+    distribution that reduces basis (IRC s.301(c)(2)); the Canadian
+    rule used to decide it there too (audit S013-01)."""
+    explicit = settings.get("foreign_return_of_capital")
+    if explicit:
+        return str(explicit)
+    return ("acb" if _normalize_country(settings.get("country", "canada"))
+            == "usa" else "dividend")
+
+
 def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   inputs_dir: Path, cache: Path, reports_dir: Path,
                   rates: Path, ticker_map: Optional[Path],
@@ -1292,7 +1315,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # never dirties the cache.
     src_manifest = cache / f"{name}_sources.list"
     # Parser option (IB foreign ROC): in the manifest so a toggle re-parses.
-    _froc_acb = settings.get("foreign_return_of_capital") == "acb"
+    _froc_acb = ib_foreign_roc_mode(settings) == "acb"
     _fut_next = settings.get("futures_settle") == "next_day"
     # Membership covers EVERY input kind that feeds the merge — CSVs and
     # .tt files alike. Listing only CSVs left a deleted .tt's
