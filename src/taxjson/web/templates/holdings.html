@@ -31,8 +31,10 @@
       <td class="num">{{ h.base_cost_per_share | default('—') }} {{ h.base_currency | default('') }}</td>
       <td class="num">{% for k, v in h.items() | sort if k.startswith('total_cost_') %}{{ v }} {{ k[11:] | upper }}{% if not loop.last %} + {% endif %}{% endfor %} <span class="muted">(MIXED)</span></td>
       {% else %}
-      <td class="num">{{ h.cost_per_share }} {{ h.currency }}</td>
-      <td class="num">{{ h.base_cost_per_share | default('—') }} {{ h.base_currency | default('') }}</td>
+      {# An option's cost_per_share is per CONTRACT (total_cost /
+         contracts; contract_multiplier shares each) — say so. #}
+      <td class="num">{{ h.cost_per_share }} {{ h.currency }}{% if h.contract_multiplier %} <span class="muted">/contract</span>{% endif %}</td>
+      <td class="num">{{ h.base_cost_per_share | default('—') }} {{ h.base_currency | default('') }}{% if h.contract_multiplier %} <span class="muted">/contract</span>{% endif %}</td>
       <td class="num">{{ h.total_cost }}</td>
       {% endif %}
       <td>{{ h.position_start_date | default('—') }}</td>
