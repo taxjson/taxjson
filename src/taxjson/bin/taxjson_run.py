@@ -929,25 +929,42 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
 
 
 def detect_broker(csv_path: Path) -> Optional[str]:
-    """Filename hint first (covers coinbase/kraken whose CSV shapes aren't
-    distinctive enough for content detection), then content detection
-    (ib/rbc_direct/questrade/webull). The hint wins because Kraken ledgers
-    look superficially like an rbc_direct activity export."""
+    """Which parser reads this CSV. In order:
+
+    1. a documented name PREFIX — generic_, cb_, kr_ — is the user's
+       explicit routing and always wins;
+    2. a positive content match on an equity export's structure (IB's
+       Statement header, Questrade's columns, Webull's Action Code)
+       wins over a word in the name;
+    3. the venue WORDS coinbase / kraken in the name (their CSV shapes
+       aren't distinctive enough for content detection, and a Kraken
+       ledger looks superficially like an RBC activity export);
+    4. whatever content detection found (rbc_direct), else None.
+
+    The word hints used to be checked first, so generic_kraken_export.csv
+    and kr_trades_moved_from_coinbase.csv went to the wrong crypto
+    parser (0 rows, exit 0) and an IB export named after Kraken Robotics
+    was refused as crypto data (R1-127, S044-01, S044-02)."""
     lower = csv_path.name.lower()
     for hint, broker in _FILENAME_HINTS:
-        # Underscore-style hints (cb_, kr_) match only at the START of
-        # the filename — the documented convention ("rename to start
-        # with cb_/kr_"). A substring match routed ibkr_statement.csv
-        # (contains "kr_") to the Kraken parser, which emitted 0
-        # transactions while the run exited 0 (REVIEW-2026-07-ui #3).
-        # Word hints (coinbase, kraken) stay substring matches.
-        if hint.endswith("_"):
-            if lower.startswith(hint):
-                return broker
-        elif hint in lower:
+        # Underscore-style hints match only at the START of the name:
+        # a substring match routed ibkr_statement.csv (contains "kr_")
+        # to the Kraken parser (REVIEW-2026-07-ui #3).
+        if hint.endswith("_") and lower.startswith(hint):
             return broker
     from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
-    return detect_brokerage(csv_path)
+    by_content = detect_brokerage(csv_path)
+    if by_content in _STRUCTURAL_BROKERS:
+        return by_content
+    for hint, broker in _FILENAME_HINTS:
+        if not hint.endswith("_") and hint in lower:
+            return broker
+    return by_content
+
+
+# Content matches strong enough to beat a venue word in the file name
+# (structural markers a crypto export never carries).
+_STRUCTURAL_BROKERS = ("ib", "questrade", "webull")
 
 
 def input_files(dirpath: Path, suffix: str) -> List[Path]:
@@ -1398,9 +1415,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                    {b for b in grouped if b not in _CRYPTO_BROKERS})
     if _mismatched:
         flag = "crypto = true" if is_crypto else "no crypto flag"
+        _which = ", ".join(f"inputs/{name}/{p.name} ({b})"
+                           for b in sorted(_mismatched)
+                           for p in grouped[b])
         sys.exit(
             f"taxjson: account '{name}' has {flag} in taxjson.toml but "
             f"its inputs contain {', '.join(sorted(_mismatched))} files "
+            f"[{_which}; routed by a cb_/kr_/generic_ name prefix, the "
+            f"file's content, or a coinbase/kraken word in its name] "
             f"— the {'equity' if is_crypto else 'crypto'} data would be "
             f"routed through the wrong pipeline. Move the files to an "
             f"account of the matching type, or fix the account's "

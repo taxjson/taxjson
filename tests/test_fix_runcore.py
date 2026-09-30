@@ -250,5 +250,47 @@ class TestInitForceKeepsEveryBackup(unittest.TestCase):
             self.assertIn("taxjson.toml.bak", out)
 
 
+class TestBrokerDetectionPrecedence(unittest.TestCase):
+    """R1-127, S044-01, S044-02: a word in the file name ('coinbase',
+    'kraken') beat both the documented prefixes and a positive content
+    match, so a generic_/kr_ file went to the wrong crypto parser (0
+    rows, rc 0) and an IB/Questrade export named after a holding was
+    refused as crypto."""
+
+    def _detect(self, src, name):
+        from taxjson.bin.taxjson_run import detect_broker
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / name
+            p.write_bytes((REPO_ROOT / "examples" / src).read_bytes())
+            return detect_broker(p)
+
+    def test_generic_prefix_beats_a_venue_word(self):
+        self.assertEqual(self._detect("questrade_demo.csv",
+                                      "generic_kraken_export.csv"),
+                         "generic")
+        self.assertEqual(self._detect("questrade_demo.csv",
+                                      "generic_coinbase_pro.csv"),
+                         "generic")
+
+    def test_kr_prefix_beats_the_coinbase_word(self):
+        self.assertEqual(self._detect("kraken_demo.csv",
+                                      "kr_trades_moved_from_coinbase.csv"),
+                         "kraken")
+
+    def test_content_match_beats_a_venue_word(self):
+        self.assertEqual(self._detect("questrade_demo.csv",
+                                      "questrade_COIN_coinbase_stock.csv"),
+                         "questrade")
+        self.assertEqual(self._detect("ib_demo.csv",
+                                      "ib_kraken_robotics_KRKNF.csv"),
+                         "ib")
+
+    def test_word_hint_still_routes_real_exchange_exports(self):
+        self.assertEqual(self._detect("kraken_demo.csv",
+                                      "my_kraken_ledger.csv"), "kraken")
+        self.assertEqual(self._detect("coinbase_demo.csv",
+                                      "coinbase_2025.csv"), "coinbase")
+
+
 if __name__ == "__main__":
     unittest.main()

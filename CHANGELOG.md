@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Broker detection: prefixes, then content, then venue words.** A
+  `generic_`/`cb_`/`kr_` prefix now always wins, and an IB, Questrade or
+  Webull export is recognised by its content even when its name mentions
+  coinbase or kraken; `generic_kraken_export.csv` and
+  `kr_trades_moved_from_coinbase.csv` went to the wrong crypto parser
+  (0 rows, exit 0), and an IB export named after Kraken Robotics was
+  refused as crypto data. The crypto/equity refusal names the files
+  (audit R1-127, S044-01, S044-02).
 - **taxjson.toml is checked the same way by every command.**
   `base_currency` is trimmed and upper-cased (" CAD" failed later with a
   misleading "fix the rates file" error; "cad" priced CAD fees at the
