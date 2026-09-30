@@ -39,11 +39,35 @@ _SUFFIX_CURRENCY = {"US": "USD", "TO": "CAD", "V": "CAD", "CN": "CAD",
                     "NE": "CAD", "L": "GBP", "AX": "AUD"}
 
 
+# Yahoo's minor-unit currencies: the quote is in pence / cents / agorot
+# (LSE 'GBp', JSE 'ZAc', TASE 'ILA'); the fetcher divides by 100 and
+# reports the major currency (audit S077-04 — VOD.L valued at 100x).
+_MINOR_UNITS = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ZAC": "ZAR",
+                "ILA": "ILS"}
+# Currency codes a Yahoo pair spelling can end in ('ETH-CAD').
+_PAIR_CURRENCIES = frozenset({"USD", "CAD", "EUR", "GBP", "AUD", "JPY",
+                              "CHF", "HKD", "NZD", "SGD", "SEK", "NOK",
+                              "DKK", "MXN", "BRL", "INR", "KRW", "CNY",
+                              "ZAR", "ILS"})
+_CA_SUFFIXES = frozenset({"TO", "V", "CN", "NE"})
+
+
 @dataclass
 class PriceQuote:
     price: float
     source: str          # 'ibkr' | 'yfinance' | 'cache:<age>d'
     asof: str            # ISO date the price was fetched
+    # The currency the SOURCE reported the price in (major units), when
+    # it says; None = infer from the quoted symbol (quote_currency).
+    currency: Optional[str] = None
+
+
+def is_crypto_symbol(symbol: str) -> bool:
+    """A book symbol with no market suffix is a crypto asset (the schema
+    convention: equities always carry .US/.TO/...; see
+    brokerages/schema.KNOWN_SUFFIXES)."""
+    import re
+    return bool(symbol) and bool(re.fullmatch(r"[A-Z0-9]{1,15}", symbol))
 
 
 def yf_symbol_for(symbol: str) -> Optional[str]:
@@ -53,13 +77,26 @@ def yf_symbol_for(symbol: str) -> Optional[str]:
     audit found three drifting copies). Returns None for symbols Yahoo
     can't serve (exchange-prefixed 'X:SYM' forms)."""
     import re
+    if is_crypto_symbol(symbol):
+        # A coin, not a stock: Yahoo's crypto pair, with the same
+        # collision table the crypto price filler uses (audit R1-228 —
+        # ETH/LINK/SOL went out as equity tickers).
+        from taxjson.bin.fill_crypto_prices import SYMBOL_OVERRIDES
+        return f"{SYMBOL_OVERRIDES.get(symbol, symbol)}-USD"
     yf_ticker = symbol
     if symbol.endswith('.US'):
-        yf_ticker = symbol.replace('.US', '')
+        yf_ticker = symbol[:-3]
+        # US class shares: Yahoo spells BF.B as BF-B (audit S077-09 —
+        # only BRK.B was handled).
+        yf_ticker = re.sub(r'\.([A-Z])$', r'-\1', yf_ticker)
     elif symbol.endswith('.TO'):
-        yf_ticker = symbol.replace('.TO', '')
+        yf_ticker = symbol[:-3]
         yf_ticker = re.sub(r'\.PR\.', '-P', yf_ticker, flags=re.IGNORECASE)
-        yf_ticker = re.sub(r'\.UN\.', '-UN', yf_ticker, flags=re.IGNORECASE)
+        # Trust units and USD-traded units: DIR.UN -> DIR-UN, DLR.U ->
+        # DLR-U (audit S077-09 / R1-150 — the old '\.UN\.' pattern ran
+        # after the .TO strip and could never match).
+        yf_ticker = re.sub(r'\.UN$', '-UN', yf_ticker, flags=re.IGNORECASE)
+        yf_ticker = re.sub(r'\.U$', '-U', yf_ticker, flags=re.IGNORECASE)
         yf_ticker = yf_ticker.replace('.B', '-B')
         yf_ticker = yf_ticker.replace('.A', '-A')
         # Preferred-share styles (.PR.A / .PR-A / .PR_A / bare .PR)
@@ -119,13 +156,33 @@ def _split_suffix(symbol: str) -> Tuple[str, str]:
     return symbol, ""
 
 
-def quote_currency(quote_symbol: str) -> str:
-    """Currency a quote for this symbol is denominated in, from the
-    exchange suffix; a bare symbol (Yahoo's US spelling) is USD. Callers
-    comparing quotes against BASE-currency book costs must convert —
-    mixing a USD price into CAD basis was a real reported bug."""
-    _, suffix = _split_suffix(quote_symbol)
-    return _SUFFIX_CURRENCY.get(suffix, "USD")
+def quote_currency(quote_symbol: str) -> Optional[str]:
+    """Currency a quote for this symbol is denominated in, from its
+    spelling; None when the spelling does not say (callers must then
+    omit the row loudly, never guess). Callers comparing quotes against
+    BASE-currency book costs must convert — mixing a USD price into CAD
+    basis was a real reported bug.
+
+      - a known exchange suffix (.TO -> CAD, .L -> GBP, ...), except a
+        Canadian-listed USD unit ('DLR.U.TO' / 'DLR-U.TO') -> USD
+        (audit R1-150);
+      - a Yahoo pair ('ETH-USD', 'ETH-CAD') -> its quote currency;
+      - a bare symbol (Yahoo's US spelling) -> USD;
+      - any other suffix ('.DE', '.T', '.JO') -> None (audit S077-00:
+        it used to fall back to USD)."""
+    import re
+    sym = (quote_symbol or "").strip()
+    base, suffix = _split_suffix(sym)
+    if suffix:
+        if suffix in _CA_SUFFIXES and re.search(r"[.\-]U$", base, re.I):
+            return "USD"
+        return _SUFFIX_CURRENCY[suffix]
+    m = re.fullmatch(r"[A-Z0-9]+-([A-Z]{3})", sym.upper())
+    if m and m.group(1) in _PAIR_CURRENCIES:
+        return m.group(1)
+    if "." in sym:
+        return None
+    return "USD"
 
 
 def load_fx_history(rates_path, base: str) -> Dict[str, Dict]:
@@ -179,9 +236,13 @@ def _ibkr_fetcher(symbols: List[str], *, host: str, port: int,
     try:
         ib.reqMarketDataType(2)              # frozen: live or prior close
         contracts = []
+        # A coin is not a stock (audit R1-228), and an unknown listing
+        # has no contract currency to guess (audit S077-00).
+        symbols = [s for s in symbols if not is_crypto_symbol(s)
+                   and quote_currency(s) is not None]
         for sym in symbols:
             root, suffix = _split_suffix(sym)
-            currency = _SUFFIX_CURRENCY.get(suffix, "USD")
+            currency = quote_currency(sym)
             contracts.append(Stock(root.replace(" ", "."), "SMART",
                                    currency))
         ib.qualifyContracts(*contracts)
@@ -253,7 +314,9 @@ def _ibkr_option_fetcher(symbols: List[str], *, host: str, port: int,
             right = parse_option_right(sym)
             if not (root and expiry and strike and right):
                 continue
-            currency = _SUFFIX_CURRENCY.get(suffix, "USD")
+            currency = quote_currency(underlying)
+            if currency is None:
+                continue                  # unknown listing: no guess
             c = None
             # Class-share roots: try as written, then the space form
             # (US names want 'RCI B'; Canadian keep the dot).
@@ -303,7 +366,13 @@ def fetch_option_prices(symbols: List[str], *,
     """Current premiums for OCC option symbols: IBKR -> cache. NO
     yfinance tier — an unpriceable contract is omitted by callers, never
     marked from a bad source. Shares the stock cache file (keys are the
-    full OCC symbols) and the fetchers test hook."""
+    full OCC symbols) and the fetchers test hook. TAXJSON_OFFLINE holds
+    here too: no gateway request, and a cache miss refuses like a stock
+    miss (audit R1-343 — the injected tier list disabled the switch)."""
+    from taxjson.lib.offline import offline_enabled
+    offline = offline_enabled() and fetchers is None
+    if offline:
+        fetchers = []
     if fetchers is None:
         fetchers = []
         if use_ibkr:
@@ -313,7 +382,8 @@ def fetch_option_prices(symbols: List[str], *,
                     verbose=verbose).items()})
     return fetch_prices({s: s for s in symbols}, cache_path=cache_path,
                         max_cache_age_days=max_cache_age_days,
-                        verbose=verbose, fetchers=fetchers)
+                        verbose=verbose, fetchers=fetchers,
+                        offline=offline)
 
 
 def _ibkr_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
@@ -347,9 +417,10 @@ def _ibkr_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
     out: Dict[str, Dict[str, float]] = {}
     try:
         for sym in pairs:
+            if is_crypto_symbol(sym) or quote_currency(sym) is None:
+                continue                  # not a stock / unknown listing
             root, suffix = _split_suffix(sym)
-            c = Stock(root.replace(" ", "."), "SMART",
-                      _SUFFIX_CURRENCY.get(suffix, "USD"))
+            c = Stock(root.replace(" ", "."), "SMART", quote_currency(sym))
             try:
                 ib.qualifyContracts(c)
                 if not c.conId and "." in c.symbol:
@@ -412,9 +483,30 @@ def _yf_history_fetcher(pairs: Dict[str, str], *, start: str, end: str,
 
 
 
+def _yf_currency(tk) -> Optional[str]:
+    """The currency Yahoo reports for a ticker (history metadata, no
+    extra request), or None."""
+    try:
+        meta = getattr(tk, "history_metadata", None) or {}
+        cur = meta.get("currency")
+        return str(cur) if cur else None
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def _normalize_units(price: float,
+                     currency: Optional[str]) -> Tuple[float, Optional[str]]:
+    """(price, currency) in MAJOR units: Yahoo quotes LSE lines in
+    pence ('GBp'), JSE in cents — divide by 100 (audit S077-04)."""
+    if currency in _MINOR_UNITS:
+        return price / 100.0, _MINOR_UNITS[currency]
+    return price, currency
+
+
 def _yfinance_fetcher(pairs: Dict[str, str], *,
-                      verbose: bool) -> Dict[str, float]:
-    """pairs: taxjson symbol -> Yahoo spelling."""
+                      verbose: bool) -> Dict[str, Tuple[float, Optional[str]]]:
+    """pairs: taxjson symbol -> Yahoo spelling. Returns {sym: (price,
+    currency)} with the price in the currency's major units."""
     try:
         import yfinance as yf
     except ImportError:
@@ -422,10 +514,11 @@ def _yfinance_fetcher(pairs: Dict[str, str], *,
             print("price-chain: yfinance not installed — skipping tier",
                   file=sys.stderr)
         return {}
-    out: Dict[str, float] = {}
+    out: Dict[str, Tuple[float, Optional[str]]] = {}
     for sym, yf_sym in pairs.items():
         try:
-            hist = yf.Ticker(yf_sym).history(period="1d", timeout=5)
+            tk = yf.Ticker(yf_sym)
+            hist = tk.history(period="1d", timeout=5)
             if not hist.empty:
                 px = float(hist["Close"].iloc[-1])
                 # NaN guard (x == x is False for NaN), matching every
@@ -434,7 +527,7 @@ def _yfinance_fetcher(pairs: Dict[str, str], *,
                 # fossilizes into the price cache and surfaces as a
                 # bare NaN token in --json output downstream.
                 if px == px and px > 0:
-                    out[sym] = px
+                    out[sym] = _normalize_units(px, _yf_currency(tk))
         except Exception as exc:
             if verbose:
                 print(f"price-chain: yfinance miss {sym} ({yf_sym}): {exc}",
@@ -472,6 +565,7 @@ def fetch_prices(pairs: Dict[str, str], *,
                  ibkr_port: int = DEFAULT_IBKR_PORT,
                  verbose: bool = False,
                  fetchers: Optional[List[Callable]] = None,
+                 offline: Optional[bool] = None,
                  ) -> Dict[str, PriceQuote]:
     """Resolve current prices for `pairs` (taxjson symbol -> Yahoo
     spelling) through IBKR -> yfinance -> cache. Fresh hits are written
@@ -479,7 +573,9 @@ def fetch_prices(pairs: Dict[str, str], *,
 
     `fetchers` overrides the live tiers for testing: a list of callables
     taking the remaining {sym: yahoo_sym} dict and returning
-    {sym: (price, source_label)}.
+    {sym: (price, source_label)} or {sym: (price, source_label,
+    currency)}. `offline` forces the TAXJSON_OFFLINE policy decision
+    (None: the switch applies unless test fetchers are injected).
     """
     today = date.today().isoformat()
     quotes: Dict[str, PriceQuote] = {}
@@ -491,7 +587,8 @@ def fetch_prices(pairs: Dict[str, str], *,
     # fails loudly below, naming what was needed. Injected `fetchers`
     # (tests) are not network tiers and stay as given.
     from taxjson.lib.offline import offline_enabled
-    offline = offline_enabled() and fetchers is None
+    if offline is None:
+        offline = offline_enabled() and fetchers is None
     if offline:
         fetchers = []
     if fetchers is None:
@@ -502,7 +599,7 @@ def fetch_prices(pairs: Dict[str, str], *,
                     list(rem), host=ibkr_host, port=ibkr_port,
                     verbose=verbose).items()})
         fetchers.append(lambda rem: {
-            s: (p, "yfinance") for s, p in _yfinance_fetcher(
+            s: (p, "yfinance", cur) for s, (p, cur) in _yfinance_fetcher(
                 rem, verbose=verbose).items()})
 
     for fetcher in fetchers:
@@ -514,8 +611,11 @@ def fetch_prices(pairs: Dict[str, str], *,
             if verbose:
                 print(f"price-chain: tier failed ({exc})", file=sys.stderr)
             continue
-        for sym, (price, source) in got.items():
-            quotes[sym] = PriceQuote(price=price, source=source, asof=today)
+        for sym, hit in got.items():
+            price, source = hit[0], hit[1]
+            cur = hit[2] if len(hit) > 2 else None
+            quotes[sym] = PriceQuote(price=price, source=source, asof=today,
+                                     currency=cur)
             remaining.pop(sym, None)
 
     cache = _load_cache(cache_path)
@@ -532,7 +632,8 @@ def fetch_prices(pairs: Dict[str, str], *,
             except ValueError:
                 continue
             quotes[sym] = PriceQuote(price=float(rec.get("price") or 0.0),
-                                     source=f"cache:{age}d", asof=asof)
+                                     source=f"cache:{age}d", asof=asof,
+                                     currency=rec.get("currency"))
             remaining.pop(sym)
             if age > max_cache_age_days:
                 stale.append(f"{sym} ({age}d)")
@@ -547,6 +648,8 @@ def fetch_prices(pairs: Dict[str, str], *,
         if q.source.startswith("cache"):
             continue
         cache[sym] = {"price": q.price, "asof": q.asof, "source": q.source}
+        if q.currency:
+            cache[sym]["currency"] = q.currency
         dirty = True
     if dirty:
         _save_cache(cache_path, cache)

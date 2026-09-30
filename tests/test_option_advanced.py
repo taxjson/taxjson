@@ -34,12 +34,15 @@ class TestOptionAdvancedLogic(unittest.TestCase):
         txs = parse_tt_lines(content)
         result = self.rules.compute_gains(txs)
         self.assertEqual(len(result['transactions']), 2)
-        # First stock sale should scoop all stacked premiums (900). Proceeds = 6000 + 900 = 6900
-        self.assertAlmostEqual(result['transactions'][0]['proceeds'], 6900.0)
-        self.assertAlmostEqual(result['transactions'][0]['gain'], 1900.0)
-        # Second sale should just be 6500
-        self.assertAlmostEqual(result['transactions'][1]['proceeds'], 6500.0)
-        self.assertAlmostEqual(result['transactions'][1]['gain'], 1500.0)
+        # Each assignment's premium goes to its own 100-share leg
+        # (audit R1-178): the first sale takes the 60C's 500, the second
+        # the 65C's 400 — not one leg scooping both (the old behaviour
+        # moved gain between dispositions, and so between years when
+        # the legs crossed zero).
+        self.assertAlmostEqual(result['transactions'][0]['proceeds'], 6500.0)
+        self.assertAlmostEqual(result['transactions'][0]['gain'], 1500.0)
+        self.assertAlmostEqual(result['transactions'][1]['proceeds'], 6900.0)
+        self.assertAlmostEqual(result['transactions'][1]['gain'], 1900.0)
 
 if __name__ == '__main__':
     unittest.main()

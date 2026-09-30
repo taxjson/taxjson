@@ -852,7 +852,16 @@ def prepare_books(transactions, sheltered_transactions=(),
         # negative, the user may have truncated history they haven't told
         # us about. Emit a one-time hint so they notice. Options are
         # filtered out (sell-to-open is normal, not phantom).
-        candidates = detect_phantoms(transactions + sheltered_transactions + affiliated_transactions)
+        # Registered status from the books' roles, not the labels
+        # (audit S076-08): the --sheltered context is registered, and so
+        # is a main book that is not --taxable.
+        # (Affiliated accounts are not ours to type: label heuristic.)
+        _types = {t.account: not taxable for t in transactions}
+        _types.update({t.account: True for t in sheltered_transactions})
+        _types = {a: v for a, v in _types.items() if a}
+        candidates = detect_phantoms(
+            transactions + sheltered_transactions + affiliated_transactions,
+            registered_accounts=_types)
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
@@ -923,9 +932,9 @@ def run_gains(transactions, sheltered_transactions=(),
     what `taxjson-gains` serializes (it IS what taxjson-gains serializes).
 
     `trace_sink`, when given with req.trace, is called with the results
-    dict at the exact point the CLI historically wrote its traces file:
-    after the year filter and fee aggregation, before the tainted split
-    strips/removes trace-bearing entries.
+    dict after the year filter, fee aggregation and the tainted split
+    (clean rows in 'transactions', phantom-basis rows in
+    'manual_reporting_required'), before traces are stripped.
 
     `books_prepared=True` skips prepare_books for callers that already
     ran it (the CLI's --suggest-phantoms path preprocesses first).
@@ -951,6 +960,7 @@ def run_gains(transactions, sheltered_transactions=(),
         _extra['option_premium_timing'] = req.option_premium_timing or 'close'
         _extra['option_grant_since'] = req.option_grant_since
         _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
+        _extra['option_grant_basis'] = tax_date
     results = rules.compute_gains(
         transactions,
         sheltered_transactions=sheltered_transactions,
@@ -1104,9 +1114,6 @@ def run_gains(transactions, sheltered_transactions=(),
         bucket['total'] += fee
     results['summary']['total_fees_by_currency'] = fees_by_currency
 
-    if req.trace and trace_sink is not None:
-        trace_sink(results)
-
     # Split tainted dispositions (those drawing from a phantom pool OR a
     # TRANSFER opening) into a separate "manual_reporting_required"
     # section. Their gain values are bogus by construction (cost basis =
@@ -1120,9 +1127,14 @@ def run_gains(transactions, sheltered_transactions=(),
             # Strip the bogus gain numbers before surfacing — leave the
             # facts the user needs for manual reporting (date, qty,
             # proceeds, account) and drop the fabricated gain/cost.
+            # days_held too: the phantom opening is dated 1970-01-01
+            # (a sentinel), so the engine's figure is ~20,000 days of
+            # nothing (audit R1-165).
             tainted_txs.append({
-                k: v for k, v in t.items()
-                if k not in ('gain', 'cost', 'taxable_gain', 'disallowed')
+                **{k: v for k, v in t.items()
+                   if k not in ('gain', 'cost', 'taxable_gain',
+                                'disallowed')},
+                'days_held': None,
             })
         else:
             clean_txs.append(t)
@@ -1134,6 +1146,12 @@ def run_gains(transactions, sheltered_transactions=(),
     # Recompute total_gain from clean transactions only.
     if 'summary' in results and (tainted_txs or req.incomplete_history):
         results['summary']['total_gain'] = sum(t.get('gain', 0.0) for t in clean_txs)
+
+    # Traces after the split (audit R1-165): the trace file's header and
+    # per-symbol totals then match the gains JSON, and phantom-basis
+    # dispositions are rendered in their own manual-reporting section.
+    if req.trace and trace_sink is not None:
+        trace_sink(results)
 
     # Cross-year superficial-loss warning: an in-year clean loss within
     # ±30 days of a tainted disposition on the same symbol may be
@@ -1174,6 +1192,7 @@ def run_gains(transactions, sheltered_transactions=(),
                 if abs((da - d0).days) <= 30:
                     _pt_warns.append({
                         'symbol': t.get('symbol'),
+                        'account': t.get('account'),
                         'loss_date': t.get('date'),
                         'raw_loss': raw,
                         'acquisition_date': a.date,
@@ -1185,6 +1204,22 @@ def run_gains(transactions, sheltered_transactions=(),
                     break
         if _pt_warns:
             results.setdefault('superficial_loss_warnings', []).extend(_pt_warns)
+
+    # Say it where the user reads it (audit R1-325): the warnings only
+    # lived in the gains JSON, and the per-account split dropped them.
+    # A `warning:` line reaches the .diag and the DIAGNOSTICS banner.
+    for w in results.get('superficial_loss_warnings') or []:
+        if w.get('message'):
+            print(f"warning: superficial-loss check (manual): "
+                  f"{w['message']}", file=sys.stderr)
+        else:
+            print(f"warning: superficial-loss check (manual): "
+                  f"{w.get('symbol')} phantom-basis loss of "
+                  f"{abs(float(w.get('raw_loss') or 0.0)):.2f} on "
+                  f"{w.get('loss_date')} with a buy on "
+                  f"{w.get('acquisition_date')} inside the window — if "
+                  f"you report this loss by hand, apply the "
+                  f"superficial-loss rule to that rebuy.", file=sys.stderr)
 
     # Traces are emitted in the sidecar text file (when requested) — drop
     # them from the JSON unconditionally so stdout stays clean and
@@ -1227,8 +1262,14 @@ def option_timing_from_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         since = None
     bb = settings.get("option_buyback_loss_superficial", False)
+    if bb is not None and not isinstance(bb, bool):
+        # bool("false") is True: the strict rule used to switch ON
+        # (audit S021-07). Every config reader refuses this too.
+        raise ValueError(
+            f"[settings] option_buyback_loss_superficial must be true or "
+            f"false, unquoted (got {bb!r})")
     return {"option_premium_timing": timing, "option_grant_since": since,
-            "option_buyback_loss_superficial": bool(bb) if bb is not None else False}
+            "option_buyback_loss_superficial": bool(bb)}
 
 
 def option_timing_flags(settings: Dict[str, Any]) -> List[str]:

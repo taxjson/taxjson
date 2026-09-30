@@ -219,13 +219,13 @@ pip install -e .
 
 Core pipeline has no third-party runtime dependencies. Note that a full
 `taxjson run` does reach the Bank of Canada (Valet API) for FX rates —
-Yahoo Finance only for pre-2017 dates and currencies the Bank does not
-publish — and Yahoo Finance for un-priced crypto rows, on a cache miss
+its legacy noon rate for 2007-05 to 2017-02, Yahoo Finance only for
+earlier dates and currencies the Bank does not publish — and Yahoo Finance for un-priced crypto rows, on a cache miss
 (`TAXJSON_OFFLINE=1` forbids it — see SECURITY.md for the complete
 egress list). Optional extras:
 
 ```bash
-pip install -e ".[fx]"          # yfinance + pandas: the FX fallback for dates before 2017-01-03 and currencies the Bank of Canada doesn't publish, and every rate for a non-CAD base (the Bank of Canada path itself needs no extra)
+pip install -e ".[fx]"          # yfinance + pandas: the FX fallback for dates before 2007-05-01 (the Bank's noon rate covers 2007-05..2017-02) and currencies the Bank of Canada doesn't publish, and every rate for a non-CAD base (the Bank of Canada path itself needs no extra)
 pip install -e ".[web]"         # local web UI (`taxjson serve`) — included in [all]
 pip install -e ".[xlsx]"        # taxjson-xlsx-to-csv, for brokers that only ship Excel
 pip install -e ".[all]"         # everything
@@ -310,7 +310,7 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 #                                   # transition from books filed the old way. `taxjson init` writes
 #                                   # it; set it ONCE (first year filed under grant timing) and keep
 #                                   # it in every later project (unset, it follows `year` — warned)
-# option_buyback_loss_superficial = false # grant timing: treat the loss on buying back a written
+# option_buyback_loss_superficial = false # either timing: treat the loss on buying back a written
 #                                   # option as superficial when identical options are bought
 #                                   # within 30 days and held (strict reading; default off — a
 #                                   # closing purchase is not a disposition s.54 reaches)
@@ -931,7 +931,9 @@ Whether the loss on buying back a written option can be *superficial* —
 denied because identical options were bought within 30 days and held,
 permanently if a registered account holds them — is not settled: s.54
 needs "a loss from the disposition of a property" and a closing purchase
-disposes of nothing. The default does not apply the rule to buy-backs;
+disposes of nothing. The default does not apply the rule to buy-backs,
+under grant or close timing alike (a contract written before
+`option_grant_timing_since` included);
 `option_buyback_loss_superficial = true` takes the strict reading.
 
 ### Return of capital (ROC)
@@ -970,7 +972,10 @@ broker-classified, manual and `distributions.map` rows; it warns when a
 symbol has a book ADJUST and a map row on the same date — the same ROC
 entered twice). If cumulative ROC ever pushes a
 position's ACB below zero, the excess is a deemed capital gain under
-s.40(3) — the engine flags this rather than computing it.
+s.40(3): the engine books it in the distribution year (a qty-0 row with
+no proceeds — T4037: enter 0 on line 13199 and the gain on 13200) and
+resets the ACB to nil. A return of capital while you are SHORT is a
+compensation payment you make: it lowers the cover's gain.
 
 ### LEAPS views
 

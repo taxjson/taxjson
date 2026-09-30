@@ -91,7 +91,7 @@ class TestValidateDiagnostics(unittest.TestCase):
             _write_json(f, [{
                 'action': 'BUYSELL', 'date': '2025-01-15',
                 'symbol': 'AAPL.US', 'quantity': 1, 'currency': 'USDX',
-                'price': 1.0,
+                'price': 1.0, 'net_amount': 1.0,
             }])
             r = _run('taxjson_validate', '--warnings', str(f))
             self.assertEqual(r.returncode, 0, r.stderr)

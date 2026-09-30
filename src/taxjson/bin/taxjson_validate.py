@@ -164,6 +164,12 @@ def validate_transactions(transactions, filename="input",
 
         # 5. Quantity / Price validation
         if action in {"BUYSELL", "ASSIGN"}:
+            # A MISSING key books as 0 in the engines (audit R1-162).
+            for _fld in ("quantity", "net_amount"):
+                if _fld not in tx and not (_fld == "quantity"
+                                           and "qty" in tx):
+                    issues[context].append(
+                        f"Missing '{_fld}' for action '{action}'")
             # None = unusable value, already reported by the type check.
             qty_val = nums["quantity"]
             if qty_val is not None and qty_val == 0:

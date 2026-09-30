@@ -184,7 +184,10 @@ class TestRenderGainBlock(unittest.TestCase):
         self.assertIn('WASH SALE (CRA superficial loss)', joined)
         self.assertIn('triggered by 2025-07-20', joined)
         self.assertIn('+$201.50', joined)
-        self.assertIn('ACB pool bumped', joined)
+        # Deferred (taxable trigger): the explain says where the denied
+        # loss went (audit R1-159 reworded the old 'ACB pool bumped').
+        self.assertIn('added to the ACB', joined)
+        self.assertNotIn('PERMANENTLY', joined)
 
 
 class TestRenderSummaryTable(unittest.TestCase):

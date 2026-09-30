@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set, Tuple
@@ -44,11 +45,61 @@ REGISTERED_ACCOUNT_PATTERNS = (
 from taxjson.lib.core import is_option_symbol  # noqa: F401 — re-exported
 
 
-def is_registered_account(account: str) -> bool:
+def is_registered_account(account: str, registered_accounts=None) -> bool:
+    """Registered (sheltered) status. When the caller knows the configured
+    accounts, pass `registered_accounts` — {account: True for type =
+    "sheltered", False for taxable}: a KNOWN account's type is the
+    answer, never its label (audit S076-08 — a taxable 'sunlife' matched
+    'LIF', a sheltered 'retireA' matched nothing). An account it does not
+    list (or no mapping) falls back to the label heuristic."""
     if not account:
         return False
+    if registered_accounts is not None and account in registered_accounts:
+        return bool(registered_accounts[account])
     upper = account.upper()
     return any(p in upper for p in REGISTERED_ACCOUNT_PATTERNS)
+
+
+def _project_doc_near(path) -> Dict[str, Any]:
+    """The project's taxjson.toml, found beside a book file
+    (<root>/work/<acct>_base.json) or one level up; {} when none."""
+    try:
+        import tomllib
+    except ImportError:                      # Python < 3.11
+        try:
+            import tomli as tomllib          # type: ignore
+        except ImportError:
+            return {}
+    p = Path(path).resolve()
+    for d in (p.parent, p.parent.parent):
+        cfg = d / 'taxjson.toml'
+        if cfg.is_file():
+            try:
+                return tomllib.loads(cfg.read_text(encoding='utf-8')) or {}
+            except (OSError, ValueError):
+                return {}
+    return {}
+
+
+def account_types_near(path) -> Dict[str, bool]:
+    """{account: is_sheltered} from the project's configured types, so
+    the standalone detectors use `type` instead of the label (audit
+    S076-08). {} outside a project."""
+    accts = _project_doc_near(path).get('accounts') or {}
+    return {str(n): (a.get('type') == 'sheltered')
+            for n, a in accts.items() if isinstance(a, dict)
+            and a.get('type') in ('taxable', 'sheltered')}
+
+
+def tax_date_near(path) -> str:
+    """The project's tax_date basis ('settle' | 'trade'); the country
+    default ('settle' for Canada) when unset or outside a project."""
+    st = _project_doc_near(path).get('settings') or {}
+    td = str(st.get('tax_date') or '').strip().lower()
+    if td in ('settle', 'trade'):
+        return td
+    return ('trade' if str(st.get('country') or '').strip().lower()
+            in ('us', 'usa') else 'settle')
 
 
 def _drop_duplicate_splits(txs):
@@ -91,6 +142,7 @@ def detect_phantoms(
     *,
     include_options: bool = False,
     include_broker_shorts: bool = False,
+    registered_accounts=None,
 ) -> List[PhantomCandidate]:
     """Walk transactions per (symbol, account, currency) and return one
     PhantomCandidate per pair whose running position ever went negative.
@@ -208,7 +260,7 @@ def detect_phantoms(
             peak_short=s['peak_short'],
             end_position=s['running'],
             disposition_count=s['disposition_count'],
-            registered=is_registered_account(account),
+            registered=is_registered_account(account, registered_accounts),
             broker_marked_short=marked,
         ))
     out.sort(key=lambda c: (c.symbol, c.account))
@@ -226,66 +278,90 @@ class MissingHistoryRow:
     last_in_year_date: str
 
 
+def _basis_date(tx, date_basis: str) -> str:
+    if date_basis == 'settle':
+        return tx.date_settle or tx.date or ''
+    return tx.date or ''
+
+
 def assess_tax_year_relevance(
     transactions: Iterable[TaxTransaction],
     candidates: List[PhantomCandidate],
     year: Any = None,
+    *,
+    date_basis: str = 'settle',
 ) -> List[MissingHistoryRow]:
     """For each phantom candidate, decide whether its missing history actually
     bears on tax year `year`.
 
-    A candidate "affects" the year when it has a disposition (BUYSELL/ASSIGN
-    with qty < 0) dated in that year that draws from the SHORT/phantom state —
-    i.e. the running position is at or below zero across the sale, so the
-    sale's cost basis is the missing history. A clean sale AFTER the pool has
-    drained back through zero (basis fully known) does NOT count, so a symbol
-    whose truncation is entirely in prior years isn't flagged for this year.
+    A candidate "affects" the year when, in that year, a row draws on the
+    SHORT/phantom state:
+      - a disposition (qty < 0) with the running position negative on
+        either side of it — its cost basis is the missing history; or
+      - a BUY that covers a short carried in (the engine books the cover
+        as a short-close gain or loss in the year — audit S021-01 /
+        S076-07; this is also the rule `--suggest-phantoms` uses).
+    A clean sale AFTER the pool has drained back through zero (basis fully
+    known) does NOT count.
+
+    The walk follows rename-SPLITs (shares move to the new symbol, as in
+    detect_phantoms — audit S075-13) and orders same-moment rows buys
+    first (the phantom_walk profile — S075-12). The YEAR of a row is its
+    date on `date_basis` ('settle' — the CRA default and the engine's
+    year — or 'trade'), so a Dec-31 trade settling in January belongs to
+    January's year (S075-16).
 
     `year` may be int or str (matched against the date prefix); None means "no
     year scope" — every candidate is reported as relevant, with its phantom-
     disposition totals across all years. Returns one row per candidate, in the
     candidates' order."""
     year_str = str(year) if year is not None else None
-    pairs = {(c.symbol, c.account) for c in candidates}
-    run: Dict[Tuple[str, str], float] = {p: 0.0 for p in pairs}
-    stats: Dict[Tuple[str, str], Dict[str, Any]] = {
-        p: {'n': 0, 'proceeds': 0.0, 'last': ''} for p in pairs}
+    run: Dict[Tuple[str, str], float] = {}
+    stats: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
     for tx in _drop_duplicate_splits(
             sorted(transactions,
                    key=lambda t: event_sort_key(t, profile='phantom_walk'))):
         key = (tx.symbol, tx.account)
-        if key not in pairs:
-            continue
         if tx.action == 'SPLIT':
-            run[key] *= tx.quantity
+            ratio = float(tx.quantity or 0.0)
+            new_sym = normalize_symbol_new(tx.symbol,
+                                           getattr(tx, 'symbol_new', ''))
+            if new_sym:
+                nk = (new_sym, tx.account)
+                run[nk] = run.get(nk, 0.0) + run.pop(key, 0.0) * ratio
+            elif key in run:
+                run[key] *= ratio
             continue
         if tx.action not in ('BUYSELL', 'ASSIGN', 'OPENING_BALANCE', 'TRANSFER'):
             continue
-        prev = run[key]
-        run[key] += tx.quantity
-        # A sale drawing from the short/phantom state (mirrors detect_phantoms'
-        # disposition_count): qty<0 with the position negative on either side.
-        phantom_sale = tx.quantity < 0 and (prev < 0 or run[key] < 0)
-        if not phantom_sale:
+        prev = run.get(key, 0.0)
+        cur = prev + tx.quantity
+        run[key] = cur
+        draws = ((tx.quantity < 0 and (prev < -1e-9 or cur < -1e-9))
+                 or (tx.quantity > 0 and prev < -1e-9
+                     and tx.action in ('BUYSELL', 'ASSIGN')))
+        if not draws:
             continue
-        if year_str is not None and not (tx.date or '').startswith(year_str):
+        d = _basis_date(tx, date_basis)
+        if year_str is not None and not d.startswith(year_str):
             continue
-        s = stats[key]
-        s['n'] += 1
-        s['proceeds'] += abs(getattr(tx, 'net_amount', 0.0) or 0.0)
-        if (tx.date or '') > s['last']:
-            s['last'] = tx.date or ''
+        st = stats.setdefault(key, {'n': 0, 'proceeds': 0.0, 'last': ''})
+        st['n'] += 1
+        st['proceeds'] += abs(getattr(tx, 'net_amount', 0.0) or 0.0)
+        if d > st['last']:
+            st['last'] = d
 
     out: List[MissingHistoryRow] = []
     for c in candidates:
-        s = stats[(c.symbol, c.account)]
+        st = stats.get((c.symbol, c.account),
+                       {'n': 0, 'proceeds': 0.0, 'last': ''})
         out.append(MissingHistoryRow(
             candidate=c,
-            affects_year=(year_str is None or s['n'] > 0),
-            in_year_dispositions=s['n'],
-            in_year_proceeds=round(s['proceeds'], 2),
-            last_in_year_date=s['last'],
+            affects_year=(year_str is None or st['n'] > 0),
+            in_year_dispositions=st['n'],
+            in_year_proceeds=round(st['proceeds'], 2),
+            last_in_year_date=st['last'],
         ))
     return out
 
@@ -319,6 +395,7 @@ def detect_zero_basis_acquisitions(
     year: Any = None,
     *,
     include_options: bool = False,
+    date_basis: str = 'settle',
 ) -> List[ZeroBasisRow]:
     """Flag (symbol, account) pairs that ACQUIRED shares at ~$0 cost — almost
     always a broker corporate-action row (a merger/spinoff "shares received"
@@ -336,7 +413,10 @@ def detect_zero_basis_acquisitions(
     corp action — or after a full drain and fresh buy — is not flagged.
 
     `year` (int/str/None): when set, `affects_year` is True only if such a
-    disposition falls in that year; None reports every flagged pair.
+    disposition falls in that year (its date on `date_basis` — the
+    engine's year, audit S075-16); None reports every flagged pair.
+    Rename-SPLITs carry the pool (and its $0 contamination) to the new
+    symbol, as detect_phantoms does (audit S075-19).
     """
     year_str = str(year) if year is not None else None
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
@@ -351,15 +431,42 @@ def detect_zero_basis_acquisitions(
             continue
         if tx.action not in ('BUYSELL', 'SPLIT'):
             continue
+        if tx.action == 'SPLIT':
+            # Every currency-slice of this (symbol, account) pool — a
+            # SPLIT row's own currency field is not the trades' key.
+            ratio = float(tx.quantity or 0.0)
+            new_sym = normalize_symbol_new(tx.symbol,
+                                           getattr(tx, 'symbol_new', ''))
+            for key in [k for k in state
+                        if k[0] == tx.symbol and k[1] == tx.account]:
+                old = state[key]
+                if not new_sym:
+                    old['running'] *= ratio
+                    continue
+                t = state.setdefault((new_sym, key[1], key[2]), {
+                    'running': 0.0, 'active': False, 'zero_qty': 0.0,
+                    'acq_date': '', 'desc': '', 'corp': False,
+                    'any_disp': 0, 'in_year': 0, 'in_year_proc': 0.0,
+                })
+                t['running'] += old['running'] * ratio
+                t['zero_qty'] += old['zero_qty'] * ratio
+                t['active'] = t['active'] or old['active']
+                t['acq_date'] = t['acq_date'] or old['acq_date']
+                if old['corp'] and not t['corp']:
+                    t['desc'], t['corp'] = old['desc'], True
+                elif not t['desc']:
+                    t['desc'] = old['desc']
+                # The old line keeps its own disposition record; its
+                # shares (and contamination) now live on the new line.
+                old['running'] = 0.0
+                old['active'] = False
+            continue
         key = (tx.symbol, tx.account, tx.currency or '')
         s = state.setdefault(key, {
             'running': 0.0, 'active': False, 'zero_qty': 0.0, 'acq_date': '',
             'desc': '', 'corp': False, 'any_disp': 0, 'in_year': 0,
             'in_year_proc': 0.0,
         })
-        if tx.action == 'SPLIT':
-            s['running'] *= float(tx.quantity or 0.0)
-            continue
         qty = float(tx.quantity or 0.0)
         cost = abs(float(tx.net_amount or 0.0))
         price = abs(float(tx.price or 0.0))
@@ -378,7 +485,8 @@ def detect_zero_basis_acquisitions(
         elif qty < -1e-9:                                # disposition
             if s['active']:
                 s['any_disp'] += 1
-                if year_str is None or (tx.date or '').startswith(year_str):
+                if year_str is None or _basis_date(
+                        tx, date_basis).startswith(year_str):
                     s['in_year'] += 1
                     s['in_year_proc'] += cost
             s['running'] += qty
@@ -548,7 +656,10 @@ def load_phantoms(path: Path) -> Set[Tuple[str, str]]:
             raise ValueError(
                 f"{path}[{i}]: 'symbol' and 'account' are both required"
             )
-        out.add((symbol, account))
+        # Book symbols are upper-case: a hand-typed 'xyz.to' used to
+        # match nothing and read as "data does not go negative" (audit
+        # S075-24 / S076-00).
+        out.add((str(symbol).strip().upper(), str(account).strip()))
     return out
 
 
@@ -664,17 +775,41 @@ def synthesize_openings(
                 reverse_renames.setdefault((new_sym, tx.account), []).append(
                     (tx.symbol, tx.account))
 
-    member_to_pair: Dict[Tuple[str, str], Tuple[str, str]] = {}
-    for pair in phantoms:
+    # Each listed pair's chain: itself plus every ancestor symbol. When
+    # a listed pair is an ANCESTOR of another listed pair (both ends of a
+    # rename chain listed — which --suggest-phantoms itself emits), the
+    # chain belongs to the most-downstream listed pair: one opening,
+    # sized on the whole chain. Iterating the set let PYTHONHASHSEED pick
+    # the owner, and the wrong one sized TWO openings (audit S021-04).
+    chains: Dict[Tuple[str, str], Set[Tuple[str, str]]] = {}
+    for pair in sorted(phantoms):
         stack = [pair]
-        seen_members = set()
+        seen_members: Set[Tuple[str, str]] = set()
         while stack:
             m = stack.pop()
             if m in seen_members:
                 continue                       # cycle guard
             seen_members.add(m)
-            member_to_pair.setdefault(m, pair)
             stack.extend(reverse_renames.get(m, []))
+        chains[pair] = seen_members
+    folded_into: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for pair in sorted(phantoms):
+        owners = [q for q in sorted(phantoms)
+                  if q != pair and pair in chains[q]]
+        if owners:
+            # The downstream-most owner: the one no other owner contains.
+            folded_into[pair] = next(
+                (q for q in owners
+                 if not any(q in chains[o] for o in owners if o != q)),
+                owners[0])
+    member_to_pair: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for pair in sorted(phantoms):
+        if pair in folded_into:
+            continue
+        for m in sorted(chains[pair]):
+            member_to_pair.setdefault(m, pair)
+    phantoms = {p for p in phantoms if p not in folded_into}
+    seen_rows: Set[Tuple[str, str]] = set()
 
     # Per LISTED pair state. The deficit is tracked in OPENING-DATE units:
     # the synthetic OPENING_BALANCE is inserted before everything else and
@@ -698,6 +833,7 @@ def synthesize_openings(
         pair = member_to_pair.get(key)
         if pair is None:
             continue
+        seen_rows.add(pair)
         # TRANSFER moves engine position too (detect_phantoms counts it, and
         # the sheltered CLI path rewrites remaining TRANSFERs to BUYSELL
         # before the engine) — excluding it sized openings wrong exactly on
@@ -720,13 +856,30 @@ def synthesize_openings(
 
     out = list(transactions)
     applied: List[Dict[str, Any]] = []
-    for (symbol, account), min_pos in min_running.items():
+    for (symbol, account), owner in sorted(folded_into.items()):
+        applied.append({'symbol': symbol, 'account': account,
+                        'opening_qty': 0.0, 'inserted': False,
+                        'note': f'same rename chain as {owner[0]} — its '
+                                f'one opening covers this pair'})
+    for (symbol, account), min_pos in sorted(min_running.items()):
         entry: Dict[str, Any] = {
             'symbol': symbol,
             'account': account,
             'opening_qty': 0.0,
             'inserted': False,
         }
+        if (symbol, account) not in seen_rows:
+            # Nothing in the data carries this (symbol, account): a
+            # spelling or account-name mismatch, not "complete data"
+            # (audit S075-24 / S076-00).
+            entry['note'] = ('no rows for this symbol/account in the data — '
+                             'check the spelling in phantoms.json')
+            print(f"warning: phantoms.json lists {symbol} / {account}, but "
+                  f"no row in the data has that symbol and account — "
+                  f"nothing was applied. Check the spelling.",
+                  file=sys.stderr)
+            applied.append(entry)
+            continue
         if min_pos >= -1e-6:
             # Listed in phantoms.json but the data is actually complete.
             # Surface this so the user can prune the file.

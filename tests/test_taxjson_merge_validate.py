@@ -90,8 +90,10 @@ class TestTaxjsonValidate(unittest.TestCase):
     def test_clean_data_has_no_issues(self):
         issues, warnings = self._validate([
             {'action': 'BUYSELL', 'date': '2025-01-15', 'time': '09:30:00',
-             'symbol': 'AAPL.US', 'quantity': 100, 'currency': 'USD'},
+             'symbol': 'AAPL.US', 'quantity': 100, 'currency': 'USD',
+             'net_amount': 15000.0},
         ])
+        # (A trade row needs its net_amount — audit R1-162.)
         self.assertEqual(len(issues), 0)
 
     def test_missing_action_flagged(self):

@@ -2,6 +2,139 @@
 
 ## Unreleased
 
+- **FX before March 2017 uses the Bank of Canada noon rate.** Folio
+  S5-F4-C1 names the Bank's noon rate for dates before 2017-03-01;
+  those dates (back to 2007-05-01, where Valet's legacy noon series
+  starts) used Yahoo closes, and Jan-Feb 2017 the new daily average.
+  They now take the noon rate (source `boc-noon`); Yahoo stays the
+  fallback for earlier dates. A Yahoo download that fails silently (an
+  empty answer) is no longer remembered as "no data" forever, so the
+  next online run asks again. The default-rate error for a date before
+  every rate source no longer tells you to refresh (it cannot help) or
+  to pass a flag `taxjson run` does not have: enter the row in the base
+  currency at its date's rate.
+- **Harvest prices the right thing in the right currency.** USD-traded
+  TSX units (`DLR.U.TO`) are valued in USD and spelled `DLR-U.TO` for
+  Yahoo; trust units (`DIR.UN.TO` -> `DIR-UN.TO`) and US class shares
+  (`BF.B` -> `BF-B`) get Yahoo's spelling; an LSE quote Yahoo gives in
+  pence is converted to pounds (it was valued 100x); a quote whose
+  currency cannot be told (a `yf_ticker.map` override to `.DE`, `.T`,
+  ...) is omitted with a warning instead of treated as USD; and
+  `harvest --crypto` looks coins up as Yahoo crypto pairs (`ETH-USD`),
+  never as stock tickers, and skips IBKR for them. `TAXJSON_OFFLINE`
+  now also stops the IBKR option-price lookup, and a cache miss refuses
+  as for stocks.
+- **Missing-history and phantom tools agree with the engine.**
+  `find-missing-history`, `--gen-phantoms`/`--suggest-phantoms` and the
+  phantom openings now: order same-moment rows buys first and put a trade
+  executed before an evening split (settling after it) ahead of the
+  split, as the engine does (no invented short, no order-dependent
+  opening size); count the in-year BUY that covers a short carried in
+  as affecting the year (the report said "safe to ignore" while the
+  year booked the cover); date a row by the project's `tax_date` (a
+  Dec-31 trade settling in January belongs to January's year); follow
+  renames (a clean sale after a rename is not flagged, a $0-cost
+  position renamed before its sale is); and take "registered" from the
+  account's configured type, not its name. `phantoms.json` symbols are
+  matched case-insensitively and a listed pair that matches no row is
+  named as such; both ends of a rename chain listed give one opening
+  whatever the hash seed.
+- **Per-account holdings include phantom openings and split the deferred
+  loss.** In a blended taxable pass each account's `_gains_wash.json`
+  inventory (read by `list`, `shares`, `harvest`) was apportioned from
+  the account's own book, which lacks the openings `phantoms.json`
+  adds: a position could show as a short at a negative cost or vanish.
+  The openings now count. The deferred superficial loss parked in a
+  blended pool is apportioned with the shares instead of being copied
+  whole into every account.
+- **Phantom-basis superficial-loss warnings are shown.** A clean loss
+  within 30 days of a phantom-basis sale, and a phantom-basis loss with
+  a rebuy in its window, were written only into the gains JSON (and
+  dropped by the per-account split); they now print as `warning:` lines
+  (so they reach the DIAGNOSTICS banner) and stay in each account's
+  `_gains_wash.json`. US engine: an IRA-to-IRA move the tool nets out no
+  longer triggers "sells beyond its recorded balance".
+- **A merger two brokers book on different dates is one event.** The
+  per-account merger-ratio fold grouped rows by exact date, so when IB
+  booked a merger on 06-11 and RBC on 06-15 the first renamed the whole
+  pool at its own ratio and the second found it empty: the extra share
+  RBC delivered was never sold in the books. Rows within 7 days now fold
+  into one event.
+- **Option-timing settings read the same everywhere.** A quoted
+  `option_buyback_loss_superficial = "false"` or `crypto = "false"`
+  counted as TRUE in every command except `run` (carryover, check-filed,
+  audit, close-year, reconcile-slips, the web UI); every config reader
+  now refuses it. With `tax_date = "trade"`, `option_grant_timing_since`
+  is tested on the write's trade year, the same date the return's year
+  filter uses. Standalone `taxjson-gains` / `taxjson-explain` say when
+  they fall back to close timing (a Canada project runs grant timing).
+- **A trade row with no amount is refused.** `taxjson-gains` accepted a
+  BUYSELL/ASSIGN row whose `net_amount` (or `quantity`) key was missing
+  and booked it at $0, and `taxjson-validate` said OK; both now name the
+  row. US engine: a sale whose commission exceeds the gross (a $0.01
+  close) keeps its negative proceeds instead of booking a credit.
+- **Return of capital: no invented proceeds, right sign on a short.** An
+  s.40(3) deemed gain (ROC below nil, or ROC after the position was
+  sold) was booked with proceeds equal to the gain, overstating
+  Schedule 3 line 13199; it now has no proceeds (CRA: 0 on 13199, the
+  gain on 13200). A ROC ADJUST on a SHORT position raised the short's
+  gain by the amount; it is now the short seller's compensation payment
+  and lowers it (a note names it).
+- **Traces and `taxjson-explain` tell the truth about phantom rows and
+  denials.** The traces file counted phantom-basis sales (from
+  `phantoms.json`) as ordinary gains in its header and per-symbol totals
+  and gave them a holding period counted from 1970; `taxjson-explain`
+  did the same. Both now show them as MANUAL REPORTING rows outside the
+  totals (the gains JSON's manual rows carry no `days_held`). The
+  superficial-loss explanation states the per-holder rule the engine
+  applies, says PERMANENTLY denied for a registered or affiliated
+  replacement instead of "ACB pool bumped", and no longer claims "the
+  earliest is chosen as trigger". A grant-timed buy-back's trace line
+  prints the booked cost and gain. `taxjson-explain --no-wash` explains
+  a registered account's book the way `taxjson run` computes it. The
+  `--affiliated` help no longer calls a parent or sibling affiliated.
+- **Superficial-loss rule fixes.** A cover that also opens a long (buy
+  150 while short 100) now counts its own 50 new shares as substituted
+  property, as two separate rows already did. In a blended pass the
+  cover-vs-acquisition test uses the pooled s.47 balance, so account B's
+  rebuy after selling shares only account A held is an acquisition. A
+  contract that expires before day 30 is not "still held", even with
+  no expiry row. `option_buyback_loss_superficial = false` (the
+  default) now exempts a written option's buy-back loss under close
+  timing and for contracts written before `option_grant_timing_since`
+  too, not only grant-timed lots. A warrant or right bought in the
+  window (`SLH.WT.TO`, `ABC.RT.TO`) is named in an option-replacement
+  warning for review. US engine: a registered or spouse account's
+  buy-to-close is no longer a §1091 replacement.
+- **Same-moment rows no longer depend on a content hash or a 1-second
+  gap.** The superficial-loss balance walk (Canada) and the US
+  replacement-lot order broke ties by each row's hash, so a one-cent
+  price or description change could flip a denial or move a US wash
+  deferral to the other lot; ties now keep the main pass's order (its
+  buy-before-sell rung, then the export's row order). A denied loss's
+  cost bump for a pre-loss rebuy now applies right after the loss row,
+  so another fill of the same order sees it whether it came 0, 1 or 2
+  seconds later. A bump for a rebuy booked under the old ticker on a
+  rename's own date lands on the pool that holds those shares instead
+  of vanishing into the empty new-ticker pool.
+- **Each option assignment's premium goes to its own stock leg.** Both
+  engines staged every assignment's premium per (account, underlying)
+  and handed the whole sum to the first stock trade that came along: a
+  spread assigned on one day put the put's premium and the call's into
+  one leg, two stock legs of one assignment did not share it, and a
+  missing stock leg let an unrelated trade months later absorb it. The
+  premium is now matched to the leg in the assignment's direction
+  (buy for an assigned put / exercised call, sell otherwise), per share,
+  within 7 days of the option leg; a premium no leg claims is named in
+  the end-of-run "unconsumed" warning instead of moving into another
+  trade (and another year).
+- **Option roots that differ from the stock ticker.** An assignment of
+  a Montreal `RCI` option into `RCI.B.TO`, an OCC `BRKB` option into
+  `BRK.B.US`, or a futures option into its dated contract (`F:CL` into
+  `F:CLG6.US`) was treated as cash-settled, so the premium was realized
+  in the wrong year. The option is now matched to the one stock line in
+  its account that trades at the assignment (a note names it); an
+  ambiguous match warns and stays cash-settled.
 - **holdings.toml states what its base-currency cost is**:
   `meta.base_cost_basis` says `base_total_cost` is per-account and
   per-listing, before superficial-loss adjustments and the s.47 blend

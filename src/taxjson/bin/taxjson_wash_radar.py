@@ -83,8 +83,6 @@ class _EngineLosses:
                          f"work/<acct>_gains*.json files")
             basis = str(summ.get('tax_date_basis') or 'settle').lower()
             buyback_wash = bool(summ.get('option_buyback_loss_superficial'))
-            grant_mode = (str(summ.get('option_premium_timing') or 'close')
-                          .lower() == 'grant')
             accts = set()
             meta_acct = ((doc.get('metadata') or {}).get('account') or '')
             if meta_acct:
@@ -104,14 +102,13 @@ class _EngineLosses:
                 if g is None or float(g) >= -0.01 or r.get('grant') \
                         or r.get('deemed'):
                     continue
-                # A buy-back loss on a grant-timed written option is not
-                # fed to the engine's superficial-loss solver unless the
-                # project opts in (core.py _wash_eligible): its cost is
-                # 0 (the premium was recognised at the write).
-                if (grant_mode and not buyback_wash
+                # A buy-back loss on a written option (any premium
+                # timing) is not fed to the engine's superficial-loss
+                # solver unless the project opts in (core.py
+                # _wash_eligible).
+                if (not buyback_wash
                         and r.get('is_option')
-                        and (r.get('direction') or '') == 'SHORT'
-                        and abs(float(r.get('cost') or 0.0)) <= 0.005):
+                        and (r.get('direction') or '') == 'SHORT'):
                     continue
                 rows.append({**r, 'raw_gain': float(g)})
             for a in accts:

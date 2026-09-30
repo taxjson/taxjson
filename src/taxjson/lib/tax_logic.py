@@ -158,9 +158,9 @@ def _canada(s: Dict[str, Any]) -> List[Section]:
              "the same option is bought, and still held at day 30, "
              "within the window (option_buyback_loss_superficial = true)."
              if buyback else
-             "A loss on buying back a grant-timed written option is "
-             "exempt from the rule (option_buyback_loss_superficial = "
-             "false); close-timed contracts still follow it."),
+             "A loss on buying back a written option is exempt from "
+             "the rule under either premium timing "
+             "(option_buyback_loss_superficial = false)."),
             "Crypto follows the same rule, pooled across exchanges when "
             "two or more crypto accounts are configured.",
         ]),

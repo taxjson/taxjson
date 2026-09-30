@@ -80,7 +80,10 @@ def parse_args():
     )
     parser.add_argument(
         "--affiliated",
-        help="Path to affiliated-persons' transactions JSON (spouse / related / corp).",
+        help="Path to affiliated-persons' transactions JSON (spouse or "
+             "common-law partner, controlled corporation, affiliated trust "
+             "or partnership — ITA s.251.1; a parent, child or sibling is "
+             "related but not affiliated).",
     )
     parser.add_argument("--symbol", help="Filter to a symbol; prefix match (e.g. AAPL matches AAPL.USD).")
     parser.add_argument("--date", help="Filter to one disposition date (YYYY-MM-DD).")
@@ -112,11 +115,19 @@ def parse_args():
              "history — applied exactly like taxjson-gains, so traces match "
              "the pipeline's books.")
     parser.add_argument("--option-premium-timing", choices=["grant", "close"],
-                        default="close", help="Canada: s.49(1) grant timing "
-                        "or close timing for written options (match the run).")
+                        default=None, help="Canada: s.49(1) grant timing "
+                        "or close timing for written options (match the "
+                        "run). Default: close, with a note — `taxjson run` "
+                        "defaults a Canada project to grant.")
     parser.add_argument("--option-grant-since", type=int, default=None,
                         metavar="YEAR")
     parser.add_argument("--option-buyback-wash", action="store_true")
+    parser.add_argument(
+        "--no-wash", action="store_true",
+        help="Skip superficial-loss / wash-sale detection. Use it for a "
+             "REGISTERED (sheltered) account's book: `taxjson run` "
+             "computes those with the rule off, and without this flag "
+             "explain applies it as if the book were taxable.")
     parser.add_argument("--color", action="store_true",
                         help="Enable ANSI color output (off by default).")
     parser.add_argument(
@@ -162,6 +173,14 @@ def fmt_summary(g) -> str:
     dis = g.get('disallowed_amount', 0.0)
     direction = g.get('direction', '')
     tag = ''
+    if g.get('tainted'):
+        # Phantom-basis disposition (--incomplete-history): the pipeline
+        # routes it to manual reporting with no gain (audit S029-22).
+        return (
+            f"{gid}  {date}  {sym:<14}  qty={qty:>10.4f}  "
+            f"proc={proc:>12.4f}  MANUAL REPORTING — phantom (pre-data) "
+            f"basis; gain not computed, not in the gains total"
+            f"  ({direction})")
     if dis > 0.001:
         tag += f"  WASH+{dis:.2f}"
     if g.get('term'):
@@ -178,7 +197,8 @@ def is_disposition_line(line: str) -> bool:
 
 
 def print_trace(g, args, use_color):
-    block = render_gain_block(g, align=not args.no_align)
+    block = render_gain_block(g, align=not args.no_align,
+                              manual=bool(g.get('tainted')))
     if not block:
         print(f"# (no trace produced for {g.get('id','?')})", file=sys.stderr)
         return
@@ -215,8 +235,26 @@ def print_trace(g, args, use_color):
     print(colorize(rule_bot, 'rule', use_color))
 
 
+def _timing_default_note(args, prog):
+    """Standalone runs default to CLOSE timing, while a Canada project
+    (`taxjson run`) defaults to s.49(1) grant timing from the project
+    year: say so instead of silently disagreeing with the .sum (audit
+    R1-177)."""
+    if (args.option_premium_timing is None
+            and str(args.country or 'canada').strip().lower()
+            not in ('us', 'usa')):
+        print(f"{prog}: note: --option-premium-timing not given — using "
+              f"close timing. `taxjson run` on a Canada project uses "
+              f"grant timing from the project year; pass "
+              f"--option-premium-timing grant --option-grant-since YEAR "
+              f"to match it.", file=sys.stderr)
+    if args.option_premium_timing is None:
+        args.option_premium_timing = 'close'
+
+
 def main():
     args = parse_args()
+    _timing_default_note(args, "taxjson-explain")
     # Country-aware --tax-date default (matches taxjson-gains): settle for
     # canada (CRA), trade for usa (IRS).
     if args.tax_date is None:
@@ -256,6 +294,7 @@ def main():
             sheltered_transactions=sheltered,
             affiliated_transactions=affiliated,
             trace=True,
+            detect_wash_sales=not args.no_wash,
             **_kw,
         )
     except AmbiguousTransferDateError as e:

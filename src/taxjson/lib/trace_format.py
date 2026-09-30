@@ -81,20 +81,30 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     loss_qty = float(ww.get('loss_qty', 0.0) or 0.0)
     disallowed_qty = float(ww.get('disallowed_qty', 0.0) or 0.0)
     direction = ww.get('loss_direction', 'LONG')
-    threshold = "qty > 0 disallows" if direction == 'LONG' else "qty < 0 disallows"
+    # The rule the engine applies (REFERENCES.md, ITA s.54): per HOLDER
+    # — your taxable accounts together, each registered or affiliated
+    # account on its own — only units ACQUIRED inside the window and
+    # still held at T+30 back a denial. The class-wide balance is shown
+    # for context only; it does not decide the result (audit R1-159).
     out.append(
-        "#   Affiliated-balance test (CRA: pool qty at T+30 across ALL accounts must be zero):"
+        "#   Superficial-loss test (ITA s.54, per holder): units a holder "
+        "ACQUIRED in the window and still holds at T+30 back the denial"
     )
-    out.append(f"#     pool qty at T+30 = {bal:+.4f}   ({threshold})")
+    out.append(
+        "#     (holders: your taxable accounts together; each registered "
+        "or affiliated account on its own)"
+    )
+    out.append(f"#     all-account qty at T+30 = {bal:+.4f}   (context only)")
     if abs(disallowed_qty - loss_qty) < 0.001:
         out.append(
-            f"#   Result: full disallowance — "
-            f"min(loss qty {loss_qty:.4f}, |bal| {abs(bal):.4f}) = {disallowed_qty:.4f} shares"
+            f"#   Result: full disallowance — {disallowed_qty:.4f} of "
+            f"{loss_qty:.4f} units backed by substituted property"
         )
     else:
         out.append(
-            f"#   Result: partial disallowance — "
-            f"{disallowed_qty:.4f} of {loss_qty:.4f} shares (capped by |bal_at_end|)"
+            f"#   Result: partial disallowance — {disallowed_qty:.4f} of "
+            f"{loss_qty:.4f} units backed by substituted property "
+            f"(acquired in the window and still held at T+30)"
         )
 
     txs = list(ww.get('transactions') or [])
@@ -111,7 +121,7 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     for t in txs:
         day = f"T{t['days_from_loss']:+d}"
         # Distinguish sheltered (your own RRSP/TFSA) from affiliated (spouse,
-        # related person, controlled corp). Both feed superficial-loss
+        # controlled corp, affiliated trust — s.251.1). Both feed superficial-loss
         # detection but the disallowance lands on different property.
         if t.get('affiliated'):
             sheltered = " [affiliated]"
@@ -123,9 +133,13 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
         if role == 'loss_sale':
             tag = "*** LOSS SALE ***"
         elif role == 'trigger':
-            tag = "*** ACB BUMP APPLIED HERE (trigger lot) ***"
+            if t.get('sheltered') or t.get('affiliated'):
+                tag = "*** TRIGGER (denial PERMANENT — no ACB bump) ***"
+            else:
+                tag = "*** TRIGGER (denied loss added to the ACB) ***"
         elif role == 'candidate':
-            tag = "candidate (eligible — earliest is chosen as trigger)"
+            tag = ("candidate (eligible; not needed — allocation takes "
+                   "buys after the sale first, then earlier buys latest first)")
         elif role == 'other_sell':
             tag = "other sell in window (may produce its own loss)"
         elif role == 'other_buy':
@@ -165,7 +179,7 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
     ]
     out.append("#")
     out.append("#   Same-symbol activity in the window (across all accounts):")
-    out.append("#   pool_bal = running qty across ALL accounts (affiliated test); acb/sh = taxable pool's per-share ACB after this tx")
+    out.append("#   pool_bal = running qty across ALL accounts (context); acb/sh = taxable pool's per-share ACB after this tx")
 
     def fmt_row(r):
         parts = []
@@ -216,10 +230,23 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
                 f"{wt['trigger_qty']:+.4f} @ {wt['trigger_price']:.4f}   "
                 f"account={wt.get('trigger_account', '')}{sheltered}"
             )
-        if 'adjust_amount' in wt:
+        perm = float(g.get('permanently_disallowed', 0.0) or 0.0)
+        deferred = float(dis or 0.0) - perm
+        if deferred > 0.005:
             out.append(
-                f"#   ACB pool bumped by {_fmt_signed_money(wt['adjust_amount'])} "
-                f"on {wt['adjust_date']} (forwards the disallowed loss to that lot)"
+                f"#   deferred {_fmt_money(deferred)}: added to the ACB of the "
+                f"replacement units in your taxable pool (recovered when "
+                f"they are sold)"
+                + (f"; first bump {_fmt_signed_money(wt['adjust_amount'])} "
+                   f"on {wt['adjust_date']}"
+                   if 'adjust_amount' in wt and perm > 0.005 else
+                   f", on {wt['adjust_date']}" if 'adjust_date' in wt else "")
+            )
+        if perm > 0.005:
+            out.append(
+                f"#   PERMANENTLY denied {_fmt_money(perm)}: the replacement "
+                f"is held in a registered or affiliated account — no ACB "
+                f"bump, the loss is lost for good"
             )
         return out
 
@@ -272,7 +299,8 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
     return out
 
 
-def render_gain_block(g: Dict[str, Any], align: bool = True) -> List[str]:
+def render_gain_block(g: Dict[str, Any], align: bool = True,
+                      manual: bool = False) -> List[str]:
     """Render one gain as a tt-style block: rule, header, trace lines, rule.
 
     The header is two lines:
@@ -284,6 +312,11 @@ def render_gain_block(g: Dict[str, Any], align: bool = True) -> List[str]:
 
     Returns the lines without trailing newlines. Returns an empty list when
     the gain has no trace attached.
+
+    `manual`: a phantom-basis disposition (the pipeline's
+    manual_reporting_required): its cost is unknown, so the header shows
+    no gain and no holding period (the engine's figures come from a
+    zero-cost pool and a 1970 sentinel date — audit R1-165 / S029-22).
     """
     trace = list(g.get('trace') or [])
     if not trace:
@@ -305,7 +338,17 @@ def render_gain_block(g: Dict[str, Any], align: bool = True) -> List[str]:
     term = g.get('term')
     gid = (g.get('id') or '')[:16]
 
-    primary = [f"# {sym}", date, f"qty={qty:.4f}", f"gain={_fmt_signed_money(gain_amt)}"]
+    if manual:
+        proceeds = float(g.get('proceeds', 0.0) or 0.0)
+        primary = [f"# {sym}", date, f"qty={qty:.4f}",
+                   f"proceeds={_fmt_money(abs(proceeds))}",
+                   "MANUAL REPORTING — phantom (pre-data) basis: gain not "
+                   "computed, not in the gains total"]
+        days = None
+        dis = 0.0
+        term = None
+    else:
+        primary = [f"# {sym}", date, f"qty={qty:.4f}", f"gain={_fmt_signed_money(gain_amt)}"]
     if dis > 0.001:
         primary.append(f"(raw {_fmt_signed_money(raw)}, disallowed +{_fmt_money(dis)})")
     if term:

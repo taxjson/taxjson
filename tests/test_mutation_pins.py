@@ -737,34 +737,32 @@ class TestRoundSixPins(unittest.TestCase):
         return TaxTransaction(**d)
 
     def test_bal_before_walk_is_phase_aware(self):
-        """Round-six settle-straddle fuzzer (seeds 113/317/...): a
-        sale settling ON a split date must be subtracted from the
-        PRE-split balance. The naive sort applied it post-split —
-        phantom shares made a later short-cover look like an opening
-        buy and denied a loss with no trigger anywhere."""
+        """Round-six settle-straddle fuzzer (seeds 113/317/...): a trade
+        settling ON a split date belongs to the PRE-split balance. The
+        naive sort applied it post-split, and the phantom position
+        misjudged which later buys open vs cover. (The original pin used
+        two taxable accounts and relied on a per-ACCOUNT cover test; the
+        cover test now uses the pooled s.47 balance — audit S069-15 — so
+        the pin is single-account.) Here a pre-split short is covered by
+        a buy settling on the split date: the 03-10 buy of 20 then OPENS
+        20 (all a trigger, 10 still held -> 100 denied). The naive walk
+        left a phantom short of 16 and saw only 4 opening (40 denied)."""
         book = [
-            self._T(date="2025-01-06", quantity=16,
-                    net_amount=1600.0),
+            self._T(date="2025-01-06", quantity=-16, net_amount=1600.0),
             self._T(date="2025-03-01", date_settle="2025-03-04",
-                    quantity=-16, net_amount=3200.0),
+                    quantity=16, net_amount=1600.0),
             TaxTransaction(action="SPLIT", date="2025-03-04",
                            time="00:00:01", symbol="Q.TO",
                            quantity=2.0, currency="CAD",
                            account="A0"),
-            self._T(date="2025-03-19", quantity=-8,
-                    net_amount=400.0),
-            self._T(date="2025-03-28", quantity=100, account="A1",
-                    net_amount=5000.0),
-            self._T(date="2025-04-06", quantity=4, net_amount=210.0),
-            self._T(date="2025-05-03", quantity=-76, account="A1",
-                    net_amount=1000.0),
+            self._T(date="2025-03-10", quantity=20, net_amount=1000.0),
+            self._T(date="2025-03-20", quantity=-10, net_amount=400.0),
         ]
         with redirect_stderr(io.StringIO()):
             r = get_tax_rules("canada").compute_gains(book)
         denied = round(sum(float(w.get("disallowed_amount") or 0)
                            for w in r.get("wash_sales") or []), 2)
-        self.assertEqual(denied, 0.0,
-                         "pure short-cover must not be a trigger")
+        self.assertEqual(denied, 100.0)
 
     def test_trade_on_split_date_not_redenominated(self):
         """Mutation core-A1: a trade EXECUTED on the split date is

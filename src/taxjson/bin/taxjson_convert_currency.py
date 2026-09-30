@@ -351,13 +351,27 @@ def fallback_validation_issues(target_curr: str,
     not a style warning: before, it was a stderr line and the run
     exited 0 with a clean checklist."""
     out: Dict[str, list] = {}
+    tgt = norm_currency(target_curr)
     for r in _FALLBACK_ROWS:
         ctx = f"TX {r['id']} ({r['action']} {r['symbol']} {r['date']})"
+        if str(r['reason']).startswith("date predates rates file start"):
+            # No source publishes rates that early, so "refresh" cannot
+            # help and `taxjson run` has no --default-rate (audit
+            # S028-13): name the remedy that works in a project.
+            fix = (f"No rate source reaches back that far, so refreshing "
+                   f"cannot help: enter this row in {tgt} (the base "
+                   f"currency) at its date's rate — e.g. a .tt row with "
+                   f"currency {tgt} — and the conversion leaves it as is.")
+        else:
+            fix = (f"Refresh the rates (`taxjson run` online); if no "
+                   f"rate exists for that date, enter the row in {tgt} "
+                   f"at its date's rate. (The standalone "
+                   f"taxjson-convert-currency takes --default-rate to "
+                   f"accept the fallback.)")
         out.setdefault(ctx, []).append(
-            f"FX: no {r['currency']}->{norm_currency(target_curr)} rate "
+            f"FX: no {r['currency']}->{tgt} rate "
             f"for {r['date']} ({r['reason']}); converted at the default "
-            f"rate {default_rate}. Refresh the rates (`taxjson run` "
-            f"online) or pass --default-rate explicitly to accept it.")
+            f"rate {default_rate}. {fix}")
     return out
 
 
@@ -388,6 +402,9 @@ def rate_source_summary(sources: Dict[str, Dict[str, str]]) -> str:
         counts[src] = counts.get(src, 0) + 1
     text = (f"FX: Bank of Canada Valet for {counts.pop('boc', 0)} dates, "
             f"Yahoo fallback for {counts.pop('yahoo', 0)}")
+    if counts.get("boc-noon"):
+        text += (f", Bank of Canada noon rate (before 2017-03) for "
+                 f"{counts.pop('boc-noon')}")
     for src, n in sorted(counts.items()):
         text += (f", {n} from a rates file without a source column"
                  if src == "unlabelled" else f", {src} for {n}")
