@@ -155,9 +155,11 @@ dated `date`. For a crypto-only export set `[options] settle_on_trade_date =
 true` (crypto has no settlement cycle).
 
 Kraken and Coinbase timestamps are UTC; rows are dated in local time
-(America/Toronto by default, `TAXJSON_LOCAL_TZ=America/Vancouver` etc. to
-change it), so a fill at 03:00 UTC on January 1 belongs to the previous tax
-year. USDC/USDT/DAI are treated as US-dollar cash on both exchanges.
+(America/Toronto by default; set `[settings] local_timezone =
+"America/Vancouver"` etc., or the `TAXJSON_LOCAL_TZ` environment variable
+outside a project, to change it — the setting wins, and a change re-dates the
+rows and re-keys crypto sends), so a fill at 03:00 UTC on January 1 belongs to
+the previous tax year. USDC/USDT/DAI are treated as US-dollar cash on both exchanges.
 
 Crypto accounts: in a US project the wash-sale rule is **not** applied to
 crypto — the IRS treats digital assets as property, not securities, so §1091
@@ -300,6 +302,7 @@ base_currency = "CAD"          # the country's currency: CAD for canada, USD for
 tax_date = "settle"            # settle (CRA default) | trade (IRS default)
 # futures_settle = "trade"     # IB futures & futures options: TRADE date (daily variation
 #                              # margin settles the P/L) | next_day (clearing premium date)
+# local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
 # province = "ON"              # canada tax-estimate default (ON/BC/AB)
 #   Canada-only keys (province, option_*, foreign_return_of_capital, and the

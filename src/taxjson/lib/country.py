@@ -213,6 +213,7 @@ SETTING_COUNTRY: Dict[str, str] = {
     "fx_cash_gains": BOTH,          # s.39(1.1) in Canada, §988 in the US
     "futures_settle": BOTH,
     "prior_year_record": BOTH,
+    "local_timezone": BOTH,         # the zone crypto UTC stamps are dated in
     "province": CANADA,
     "option_premium_timing": CANADA,
     "option_grant_timing_since": CANADA,

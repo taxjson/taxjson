@@ -444,6 +444,14 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
         _die(problems[0] if len(problems) == 1 else
              "taxjson.toml:\n  " + "\n  ".join(problems))
     settings = cfg["settings"]
+    # The zone crypto UTC stamps are dated in (the parsers and
+    # crypto-sends read TAXJSON_LOCAL_TZ): the project's setting wins
+    # over the environment, so every command and stage of this project
+    # dates a crypto row the same way (partition INPUTS-09).
+    _tz = settings.get("local_timezone")
+    if _tz:
+        import os as _os
+        _os.environ["TAXJSON_LOCAL_TZ"] = _tz
     srcs = settings.get("source_currencies")
     if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
         settings["source_currencies"] = [c.strip().upper() for c in srcs]
@@ -1673,7 +1681,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         + [f"tt/{p.name}" for p in input_files(acct_dir, ".tt")]
         + _map_entries
         + (["setting/foreign_return_of_capital=acb"] if _froc_acb else [])
-        + (["setting/futures_settle=next_day"] if _fut_next else []))) + "\n"
+        + (["setting/futures_settle=next_day"] if _fut_next else [])
+        # The crypto parsers date UTC stamps in this zone: a change
+        # re-parses.
+        + ([f"setting/local_timezone={settings['local_timezone']}"]
+           if is_crypto and settings.get("local_timezone") else []))) + "\n"
     if (not src_manifest.exists()
             or src_manifest.read_text(encoding="utf-8") != src_txt):
         src_manifest.write_text(src_txt, encoding="utf-8")
@@ -3412,11 +3424,12 @@ _TEMPLATE_CONFIG = """\
 [settings]
 year              = {year}
 country           = "{country}"{country_pad}# canada | ca | usa | us
-{province_line}base_currency     = "{base_currency}"{base_pad}# report currency; foreign income converted at BoC/IRS rates
+{province_line}base_currency     = "{base_currency}"{base_pad}# report currency (the country's); CAD: Bank of Canada rates, USD: Yahoo
 source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besides base_currency (FX rates fetched)
 tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
 # futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
 #                                     #   (daily variation margin); next_day = the clearing premium date
+# local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone (IANA name)
 # prior_year_record = "../{prev_year}/filed/{prev_year}.json"
 #                                     # last year's close-year record, checked by `taxjson handoff`
 

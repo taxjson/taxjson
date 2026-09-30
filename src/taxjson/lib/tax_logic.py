@@ -186,6 +186,12 @@ def _ownership(country: str) -> List[Rule]:
     ]
 
 
+def _local_tz(s: Dict[str, Any]) -> str:
+    """The zone crypto rows are dated in, as the parsers read it."""
+    from taxjson.lib.brokerages._crypto_common import DEFAULT_LOCAL_TZ
+    return str(s.get("local_timezone") or DEFAULT_LOCAL_TZ)
+
+
 def _canada(s: Dict[str, Any]) -> List[RuleSection]:
     c = _C.CANADA
     basis = _C.resolve_tax_date(c, s.get("tax_date"))
@@ -196,6 +202,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
     fut = _C.futures_settle_mode(s)
     froc = _C.foreign_roc_mode(dict(s, country=c))
     buyback = kw["option_buyback_loss_superficial"]
+    tz = _local_tz(s)
 
     if basis == "settle":
         year_rule = Rule(
@@ -295,7 +302,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "By law (s.104(13)) it belongs to the year it becomes "
                  "payable: one payable in December and paid in January is "
                  "not moved back yet, so take its year from the T3 slip."),
-            Rule("CA-DATE-12", "Crypto is dated in local time."),
+            Rule("CA-DATE-12",
+                 f"Crypto is dated in local time: {tz} ([settings] "
+                 f"local_timezone; outside a project TAXJSON_LOCAL_TZ). "
+                 f"Changing it re-dates the rows and re-keys crypto "
+                 f"sends.", keys=("local_timezone",)),
+            Rule("CA-DATE-13",
+                 "A .tt line has one date, used as both its trade and its "
+                 "settle date; `taxjson-convert-tt` writes a book's rows "
+                 "with the project's tax_date."),
         ]),
         ("Currency", [
             Rule("CA-FX-01",
@@ -600,6 +615,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-INC-DATE-ROC",
                  "A return of capital (nondividend distribution) lowers "
                  "basis on the date it is paid."),
+            Rule("US-DATE-10",
+                 "A .tt line has one date, used as both its trade and its "
+                 "settle date; `taxjson-convert-tt` writes a book's rows "
+                 "with the project's tax_date."),
+            Rule("US-DATE-11",
+                 f"Crypto is dated in local time: {_local_tz(s)} "
+                 f"([settings] local_timezone; outside a project "
+                 f"TAXJSON_LOCAL_TZ). Changing it re-dates the rows and "
+                 f"re-keys crypto sends.", keys=("local_timezone",)),
             Rule("US-INC-DATE-RIC",
                  "Not applied yet: a mutual-fund or REIT dividend declared "
                  "in October-December and paid in January belongs to the "

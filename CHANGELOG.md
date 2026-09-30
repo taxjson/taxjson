@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Crypto local time is a project setting.** `[settings] local_timezone`
+  (an IANA zone, both countries) names the zone Kraken and Coinbase UTC
+  stamps are dated in; it was only the `TAXJSON_LOCAL_TZ` environment
+  variable, with America/Toronto for everyone, so a trade after midnight
+  Eastern on Dec 31 could land in the wrong tax year for someone in
+  another zone. The default is unchanged; tax-logic states the zone in
+  force. A change re-parses the crypto account.
+- **`taxjson-convert-tt` writes the project's tax_date.** Converting a
+  book to .tt defaulted to the settlement date (the Canadian rule) with
+  no country, so a US book's Dec-31 sale came back as a January one. It
+  now reads the project's tax_date when the file sits in a project, and
+  outside one asks for `--date-basis` when a row's two dates differ.
 - **distributions.map sizes on the holder of record in both countries.**
   The record-date balance followed the project's tax-year date basis, so
   a US project (trade dates) credited a buy traded on the record date.

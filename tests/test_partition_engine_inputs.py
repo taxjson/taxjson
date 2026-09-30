@@ -653,5 +653,92 @@ class TestRecordDateHolder(unittest.TestCase):
         self.assertNotIn("ACB", notes["usa"])
 
 
+# ------------------------------------------------ INPUTS-09, INPUTS-14(c)
+class TestDatingSettings(unittest.TestCase):
+    """Crypto local time is a project setting (both countries), and
+    convert-tt writes the project's own tax_date, never a silent
+    Canadian settle date."""
+
+    @rule("CA-DATE-12")
+    @rule("US-DATE-11")
+    def test_local_timezone_setting_dates_crypto_rows(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from taxjson.bin import taxjson_run as run
+        from tax_rules.dual import settings_for
+        from test_crypto_parse_hardening import _KT_H, _kraken_dir, _run
+        csv = _KT_H + ("T1,O1,SOL/USD,2026-01-01 05:30:00.1,buy,limit,"
+                       "200,2000,5,10,,,\n")
+        for c in C.COUNTRIES:
+            with tempfile.TemporaryDirectory() as td, \
+                    mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TAXJSON_LOCAL_TZ", None)
+                root = Path(td)
+                (root / "taxjson.toml").write_text(
+                    settings_for(c, year=2025,
+                                 local_timezone="America/Los_Angeles")
+                    + '[accounts.crypto]\ntype = "taxable"\n'
+                      'crypto = true\n')
+                run.load_config(root)
+                self.assertEqual(os.environ.get("TAXJSON_LOCAL_TZ"),
+                                 "America/Los_Angeles")
+                ktd, K = _kraken_dir({"kr_trades.csv": csv})
+                with ktd:
+                    txs, _ = _run(K().parse_file,
+                                  Path(ktd.name) / "kr_trades.csv")
+                # 05:30 UTC on Jan 1 is Dec 31 in Los Angeles: tax year
+                # 2025, not 2026 (Toronto: 00:30 Jan 1).
+                self.assertEqual((txs[0]["date"], txs[0]["time"]),
+                                 ("2025-12-31", "21:30:00"), c)
+                self.assertEqual(txs[0]["date_settle"], txs[0]["date"])
+        from taxjson.lib.config_check import settings_problems
+        bad = {"settings": {"country": "usa", "local_timezone": "Mars/Base"}}
+        self.assertTrue(any("local_timezone" in p
+                            for p in settings_problems(bad)))
+        from taxjson.lib import tax_logic as TL
+        for c in C.COUNTRIES:
+            text = TL.render(c, {"local_timezone": "America/Denver"})
+            self.assertIn("America/Denver", text)
+
+    @rule("CA-DATE-13")
+    @rule("US-DATE-10")
+    def test_convert_tt_writes_the_projects_tax_date(self):
+        import json
+        import os
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        from tax_rules.dual import SRC, projects_both
+        book = {"transactions": [dict(
+            action="BUYSELL", date="2025-12-31", time="10:00:00",
+            date_settle="2026-01-02", symbol="AAA.US", quantity=-10.0,
+            price=10.0, net_amount=100.0, currency="USD")]}
+
+        def convert(path, *flags):
+            return subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_convert_tt",
+                 str(path), *flags], capture_output=True, text=True,
+                env=dict(os.environ, PYTHONPATH=str(SRC)))
+        with tempfile.TemporaryDirectory() as td:
+            ps = projects_both(Path(td), files={
+                "work/margin_base.json": json.dumps(book)})
+            out = {c: convert(p / "work" / "margin_base.json")
+                   for c, p in ps.items()}
+            for c, r in out.items():
+                self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("BUYSELL 2026-01-02 ", out["canada"].stdout)
+            self.assertIn("BUYSELL 2025-12-31 ", out["usa"].stdout)
+            loose = Path(td) / "loose.json"
+            loose.write_text(json.dumps(book))
+            r = convert(loose)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("--date-basis", r.stderr)
+            r = convert(loose, "--date-basis", "trade")
+            self.assertIn("BUYSELL 2025-12-31 ", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

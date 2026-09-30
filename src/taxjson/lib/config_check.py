@@ -147,4 +147,17 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
                        f"{base!r}")
             return out
         settings["base_currency"] = base.strip().upper()
+    tz = settings.get("local_timezone")
+    if tz is not None:
+        from taxjson.lib.brokerages._crypto_common import utc_to_local
+        from datetime import datetime as _dt
+        try:
+            if not isinstance(tz, str) or not tz.strip():
+                raise ValueError
+            utc_to_local(_dt(2025, 1, 1), tz.strip())
+            settings["local_timezone"] = tz.strip()
+        except ValueError:
+            out.append(f"[settings] local_timezone must be an IANA zone "
+                       f"name such as \"America/Toronto\" or "
+                       f"\"America/Los_Angeles\", got {tz!r}")
     return out + config_country_problems(cfg)
