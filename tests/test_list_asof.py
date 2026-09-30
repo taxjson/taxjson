@@ -103,6 +103,30 @@ class TestAsOf(unittest.TestCase):
         self.assertAlmostEqual(row["cost"], 800.0)  # ACB avg 20/sh
         self.assertIn("as of 2025-04-01", doc["basis"])
 
+    def test_list_date_cuts_on_the_projects_date_basis(self):
+        # R1-10: a sale traded 12-31 that settles 01-02 is a next-year
+        # disposition on a settle-basis project (the gains year, t1135):
+        # at 12-31 the shares are still held.
+        txs = [_tx("2024-12-10", 300, 50.0, "QQX.TO"),
+               dict(_tx("2024-12-31", -300, 60.0, "QQX.TO"), date_settle="2025-01-02")]
+        for basis, want in (("", 300), ('tax_date = "settle"\n', 300),
+                            ('tax_date = "trade"\n', None)):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "work").mkdir()
+                (root / "taxjson.toml").write_text(
+                    '[settings]\nyear = 2024\ncountry = "canada"\n'
+                    'base_currency = "CAD"\n' + basis +
+                    '[accounts.margin]\ntype = "taxable"\n')
+                (root / "work" / "margin_base.json").write_text(
+                    json.dumps({"transactions": txs}))
+                r = _run(root, "list", "--date", "2024-12-31", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            doc = json.loads(r.stdout)
+            qty = {row["symbol"]: row["qty"] for row in doc["rows"]}.get("QQX.TO")
+            self.assertEqual(qty, want, basis)
+            self.assertIn("settlement date" if want else "trade date", doc["basis"])
+
     def test_bad_date_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = _run(_project(tmp), "list", "--date", "banana")

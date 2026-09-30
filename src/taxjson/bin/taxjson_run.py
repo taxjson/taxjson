@@ -815,6 +815,55 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
         diag.unlink(missing_ok=True)
 
 
+def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
+                               year: Any) -> None:
+    """An option still open in the books after its expiry date: the
+    export dropped the expiry / assignment / exercise row. For a LONG
+    contract the premium paid is a capital loss of the expiry year that
+    the books never realize (R1-37); option-boundary covers written
+    contracts only. Loud on every run and, through a `.diag` sidecar,
+    in the account's .sum. Cutoff: the earlier of the project's year end
+    and today — a contract expiring later is simply open."""
+    import json as _json
+    from datetime import date as _date
+    from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    diag = cache / f"{name}_expired_options.diag"
+    cutoff = min(f"{year}-12-31", _date.today().isoformat())
+    lines: List[str] = []
+    try:
+        inv = _json.loads(gains_json.read_text(encoding="utf-8")).get(
+            "inventory") or []
+    except (OSError, ValueError, AttributeError):
+        inv = []
+    for h in inv:
+        sym = str(h.get("symbol") or "")
+        try:
+            qty = float(h.get("qty") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(qty) < 1e-9 or not is_option_symbol(sym):
+            continue
+        exp = parse_option_expiry(sym)
+        if not exp or exp >= cutoff:
+            continue
+        side = "long" if qty > 0 else "written"
+        lines.append(
+            f"warning: {name}: {sym} expired {exp} but the books still "
+            f"hold {qty:g} ({side}) — the export is missing its expiry, "
+            f"assignment or exercise row"
+            + (f"; the {abs(float(h.get('total_cost') or 0.0)):,.2f} paid "
+               f"is a loss of {exp[:4]} that is not booked"
+               if qty > 0 else "")
+            + ". Add the missing row (an expiry is a BUYSELL closing "
+              "the position at 0 on the expiry date) and re-run.")
+    if lines:
+        diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        for ln in lines:
+            print(f"  ! {ln}", file=sys.stderr)
+    else:
+        diag.unlink(missing_ok=True)
+
+
 def detect_broker(csv_path: Path) -> Optional[str]:
     """Filename hint first (covers coinbase/kraken whose CSV shapes aren't
     distinctive enough for content detection), then content detection
@@ -1790,6 +1839,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    if is_taxable:
+        _warn_expired_open_options(name, gains_json, cache, year)
 
     # 5b. Raw holdings: merge + sort + dedup, NO currency conversion and
     # NO validation; then gains with no options. The same ticker.map is
@@ -3479,6 +3530,13 @@ def cmd_elect(args: argparse.Namespace) -> None:
         print(f"Election saved: {event_id} = {election}"
               + (f" (hints: {hints})" if hints else "")
               + f" → {manifest_path}")
+        if ("fmv_per_share" in hints and abs(hints["fmv_per_share"]) < 1e-12
+                and election.startswith("taxable_")):
+            # 0 is the documented "defer" value (R1-11): say what it books.
+            print(f"taxjson elect: warning: fmv_per_share=0 books this "
+                  f"{election} at $0 — no income and a $0 cost for the "
+                  f"new shares. Every `taxjson run` and the checklist "
+                  f"flag it until a value is set.", file=sys.stderr)
         return
 
     if not (args.redo or args.reset):
@@ -6507,6 +6565,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 print("FX on foreign cash (s.39(1.1)) is not in the rows "
                       "above — T4037 puts it on line 15300; see `taxjson "
                       "fx-cash`.")
+            # Slip capital gains are part of line 19700 too (R1-44).
+            print("Capital gains on T3 (box 21) and T5/T5013 (box 18) "
+                  "slips are not in the rows above — Schedule 3 lines "
+                  "17600 and 17400, entered from the slips (the books "
+                  "carry those distributions as dividends).")
 
     if want_estimate:
         _print_tax_estimate(
@@ -8228,6 +8291,13 @@ def cmd_positions(args: argparse.Namespace) -> None:
                      f"taxjson.toml")
         names = ([args.account] if args.account
                  else sorted(accounts_cfg))
+        # The cutoff reads the project's date basis, like the gains
+        # year and t1135 (R1-10).
+        _asof_basis_set = str(settings.get("tax_date") or "").strip().lower() \
+            in ("trade", "settle")
+        _asof_basis = (str(settings.get("tax_date")).strip().lower()
+                       if _asof_basis_set else
+                       ("trade" if country in ("us", "usa") else "settle"))
         files = {}
         tmp_docs = {}
         _no_input = _accounts_skipped_for_no_inputs(root)
@@ -8249,6 +8319,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
                    "--country", country, "--year", year,
                    "--as-of", as_of, "--no-wash"] + option_timing_flags(
                        settings)
+            if _asof_basis_set:
+                cmd += ["--tax-date", _asof_basis]
             if accounts_cfg.get(n, {}).get("type") == "taxable":
                 cmd.append("--taxable")
             res = _run_cmd(cmd + [str(b)], capture_output=True)
@@ -8262,8 +8334,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             sys.exit(f"taxjson list: no base files in {cache} "
                      f"(run `taxjson run` first).")
-        basis = (f"as of {as_of} (per-account ACB, pre-wash, "
-                 f"pre-ticker.map)")
+        _asof_word = ("settlement date" if _asof_basis == "settle"
+                      else "trade date")
+        basis = (f"as of {as_of} by {_asof_word} (per-account ACB, "
+                 f"pre-wash, pre-ticker.map)")
         # A symbol held in two taxable accounts has ONE s.47 ACB on the
         # return (plain `list` shows it); this view recomputes each
         # account alone, so its cost differs — say so rather than
@@ -11877,7 +11951,9 @@ def main() -> None:
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
                        help="Positions AS OF this date — each account's "
                             "books recomputed alone with the engine's "
-                            "--as-of cutoff (per-account ACB: no s.47 "
+                            "--as-of cutoff on the project's date basis "
+                            "(settlement date unless tax_date = "
+                            "\"trade\"; per-account ACB: no s.47 "
                             "blend across taxable accounts; pre-wash, "
                             "pre-ticker.map)")
     p_pos.add_argument("--negative", action="store_true",

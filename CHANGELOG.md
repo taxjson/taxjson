@@ -1724,6 +1724,52 @@
   and at its own premium, and a buy-back of a grant lot is a loss of
   exactly the amount paid even when other lots were written at other
   premiums — both move amounts between years, never the total.
+- **check-pii closes five gaps.** Ad-hoc mode matches file names
+  relative to the scanned argument (a home directory named after its
+  owner no longer fails every scan) and hides each matching path
+  component; every file that is not a known binary type is scanned as
+  text and fails closed on NUL bytes whatever its extension (a UTF-16
+  `.tsv` or `.log`); an exempt synthetic token no longer hides a real
+  id, account number or e-mail on the same line or in the file path; a
+  configured `TAXJSON_PII_DENYLIST` that is missing, or a denylist that
+  cannot be read, fails instead of passing on the generic patterns; and
+  a spaced or dashed 3-3-3 number with a valid SIN check digit is a hit.
+- **T1135 cost includes denied superficial losses.** The cost walk now
+  adds the amount the engine denies under s.54 to the replacement
+  property's cost (s.53(1)(f)), as the ACB does, so the year-end and
+  maximum cost columns and the $100,000 threshold test no longer
+  understate after a superficial loss in the project year.
+- **TOBASE no longer pools a US option into a Montreal contract.** When
+  a share rule's root rename would move a US-listed option onto a
+  contract code the account also trades on the Montreal Exchange, the
+  US contract keeps its own symbol (different strike currency and
+  clearing house: not identical property) and the `.sum` DIAGNOSTICS
+  name it; before, the two ACBs were pooled and the gain changed
+  silently.
+- **`list --date` cuts on the project's date basis.** On a settle-basis
+  project (the Canadian default) the as-of positions now drop rows by
+  settlement date, like the gains year and `t1135`: a sale traded Dec 31
+  that settles in January is still held at Dec 31. The banner names the
+  basis; `taxjson-gains --as-of` follows `--tax-date`.
+- **Schedule 3 outputs name the slip capital-gain lines.** `sum`'s FOR
+  THE RETURN block, `form-export` and docs/filing.md now say that
+  capital gains on T3 (box 21, line 17600) and T5/T5013 (box 18, line
+  17400) slips are not in their rows and are entered from the slips.
+- **LSE, ASX and other non-North-American shares settle T+2.** The
+  settlement lag followed the US T+1 cycle for every currency but CAD, so
+  a GBP or AUD sale on the second-to-last trading day of the year landed
+  in that year; GBP/EUR/CHF now move to T+1 on 2027-10-11 and every
+  other non-North-American currency stays T+2.
+- **A spin-off booked at $0 keeps the checklist open.** The `elections`
+  step now needs attention while any taxable spin-off or merger is
+  booked at $0 (`fmv_per_share=0`, the "defer" value), and `taxjson
+  elect --set ... --hint fmv_per_share=0` says what it books.
+- **An option held past its expiry is named.** `taxjson run` warns (on
+  the console and in the `.sum` DIAGNOSTICS) for every option a taxable
+  account still holds after its expiry date — the export dropped the
+  expiry, assignment or exercise row. For a long contract the premium
+  paid is an unbooked loss of the expiry year; option-boundary covered
+  written contracts only.
 
 ## v0.16.0 (2026-09-25)
 

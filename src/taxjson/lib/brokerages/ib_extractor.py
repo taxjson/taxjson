@@ -182,7 +182,9 @@ def get_ib_settlement(date_str: str, asset_cat: str,
       (the clearing house's option-premium date).
     - Stocks/Warrants: T+1 since the cutover (US 2024-05-28; Canada
       2024-05-27, a TSX trading day the US spent closed for Memorial
-      Day), T+2 before, T+3 before 2017-09-05.
+      Day), T+2 before, T+3 before 2017-09-05. Other markets by
+      currency (lib/dates._T1_CUTOVER): LSE/EU T+2 until 2027-10-11,
+      the ASX and the rest T+2.
     - Everything else (equity and index options, bonds): T+1.
     Days are counted in the trade currency's settlement calendar (US:
     NYSE + Federal Reserve holidays; Canada: TSX + bank holidays), see
