@@ -355,13 +355,22 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
 
 # ---------------------------------------------------------------- income/gains
 
-def join_income_gains(gains_paths: List[Path], year: int) -> Dict[str, Dict[str, float]]:
+def join_income_gains(gains_paths: List[Path], year: int,
+                      overrides: Optional[Dict[str, Optional[str]]] = None
+                      ) -> Dict[str, Dict[str, float]]:
     """Per-symbol dividend+PIL income and realized gain(loss) for `year`,
     from the pipeline's (already year-scoped) gains files. Defensively
-    re-filters by year so a hand-run full-history gains file also works."""
+    re-filters by year so a hand-run full-history gains file also works.
+
+    Phantom-basis dispositions (the pipeline's manual_reporting_required
+    rows — their 'tainted' key is popped there, so a 'tainted' test alone
+    never saw them: audit R1-199) are excluded from the gain column with
+    a warning naming them. With `overrides`, only T1135-scope (foreign)
+    symbols are named."""
     out: Dict[str, Dict[str, float]] = {}
     ystr = str(year)
     tainted_skipped = 0
+    manual_syms: List[str] = []
     for p in gains_paths:
         try:
             data = load_json(p)
@@ -390,11 +399,23 @@ def join_income_gains(gains_paths: List[Path], year: int) -> Dict[str, Dict[str,
                     tainted_skipped += 1
                     continue
                 rec["gain"] += float(e.get("gain") or 0.0)
+        for e in data.get("manual_reporting_required") or []:
+            date = e.get("date_settle") or e.get("date") or ""
+            symbol = e.get("symbol") or ""
+            if not str(date).startswith(ystr) or not symbol:
+                continue
+            if (overrides is not None
+                    and classify_country(symbol, overrides) is None):
+                continue            # domestic: not a T1135 property
+            tainted_skipped += 1
+            manual_syms.append(symbol)
     if tainted_skipped:
+        _named = (f" ({', '.join(sorted(set(manual_syms)))})"
+                  if manual_syms else "")
         print(f"warning: {tainted_skipped} tainted disposition(s) with "
-              f"phantom cost basis EXCLUDED from the T1135 gain(loss) "
-              f"column — resolve the missing history and re-run "
-              f"(matches form-export/carryover).", file=sys.stderr)
+              f"phantom cost basis{_named} EXCLUDED from the T1135 "
+              f"gain(loss) column — resolve the missing history and "
+              f"re-run (matches form-export/carryover).", file=sys.stderr)
     return out
 
 
@@ -407,7 +428,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  detailed_threshold: float = DETAILED_THRESHOLD) -> Dict[str, Any]:
     txs = load_transactions(base_paths)
     walk = walk_costs(txs, year, overrides)
-    inc = join_income_gains(gains_paths, year)
+    inc = join_income_gains(gains_paths, year, overrides)
 
     rows = []
     for symbol in sorted(walk["per_symbol"]):

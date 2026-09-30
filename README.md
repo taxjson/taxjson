@@ -758,9 +758,13 @@ FILE` writes importable rows, `--json` the raw report.
   denial, noted per row (the denied amount goes onto the replacement
   property's ACB; a registered-account denial is noted as permanent).
 
-Both read the wash-adjusted gains (the allowed numbers a return reports) and
-**skip tainted dispositions with a warning** — phantom-basis rows are routed
-to `manual_reporting_required` and must be resolved, not filed.
+Both read the wash-adjusted gains (the allowed numbers a return reports).
+**Phantom-basis (tainted) dispositions are not in the rows or totals** — their
+cost is unknown — but they are never dropped silently: a stderr warning names
+each one with its proceeds, the text report ends with a **MANUAL REPORTING
+REQUIRED** section, the CSV carries them as `MANUAL` rows (blank cost and gain),
+the JSON as `manual_reporting_required`, and `taxjson checklist` keeps the
+form-export step open until they are reported by hand.
 
 **`taxjson reconcile-slips SLIP.csv`** — diffs the broker's official slips
 (CRA **T5008**, IRS **1099-B**) against the computed dispositions, per

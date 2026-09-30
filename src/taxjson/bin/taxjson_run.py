@@ -5611,8 +5611,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
         # files).
         print(f"taxjson sum: warning: {tainted_routed} tainted "
               f"disposition(s) were routed to manual reporting — "
-              f"these totals EXCLUDE them (see the account .sum's "
-              f"MANUAL REPORTING section; report them by hand).",
+              f"these totals EXCLUDE them (`taxjson form-export` "
+              f"lists them in its MANUAL REPORTING section; report "
+              f"them by hand).",
               file=sys.stderr)
     # Scope: unlike the filing commands (carryover/t1135/form-export,
     # taxable-only by law), this summary rolls up EVERY account — say so

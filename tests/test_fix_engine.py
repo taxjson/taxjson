@@ -425,5 +425,102 @@ class TestDistributionsSizedWithPhantoms(unittest.TestCase):
                              for t in doc["transactions"]))
 
 
+class TestManualRowsReachFormExport(unittest.TestCase):
+    """R1-199: phantom-basis dispositions live in the pipeline's
+    manual_reporting_required section (their 'tainted' key popped, gain
+    and cost stripped), so form-export's tainted counter never fired and
+    they vanished from Schedule 3 / 8949 / TXF with no warning."""
+
+    def _file(self, td, country='ca'):
+        sfx, cur = ('TO', 'CAD') if country == 'ca' else ('US', 'USD')
+        clean = {"date": "2025-05-02", "date_settle": "2025-05-05",
+                 "symbol": f"OKK.{sfx}", "qty": -10, "proceeds": 120.0,
+                 "cost": 100.0, "gain": 20.0, "raw_gain": 20.0,
+                 "disallowed_amount": 0.0, "days_held": 30,
+                 "term": "SHORT_TERM" if country == 'us' else None,
+                 "direction": "LONG", "commission": 0.0, "fee": 0.0,
+                 "account": "margin", "is_option": False, "currency": cur}
+        manual = {"date": "2025-06-02", "date_settle": "2025-06-03",
+                  "symbol": f"PHX.{sfx}", "qty": -20, "proceeds": 500.0,
+                  "raw_gain": 500.0, "days_held": 0, "direction": "LONG",
+                  "account": "margin", "currency": cur}
+        p = Path(td) / "margin_gains_wash.json"
+        p.write_text(json.dumps({"transactions": [clean],
+                                 "manual_reporting_required": [manual]}))
+        return p
+
+    def _main(self, *argv):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_form_export import main
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main(list(argv))
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_schedule3_lists_manual_rows_and_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = self._file(td)
+            csvp = Path(td) / "s3.csv"
+            rc, out, err = self._main("--form", "schedule3", "--year",
+                                      "2025", "--csv", str(csvp), str(p))
+            csv_text = csvp.read_text()
+            rc2, jout, _ = self._main("--form", "schedule3", "--year",
+                                      "2025", "--json", str(p))
+        self.assertEqual(rc, 0)
+        self.assertIn("PHX.TO", err)
+        self.assertIn("MANUAL REPORTING", out)
+        self.assertIn("PHX.TO", out)
+        self.assertIn("MANUAL", csv_text)
+        self.assertIn("PHX.TO", csv_text)
+        rep = json.loads(jout)
+        self.assertEqual([r["symbol"] for r in rep["manual_reporting_required"]],
+                         ["PHX.TO"])
+        self.assertAlmostEqual(rep["manual_proceeds"], 500.0, places=2)
+        # The filing totals stay the ALLOWED numbers (sum/checklist tie out).
+        self.assertAlmostEqual(rep["totals"]["proceeds_all"], 120.0, places=2)
+
+    def test_8949_and_txf_warn(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = self._file(td, 'us')
+            rc, out, err = self._main("--form", "8949", "--year", "2025",
+                                      str(p))
+            self.assertIn("PHX.US", err)
+            self.assertIn("MANUAL REPORTING", out)
+            rc, out, err = self._main("--form", "txf", "--year", "2025",
+                                      str(p))
+            self.assertIn("PHX.US", err)
+
+    def test_t1135_warns_on_manual_rows(self):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_t1135 import join_income_gains
+        with tempfile.TemporaryDirectory() as td:
+            p = self._file(td, 'us')
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                join_income_gains([p], 2025)
+        self.assertIn("EXCLUDED", buf.getvalue())
+        self.assertIn("PHX.US", buf.getvalue())
+
+    def test_checklist_form_export_step_is_not_done_with_manual_rows(self):
+        import test_checklist as tc
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tc._project(root)
+            fe = {"form": "schedule3", "rows": [{}],
+                  "totals": {"proceeds_all": 100.0, "gain_all": 10.0},
+                  "manual_reporting_required": [{"symbol": "PHX.TO"}],
+                  "manual_proceeds": 500.0}
+            sm = {"accounts": [{"account": "margin", "realized": 10.0}],
+                  "filing": {"totals": {"proceeds": 100.0, "gain": 10.0}}}
+            ctx = tc._ctx(root, {"form-export": (0, json.dumps(fe), ""),
+                                 "sum": (0, json.dumps(sm), "")})
+            r = cl.d_form_export(ctx)
+        self.assertEqual(r.status, "attention")
+        self.assertIn("phantom-basis", r.detail)
+
+
 if __name__ == '__main__':
     unittest.main()

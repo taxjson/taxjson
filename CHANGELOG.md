@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Phantom-basis sales no longer vanish from `form-export`.** Sales
+  drawn on `phantoms.json` openings (cost unknown) were left out of the
+  Schedule 3 / Form 8949 / TXF output with no warning, and the checklist
+  marked the export complete. They are still not in the computed rows or
+  totals, but form-export now warns with each one's proceeds, lists them
+  in a MANUAL REPORTING section (MANUAL rows in the CSV), and the
+  checklist keeps the step open. `t1135` names them too.
 - **`distributions.map` counts `phantoms.json` shares.** The record-date
   balance was taken from the book without the phantom openings, so a
   position with pre-window history got too small an ACB adjustment (or
