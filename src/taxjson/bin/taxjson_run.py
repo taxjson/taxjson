@@ -3871,11 +3871,7 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             print(f"note: no native transaction file for account {acct!r}; "
                   f"skipping.", file=sys.stderr)
             continue
-        try:
-            data = json.loads(native.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {native}: {e}", file=sys.stderr)
-            continue
+        data = _load_json_or_die(native)
         for tx in data.get("transactions", []):
             if actions is not None and tx.get("action") not in actions:
                 continue
@@ -4380,10 +4376,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
         native = _native_tx_file(cache, acct)
         if native is None:
             continue
-        try:
-            data = json.loads(native.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+        data = _load_json_or_die(native)
         # Per-ACCOUNT running balance, rows in date order: the old
         # single cross-account dict, iterated in account-name order,
         # made "buy against a short = buy-to-close" depend on the
@@ -4517,11 +4510,7 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
     resolved = resolve_gains_files(cache, account or None)
     basis = gains_basis_label(resolved)
     for acct, path in resolved.items():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {path}: {e}", file=sys.stderr)
-            continue
+        data = _load_json_or_die(path)
         found = True
         _settle = _settle_basis(root, data)
         for e in data.get("transactions", []):
@@ -4642,12 +4631,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     agg: Dict[str, Dict[str, float]] = {}
     tainted_skipped = 0
     for acct, f in resolved.items():
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {f}: {e}",
-                  file=sys.stderr)
-            continue
+        data = _load_json_or_die(f)
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
         # tainted too — counted, never silent (audit S040-15 sibling).
@@ -4778,12 +4762,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
     grp_gain = {"taxable": 0.0, "sheltered": 0.0}
     shel_accts = set()
     for _acct, f in resolved.items():
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {f}: {e}",
-                  file=sys.stderr)
-            continue
+        data = _load_json_or_die(f)
         _settle = _settle_basis(root, data)
         # Pipeline files ROUTE phantom-basis rows out of transactions[]
         # into manual_reporting_required: count them too, or the
@@ -4957,11 +4936,7 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions):
         native = _native_tx_file(cache, acct)
         if native is None:
             continue
-        try:
-            data = json.loads(native.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {native}: {e}", file=sys.stderr)
-            continue
+        data = _load_json_or_die(native)
         for tx in data.get("transactions", []):
             if actions is not None and tx.get("action") not in actions:
                 continue
@@ -4985,6 +4960,19 @@ def _account_group_of(root: Path) -> Dict[str, str]:
         if t in ("taxable", "sheltered"):
             out[name] = t
     return out
+
+
+def _load_json_or_die(path: Path) -> Any:
+    """Read a work/ artifact a query view needs, or stop naming it. The
+    views used to warn and skip the file, then print a partial report —
+    a smaller total, a missing account, 'No findings — clean scan.' —
+    with exit 0 (audit S045-01, S042-05)."""
+    import json as _json
+    try:
+        return _json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        _die(f"could not read {path}: {e} — rerun `taxjson run` (this "
+             f"view would otherwise leave that file's rows out).")
 
 
 def _warn_bad_dates(bad: int) -> None:
@@ -5343,11 +5331,7 @@ def cmd_gains(args: argparse.Namespace) -> None:
             print(f"note: no native gains for account {acct!r} (e.g. crypto "
                   f"only has base-converted gains); skipping.", file=sys.stderr)
             continue
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {f}: {e}", file=sys.stderr)
-            continue
+        data = _load_json_or_die(f)
         _settle = _settle_basis(root, data)
         for g in data.get("transactions", []):
             if g.get("action") in _INCOME:
@@ -5551,10 +5535,9 @@ def cmd_scan(args: argparse.Namespace) -> None:
         f = cache / f"{name}_raw.json"
         if not f.exists():
             continue
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+        # A truncated raw book turned a real finding into 'No findings —
+        # clean scan.' with exit 0 (audit S042-05).
+        data = _load_json_or_die(f)
         for t in data.get("transactions", []):
             if t.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 div_syms.add(str(t.get("symbol") or "").upper())
@@ -7100,12 +7083,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
     by_sym: Dict[str, Dict[str, Any]] = {}
     year = None
     for acct, f in files.items():
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {f}: {e}",
-                  file=sys.stderr)
-            continue
+        data = _load_json_or_die(f)
         year = year or (data.get("summary") or {}).get("year")
         for h in (data.get("inventory") or []):
             sym = str(h.get("symbol") or "")
@@ -8089,11 +8067,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if as_of:
             data = tmp_docs[acct]
         else:
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
-                print(f"taxjson: warning: could not read {p}: {e}", file=sys.stderr)
-                continue
+            data = _load_json_or_die(p)
         year = year or (data.get("summary") or {}).get("year")
         inv = sorted((data.get("inventory") or []),
                      key=lambda r: str(r.get("symbol") or ""))
@@ -8168,8 +8142,15 @@ def _soft_config(root: Path) -> Dict[str, Any]:
     if cfg_path.exists() and tomllib is not None:
         try:
             cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return {}
+        except Exception as e:
+            # Soft about a MISSING config only. An existing file that
+            # does not parse is a user error to fix, not a reason to
+            # guess: the {} fallback converted a USD-base project's fees
+            # to CAD at an invented 1.35, dropped fees-sum's sibling
+            # guard, and made the radar treat every registered book as
+            # taxable (audit S049-00, S048-13).
+            _die(f"{cfg_path} is not valid TOML ({e}) — fix it before "
+                 f"running this command.")
         # Soft about a MISSING or unreadable config, never about an
         # account the filing commands would silently drop (R1-268).
         _refuse_bad_account_types(cfg)
@@ -8231,11 +8212,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     rows = []
     year = None
     for acct, f in files:
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"taxjson: warning: could not read {f}: {e}", file=sys.stderr)
-            continue
+        data = _load_json_or_die(f)
         year = year or (data.get("summary") or {}).get("year")
         for t in data.get("transactions", []):
             if t.get("is_wash_sale"):

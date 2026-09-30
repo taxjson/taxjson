@@ -269,5 +269,51 @@ class TestWinnersScope(unittest.TestCase):
         self.assertIn("1 tainted", r.stderr)
 
 
+class TestUnreadableInputsAreErrors(unittest.TestCase):
+    """S045-01 / S042-05 / S049-00: a view never answers from part of
+    the books with exit 0."""
+
+    def _proj(self, tmp):
+        root = _window_project(tmp)
+        _write(root, "rrsp_gains.json", [
+            {"date": "2026-05-01", "date_settle": "2026-05-02",
+             "symbol": "BBB.TO", "qty": 10, "proceeds": 2000.0,
+             "cost": 1000.0, "gain": 1000.0, "currency": "CAD"}],
+            summary={"year": "2026", "tax_date_basis": "settle"},
+            inventory=[{"symbol": "BBB.TO", "qty": 5, "total_cost": 500.0}])
+        return root
+
+    def test_truncated_gains_file_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d)
+            (root / "work" / "rrsp_gains.json").write_text('{"transactions": [')
+            for cmd in (["winners"], ["ccd-sum"], ["leaps-sum"], ["list"],
+                        ["shares"], ["wash-sales"]):
+                r = _runsub(root, *cmd)
+                self.assertNotEqual(r.returncode, 0, (cmd, r.stdout))
+                self.assertIn("rrsp_gains.json", r.stderr, cmd)
+
+    def test_truncated_raw_book_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d)
+            (root / "work" / "margin_raw.json").write_text('{"transac')
+            (root / "reports").mkdir()
+            (root / "reports" / "margin_holdings.toml").write_text(
+                '[[holding]]\nsymbol = "AAA.TO"\nquantity = 10\n')
+            for cmd in (["leaps"], ["scan"], ["divs-sum"], ["events"]):
+                r = _runsub(root, *cmd)
+                self.assertNotEqual(r.returncode, 0, (cmd, r.stdout))
+                self.assertIn("margin_raw.json", r.stderr, cmd)
+                self.assertNotIn("clean scan", r.stdout, cmd)
+
+    def test_unreadable_config_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d)
+            (root / "taxjson.toml").write_text(_TOML + "oops = = 1\n")
+            r = _runsub(root, "fees-sum")
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn("taxjson.toml", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

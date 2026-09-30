@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Query views stop on an unreadable file.** `list`, `shares`, `winners`,
+  `wash-sales`, `ccd-sum`, `leaps`, `gains`, the transaction views and the
+  -sum roll-ups warned about a truncated work/ file and printed a partial
+  report with exit 0 (`winners` moved by 39k, `scan` said "clean scan");
+  they now name the file and exit nonzero (audit S045-01, S042-05).
+- **An unparseable `taxjson.toml` is an error in every query command.**
+  It was read as an empty config: `fees-sum` converted a USD-base
+  project's fees to CAD at an invented 1.35 and dropped its sibling-account
+  guard, and the radar treated registered books as taxable (audit S049-00).
 - **`divs-sum` and `winners` separate registered accounts.** Both summed
   RRSP/TFSA/LIRA/RESP amounts into the headline (the 2025 `winners` total
   was 2.24x the Schedule 3 gain, and the USD `divs-sum` 2.25x the slips);
