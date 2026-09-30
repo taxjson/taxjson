@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **An IB/RBC-style assignment keeps its own premium when a Webull-style
+  assignment on the same stock comes later.** The option premium of a
+  plain-convention assignment (stock leg booked as an ordinary buy/sell)
+  was held back for ANY later marked `ASSIGN` stock leg on that stock in
+  the account, even a year later, and moved to that year. A marked leg
+  now reserves only the premium of its own option leg (same account and
+  underlying, within 7 days).
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is
