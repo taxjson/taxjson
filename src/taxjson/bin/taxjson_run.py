@@ -1072,6 +1072,100 @@ def _sheltered_expected(root: Path) -> bool:
                for n, c in _acfg.items())
 
 
+def _crypto_broker_files(root: Path, cfg: Dict[str, Any]
+                         ) -> Dict[str, List[Tuple[str, Path]]]:
+    """{crypto account: [(broker, csv)]} — the raw exchange exports the
+    stablecoin pool of `taxjson crypto-sends` is rebuilt from."""
+    from taxjson.lib.crypto_sends import crypto_accounts
+    out: Dict[str, List[Tuple[str, Path]]] = {}
+    for acct in crypto_accounts(cfg):
+        d = root / "inputs" / acct
+        if d.is_dir():
+            out[acct] = [(b, p) for b, ps in group_inputs(d).items()
+                         for p in ps]
+    return out
+
+
+def _is_us(cfg: Dict[str, Any]) -> bool:
+    return _normalize_country(
+        (cfg.get("settings") or {}).get("country", "canada")) in ("us",
+                                                                 "usa")
+
+
+def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
+                     ) -> Tuple[str, List[Tuple[str, str]]]:
+    """(Re)write inputs/<acct>/crypto_sends.tt from the report. Returns
+    (write status, duplicate hand-written lines). Raises ValueError when
+    a gift/payment cannot be priced (nothing is written then)."""
+    from taxjson.lib import crypto_sends as CS
+    adoc = report["accounts"][acct]
+    entries, unpriced = CS.tt_entries(adoc)
+    if unpriced:
+        raise ValueError(
+            "no fair value for " + ", ".join(e["id"] for e in unpriced)
+            + " (the price lookup failed or TAXJSON_OFFLINE is set and "
+              "the price is not cached) — re-run online, or give the "
+              f"value per coin in {report['base_currency']}: `taxjson "
+              f"crypto-sends {acct} --set ID=gift|payment --price P`. "
+              f"crypto_sends.tt was not changed.")
+    status = CS.write_tt(Path(adoc["tt_file"]),
+                         CS.render_tt(acct, entries))
+    return status, CS.duplicate_lines(root / "inputs" / acct, entries)
+
+
+def _dup_warning(acct: str, dups: List[Tuple[str, str]]) -> List[str]:
+    return [f"inputs/{acct}/{f} already sells what {sid} sells (same date, "
+            f"coin and quantity) — with crypto_sends.tt that disposition "
+            f"is counted twice; delete the hand-written line (the "
+            f"generated file now carries it)." for f, sid in dups]
+
+
+def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
+    """`taxjson run` hook for a crypto account, right after the parse:
+    prompt for undecided sends at a TTY (else one note line), then
+    refresh the generated crypto_sends.tt from the saved decisions."""
+    from taxjson.lib import crypto_sends as CS
+    cfg = _soft_config(root)
+    cache = root / "work"
+    # Another crypto account not parsed yet (first run of a
+    # multi-account project): its arrivals are unknown, so a send to it
+    # would look like a gift. Don't ask until its sidecar exists.
+    files = _crypto_broker_files(root, cfg)
+    unparsed = [a for a, fs in files.items() if a != name and any(
+        not (cache / f"{a}_{b}_transfers.json").exists()
+        for b, _p in fs if b in ("kraken", "coinbase"))]
+    try:
+        report = CS.build_report(root, cfg, files, CS.yahoo_usd_price(root),
+                                 want=name)
+        adoc = report["accounts"].get(name)
+        if adoc is None:
+            return
+        if adoc["undecided"] and interactive and not unparsed:
+            if CS.prompt_undecided(adoc["sends"], Path(adoc["manifest"]),
+                                   allow_gift=not _is_us(cfg)):
+                report = CS.build_report(root, cfg, files,
+                                         CS.yahoo_usd_price(root),
+                                         want=name)
+                adoc = report["accounts"][name]
+        if adoc["undecided"] and interactive and unparsed:
+            print(f"  note: not asking about crypto sends yet — account(s) "
+                  f"{', '.join(unparsed)} have not been parsed, so a send "
+                  f"to them would look unmatched.", file=sys.stderr)
+        if adoc["undecided"]:
+            print(f"  note: {adoc['undecided']} crypto send(s) not yet "
+                  f"classified as self / gift / payment — `taxjson "
+                  f"crypto-sends {name}` lists them (a gift or payment is "
+                  f"a disposition at fair value).", file=sys.stderr)
+        status, dups = _crypto_sends_tt(root, name, report)
+        if status in ("written", "removed"):
+            print(f"  crypto-sends: inputs/{name}/{CS.TT_NAME} {status}")
+        for w in _dup_warning(name, dups):
+            print(f"taxjson: WARNING: {w}", file=sys.stderr)
+    except ValueError as e:
+        print(f"taxjson: WARNING: {name}: crypto sends: {e}",
+              file=sys.stderr)
+
+
 def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   inputs_dir: Path, cache: Path, reports_dir: Path,
                   rates: Path, ticker_map: Optional[Path],
@@ -1273,6 +1367,16 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   f"Check the file's header/format (or its name: cb_/kr_/"
                   f"coinbase/kraken route it to a crypto parser); "
                   f"`run --strict` refuses this.", file=sys.stderr)
+
+    # 1b. crypto sends: an outgoing transfer that never arrived on
+    # another exchange is a gift, a payment, or a move to your own
+    # wallet — only the owner knows. Ask at a TTY, then (re)generate
+    # inputs/<acct>/crypto_sends.tt BEFORE the .tt stage below reads
+    # the account's .tt files, so the decisions book in this run.
+    if is_crypto and not include_transfers:
+        _stage_crypto_sends(inputs_dir.parent, name,
+                            interactive=not (no_input
+                                             or not sys.stdin.isatty()))
 
     # 2. corp-actions per equity broker. taxjson-corp-actions requires
     # --manifest when multiple CSVs are passed, so always provide one.
@@ -3781,6 +3885,198 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             fmt_money(r["value"]), r["currency"], r["where"]]))
     _print_report_table(out_lines)
     print(f"\n{len(rows)} transfer row(s).")
+
+
+def cmd_crypto_sends(args: argparse.Namespace) -> None:
+    """`taxjson crypto-sends`: every outgoing crypto transfer that did
+    not arrive on another of your exchanges, with your decision (self /
+    gift / payment), its fair value and the ready .tt line; --set
+    records a decision, --write regenerates inputs/<acct>/crypto_sends.tt."""
+    from taxjson.lib import crypto_sends as CS
+    root = Path(args.dir).resolve()
+    cfg = load_config(root)
+    accts = CS.crypto_accounts(cfg)
+    if not accts:
+        _die("no crypto account in taxjson.toml (an [accounts.X] with "
+             "`crypto = true`).")
+    acct = (args.account or "").strip() or None
+    if acct and acct not in accts:
+        _die(f"{acct!r} is not a crypto account — crypto accounts: "
+             f"{', '.join(accts)}.")
+    sets = list(getattr(args, "set", None) or [])
+    if (sets or args.write) and not acct:
+        if len(accts) != 1:
+            _die(f"--set/--write need an account: `taxjson crypto-sends "
+                 f"<{'|'.join(accts)}> --set ID=gift`.")
+        acct = accts[0]
+    if (args.note is not None or args.price is not None) and not sets:
+        _die("--note/--price only apply with --set ID=DECISION.")
+    if args.json and (sets or args.write):
+        _die("--json applies to the listing only.")
+    cache = root / "work"
+    if not any((cache / f"{a}_{b}_transfers.json").exists()
+               for a in accts for b in ("kraken", "coinbase")):
+        _die("no crypto transfer evidence in work/ — run `taxjson run` "
+             "first (the parse keeps withdrawals/sends in "
+             "work/<acct>_<exchange>_transfers.json).")
+    us = _is_us(cfg)
+    try:
+        if sets:
+            light = CS.build_report(root, cfg, None, None, want=acct,
+                                    with_pool=False)
+            by_id = {s["id"]: s for s in light["accounts"][acct]["sends"]}
+            for item in sets:
+                if "=" not in item:
+                    _die(f"--set expects ID=DECISION, got {item!r}.")
+                sid, dec = (x.strip() for x in item.rsplit("=", 1))
+                dec = dec.lower()
+                if dec not in CS.DECISIONS:
+                    _die(f"decision {dec!r} for {sid} — expected one of "
+                         f"{', '.join(CS.DECISIONS)}.")
+                if dec == "gift" and us:
+                    _die("US project: a gift is not a sale for the donor "
+                         "(the recipient takes over your basis) — record "
+                         "it as `self` (no tax event) or, if you were "
+                         "paid, `payment`.")
+                if sid not in by_id:
+                    _die(f"no unmatched send {sid!r} in account {acct!r} — "
+                         f"`taxjson crypto-sends {acct}` lists the ids.")
+                if args.price is not None and not (args.price > 0):
+                    _die("--price must be a positive value per coin.")
+                CS.record_decision(Path(light["accounts"][acct]["manifest"]),
+                                   sid, dec, note=args.note,
+                                   price=args.price,
+                                   summary=by_id[sid]["summary"])
+                print(f"saved: {sid} = {dec}  "
+                      f"(inputs/{acct}/{CS.MANIFEST_NAME})")
+            if not args.write:
+                print(f"Regenerate the .tt lines: `taxjson crypto-sends "
+                      f"{acct} --write` (or just `taxjson run`).")
+                return
+        report = CS.build_report(root, cfg, _crypto_broker_files(root, cfg),
+                                 CS.yahoo_usd_price(root), want=acct)
+        if args.write:
+            status, dups = _crypto_sends_tt(root, acct, report)
+            n = len(CS.tt_entries(report["accounts"][acct])[0])
+            print(f"inputs/{acct}/{CS.TT_NAME}: {status} "
+                  f"({n} BUYSELL line(s)); `taxjson run` books it.")
+            for w in _dup_warning(acct, dups):
+                print(f"taxjson: WARNING: {w}", file=sys.stderr)
+            return
+    except ValueError as e:
+        _die(str(e))
+    if args.json:
+        _json_out(report)
+        return
+    _print_crypto_sends(root, report)
+
+
+def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
+    from taxjson.lib import crypto_sends as CS
+    base = report["base_currency"]
+    print("CRYPTO SENDS — outgoing transfers that did not arrive on "
+          "another of your exchanges. A move to your own wallet is not a "
+          "sale (self); a gift or a payment is a disposition at fair "
+          "market value.")
+    fx_by_year: Dict[str, float] = {}
+    for acct, adoc in report["accounts"].items():
+        sends = adoc["sends"]
+        print(f"\n== {acct}: {len(sends)} unmatched send(s), "
+              f"{adoc['undecided']} undecided; {adoc['matched']} matched "
+              f"to an arrival (self-custody moves, `taxjson transfers`)")
+        for e in sends:
+            dec = (e["decision"] or "PENDING").upper()
+            ref = f"   ref {e['ref']}" if e["ref"] else ""
+            print(f"\n{e['id']}   {dec}{ref}")
+            fee = ("" if not e["fee_booked"] else
+                   f"  (plus a {CS.fmt_qty(e['fee_booked'])} {e['symbol']} "
+                   f"withdrawal fee — cash, not a sale)" if e["stable"] else
+                   f"  ({CS.fmt_qty(e['fee_booked'])} {e['symbol']} network "
+                   f"fee already booked from the ledger)")
+            print(f"  {e['summary']}{fee}")
+            fv = e["fair_value"]
+            if fv:
+                print(f"  fair value {CS.fmt_price(fv['price'])} {base}/"
+                      f"{e['symbol']} = {fv['value']:,.2f} {base}  "
+                      f"[{fv['source']}]")
+            else:
+                print(f"  fair value: UNPRICED (lookup failed or offline) "
+                      f"— `--set {e['id']}=... --price P` gives it")
+            if e["stable"]:
+                fx = e["fx"]
+                if base == "USD":
+                    print("  stablecoin = US-dollar cash: no sale line and "
+                          "no currency gain in a USD project")
+                elif fx:
+                    tag = ("FX gain" if e["decision"] in CS.DISPOSING
+                           else "FX gain if gift/payment")
+                    print(f"  stablecoin = US-dollar cash in the books: no "
+                          f"sale line. {tag}: value {fx['value']:,.2f} - "
+                          f"ACB {fx['acb']:,.2f} (USD pool average cost) = "
+                          f"{fx['gain']:+,.2f} {base}")
+                    if fx.get("superficial"):
+                        print("  that loss is likely SUPERFICIAL (s.54): "
+                              "USD/stablecoins acquired within 30 days "
+                              "and still held — denied")
+                    if fx.get("overdrawn"):
+                        print("  (the pool was short: the ledgers do not "
+                              "show where part of this USD came from)")
+                    if e["decision"] in CS.DISPOSING:
+                        y = e["date"][:4]
+                        allowed = 0.0 if (fx["gain"] < 0 and
+                                          fx.get("superficial")) \
+                            else fx["gain"]
+                        fx_by_year[y] = fx_by_year.get(y, 0.0) + allowed
+                else:
+                    print("  stablecoin = US-dollar cash in the books: no "
+                          "sale line (FX gain unavailable: no USD rate)")
+            elif e["tt"]:
+                lead = ".tt" if e["decision"] in CS.DISPOSING else \
+                    ".tt if gift/payment"
+                print(f"  {lead}: {e['tt']}")
+            if e["note"]:
+                print(f"  note: {e['note']}")
+        entries, unpriced = CS.tt_entries(adoc)
+        tt = Path(adoc["tt_file"])
+        want = CS.render_tt(acct, entries) if not unpriced else None
+        have = tt.read_text(encoding="utf-8") if tt.is_file() else None
+        print()
+        if unpriced:
+            print(f"crypto_sends.tt: cannot be written — no fair value for "
+                  f"{', '.join(e['id'] for e in unpriced)}.")
+        elif want == have:
+            print(f"inputs/{acct}/{CS.TT_NAME}: up to date "
+                  f"({len(entries)} line(s))." if have else
+                  "No gift/payment needs a sale line.")
+        else:
+            print(f"inputs/{acct}/{CS.TT_NAME}: OUT OF DATE — run "
+                  f"`taxjson crypto-sends {acct} --write` (or `taxjson "
+                  f"run`).")
+        for w in _dup_warning(acct, CS.duplicate_lines(
+                root / "inputs" / acct, entries)):
+            print(f"WARNING: {w}")
+        for sid in adoc["orphans"]:
+            print(f"note: sends.json has a decision for {sid}, which is "
+                  f"no longer an unmatched send (inputs changed?) — it is "
+                  f"ignored.")
+        if adoc["undecided"]:
+            print(f"Decide: taxjson crypto-sends {acct} --set "
+                  f"ID=self|gift|payment [--note TEXT]   (then --write)")
+    if fx_by_year:
+        print("\nStablecoin gifts/payments, currency gain (superficial "
+              "losses excluded): " + "; ".join(
+                  f"{y} {g:+,.2f} {base}" for y, g in sorted(
+                      fx_by_year.items())))
+        print("  Stablecoins are US-dollar cash in these books, so this is "
+              "a foreign-currency gain: ITA s.39(1.1) taxes only the "
+              "year's NET currency gain beyond $200 — add it to "
+              "`taxjson fx-cash` for the year.")
+    pool = report.get("pool")
+    if pool and pool.get("overdrafts"):
+        print(f"\nnote: the USD/stablecoin pool went short "
+              f"{pool['overdrafts']} time(s) — the ledgers do not show "
+              f"where that USD came from (an earlier year's export?); "
+              f"the shortfall is valued at the day's rate (no gain).")
 
 
 def cmd_dividends(args: argparse.Namespace) -> None:         # `divs` view
@@ -10317,6 +10613,32 @@ def main() -> None:
     p_xfer.add_argument("--json", action="store_true",
                         help="Emit JSON instead of text")
     p_xfer.set_defaults(func=cmd_transfers_view)
+
+    p_csend = sub.add_parser(
+        "crypto-sends",
+        help="Crypto withdrawals/sends that did not arrive on another of "
+             "your exchanges: decide self (own wallet) / gift / payment, "
+             "see the fair value and the .tt BUYSELL line; --write "
+             "generates inputs/<acct>/crypto_sends.tt. Stablecoins get "
+             "the currency-gain calculation instead of a sale line.")
+    p_csend.add_argument("account", nargs="?",
+                         help="Crypto account (default: all)")
+    p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
+                         help="Record a decision (self | gift | payment) "
+                              "for a send id from the listing; "
+                              "repeatable")
+    p_csend.add_argument("--note", metavar="TEXT",
+                         help="With --set: a note kept with the decision "
+                              "and written into crypto_sends.tt")
+    p_csend.add_argument("--price", type=float, metavar="P",
+                         help="With --set: fair value per coin in the base "
+                              "currency, when the price lookup fails")
+    p_csend.add_argument("--write", action="store_true",
+                         help="(Re)generate inputs/<acct>/crypto_sends.tt "
+                              "from the decisions (idempotent)")
+    p_csend.add_argument("--json", action="store_true",
+                         help="Emit JSON instead of text")
+    p_csend.set_defaults(func=cmd_crypto_sends)
 
     p_dil = sub.add_parser(
         "dil",

@@ -81,6 +81,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("elections", 2, "No unresolved merger or spin-off election",
      "taxjson elect --pending",
      "A deferred election leaves the account out of the run."),
+    ("crypto-sends", 2, "Crypto sends classified (own wallet, gift or payment)",
+     "taxjson crypto-sends",
+     "A crypto send that left your ownership is a disposition at fair value; only you know which sends did."),
     ("audit", 2, "Every disposition traced and tied",
      "taxjson audit",
      "The audit walks each sale from the broker row to the reported gain."),
@@ -140,6 +143,9 @@ US_STEPS: Dict[str, Any] = {
     "roc-entered": ("Nondividend distributions (1099-DIV box 3) entered before trusting any basis",
                     "ADJUST lines / distributions.map",
                     "Return of capital reduces basis; funds often reclassify after year end."),
+    "crypto-sends": ("Crypto sends classified (own wallet, gift or payment)",
+                     "taxjson crypto-sends",
+                     "Paying with crypto is a sale at fair value; a gift is not a sale for the donor."),
     "wash-reviewed": ("Every wash-sale disallowance reviewed", "taxjson wash-sales",
                       "A wash sale triggered by an IRA purchase is permanently disallowed."),
     "option-boundary": "US: written-option premiums are netted at the close (§1234) — no s.49 boundary",
@@ -173,6 +179,7 @@ US_STEPS: Dict[str, Any] = {
 # Steps that only concern TAXABLE accounts: n/a for a sheltered-only
 # project instead of blocked by artifacts that can never exist.
 TAXABLE_ONLY = {"inputs-frozen", "roc-entered", "missing-history", "audit",
+                "crypto-sends",
                 "wash-reviewed", "option-boundary", "handoff", "t5008", "t5-t3",
                 "foreign-tax", "form-export", "t1135", "carryover",
                 "fx-cash", "fees", "filed-lock", "lock-committed"}
@@ -506,6 +513,44 @@ def d_elections(ctx: Ctx) -> Result:
     return Result("elections", "attention", _last_line(out))
 
 
+def d_crypto_sends(ctx: Ctx) -> Result:
+    """Offline and fast: the sidecars + inputs/<acct>/sends.json + the
+    ids recorded in the generated crypto_sends.tt — no price lookups."""
+    from taxjson.lib import crypto_sends as cs
+    names = _accounts_of(ctx, "crypto")
+    if not names:
+        return Result("crypto-sends", "n/a", "no crypto account configured")
+    if not any((ctx.cache / f"{n}_{b}_transfers.json").is_file()
+               for n in names for b in ("kraken", "coinbase")):
+        return Result("crypto-sends", "blocked",
+                      "no crypto transfer evidence in work/ — run `taxjson run`")
+    try:
+        rep = cs.build_report(ctx.root, ctx.cfg, None, None, with_pool=False)
+    except ValueError as e:
+        return Result("crypto-sends", "attention", str(e))
+    undecided, stale, total = [], [], 0
+    for n, a in rep["accounts"].items():
+        total += len(a["sends"])
+        if a["undecided"]:
+            undecided.append(f"{n}: {a['undecided']}")
+        want = {e["id"] for e in a["sends"]
+                if e["decision"] in cs.DISPOSING and not e["stable"]}
+        have = cs.tt_ids(Path(a["tt_file"])) or set()
+        if want != have:
+            stale.append(n)
+    if undecided:
+        return Result("crypto-sends", "attention",
+                      f"undecided send(s) — {', '.join(undecided)}; "
+                      f"decide with `taxjson crypto-sends ACCOUNT --set ID=...`")
+    if stale:
+        return Result("crypto-sends", "attention",
+                      f"crypto_sends.tt out of date for {', '.join(stale)} — "
+                      f"`taxjson crypto-sends ACCOUNT --write`")
+    return Result("crypto-sends", "done",
+                  f"{total} unmatched send(s), all decided" if total
+                  else "every send arrived on another exchange")
+
+
 def d_audit(ctx: Ctx) -> Result:
     code, out, err = ctx.sub("audit")
     if not out:
@@ -820,6 +865,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "sanity": d_sanity,
     "missing-history": d_missing_history,
     "elections": d_elections,
+    "crypto-sends": d_crypto_sends,
     "audit": d_audit,
     "wash-reviewed": d_wash_reviewed,
     "option-boundary": d_option_boundary,

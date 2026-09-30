@@ -108,6 +108,18 @@
   "Series FX…CAD not found" answer marks a series now; the mark carries
   its date and is re-checked after 7 days; cached Bank observations keep
   their source; the note names the answer and the source used.
+- **`taxjson crypto-sends`: is a crypto send a gift, a payment, or your
+  own wallet?** Every withdrawal/send that did not arrive on another of
+  your exchanges is listed with its fair value (the exchange's spot
+  price, or the Yahoo daily close times the Bank of Canada rate) and the
+  ready `.tt` sale line. Record the answer with `--set ID=self|gift|payment
+  [--note]` (kept in `inputs/<acct>/sends.json`); `--write` generates
+  `inputs/<acct>/crypto_sends.tt` with one BUYSELL per gift or payment.
+  `taxjson run` asks at a terminal and refreshes the file; the checklist
+  has a "Crypto sends classified" step. Stablecoin gifts get the currency
+  gain against the USD pool's average cost instead of a sale line. If you
+  already declared a send by hand (a `tao_payment.tt`), delete that file
+  when you adopt `crypto_sends.tt` — the command warns while both exist.
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is
