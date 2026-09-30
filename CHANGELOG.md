@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **audit fails when a configured account has no books** (it printed
+  "✓" over the others and exited 0, and the checklist marked every
+  disposition tied) (audit S047-16).
+- **The checklist's run-clean step flags unblended books.** With two or
+  more taxable equity accounts and no blended pass (`run --account` on
+  each, or a run stopped at pending elections) the filing figures are
+  per-account ACB; run-clean now says so instead of "done", and every
+  command that reports the run state carries it (audit S004-07).
 - **LEAPS views: long positions only, through ticker.map, with the
   registered accounts split out.** `leaps` / `leaps-sum` no longer count
   the write and buy-back of a contract that qualified through a long buy

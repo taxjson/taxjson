@@ -477,6 +477,23 @@ def d_run_clean(ctx: Ctx) -> Result:
         problems.append(f"no reports/<account>.sum for {', '.join(unreported)} "
                         f"— the last run did not finish them (run `taxjson run` "
                         f"with no --account)")
+    # Two or more taxable equity accounts are filed on ONE blended
+    # (s.47 ACB / cross-account wash) pass. `run --account` and a run
+    # stopped at pending elections skip it, and with no wash files at
+    # all every filing view read the per-account books as Schedule 3
+    # figures in silence (S004-07).
+    equity = _accounts_of(ctx, "taxable")
+    if len(equity) >= 2:
+        unblended = [n for n in equity
+                     if (ctx.reports / f"{n}.sum").is_file()
+                     and not (ctx.cache / f"{n}_gains_wash.json").is_file()]
+        if unblended:
+            problems.append(
+                f"no blended (s.47) pass for {', '.join(unblended)} — "
+                f"the last run was per-account (`run --account`) or "
+                f"stopped at pending elections, so the filing figures "
+                f"are unblended per-account books (run `taxjson run` "
+                f"with no --account)")
     if empty_parse:
         problems.append(f"{', '.join(empty_parse)} parsed to 0 "
                         f"transactions (its rows are not in the books)")

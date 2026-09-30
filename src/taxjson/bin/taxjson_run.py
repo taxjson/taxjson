@@ -10923,6 +10923,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
     crypto_blend = country not in ("us", "usa") and len(crypto) >= 2
 
     _no_input = _accounts_skipped_for_no_inputs(root)
+    # Configured accounts (with inputs) the audit could not cover: the
+    # tie-out printed "✓" over the rest and exited 0, and the checklist
+    # marked every disposition traced (S047-16).
+    _uncovered: List[str] = []
 
     def _blended_invocation(names: List[str], *, is_crypto: bool) -> None:
         bases = [cache / f"{n}_base.json" for n in names
@@ -10930,6 +10934,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         missing = [n for n in names
                    if not (cache / f"{n}_base.json").exists()
                    and n not in _no_input]
+        _uncovered.extend(missing)
         if missing:
             print(f"taxjson audit: note: no books yet for "
                   f"{', '.join(missing)} — run `taxjson run` to include "
@@ -10981,6 +10986,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         base = cache / f"{n}_base.json"
         if not base.exists():
             if n not in _no_input:
+                _uncovered.append(n)
                 print(f"taxjson audit: note: no books yet for {n} — run "
                       f"`taxjson run` to include it.", file=sys.stderr)
             continue
@@ -11058,6 +11064,12 @@ def cmd_audit(args: argparse.Namespace) -> None:
                            for d in json_docs), 2),
                    "failed": any(d.get("failed") for d in json_docs)}
         _json_out(doc)
+    if _uncovered and not _acct:
+        print(f"taxjson audit: WARNING: not audited — no books for "
+              f"{', '.join(sorted(set(_uncovered)))}; their dispositions "
+              f"are not in the tie-out above. Run `taxjson run`.",
+              file=sys.stderr)
+        rc = max(rc, 1)
     if rc:
         raise SystemExit(rc)
 

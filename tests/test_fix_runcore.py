@@ -866,5 +866,56 @@ class TestLeapsViews(unittest.TestCase):
             self.assertAlmostEqual(doc["sheltered_gain"], 0.0)
 
 
+class TestAuditUncoveredAccount(unittest.TestCase):
+    """S047-16: audit noted an account with no books but exited 0, and
+    the checklist marked every disposition traced and tied."""
+
+    def test_missing_books_fail_the_audit(self):
+        cfg = _CONFIG + "\n[accounts.cash]\ntype = \"taxable\"\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, cfg)
+            (root / "inputs" / "cash").mkdir()
+            (root / "inputs" / "cash" / "q.csv").write_text(
+                _MARGIN_CSV.replace("XEI.TO", "XIU.TO"))
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            self.assertEqual(_run_cli(root, "audit").returncode, 0)
+            (root / "work" / "cash_base.json").unlink()
+            r = _run_cli(root, "audit")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not audited", r.stderr)
+        self.assertIn("cash", r.stderr)
+
+
+class TestUnblendedBooksAreNotRunClean(unittest.TestCase):
+    """S004-07: with the blended pass skipped (`run --account` on each
+    account) the checklist marked 'Full run' done and the filing views
+    served per-account ACB as Schedule 3 figures."""
+
+    def test_per_account_runs_leave_run_clean_attention(self):
+        from datetime import date
+        from taxjson.lib.checklist import Ctx, d_run_clean
+        import tomllib
+        cfg_text = _CONFIG + "\n[accounts.cash]\ntype = \"taxable\"\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, cfg_text)
+            (root / "inputs" / "cash").mkdir()
+            (root / "inputs" / "cash" / "q.csv").write_text(
+                _MARGIN_CSV.replace("55500001", "55500004"))
+            for a in ("margin", "cash"):
+                r = _run_cli(root, "run", "--no-input", "--account", a)
+                self.assertEqual(r.returncode, 0, r.stderr)
+            cfg = tomllib.loads(cfg_text)
+            res = d_run_clean(Ctx(root, cfg, 2025, date.today(),
+                                  lambda *a, **k: (0, "", "")))
+            self.assertEqual(res.status, "attention", res.detail)
+            self.assertIn("blended", res.detail)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            res = d_run_clean(Ctx(root, cfg, 2025, date.today(),
+                                  lambda *a, **k: (0, "", "")))
+            self.assertNotIn("blended", res.detail)
+
+
 if __name__ == "__main__":
     unittest.main()
