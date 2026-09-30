@@ -907,8 +907,13 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
 
     curs: Dict[str, set] = {}
     for t in txs:
-        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
-                                   "SPLIT"):
+        # SPLIT rows are not counted: they carry no money, and a .tt
+        # SPLIT is stamped CAD whatever the listing — a USD stock's
+        # split then looked like a mixed-currency pool and the holdings
+        # refresh was skipped with a misleading "rollover rename"
+        # message (R1-126). A rename's currency mix still shows through
+        # the trades on either side of it (followed via `renames`).
+        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER"):
             continue
         c, sym = t.get("currency"), t.get("symbol")
         if c and sym:
@@ -2458,9 +2463,12 @@ def cmd_run(args: argparse.Namespace) -> None:
         from taxjson.bin.taxjson_ticker_map import map_file_problems
         _tm_problems = map_file_problems(ticker_map)
         if _tm_problems:
-            _die(f"{len(_tm_problems)} malformed ticker.map line(s) — "
-                 f"each rule would be silently dropped, changing ACB "
-                 f"pools and gains:\n    "
+            _die(f"{len(_tm_problems)} ticker.map problem(s) — a "
+                 f"malformed line's rule would be silently dropped, and "
+                 f"contradictory rules (a cycle, two targets for one "
+                 f"symbol, a DISTINCT pair the renames pool) have no "
+                 f"single meaning; either changes ACB pools and gains:"
+                 f"\n    "
                  + "\n    ".join(_tm_problems)
                  + "\n  Fix the line (KEYWORD FROM TO, separated by "
                  "spaces; notes after `#`) or delete it.")
@@ -2468,6 +2476,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     # corrections for securities the currency->exchange suffix mislabels.
     sec_overrides = root / "ticker_extraction_overrides.txt"
     sec_overrides_arg = sec_overrides if sec_overrides.exists() else None
+    if sec_overrides_arg:
+        # Same up-front refusal as ticker.map (S053-04): a malformed
+        # line would drop its ticker fix and split an ACB pool.
+        from taxjson.bin.taxjson_brokerage import load_security_overrides
+        try:
+            load_security_overrides(sec_overrides)
+        except ValueError as e:
+            _die(str(e))
     # phantoms.json — optional project-wide list of (symbol, account) pairs
     # with missing pre-window history (from `find-missing-history
     # --gen-phantoms`). Auto-detected at the root like ticker.map; when present
@@ -3694,14 +3710,18 @@ def _discover_tx_accounts(cache: Path) -> List[str]:
     return sorted(names)
 
 
-def _tx_display_line(tx: dict) -> Optional[str]:
+def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     """Human-readable line for `taxjson transactions`. Money amounts (total,
     fee, dividend/tax/interest/adjust amount) are shown to 2 decimals; quantity
     and per-share price keep their significant digits (a 0.0375 dividend rate
     or a 0.25178314 crypto qty must not be rounded away). Mirrors the .tt field
     layout but is a DISPLAY formatter — distinct from tx_to_tt_line, which
     keeps full precision for round-trippable .tt output. Returns None for
-    actions with no representation."""
+    actions with no representation. `settle=True` writes the SETTLEMENT
+    date (a .tt line's single date on a settle-basis project): the
+    single-account view is round-trippable taxtext, and pasting its
+    trade-dated Dec-31 sale into next year's .tt dropped it from both
+    years (S002-03)."""
     money = fmt_money               # dollar amount → 2 decimals (shared)
 
     def sig(x):                         # qty / price → full precision
@@ -3716,6 +3736,8 @@ def _tx_display_line(tx: dict) -> Optional[str]:
 
     action = tx.get("action", "")
     date = tx.get("date", "")
+    if settle and tx.get("date_settle"):
+        date = tx["date_settle"]
     time = tx.get("time", "09:30:00")
     sym = tx.get("symbol", "")
     cur = tx.get("currency") or "CAD"
@@ -3937,13 +3959,20 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
     # all-accounts view prefixes each line with the account so the merged
     # chronological list stays legible.
     prefix = len(accounts) != 1
+    # The single-account (round-trippable) view writes each line's
+    # SETTLEMENT date on a settle-basis project — what a .tt line's one
+    # date means there (README "Importing manual cost basis").
+    _st = _soft_settings(root)
+    settle_dates = (not prefix and (_st.get("tax_date") or (
+        "trade" if _normalize_country(_st.get("country", "canada"))
+        in ("us", "usa") else "settle")) == "settle")
     skipped = 0
     out_lines = []
     buys: Dict[str, float] = {}
     sells: Dict[str, float] = {}
     divs: Dict[str, float] = {}
     for _d, _t, acct, tx in rows:
-        line = _tx_display_line(tx)
+        line = _tx_display_line(tx, settle=settle_dates)
         if line is None:
             skipped += 1
             continue
@@ -5040,12 +5069,11 @@ def cmd_fees(args: argparse.Namespace) -> None:
     entries = []
     for acct, tx in rows:
         if tx.get("action") == "FEE":
-            # Standalone fee rows (IB market-data fees, Questrade/RBC FCH,
-            # IB Commission Adjustments) follow the repo FEE convention:
-            # net_amount POSITIVE = charged, negative = refund/rebate —
-            # the sign every parser emits and fx-cash reads. The old flip
-            # (from before IB's sign was aligned) showed every charge as
-            # a rebate (audit R1-54/R1-269).
+            # Standalone fee rows (e.g. IB monthly/market-data fees) carry
+            # the amount in net_amount: POSITIVE = charged, the convention
+            # every parser (IB, Questrade, RBC, generic) and fx-cash use
+            # (a rebate is negative and nets out). The old flip showed
+            # every charge as a rebate (R1-124, R1-54, R1-269).
             fee = float(tx.get("net_amount") or 0.0)
         else:
             fee = _tx_fee(tx)
@@ -5638,13 +5666,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # ticker.map consolidations (GLOBAL + TOBASE + JOURNAL) and the
     # user's declared-distinct pairs (CDRs etc. — see DISTINCT).
     renames: Dict[str, str] = {}
+    raw_rules: Dict[str, str] = {}
     distinct_pairs: set = set()
     map_file = root / "ticker.map"
     if map_file.exists():
         try:
             from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                        merge_renames)
+                                                        merge_renames,
+                                                        raw_renames)
             _tmap = load_map_file(map_file)
+            raw_rules = raw_renames(_tmap, to_base=True)
             renames = merge_renames(_tmap, to_base=True)
             distinct_pairs = {frozenset(s.upper() for s in pair)
                               for pair in _tmap.distinct}
@@ -5740,15 +5771,18 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     "ACB pool; the radar can miss the pair)."))
 
     # MAP-UNUSED (note, not a finding): rules whose FROM symbol never
-    # occurs in any parsed source. ROOT-aware on purpose — a rule with
-    # no stock rows can still be live through OPTION trades (the
-    # underlying's root folds through it: BCE251121C00050000.US needs
-    # `TOBASE BCE.US BCE.TO`), and a bare from-symbol (`D056068`)
-    # matches with or without a currency suffix. A root-blind check
-    # once pruned ten live rules from a real map and split every
-    # affected option's identity class (2026-09-15).
+    # occurs in any parsed source — judged the way the ENGINE applies
+    # the map (taxjson_ticker_map.map_symbol): FROM must equal a symbol
+    # exactly, or an option's underlying (ROOT-aware on purpose — a
+    # rule with no stock rows is still live through OPTION trades:
+    # BCE251121C00050000.US needs `TOBASE BCE.US BCE.TO`; a root-blind
+    # check once pruned ten live rules from a real map, 2026-09-15).
+    # Chains count: a rule reached through another rule's target is
+    # live (R1-139). A suffix-less FROM (`GLOBAL QQOL QQNW`) matches
+    # only a suffix-less symbol — the engine never applies it to
+    # QQOL.US, so scan must not call it live either (S053-12).
     map_unused: list = []
-    if renames:
+    if raw_rules:
         from taxjson.lib.core import (is_option_symbol,
                                       parse_option_underlying)
         _seen_syms: set = set()
@@ -5763,24 +5797,36 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     _sym = str((_t or {}).get("symbol") or "").upper()
                     if _sym:
                         _seen_syms.add(_sym)
-        _roots: set = set()
+        _reached: set = set()
         for _sym in _seen_syms:
-            _b = _sym
+            _reached.add(_sym)
             if is_option_symbol(_sym):
                 try:
-                    _b = str(parse_option_underlying(_sym)).upper()
+                    _reached.add(str(parse_option_underlying(_sym)).upper())
                 except Exception:
                     pass
-            _roots.add(_b)
-            _roots.add(_b.rsplit(".", 1)[0])
-        for _frm, _to in sorted(renames.items()):
+        _rules_u = {k.upper(): v.upper() for k, v in raw_rules.items()}
+        _frontier = list(_reached)
+        while _frontier:
+            _nxt = _rules_u.get(_frontier.pop())
+            if _nxt and _nxt not in _reached:
+                _reached.add(_nxt)
+                _frontier.append(_nxt)
+        _suffixed = {}
+        for _sym in _reached:
+            if "." in _sym:
+                _suffixed.setdefault(_sym.rsplit(".", 1)[0], set()).add(_sym)
+        for _frm, _to in sorted(raw_rules.items()):
             _fu = _frm.upper()
-            if _fu in _roots or _fu.rsplit(".", 1)[0] == _fu and _fu in _roots:
+            if _fu in _reached:
                 continue
-            if "." not in _fu and any(r.rsplit(".", 1)[0] == _fu
-                                      for r in _roots):
-                continue
-            map_unused.append(f"{_frm} -> {_to}")
+            _hint = ""
+            if "." not in _fu and _fu in _suffixed:
+                _alts = ", ".join(sorted(_suffixed[_fu]))
+                _hint = (f" (the books only have {_alts}; a rule's FROM "
+                         f"matches exactly — write the suffixed form, "
+                         f"e.g. {sorted(_suffixed[_fu])[0]})")
+            map_unused.append(f"{_frm} -> {_to}{_hint}")
 
     if getattr(args, "online", False):
         try:
@@ -5957,7 +6003,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     if map_unused:
         print(f"NOTE: {len(map_unused)} ticker.map rule(s) match no "
               f"parsed symbol in this project (checked stock rows, "
-              f"option roots and suffix-less codes): "
+              f"option roots and rename chains): "
               f"{'; '.join(map_unused)}. Unused rules are harmless; "
               f"prune only if you know the symbol will not return.")
         print()
@@ -9608,30 +9654,29 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             positions = F.qt_positions(qt_session, number, http)
         except RuntimeError as e:
             _die(f"{a}: {e}")
-        # Montreal options: learn Canadian-listed roots from the
-        # account's own BOOKS too — a cash-secured put has no equity
-        # leg in the live payload, so its live symbol was suffixed
-        # .US while the books say .TO (phantom verify mismatch,
-        # 2026-09 audit).
-        _book_to_roots = set()
+        # The account's BOOK symbols decide a live option's suffix when
+        # the books hold that exact contract, and the books' .TO
+        # OPTIONS teach Montreal roots (a cash-secured put has no
+        # equity leg in the live payload — 2026-09 audit). A .TO
+        # EQUITY in the books no longer does: a CDR (AMZN.TO) made the
+        # account's US AMZN option .TO live vs .US in the books, a
+        # phantom verify mismatch every run (S031-12).
+        _book_syms = set()
         try:
             import json as _json
             _bp = cache / f"{a}_base.json"
             if _bp.exists():
                 for _r in (_json.loads(_bp.read_text(encoding="utf-8"))
                            .get("transactions") or []):
-                    _sym = str(_r.get("symbol") or "")
-                    if _sym.endswith(".TO"):
-                        _root = _sym.rsplit(".", 1)[0]
-                        from taxjson.lib.core import parse_option_underlying
-                        _u = parse_option_underlying(_sym)
-                        _book_to_roots.add((_u or _root).split(".")[0])
+                    _sym = str(_r.get("symbol") or "").upper()
+                    if _sym:
+                        _book_syms.add(_sym)
         except Exception:
             pass
         text = F.positions_to_holdings_toml(
             positions, a, number,
             _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
-            extra_to_roots=_book_to_roots)
+            book_symbols=_book_syms)
         toml_path = cache / f"{a}_live_holdings.toml"
         F.write_private(toml_path, text)
         n = sum(1 for pz in positions if pz.get("openQuantity"))
@@ -11764,8 +11809,8 @@ def main() -> None:
                               "account declaring a `brokerage`)")
     p_fetch.add_argument("--year", type=int, default=None, metavar="N",
                          help="Questrade: backfill a PAST tax year — "
-                              "fetch its whole window (Dec 15 of N-1 "
-                              "through Jan 15 of N+1) into "
+                              "fetch its whole window (Dec 1 of N-1 "
+                              "through Jan 31 of N+1) into "
                               "questrade_N.csv. Not combinable with "
                               "--from/--days")
     p_fetch.add_argument("--json", action="store_true",
@@ -11776,7 +11821,8 @@ def main() -> None:
     p_fetch.add_argument("--days", type=int, default=None, metavar="N",
                          help="Questrade: fetch only the last N days "
                               "(default: the whole tax-year window "
-                              "from Dec 15 of the prior year; "
+                              "Dec 1 of the prior year to Jan 31 "
+                              "of the next; "
                               "trailing 90 days when the config has "
                               "no year)")
     p_fetch.add_argument("--from", dest="from_date", default=None,
