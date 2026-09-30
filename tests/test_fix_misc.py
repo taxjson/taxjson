@@ -220,5 +220,25 @@ class TestCaPriorityLadderPinned(unittest.TestCase):
                                ("ADJUST", 5), ("BUYSELL", 0)])
 
 
+class TestOptionTimingFlagsPinned(unittest.TestCase):
+    """G1-8: the grant-timing transition year reaches the engine flags."""
+
+    def test_flags(self):
+        from taxjson.lib.pipeline import option_timing_flags as f
+        self.assertEqual(f({"year": 2026, "option_grant_timing_since": 2025}),
+                         ["--option-premium-timing", "grant",
+                          "--option-grant-since", "2025"])
+        # Default: since = the project year.
+        self.assertEqual(f({"year": 2026}),
+                         ["--option-premium-timing", "grant",
+                          "--option-grant-since", "2026"])
+        self.assertEqual(f({"option_premium_timing": "close"}),
+                         ["--option-premium-timing", "close"])
+        self.assertEqual(f({"year": 2025, "option_buyback_loss_superficial": True}),
+                         ["--option-premium-timing", "grant",
+                          "--option-grant-since", "2025", "--option-buyback-wash"])
+        self.assertEqual(f({"year": 2025, "country": "us"}), [])
+
+
 if __name__ == "__main__":
     unittest.main()
