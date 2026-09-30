@@ -32,6 +32,7 @@ Subcommands:
 """
 
 import argparse
+import hashlib
 import re
 import shutil
 import subprocess
@@ -41,7 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note
-from taxjson.lib.pipeline import option_timing_flags
+from taxjson.lib.pipeline import option_timing_flags, tt_json_path
 from taxjson.lib.report_model import (align_columns, fmt_money,
                                       fmt_qty, format_report_table)
 
@@ -134,6 +135,8 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
 # so a keen eye can spot a 0-object parse of a non-empty file before
 # downstream stages silently propagate the empty data.
 _PARSE_COUNT_RE = re.compile(r'^\s+\S+: \d+ tax objects$')
+# taxjson-brokerage's zero-row warning (captured in the parse .diag).
+_ZERO_TX_RE = re.compile(r'^warning: (.+?) parsed to 0 transactions\b')
 
 
 def _load_holdings_summary(toml_path: Path) -> Dict[str, Tuple[float, float]]:
@@ -225,6 +228,25 @@ def echo_parse_stats(out_path: Path) -> None:
         elif line.startswith("warning: ") and " parsed to 0 transactions" in line:
             # Indent the warning to match per-file count nesting.
             print(f"  {line}")
+        elif line.startswith(UNBOOKED_PREFIX):
+            # Input rows the parser knows are real events but could not
+            # book (e.g. Kraken ledger trades with no trades-export
+            # fill): the tax numbers are missing them. Console, always.
+            print(f"  {line}")
+
+
+# Parser warning prefix for rows that are known tax events the parser
+# could NOT book. `taxjson run` echoes these to the console and, under
+# --strict, refuses to publish (R1-104).
+UNBOOKED_PREFIX = "warning: UNBOOKED:"
+
+
+def unbooked_lines(out_path: Path) -> List[str]:
+    diag_path = out_path.with_name(out_path.name + ".diag")
+    if not diag_path.exists():
+        return []
+    return [ln for ln in diag_path.read_text(errors="replace").splitlines()
+            if ln.startswith(UNBOOKED_PREFIX)]
 
 
 _DIAG_MARKER_RE = re.compile(
@@ -380,9 +402,25 @@ def load_config(root: Path) -> Dict[str, Any]:
                          f"name — use letters, digits, '_', '-' or "
                          f"'.' (must start with a letter, digit or "
                          f"'_'); it becomes file and directory names.")
-            return cfg
         except Exception as e:
             _die(f"{path} is not valid TOML: {e}")
+    _refuse_bad_account_types(cfg)
+    return cfg
+
+
+def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
+    """Die on an [accounts.*] entry whose `type` is missing or not
+    exactly taxable/sheltered. Applied by EVERY config reader
+    (load_config, _soft_config), not only `run`'s validate_config: the
+    filing commands partition on an exact string match, so a type
+    edited after the run ("Taxable") silently dropped the account from
+    estimate, sum, form-export and the close-year lock (R1-268). Silent
+    on a valid config."""
+    from taxjson.lib.config_check import account_type_problems
+    problems = account_type_problems(cfg)
+    if problems:
+        _die(problems[0] if len(problems) == 1
+             else "\n  ".join(["invalid account types:"] + problems))
 
 
 # The command currently executing (set by main's dispatch loop) so
@@ -408,7 +446,34 @@ def _die(msg: str) -> None:
     sys.exit(prefix + msg)
 
 
-_ESTIMATE_KEYS = ("other_income", "other_losses")
+_ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
+                  "carrying_charges")
+
+
+def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
+    """(deductions, carrying_charges) for the Canada estimate: CLI
+    flags win, else the [estimate] table, else zero. `deductions` are
+    lines 20700-23500 the AMT allows in full (RRSP 20800, FHSA, RPP);
+    `carrying_charges` is line 22100 (50% under the post-2024 AMT).
+    other_income stays >= 0: deductions are their own input, not a
+    negative income (R1-213)."""
+    import math as _math
+    cfg = _soft_config(root).get("estimate") or {}
+    out = []
+    for key in ("deductions", "carrying_charges"):
+        v = getattr(args, key, None)
+        src = f"--{key.replace('_', '-')}"
+        if v is None:
+            v, src = cfg.get(key), f"[estimate] {key}"
+        try:
+            f = float(v or 0.0)
+        except (TypeError, ValueError):
+            _die(f"{src} must be a number, got {v!r}")
+        if not _math.isfinite(f) or f < 0:
+            _die(f"{src} must be a non-negative finite number (the "
+                 f"amount you deduct, as a positive figure), got {v!r}")
+        out.append(f)
+    return out[0], out[1]
 
 
 def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
@@ -540,20 +605,10 @@ def validate_config(cfg: Dict[str, Any],
             if key not in _ACCOUNT_KEYS:
                 warnings.append(f"unknown [accounts.{name}] key {key!r} is "
                                 f"ignored{_suggest(key, _ACCOUNT_KEYS)}")
-        atype = acfg.get("type")
-        if atype is None:
-            # Fatal, like a bad value: the old "default to sheltered"
-            # silently dropped an untyped TAXABLE account's gains from
-            # every filing command (2026-09 CLI audit).
-            _die(f"[accounts.{name}] has no `type` — it is required: "
-                 f"add type = \"taxable\" or type = \"sheltered\" "
-                 f"(taxable | sheltered). An untyped account would "
-                 f"otherwise be left out of the return.")
-        elif atype not in _ACCOUNT_TYPES:
-            _die(f"[accounts.{name}] type must be "
-                     f"\"taxable\" or \"sheltered\", got {atype!r} — this "
-                     f"account would otherwise be silently dropped from "
-                     f"the run{_suggest(str(atype), _ACCOUNT_TYPES)}")
+    # Missing / invalid `type`: fatal, and the SAME check every other
+    # config reader applies (lib/config_check.py).
+    _refuse_bad_account_types(cfg)
+    for name, acfg in accounts.items():
         for flag in ("crypto", "transfers"):
             if flag in acfg and not isinstance(acfg[flag], bool):
                 _die(f"[accounts.{name}] {flag} must be "
@@ -588,6 +643,32 @@ def validate_config(cfg: Dict[str, Any],
                         f"directly in inputs/{name}/ are processed; move "
                         f"them up a level (or out of inputs/ if they are "
                         f"not meant for this account)")
+    # Spreadsheet exports (Questrade's default download is .xlsx) sit
+    # next to the CSVs but are never read: the run exited 0 with every
+    # trade in them missing and never named the file (R1-64/R1-248).
+    # Fatal unless the file's CSV conversion sits beside it.
+    if inputs_dir is not None and inputs_dir.is_dir():
+        unconverted: List[str] = []
+        for name in accounts:
+            adir = inputs_dir / str(name)
+            csv_stems = {p.stem.lower() for p in input_files(adir, ".csv")}
+            for sheet in spreadsheet_inputs(adir):
+                rel = f"inputs/{name}/{sheet.name}"
+                if sheet.stem.lower() in csv_stems:
+                    warnings.append(
+                        f"{rel} is not read (spreadsheets never are); its "
+                        f"CSV conversion {sheet.stem}.csv is. Move the "
+                        f"spreadsheet out of inputs/ to silence this.")
+                else:
+                    unconverted.append(rel)
+        if unconverted:
+            _die("spreadsheet export(s) in inputs/ are NOT read — only "
+                 ".csv and .tt files are, so every trade in them would be "
+                 "missing from the books:\n    "
+                 + "\n    ".join(unconverted)
+                 + "\n  Convert each to CSV next to it (`taxjson-xlsx-to-csv "
+                 "FILE.xlsx -o FILE.csv`, or the broker's CSV download) "
+                 "and move the spreadsheet out of inputs/.")
     # Inputs dir with data but no [accounts.*] entry: today that folder is
     # silently ignored — the inverse of the configured-but-unpopulated
     # warning the run loop already prints.
@@ -598,7 +679,8 @@ def validate_config(cfg: Dict[str, Any],
             if not sub.is_dir() or sub.name in accounts \
                     or sub.name == "slips":
                 continue
-            if input_files(sub, ".csv") or input_files(sub, ".tt"):
+            if input_files(sub, ".csv") or input_files(sub, ".tt") \
+                    or spreadsheet_inputs(sub):
                 warnings.append(f"inputs/{sub.name}/ contains data but has "
                                 f"no [accounts.{sub.name}] section — it "
                                 f"will NOT be processed")
@@ -718,6 +800,20 @@ def input_files(dirpath: Path, suffix: str) -> List[Path]:
         return []
     return sorted(p for p in dirpath.iterdir()
                   if p.is_file() and p.suffix.lower() == suffix)
+
+
+# Spreadsheet suffixes a broker export may arrive in. None is read by
+# the run; validate_config refuses them unless converted (R1-64).
+SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods")
+
+
+def spreadsheet_inputs(dirpath: Path) -> List[Path]:
+    """Spreadsheet files directly in an inputs folder (never read)."""
+    if not dirpath.is_dir():
+        return []
+    return sorted(p for p in dirpath.iterdir()
+                  if p.is_file() and not p.name.startswith((".", "~$"))
+                  and p.suffix.lower() in SPREADSHEET_SUFFIXES)
 
 
 def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
@@ -1139,7 +1235,44 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # glance that each CSV contributed the expected number
             # of rows.
             echo_parse_stats(out)
+        # Outside the rebuild branch on purpose: `run --strict --fast`
+        # on a cached parse must hit the same gate.
+        if strict and unbooked_lines(out):
+            sys.exit(f"taxjson run --strict: {name}: {broker} input has "
+                     f"event(s) the parser could not book (UNBOOKED "
+                     f"warning above / in {out.name}.diag) — aborting.")
         parsed.append(out)
+
+    # A non-empty export that parsed to 0 transactions (a renamed
+    # header, a kr_-named file that is not a Kraken ledger) drops that
+    # whole file from the books. Read from the persisted .diag on EVERY
+    # run — cached or not — so the console warning and the --strict
+    # gate cannot be skipped by a warm cache (R1-247).
+    _empty_files: List[str] = []
+    for _out in parsed:
+        _d = _out.with_name(_out.name + ".diag")
+        try:
+            _lines = _d.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for _ln in _lines:
+            _m = _ZERO_TX_RE.match(_ln.strip())
+            if _m:
+                _empty_files.append(_m.group(1))
+    if _empty_files:
+        _which = ", ".join(f"inputs/{name}/{f}" for f in _empty_files)
+        if strict:
+            sys.exit(f"taxjson run --strict: {name}: {_which} parsed to 0 "
+                     f"transactions — every row in it would be missing "
+                     f"from the books. Check the file's header/format (or "
+                     f"its name: cb_/kr_/coinbase/kraken route it to a "
+                     f"crypto parser), or remove it from inputs/.")
+        for _f in _empty_files:
+            print(f"taxjson: WARNING: {name}: inputs/{name}/{_f} parsed to "
+                  f"0 transactions — NONE of its rows are in the books. "
+                  f"Check the file's header/format (or its name: cb_/kr_/"
+                  f"coinbase/kraken route it to a crypto parser); "
+                  f"`run --strict` refuses this.", file=sys.stderr)
 
     # 2. corp-actions per equity broker. taxjson-corp-actions requires
     # --manifest when multiple CSVs are passed, so always provide one.
@@ -1203,10 +1336,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             corp_files.append(out)
         _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
 
-    # 3. starting-position .tt files
+    # 3. starting-position .tt files. Their converted JSON lives in its
+    # own `<acct>_tt_<stem>` namespace: `<acct>_<stem>` collided with
+    # the broker parse (`questrade.tt` overwrote <acct>_questrade.json,
+    # silently dropping every CSV trade) and with pipeline
+    # intermediates like <acct>_base.json (R1-116).
     tt_jsons: List[Path] = []
     for tt in input_files(acct_dir, ".tt"):
-        out = cache / f"{name}_{tt.stem}.json"
+        out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt):
             print(f"  convert-tt {tt.name}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
@@ -1221,7 +1358,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         | {f"{name}_{b}_corp" for b in grouped} \
         | ({f"{name}_{b}_transfers" for b in grouped}
            if not include_transfers else set()) \
-        | {f"{name}_{tt.stem}" for tt in input_files(acct_dir, ".tt")}
+        | {tt_json_path(cache, name, tt.name).stem
+           for tt in input_files(acct_dir, ".tt")}
     # Prefix-sibling guard: for account `m`, the glob also matches
     # account `m_extra`'s artifacts — deleting those every run
     # destroyed m_extra's parsed books and (worse) its elections
@@ -1294,9 +1432,28 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         elif (cache / f"{name}_mapped.json").exists():
             (cache / f"{name}_mapped.json").unlink()
         filled = cache / f"{name}_filled.json"
-        if force or needs_rebuild(filled, mapped):
+        # The project-root crypto_ticker.map (README) is resolved from
+        # the project, never the cwd: `-C <proj>` from anywhere used to
+        # ignore it (and a map in the cwd leaked into other projects).
+        # Its state (content, or absence) is a rebuild dep through a
+        # stamp that changes only when the map does, so `run --fast`
+        # re-prices after the map is added, edited, or deleted.
+        _cmap = inputs_dir.parent / "crypto_ticker.map"
+        try:
+            _cstate = ("sha256:" + hashlib.sha256(
+                _cmap.read_bytes()).hexdigest()) if _cmap.is_file() \
+                else "absent"
+        except OSError:
+            _cstate = "unreadable"
+        _cstamp = cache / f"{name}_crypto_ticker_map.state"
+        if (not _cstamp.exists()
+                or _cstamp.read_text(encoding="utf-8").strip() != _cstate):
+            _cstamp.write_text(_cstate + "\n", encoding="utf-8")
+        if force or needs_rebuild(filled, mapped, _cstamp):
             print("  fill-crypto-prices")
-            run_to_file(_cmd("taxjson-fill-crypto") + [str(mapped)], filled)
+            run_to_file(_cmd("taxjson-fill-crypto") + [
+                "--project-root", str(inputs_dir.parent), str(mapped)],
+                filled)
         if force or needs_rebuild(base_json, filled, rates):
             print(f"  convert-currency → {base_currency}")
             run_to_file(_cmd("taxjson-convert-currency") + [
@@ -1308,7 +1465,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # merge2-validated equity accounts.
         validate_diag = cache / f"{name}_validate.diag"
         from taxjson.lib.dispatch import run_cmd as _run_cmd
-        vres = _run_cmd(_cmd("taxjson-validate") + [str(base_json)],
+        # --require-prices: a row fill-crypto could not price is an
+        # ERROR here (R1-105), not a silent $0 income/cost.
+        vres = _run_cmd(_cmd("taxjson-validate") + ["--require-prices",
+                                                    str(base_json)],
                         capture_output=True)
         report = (vres.stdout or "") + (vres.stderr or "")
         if report.strip():
@@ -1318,10 +1478,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # Quiet on success (the report is in the .diag → .sum); only
         # surface to the console if validation actually failed.
         if vres.returncode != 0:
-            sys.stderr.buffer.write(report)
+            # `report` is text (run_cmd captures with text=True);
+            # stderr.buffer.write(str) raised TypeError and crashed the
+            # run instead of printing the report.
+            sys.stderr.write(report)
             if strict:
                 sys.exit(f"taxjson run --strict: {name}: validation "
                          f"ERROR(s) in the crypto books — aborting.")
+            print(f"  !! {name}: validation ERROR(s) in the crypto books "
+                  f"— numbers may be wrong. Details: reports/{name}.sum "
+                  f"DIAGNOSTICS (or {validate_diag.name}).",
+                  file=sys.stderr)
     else:
         cmd = _cmd("taxjson-merge2") + [
             "--sort", "--dedup", "--require-inputs",
@@ -1542,6 +1709,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     if any(_sc.name.startswith(_pre)
                            for _pre in _sibling_prefixes):
                         continue     # another account's sidecar
+                    if _sc.name.startswith(f"{name}_tt_"):
+                        continue     # a converted .tt, not a sidecar
                     export_cmd += ["--transfer-evidence", str(_sc)]
             export_cmd += ["--base-gains", str(raw_base_gains),
                            "--base-currency", base_currency,
@@ -2053,6 +2222,20 @@ def cmd_run(args: argparse.Namespace) -> None:
     # DELETE nukes a ticker. Each merge/export stage requests its subset.
     ticker_map = root / "ticker.map"
     ticker_map_arg = ticker_map if ticker_map.exists() else None
+    if ticker_map_arg:
+        # A line the loader cannot parse DROPS its rule, and a dropped
+        # TOBASE/GLOBAL/JOURNAL rule moves ACB pools and the Schedule 3
+        # gain; its warning used to reach only reports/*.sum while the
+        # run (even --strict) exited 0 (S009-03). Refuse up front.
+        from taxjson.bin.taxjson_ticker_map import map_file_problems
+        _tm_problems = map_file_problems(ticker_map)
+        if _tm_problems:
+            _die(f"{len(_tm_problems)} malformed ticker.map line(s) — "
+                 f"each rule would be silently dropped, changing ACB "
+                 f"pools and gains:\n    "
+                 + "\n    ".join(_tm_problems)
+                 + "\n  Fix the line (KEYWORD FROM TO, separated by "
+                 "spaces; notes after `#`) or delete it.")
     # ticker_extraction_overrides.txt — description-keyed ticker
     # corrections for securities the currency->exchange suffix mislabels.
     sec_overrides = root / "ticker_extraction_overrides.txt"
@@ -2553,6 +2736,8 @@ _TEMPLATE_INSTALMENTS = """
 # [estimate]
 # other_income = 120000
 # other_losses = 0
+# deductions = 0            # RRSP 20800, FHSA, RPP ... (full under AMT)
+# carrying_charges = 0      # line 22100 (50% under AMT)
 
 # Tax instalments (`taxjson instalments`, and a summary inside
 # `taxjson estimate`). Uncomment and fill in YOUR figures.
@@ -5148,8 +5333,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # TAXABLE accounts' income.
     want_estimate = (getattr(args, "other_income", None) is not None
                      or getattr(args, "other_losses", None) is not None
+                     or getattr(args, "deductions", None) is not None
+                     or getattr(args, "carrying_charges", None) is not None
                      or getattr(args, "estimate", False))
     _oi, _ol = _estimate_inputs(root, args)
+    _ded, _cc = _estimate_deductions(root, args)
     _foreign_by_acct: Dict[str, float] = {}
     cfg = load_config(root) if (root / "taxjson.toml").exists() else {}
     taxable_accounts = {n for n, c in cfg.get("accounts", {}).items()
@@ -5453,6 +5641,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             doc["estimate"] = _tax_estimate_result(
                 cfg, est,
                 other_income=_oi, other_losses=_ol,
+                deductions=_ded, carrying_charges=_cc,
                 province=getattr(args, "province", None),
                 actual_withheld=_actual_withholding(
                     cache, set(files) & taxable_accounts,
@@ -5553,6 +5742,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _print_tax_estimate(
             cfg, est, base,
             other_income=_oi, other_losses=_ol,
+            deductions=_ded, carrying_charges=_cc,
             province=getattr(args, "province", None),
             verbose=getattr(args, "verbose", False),
             actual_withheld=_actual_withholding(
@@ -5747,12 +5937,17 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         _die("instalments are modeled for canada only (US estimated "
              "taxes use a different regime — see KNOWN_ISSUES).")
     _oi, _ol = _estimate_inputs(root, args)
+    _ded, _cc = _estimate_deductions(root, args)
     _argv = [sys.executable, "-m", "taxjson.bin.taxjson_run",
              "-C", str(root), "estimate", "--json"]
     if _oi:
         _argv += ["--other-income", repr(_oi)]
     if _ol:
         _argv += ["--other-losses", repr(_ol)]
+    if _ded:
+        _argv += ["--deductions", repr(_ded)]
+    if _cc:
+        _argv += ["--carrying-charges", repr(_cc)]
     res = _run(_argv, capture_output=True)
     if res.returncode != 0:
         _die(f"could not compute the estimate it builds on: "
@@ -5860,7 +6055,9 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
 def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                          other_income: float, other_losses: float,
                          province: Optional[str],
-                         actual_withheld: Optional[float] = None
+                         actual_withheld: Optional[float] = None,
+                         deductions: float = 0.0,
+                         carrying_charges: float = 0.0
                          ) -> Dict[str, Any]:
     """Resolve country/province and run the estimator — shared by the
     text block and `sum --json` so the two can never disagree. For usa,
@@ -5887,9 +6084,15 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                                    other_losses=other_losses,
                                    province=prov,
                                    actual_withheld=actual_withheld,
-                                   staking=est.get("staking", 0.0))
+                                   staking=est.get("staking", 0.0),
+                                   deductions=deductions,
+                                   carrying_charges=carrying_charges)
         except ValueError as e:
             _die(str(e))
+    if deductions or carrying_charges:
+        _die("--deductions/--carrying-charges are modelled for the "
+             "canada estimate only (the US estimate is experimental and "
+             "uses the standard deduction).")
     unterm = est["realized"] - est["st"] - est["lt"]
     st_in = est["st"]
     if abs(unterm) > 0.01:
@@ -5910,6 +6113,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         base_cur: str, *, other_income: float,
                         other_losses: float,
                         province: Optional[str],
+                        deductions: float = 0.0,
+                        carrying_charges: float = 0.0,
                         verbose: bool = False,
                         actual_withheld: Optional[float] = None,
                         root: Optional[Path] = None,
@@ -5922,7 +6127,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
     money = fmt_money
     r = _tax_estimate_result(cfg, est, other_income=other_income,
                              other_losses=other_losses, province=province,
-                             actual_withheld=actual_withheld)
+                             actual_withheld=actual_withheld,
+                             deductions=deductions,
+                             carrying_charges=carrying_charges)
     # The result carries the vintage apply_vintage() actually selected
     # for the project year — never the import-time module default.
     RATE_VINTAGE = r.get("vintage", "?")
@@ -5945,7 +6152,13 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             ("Payments in lieu", est["pil"], ""),
         ] + ([("Crypto staking (ordinary)", r["staking"],
                "[no withholding, no FTC]")]
-             if r.get("staking") else [])
+             if r.get("staking") else []) \
+          + ([("Deductions", -r["deductions"],
+               "[lines 20700-23500, e.g. RRSP 20800; in full under AMT]")]
+             if r.get("deductions") else []) \
+          + ([("Carrying charges", -r["carrying_charges"],
+               "[line 22100; 50% under AMT]")]
+             if r.get("carrying_charges") else [])
         for label, amt, note in rows:
             print(f"  {label:<30}{money(amt):>14}"
                   + (f"  {note}" if note else ""))
@@ -6009,8 +6222,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                   f"vs WITH investments")
             print(f"  Taxable income: BASE {money(tb['ti'])} | WITH "
                   f"{money(tw['ti'])} = "
-                  f"{money(other_income + est['pil'] + r.get('staking', 0.0))}"
-                  f" ordinary + {money(r['taxable_gain'])} taxable gains"
+                  f"{money(other_income + est['pil'] + r.get('staking', 0.0) - r.get('deductions', 0.0) - r.get('carrying_charges', 0.0))}"
+                  f" ordinary (after deductions) + {money(r['taxable_gain'])} taxable gains"
                   f" + {money(r['grossed_eligible'])} grossed dividends"
                   f" + {money(est['div_foreign'])} foreign")
             print(f"  {'FEDERAL':<36}{'BASE':>14}{'WITH':>14}")
@@ -7324,9 +7537,13 @@ def _soft_config(root: Path) -> Dict[str, Any]:
     cfg_path = root / "taxjson.toml"
     if cfg_path.exists() and tomllib is not None:
         try:
-            return tomllib.loads(cfg_path.read_text(encoding="utf-8")) or {}
+            cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8")) or {}
         except Exception:
-            pass
+            return {}
+        # Soft about a MISSING or unreadable config, never about an
+        # account the filing commands would silently drop (R1-268).
+        _refuse_bad_account_types(cfg)
+        return cfg
     return {}
 
 
@@ -9960,6 +10177,23 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"  3. run: taxjson -C {_shlex.quote(str(root))} run")
 
 
+def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
+    """--deductions / --carrying-charges for the Canada estimate
+    (`sum` and `estimate`); [estimate] deductions / carrying_charges
+    are the config equivalents."""
+    p.add_argument("--deductions", type=float, default=None,
+                   metavar="AMT",
+                   help="Canada: deductions from total income that the "
+                        "AMT allows in full — RRSP (line 20800), FHSA, "
+                        "RPP ... (default: [estimate] deductions, else 0)")
+    p.add_argument("--carrying-charges", type=float, default=None,
+                   metavar="AMT",
+                   help="Canada: interest and carrying charges (line "
+                        "22100), deducted in full from regular income "
+                        "and at 50%% in the AMT base (default: "
+                        "[estimate] carrying_charges, else 0)")
+
+
 def main() -> None:
     # Tax data is private: everything this process and its pipeline
     # stages create is owner-only (files 0600, dirs 0700) whatever the
@@ -10160,6 +10394,8 @@ def main() -> None:
                        help="Prior-year capital losses (full dollars) to "
                             "net against this year's gains — turns on "
                             "the tax-estimate block")
+    for _p in (p_sum,):
+        _add_deduction_flags(_p)
     p_sum.add_argument("account", nargs="?",
                        help="Account (default: all accounts). No "
                             "PERIOD here by design: sum reports the "
@@ -10194,6 +10430,7 @@ def main() -> None:
                        help="Prior-year capital losses applied, in "
                             "FULL dollars (netted before the 50%% "
                             "inclusion)")
+    _add_deduction_flags(p_est)
     p_est.add_argument("--province", default=None,
                        help="Canada: ON|BC|AB (default: `province` "
                             "under [settings])")
