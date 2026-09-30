@@ -2028,6 +2028,12 @@ class IbBrokerage(BaseBrokerage):
                 asset_cat = self._cell(row, header_map, 'Asset Category')
                 transfer_type = self._cell(row, header_map, 'Type')
                 symbol = self._cell(row, header_map, 'Symbol')
+                # The description names the SECURITY (the raw IB symbol,
+                # as on Trades rows) next to the transfer kind: the
+                # security overrides key on it, and a kind-only
+                # description ('ACATS') left the transfer on the
+                # un-overridden listing — the pool split (audit S059-03).
+                xfer_desc = f"{transfer_type} ({symbol})"
                 currency = self._cell(row, header_map, 'Currency')
                 qty_str = self._cell(row, header_map, 'Qty')
                 if not asset_cat or asset_cat.startswith('Total'):
@@ -2104,7 +2110,7 @@ class IbBrokerage(BaseBrokerage):
                                 and abs(float(_t.get('quantity') or 0)
                                         + qty) < 1e-9
                                 and _t.get('description')
-                                == transfer_type):
+                                == xfer_desc):
                             del transactions[_i]
                             self.note_row_consumed()  # + original
                             break
@@ -2122,7 +2128,7 @@ class IbBrokerage(BaseBrokerage):
                             'currency': currency, 'price': price,
                             'net_amount': abs(total_cost),
                             'account': 'IB',
-                            'description': f"{transfer_type} (Ca)",
+                            'description': f"{xfer_desc} (Ca)",
                         })
                         self.note_row_consumed()
                     continue
@@ -2138,7 +2144,7 @@ class IbBrokerage(BaseBrokerage):
                     'price': price,
                     'net_amount': abs(total_cost),
                     'account': 'IB',
-                    'description': transfer_type
+                    'description': xfer_desc
                 })
                 self.note_row_consumed()
 

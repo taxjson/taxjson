@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Security overrides are stricter and reach every row.**
+  `ticker_extraction_overrides.txt` keys now match whole words (on IB,
+  where the description is the bare ticker, `BN` no longer rewrites
+  ABNB or BNTX), never rewrite option or futures rows, take the currency
+  case-insensitively, ignore a leading BOM, and a malformed line fails
+  the parse naming its line number instead of being skipped. The
+  override now runs before TRANSFER rows are set aside (the custody
+  sidecar gets the corrected symbol), IB TRANSFER rows carry the
+  security (`ACATS (DLR)`) so the override can match them, and an IB
+  split of an overridden security stays a split (its `symbol_new`
+  follows the rewrite) (audit R1-143, S001-00/01/02, S012-09, S027-01,
+  S059-03).
+- **Transfer sidecar is de-duplicated across overlapping exports.** A
+  re-downloaded or overlapping statement no longer doubles every custody
+  row in `taxjson transfers` or moves twice the shares in the holdings
+  evidence netting (audit S026-23, S027-00).
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

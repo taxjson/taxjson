@@ -54,7 +54,8 @@ class TestSidecar(unittest.TestCase):
             self.assertEqual(doc["metadata"]["account"], "margin")
             rows = doc["transactions"]
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["description"], "InterDepot")
+            # The kind plus the security (audit S059-03).
+            self.assertEqual(rows[0]["description"], "InterDepot (OR)")
             self.assertEqual(rows[0]["account"], "margin",
                              "sidecar rows get the account label")
 
