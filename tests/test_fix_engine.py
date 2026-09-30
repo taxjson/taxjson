@@ -77,5 +77,89 @@ class TestUnmarkedLegNotBlockedByLaterMarkedLeg(unittest.TestCase):
                                msg=f"premium landed on 2026: {by_year}")
 
 
+def _gains(main, sheltered, **kw):
+    from taxjson.lib.pipeline import GainsRequest, run_gains
+    import contextlib
+    import io
+    with contextlib.redirect_stderr(io.StringIO()):
+        r = run_gains(main, sheltered,
+                      req=GainsRequest(country='canada', year=2025,
+                                       taxable=True, **kw))
+    perm = round(sum(g.get('permanently_disallowed', 0.0) or 0.0
+                     for g in r['transactions']), 6)
+    return r['summary']['total_gain'], r['summary']['total_disallowed'], perm
+
+
+def _t(action, date, qty, acct, sym='XYZ.TO', price=10.0):
+    return _tx(action=action, date=date, time='10:00:00', symbol=sym,
+               quantity=float(qty), price=price,
+               net_amount=abs(qty) * price, account=acct)
+
+
+class TestOwnRegisteredMoveKeepsHolderBalances(unittest.TestCase):
+    """S018-05 / G2-0: a registered-to-registered move of the owner's
+    own shares (rrspA -> rrspB) is netted out of the wash context at the
+    symbol level, but the s.54 still-held test runs PER HOLDER — so the
+    receiving account looked short (a permanent denial was missed) and
+    the sending account looked long (a denial was invented)."""
+
+    MARGIN = [
+        _t('BUYSELL', '2025-01-10', 100, 'margin', price=20.0),
+        _t('BUYSELL', '2025-06-02', -100, 'margin'),     # loss 1,000
+    ]
+
+    def test_case_a_receiving_account_rebuys_and_holds(self):
+        moved = [
+            _t('BUYSELL', '2024-01-10', 100, 'rrspA'),
+            _t('TRANSFER', '2024-03-01', -100, 'rrspA'),
+            _t('TRANSFER', '2024-03-01', 100, 'rrspB'),
+            _t('BUYSELL', '2024-05-01', -100, 'rrspB'),
+            _t('BUYSELL', '2025-06-10', 100, 'rrspB'),
+        ]
+        native = [
+            _t('BUYSELL', '2024-01-10', 100, 'rrspB'),
+            _t('BUYSELL', '2024-05-01', -100, 'rrspB'),
+            _t('BUYSELL', '2025-06-10', 100, 'rrspB'),
+        ]
+        self.assertEqual(_gains(self.MARGIN, native), (0.0, 1000.0, 1000.0))
+        self.assertEqual(_gains(self.MARGIN, moved), (0.0, 1000.0, 1000.0),
+                         "the netted move left rrspB short, so its "
+                         "in-window rebuy was not 'still held'")
+
+    def test_case_b_sending_account_round_trips_in_window(self):
+        moved = [
+            _t('BUYSELL', '2024-01-10', 100, 'rrspA'),
+            _t('TRANSFER', '2024-03-01', -100, 'rrspA'),
+            _t('TRANSFER', '2024-03-01', 100, 'rrspB'),
+            _t('BUYSELL', '2025-06-05', 100, 'rrspA'),
+            _t('BUYSELL', '2025-06-20', -100, 'rrspA'),
+        ]
+        native = [
+            _t('BUYSELL', '2024-01-10', 100, 'rrspB'),
+            _t('BUYSELL', '2025-06-05', 100, 'rrspA'),
+            _t('BUYSELL', '2025-06-20', -100, 'rrspA'),
+        ]
+        self.assertEqual(_gains(self.MARGIN, native), (-1000.0, 0, 0.0))
+        self.assertEqual(_gains(self.MARGIN, moved), (-1000.0, 0, 0.0),
+                         "the netted move left rrspA holding the moved "
+                         "shares, inventing a permanent denial")
+
+    def test_g2_0_partial_sale_after_move(self):
+        margin = [
+            _t('BUYSELL', '2024-10-01', 100, 'margin', price=20.0),
+            _t('BUYSELL', '2025-06-02', -100, 'margin'),
+        ]
+        moved = [
+            _t('BUYSELL', '2024-11-01', 200, 'rrsp'),
+            _t('TRANSFER', '2025-02-03', -200, 'rrsp'),
+            _t('TRANSFER', '2025-02-03', 200, 'rrsp2'),
+            _t('BUYSELL', '2025-03-03', -150, 'rrsp2'),
+            _t('BUYSELL', '2025-06-09', 100, 'rrsp2'),
+        ]
+        g, dis, perm = _gains(margin, moved)
+        self.assertAlmostEqual(perm, 1000.0, places=2)
+        self.assertAlmostEqual(g, 0.0, places=2)
+
+
 if __name__ == '__main__':
     unittest.main()

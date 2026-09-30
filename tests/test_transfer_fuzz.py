@@ -23,7 +23,8 @@ Checks:
                  permanent denials >= 0.
   P4 DETERMIN  — full prepare+compute twice on fresh copies gives
                  byte-identical JSON.
-  P5 MAIN CLEAN— no TRANSFER action survives into the engine books.
+  P5 MAIN CLEAN— no TRANSFER action survives into the engine books
+                 (except balance-only own-account moves, netting to 0).
 """
 import io
 import json
@@ -206,11 +207,21 @@ def check_book(txs, shel, country):
     except Exception as e:  # noqa: BLE001
         return f"P1 prepare_books crash: {type(e).__name__}: {e}"
 
-    # P5: no raw TRANSFER survives into the engine books.
+    # P5: no raw TRANSFER survives into the engine books, except a
+    # netted own-account move kept in the wash context as a
+    # balance-only row (S018-05) — which must net to zero per symbol.
+    own = {}
     for label, rows in (("main", m), ("sheltered", s)):
         for t in rows:
+            if (label == "sheltered" and t.action == "TRANSFER"
+                    and getattr(t, "type", "") == "own_account_move"):
+                own[t.symbol] = own.get(t.symbol, 0.0) + t.quantity
+                continue
             if t.action == "TRANSFER":
                 return f"P5 raw TRANSFER survived in {label} book"
+    for sym, q in own.items():
+        if abs(q) > 1e-9:
+            return f"P5 own-account move rows do not net for {sym}: {q}"
 
     survivors = sum(1 for t in s if getattr(t, "type", "")
                     == "transfer_rewrite")

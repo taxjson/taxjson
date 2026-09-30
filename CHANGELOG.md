@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Moving shares between your own registered accounts no longer flips
+  a superficial loss.** A custody move such as rrsp -> rrsp2 was netted
+  out of the superficial-loss context, but the "still held at day 30"
+  test runs per account: the receiving account looked short (a
+  permanent denial for its in-window rebuy was missed) and the sending
+  account looked long (a denial was invented). Netted moves now stay in
+  the context as balance-only rows; they are never replacement
+  property. The misleading "rrsp2 go short" hint goes away with it.
 - **An IB/RBC-style assignment keeps its own premium when a Webull-style
   assignment on the same stock comes later.** The option premium of a
   plain-convention assignment (stock leg booked as an ordinary buy/sell)

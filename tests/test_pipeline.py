@@ -118,7 +118,10 @@ class TestPrepareBooks(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             _, shel_out, _, _ = prepare_books(main, shel, taxable=False,
                                               phantom_hint=False)
-        self.assertEqual(shel_out, [])
+        # Kept only as balance-only TRANSFER rows (never a trigger;
+        # the per-holder still-held test needs them — S018-05).
+        self.assertEqual([(t.action, t.type) for t in shel_out],
+                         [("TRANSFER", "own_account_move")] * 2)
 
     def test_self_cancelling_pair_dropped(self):
         main = [
