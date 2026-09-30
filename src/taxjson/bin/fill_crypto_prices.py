@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+import re
 import argparse
 import urllib.request
 import json
@@ -155,6 +156,66 @@ def main():
         SYMBOL_OVERRIDES.update(_saved)
 
 
+_SWAP_LEG_RE = re.compile(r'^(.+)-(sell|buy|base|quote)$')
+
+
+def _swap_pairs(loaded):
+    """(received, spent) leg pairs of unpriced crypto-to-crypto swaps.
+    The parsers give both legs of one exchange one id stem — Kraken
+    `<refid>-sell`/`-buy` and `<txid>-base`/`-quote`, Coinbase Convert
+    `<id>-sell`/`-buy` and an Advanced Trade's `<id>` + `<id>-quote`.
+    A pair is exactly two unpriced BUYSELL rows under one stem with
+    opposite-sign quantities and different symbols."""
+    groups = {}
+    for tx in loaded:
+        if (tx.action != 'BUYSELL' or not getattr(tx, 'id', None)
+                or abs(tx.price) >= 1e-8 or abs(tx.net_amount) >= 1e-8
+                or abs(tx.quantity) <= 1e-12
+                or tx.symbol in ('USD', 'CAD')
+                or tx.symbol in _STABLE_ONE_TO_ONE):
+            continue
+        m = _SWAP_LEG_RE.match(str(tx.id))
+        groups.setdefault(m.group(1) if m else str(tx.id), []).append(tx)
+    pairs = []
+    for legs in groups.values():
+        if len(legs) != 2 or legs[0].symbol == legs[1].symbol:
+            continue
+        a, b = legs
+        if (a.quantity > 0) == (b.quantity > 0):
+            continue
+        pairs.append((a, b) if a.quantity > 0 else (b, a))
+    return pairs
+
+
+def _value_swaps_once(pairs, unpriced):
+    """One exchange, one value (audit S013-08): each leg priced from its
+    own coin's daily close gave the spent coin's proceeds and the
+    received coin's cost two different values — a phantom gain or loss
+    that stayed in the lifetime total. Both legs take the RECEIVED
+    coin's fair value (what the spent coin was exchanged for), else the
+    spent coin's when the received coin has no price. Returns the
+    number of swaps valued."""
+    n = 0
+
+    def _unpriced(leg):
+        return any(u is leg for u in unpriced)
+
+    for recv, spent in pairs:
+        value = (abs(recv.net_amount) if not _unpriced(recv) else 0.0) \
+            or (abs(spent.net_amount) if not _unpriced(spent) else 0.0)
+        if not value > 0:
+            continue
+        for leg in (recv, spent):
+            leg.net_amount = value
+            leg.gross_amount = value
+            leg.price = round(value / abs(leg.quantity), 8)
+            leg.currency = 'USD'
+        unpriced[:] = [u for u in unpriced
+                       if u is not recv and u is not spent]
+        n += 1
+    return n
+
+
 def _fill(args):
     cache = load_cache()
     cache_dirty = False
@@ -172,6 +233,7 @@ def _fill(args):
 
     transactions = []
     unpriced = []
+    swap_pairs = _swap_pairs(loaded)
     for tx in loaded:
         if tx.action in ('BUYSELL', 'DIVIDEND'):
             # Stablecoin (or a hand-entered `USD`-symbol DIVIDEND, i.e.
@@ -262,6 +324,13 @@ def _fill(args):
 
     if cache_dirty:
         save_cache(cache)
+    n_swaps = _value_swaps_once(swap_pairs, unpriced)
+    if n_swaps:
+        cli_diag.note(
+            PROG,
+            f"{n_swaps} crypto-to-crypto swap(s) valued ONCE: both legs "
+            f"carry the received coin's fair value (the spent coin's "
+            f"proceeds = the received coin's cost).")
     if unpriced:
         # Never silently 0 (R1-105): these rows still carry price 0 —
         # $0 income, $0 cost basis, or $0 proceeds. The crypto path's

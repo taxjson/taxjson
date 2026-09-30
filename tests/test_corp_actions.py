@@ -142,11 +142,16 @@ class TestIBSplitUp(unittest.TestCase):
         self.assertEqual(len(a), 2)
 
     def test_half_event_not_emitted(self):
-        # Only the out-leg present (statement split): emit nothing
-        # rather than half an exchange.
+        # Only the out-leg present (statement split): never half an
+        # exchange — and never a silent skip either (audit S020-00): a
+        # blocking `unsupported` event names it until the other leg's
+        # statement is added or it is booked by hand.
         lines = _SPLITUP_CSV.strip().splitlines()
         path = _write_csv("\n".join(lines[:2]) + "\n")
-        self.assertEqual(parse_ib_corporate_actions(path), [])
+        import contextlib, io
+        with contextlib.redirect_stderr(io.StringIO()):
+            evs = parse_ib_corporate_actions(path)
+        self.assertEqual([e.action_type for e in evs], ['unsupported'])
 
 
 class TestIBExtractor(unittest.TestCase):

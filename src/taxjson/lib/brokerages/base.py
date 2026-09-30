@@ -28,6 +28,20 @@ def encode_occ_strike(strike) -> str:
     return f"{int(Decimal(str(strike).strip()) * 1000):08d}"
 
 
+# An option strike in a broker description. A strike of 1,000 or more
+# may carry a thousands separator ('CALL SPX 12/19/25 5,000.00'); the
+# old `[\d\.]+` stopped at the comma, so 5,000 and 5,025 both became
+# strike 5 -- two contracts in one OCC symbol and one ACB pool (audit
+# R1-170). The grouped form is tried first; option_strike_text drops
+# the separators.
+OPTION_STRIKE_RE = r'([1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?|[\d\.]+)'
+
+
+def option_strike_text(raw: str) -> str:
+    """A matched strike with its thousands separators removed."""
+    return (raw or '').replace(',', '')
+
+
 # Return-of-capital marker, shared by every parser so the classification
 # can't drift per broker. ROC is NOT dividend income: it reduces the
 # position's ACB (emitted as an ADJUST row with negative net_amount via
@@ -167,20 +181,23 @@ class BrokerageParseError(ValueError):
 
 # Strict number grammar for REQUIRED money/quantity cells. A leading
 # sign, then either a plain digit run or a comma-grouped integer part
-# whose groups are exactly three digits (1,234,567), then an optional
-# fraction. A decimal comma ("1234,56"), a space-grouped number
+# whose groups are exactly three digits after a lead that is not 0
+# (1,234,567; "0,125" is refused), then an optional fraction. A decimal comma ("1234,56"), a space-grouped number
 # ("1 000"), a stray letter, or an empty cell is not guessed at.
 _STRICT_NUM_RE = re.compile(
     r'^(?P<sign>[+-]?)'
-    r'(?P<int>\d{1,3}(?:,\d{3})+|\d*)'
+    r'(?P<int>[1-9]\d{0,2}(?:,\d{3})+|\d*)'
     r'(?P<frac>\.\d*)?'
     r'(?P<exp>[eE][+-]?\d+)?$')
 # A comma is only ever a THOUSANDS separator: digit groups of exactly
-# three after a 1-3 digit lead, optionally followed by a dot fraction.
+# three after a 1-3 digit lead that does not start with 0 ("0,125" is a
+# decimal comma, never 125 -- audit S055-08), optionally followed by a
+# dot fraction.
 # Anything else with a comma ("0,95", "1,5", "1.234,56", "12,3456") is a
 # decimal-comma (French/European locale) number, and stripping the comma
 # reads it 100x or 10x too large -- so it is refused, never scaled.
-_THOUSANDS_COMMA_RE = re.compile(r'^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d*)?$')
+_THOUSANDS_COMMA_RE = re.compile(
+    r'^[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?$')
 
 
 def check_comma_grouping(num_text: str, raw=None, *, where: str = '',
@@ -398,11 +415,11 @@ class BaseBrokerage:
     # own variants by overriding _option_description_patterns.
     _BASE_OPTION_PATTERNS = (
         re.compile(
-            r'^(?:EXP\s*-\s*|ASN\s*-\s*)?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+([\d\.]+)',
+            r'^(?:EXP\s*-\s*|ASN\s*-\s*)?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+' + OPTION_STRIKE_RE,
             re.IGNORECASE,
         ),
         re.compile(
-            r'ASSIGNMENT OF OPTION.*?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+([\d\.]+)',
+            r'ASSIGNMENT OF OPTION.*?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+(\d{1,2}/\d{1,2}/\d{2})\s+' + OPTION_STRIKE_RE,
             re.IGNORECASE,
         ),
     )
@@ -424,7 +441,7 @@ class BaseBrokerage:
                     'right': 'P' if right_str.upper() == 'PUT' else 'C',
                     'base': base.strip().lstrip('.').rstrip('.').replace(' ', '.'),
                     'expiry': expiry_raw,
-                    'strike': strike_raw,
+                    'strike': option_strike_text(strike_raw),
                 }
         return None
 
@@ -654,9 +671,42 @@ class BaseBrokerage:
             return exp.strftime("%Y-%m-%d")
         return posting_iso
 
-    @staticmethod
-    def clamp_settlement_to_expiry(transactions: List[Dict[str, Any]],
+    # "... AS OF mm/dd/yy EXPIRED", "... WARRANT EXP mm/dd/yy - EXPIRED"
+    _DESC_EXPIRY_RE = re.compile(
+        r'\b(?:AS\s+OF|EXP(?:IRY|IRES|IRED|\.)?)\s+'
+        r'(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\b', re.IGNORECASE)
+
+    @classmethod
+    def non_option_expiry_booking_date(cls, posting_iso: str,
+                                       desc: str) -> str:
+        """The date a rights/warrant EXPIRY row belongs on (audit
+        S065-04): like an option, an expiring right or warrant has no
+        settlement cycle and brokers post it a business day or so late,
+        so a Dec-31 expiry posted Jan 2 moved its loss into the next
+        year. The expiry date comes from the description's "AS OF
+        mm/dd/yy" / "EXP mm/dd/yy" when it is at most a week before the
+        posting date; otherwise the posting date is kept."""
+        m = cls._DESC_EXPIRY_RE.search(desc or '')
+        if not m:
+            return posting_iso
+        mm, dd, yy = m.groups()
+        return cls.option_expiry_booking_date(
+            posting_iso, f"{int(mm):02d}/{int(dd):02d}/{yy[-2:]}")
+
+    def clamp_settlement_to_expiry(self, transactions: List[Dict[str, Any]],
                                    expiries: List[Dict[str, Any]]) -> None:
+        """Clamp this file's trades (see `clamp_settlement_across`) and
+        remember the expiry rows: taxjson-brokerage re-runs the clamp over
+        ALL of an account's files, so a Dec-31 0DTE trade whose expiry row
+        sits in the NEXT yearly export (Questrade/RBC/Webull post it the
+        next business day) is clamped too (audit S055-22)."""
+        self.expiry_rows = list(getattr(self, 'expiry_rows', [])) + list(
+            expiries)
+        self.clamp_settlement_across(transactions, expiries)
+
+    @staticmethod
+    def clamp_settlement_across(transactions: List[Dict[str, Any]],
+                                expiries: List[Dict[str, Any]]) -> None:
         """An option expiry has no settlement cycle: the contract ceases
         to exist on its expiry date, so the expiry row is booked with
         date_settle == date (parsers set that themselves). A trade in
@@ -668,7 +718,7 @@ class BaseBrokerage:
         followed by a buy-to-close, and a Dec-31 0DTE trade's settle
         crossed the tax year while its expiry did not. Clamp such a
         trade's settle to the expiry date (never before its own trade
-        date). Only contracts with an expiry row in this file are
+        date). Only contracts with an expiry row in `expiries` are
         touched; everything else keeps its broker/computed settle.
 
         Mutates `transactions` in place."""

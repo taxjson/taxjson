@@ -40,6 +40,9 @@ _MAX_TOKENS = {
     'INTEREST': 5, 'FEE': 5, 'ADJUST': 6, 'DISALLOW': 6,
 }
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+# Futures symbol prefixes (lib/futures.py): the contract size is not on
+# a .tt line, so no qty x price comparison is possible.
+_FUTURES_PREFIXES = ('F:', '/', '\\')
 _TIME_RE = re.compile(r'^\d{2}:\d{2}:\d{2}$')
 
 
@@ -144,9 +147,12 @@ def parse_tt_line(line: str, account_name: str = 'default',
         }
 
         if action in ('BUYSELL', 'ASSIGN', 'TRANSFER', 'SPLIT'):
-            tx['symbol'] = parts[3]
+            # Symbols are canonical upper-case, like the currency: a
+            # hand-typed `aapl.us` was its own ACB pool and the broker's
+            # sale of AAPL.US opened a phantom short (S001-06).
+            tx['symbol'] = parts[3].upper()
             if action == 'SPLIT':
-                tx['symbol_new'] = parts[4]
+                tx['symbol_new'] = parts[4].upper()
                 tx['quantity'] = _tt_num(parts[5])
                 tx['currency'] = 'CAD'
                 tx['price'] = 0.0
@@ -193,6 +199,9 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 # legitimately by a little — 1% + $0.05 tolerance.
                 # Option rows: price is per SHARE, the contract covers
                 # 100 — without the ×100 every option line warned.
+                # Futures: the contract size is not on the line — the
+                # 1/100 guess called every correct futures total a typo
+                # (S029-00), so no comparison for them.
                 from taxjson.lib.core import is_option_symbol
                 _mult = 100.0 if is_option_symbol(tx['symbol']) else 1.0
                 _q = tx['quantity']
@@ -201,6 +210,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                              + (_fee if _q > 0 else -_fee))
                 _total = abs(tx['net_amount'])
                 if (tx['price'] > 0 and abs(_q) > 0
+                        and not tx['symbol'].startswith(_FUTURES_PREFIXES)
                         and abs(_total - _expected) >
                         max(0.05, 0.01 * max(_expected, 1.0))):
                     print(
@@ -215,7 +225,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                     )
 
         elif action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'):
-            tx['symbol'] = parts[3]
+            tx['symbol'] = parts[3].upper()
             tx['quantity'] = _tt_num(parts[4])
             tx['currency'] = parts[5]
             val = _tt_num(parts[7])
@@ -234,7 +244,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
             tx['symbol'] = 'CASH'
 
         elif action == 'ADJUST' or action == 'DISALLOW':
-            tx['symbol'] = parts[3]
+            tx['symbol'] = parts[3].upper()
             tx['currency'] = parts[4]
             tx['net_amount'] = _tt_num(parts[5])
     except (ValueError, IndexError) as e:
@@ -263,8 +273,32 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"If you typed the cash sign, drop the '-'; if the commission "
             f"exceeds the proceeds, enter 0. Line: {line.strip()!r}")
 
+    _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
     return tx
+
+
+def _warn_unknown_suffix(tx: dict, line: str, source: str) -> None:
+    """A dotted symbol must end in a known market suffix — the rule the
+    schema applies to every parser row, which .tt rows never met. A
+    typo'd lot (`XYZ.TSX`, `XYZ.CA`) is its own ACB pool: the broker's
+    sale of XYZ.TO opens a phantom short and the gain drops out
+    (S028-19). Bare symbols (crypto) and option/futures symbols are
+    exempt."""
+    from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
+    from taxjson.lib.core import is_option_symbol
+    for key in ('symbol', 'symbol_new'):
+        sym = tx.get(key) or ''
+        if ('.' not in sym or sym == 'CASH' or is_option_symbol(sym)
+                or sym.startswith(_FUTURES_PREFIXES)):
+            continue
+        ext = sym.rsplit('.', 1)[1]
+        if ext not in KNOWN_SUFFIXES:
+            print(f"warning: {_where(source)}symbol {sym} ends in .{ext}, "
+                  f"which is not a known market suffix "
+                  f"({', '.join(sorted(KNOWN_SUFFIXES))}) — a typo here is "
+                  f"its own ACB pool, and the broker's rows for the real "
+                  f"listing go short: {line.strip()!r}", file=sys.stderr)
 
 
 def compute_tt_id(tx: dict) -> str:
@@ -297,17 +331,26 @@ def compute_tt_id(tx: dict) -> str:
     return hashlib.sha256(raw_id.encode('utf-8')).hexdigest()[:16]
 
 
-def tx_to_tt_line(tx: dict):
+def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
     """Emit a single `.tt` line for one transaction, matching the legacy
     Perl scripts' field order. Returns None for transactions whose action
     has no `.tt` representation (e.g. OPENING_BALANCE) so the caller can
     skip them. Numeric fields use %.8f for qty/price, %.5f for totals/fees
-    (the convention from cb_trades.pl / kr_ledgers.pl)."""
+    (the convention from cb_trades.pl / kr_ledgers.pl).
+
+    A .tt line has ONE date, which the reader uses as both the trade and
+    the settlement date. `date_basis='settle'` (the default — Canada
+    times a disposition on settlement) writes `date_settle`: writing the
+    trade date moved a Dec-31 sale settling in January into the earlier
+    year on re-import (R1-130). `'trade'` writes the trade date (a
+    trade-basis project)."""
     action = tx.get('action', '')
     if action not in _VALID_ACTIONS:
         return None
 
     date = tx.get('date', '')
+    if date_basis == 'settle' and tx.get('date_settle'):
+        date = tx['date_settle']
     time = tx.get('time', '09:30:00')
     symbol = tx.get('symbol', '')
     qty = float(tx.get('quantity') or 0.0)
@@ -318,7 +361,10 @@ def tx_to_tt_line(tx: dict):
     # prefer it when present — parsers leave gross at 0 when only net is
     # known, in which case net is the right fallback.
     gross = float(tx.get('gross_amount') or 0.0) or net
-    fee = float(tx.get('fee') or 0.0)
+    # fee + commission: parsers split the charge across both keys
+    # (Questrade books `commission` only) — reading `fee` alone dropped
+    # the commission on a json->tt->json cycle (R1-130).
+    fee = float(tx.get('fee') or 0.0) + float(tx.get('commission') or 0.0)
 
     if action in ('BUYSELL', 'ASSIGN'):
         # ACTION date time symbol qty currency price total fee
@@ -442,6 +488,25 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
     BaseBrokerage.disambiguate_split_fills(
         [tx for tx in transactions
          if tx.get('description') != MANUAL_TRANSFER_DECLARATION])
+    # Byte-identical DECLARED counter-transfers in ONE file (two ACQUIRED
+    # lots of the same size, price and arrival day) are two arrival legs,
+    # not a duplicate: the always-on dedup kept one and the other lot's
+    # arrival was never netted — a phantom 100 shares (S029-08). They are
+    # exempt from the fill markers above (the declaration is matched by
+    # exact description), so combine them into one row carrying the sum.
+    combined = []
+    by_id = {}
+    for tx in transactions:
+        if (tx.get('action') == 'TRANSFER'
+                and tx.get('description') == MANUAL_TRANSFER_DECLARATION):
+            first = by_id.get(tx['id'])
+            if first is not None:
+                first['quantity'] += tx['quantity']
+                first['net_amount'] += tx['net_amount']
+                continue
+            by_id[tx['id']] = tx
+        combined.append(tx)
+    transactions = combined
     for tx in transactions:
         tx['id'] = compute_tt_id(tx)
     return {
@@ -457,20 +522,49 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
     }
 
 
-def json_to_tt_lines(input_path: Path):
+def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
     with input_path.open('r', encoding='utf-8') as f:
         data = json.load(f)
     transactions = data.get('transactions', data) if isinstance(data, dict) else data
     skipped = 0
+    two_dates = 0
+    mults = []
     for tx in transactions:
-        line = tx_to_tt_line(tx)
+        line = tx_to_tt_line(tx, date_basis=date_basis)
         if line is None:
             skipped += 1
             continue
+        if (tx.get('date_settle') and tx.get('date')
+                and tx['date_settle'] != tx['date']):
+            two_dates += 1
+        m = tx.get('multiplier')
+        try:
+            if m not in (None, '') and float(m) not in (1.0, 100.0):
+                mults.append(f"{tx.get('symbol')} x{float(m):g}")
+        except (TypeError, ValueError):
+            mults.append(f"{tx.get('symbol')} x{m!r}")
         yield line
     if skipped:
         print(
             f"note: skipped {skipped} transaction(s) with no .tt representation",
+            file=sys.stderr,
+        )
+    if two_dates:
+        which = ("SETTLEMENT" if date_basis == 'settle' else "TRADE")
+        print(
+            f"note: {two_dates} row(s) have a trade date and a later "
+            f"settlement date; a .tt line carries one date, so each was "
+            f"written with its {which} date (--date-basis "
+            f"{'trade' if date_basis == 'settle' else 'settle'} for the "
+            f"other). The year a sale lands in follows that date.",
+            file=sys.stderr,
+        )
+    if mults:
+        print(
+            f"warning: {len(mults)} row(s) carry a contract multiplier the "
+            f".tt format cannot hold ({', '.join(mults[:5])}"
+            f"{' ...' if len(mults) > 5 else ''}); the total is kept, but "
+            f"the re-imported row loses the declared size.",
             file=sys.stderr,
         )
 
@@ -506,6 +600,16 @@ def _main():
             "E.g. 'Margin', 'RRSP', 'TFSA'. (default: 'default')"
         ),
     )
+    parser.add_argument(
+        "--date-basis",
+        choices=("settle", "trade"),
+        default="settle",
+        help=(
+            "json->tt only: which date a .tt line (one date) carries — "
+            "the settlement date (default; Canada's settle-basis rule) or "
+            "the trade date (a trade-basis project)."
+        ),
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -519,7 +623,8 @@ def _main():
         # JSON → tt
         out_fh = open(args.output, 'w', encoding='utf-8') if args.output else sys.stdout
         try:
-            for line in json_to_tt_lines(input_path):
+            for line in json_to_tt_lines(input_path,
+                                         date_basis=args.date_basis):
                 out_fh.write(line + "\n")
         finally:
             if args.output:

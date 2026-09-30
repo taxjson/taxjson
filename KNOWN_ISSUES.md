@@ -23,7 +23,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — `isin_map = {... 'IE': 'L' ...}` in the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead — corrected 2026-09 round-five audit).
-- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix.
+- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
 - **Why deferred:** the user holds no IE-domiciled ETFs, so the bug doesn't fire on their data. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
 - **Workaround:** users who hold IE-domiciled ETFs should add a `ticker.map` GLOBAL rule rewriting the parsed `.L` symbol to the correct market suffix.
 
@@ -39,6 +39,11 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** `taxjson fx-cash` (`src/taxjson/bin/taxjson_fx_cash.py`) reconstructs foreign-cash ACB from the security cash flows in the taxable books, and its docstring assumes broker CSVs carry no explicit conversions — IB's do (this section), so on an IB account the ledger is asked to spend currency it saw acquired only through trades and overdrafts on the conversion side. Consuming Forex rows properly means booking each as a disposition of the sold currency at the conversion rate AND an acquisition of the bought one, together with the cash deposits/withdrawals the same statement lists — half of that (conversions only) would still overdraft.
 - **Evidence / work needed:** extend the fx-cash ledger to read Forex rows plus the `Deposits & Withdrawals` section as currency acquisitions/dispositions; until then the IB Forex count in the parse note is the size of the gap.
 
+### fx-cash: cash folded into a corporate-action sale leg is not ledgered
+- **Where:** `src/taxjson/bin/taxjson_fx_cash.py` — `_non_cash`.
+- **Current behavior:** rows emitted by the corp-actions stage (`corp_event_id` set: share-for-share mergers, taxable exchanges at FMV, spin-off ACB allocations) move no foreign cash and are left out of the s.39(1.1) ledger; so are crypto-for-crypto legs (Kraken swaps, Coinbase Convert) and staking rewards paid in a coin. A standalone cash-in-lieu leg is ledgered. Cash-in-lieu or §356 boot FOLDED into a taxable exchange's sale leg (`_emit_taxable_exchange`, `_emit_boot_exchange`) is not — the row does not say how much of its proceeds was cash. A cash takeover is a sale the broker parser books and is ledgered normally.
+- **Evidence / work needed:** emit the cash part of a taxable exchange as its own leg (or a `cash_amount` field) so the ledger can count it; the amounts are fractional-share dust in practice.
+
 ### Kraken fiat conversions are not modeled
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose BASE is fiat after stablecoin folding: `USD/CAD`, `USDC/USD`, `USDT/CAD`) and `_build_instant_trade` (a `spend`/`receive` pair whose both legs are fiat: USDC dust swept to USD, USD → CAD).
 - **Current behavior:** counted as recognized non-events (`forex conversion … not modeled — KNOWN_ISSUES`). Previously each emitted a BUYSELL of a phantom `USD` / `CAD` asset (the fiat base treated as the traded security), which put a fake position in the crypto book and a nonsense trade in the gains report.
@@ -52,8 +57,8 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Workaround:** price lookups that need the venue use `yf_ticker.map` (`PNG.TO PNG.V`).
 
 ### Trade reversals across export files
-- **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI).
-- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. A Questrade CIL/REI reversal must find its original in the SAME export file, else the parse is refused.
+- **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI / stock dividend).
+- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. A Questrade CIL/REI/stock-dividend reversal must find its original in the SAME export file, else the parse is refused.
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
@@ -69,10 +74,15 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 Capabilities one broker parser has that a comparable one lacks. The ones below are deferred because they need a real broker sample to implement safely, or are a design decision.
 
-### Webull does not handle option expiry/assignment
-- **Where:** `src/taxjson/lib/brokerages/webull.py` — only `action_raw in ('BUY','SELL')` rows are processed.
-- **Current behavior:** A Webull option that expires/gets assigned under a non-BUY/SELL action code is skipped (the long position never closes → phantom). The skip is at least COUNTED now (the parser's skipped-actions summary names the unhandled code), and settlement dates are correct — the CSV Date column IS the settlement date, with the trade date back-computed era-aware (fixed in the 2026-07 date-semantics audit). IB/Questrade/RBC all distinguish expiry/assignment.
-- **Why deferred:** no Webull options-with-expiry CSV sample on hand to confirm the action-code/field layout; implementing blind risks mis-parsing. Provide a Webull options statement to graduate this.
+### Webull exercise/assignment inference
+- **Where:** `src/taxjson/lib/brokerages/webull.py` — `_mark_assignments`.
+- **Current behavior:** Webull's Trading Summary shows an exercise or assignment only as a $0 option close plus an ordinary stock trade at the strike. The parser pairs them (both legs ASSIGN, premium folded into the shares under s.49(3)) when the stock trade is on the same underlying (the row's own `@Symbol`), for 100 x contracts shares in the matching direction, at the strike, settling -1..+7 days from the close, AND carries Webull's $1.00 exercise/assignment charge; the smallest settle gap wins across every option, and exports beside the file are searched too (a Dec-31 assignment whose shares settle in January). Every inferred pair is named on stderr. A trade at the strike with an ordinary commission is NOT paired (a limit order at a round strike after a worthless expiry) and is named as a warning instead.
+- **Why this is the choice:** the export has no action code for exercise/assignment; the $1.00 charge is the only evidence that separates a real one from a coincidental trade. If Webull changes that charge, a real assignment is booked as an expiry plus a trade, with the warning naming it.
+
+### Webull Trading Summary carries no income
+- **Where:** `src/taxjson/lib/brokerages/webull.py` — the Trading Summary holds BUY/SELL rows only.
+- **Current behavior:** Webull interest and dividends (T5 slips) are not in any Webull input, so the account's income summary leaves them out. Enter them by hand in a `.tt` file in the account's folder: `INTEREST 2025-12-31 16:00:00 USD 1149.27` (T5 box 13; a slip with a blank box 27 is CAD), `DIVIDEND ...` for dividends.
+- **Why:** Webull exports no income file the parser could read.
 
 ### Questrade emits no standalone INTEREST or withholding-TAX rows
 - **Where:** `src/taxjson/lib/brokerages/questrade.py` — strips `TAX WITHHELD`/`NON-RES` only as description-key noise; no TAX/INTEREST emission.
@@ -89,8 +99,30 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** RBC now emits a TRANSFER for an in-kind security move (Activity `Transfers`, e.g. a DTC transfer-in). For sheltered accounts (`transfers = true`) it's kept; for **taxable** accounts `transfers` stays **off**, so the row is dropped.
 - **Why this is intentional (decided 2026-06):** taxable cost basis must be computed from *actual* buys and sells — a transfer-in carries no reliable ACB (RBC ships book value 0), so accepting it would fabricate basis. Dropping it instead leaves the position looking short until the user supplies the real acquisition history; that phantom short is the **correct signal** (surfaced by `taxjson-missing-history`) that actual buys are missing, not something to paper over with a transfer. Do not flip the taxable default.
 
-### Questrade stock dividends enter the book at $0 cost
-- **Where:** `src/taxjson/lib/brokerages/questrade.py` — the `DIS` + stock-dividend branch (added 2026-08, commit 40d51bb).
+### Trust distributions are dated by pay date, not record date
+- **Where:** `src/taxjson/lib/brokerages/rbc_direct.py`, `questrade.py` — a DIVIDEND row is dated by the export's Date / Transaction Date (the pay date); the `REC mm/dd/yy PAY mm/dd/yy` in the description is not read.
+- **Current behavior:** a Canadian trust ETF's distribution with a December record date paid in January (XIC, HDIV, SMAX, a money-market fund) is on the PRIOR year's T3 (s.104(13): payable in the trust's year) but lands in the next year of `divs-sum`, `estimate` and the instalment figures. Filed numbers come from the slips and capital gains / ACB are unaffected, but the "slips vs `divs-sum`" check in docs/filing.md disagrees by those payments every year.
+- **Why deferred (owner decision):** the fix must tell a TRUST (record-date year) from a CORPORATION paying a "distribution" (split-share corps FFN, FTN, DFN, BK, LFE, YCM: T5, taxed when received), and neither export says which. Options: (a) keep pay date and document the reconciling items; (b) date "DIST ON ... REC 12/xx PAY 01/xx" rows to the record year with a per-symbol trust/corporation list (`distributions.map` or a new map); (c) record-date for every DIST row with a corporate exception list. (2026-09 audit R1-7, S062-01.)
+- **Workaround:** when reconciling, move the January rows whose REC date is in December to the prior year by hand.
+
+### RBC exports by Date miss back-dated year-end book-cost rows
+- **Where:** the RBC export window (not the parser: `rbc_direct.py:_build_book_adjust` books the rows correctly when present).
+- **Current behavior:** RBC posts year-end book-cost adjustments ("2022 NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST", a year-end ROC) dated Dec 31 but only in the following spring. An export for the calendar year taken before then, and next year's export (which starts Jan 1), both lack them; nothing in the inputs can show the gap (2026-09 audit R1-85: a 2023 VDY loss understated by 5,291.90).
+- **Workaround:** export each RBC year with an end date after the following June (or re-export the prior year once the T3s are out) and keep the overlapping files: overlapping downloads of one account are de-duplicated row by row.
+
+### RBC notional distributions raise ACB only
+- **Where:** `src/taxjson/lib/brokerages/rbc_direct.py:_build_book_adjust`.
+- **Current behavior:** a "NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST $x" row becomes an ACB increase (ADJUST `dist`), and the parse now warns that the distribution itself is income on the fund's T3 (usually box 21) and is NOT in taxjson's income totals (2026-09 audit S063-17).
+- **Why deferred (owner decision):** booking it as income needs its character (capital-gain distribution vs other income), which only the T3 gives; booking it as a dividend would gross it up as eligible. Take the amount from the slip.
+
+### RBC export "as of" date is not a coverage check
+- **Where:** `rbc_direct.py:_find_header` skips the "Activity Export as of <date>" preamble; `checklist.py` `inputs-frozen` looks at the latest activity across ALL sources.
+- **Current behavior:** an RBC export taken before year-end (so missing a late-December sale) is accepted, and the checklist can call the inputs complete from another broker's later dates (2026-09 audit S063-22, the RBC sibling of the IB statement-period item).
+- **Why deferred:** needs a per-statement coverage record carried from the parsers into `run`/`checklist`; the export's timestamp is only an upper bound on coverage (RBC does not write the chosen date range).
+- **Workaround:** export RBC activity after Jan 31 of the next year.
+
+### Questrade, IB and RBC stock dividends enter the book at $0 cost
+- **Where:** `src/taxjson/lib/brokerages/questrade.py` — the `DIS` + stock-dividend branch (added 2026-08, commit 40d51bb); `ib_extractor.py` — a Corporate Actions `Stock Dividend` row (2026-09; IB's exact wording is modelled, not seen in a real statement). IB's note (an `ATTENTION` line on the console) also shows the row's Value.; RBC's `DIS - ... STK DIV` rows follow the same convention (`rbc_direct.py:_build_stock_dividend`).
 - **Current behavior:** a STOCK DIVIDEND row (split-share corps paying non-cash share dividends) is parsed as a zero-cost, zero-cash BUYSELL so the delivered shares exist in inventory (previously the row was silently discarded and the position went phantom-short at the next full sale). The taxable amount of a stock dividend is the fund's *declared* amount, which the CSV does not carry, so the shares enter at $0 cost and a stderr `NOTE:` names the symbol, date, and share count.
 - **Impact:** registered accounts — none. Taxable accounts — ACB is understated (gain overstated at sale) until the declared amount is supplied; the zero-basis walk also surfaces the position via `taxjson find-missing-history`.
 - **Workaround (the intended flow):** add the fund's declared per-share amount for the record date to `distributions.map`; `taxjson run` converts it into the ACB-raising ADJUST.
@@ -167,6 +199,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `taxjson estimate` / `lib/tax_estimate.py`.
 - **Current behavior:** a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign (15% FTC assumed). A Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson scan` flags the cross-listing case. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
 
+### Estimate has no input for a minimum tax carryover
+- **Where:** `taxjson estimate` / `taxjson instalments` (`lib/tax_estimate.py`).
+- **Current behavior:** minimum tax (AMT) paid in the 7 preceding years is creditable against regular tax above the minimum (ITA s.120.2; T691 Part 8, T1 line 40427, and the provincial piggyback such as ON428 line 59). The estimate cannot take that carryover, so in a year where regular tax exceeds the minimum it overstates tax — and the current-year instalment basis, which uses total tax, overstates by the full credit. When AMT does not bind, the estimate prints a NOTE with the headroom a carryover could use.
+- **Workaround:** subtract the carryover you can apply (from your T691 / notice of assessment) by hand.
+
 ### Interest expense and carrying charges are not surfaced
 - **Where:** IB `INTEREST` rows keep their sign; `sum-income` nets debit against credit interest.
 - **Current behavior:** margin interest paid (deductible under s.20(1)(c), line 22100; only 50% for the 2024+ AMT) disappears into the income total instead of being reported as a deduction. The estimate does not read interest from the books; enter the year's carrying charges yourself (`taxjson estimate --carrying-charges`, or `[estimate] carrying_charges`), which it deducts in full from regular income and at 50% in the AMT base.
@@ -197,7 +234,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Currency⇒exchange suffix map is duplicated in ~6 places
 - **Where:** `base.py`, `corp_actions.py`, `ib_extractor.py` (×3), `ticker_map.py` — each hardcodes `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
-- **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
+- **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. An explicit `.TO` in a Questrade or generic export is kept whatever the row currency (`DLR.U.TO` bought in USD), so the known USD-on-TSX case no longer depends on the map. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
 
 ## Test coverage gaps (tracked; lower priority)
 
@@ -259,7 +296,9 @@ pipeline tie-out does not consult that list, so each such sale prints
 "disposition not found in the pipeline gains file(s) — cannot tie out
 (books changed since the last run?)" and the tie-out line ends with ✗
 even though nothing is stale. Seen on the 2024 reconstruction (two BK.TO
-sales against a pre-history position). Reading fix: the audit should
+sales that RBC marks as a SHORT sale — a real short covered three days
+later, which a phantom entry had turned into missing basis; the
+missing-history report now lists broker-marked shorts apart). Reading fix: the audit should
 recognise the manual-reporting rows and tie them out as "phantom basis —
 reported manually" instead of counting them as missing.
 
@@ -308,7 +347,8 @@ item first shipped charged them twice and was removed in the 2026-09
 parse hardening; `Commission Adjustments` refunds
 are negative FEE rows; tender / voluntary-offer journals are netted
 (zero-proceeds round trip = recognized no-op, cash settlement = a
-booked sale with a NOTE). Kraken `transfer/transferpeertopeer` is
+booked sale with a NOTE; an allocation that delivers ANOTHER security
+is an UNBOOKED warning — book the exchange by hand). Kraken `transfer/transferpeertopeer` is
 custody evidence like a withdrawal; Kraken fiat-base fills and fiat-
 fiat instant trades, IB `Trades/Forex`, and Questrade `FXT` are
 recognized non-events (see the two "conversions are not modeled"

@@ -185,7 +185,7 @@ class TestGenericEmitterParity(unittest.TestCase):
                           qty_disposed=1600.0, qty_received=100.0)
         rows = resolve_event(ev, 'rollover_s_85_1_5', country='canada')
         self.assertEqual(rows[0]['action'], 'SPLIT')
-        self.assertIn('s. 85.1(5) rollover elected', rows[0]['description'])
+        self.assertIn('s. 85.1 rollover', rows[0]['description'])
         self.assertIn('100 shares received per 1600 disposed',
                       rows[0]['description'])
 
@@ -194,7 +194,7 @@ class TestGenericEmitterParity(unittest.TestCase):
                           fmv=25920.67, target_fmv=18600.0,
                           currency='CAD', target_currency='USD')
         rows = resolve_event(ev, 'taxable_disposition', country='canada')
-        self.assertIn('(taxable disposition; no CRA election filed)',
+        self.assertIn('(taxable disposition; gain reported',
                       rows[0]['description'])
 
 

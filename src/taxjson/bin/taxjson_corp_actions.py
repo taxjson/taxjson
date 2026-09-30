@@ -511,7 +511,16 @@ def main():
                   f"{args.rates} unusable ({e}); cross-currency "
                   f"exchanges are booked in the consideration's "
                   f"currency.", file=sys.stderr)
-    out = _emit_resolved(events, manifest, args.country, fx=fx)
+    try:
+        out = _emit_resolved(events, manifest, args.country, fx=fx)
+    except (KeyError, ValueError) as e:
+        # A saved election the rules cannot apply (an unknown election
+        # key, a misspelled or missing hint): refuse by name instead of
+        # a traceback — or, worse, silently $0 rows (audit S072-07).
+        msg = e.args[0] if e.args else str(e)
+        print(f"taxjson-corp-actions: error: {msg} (manifest "
+              f"{manifest_path})", file=sys.stderr)
+        raise SystemExit(2)
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 
