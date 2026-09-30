@@ -442,5 +442,139 @@ class TestRbcSymbolResolution(unittest.TestCase):
         self.assertIn("SHORT", err)
 
 
+# ============================================================= Questrade
+_QT_H = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
+         'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
+         'Activity Type,Account #,Account Type\n')
+
+
+def _qt(date, action, sym, desc, qty, cur, activity, price='0',
+        net='0'):
+    return (f'{date} 12:00:00 AM,{date} 12:00:00 AM,{action},{sym},{desc},'
+            f'{qty},{price},{net},0,{net},{cur},{activity},55500001,'  # pii-ok
+            f'Individual margin\n')
+
+
+def _qt_events(tmp, *files):
+    from taxjson.bin.taxjson_corp_actions import extract_events
+    from taxjson.lib.corp_actions import parse_questrade_corporate_actions
+    paths = []
+    for i, (header, rows) in enumerate(files):
+        p = Path(tmp) / f"qt_{i}.csv"
+        p.write_text(header + ''.join(rows))
+        paths.append(p)
+    return _quiet(extract_events, parse_questrade_corporate_actions,
+                  paths, 'margin')
+
+
+_SPIN = ('WTS {tgt} SPINOFF ON 100 SHS FROM SEC# J000001 {parent} '
+         'REC 03/01/25 PAY 03/05/25')
+
+
+class TestQuestradeSpinoffSymbols(unittest.TestCase):
+    def test_r1_141_dotted_target_gets_market_suffix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _qt_events(tmp, (_QT_H, [
+                _qt('2025-01-10', 'Buy', 'ABC', 'ABC CORP', '100', 'USD',
+                    'Trades', '10', '-1000'),
+                _qt('2025-03-05', 'DIS', 'ABC.WS',
+                    _SPIN.format(tgt='ABC CORP', parent='ABC CORP'), '10',
+                    'USD', 'Dividends')]))
+        self.assertEqual((evs[0].source_symbol, evs[0].target_symbol),
+                         ('ABC.US', 'ABC.WS.US'), err)
+
+    def test_s074_07_venture_listing_like_the_parser(self):
+        from taxjson.lib.brokerages.questrade import QuestradeBrokerage
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _qt_events(tmp, (_QT_H, [
+                _qt('2025-01-10', 'Buy', 'ABC.VN', 'ABC MINING CORP', '100',
+                    'CAD', 'Trades', '10', '-1000'),
+                _qt('2025-03-05', 'DIS', 'NEWCO.VN',
+                    _SPIN.format(tgt='NEWCO', parent='ABC MINING CORP'),
+                    '10', 'CAD', 'Dividends')]))
+        q = QuestradeBrokerage()
+        self.assertEqual(
+            (evs[0].source_symbol, evs[0].target_symbol),
+            (q.apply_currency_suffix('ABC.VN', 'CAD'),
+             q.apply_currency_suffix('NEWCO.VN', 'CAD')), err)
+
+    def test_s020_02_padded_header(self):
+        padded = ', '.join(_QT_H.strip().split(',')) + '\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _qt_events(tmp, (padded, [
+                _qt('2025-01-10', 'Buy', 'ABC', 'ABC CORP', '100', 'USD',
+                    'Trades', '10', '-1000'),
+                _qt('2025-03-05', 'DIS', 'ABCW',
+                    _SPIN.format(tgt='ABC CORP', parent='ABC CORP'), '10',
+                    'USD', 'Dividends')]))
+        self.assertEqual(len(evs), 1, err)
+        self.assertEqual(evs[0].source_symbol, 'ABC.US')
+
+    def test_s073_05_s074_08_parent_is_the_listing_held(self):
+        # QUUX bought and sold on the TSX, then bought on the NYSE: the
+        # parent of a USD spin-off is the NYSE line, in either row order.
+        rows = [
+            _qt('2025-01-05', 'Buy', 'QUUX.TO', 'QUUX CORP', '100', 'CAD',
+                'Trades', '10', '-1000'),
+            _qt('2025-01-20', 'Sell', 'QUUX.TO', 'QUUX CORP', '-100', 'CAD',
+                'Trades', '11', '1100'),
+            _qt('2025-02-03', 'Buy', 'QUUX', 'QUUX CORP', '100', 'USD',
+                'Trades', '8', '-800'),
+            _qt('2025-03-05', 'DIS', 'QUUXW',
+                _SPIN.format(tgt='QUUX CORP', parent='QUUX CORP'), '10',
+                'USD', 'Dividends'),
+        ]
+        for order in (rows, list(reversed(rows))):
+            with tempfile.TemporaryDirectory() as tmp:
+                evs, err = _qt_events(tmp, (_QT_H, order))
+            self.assertEqual(evs[0].source_symbol, 'QUUX.US', err)
+
+    def test_s074_08_two_live_listings_not_guessed(self):
+        rows = [
+            _qt('2025-01-05', 'Buy', 'BTO.TO', 'BTWO GOLD CORP', '100',
+                'CAD', 'Trades', '4', '-400'),
+            _qt('2025-01-06', 'Buy', 'BTG', 'BTWO GOLD CORP', '100', 'USD',
+                'Trades', '3', '-300'),
+            _qt('2025-03-05', 'DIS', 'NEWC',
+                _SPIN.format(tgt='NEWC', parent='BTWO GOLD CORP'), '10',
+                'USD', 'Dividends'),
+        ]
+        ids = set()
+        for order in (rows, list(reversed(rows))):
+            with tempfile.TemporaryDirectory() as tmp:
+                evs, err = _qt_events(tmp, (_QT_H, order))
+            self.assertNotIn(evs[0].source_symbol, ('BTO.TO', 'BTG.US'))
+            self.assertIn('several listings', err)
+            ids.add(evs[0].event_id)
+        self.assertEqual(len(ids), 1)
+
+    def test_s073_09_chain_across_the_year_boundary(self):
+        placeholder = _qt('2025-12-30', 'DIS', '',
+                          'WTS QZD CORP SPINOFF ON 1000 SHS FROM SEC# '
+                          'J000002 QZD CORP REC 12/29/25 PAY 12/30/25',
+                          '100', 'USD', 'Dividends')
+        release = _qt('2026-01-02', 'DIS', 'QZDW',
+                      'WTS QZD CORP SPINOFF ON 1000 SHS REC 12/29/25 PAY '
+                      '12/30/25 RELEASING AS RIGHTS DIST', '-100', 'USD',
+                      'Dividends')
+        repost = _qt('2026-01-02', 'DIS', 'QZDW',
+                     'QZD CORP PENDING RTS DIST ON 1000 SHS REC 12/29/25 '
+                     'PAY 12/30/25', '100', 'USD', 'Dividends')
+        buy = _qt('2025-06-02', 'Buy', 'QZD', 'QZD CORP', '1000', 'USD',
+                  'Trades', '1', '-1000')
+        with tempfile.TemporaryDirectory() as tmp:
+            one, _ = _qt_events(tmp, (_QT_H, [buy, placeholder, release,
+                                             repost]))
+        with tempfile.TemporaryDirectory() as tmp:
+            split, err = _qt_events(tmp, (_QT_H, [buy, placeholder]),
+                                    (_QT_H, [release, repost]))
+        from taxjson.lib.corp_actions import combine_broker_copies
+        split = combine_broker_copies(split, stream=io.StringIO())
+        self.assertEqual(len(one), 1)
+        self.assertEqual([(e.event_id, e.qty_received) for e in split],
+                         [(one[0].event_id, 100.0)], err)
+        self.assertNotIn('SKIPPED', err)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -947,24 +947,43 @@ def parse_questrade_corporate_actions(
     # lazily — this module is broker-agnostic apart from the extractors.
     from taxjson.lib.brokerages.questrade import (_FX_SETTLED_RE,
                                                   _INTERNAL_CODE_RE,
+                                                  QuestradeBrokerage,
                                                   _get_desc_key)
+    import io
+    # The parser's own symbol shape (market suffix; a dotted class share
+    # or warrant keeps its dot, a Venture .VN is the canonical .TO line)
+    # — the corp rows must land on the pools the trades are booked under
+    # (audits R1-141, S074-07).
+    _suffix = QuestradeBrokerage().apply_currency_suffix
 
     def _read(path: Path) -> List[Dict[str, str]]:
-        with Path(path).open('r', encoding='utf-8-sig') as f:
-            return list(csv.DictReader(f))
+        # Decoded and header-normalized exactly like the parser: a
+        # padded header (', ' between cells) or a UTF-16 export used to
+        # read as no rows here while the parser accepted it — the
+        # spin-off's election was silently never asked (audit S020-02).
+        raw = Path(path).read_bytes()
+        text = (raw.decode('utf-16') if raw[:2] in (b'\xff\xfe', b'\xfe\xff')
+                else raw.decode('utf-8-sig'))
+        reader = csv.DictReader(io.StringIO(text, newline=''))
+        reader.fieldnames = [h.strip() if h else h
+                             for h in (reader.fieldnames or [])]
+        return list(reader)
     all_rows = _read(csv_path)
     # The parent is usually bought in an EARLIER export (last year's)
     # than the one holding the DIS row: its ticker is looked up in every
     # export of the account, this one first (2026-09 audit — a per-file
     # lookup sent the s.86.1 ACB reduction to the SEC# code).
     lookup_rows = list(all_rows)
+    others: List[List[Dict[str, str]]] = []
     for other in context_files or []:
         if Path(other).resolve() == Path(csv_path).resolve():
             continue
         try:
-            lookup_rows.extend(_read(other))
-        except (OSError, csv.Error, UnicodeDecodeError):
+            rows_o = _read(other)
+        except (OSError, csv.Error, UnicodeError):
             continue
+        others.append(rows_o)
+        lookup_rows.extend(rows_o)
 
     def _listing(row) -> str:
         # The parser's listing rule: a CAD row that says EXCHANGE RATE
@@ -975,25 +994,64 @@ def parse_questrade_corporate_actions(
             cur = 'USD'
         return cur
 
-    # company-name key -> (ticker, listing currency); ticker -> listing
-    # currency. Trades first (highest-fidelity symbol), transfers fill
-    # positions never traded here.
-    name_to_symbol: Dict[str, tuple] = {}
-    symbol_listing: Dict[str, str] = {}
-    for activity in ('Trades', 'Transfers'):
-        for row in lookup_rows:
-            if (row.get('Activity Type') or '').strip() != activity:
+    # company-name key -> {(ticker, listing currency)}; ticker ->
+    # {listing currencies}; (ticker, listing) -> [(date, qty)] from the
+    # Trades/Transfers rows of every export. A key with several listings
+    # (an interlisted company) is resolved by the one HELD on the
+    # spin-off date, never by the first row in file order (audits
+    # S073-05, S074-08).
+    name_to_symbol: Dict[str, set] = {}
+    symbol_listing: Dict[str, set] = {}
+    moves: Dict[tuple, list] = defaultdict(list)
+    for row in lookup_rows:
+        if (row.get('Activity Type') or '').strip() not in ('Trades',
+                                                            'Transfers'):
+            continue
+        sym = (row.get('Symbol') or '').strip().lstrip('.')
+        sym = re.sub(r'\.TO$', '', sym, flags=re.IGNORECASE)
+        if not sym or _INTERNAL_CODE_RE.match(sym):
+            continue
+        lst = _listing(row)
+        symbol_listing.setdefault(sym.upper(), set()).add(lst)
+        key = _get_desc_key(row.get('Description') or '')
+        if key:
+            name_to_symbol.setdefault(key, set()).add((sym, lst))
+        try:
+            q = float((row.get('Quantity') or '0').replace(',', '') or 0)
+        except ValueError:
+            q = 0.0
+        moves[(sym, lst)].append(
+            (_parse_qt_date(row.get('Transaction Date', '')), q))
+
+    def _held_on(cand, date: str) -> float:
+        return sum(q for d, q in moves.get(cand, ()) if d <= date)
+
+    # DIS rows of EVERY export of the account: a chain whose placeholder
+    # posts in December and its release/repost in January straddles two
+    # exports, and each half alone netted to nothing or had no target
+    # symbol (audit S073-09). Rows the exports repeat (an overlapping
+    # re-download) count once — the most copies any one export holds.
+    def _ident(row) -> tuple:
+        return tuple(sorted((k, (v or '').strip()) for k, v in row.items()
+                            if k is not None and isinstance(v, str)))
+    own_ids = {_ident(r) for r in all_rows}
+    union: Dict[tuple, Tuple[Dict[str, str], int]] = {}
+    for rows_f in [all_rows] + others:
+        counts: Dict[tuple, int] = defaultdict(int)
+        firsts: Dict[tuple, Dict[str, str]] = {}
+        for r in rows_f:
+            if (r.get('Action') or '').strip() != 'DIS':
                 continue
-            sym = (row.get('Symbol') or '').strip().lstrip('.')
-            sym = re.sub(r'\.TO$', '', sym, flags=re.IGNORECASE)
-            key = _get_desc_key(row.get('Description') or '')
-            if sym and not _INTERNAL_CODE_RE.match(sym):
-                symbol_listing.setdefault(sym.upper(), _listing(row))
-                if key:
-                    name_to_symbol.setdefault(key, (sym, _listing(row)))
+            i = _ident(r)
+            counts[i] += 1
+            firsts.setdefault(i, r)
+        for i, n in counts.items():
+            if i not in union or union[i][1] < n:
+                union[i] = (firsts[i], n)
+    dis_rows = [(r, i) for i, (r, n) in union.items() for _ in range(n)]
 
     by_target: Dict[tuple, list] = defaultdict(list)
-    for row in all_rows:
+    for row, ident in dis_rows:
         action_code = (row.get('Action') or '').strip()
         description = row.get('Description') or ''
         if action_code != 'DIS':
@@ -1029,10 +1087,14 @@ def parse_questrade_corporate_actions(
             'date': date, 'symbol': symbol, 'qty': qty,
             'currency': currency, 'description': description,
             'account': (row.get('Account #') or '').strip(),
+            'own': ident in own_ids,
         })
 
     events: List[CorporateAction] = []
     for _key, rows in by_target.items():
+        if not any(r['own'] for r in rows):
+            continue                    # another export's chain
+        rows.sort(key=lambda r: (r['date'], -r['qty']))
         net_qty = sum(r['qty'] for r in rows)
         if net_qty <= 0:
             # Net zero or negative means the position was distributed
@@ -1070,13 +1132,27 @@ def parse_questrade_corporate_actions(
                 break
         parent_symbol = ''
         parent_listing = ''
-        hit = name_to_symbol.get(_get_desc_key(parent_name)) \
-            if parent_name else None
+        event_date = min(r['date'] for r in rows)
+        cands = sorted(name_to_symbol.get(_get_desc_key(parent_name))
+                       or ()) if parent_name else []
+        if len(cands) > 1:
+            held = [c for c in cands if _held_on(c, event_date) > 1e-9]
+            if len(held) == 1:
+                cands = held
+            else:
+                print(f"warning: Questrade spinoff parent "
+                      f"{parent_name!r} (SEC# {parent_code}) trades under "
+                      f"several listings in this account ("
+                      f"{', '.join(_suffix(sy, c) for sy, c in cands)}) "
+                      f"and the one held on {event_date} is not clear — "
+                      f"not guessed; a rollover's parent-ACB reduction "
+                      f"would land on the SEC# code. Fold the listings "
+                      f"with a ticker.map rule.", file=sys.stderr)
+        hit = cands[0] if len(cands) == 1 else None
         if hit:
             parent_listing = hit[1].upper()
-            parent_symbol = (
-                f"{hit[0]}.{'TO' if parent_listing == 'CAD' else 'US'}")
-        elif parent_code:
+            parent_symbol = _suffix(hit[0], parent_listing)
+        elif parent_code and not cands:
             print(f"warning: Questrade spinoff parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded or transferred "
                   f"in any export of this account, so its ticker is "
@@ -1090,13 +1166,19 @@ def parse_questrade_corporate_actions(
         # account's exports; else, a CAD DIS row under a US-listed
         # parent (bought from the CAD side, EXCHANGE RATE rows) is the
         # US listing too; else the DIS row's currency.
-        if '.' not in symbol:
-            _cur = (rows[0]['currency'] or 'USD').upper()
-            listing = symbol_listing.get(symbol.upper())
-            if listing is None:
-                listing = ('USD' if _cur == 'CAD' and parent_listing == 'USD'
-                           else _cur)
-            symbol = f"{symbol}.{'TO' if listing == 'CAD' else 'US'}"
+        bare = re.sub(r'\.TO$', '', symbol.lstrip('.'), flags=re.IGNORECASE)
+        _cur = (rows[0]['currency'] or 'USD').upper()
+        listings = symbol_listing.get(bare.upper()) or set()
+        if len(listings) == 1:
+            listing = next(iter(listings))
+        else:
+            listing = ('USD' if _cur == 'CAD' and parent_listing == 'USD'
+                       else _cur)
+        if symbol.upper().endswith('.TO'):
+            listing = 'CAD' if len(listings) != 1 else listing
+        # The parser's shape: ABC.WS -> ABC.WS.US (the old "no dot yet"
+        # test left a dotted target bare), NEWCO.VN -> NEWCO.TO.
+        symbol = _suffix(bare, listing)
 
         # Ratio denominator (the parent share count the user held).
         source_qty = 0.0
@@ -1106,7 +1188,6 @@ def parse_questrade_corporate_actions(
                 source_qty = float(m.group(1))
                 break
 
-        event_date = min(r['date'] for r in rows)
         currency = rows[0]['currency']
 
         events.append(CorporateAction(

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Questrade spin-offs land on the parser's symbols.** A dotted target
+  (`ABC.WS`, a class share) was left without its market suffix and a
+  Venture `.VN` listing became `ABC.VN.TO`, so the spun-off lot and its
+  later sale sat in two pools (a phantom long, a short sale, no gain).
+  The extractor now uses the parser's own suffix rule, reads a padded or
+  UTF-16 header like the parser (the whole spin-off used to vanish), picks
+  an interlisted parent by the listing held on the spin-off date (never
+  by file order; ambiguity is refused with a warning), and nets a DIS
+  chain whose rows straddle two yearly exports.
 - **RBC spin-off parents and merger sources resolve to the right pool.**
   The parent took its market suffix from the spun-off shares' row (a TSX
   parent became `.US`), could resolve to a covered call's option code or
