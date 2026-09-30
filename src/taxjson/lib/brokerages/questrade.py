@@ -117,10 +117,13 @@ _SPINOFF_PARENT_RE = re.compile(
 _BOOK_VALUE_RE = re.compile(
     r'BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE
 )
-# FCH fee rows name the security only in the description:
-#   "ADR CUSTODY FEE # SHARES TKR RECORD DATE 06/15/25"
+# FCH fee rows name the security only in the description, after the
+# share count: "ADR CUSTODY FEE 500 SHARES XPEV RECORD DATE 8/1/25" (the
+# real wording; audit R1-77 — only the '# SHARES TKR' placeholder form
+# used to match, and the real fee landed on CASH).
 _FEE_SHARES_TICKER_RE = re.compile(
-    r'#\s*SHARES\s+([A-Z][A-Z0-9.\-]*)', re.IGNORECASE)
+    r'(?:#|\b\d[\d,]*(?:\.\d+)?)\s*SHARES\s+([A-Z][A-Z0-9.\-]*)',
+    re.IGNORECASE)
 # A quantity-bearing zero-cash DIS row of a spinoff / rights chain — a
 # corporate-action leg taxjson-corp-actions books (same marker it uses).
 _QT_CA_LEG_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b',
@@ -178,10 +181,27 @@ def _read_qt_rows(path: Path) -> List[tuple]:
     reader.fieldnames = header
     rows = []
     for lineno, row in enumerate(reader, 2):
+        extra = [v for v in (row.get(None) or []) if (v or '').strip()]
         vals = [str(v or '').strip() for k, v in row.items()
                 if k is not None]
-        if not any(vals):
+        if not any(vals) and not extra:
             continue              # blank trailer line: not a row
+        # A quote left open inside a field swallows the NEXT row(s) into
+        # it and shifts the rest of the line into this row's money
+        # columns (audit S062-07; RBC's twin is R1-84). Questrade and
+        # pandas both escape quotes, so a hand-edited file is refused.
+        spill = next((v for k, v in row.items() if k is not None
+                      and ('\n' in (v or '') or '\r' in (v or ''))), None)
+        if spill is not None or extra:
+            raise BrokerageParseError(
+                f"{path.name} line {lineno}: "
+                + (f"a cell spans a line break ({spill[:60]!r})"
+                   if spill is not None else
+                   f"the row has {len(header) + len(row.get(None) or [])} "
+                   f"cells for {len(header)} columns (extra: {extra[:3]})")
+                + " — an unescaped quote or comma swallowed or shifted "
+                  "cells; refusing to guess which row they belong to. "
+                  "Fix the stray quote/comma in the CSV and re-run.")
         rows.append((lineno, row))
     return rows
 
@@ -431,8 +451,9 @@ class QuestradeBrokerage(BaseBrokerage):
                           f"under its own symbol, but the same security "
                           f"({(row.get('Description') or '')[:50]!r}) "
                           f"trades as {', '.join(others)} — if they are "
-                          f"one security, fold them with a ticker.map "
-                          f"rule.", file=sys.stderr)
+                          f"one security and ticker.map does not already "
+                          f"fold them, add a ticker.map rule.",
+                          file=sys.stderr)
             return sym, cur
         if len(cands) == 1:
             return next(iter(cands))
@@ -444,7 +465,8 @@ class QuestradeBrokerage(BaseBrokerage):
                       f"({(row.get('Description') or '')[:60]!r}) matches "
                       f"several traded symbols "
                       f"({', '.join(s for s, _ in sorted(cands))}) — not "
-                      f"rebound; map it with a ticker.map rule.",
+                      f"rebound; map it with a ticker.map rule (moot if "
+                      f"ticker.map already maps it).",
                       file=sys.stderr)
         elif _INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned:
             # A row booked under Questrade's internal code that no trade
@@ -455,14 +477,17 @@ class QuestradeBrokerage(BaseBrokerage):
             # finding (audit R1-67, S062-24, R1-3).
             self._code_warned.add(sym)
             where = self._where(lineno) if lineno else self._qt_name
+            # Printed at parse time, before ticker.map is applied: say
+            # it is moot once the line exists (audit S063-10).
+            _key = self.apply_currency_suffix(sym, currency)
             msg = (f"{where}: {(row.get('Action') or '').strip() or '?'} "
                    f"row keeps internal symbol code {sym!r} "
                    f"({(row.get('Description') or '')[:60]!r}) — no trade "
                    f"or transfer in this account's exports resolves it. "
-                   f"Map it to the real ticker with a ticker.map line "
-                   f"(GLOBAL {self.apply_currency_suffix(sym, currency)} "
+                   f"Unless ticker.map already maps {_key}, add "
+                   f"GLOBAL {_key} "
                    f"<TICKER>.{self.apply_currency_suffix('X', currency)[2:]}"
-                   f") or the position will fragment.")
+                   f" or the position will fragment.")
             print(f"warning: {msg}", file=sys.stderr)
             self.lint_findings.append(msg)
         return sym, currency
@@ -553,7 +578,8 @@ class QuestradeBrokerage(BaseBrokerage):
             # 'STK SPLIT' in the description — must be checked BEFORE the
             # dividend branch, which would otherwise drop it as a $0 dividend
             # and lose the split shares entirely.
-            if self._is_stock_split(action_raw, activity_type, desc):
+            if (self._is_stock_split(action_raw, activity_type, desc)
+                    and not self._is_cash_only(row)):
                 tx = self._parse_split(row, currency, desc, lineno)
                 if tx:
                     self.note_row_consumed()
@@ -1247,9 +1273,23 @@ class QuestradeBrokerage(BaseBrokerage):
         qty_s = self._num(row, 'Quantity', lineno)
         net_s = self._num(row, 'Net Amount', lineno)
         qty, net = abs(qty_s), abs(net_s)
-        if qty <= 0 or net <= 0:
-            self.count_skip("REI row with no shares/cost")
+        if qty <= 1e-12 and net < 0.005:
+            self.count_nonevent("REI row with no shares and no cash")
             return None
+        if qty <= 1e-12 or net < 0.005:
+            # Units with no cash (an in-kind reinvestment: is there a
+            # separate cash DIV row? the export does not say) or cash
+            # with no units. Skipping it lost the units and left a
+            # phantom short at the next sale, under a note that said the
+            # row had no shares (audit S063-06). RBC refuses the same.
+            raise BrokerageParseError(
+                f"{self._where(lineno)}: REI (reinvestment) row with "
+                f"Quantity {qty_s:g} and Net Amount {net_s:,.2f} "
+                f"({desc[:50]!r}) — a reinvestment buys units for cash; "
+                f"with {'no cash' if qty > 1e-12 else 'no units'} the "
+                f"parser cannot tell the purchase (and any income) apart. "
+                f"Book it in a .tt file (the units at the REINV@ price) "
+                f"and delete the row.")
         if (qty_s > 0) == (net_s > 0):
             raise BrokerageParseError(
                 f"{self._where(lineno)}: REI row with Quantity {qty_s:g} "
@@ -1296,6 +1336,21 @@ class QuestradeBrokerage(BaseBrokerage):
         du = (desc or '').upper()
         return ('STK SPLIT' in du or 'STOCK SPLIT' in du) and (
             action_raw == 'DIS' or activity_type == 'Dividends')
+
+    @staticmethod
+    def _is_cash_only(row) -> bool:
+        """Cash and no shares: a dividend, whatever its description
+        says ('... POST STOCK SPLIT' dropped the income into the split
+        branch — audit S063-07). Unparseable cells: not cash-only (the
+        branch that reads them names the row)."""
+        try:
+            qty = parse_strict_number(row.get('Quantity'), allow_blank=True,
+                                      blank=0.0)
+            net = parse_strict_number(row.get('Net Amount'),
+                                      allow_blank=True, blank=0.0)
+        except BrokerageParseError:
+            return False
+        return abs(qty) < 1e-9 and abs(net) >= 0.005
 
     def _parse_split(self, row, currency, desc, lineno):
         """Emit a SPLIT scaling the existing pool by (held + received)/held —

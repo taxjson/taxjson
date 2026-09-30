@@ -143,5 +143,73 @@ class TestSettleBeforeTrade(unittest.TestCase):
         self.assertEqual(txs[0]['date_settle'], '2023-12-29')
 
 
+# --------------------------------------------------- Questrade row shapes
+
+class TestQtRowShapesLow(unittest.TestCase):
+
+    def test_adr_custody_fee_real_wording_binds_the_ticker(self):
+        """R1-77: Questrade's real text is '500 SHARES XPEV'."""
+        fee = q(td='2025-09-16', action='FCH', sym='',
+                desc='ADR CUSTODY FEE 500 SHARES QZPV RECORD DATE 8/1/25',
+                qty='0', price='0', gross='0', comm='0', net='-10.00',
+                act='Fees and rebates')
+        txs, _, _ = qt_parse(fee)
+        self.assertEqual([(t['action'], t['symbol'], t['net_amount'])
+                          for t in txs], [('FEE', 'QZPV.US', 10.0)])
+
+    def test_a_swallowed_row_is_refused(self):
+        """S062-07: an unescaped quote swallows the next row and shifts
+        its cells into this row's money columns."""
+        good = q(sym='QZA', desc='QZA CORP')
+        broken = good.replace('QZA CORP', '"QZA CORP ""', 1)
+        nxt = q(sym='QZD', desc='"QZD CORP"', qty='50', price='20',
+                gross='-1000', comm='0', net='-1000')
+        with self.assertRaises(BrokerageParseError) as cm:
+            qt_parse(broken + nxt + q(sym='QZG', desc='QZG CORP'))
+        self.assertIn('line', str(cm.exception))
+
+    def test_extra_cells_are_refused(self):
+        body = q(sym='QZA', desc='QZA CORP').rstrip('\n') + ',EXTRA\n'
+        with self.assertRaises(BrokerageParseError):
+            qt_parse(body)
+
+    def test_cash_dividend_mentioning_a_split_stays_a_dividend(self):
+        """S063-07."""
+        div = qdiv('QZA', 'QZA CORP CASH DIV ON 100 SHS POST STOCK SPLIT',
+                   '25.00', cur='CAD')
+        txs, err, _ = qt_parse(div)
+        self.assertEqual([(t['action'], t['net_amount']) for t in txs],
+                         [('DIVIDEND', 25.0)], err)
+
+    def test_real_split_row_still_splits(self):
+        buy = q(td='2025-01-06', sym='QZS', desc='QZS CORP', qty='10',
+                price='10', gross='-100', comm='0', net='-100', cur='CAD')
+        split = q(td='2025-03-03', action='DIS', sym='QZS',
+                  desc='QZS CORP STK SPLIT ON 10 SHS', qty='10', price='0',
+                  gross='0', comm='0', net='0', cur='CAD', act='Dividends')
+        txs, _, _ = qt_parse(buy + split)
+        self.assertEqual(of(txs, action='SPLIT')[0]['quantity'], 2.0)
+
+    def test_reinvestment_with_units_and_no_cash_is_refused(self):
+        """S063-06: it was skipped as 'no shares/cost' and the units
+        were lost (phantom short at the next sale)."""
+        rei = q(td='2025-03-03', action='REI', sym='QZR',
+                desc='QZR FUND REINV@C$10.00000', qty='5', price='0',
+                gross='0', comm='0', net='0', cur='CAD',
+                act='Dividend reinvestment')
+        with self.assertRaises(BrokerageParseError) as cm:
+            qt_parse(rei)
+        self.assertIn('no cash', str(cm.exception))
+
+    def test_internal_code_warning_says_it_is_moot_once_mapped(self):
+        """S063-10: the parse-time warning cannot see ticker.map."""
+        xfer = q(td='2026-02-02', action='TF6', sym='R223608',
+                 desc='QZF HOLDINGS TRANSFER BOOK VALUE 1000.00', qty='10',
+                 price='0', gross='0', comm='0', net='0', cur='CAD',
+                 act='Transfers')
+        _, err, _ = qt_parse(xfer, taxable=False)
+        self.assertIn("Unless ticker.map already maps R223608.TO", err)
+
+
 if __name__ == '__main__':
     unittest.main()
