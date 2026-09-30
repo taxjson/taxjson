@@ -332,5 +332,96 @@ class TestMalformedTickerMapLine(unittest.TestCase):
         self.assertIn("ticker.map:2", buf.getvalue())
 
 
+class TestEstimateDeductions(unittest.TestCase):
+    """R1-213: the estimate had no input for deductions below line
+    15000 (RRSP 20800, carrying charges 22100) and other_income had to
+    be >= 0, so a no-salary year's tax was overstated and a binding AMT
+    could read as not binding."""
+
+    _KW = dict(realized=380000.0, eligible_div=112000.0, year=2025,
+               foreign_div=12000.0, pil=0.0, other_losses=0.0,
+               province="ON", actual_withheld=800.0, staking=2700.0)
+
+    def test_deductions_lower_regular_tax_like_less_income(self):
+        from taxjson.lib.tax_estimate import estimate_canada
+        plain = estimate_canada(other_income=50000.0, **self._KW)
+        ded = estimate_canada(other_income=50000.0, deductions=30000.0,
+                              **self._KW)
+        less = estimate_canada(other_income=20000.0, **self._KW)
+        self.assertAlmostEqual(ded["tax_with"]["total"],
+                               less["tax_with"]["total"], places=2)
+        self.assertLess(ded["tax_with"]["total"],
+                        plain["tax_with"]["total"])
+        self.assertEqual(ded["deductions"], 30000.0)
+
+    def test_deductions_beyond_other_income_reduce_investment_income(self):
+        from taxjson.lib.tax_estimate import estimate_canada
+        zero = estimate_canada(other_income=0.0, **self._KW)
+        ded = estimate_canada(other_income=0.0, deductions=32490.0,
+                              **self._KW)
+        self.assertLess(ded["tax_with"]["total"],
+                        zero["tax_with"]["total"] - 5000)
+        # No other income: the base run is zero either way, never
+        # negative.
+        self.assertEqual(ded["tax_base"]["total"], 0.0)
+        self.assertGreaterEqual(ded["trace_base"]["ti"], 0.0)
+
+    def test_carrying_charges_count_half_under_amt(self):
+        from taxjson.lib.tax_estimate import estimate_canada
+        rrsp = estimate_canada(other_income=0.0, deductions=10000.0,
+                               **self._KW)
+        cc = estimate_canada(other_income=0.0, carrying_charges=10000.0,
+                             **self._KW)
+        # Regular tax: identical (both deducted in full).
+        self.assertAlmostEqual(rrsp["tax_with"]["total"],
+                               cc["tax_with"]["total"], places=2)
+        # AMT base: RRSP in full, carrying charges at 50%.
+        self.assertAlmostEqual(cc["amt"]["adjusted_income"]
+                               - rrsp["amt"]["adjusted_income"],
+                               5000.0, places=2)
+
+    def test_negative_deductions_refused(self):
+        from taxjson.lib.tax_estimate import estimate_canada
+        with self.assertRaises(ValueError):
+            estimate_canada(other_income=0.0, deductions=-1.0, **self._KW)
+
+    def _estimate_project(self, tmp, extra=""):
+        cfg = _CONFIG.replace('source_currencies = []',
+                              'source_currencies = []\nprovince = "ON"')
+        root = _project(tmp, cfg + extra)
+        r = _run_cli(root, "run", "--no-input")
+        assert r.returncode == 0, r.stderr
+        return root
+
+    def test_cli_flags_and_config_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._estimate_project(tmp)
+            base = json.loads(_run_cli(root, "estimate", "--json",
+                                       "--other-income", "60000").stdout)
+            r = _run_cli(root, "estimate", "--json", "--other-income",
+                         "60000", "--deductions", "20000",
+                         "--carrying-charges", "1000")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            flg = json.loads(r.stdout)
+            (root / "taxjson.toml").write_text(
+                (root / "taxjson.toml").read_text()
+                + "\n[estimate]\nother_income = 60000\n"
+                  "deductions = 20000\ncarrying_charges = 1000\n")
+            r2 = _run_cli(root, "estimate", "--json")
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            cfgd = json.loads(r2.stdout)
+            txt = _run_cli(root, "estimate").stdout
+            bad = _run_cli(root, "estimate", "--deductions", "-5")
+        e0, e1, e2 = base["estimate"], flg["estimate"], cfgd["estimate"]
+        self.assertLess(e1["tax_with"]["total"], e0["tax_with"]["total"])
+        self.assertEqual(e1["tax_with"], e2["tax_with"])
+        self.assertEqual(e1["deductions"], 20000.0)
+        self.assertEqual(e1["carrying_charges"], 1000.0)
+        self.assertIn("Deductions", txt)
+        self.assertIn("ESTIMATE ONLY", txt)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("non-negative", bad.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

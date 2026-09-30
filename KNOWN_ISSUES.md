@@ -151,7 +151,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Interest expense and carrying charges are not surfaced
 - **Where:** IB `INTEREST` rows keep their sign; `sum-income` nets debit against credit interest.
-- **Current behavior:** margin interest paid (deductible under s.20(1)(c), line 22100; only 50% for the 2024+ AMT) disappears into the income total instead of being reported as a deduction. The estimate excludes interest entirely.
+- **Current behavior:** margin interest paid (deductible under s.20(1)(c), line 22100; only 50% for the 2024+ AMT) disappears into the income total instead of being reported as a deduction. The estimate does not read interest from the books; enter the year's carrying charges yourself (`taxjson estimate --carrying-charges`, or `[estimate] carrying_charges`), which it deducts in full from regular income and at 50% in the AMT base.
 
 ### Spin-off default wording
 - **Where:** `lib/corp_actions.py` spin-off default.

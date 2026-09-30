@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The Canada estimate takes deductions.** `--deductions` (RRSP 20800,
+  FHSA, RPP ...) and `--carrying-charges` (line 22100), or
+  `deductions`/`carrying_charges` in `[estimate]` (which `instalments`
+  reads too), lower net and taxable income; the AMT base takes the
+  deductions in full and carrying charges at 50%. Before, a year with
+  an RRSP deduction and little other income was overstated (the
+  owner's filed 2025 mix: +16,082 before, +1,354 after) and a binding
+  AMT could read as not binding.
 - **A malformed `ticker.map` line stops the run.** A typo such as
   `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
   ACB pools and the Schedule 3 gain, and the warning reached only

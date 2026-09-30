@@ -426,7 +426,34 @@ def _die(msg: str) -> None:
     sys.exit(prefix + msg)
 
 
-_ESTIMATE_KEYS = ("other_income", "other_losses")
+_ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
+                  "carrying_charges")
+
+
+def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
+    """(deductions, carrying_charges) for the Canada estimate: CLI
+    flags win, else the [estimate] table, else zero. `deductions` are
+    lines 20700-23500 the AMT allows in full (RRSP 20800, FHSA, RPP);
+    `carrying_charges` is line 22100 (50% under the post-2024 AMT).
+    other_income stays >= 0: deductions are their own input, not a
+    negative income (R1-213)."""
+    import math as _math
+    cfg = _soft_config(root).get("estimate") or {}
+    out = []
+    for key in ("deductions", "carrying_charges"):
+        v = getattr(args, key, None)
+        src = f"--{key.replace('_', '-')}"
+        if v is None:
+            v, src = cfg.get(key), f"[estimate] {key}"
+        try:
+            f = float(v or 0.0)
+        except (TypeError, ValueError):
+            _die(f"{src} must be a number, got {v!r}")
+        if not _math.isfinite(f) or f < 0:
+            _die(f"{src} must be a non-negative finite number (the "
+                 f"amount you deduct, as a positive figure), got {v!r}")
+        out.append(f)
+    return out[0], out[1]
 
 
 def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
@@ -2612,6 +2639,8 @@ _TEMPLATE_INSTALMENTS = """
 # [estimate]
 # other_income = 120000
 # other_losses = 0
+# deductions = 0            # RRSP 20800, FHSA, RPP ... (full under AMT)
+# carrying_charges = 0      # line 22100 (50% under AMT)
 
 # Tax instalments (`taxjson instalments`, and a summary inside
 # `taxjson estimate`). Uncomment and fill in YOUR figures.
@@ -5203,8 +5232,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # TAXABLE accounts' income.
     want_estimate = (getattr(args, "other_income", None) is not None
                      or getattr(args, "other_losses", None) is not None
+                     or getattr(args, "deductions", None) is not None
+                     or getattr(args, "carrying_charges", None) is not None
                      or getattr(args, "estimate", False))
     _oi, _ol = _estimate_inputs(root, args)
+    _ded, _cc = _estimate_deductions(root, args)
     _foreign_by_acct: Dict[str, float] = {}
     cfg = load_config(root) if (root / "taxjson.toml").exists() else {}
     taxable_accounts = {n for n, c in cfg.get("accounts", {}).items()
@@ -5508,6 +5540,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             doc["estimate"] = _tax_estimate_result(
                 cfg, est,
                 other_income=_oi, other_losses=_ol,
+                deductions=_ded, carrying_charges=_cc,
                 province=getattr(args, "province", None),
                 actual_withheld=_actual_withholding(
                     cache, set(files) & taxable_accounts,
@@ -5608,6 +5641,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _print_tax_estimate(
             cfg, est, base,
             other_income=_oi, other_losses=_ol,
+            deductions=_ded, carrying_charges=_cc,
             province=getattr(args, "province", None),
             verbose=getattr(args, "verbose", False),
             actual_withheld=_actual_withholding(
@@ -5802,12 +5836,17 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         _die("instalments are modeled for canada only (US estimated "
              "taxes use a different regime — see KNOWN_ISSUES).")
     _oi, _ol = _estimate_inputs(root, args)
+    _ded, _cc = _estimate_deductions(root, args)
     _argv = [sys.executable, "-m", "taxjson.bin.taxjson_run",
              "-C", str(root), "estimate", "--json"]
     if _oi:
         _argv += ["--other-income", repr(_oi)]
     if _ol:
         _argv += ["--other-losses", repr(_ol)]
+    if _ded:
+        _argv += ["--deductions", repr(_ded)]
+    if _cc:
+        _argv += ["--carrying-charges", repr(_cc)]
     res = _run(_argv, capture_output=True)
     if res.returncode != 0:
         _die(f"could not compute the estimate it builds on: "
@@ -5915,7 +5954,9 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
 def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                          other_income: float, other_losses: float,
                          province: Optional[str],
-                         actual_withheld: Optional[float] = None
+                         actual_withheld: Optional[float] = None,
+                         deductions: float = 0.0,
+                         carrying_charges: float = 0.0
                          ) -> Dict[str, Any]:
     """Resolve country/province and run the estimator — shared by the
     text block and `sum --json` so the two can never disagree. For usa,
@@ -5942,9 +5983,15 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                                    other_losses=other_losses,
                                    province=prov,
                                    actual_withheld=actual_withheld,
-                                   staking=est.get("staking", 0.0))
+                                   staking=est.get("staking", 0.0),
+                                   deductions=deductions,
+                                   carrying_charges=carrying_charges)
         except ValueError as e:
             _die(str(e))
+    if deductions or carrying_charges:
+        _die("--deductions/--carrying-charges are modelled for the "
+             "canada estimate only (the US estimate is experimental and "
+             "uses the standard deduction).")
     unterm = est["realized"] - est["st"] - est["lt"]
     st_in = est["st"]
     if abs(unterm) > 0.01:
@@ -5965,6 +6012,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         base_cur: str, *, other_income: float,
                         other_losses: float,
                         province: Optional[str],
+                        deductions: float = 0.0,
+                        carrying_charges: float = 0.0,
                         verbose: bool = False,
                         actual_withheld: Optional[float] = None,
                         root: Optional[Path] = None,
@@ -5977,7 +6026,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
     money = fmt_money
     r = _tax_estimate_result(cfg, est, other_income=other_income,
                              other_losses=other_losses, province=province,
-                             actual_withheld=actual_withheld)
+                             actual_withheld=actual_withheld,
+                             deductions=deductions,
+                             carrying_charges=carrying_charges)
     # The result carries the vintage apply_vintage() actually selected
     # for the project year — never the import-time module default.
     RATE_VINTAGE = r.get("vintage", "?")
@@ -6000,7 +6051,13 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             ("Payments in lieu", est["pil"], ""),
         ] + ([("Crypto staking (ordinary)", r["staking"],
                "[no withholding, no FTC]")]
-             if r.get("staking") else [])
+             if r.get("staking") else []) \
+          + ([("Deductions", -r["deductions"],
+               "[lines 20700-23500, e.g. RRSP 20800; in full under AMT]")]
+             if r.get("deductions") else []) \
+          + ([("Carrying charges", -r["carrying_charges"],
+               "[line 22100; 50% under AMT]")]
+             if r.get("carrying_charges") else [])
         for label, amt, note in rows:
             print(f"  {label:<30}{money(amt):>14}"
                   + (f"  {note}" if note else ""))
@@ -6064,8 +6121,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                   f"vs WITH investments")
             print(f"  Taxable income: BASE {money(tb['ti'])} | WITH "
                   f"{money(tw['ti'])} = "
-                  f"{money(other_income + est['pil'] + r.get('staking', 0.0))}"
-                  f" ordinary + {money(r['taxable_gain'])} taxable gains"
+                  f"{money(other_income + est['pil'] + r.get('staking', 0.0) - r.get('deductions', 0.0) - r.get('carrying_charges', 0.0))}"
+                  f" ordinary (after deductions) + {money(r['taxable_gain'])} taxable gains"
                   f" + {money(r['grossed_eligible'])} grossed dividends"
                   f" + {money(est['div_foreign'])} foreign")
             print(f"  {'FEDERAL':<36}{'BASE':>14}{'WITH':>14}")
@@ -10019,6 +10076,23 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"  3. run: taxjson -C {_shlex.quote(str(root))} run")
 
 
+def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
+    """--deductions / --carrying-charges for the Canada estimate
+    (`sum` and `estimate`); [estimate] deductions / carrying_charges
+    are the config equivalents."""
+    p.add_argument("--deductions", type=float, default=None,
+                   metavar="AMT",
+                   help="Canada: deductions from total income that the "
+                        "AMT allows in full — RRSP (line 20800), FHSA, "
+                        "RPP ... (default: [estimate] deductions, else 0)")
+    p.add_argument("--carrying-charges", type=float, default=None,
+                   metavar="AMT",
+                   help="Canada: interest and carrying charges (line "
+                        "22100), deducted in full from regular income "
+                        "and at 50%% in the AMT base (default: "
+                        "[estimate] carrying_charges, else 0)")
+
+
 def main() -> None:
     # Tax data is private: everything this process and its pipeline
     # stages create is owner-only (files 0600, dirs 0700) whatever the
@@ -10219,6 +10293,8 @@ def main() -> None:
                        help="Prior-year capital losses (full dollars) to "
                             "net against this year's gains — turns on "
                             "the tax-estimate block")
+    for _p in (p_sum,):
+        _add_deduction_flags(_p)
     p_sum.add_argument("account", nargs="?",
                        help="Account (default: all accounts). No "
                             "PERIOD here by design: sum reports the "
@@ -10253,6 +10329,7 @@ def main() -> None:
                        help="Prior-year capital losses applied, in "
                             "FULL dollars (netted before the 50%% "
                             "inclusion)")
+    _add_deduction_flags(p_est)
     p_est.add_argument("--province", default=None,
                        help="Canada: ON|BC|AB (default: `province` "
                             "under [settings])")
