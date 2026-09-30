@@ -127,6 +127,17 @@ _ADV_NOTES_RE = re.compile(
     r'([A-Z0-9]{1,15})\b', re.IGNORECASE)
 
 
+def _cb_symbol(asset: str) -> str:
+    """The book symbol for a Coinbase asset code. Upper-cased (a
+    hand-edited `sol` beside `SOL` used to open a second pool, R1-112)
+    and ETH2 folded into ETH — Coinbase's staked-ETH wrap is the same
+    property (Coinbase itself relabels it with a 'Retail ETH
+    Deprecation' non-event; Kraken folds it the same way), so an ETH2
+    pool used to be stranded and ETH -> ETH2 realized a gain (R1-110)."""
+    sym = (asset or '').strip().upper().replace(' ', '.')
+    return 'ETH' if sym == 'ETH2' else sym
+
+
 class CoinbaseBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Coinbase"
 
@@ -141,7 +152,11 @@ class CoinbaseBrokerage(BaseBrokerage):
             header_map: Dict[str, int] = {}
             for row in reader:
                 if not header:
-                    if row and 'timestamp' in [c.lower() for c in row]:
+                    # Stripped like raw_map below: a header written
+                    # `ID, Timestamp, ...` used to be missed and the
+                    # whole file parsed to 0 rows (R1-109).
+                    if row and 'timestamp' in [c.strip().lower()
+                                               for c in row]:
                         header = row
                         raw_map = {c.lower().strip(): i
                                    for i, c in enumerate(header)}
@@ -168,6 +183,24 @@ class CoinbaseBrokerage(BaseBrokerage):
                     continue
                 if not row or len(row) < 3:
                     continue
+                # A quoted cell that never closes (Notes ending in an
+                # unescaped quote) swallows every following row into one
+                # cell: those trades vanished with no message (S056-06).
+                # Real exports never put a newline in a data cell, and
+                # never write more cells than the header.
+                if any('\n' in c or '\r' in c for c in row):
+                    raise ValueError(
+                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"a cell spans several lines — an unterminated "
+                        f"quote (e.g. in Notes) has swallowed the rows "
+                        f"after it. Fix the quoting in the file.")
+                if len(row) > len(header) and any(
+                        c.strip() for c in row[len(header):]):
+                    raise ValueError(
+                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"the row has {len(row)} cells but the header has "
+                        f"{len(header)} — misaligned columns (an unquoted "
+                        f"comma?); refusing to read it.")
 
                 type_raw = self._col(row, header_map, 'transaction type')
                 is_buy = bool(_BUY_RE.search(type_raw))
@@ -205,7 +238,11 @@ class CoinbaseBrokerage(BaseBrokerage):
                                 f"into a paired Buy+Sell "
                                 f"(USD-denominated). See KNOWN_ISSUES.md."
                             )
-                        self.note_row_consumed()
+                        if legs:
+                            # [] = a counted non-event (ETH <-> ETH2,
+                            # stablecoin <-> stablecoin), already
+                            # tallied by _build_convert.
+                            self.note_row_consumed()
                         transactions.extend(legs)
                         continue
                     # Send/Receive: custody EVIDENCE — emitted as
@@ -235,9 +272,8 @@ class CoinbaseBrokerage(BaseBrokerage):
                                 'date': _dt.strftime("%Y-%m-%d"),
                                 'time': _dt.strftime("%H:%M:%S"),
                                 'date_settle': _dt.strftime("%Y-%m-%d"),
-                                'symbol': self._col(
-                                    row, header_map,
-                                    'asset').replace(' ', '.'),
+                                'symbol': _cb_symbol(self._col(
+                                    row, header_map, 'asset')),
                                 'quantity': (-_q if _tl == 'send'
                                              else _q),
                                 'currency': self._currency(
@@ -307,7 +343,7 @@ class CoinbaseBrokerage(BaseBrokerage):
 
                 date_str = dt.strftime("%Y-%m-%d")
                 time_str = dt.strftime("%H:%M:%S")
-                symbol = asset.replace(' ', '.')
+                symbol = _cb_symbol(asset)
                 # Coinbase exports a unique per-event ID (`ID` column) for each
                 # row. Preserving it as the transaction id stops the sort-stage
                 # dedup from collapsing distinct events that happen to share
@@ -448,17 +484,32 @@ class CoinbaseBrokerage(BaseBrokerage):
             return None
         from_qty = strict_money(m.group(1), 'Convert quantity',
                                 f"Coinbase notes {notes!r}")
-        from_asset = m.group(2).upper()
+        from_raw = m.group(2).upper()
         to_qty = strict_money(m.group(3), 'Convert quantity',
                               f"Coinbase notes {notes!r}")
-        to_asset = m.group(4).upper()
-        if from_qty <= 0 or to_qty <= 0 or from_asset == to_asset:
+        to_raw = m.group(4).upper()
+        if from_qty <= 0 or to_qty <= 0 or from_raw == to_raw:
             return None
         # Cross-check the Asset column against the Notes legs — a
         # mismatch means an unknown layout, not a parsing choice.
         asset_col = (self._col(row, header_map, 'asset') or '').strip().upper()
-        if asset_col and asset_col not in (from_asset, to_asset):
+        if asset_col and asset_col not in (from_raw, to_raw):
             return None
+        from_asset, to_asset = _cb_symbol(from_raw), _cb_symbol(to_raw)
+        if from_asset == to_asset:
+            # ETH -> ETH2: two spellings of one property (R1-110). A
+            # relabel, not a disposition — unless the quantities differ,
+            # which has no modeled booking.
+            if abs(from_qty - to_qty) > 1e-8 * max(from_qty, to_qty):
+                raise ValueError(
+                    f"Coinbase Convert {notes!r}: {from_raw} and {to_raw} "
+                    f"are the same property ({from_asset}) but the "
+                    f"quantities differ ({from_qty:g} vs {to_qty:g}) — "
+                    f"not modeled; enter the difference via a .tt file "
+                    f"and remove the row.")
+            self.count_nonevent(f"{from_raw}->{to_raw} convert (same "
+                                f"property {from_asset})")
+            return []
         dt = self._ts(row, header_map, 'Convert')
         date_str = dt.strftime("%Y-%m-%d")
         time_str = dt.strftime("%H:%M:%S")
@@ -519,6 +570,8 @@ class CoinbaseBrokerage(BaseBrokerage):
         # sale. The fee then lands on the one crypto leg — capitalized
         # into a purchase, netted from a sale's proceeds.
         if from_asset in _STABLECOINS and to_asset in _STABLECOINS:
+            self.count_nonevent("stablecoin <-> stablecoin convert "
+                                "(USD cash)")
             return []
         if from_asset in _STABLECOINS:
             return [buy]
@@ -600,7 +653,7 @@ class CoinbaseBrokerage(BaseBrokerage):
         quote_leg = {
             'action': 'BUYSELL',
             'date': date_str, 'time': time_str, 'date_settle': date_str,
-            'symbol': quote,
+            'symbol': _cb_symbol(quote),
             'quantity': self.signed_quantity(q_qty,
                                              action_is_sell=not is_sell),
             'currency': tx['currency'], 'price': 0.0,
@@ -644,8 +697,20 @@ class CoinbaseBrokerage(BaseBrokerage):
     def _currency(self, row, header_map) -> str:
         """Price currency; a stablecoin quote is USD (cash model). Older
         US-retail exports have no currency column and are USD."""
-        c = (self._col(row, header_map, 'price currency') or 'USD')
-        c = c.strip().upper() or 'USD'
+        if 'price currency' not in header_map:
+            return 'USD'
+        c = (self._col(row, header_map, 'price currency') or '').strip()
+        if not c:
+            # The column exists but this cell is blank: defaulting to
+            # USD booked a CAD row's amounts in USD, converting them a
+            # second time (R1-111).
+            raise ValueError(
+                f"Coinbase row "
+                f"{self._col(row, header_map, 'timestamp')!r} "
+                f"{self._col(row, header_map, 'transaction type')!r}: "
+                f"blank Price Currency cell — refusing to guess the "
+                f"currency. Fill it in from the Coinbase statement.")
+        c = c.upper()
         return 'USD' if c in _STABLECOINS else c
 
     def _ts(self, row, header_map, what):
