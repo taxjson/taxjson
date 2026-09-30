@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`fetch` never loses input activity.** `--trim-overlap` finds the
+  trade date by the "Transaction Date" header (a manual export with
+  Settlement Date first lost a trade the API file did not hold) and
+  writes the trimmed file atomically at 0600; the overlap guard sees an
+  upper-case `.CSV` sibling like `run` does; an IBKR Flex download that
+  does not cover the tax-year activity already in `ib_flex.csv` is
+  refused (saved as `ib_flex.csv.new`), the replaced file is kept as a
+  numbered `.bak`, and a past year's download that does not span the
+  year warns (audit R1-74, S046-14, S007-00).
 - **buy-check / sell-check read broker spellings and Montreal option
   roots.** RCI-B, "RCI B", RCI/B and RCI-B.TO are read as RCI.B(.TO) (they
   answered SAFE beside a loss on RCI.B.TO), and an option on a root that

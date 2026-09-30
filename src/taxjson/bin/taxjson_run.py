@@ -9712,7 +9712,10 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
     coexisting coverage double-counts the books."""
     hits: List[Tuple[Path, int]] = []
     import csv as _csv
-    for sib in sorted(acct_dir.glob("*.csv")):
+    # input_files, not glob("*.csv"): `run` reads QT_MANUAL.CSV too, so
+    # a case-sensitive glob let an overlapping upper-case export double
+    # the books with no warning (S046-14).
+    for sib in input_files(acct_dir, ".csv"):
         if sib == out:
             continue
         if re.fullmatch(r"questrade_\d{4}\.csv", sib.name):
@@ -9729,11 +9732,23 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
                 rows = list(_csv.reader(f))
         except Exception:
             continue
-        n = sum(1 for r in rows[1:] if r and _row_date_in_window(
-            r[0], start_iso, end_iso))
+        col = _qt_date_col(rows[0] if rows else [])
+        n = sum(1 for r in rows[1:] if len(r) > col and _row_date_in_window(
+            r[col], start_iso, end_iso))
         if n:
             hits.append((sib, n))
     return hits
+
+
+def _qt_date_col(header: List[str]) -> int:
+    """Index of Questrade's "Transaction Date" column, by header name.
+    The window is a TRADE-date window (the API's own); reading r[0]
+    trimmed by Settlement Date when a manual export had that column
+    first, deleting a trade the fetched file does not hold (R1-74)."""
+    for i, h in enumerate(header):
+        if h.strip().lstrip("\ufeff").lower() == "transaction date":
+            return i
+    return 0
 
 
 def _row_date_in_window(first_field: str, start_iso: str,
@@ -9758,11 +9773,13 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
     rows removed; unparseable rows are kept (safe side)."""
     import csv as _csv
     import io as _io
+    from taxjson.bin import taxjson_fetch as F
     with path.open(encoding="utf-8", errors="replace") as f:
         rows = list(_csv.reader(f))
+    col = _qt_date_col(rows[0] if rows else [])
     keep = [rows[0]] + [r for r in rows[1:]
-                        if not (r and _row_date_in_window(
-                            r[0], start_iso, end_iso))]
+                        if not (len(r) > col and _row_date_in_window(
+                            r[col], start_iso, end_iso))]
     removed = len(rows) - len(keep)
     if removed:
         # Never clobber an existing backup: a second --trim-overlap
@@ -9773,11 +9790,44 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
         while bak.exists():
             bak = path.with_name(f"{path.name}.bak{n}")
             n += 1
-        path.replace(bak)
+        # Copy, then write the trimmed file atomically and private
+        # (0600) like every fetched file — replace-then-write_text left
+        # a 0664 file, and no file at all if the write failed (R1-74).
+        shutil.copy2(path, bak)
         buf = _io.StringIO()
         _csv.writer(buf, lineterminator="\n").writerows(keep)
-        path.write_text(buf.getvalue(), encoding="utf-8")
+        F.write_private(path, buf.getvalue())
     return removed
+
+
+_FLEX_DATE_RE = re.compile(r"(?<!\d)(20\d{2})-?(0[1-9]|1[0-2])-?"
+                           r"(0[1-9]|[12]\d|3[01])(?!\d)")
+
+
+def _flex_dates(text: str) -> List[str]:
+    """Sorted ISO dates found on an IB statement's data rows (the
+    Statement section — generation time, period — is skipped)."""
+    out = set()
+    for line in text.splitlines():
+        if line.lstrip('"').startswith("Statement"):
+            continue
+        for m in _FLEX_DATE_RE.finditer(line):
+            out.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+    return sorted(out)
+
+
+def _flex_lost_dates(existing: str, new: str, year: Any) -> List[str]:
+    """Dates of `year` the existing ib_flex.csv covers but the new
+    download's date range does not: overwriting would delete those
+    rows. A Flex query set to 'Year to date' re-fetched in January
+    replaced a whole year of activity at exit 0 (S007-00)."""
+    if not year or not existing:
+        return []
+    old = [d for d in _flex_dates(existing) if d[:4] == str(year)]
+    got = _flex_dates(new)
+    if not got:
+        return old
+    return [d for d in old if not got[0] <= d <= got[-1]]
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -9999,16 +10049,56 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                          f"line descriptor', then re-fetch.")
             results[a] = {"source": "ibkr_flex", "file": out.name,
                           "lines": len(text.splitlines())}
+            _pyear = cfg.get("settings", {}).get("year")
+            _existing = (out.read_text(encoding="utf-8", errors="replace")
+                         if out.exists() else "")
+            _lost = _flex_lost_dates(_existing, text, _pyear)
+            _got = _flex_dates(text)
+            _span = f"{_got[0]}..{_got[-1]}" if _got else "no dated rows"
+            if _lost:
+                _new = out.with_name(out.name + ".new")
+                if not getattr(args, "dry_run", False):
+                    F.write_private(_new, text)
+                sys.exit(f"taxjson fetch: {a}: the Flex download covers "
+                         f"{_span}, but {out.name} holds {len(_lost)} "
+                         f"{_pyear} activity date(s) outside it "
+                         f"({_lost[0]}..{_lost[-1]}) — replacing it "
+                         f"would delete that activity from the books. "
+                         + ("" if getattr(args, "dry_run", False) else
+                            f"The download was saved as {_new.name} "
+                            f"(not read by `taxjson run`). ")
+                         + f"Set the Flex query's period to cover "
+                         f"{_pyear}, or move {out.name} aside to accept "
+                         f"the new file.")
             if getattr(args, "dry_run", False):
                 say(f"  would write {out.name} "
-                    f"({len(text.splitlines())} lines)")
+                    f"({len(text.splitlines())} lines, {_span})")
                 continue
+            if _existing and _existing != text:
+                # Never lose the previous statement: numbered backups,
+                # like --trim-overlap's (not read by `taxjson run`).
+                bak = out.with_name(out.name + ".bak")
+                n = 2
+                while bak.exists():
+                    bak = out.with_name(f"{out.name}.bak{n}")
+                    n += 1
+                F.write_private(bak, _existing)
             # Atomic like the Questrade path: a crash mid-write must
             # not leave a truncated statement for the next run.
             F.write_private(out, text)
-            say(f"  {out.name}: {len(text.splitlines())} lines "
+            say(f"  {out.name}: {len(text.splitlines())} lines, {_span} "
                 f"(overwritten — a Flex query re-covers its whole "
-                f"configured period)")
+                f"configured period"
+                + (f"; previous copy kept as {bak.name}"
+                   if _existing and _existing != text else "") + ")")
+            if (_pyear and _got and int(_pyear) < date_cls.today().year
+                    and (_got[0] > f"{_pyear}-01-10"
+                         or _got[-1] < f"{_pyear}-12-20")):
+                print(f"taxjson fetch: WARNING: {a}: the Flex download "
+                      f"covers {_span}, not the whole tax year "
+                      f"{_pyear} — set the query's period to the full "
+                      f"year (Jan 1 to Dec 31, plus January for "
+                      f"year-end settlements).", file=sys.stderr)
         else:
             sys.exit(f"taxjson fetch: [accounts.{a}] brokerage must be "
                      f"'questrade' or 'ibkr_flex', got {source!r}.")

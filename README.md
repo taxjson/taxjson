@@ -77,7 +77,10 @@ overrides); IBKR reads
 of the prior year, so year-boundary trades that settle in January are
 never missed — and union-merges into the file, exactly like refreshing
 a manual YTD export) and `inputs/<account>/ib_flex.csv` (overwritten — a Flex query
-re-covers its whole configured period) — the same formats the parsers
+re-covers its whole configured period; the previous file is kept as
+`ib_flex.csv.bak`, and a download that would drop activity of the tax
+year the old file holds is refused and saved as `ib_flex.csv.new`
+instead) — the same formats the parsers
 read from manual exports, which keep working side by side.
 
 A manually exported Questrade CSV with rows inside the fetched window
