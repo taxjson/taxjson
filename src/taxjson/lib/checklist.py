@@ -425,7 +425,7 @@ def d_run_clean(ctx: Ctx) -> Result:
     sums = sorted(ctx.reports.glob("*.sum")) if ctx.reports.is_dir() else []
     if not sums:
         return Result("run-clean", "blocked", "no reports — run `taxjson run`")
-    errors = 0
+    per_account: Dict[str, int] = {}
     empty_parse: List[str] = []
     for s in sums:
         try:
@@ -434,13 +434,19 @@ def d_run_clean(ctx: Ctx) -> Result:
             continue
         m = re.search(r"validation: (\d+) error", head)
         if m:
-            errors += int(m.group(1))
+            # <acct>.sum and <acct>_wash.sum carry the SAME account's
+            # diagnostics: one error was counted twice (R1-252).
+            acct = s.stem[:-len("_wash")] if s.stem.endswith("_wash") \
+                else s.stem
+            per_account[acct] = max(per_account.get(acct, 0),
+                                    int(m.group(1)))
         # A non-empty export that parsed to nothing dropped a whole
         # file from the books (R1-247).
         for f in re.findall(r"warning: (\S+) parsed to 0 transactions",
                             head):
             if f not in empty_parse:
                 empty_parse.append(f)
+    errors = sum(per_account.values())
     pend = [p for p in ctx.cache.glob("*pending_elections.json")
             if p.is_file() and p.stat().st_size > 2]
     oldest_report = min(s.stat().st_mtime for s in sums)
@@ -576,6 +582,13 @@ def d_sanity(ctx: Ctx) -> Result:
                       "no `holdings = [...]` in taxjson.toml — run "
                       "`taxjson sanity ACCOUNT=FILE.toml` by hand")
     code, out, err = ctx.sub("sanity")
+    incomplete = [ln for ln in out.splitlines()
+                  if ln.startswith("INCOMPLETE")]
+    if code == 0 and incomplete:
+        # An account whose configured holdings file is missing was
+        # never compared: exit 0 covers the other groups only (2026-09
+        # audit R1-324).
+        return Result("sanity", "attention", incomplete[0])
     if code == 0:
         return Result("sanity", "done", "positions tie to the holdings files")
     return Result("sanity", "attention", _last_line(out) or _last_line(err) or f"exit {code}")
@@ -834,10 +847,17 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
         parts = [f"{c.get('mismatch', 0)} mismatch",
                  f"{c.get('missing_from_computed', 0)} missing from computed",
                  f"{c.get('missing_from_slip', 0)} missing from slip"]
+        if c.get("ambiguous_listing"):
+            parts.append(f"{c['ambiguous_listing']} ambiguous listing")
         if rep.get("unreadable_rows"):
             parts.append(f"{rep['unreadable_rows']} unreadable slip row(s)")
+        # Real mismatches first as the examples (R1-1).
+        _rank = {"MISMATCH": 0, "AMBIGUOUS_LISTING": 1,
+                 "MISSING_FROM_COMPUTED": 2, "MISSING_FROM_SLIP": 3}
         bad = [f"{r.get('symbol')} {r.get('status')}"
-               for r in (rep.get("rows") or []) if r.get("status") != "OK"]
+               for r in sorted((r for r in (rep.get("rows") or [])
+                                if r.get("status") in _rank),
+                               key=lambda r: _rank[r.get("status")])]
         if bad:
             parts.append("e.g. " + ", ".join(bad[:3]) + (" ..." if len(bad) > 3 else ""))
         return ", ".join(parts)
@@ -1046,7 +1066,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "option-boundary": d_option_boundary,
     "handoff": d_handoff,
     "t5008": d_t5008,
-    "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with `taxjson divs-sum` / `roc-sum`"),
+    "t5-t3": lambda ctx: Result("t5-t3", "manual", "compare the slips with the TAXABLE line of `taxjson divs-sum` / `roc-sum`"),
     "foreign-tax": lambda ctx: Result("foreign-tax", "manual", "from the slips"),
     "form-export": d_form_export,
     "t1135": d_t1135,

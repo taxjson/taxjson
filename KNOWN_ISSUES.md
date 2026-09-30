@@ -74,10 +74,15 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 Capabilities one broker parser has that a comparable one lacks. The ones below are deferred because they need a real broker sample to implement safely, or are a design decision.
 
-### Webull does not handle option expiry/assignment
-- **Where:** `src/taxjson/lib/brokerages/webull.py` — only `action_raw in ('BUY','SELL')` rows are processed.
-- **Current behavior:** A Webull option that expires/gets assigned under a non-BUY/SELL action code is skipped (the long position never closes → phantom). The skip is at least COUNTED now (the parser's skipped-actions summary names the unhandled code), and settlement dates are correct — the CSV Date column IS the settlement date, with the trade date back-computed era-aware (fixed in the 2026-07 date-semantics audit). IB/Questrade/RBC all distinguish expiry/assignment.
-- **Why deferred:** no Webull options-with-expiry CSV sample on hand to confirm the action-code/field layout; implementing blind risks mis-parsing. Provide a Webull options statement to graduate this.
+### Webull exercise/assignment inference
+- **Where:** `src/taxjson/lib/brokerages/webull.py` — `_mark_assignments`.
+- **Current behavior:** Webull's Trading Summary shows an exercise or assignment only as a $0 option close plus an ordinary stock trade at the strike. The parser pairs them (both legs ASSIGN, premium folded into the shares under s.49(3)) when the stock trade is on the same underlying (the row's own `@Symbol`), for 100 x contracts shares in the matching direction, at the strike, settling -1..+7 days from the close, AND carries Webull's $1.00 exercise/assignment charge; the smallest settle gap wins across every option, and exports beside the file are searched too (a Dec-31 assignment whose shares settle in January). Every inferred pair is named on stderr. A trade at the strike with an ordinary commission is NOT paired (a limit order at a round strike after a worthless expiry) and is named as a warning instead.
+- **Why this is the choice:** the export has no action code for exercise/assignment; the $1.00 charge is the only evidence that separates a real one from a coincidental trade. If Webull changes that charge, a real assignment is booked as an expiry plus a trade, with the warning naming it.
+
+### Webull Trading Summary carries no income
+- **Where:** `src/taxjson/lib/brokerages/webull.py` — the Trading Summary holds BUY/SELL rows only.
+- **Current behavior:** Webull interest and dividends (T5 slips) are not in any Webull input, so the account's income summary leaves them out. Enter them by hand in a `.tt` file in the account's folder: `INTEREST 2025-12-31 16:00:00 USD 1149.27` (T5 box 13; a slip with a blank box 27 is CAD), `DIVIDEND ...` for dividends.
+- **Why:** Webull exports no income file the parser could read.
 
 ### Questrade emits no standalone INTEREST or withholding-TAX rows
 - **Where:** `src/taxjson/lib/brokerages/questrade.py` — strips `TAX WITHHELD`/`NON-RES` only as description-key noise; no TAX/INTEREST emission.
@@ -223,7 +228,12 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
 - **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Split-share corporations, some REIT/LP distributions and small-business dividends are non-eligible (15% gross-up, smaller credit) and are overstated in the estimate; T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
 - **Why deferred:** brokers' activity exports do not carry the T5 box; the split is only known from the slip.
-- **Workaround:** the estimate is disclosed as an estimate; use the slips for the return. `taxjson reconcile-slips` compares totals.
+- **Workaround:** the estimate is disclosed as an estimate; use the T5/T3 slips for the return. (`taxjson reconcile-slips` reads only T5008 / 1099-B disposition slips; it does not check dividend slips.)
+
+### reconcile-slips cannot read per-type-code T5008s or scope a slip to one broker
+- **Where:** `src/taxjson/bin/taxjson_reconcile_slips.py`.
+- **Current behavior:** comparison is per security. IBKR issues one T5008 row per type code (SHS / OPC / WTS / FUT) identified as "Various"; such a slip cannot be compared, so transcribe a per-security CSV. Several brokers' slips are reconciled together against the account's combined dispositions; a single broker's slip cannot be scoped to that broker's own sales when one account mixes brokers (the gains rows carry no broker).
+- **Why deferred:** a per-type-code total mode needs each disposition's broker (to separate IB's sales from Webull's and RBC's in a mixed account) and a warrant/share split the books do not carry.
 
 ## Latent assumptions (audit-flagged, not firing on current data)
 
@@ -246,7 +256,7 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
   - **`<account>.sum`** — gains computed WITHOUT cross-account `--sheltered` context. The engine's intra-account wash-sale logic (ITA s. 40(2)(g) for Canada; IRC §1091 for US) still fires on the account's own losses.
   - **`<account>_wash.sum`** — gains re-computed WITH the merged sheltered accounts passed as `--sheltered` context. Adds Rev. Rul. 2008-5 (US) / affiliated-balance (Canada) matching: a sheltered acquisition within ±30 days of a taxable loss disallows the loss.
 - **Why this is intentional:** the pair is a deliberate debug check. Comparing the two files line-by-line surfaces which losses got disallowed only because of a cross-account match — useful for sanity-checking the data (and catching wrong-account-tagging errors before filing).
-- **Which one do I file from?** **`<account>_wash.sum` is canonical.** It includes the full cross-account wash treatment. `<account>.sum` is the pre-comparison baseline.
+- **Which one do I file from?** **`<account>_wash.sum` is canonical** for the gains and the wash treatment: it includes the full cross-account wash treatment. `<account>.sum` is the pre-comparison baseline. Its TOTAL PROCEEDS / TOTAL COST lines are the engine's signed figures (short covers and written-option buy-backs count as negative proceeds), not Schedule 3 proceeds/ACB — take those from `taxjson form-export` (or the FOR THE RETURN block of `taxjson sum`).
 - **Why not collapse them:** the pre/post comparison is the design's value-add. Future change candidate: bake the "POST-WASH (FILE FROM THIS)" / "PRE-WASH (DIAGNOSTIC)" label into a header line at the top of each file so the role is unambiguous when a user opens one in isolation.
 
 ---
@@ -257,9 +267,9 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 - **Why this is the design:** T1135 cost amount IS adjusted cost base; the tool refuses to invent one from a transfer's arrival market value. Declare the real history (the same `custody_fixes.tt` pattern the wash engine prescribes) and the threshold is right.
 
 ### T1135 cost carries superficial losses denied in the project year only
-- **Where:** `src/taxjson/bin/taxjson_t1135.py` (`wash_adjustments`).
-- **Current behavior:** the cost walk adds each s.53(1)(f) amount the engine denied in the project year (the gains file's `wash_sales`) to the replacement's cost, at the later of the losing sale and the replacement purchase. A loss denied in an EARLIER year onto a position still held is carried only if the project's own rows carry it (a hand-off `margin_start.tt` needs the `ADJUST` line — see the hand-off check); the gains files are year-scoped and do not list it.
-- **Why:** the walk reads the year's gains files; replaying every earlier year's wash pass (with its registered-account context) inside `t1135` would re-run the engine.
+- **Where:** `src/taxjson/bin/taxjson_t1135.py` (`wash_adjustments`, `_deferred_wash`).
+- **Current behavior:** the cost walk adds each s.53(1)(f) amount the engine denied in the project year (the gains files' `wash_sales`) to the replacement's cost, at the later of the losing sale and the replacement purchase. A loss denied in an EARLIER year onto a position still held is not in the year-scoped gains files, so the walk carries it only if the project's own rows do (a hand-off `margin_start.tt` needs the `ADJUST` line — see the hand-off check); the report names what the engine's inventory still defers beyond the year's additions and says when it could lift the maximum over the threshold.
+- **Why deferred:** replaying every earlier year's wash pass (with its registered-account context) inside `t1135` re-runs the engine. Sketch: one full-history `run_gains` pass in `cmd_t1135` (as `carryover` does), feeding each earlier year's `wash_sales` through the same `wash_adjustments`.
 
 ### Futures are booked on their settled P/L (Canadian books)
 - **Where:** `src/taxjson/lib/futures.py` (applied by convert-currency / merge2 for a CAD target), `core._trade_money`, `taxjson_form_export.build_schedule3`.

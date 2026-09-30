@@ -55,9 +55,16 @@ TickerMap = namedtuple("TickerMap",
 
 def _parse_map_file(file_path: Path):
     """(TickerMap, problems, notes). `problems` are the lines that
-    could not be parsed — each rule on them is DROPPED — as
+    could not be parsed — each rule on them is DROPPED — or that
+    contradict another line (one FROM with two targets, a rename
+    cycle, a DISTINCT pair the renames join), as
     `<file>:<lineno>: <message>: '<line>'`; `notes` are harmless
-    no-op lines (a DISTINCT that pairs a symbol with itself)."""
+    no-op lines (a DISTINCT that pairs a symbol with itself).
+
+    Symbols are upper-cased (the keyword always was): a lower-case
+    rule used to match nothing in the pipeline while `taxjson scan`,
+    which upper-cases, called it live (S009-05). A BOM and inline
+    `# notes` are stripped (R1-139)."""
     glob: Dict[str, str] = {}
     tobase: Dict[str, str] = {}
     journal: Dict[str, str] = {}
@@ -66,43 +73,119 @@ def _parse_map_file(file_path: Path):
     problems: List[str] = []
     notes: List[str] = []
     buckets = {"GLOBAL": glob, "TOBASE": tobase, "JOURNAL": journal}
-    with file_path.open("r", encoding="utf-8") as f:
+    # from -> (target, where, line) of its first rename rule
+    first_rule: Dict[str, tuple] = {}
+    distinct_where: Dict[frozenset, tuple] = {}
+    with file_path.open("r", encoding="utf-8-sig") as f:
         for lineno, raw in enumerate(f, 1):
-            line = raw.strip()
-            if not line or line.startswith('#'):
+            line = raw.split('#', 1)[0].strip()
+            if not line:
                 continue
             where = f"{file_path.name}:{lineno}"
             parts = line.split()
             kw = parts[0].upper()
+            syms = [p.upper() for p in parts[1:]]
             if kw not in _MAP_KEYWORDS:
                 problems.append(
                     f"{where}: line has no GLOBAL/TOBASE/JOURNAL/DELETE/"
                     f"DISTINCT keyword: {line!r}")
                 continue
+            want = 1 if kw == "DELETE" else 2
+            if len(syms) > want:
+                problems.append(
+                    f"{where}: {kw} line has extra token(s) "
+                    f"{parts[1 + want:]} — notes go after `#`: {line!r}")
+                continue
             if kw == "DELETE":
-                if len(parts) >= 2:
-                    delete.add(parts[1])
+                if syms:
+                    delete.add(syms[0])
                 else:
                     problems.append(f"{where}: DELETE line needs a "
                                     f"symbol: {line!r}")
             elif kw == "DISTINCT":
-                if len(parts) >= 3:
-                    if parts[1] == parts[2]:
+                if len(syms) == 2:
+                    if syms[0] == syms[1]:
                         notes.append(f"{where}: DISTINCT pairs a symbol "
                                      f"with itself (no effect): {line!r}")
                         continue
-                    distinct.add(frozenset((parts[1], parts[2])))
+                    pair = frozenset(syms)
+                    distinct.add(pair)
+                    distinct_where.setdefault(pair, (where, line))
                 else:
                     problems.append(f"{where}: DISTINCT line needs "
                                     f"`a b`: {line!r}")
             else:
-                if len(parts) >= 3:
-                    buckets[kw][parts[1]] = parts[2]
+                if len(syms) == 2:
+                    frm, to = syms
+                    if frm == to:
+                        notes.append(f"{where}: {kw} renames a symbol to "
+                                     f"itself (no effect): {line!r}")
+                        continue
+                    prev = first_rule.get(frm)
+                    if prev is not None and prev[0] != to:
+                        problems.append(
+                            f"{where}: {frm} is renamed to {to} here but "
+                            f"to {prev[0]} at {prev[1]} ({prev[2]!r}) — "
+                            f"one symbol can have only one target: "
+                            f"{line!r}")
+                        continue
+                    first_rule.setdefault(frm, (to, where, line))
+                    buckets[kw][frm] = to
                 else:
                     problems.append(f"{where}: {kw} line needs `from to` "
                                     f"(two symbols separated by a space): "
                                     f"{line!r}")
-    return TickerMap(glob, tobase, journal, delete, distinct), problems, notes
+    tmap = TickerMap(glob, tobase, journal, delete, distinct)
+    for to_base in (False, True):
+        raw = raw_renames(tmap, to_base)
+        for frm in sorted(raw):
+            cyc = _chain_cycle(frm, raw)
+            if cyc and frm == min(cyc):
+                wheres = ", ".join(first_rule[s][1] for s in cyc
+                                   if s in first_rule)
+                msg = (f"rename cycle {' -> '.join(cyc + [cyc[0]])} "
+                       f"({wheres}) — a chain of renames must end at "
+                       f"one symbol")
+                if not any(msg in p for p in problems):
+                    problems.append(f"{file_path.name}: {msg}")
+    if not any("rename cycle" in p for p in problems):
+        for to_base, view in ((False, "GLOBAL"), (True, "base-currency")):
+            ren = merge_renames(tmap, to_base)
+            for pair in sorted(distinct, key=sorted):
+                a, b = sorted(pair)
+                if map_symbol(a, ren) == map_symbol(b, ren):
+                    w, ln = distinct_where[pair]
+                    via = ", ".join(first_rule[s][1] for s in (a, b)
+                                    if s in first_rule)
+                    msg = (f"{w}: DISTINCT {a} {b} ({ln!r}) contradicts "
+                           f"the rename rule(s) at {via}, which pool "
+                           f"both into {map_symbol(a, ren)} ({view} "
+                           f"view) — delete one of the two statements")
+                    if msg not in problems:
+                        problems.append(msg)
+    return tmap, problems, notes
+
+
+def _chain_cycle(frm: str, raw: Dict[str, str]):
+    """The cycle (list of symbols) reached by following renames from
+    `frm`, or None when the chain ends."""
+    seen: List[str] = []
+    cur = frm
+    while cur in raw:
+        if cur in seen:
+            return seen[seen.index(cur):]
+        seen.append(cur)
+        cur = raw[cur]
+    return None
+
+
+def raw_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
+    """The stage's rename rules as written (one hop each)."""
+    renames = dict(tmap.glob)
+    if to_base:
+        renames.update(tmap.tobase)
+        renames.update(tmap.journal)
+    return renames
 
 
 def map_file_problems(file_path: Path) -> List[str]:
@@ -119,7 +202,8 @@ def load_map_file(file_path: Path) -> "TickerMap":
     (`taxjson run` refuses such a map up front — map_file_problems)."""
     tmap, problems, notes = _parse_map_file(file_path)
     for msg in problems:
-        print(f"warning: {msg} — skipping", file=sys.stderr)
+        print(f"warning: ticker.map problem: {msg} (`taxjson run` refuses "
+              f"this map)", file=sys.stderr)
     for msg in notes:
         print(f"warning: {msg} — skipping", file=sys.stderr)
     return tmap
@@ -129,12 +213,26 @@ def merge_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
     """Build the symbol-rename dict for a merge stage. GLOBAL renames
     always apply; TOBASE and JOURNAL renames apply only when converting
     to base currency (`to_base`) — pre-gains they'd otherwise create a
-    mixed-currency ACB pool, which only the conversion stage resolves."""
-    renames = dict(tmap.glob)
-    if to_base:
-        renames.update(tmap.tobase)
-        renames.update(tmap.journal)
-    return renames
+    mixed-currency ACB pool, which only the conversion stage resolves.
+
+    Chains resolve to their fixed point: `GLOBAL OLD.US NEW.US` plus
+    `TOBASE NEW.US NEW.TO` sends OLD.US to NEW.TO. A one-hop lookup left
+    OLD.US's lots in NEW.US — a split pool and a phantom short (R1-139).
+    A cycle raises (`taxjson run` refuses such a map up front)."""
+    raw = raw_renames(tmap, to_base)
+    out: Dict[str, str] = {}
+    for frm in raw:
+        cyc = _chain_cycle(frm, raw)
+        if cyc:
+            raise ValueError(
+                f"ticker.map: rename cycle "
+                f"{' -> '.join(cyc + [cyc[0]])} — a chain of renames "
+                f"must end at one symbol")
+        cur = raw[frm]
+        while cur in raw:
+            cur = raw[cur]
+        out[frm] = cur
+    return out
 
 
 def apply_drops(transactions: List[TaxTransaction], drops) -> List[TaxTransaction]:

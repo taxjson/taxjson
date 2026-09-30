@@ -61,10 +61,16 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
     operation; a redirect is an anomaly worth failing loudly on."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Query strings stripped: a redirect that keeps the path and
+        # query (an ordinary http->https or host-migration 30x) carries
+        # the Flex `t=` token / the Questrade `refresh_token=`, and this
+        # message reaches stderr (S031-14) — same redaction as every
+        # other error path in this module.
         raise urllib.error.HTTPError(
-            req.full_url, code,
-            f"refusing to follow a redirect to {newurl!r} on a "
-            f"credentialed request", headers, fp)
+            req.full_url.split('?')[0], code,
+            f"refusing to follow a redirect to "
+            f"{str(newurl).split('?')[0]!r} on a credentialed request",
+            headers, fp)
 
 
 _opener = urllib.request.build_opener(_NoRedirect())
@@ -229,6 +235,11 @@ _QT_COLUMNS = ("Transaction Date", "Settlement Date", "Action", "Symbol",
                "Activity Type", "Account Type")
 
 
+def _money_cell(v: Any) -> Any:
+    """A money cell for qt_to_csv: blank when the API omitted it."""
+    return "" if v is None or (isinstance(v, str) and not v.strip()) else v
+
+
 def qt_to_csv(activities: List[Dict[str, Any]], number: str) -> str:
     """Render API activities as a Questrade activity-export CSV — the
     exact column set the existing parser reads. Rows sort by
@@ -260,9 +271,14 @@ def qt_to_csv(activities: List[Dict[str, Any]], number: str) -> str:
             " ".join(str(a.get("description") or "").split()),
             a.get("quantity") or 0,
             a.get("price") or 0,
-            a.get("grossAmount") or 0,
-            a.get("commission") or 0,
-            a.get("netAmount") or 0,
+            # Money fields: a MISSING or null value is written BLANK so
+            # the strict parser refuses the row ("required Net Amount is
+            # blank"). Written as 0 it was indistinguishable from a real
+            # $0 row, and a dividend with no netAmount was dropped as a
+            # zero-net informational row at exit 0 (R1-348).
+            _money_cell(a.get("grossAmount")),
+            _money_cell(a.get("commission")),
+            _money_cell(a.get("netAmount")),
             a.get("currency") or "",
             number,
             a.get("type") or "",
@@ -287,7 +303,8 @@ _MONTHS = {"Jan": "01", "Feb": "02", "Mar": "03", "Apr": "04",
            "Sep": "09", "Oct": "10", "Nov": "11", "Dec": "12"}
 
 
-def qt_position_symbol(sym: str, to_roots=frozenset()) -> str:
+def qt_position_symbol(sym: str, to_roots=frozenset(),
+                       book_symbols=frozenset()) -> str:
     """Questrade position symbol -> taxjson convention. Equities:
     Canadian venues ('.TO', '.VN' TSX Venture, '.CN', '.NE') all map
     to '.TO' with a dotted preferred series, as the parsers do; bare
@@ -296,6 +313,10 @@ def qt_position_symbol(sym: str, to_roots=frozenset()) -> str:
     become OCC ('BMO260120C00088000.TO') — suffixed .TO when the
     root's equity also appears in this payload as a .TO listing
     (Montréal-listed options on Canadian names), else .US.
+    When the account's BOOKS already hold the exact contract
+    (`book_symbols`), their suffix wins — the parsers suffix a contract
+    by its listing currency, and a same-root .TO equity (a CDR such as
+    AMZN.TO) must not turn a US option Montreal-listed (S031-12).
     Unrecognized shapes pass through untouched so a mismatch stays
     VISIBLE in the sanity diff instead of being mangled."""
     import re as _re
@@ -313,6 +334,10 @@ def qt_position_symbol(sym: str, to_roots=frozenset()) -> str:
         if mm:
             occ = (f"{root}{yy}{mm}{dd}{right}"
                    f"{int(round(float(strike) * 1000)):08d}")
+            if f"{occ}.TO" in book_symbols:
+                return f"{occ}.TO"
+            if f"{occ}.US" in book_symbols:
+                return f"{occ}.US"
             return occ + (".TO" if root in to_roots else ".US")
     if "." not in sym:
         return f"{sym}.US"
@@ -336,7 +361,8 @@ def qt_position_symbol(sym: str, to_roots=frozenset()) -> str:
 def positions_to_holdings_toml(positions: List[Dict[str, Any]],
                                account: str, number: str,
                                generated_at: str,
-                               extra_to_roots=frozenset()) -> str:
+                               extra_to_roots=frozenset(),
+                               book_symbols=frozenset()) -> str:
     """Render live positions as the portoml-style holdings TOML that
     `taxjson sanity` reads ([[holding]] symbol/quantity; extra fields
     are informational)."""
@@ -348,11 +374,25 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
     # a phantom verify mismatch every run (2026-09 audit). The best
     # remaining signal for the no-equity-anywhere case is the option
     # description; Questrade names Montreal contracts on the TSX line.
+    # `book_symbols` (the account's parsed book, upper-case): an exact
+    # contract there decides its suffix (qt_position_symbol), and only
+    # its .TO OPTIONS teach Montreal roots — a .TO equity in the books
+    # may be a CDR over a US name.
+    book_symbols = frozenset(str(b).upper() for b in book_symbols)
+    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    book_to_roots = set()
+    for b in book_symbols:
+        if b.endswith(".TO") and is_option_symbol(b):
+            try:
+                book_to_roots.add(
+                    str(parse_option_underlying(b)).rsplit(".", 1)[0])
+            except Exception:
+                pass
     to_roots = frozenset(
         str(p.get("symbol") or "").rsplit(".", 1)[0]
         for p in positions
         if str(p.get("symbol") or "").endswith(".TO")) | frozenset(
-            extra_to_roots)
+            extra_to_roots) | frozenset(book_to_roots)
     q = toml_str
     lines = ["# Live Questrade holdings snapshot — taxjson fetch/verify.",
              "# Regenerated on every fetch; do not hand-edit.",
@@ -368,7 +408,8 @@ def positions_to_holdings_toml(positions: List[Dict[str, Any]],
         qty = float(p2.get("openQuantity") or 0.0)
         if abs(qty) < 1e-12:
             continue
-        sym = qt_position_symbol(str(p2.get("symbol") or ""), to_roots)
+        sym = qt_position_symbol(str(p2.get("symbol") or ""), to_roots,
+                                 book_symbols)
         lines += ["", "[[holding]]",
                   f"symbol = {q(sym)}",
                   f"quantity = {qty!r}"]
@@ -525,10 +566,10 @@ def qt_window(days: Optional[int], since: Optional[str],
               year: Optional[int] = None) -> Tuple[date, date]:
     """[start, end] for a Questrade fetch. Explicit --from/--days win;
     the default covers the WHOLE tax-year window every time — from
-    Dec 15 of the year BEFORE the config tax `year` (a late-December
-    trade settles in January and belongs to the new year under
-    settle-date rules; a hard Jan 1 start would miss it) through
-    today. Re-fetching the full window keeps the file equivalent to a
+    Dec 1 of the year BEFORE the config tax `year` through Jan 31 of
+    the year after (capped at today): the superficial-loss window of
+    a year-boundary disposition (30 days either side) and a
+    late-December trade settling in January both fall inside it. Re-fetching the full window keeps the file equivalent to a
     manual YTD export and self-heals late-posted or corrected rows
     anywhere in the year; the union-merge dedups the overlap. Falls
     back to a trailing 90 days when no year is known."""
@@ -538,15 +579,19 @@ def qt_window(days: Optional[int], since: Optional[str],
     if days:
         return end - timedelta(days=days), end
     if year:
-        # The window is the TAX YEAR plus boundary margins: Dec 15 of
-        # the prior year (December trades settling in January belong
-        # to the new year) through Jan 15 of the next (the mirror
-        # margin) — capped at today. For the current year that cap
-        # means "through today"; for a past year (--year backfill) it
-        # keeps the file year-scoped instead of dragging in everything
-        # up to the present.
-        start = date(int(year) - 1, 12, 15)
-        end = min(end, date(int(year) + 1, 1, 15))
+        # The window is the TAX YEAR plus the superficial-loss margins:
+        # Dec 1 of the prior year through Jan 31 of the next — capped
+        # at today. The 30-day window around a disposition settling
+        # early in January reaches back into December, and one settling
+        # Dec 31 reaches Jan 30: a Jan 16-30 (or Dec 1-14) repurchase in
+        # a fetch-only account used to fall outside the old Dec 15 ..
+        # Jan 15 window, so a permanently denied loss was allowed
+        # (S002-05/S031-13). December trades settling in January are
+        # covered too. For the current year the cap means "through
+        # today"; for a past year (--year backfill) it keeps the file
+        # year-scoped.
+        start = date(int(year) - 1, 12, 1)
+        end = min(end, date(int(year) + 1, 1, 31))
         if start <= end:
             return start, end
     return end - timedelta(days=90), end

@@ -1411,7 +1411,7 @@ class TestRadarViolationRescueDeadline(unittest.TestCase):
                  "--taxable", str(t), "--date", "2025-02-20"],
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        m = _re.search(r"VIOLATION: Sell [\d.]+ shares \(globally\) by "
+        m = _re.search(r"VIOLATION: Sell [\d.]+ shares \([^)]*\) by "
                        r"(\d{4}-\d{2}-\d{2})", r.stdout)
         self.assertIsNotNone(m, f"no VIOLATION advisory in:\n{r.stdout}")
         return m.group(1)

@@ -40,6 +40,7 @@
   <label>{% if is_option %}Premium per share{% else %}Price{% endif %} ({{ holding.currency or ctx.base_currency }}) <input name="price" type="number" step="any" required></label>
   <button type="submit">Simulate</button>
 </form>
+<p class="muted">A positive quantity sells a long position; for a SHORT position (a written option, a short sale) enter a negative quantity to simulate buying to cover.</p>
 {% if is_option %}<p class="muted">Option: enter the quoted premium per share (as in the trade table); proceeds are qty &times; premium &times; 100 per contract.</p>{% endif %}
 <p class="muted">Enter the price in the holding's own currency ({{ holding.currency or ctx.base_currency }}); it is converted to {{ ctx.base_currency }} at today's rate before the engine computes the gain and any superficial-loss.</p>
 {% else %}

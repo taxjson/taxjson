@@ -91,7 +91,7 @@ def load_yf_map(search_dirs) -> Dict[str, Tuple[str, float]]:
         if not map_file.exists():
             continue
         try:
-            for line in map_file.read_text(encoding='utf-8').splitlines():
+            for line in map_file.read_text(encoding='utf-8-sig').splitlines():
                 line = line.split('#', 1)[0].strip()
                 if not line:
                     continue

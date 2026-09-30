@@ -51,6 +51,7 @@ Or through the project wrapper (recommended):  `taxjson t1135`
 
 import argparse
 import json
+import re
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -141,7 +142,10 @@ def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
     overrides: Dict[str, Optional[str]] = {}
     if path is None:
         return overrides
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    # utf-8-sig: a BOM (Windows editors) became part of the first key
+    # and silently disabled that override (S008-03, S051-18).
+    for lineno, line in enumerate(
+            path.read_text(encoding="utf-8-sig").splitlines(), 1):
         stripped = line.split("#", 1)[0].strip()
         if not stripped:
             continue
@@ -196,19 +200,64 @@ class _Pool:
         return max(float(self.cost), 0.0)
 
 
-def _sort_key(tx: Dict[str, Any]) -> Tuple[str, str]:
-    # Settlement basis, matching the project's canonical Canada decision.
-    return (tx.get("date_settle") or tx.get("date") or "",
-            tx.get("time") or "00:00:00")
+class _Ev:
+    """Attribute view of a base-book row for corporate_timeline's
+    event_sort_key."""
+    __slots__ = ("action", "date", "date_settle", "time", "quantity",
+                 "symbol")
+
+    def __init__(self, tx: Dict[str, Any]) -> None:
+        self.action = (tx.get("action") or "").upper()
+        self.date = tx.get("date") or ""
+        self.date_settle = tx.get("date_settle") or ""
+        self.time = tx.get("time") or "00:00:00"
+        try:
+            self.quantity = float(tx.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            self.quantity = 0.0
+        self.symbol = tx.get("symbol") or ""
+
+
+def _tx_date(tx: Dict[str, Any], tax_date: str = "settle") -> str:
+    if tax_date == "trade":
+        return tx.get("date") or tx.get("date_settle") or ""
+    return tx.get("date_settle") or tx.get("date") or ""
+
+
+def _sort_key(tx: Dict[str, Any], tax_date: str = "settle") -> Tuple:
+    """The Canada engine's own ladder (ca_main): at one stamp an
+    assignment's option leg precedes its stock leg, buys precede sells,
+    and a settle-lagged execution precedes a SPLIT on its settle date.
+    Input order decided the threshold test and the per-property maxima
+    before (S008-05)."""
+    from taxjson.lib.corporate_timeline import event_sort_key
+    if tax_date == "trade":
+        return event_sort_key(_Ev(tx), profile="ca_main",
+                              date_of=lambda t: t.date or t.date_settle)
+    return event_sort_key(_Ev(tx), profile="ca_main")
 
 
 def walk_costs(transactions: List[Dict[str, Any]], year: int,
-               overrides: Dict[str, Optional[str]]) -> Dict[str, Any]:
+               overrides: Dict[str, Optional[str]],
+               tax_date: str = "settle") -> Dict[str, Any]:
     """Replay full history in base currency; return per-symbol cost stats
     for `year` plus the maximum TOTAL foreign cost observed in the year
-    (the ITA 233.3 filing-threshold test)."""
+    (the ITA 233.3 filing-threshold test). `overrides` is updated with
+    rename targets of overridden symbols (a ticker change keeps its
+    t1135.map classification, S051-17)."""
     year_start = f"{year}-01-01"
     year_end = f"{year}-12-31"
+    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    # Underlyings that trade as stock here: only their assignments fold
+    # the option premium into the shares (a cash-settled index option
+    # has no stock leg — same test as the engine).
+    stock_symbols = {tx.get("symbol") for tx in transactions
+                     if tx.get("symbol")
+                     and not is_option_symbol(tx.get("symbol"))}
+    # Splits applied so far per pool: a pre-split execution that
+    # settles after the split is re-denominated like the engine does
+    # (S008-06).
+    applied_splits: Dict[str, List[Tuple[str, float]]] = {}
 
     pools: Dict[str, _Pool] = {}
     max_total = 0.0
@@ -244,8 +293,8 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # dedupe the same way, core._dedupe_corporate_splits).
     from taxjson.lib.corporate_timeline import split_seen
     seen_splits: set = set()
-    for tx in sorted(transactions, key=_sort_key):
-        date = tx.get("date_settle") or tx.get("date") or ""
+    for tx in sorted(transactions, key=lambda t: _sort_key(t, tax_date)):
+        date = _tx_date(tx, tax_date)
         if date > year_end:
             break
         if (tx.get("action") or "").upper() == "SPLIT":
@@ -297,7 +346,14 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                 continue
             if ratio > 0:
                 pool.qty *= ratio
+                if ratio != 1 and not (new_symbol
+                                       and new_symbol != symbol):
+                    applied_splits.setdefault(symbol, []).append(
+                        (tx.get("date_settle") or tx.get("date") or "",
+                         tx.get("time") or "00:00:00", ratio))
             if new_symbol and new_symbol != symbol:
+                if symbol in overrides and new_symbol not in overrides:
+                    overrides[new_symbol] = overrides[symbol]
                 dest = pools.setdefault(new_symbol, _Pool())
                 dest.qty += pool.qty
                 dest.cost += pool.cost
@@ -315,6 +371,35 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             # |net_amount|, which parsers emit fee-inclusive).
             if abs(qty) < _QTY_EPS:
                 continue
+            if tax_date != "trade" and tx.get("date") and \
+                    tx.get("date_settle") and \
+                    tx["date"] < tx["date_settle"]:
+                _exec = (tx["date"], tx.get("time") or "00:00:00")
+                for spd, spt, r in applied_splits.get(symbol, ()):
+                    if _exec < (spd, spt) and spd < tx["date_settle"]:
+                        # Executed before a split this pool has already
+                        # taken (it settles after): its units are
+                        # pre-split — re-denominated as the engine does
+                        # (core: split inside a settle lag).
+                        qty *= r
+            fold = None
+            if action == "ASSIGN" and is_option_symbol(symbol):
+                und = parse_option_underlying(symbol)
+                _m = re.search(r"\d{6}([CP])\d{8}", symbol)
+                right = _m.group(1) if (und and _m) else ""
+                closing_units = min(abs(qty), abs(pool.qty))
+                if (und and und in stock_symbols
+                        and closing_units > _QTY_EPS
+                        and ((pool.qty > 0 and right == "C")
+                             or (pool.qty < 0 and right == "P"))):
+                    # s.49(3) / 49(3.1): an exercised long call's cost
+                    # is added to the shares acquired; an assigned
+                    # written put's premium is deducted from their cost.
+                    # (A written call / long put disposes of shares —
+                    # the premium moves proceeds, not remaining cost.)
+                    per = pool.cost / Decimal(str(abs(pool.qty)))
+                    amt = per * Decimal(str(closing_units))
+                    fold = (und, amt if pool.qty > 0 else -amt)
             is_opening = (pool.qty > _QTY_EPS and qty > 0) or \
                          (pool.qty < -_QTY_EPS and qty < 0) or \
                          (abs(pool.qty) <= _QTY_EPS)
@@ -348,6 +433,11 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                     frac = remainder / abs(qty)
                     pool.cost += Decimal(str(abs(net) * frac))
                     pool.qty += remainder * (1 if qty > 0 else -1)
+            if fold is not None:
+                # R1-202 / R1-276: the premium follows the shares (the
+                # option leg sorts before its stock leg, so this lands
+                # before the stock purchase's own cost).
+                pools.setdefault(fold[0], _Pool()).cost += fold[1]
 
         if date >= year_start:
             snapshot(date)
@@ -386,8 +476,13 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
 
 # ---------------------------------------------------------------- income/gains
 
+class UnreadableGains(SystemExit):
+    pass
+
+
 def join_income_gains(gains_paths: List[Path], year: int,
-                      overrides: Optional[Dict[str, Optional[str]]] = None
+                      overrides: Optional[Dict[str, Optional[str]]] = None,
+                      tax_date: str = "settle"
                       ) -> Dict[str, Dict[str, float]]:
     """Per-symbol dividend+PIL income and realized gain(loss) for `year`,
     from the pipeline's (already year-scoped) gains files. Defensively
@@ -406,10 +501,13 @@ def join_income_gains(gains_paths: List[Path], year: int,
         try:
             data = load_json(p)
         except (OSError, json.JSONDecodeError) as e:
-            print(f"warning: could not read {p}: {e}", file=sys.stderr)
-            continue
+            # A skipped taxable gains file zeroed that account's income
+            # and gain columns with rc 0 (R1-277).
+            raise UnreadableGains(
+                f"taxjson-t1135: could not read {p}: {e} — re-run "
+                f"`taxjson run` to rebuild it.")
         for e in data.get("transactions", []):
-            date = e.get("date_settle") or e.get("date") or ""
+            date = _tx_date(e, tax_date)
             if not date.startswith(ystr):
                 continue
             symbol = e.get("symbol") or ""
@@ -431,7 +529,7 @@ def join_income_gains(gains_paths: List[Path], year: int,
                     continue
                 rec["gain"] += float(e.get("gain") or 0.0)
         for e in data.get("manual_reporting_required") or []:
-            date = e.get("date_settle") or e.get("date") or ""
+            date = _tx_date(e, tax_date)
             symbol = e.get("symbol") or ""
             if not str(date).startswith(ystr) or not symbol:
                 continue
@@ -450,11 +548,9 @@ def join_income_gains(gains_paths: List[Path], year: int,
     return out
 
 
-# ---------------------------------------------------------------- wash
-
 def wash_adjustments(gains_paths: List[Path],
-                     transactions: List[Dict[str, Any]]
-                     ) -> List[Dict[str, Any]]:
+                     transactions: List[Dict[str, Any]],
+                     tax_date: str = "settle") -> List[Dict[str, Any]]:
     """The engine's s.53(1)(f) additions as ADJUST rows for the cost walk.
 
     A superficial loss the engine denies (s.54) is added to the ACB of
@@ -463,14 +559,14 @@ def wash_adjustments(gains_paths: List[Path],
     (audit G7-0: the walk replayed base rows only and understated every
     replacement's cost by the denied loss). Each gains file's
     `wash_sales` entry becomes an ADJUST on the replacement lot's symbol
-    at that lot's own date/time — only when the lot is one of the walked
-    (taxable) rows; a replacement bought in a registered or affiliated
-    account is not the filer's foreign property. The row is placed at
-    the LATER of the loss sale and the replacement purchase: a
-    replacement bought before the losing sale must not have part of the
-    addition averaged out by that sale. The gains files are
-    year-scoped, so a loss denied in an EARLIER year still rides on the
-    walk's replay only as far as the base rows carry it."""
+    — only when the lot is one of the walked (taxable) rows; a
+    replacement bought in a registered or affiliated account is not the
+    filer's foreign property. The row is stamped at the LATER of the
+    losing sale and the replacement purchase (a replacement bought
+    before the losing sale must not have part of the addition averaged
+    out by that sale); an ADJUST sorts after the trades at its stamp.
+    The gains files are year-scoped: a loss denied in an EARLIER year is
+    not listed (see `_deferred_wash`)."""
     by_id = {str(t.get("id")): t for t in transactions if t.get("id") not in (None, "")}
     out: List[Dict[str, Any]] = []
     seen = set()
@@ -497,7 +593,7 @@ def wash_adjustments(gains_paths: List[Path],
             seen.add(key)
             at = lot
             loss = by_id.get(str(w.get("loss_tx_id") or ""))
-            if loss is not None and _sort_key(loss) > _sort_key(lot):
+            if loss is not None and _sort_key(loss, tax_date) > _sort_key(lot, tax_date):
                 at = loss
             out.append({"id": f"wash:{w.get('loss_tx_id')}:{w.get('trigger_lot_id')}",
                         "action": "ADJUST", "symbol": sym,
@@ -509,6 +605,29 @@ def wash_adjustments(gains_paths: List[Path],
     return out
 
 
+def _deferred_wash(gains_paths: List[Path],
+                   overrides: Dict[str, Optional[str]]) -> Dict[str, float]:
+    """{foreign symbol: denied superficial loss still in its ACB at year
+    end} from the gains files' inventory. The max per symbol, not the
+    sum: every account's inventory row of a blended symbol carries the
+    blended pool's deferral."""
+    out: Dict[str, float] = {}
+    for p in gains_paths:
+        try:
+            data = load_json(p)
+        except (OSError, json.JSONDecodeError):
+            continue
+        for h in data.get("inventory") or []:
+            sym = h.get("symbol") or ""
+            try:
+                dw = float(h.get("deferred_wash") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if dw > 0.005 and classify_country(sym, overrides) is not None:
+                out[sym] = round(max(out.get(sym, 0.0), dw), 2)
+    return out
+
+
 # ---------------------------------------------------------------- report
 
 def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
@@ -516,13 +635,35 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  base_currency: str,
                  threshold: float = FILING_THRESHOLD,
                  detailed_threshold: float = DETAILED_THRESHOLD,
-                 phantoms: Optional[Path] = None) -> Dict[str, Any]:
+                 phantoms: Optional[Path] = None,
+                 tax_date: str = "settle") -> Dict[str, Any]:
     txs = load_transactions(base_paths, phantoms)
-    # Appended after the base rows: the walk's sort is stable, so each
-    # addition lands right after its replacement purchase.
-    txs = txs + wash_adjustments(gains_paths, txs)
-    walk = walk_costs(txs, year, overrides)
-    inc = join_income_gains(gains_paths, year, overrides)
+    user_keys = set(overrides)
+    overrides = dict(overrides)         # the walk adds rename targets
+    # The year's denied superficial losses join the walk as ADJUST rows
+    # (G7-0); the sort puts each after the trades at its stamp.
+    wash = wash_adjustments(gains_paths, txs, tax_date)
+    txs = txs + wash
+    walk = walk_costs(txs, year, overrides, tax_date)
+    inc = join_income_gains(gains_paths, year, overrides, tax_date)
+    # An override that matches nothing (a ticker change, a ticker.map
+    # consolidation, a typo) silently reversed the filing verdict
+    # (S051-17): name it.
+    seen = {t.get("symbol") for t in txs if t.get("symbol")}
+    unused_overrides = sorted(k for k in user_keys if k not in seen)
+    for k in unused_overrides:
+        print(f"warning: t1135.map: {k!r} matches no symbol in the books "
+              f"(renamed, consolidated by ticker.map, or a typo?) — the "
+              f"override is not applied.", file=sys.stderr)
+    deferred = _deferred_wash(gains_paths, overrides)
+    # What the walk already carries is not "excluded": only a deferral
+    # beyond the year's own additions (a loss denied in an earlier year)
+    # is left for the note.
+    added: Dict[str, float] = {}
+    for w in wash:
+        added[w["symbol"]] = added.get(w["symbol"], 0.0) + float(w["net_amount"])
+    deferred = {k: round(v - added.get(k, 0.0), 2) for k, v in deferred.items()
+                if v - added.get(k, 0.0) > 0.005}
     futures = set(walk.get("futures_symbols") or ())
 
     rows = []
@@ -595,6 +736,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "unknown_acb_symbols": [r["symbol"] for r in rows if r["unknown_acb"]],
         "futures_symbols": sorted(futures),
         "phantoms_applied": phantoms is not None,
+        "unused_overrides": unused_overrides,
+        # Superficial losses still in open positions' ACB (s.53(1)(f))
+        # beyond those the year's gains files list (added to the walk):
+        # a loss denied in an earlier year — the cost columns are low
+        # by up to this (KNOWN_ISSUES).
+        "deferred_wash_not_in_cost": deferred,
+        "tax_date_basis": tax_date,
     }
 
 
@@ -623,6 +771,21 @@ def render_report(rep: Dict[str, Any]) -> str:
     else:
         lines.append(f"  => below the {_money(rep['filing_threshold'])} {cur} "
                      f"threshold — no T1135 required this year")
+    _dw = sum((rep.get("deferred_wash_not_in_cost") or {}).values())
+    if _dw:
+        lines.append(f"  !! cost amounts EXCLUDE {_money(_dw)} {cur} of "
+                     f"denied superficial losses added to the ACB of "
+                     f"shares still held (s.53(1)(f)): "
+                     + ", ".join(f"{k} {_money(v)}" for k, v in sorted(
+                         rep["deferred_wash_not_in_cost"].items())[:6])
+                     + " — the true cost amounts are higher by up to "
+                       "that much.")
+        if (not rep["filing_required"]
+                and rep["max_total_cost"] + _dw > rep["filing_threshold"]):
+            lines.append(f"  !! with them the maximum could exceed "
+                         f"{_money(rep['filing_threshold'])} {cur} — the "
+                         f"'no T1135 required' verdict is NOT reliable; "
+                         f"work the cost out by hand.")
     lines.append("")
 
     rows = rep["properties"]
@@ -745,6 +908,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Detailed-method threshold (default: 250000)")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    parser.add_argument("--tax-date", choices=("settle", "trade"),
+                        default="settle",
+                        help="Date basis the project's gains files use "
+                             "(the wrapper passes the project's): the "
+                             "gain column and the year-end position "
+                             "follow it (default: settle, CRA).")
     parser.add_argument("--incomplete-history", type=Path, default=None,
                         metavar="PHANTOMS_JSON",
                         help="phantoms.json: add the same phantom "
@@ -762,11 +931,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     overrides = load_overrides(args.map)
-    rep = build_report(args.files, args.gains, args.year, overrides,
-                       args.base_currency.upper(),
-                       threshold=args.threshold,
-                       detailed_threshold=args.detailed_threshold,
-                       phantoms=args.incomplete_history)
+    try:
+        rep = build_report(args.files, args.gains, args.year, overrides,
+                           args.base_currency.upper(),
+                           threshold=args.threshold,
+                           detailed_threshold=args.detailed_threshold,
+                           phantoms=args.incomplete_history,
+                           tax_date=args.tax_date)
+    except UnreadableGains as e:
+        print(e.code, file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as e:
+        print(f"taxjson-t1135: could not read the base books: {e} — "
+              f"re-run `taxjson run` to rebuild them.", file=sys.stderr)
+        return 2
     if args.json:
         json.dump(rep, sys.stdout, indent=2, sort_keys=True)
         print()

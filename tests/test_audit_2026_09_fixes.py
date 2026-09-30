@@ -364,9 +364,11 @@ class TestHarvestScheduleSemantics(unittest.TestCase):
 class TestExitableWithShelteredHolding(unittest.TestCase):
     def test_full_exit_advice_carries_the_denied_portion(self):
         # The real FFH.TO shape: taxable in-window buys + an OLD
-        # sheltered holding. "Selling the FULL position at a loss is
-        # fine now" was wrong — CRA's min(sold, acquired, still-held)
-        # keeps up to the sheltered balance denied PERMANENTLY.
+        # sheltered holding. The sheltered shares were bought before
+        # the window, so they are not substituted property: a FULL
+        # taxable exit keeps the whole loss (the engine's per-holder
+        # rule). This test used to pin "PERMANENTLY denied" (medium
+        # audit R1-231); the old holding is now a forward caveat only.
         import subprocess
         with tempfile.TemporaryDirectory() as td:
             tax = Path(td) / 'tax.json'
@@ -393,8 +395,9 @@ class TestExitableWithShelteredHolding(unittest.TestCase):
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('EXITABLE', r.stdout)
-        self.assertIn('PERMANENTLY denied', r.stdout)
-        self.assertNotIn('loss is fine now', r.stdout)
+        self.assertNotIn('PERMANENTLY denied', r.stdout)
+        self.assertIn('loss is fine now', r.stdout)
+        self.assertIn('bought before the window', r.stdout)
 
 
 class TestWatchAdvisoryDiff(unittest.TestCase):

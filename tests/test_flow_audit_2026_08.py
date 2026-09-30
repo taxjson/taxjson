@@ -348,7 +348,7 @@ class TestCloseYearStalenessGuard(unittest.TestCase):
             os.utime(work / "margin_gains.json", (now + 5, now + 5))
             with self.assertRaises(SystemExit) as cm:
                 _run_cmd(cmd_close_year, root, year=None, force=False)
-        self.assertIn("STALER", str(cm.exception))
+        self.assertIn("STALE", str(cm.exception))
 
 
 class TestCombinedSidecarStaleness(unittest.TestCase):
@@ -755,8 +755,12 @@ class TestSellCheck(unittest.TestCase):
                     f"XEI.TO,D,50,8.50,425.00,0.00,-425.00,CAD,1,"
                     f"Trades,Ind\n"))
             r = _cli(root, "sell-check", "XEI")
+        # The RRSP's 50 in-window shares put 50 of the 100 taxable
+        # shares' loss at risk: PARTIAL, still exit 1 (medium audit
+        # R1-232 — the whole position is UNSAFE only when all of it is).
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("UNSAFE", r.stdout)
+        self.assertIn("PARTIAL", r.stdout)
+        self.assertIn("up to 50 of your 100", r.stdout)
         self.assertIn("permanently denied", r.stdout)
 
     def test_violation_is_action_to_rescue(self):
