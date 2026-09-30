@@ -123,6 +123,7 @@ _QT_CA_LEG_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b',
 # VALUE: $3039.64 CNV@ 1.4138" (carried as evidence, like RBC's).
 _BRW_BOOK_VALUE_RE = re.compile(
     r'BOOK\s+VALUE:?\s*\$?\s*([\d,]+(?:\.\d+)?)', re.IGNORECASE)
+_BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE)
 # A dividend Questrade posts NET of non-resident withholding.
 _NONRES_NET_RE = re.compile(r'NON-?RES\w*\.?\s+TAX\s+WITH', re.IGNORECASE)
 
@@ -500,6 +501,7 @@ class QuestradeBrokerage(BaseBrokerage):
         net_of_tax: List[str] = []              # NON-RES TAX WITHHELD divs
         no_book_value: List[str] = []           # transfer-ins at $0 cost
         journals: List[str] = []                # BRW listing journals
+        journal_txs: List[Dict[str, Any]] = []
         # CIL / REI reversals (audit R1-66): a same-code row with the
         # signs negated cancels its original. Originals by key -> list of
         # emitted leg groups; reversal rows -> (key, lineno), paired at
@@ -774,9 +776,13 @@ class QuestradeBrokerage(BaseBrokerage):
                         _jtx['book_value'] = parse_strict_number(
                             _bv.group(1), field='BOOK VALUE',
                             where=self._where(lineno))
+                        _cnv = _BRW_CNV_RE.search(desc)
+                        if _cnv:
+                            _jtx['_cnv'] = float(_cnv.group(1))
                     self.note_row_consumed()
                     transactions.append(_jtx)
                     journals.append(f"{_jtx['symbol']} {_q:+g}")
+                    journal_txs.append(_jtx)
                     continue
                 # Previously a silent drop — a new Questrade action code
                 # lost rows with zero signal. Count it; the summary at
@@ -1047,6 +1053,7 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"find-missing-history --gen-phantoms`)."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
                   file=sys.stderr)
+        self._cost_journal_pairs(journal_txs)
         if journals:
             print(f"note: {path.name}: {len(journals)} BRW journal row(s) "
                   f"move units between the CAD and USD lines of one "
@@ -1056,6 +1063,33 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"the pair nets out.", file=sys.stderr)
         self.emit_skip_summary(path.name)
         return transactions
+
+    @staticmethod
+    def _cost_journal_pairs(legs: List[Dict[str, Any]]) -> None:
+        """Carry the journaled units' cost on both BRW legs: the IN leg
+        states the book value in its own currency ("BOOK VALUE: $3039.64
+        CNV@ 1.4138"), the OUT leg is the same cost at the stated rate.
+        Where the pair does not net (no JOURNAL rule, or a sheltered
+        custody view that rewrites TRANSFER to BUYSELL at its net), the
+        cost moves with the units instead of a $0-cost lot."""
+        rates = {id(t): t.pop('_cnv', None) for t in legs}
+        for i in legs:
+            if i['quantity'] <= 0 or not i.get('book_value'):
+                continue
+            bv = float(i['book_value'])
+            i['net_amount'] = i['gross_amount'] = bv
+            i['price'] = round(bv / i['quantity'], 8)
+            out = next((o for o in legs if o['quantity'] < 0
+                        and o['date'] == i['date']
+                        and abs(o['quantity'] + i['quantity']) < 1e-9
+                        and not o.get('net_amount')), None)
+            if out is None:
+                continue
+            rate = rates.get(id(i))
+            o_bv = (round(bv * rate, 2)
+                    if rate and out['currency'] != i['currency'] else bv)
+            out['net_amount'] = out['gross_amount'] = o_bv
+            out['price'] = round(o_bv / abs(out['quantity']), 8)
 
     def _check_trade_money(self, lineno, desc, qty, price, gross, comm,
                            diff, mult, fx_settled, *, cash=None,

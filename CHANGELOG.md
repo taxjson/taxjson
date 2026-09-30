@@ -55,8 +55,9 @@
   like `Buy`; an unknown action that moves shares is an `UNBOOKED`
   warning on the console (fatal under `run --strict`); a `BRW`
   Norbert's-gambit journal between `DLR.TO` and `DLR.U.TO` is booked as
-  a TRANSFER pair like RBC's journal legs (skipped before, leaving the
-  units on `DLR.TO`), which a `JOURNAL DLR.U.TO DLR.TO` rule nets; a negated stock-dividend row cancels its original; a DIS or
+  a TRANSFER pair like RBC's journal legs, carrying the stated book
+  value (skipped before, leaving the units on `DLR.TO`), which a
+  `JOURNAL DLR.U.TO DLR.TO` rule nets; a negated stock-dividend row cancels its original; a DIS or
   stock-dividend row carrying both shares and cash is refused; a
   CAD-settled US trade's CAD net must match the USD gross at the stated
   rate and keeps its sign; a blank settlement date on an option is T+1;

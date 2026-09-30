@@ -238,6 +238,12 @@ class TestQtRowShapes(unittest.TestCase):
                           ('TRANSFER', 'DLR.U.TO', 300.0)])
         self.assertAlmostEqual(of(txs, symbol='DLR.U.TO')[0]['book_value'],
                                3039.64)
+        # The cost moves with the units: USD book value on the IN leg,
+        # the same cost in CAD at the stated rate on the OUT leg.
+        self.assertAlmostEqual(of(txs, symbol='DLR.U.TO')[0]['net_amount'],
+                               3039.64)
+        self.assertAlmostEqual(of(txs, symbol='DLR.TO')[0]['net_amount'],
+                               round(3039.64 * 1.4138, 2))
         self.assertNotIn('UNBOOKED', err)
         self.assertIn('JOURNAL', err)
 
