@@ -354,15 +354,20 @@ def build(*, year: int, basis: str, current_net_tax: float,
     remaining_total = max(0.0, req_total - max(paid_total, due_total))
     # CRA's requirement test has TWO limbs: net tax owing over the
     # threshold in the current year AND in either of the two
-    # preceding years. Knowing only the current year, the second limb
-    # is unknown and we assume it is met (the common case for someone
-    # asking); when the prior figures ARE supplied and both sit at or
-    # below the threshold, no instalments are required at all.
+    # preceding years (s.156.1(1)). One known year over the threshold
+    # meets the limb; it FAILS only when BOTH years are known and both
+    # sit at or below it. Anything else is unknown and assumed met (the
+    # common case for someone asking) — one low year with the other
+    # unset read as "not met" and printed the unset year as 0.00
+    # (audit R1-214).
     priors = [p for p in (prior_net_tax, second_prior_net_tax)
               if p is not None]
-    prior_test = ("unknown" if not priors else
-                  ("met" if any(p > THRESHOLD for p in priors)
-                   else "not_met"))
+    if any(p > THRESHOLD for p in priors):
+        prior_test = "met"
+    elif len(priors) == 2:
+        prior_test = "not_met"
+    else:
+        prior_test = "unknown"
     governing_total = round(
         sum(r["amount"] for r in cands[interest_basis]), 2)
     return {
@@ -406,6 +411,10 @@ def render(doc: Dict[str, Any], base: str) -> str:
         return textwrap.fill(t, width=78, initial_indent="  ",
                              subsequent_indent="  ")
 
+    def _prior_text(v):
+        # Never print an unset year as a figure.
+        return "not set" if v is None else fmt_money(v)
+
     _BASIS_LABEL = {
         "current_year": "current-year option (1/4 of this year's "
                         "estimated net tax owing)",
@@ -433,9 +442,8 @@ def render(doc: Dict[str, Any], base: str) -> str:
                 f"either of the two preceding years. This year is "
                 f"{fmt_money(doc['current_net_tax'])}, but the "
                 f"configured prior years are "
-                f"{fmt_money(doc.get('prior_year_net_tax') or 0.0)} "
-                f"and "
-                f"{fmt_money(doc.get('second_prior_net_tax') or 0.0)} "
+                f"{_prior_text(doc.get('prior_year_net_tax'))} and "
+                f"{_prior_text(doc.get('second_prior_net_tax'))} "
                 f"— both at or below the threshold."))
             lines.append("")
             lines.append(wrap(

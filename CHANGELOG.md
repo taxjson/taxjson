@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **One low prior year no longer waives instalments.** With only one
+  of `prior_year_net_tax` / `second_prior_net_tax` set and at or below
+  $3,000, `taxjson instalments` said "No instalments required" and
+  printed the unset year as 0.00. Both preceding years must be at or
+  below $3,000 (ITA s.156.1(1)); with one unknown the test is now
+  unknown (instalments assumed required) and an unset year prints as
+  "not set".
 - **Instalment interest keeps compounding after you catch up.**
   `taxjson instalments` now computes interest the way CRA publishes it:
   interest on each required instalment from its due date, minus
