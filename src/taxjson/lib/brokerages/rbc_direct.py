@@ -27,7 +27,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
-                                         OPTION_STRIKE_RE,
+                                         DESC_NUMBER_RE, OPTION_STRIKE_RE,
+                                         desc_number,
                                          _parse_div_qty_rate,
                                          income_facts_from_description,
                                          is_roc_description)
@@ -71,12 +72,15 @@ _RBC_CODE_RE = re.compile(r'^\s*([A-Z]{2,4})\s*-(?=\s|$)')
 #   "DIV - <name> CASH DIV  ON  500 SHS ..."   "<name> DIST  ON  400 SHS"
 _RBC_INCOME_VERB_RE = re.compile(
     r'^\s*DIV\s*-|\bCASH\s+DIV(?:IDEND)?\s+ON\b|\bDIST\s+ON\b', re.I)
+# Amounts in description text are captured with every comma and judged
+# by base.desc_number: thousands commas only (a decimal comma is refused,
+# never stripped into a 100x amount — audit S016-01 / S064-19).
 _RBC_BOOK_COST_RE = re.compile(
-    r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\s+\$?\s*([\d,]*\.?\d+)', re.I)
-_RBC_BOOK_VALUE_RE = re.compile(r'\bBOOK\s+VALUE\s+\$?\s*(-?[\d,]*\.?\d+)',
-                                re.I)
-_RBC_REINV_PRICE_RE = re.compile(r'\bREINV\s*@\s*[A-Z]{0,2}\$?\s*([\d.]+)',
-                                 re.I)
+    r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\s+\$?\s*' + DESC_NUMBER_RE, re.I)
+_RBC_BOOK_VALUE_RE = re.compile(
+    r'\bBOOK\s+VALUE\s+\$?\s*-?' + DESC_NUMBER_RE, re.I)
+_RBC_REINV_PRICE_RE = re.compile(
+    r'\bREINV\s*@\s*[A-Z]{0,2}\$?\s*' + DESC_NUMBER_RE, re.I)
 
 # A retraction/redemption/tender of shares by the issuer (split-share
 # corps' monthly and annual retractions): Activity 'Other', code TEN,
@@ -88,7 +92,8 @@ _RBC_RETRACTION_RE = re.compile(
 #   "DIS - VANGUARD ... GROWTH ETF STK SPLIT ON 14 SHS REC 04/17/26 ..."
 _RBC_STK_SPLIT_RE = re.compile(r'\b(?:STK|STOCK|FORWARD|REVERSE)\s+SPLIT\b',
                                re.I)
-_RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SHS\b', re.I)
+_RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+' + DESC_NUMBER_RE + r'\s+SHS\b',
+                                  re.I)
 # Legacy description tokens for rows whose Activity label is unknown.
 _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell)\b')
 
@@ -119,7 +124,7 @@ _RBC_STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b', re.I)
 # "DIV - <fund> As Of 04/07/22 Reinvest @ $21.217", Quantity 6.73, Value
 # blank — the whole distribution, reinvested (audit R1-87).
 _RBC_REINVEST_AT_RE = re.compile(
-    r'\bREINVEST\s*@\s*\$?\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|[\d.]+)', re.I)
+    r'\bREINVEST\s*@\s*\$?\s*' + DESC_NUMBER_RE, re.I)
 # The direction of an in-kind transfer comes from RBC's code or its verb,
 # never from a word in the security name ("DELIVERY HERO", audit S016-05).
 _RBC_TRANSFER_OUT_RE = re.compile(
@@ -1422,6 +1427,10 @@ class RbcBrokerage(BaseBrokerage):
         return classify_rbc_row(row)
 
     # --------------------------------------------------------------- builders
+    def _at(self, r) -> str:
+        """'<file>:<line>' for an error naming the row."""
+        return f"{self._fname}:{r.line}"
+
     def _time(self, r) -> str:
         return rbc_time(r.k)
 
@@ -1435,7 +1444,8 @@ class RbcBrokerage(BaseBrokerage):
         received = r.qty
         if not m or abs(received) < 1e-9:
             return None
-        base = float(m.group(1).replace(',', ''))
+        base = desc_number(m.group(1), where=self._at(r),
+                           field="split base 'ON N SHS'")
         sym_raw = self._resolve_temp(r)
         # On a SHORT pool the split debits shares (a negative quantity
         # for a forward split): (base + received)/base gave 0.95 for a
@@ -1489,7 +1499,8 @@ class RbcBrokerage(BaseBrokerage):
         }
         m = _RBC_BOOK_VALUE_RE.search(r.desc)
         if m:
-            tx['book_value'] = abs(float(m.group(1).replace(',', '')))
+            tx['book_value'] = desc_number(m.group(1), where=self._at(r),
+                                           field='BOOK VALUE')
         return tx
 
     def _build_trade(self, r):
@@ -1676,7 +1687,8 @@ class RbcBrokerage(BaseBrokerage):
                        f"({r.label()}) — refusing to guess which is the "
                        f"distribution")
         m = _RBC_REINVEST_AT_RE.search(r.desc)
-        price = float(m.group(1).replace(',', ''))
+        price = desc_number(m.group(1), where=self._at(r),
+                            field="'Reinvest @' price")
         amount = round(r.qty * price, 2)
         symbol = self._equity_symbol(r.symbol, r.currency, r, market=True)
         self._note(f"line {r.line}: in-kind reinvested distribution — "
@@ -1765,7 +1777,10 @@ class RbcBrokerage(BaseBrokerage):
             self._rei_reversals.append((rei_key, r))
             return []
         m = _RBC_REINV_PRICE_RE.search(r.desc)
-        price = r.price or (float(m.group(1)) if m else round(net / qty, 6))
+        # 'REINV@C$1,234.56' is 1234.56, not 1 (audit S062-20 /
+        # S064-21); a decimal comma falls back to the cash / units.
+        price = r.price or (desc_number(m.group(1), strict=False) if m
+                            else None) or round(net / qty, 6)
         tx = {
             'action': 'BUYSELL',
             'date': r.date, 'time': self._time(r),
@@ -1788,7 +1803,8 @@ class RbcBrokerage(BaseBrokerage):
           "... RETURN OF CAPITAL ADJUSTMENT TO BOOK COST $1.16"
               → ACB DOWN (return of capital)."""
         m = _RBC_BOOK_COST_RE.search(r.desc)
-        amount = float(m.group(1).replace(',', '')) if m else 0.0
+        amount = (desc_number(m.group(1), where=self._at(r),
+                              field='ADJUSTMENT TO BOOK COST') if m else 0.0)
         if amount < 0.005:
             self._warn(f"$0 book-cost adjustment — {r.label()}; nothing "
                        f"booked.")

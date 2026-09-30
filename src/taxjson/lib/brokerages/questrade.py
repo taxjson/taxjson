@@ -10,7 +10,9 @@ from typing import List, Dict, Any, Optional, Tuple
 from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          _parse_div_qty_rate,
+                                         DESC_NUMBER_RE,
                                          canonical_ca_listing,
+                                         desc_number,
                                          income_facts_from_description,
                                          is_roc_description,
                                          parse_strict_number)
@@ -40,7 +42,8 @@ _QT_REGISTERED_RE = re.compile(
 
 # A stock-split distribution (Action DIS) reports the NEW shares in Quantity
 # and the held count as "... ON <held> SHS ...". Used to recover the ratio.
-_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SH', re.IGNORECASE)
+_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+' + DESC_NUMBER_RE + r'\s+SH',
+                              re.IGNORECASE)
 
 # A STOCK DIVIDEND row (split-share corps like TDb pay non-cash share
 # distributions): DIS / 'Dividends' with 'STK DIV' in the description
@@ -53,7 +56,8 @@ _SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SH', re.IGNORECASE)
 _FX_SETTLED_RE = re.compile(r'EXCHANGE RATE\s+([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE)
 
 _CIL_RE = re.compile(r'CASH\s+IN\s+LIEU\s+OF\s+([0-9]*\.?[0-9]+)', re.I)
-_REINV_PRICE_RE = re.compile(r'REINV@(?:[A-Z]{1,3}\$)?\s*([0-9]+(?:\.[0-9]+)?)', re.I)
+_REINV_PRICE_RE = re.compile(r'REINV@(?:[A-Z]{1,3}\$)?\s*' + DESC_NUMBER_RE,
+                             re.I)
 _STK_DIV_RE = re.compile(r'\bSTK\.?\s+DIV\b|\bSTOCK\s+DIVIDEND\b',
                          re.IGNORECASE)
 
@@ -1260,7 +1264,11 @@ class QuestradeBrokerage(BaseBrokerage):
         sdt = self._date(row, 'Settlement Date', lineno, required=False)
         date_settle = sdt.strftime('%Y-%m-%d') if sdt else date
         m = _REINV_PRICE_RE.search(desc)
-        price = float(m.group(1)) if m else round(net / qty, 8)
+        # 'REINV@C$1,234.56' is 1234.56, not 1 (audit S062-20); a
+        # decimal comma falls back to the cash / units.
+        price = desc_number(m.group(1), strict=False) if m else None
+        if not price:
+            price = round(net / qty, 8)
         tx = {
             'action': 'BUYSELL',
             'date': date, 'time': '09:30:00', 'date_settle': date_settle,
@@ -1293,7 +1301,10 @@ class QuestradeBrokerage(BaseBrokerage):
         actually holds."""
         received = self._num(row, 'Quantity', lineno)
         m = _SPLIT_ON_SHS_RE.search(desc)
-        held = float(m.group(1).replace(',', '')) if m else 0.0
+        # A decimal comma ('ON 1,5 SHS') is refused, never read as 15
+        # (audit S062-13): the ratio rescales the whole pool.
+        held = (desc_number(m.group(1), where=self._where(lineno),
+                            field="split base 'ON N SHS'") if m else 0.0)
         if not m or received == 0 or held <= 0:
             print(f"warning: Questrade stock-split row not understood "
                   f"(need 'ON N SHS' and a nonzero quantity), skipping: "
