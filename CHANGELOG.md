@@ -1746,6 +1746,11 @@
   clearing house: not identical property) and the `.sum` DIAGNOSTICS
   name it; before, the two ACBs were pooled and the gain changed
   silently.
+- **`list --date` cuts on the project's date basis.** On a settle-basis
+  project (the Canadian default) the as-of positions now drop rows by
+  settlement date, like the gains year and `t1135`: a sale traded Dec 31
+  that settles in January is still held at Dec 31. The banner names the
+  basis; `taxjson-gains --as-of` follows `--tax-date`.
 
 ## v0.16.0 (2026-09-25)
 

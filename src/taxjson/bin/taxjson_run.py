@@ -8228,6 +8228,13 @@ def cmd_positions(args: argparse.Namespace) -> None:
                      f"taxjson.toml")
         names = ([args.account] if args.account
                  else sorted(accounts_cfg))
+        # The cutoff reads the project's date basis, like the gains
+        # year and t1135 (R1-10).
+        _asof_basis_set = str(settings.get("tax_date") or "").strip().lower() \
+            in ("trade", "settle")
+        _asof_basis = (str(settings.get("tax_date")).strip().lower()
+                       if _asof_basis_set else
+                       ("trade" if country in ("us", "usa") else "settle"))
         files = {}
         tmp_docs = {}
         _no_input = _accounts_skipped_for_no_inputs(root)
@@ -8249,6 +8256,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
                    "--country", country, "--year", year,
                    "--as-of", as_of, "--no-wash"] + option_timing_flags(
                        settings)
+            if _asof_basis_set:
+                cmd += ["--tax-date", _asof_basis]
             if accounts_cfg.get(n, {}).get("type") == "taxable":
                 cmd.append("--taxable")
             res = _run_cmd(cmd + [str(b)], capture_output=True)
@@ -8262,8 +8271,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             sys.exit(f"taxjson list: no base files in {cache} "
                      f"(run `taxjson run` first).")
-        basis = (f"as of {as_of} (per-account ACB, pre-wash, "
-                 f"pre-ticker.map)")
+        _asof_word = ("settlement date" if _asof_basis == "settle"
+                      else "trade date")
+        basis = (f"as of {as_of} by {_asof_word} (per-account ACB, "
+                 f"pre-wash, pre-ticker.map)")
         # A symbol held in two taxable accounts has ONE s.47 ACB on the
         # return (plain `list` shows it); this view recomputes each
         # account alone, so its cost differs — say so rather than
@@ -11877,7 +11888,9 @@ def main() -> None:
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
                        help="Positions AS OF this date — each account's "
                             "books recomputed alone with the engine's "
-                            "--as-of cutoff (per-account ACB: no s.47 "
+                            "--as-of cutoff on the project's date basis "
+                            "(settlement date unless tax_date = "
+                            "\"trade\"; per-account ACB: no s.47 "
                             "blend across taxable accounts; pre-wash, "
                             "pre-ticker.map)")
     p_pos.add_argument("--negative", action="store_true",
