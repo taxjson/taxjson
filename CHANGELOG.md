@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Generic importer: a sell whose commission exceeds its gross nets
+  negative.** A penny option close with a larger commission is booked with
+  its negative net (the schema accepts it since S017-00; the engine deducts
+  it) — it used to be clamped to 0 without an amount column, losing the
+  excess commission, or refused as a mis-mapped column with one (S057-02).
 - **Webull: exercise/assignment is inferred only on evidence.** A $0 option
   close is paired with a stock trade at the strike only when that trade
   carries Webull's $1.00 exercise/assignment charge; a limit order at the

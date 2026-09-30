@@ -352,3 +352,39 @@ class TestTtEmitterDates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ------------------------------------------------------------ S057-02
+class TestGenericNegativeSellNet(unittest.TestCase):
+    """A sell whose commission exceeds its gross nets negative; the
+    schema accepts a negative SELL net (S017-00) and the engine deducts
+    it, so the importer must neither refuse nor clamp it (S057-02)."""
+
+    _OPT = "ZZQ250321C00050000"
+    _BUY = f"2025-01-15,BUY,{_OPT},1,2.00,-209.95,9.95,CAD\n"
+
+    def _toml(self):
+        return _TOML + "[options]\nallow_large_fees=true\n"
+
+    def test_amount_mapped_negative_sell_net_booked(self):
+        for qty in ("-1", "1"):
+            csv = (_HDR + self._BUY +
+                   f"2025-03-01,SELL,{self._OPT},{qty},0.01,-8.95,9.95,CAD\n")
+            txs, _ = _parse(csv, self._toml())
+            self.assertAlmostEqual(txs[1]["net_amount"], -8.95)
+            self.assertEqual(txs[1]["quantity"], -1.0)
+
+    def test_derived_negative_sell_net_not_clamped(self):
+        toml = (self._toml().replace('amount="Amount"\n', '')
+                .replace('"DIV"="dividend"\n', '').replace('"FEE"="fee"\n', ''))
+        csv = (_HDR + f"2025-01-15,BUY,{self._OPT},1,2.00,,9.95,CAD\n"
+               f"2025-03-01,SELL,{self._OPT},-1,0.01,,9.95,CAD\n")
+        txs, err = _parse(csv, toml)
+        self.assertAlmostEqual(txs[1]["net_amount"], -8.95)
+        self.assertNotIn("clamped", err)
+
+    def test_negative_amount_not_matching_fee_still_refused(self):
+        csv = (_HDR + self._BUY +
+               f"2025-03-01,SELL,{self._OPT},-1,0.01,-500.00,9.95,CAD\n")
+        with self.assertRaises(ValueError):
+            _parse(csv, self._toml())

@@ -339,8 +339,12 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
             f"`[options] allow_large_fees = true` in the mapping.")
     if amount and gross > 0:
         expected = gross + fee if target == "buy" else gross - fee
-        if abs(abs(amount) - expected) > max(_ABS_TOL,
-                                             _REL_TOL * max(expected, 1.0)):
+        # A sell whose commission exceeds its gross nets NEGATIVE (a
+        # penny option close): its amount is fee - gross in magnitude,
+        # whichever sign the file writes (S057-02).
+        cmp = abs(expected)
+        if abs(abs(amount) - cmp) > max(_ABS_TOL,
+                                        _REL_TOL * max(cmp, 1.0)):
             raise ValueError(
                 f"generic importer: {where}: amount {abs(amount):.2f} "
                 f"differs from qty x price{' x 100' if mult > 1 else ''} "
@@ -357,24 +361,21 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
 
 
 def _trade_net(fname: str, target: str, qty: float, price: float,
-               amount: float, fee: float, mult: float = 1.0) -> float:
+               amount: float, fee: float, mult: float = 1.0,
+               is_future: bool = False) -> float:
     """Fee-inclusive trade total: the amount column when present, else
-    derived. A derived SELL net that goes NEGATIVE (fee > gross —
-    worthless-position cleanup sells) is clamped to 0 with a warning:
-    the engines consume net_amount as a magnitude, so a negative value
-    would silently UNDERSTATE the loss."""
+    derived. A SELL whose commission exceeds its gross (a penny option
+    close, a worthless-position cleanup) nets NEGATIVE: the engine
+    deducts those negative proceeds (core._trade_money) and the schema
+    accepts them (S017-00). It used to be clamped to 0 — the excess
+    commission never reached the loss — or, with an amount column,
+    refused as a mis-mapping (S057-02)."""
+    gross = 0.0 if is_future else abs(qty) * abs(price) * mult
     if amount:
+        if target == "sell" and gross > 0 and abs(fee) > gross:
+            return -abs(amount)
         return abs(amount)
-    derived = (abs(qty) * abs(price) * mult
-               + (abs(fee) if target == "buy" else -abs(fee)))
-    if derived < 0:
-        print(f"warning: generic importer: {fname}: sell fee "
-              f"({abs(fee):.2f}) exceeds gross proceeds "
-              f"({abs(qty) * abs(price) * mult:.2f}) — net proceeds clamped "
-              f"to 0; hand-check this disposition (the excess fee is "
-              f"not deducted from the basis).", file=sys.stderr)
-        return 0.0
-    return derived
+    return gross + (abs(fee) if target == "buy" else -abs(fee))
 
 
 class GenericBrokerage(BaseBrokerage):
@@ -653,7 +654,7 @@ class GenericBrokerage(BaseBrokerage):
                         # magnitude); else derive from qty*price±fee.
                         "net_amount": _trade_net(
                             path.name, target, qty, price, amount, fee,
-                            mult),
+                            mult, is_future),
                         "gross_amount": (
                             # Futures: the implied qty x price x size.
                             abs(amount) + (abs(fee) if target == "sell"
@@ -784,7 +785,14 @@ class GenericBrokerage(BaseBrokerage):
                 f"buy but the quantity is NEGATIVE ({qty:g}) — a sell by "
                 f"its own sign. Map sells to their own action value; "
                 f"booking it as a buy would drop the disposition.")
-        if target == "sell" and qty > 0 and (amount_v or 0.0) < 0:
+        _gross = abs(qty) * abs(price_v or 0.0) * mult
+        _neg_net = (fee > _gross > 0 and abs(abs(amount_v or 0.0)
+                                             - (fee - _gross))
+                    <= max(_ABS_TOL, _REL_TOL * (fee - _gross)))
+        if (target == "sell" and qty > 0 and (amount_v or 0.0) < 0
+                and not _neg_net):
+            # (Not a sell whose commission exceeds its gross: that one
+            # really is cash out — S057-02.)
             raise ValueError(
                 f"generic importer: {where}: {raw_action} is mapped to "
                 f"sell but the quantity is positive and the amount "
