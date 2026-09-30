@@ -46,9 +46,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from taxjson.lib import cli_diag
+from taxjson.lib.country import country_arg
 
 PROG = "taxjson-apply-distributions"
 
@@ -106,10 +107,12 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
 
     `date_basis` picks which date a row moves the balance on. Fund
     record dates go by the holder of record — the SETTLED position —
-    so under `settle` (the CRA default) a sale traded 06-19 that
-    settles 06-22 still holds on a 06-19 record date, and a buy traded
-    ON the record date (settling after it) is not yet credited. Under
-    `trade` the trade date rules (IRS-style projects)."""
+    so under `settle` (what `taxjson run` uses in both countries: the
+    record date is a market fact, not the tax-year date basis —
+    partition INPUTS-10) a sale traded 06-19 that settles 06-22 still
+    holds on a 06-19 record date, and a buy traded ON the record date
+    (settling after it) is not yet credited. `trade` is a manual
+    override."""
     if date_basis not in DATE_BASES:
         raise ValueError(f"date_basis must be one of {DATE_BASES}, "
                          f"got {date_basis!r}")
@@ -246,9 +249,18 @@ def _phantom_openings(txs: List[dict], phantoms) -> List[dict]:
             if t.action == "OPENING_BALANCE"]
 
 
+# Where the income of a reinvested distribution is reported, by the
+# project's country (the tool books the cost side only).
+_INCOME_SLIP = {"canada": "the T3/T5 slip",
+                "usa": "Form 1099-DIV (box 2a for a capital-gain "
+                       "distribution)",
+                None: "your tax slip"}
+
+
 def apply_distributions(doc: dict, map_rows, account: str,
                         date_basis: str = "settle",
-                        phantoms=None, renames=None) -> Tuple[dict, int]:
+                        phantoms=None, renames=None,
+                        country: Optional[str] = None) -> Tuple[dict, int]:
     """`phantoms` — the (symbol, account) set from phantoms.json. The
     record-date balance must include the phantom openings the gains
     stage synthesizes (audit S000-08: sized on the phantom-less book, a
@@ -278,8 +290,9 @@ def apply_distributions(doc: dict, map_rows, account: str,
                   file=sys.stderr)
             continue
         amount = round(bal * per_share, 6)
-        kind = ("reinvested distribution (ACB up)" if per_share > 0
-                else "return of capital (ACB down)")
+        _cost = "basis" if country == "usa" else "ACB"
+        kind = (f"reinvested distribution ({_cost} up)" if per_share > 0
+                else f"return of capital ({_cost} down)")
         txs.append({
             "action": "ADJUST",
             "date": date, "time": "23:59:58", "date_settle": date,
@@ -296,12 +309,14 @@ def apply_distributions(doc: dict, map_rows, account: str,
         # box 21/26/49, or a T5 stock dividend): the ACB rises only
         # because that amount is taxed. This tool books the ACB side
         # only — say so, or the estimate silently omits it (S026-00).
-        income = (f" Report the {amount:.2f} itself as income from the "
-                  f"T3/T5 slip — it is not counted as income by taxjson "
-                  f"(estimate, divs-sum)." if per_share > 0 else "")
+        income = (f" Report the {amount:.2f} itself as income from "
+                  f"{_INCOME_SLIP[country]} — it is not counted as income "
+                  f"by taxjson (estimate, divs-sum)." if per_share > 0
+                  else "")
         print(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
-              f"{per_share:g} = {amount:+.2f} ACB adjustment.{income}",
-              file=sys.stderr)
+              f"{per_share:g} = {amount:+.2f} "
+              f"{'basis' if country == 'usa' else 'ACB'} "
+              f"adjustment.{income}", file=sys.stderr)
         applied += 1
     doc["transactions"] = txs
     return doc, applied
@@ -314,9 +329,14 @@ def main(argv=None) -> int:
     ap.add_argument("--account", default="")
     ap.add_argument("--date-basis", choices=DATE_BASES, default="settle",
                     help="Which date a trade moves the record-date "
-                         "balance on: settle (holder of record = "
-                         "settled position; CRA default) or trade. "
-                         "`taxjson run` passes the project's tax_date.")
+                         "balance on: settle (the holder of record is "
+                         "the settled position — a market fact in both "
+                         "countries, and what `taxjson run` uses) or "
+                         "trade (a manual override).")
+    ap.add_argument("--country", type=country_arg, default=None,
+                    metavar="{canada,ca,usa,us}",
+                    help="Only words the income note (T3/T5 slip or "
+                         "Form 1099-DIV); `taxjson run` passes it.")
     ap.add_argument("--ticker-map", type=Path, default=None,
                     metavar="TICKER_MAP",
                     help="ticker.map the base book went through: map "
@@ -359,7 +379,8 @@ def main(argv=None) -> int:
         renames = merge_renames(tmap, to_base=True)
     doc, applied = apply_distributions(doc, load_map(args.map), account,
                                        args.date_basis, phantoms=phantoms,
-                                       renames=renames)
+                                       renames=renames,
+                                       country=args.country)
 
     tmp = args.base_json.with_name(args.base_json.name + ".part")
     tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",

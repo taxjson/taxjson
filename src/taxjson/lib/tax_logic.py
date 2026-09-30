@@ -351,6 +351,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "shares' cost) is not in the broker's export: add it "
                  "(distributions.map or a .tt ADJUST). The new shares are "
                  "an acquisition for the superficial-loss rule."),
+            Rule("CA-DIST-01",
+                 "distributions.map: a non-cash distribution (a reinvested "
+                 "capital-gains distribution, a late return-of-capital "
+                 "factor) becomes an ACB adjustment sized on the shares "
+                 "held on its record date — the settled position. Its "
+                 "income is on the T3/T5 slip; taxjson does not count "
+                 "it."),
             Rule("CA-ACB-06", "Return of capital lowers the ACB."),
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
@@ -622,6 +629,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-HOLD-03", "A stand-alone short sale is short-term.",
                  cont=True),
+            Rule("US-DIST-01",
+                 "distributions.map: a non-cash distribution (a reinvested "
+                 "capital-gain distribution, a late return-of-capital "
+                 "factor) becomes a basis adjustment sized on the shares "
+                 "held on its record date — the settled position. Its "
+                 "income is on Form 1099-DIV; taxjson does not count it."),
             Rule("US-ROC-01",
                  "A return of capital (nondividend distribution, "
                  "§301(c)(2)) lowers the basis of the shares held, pro rata "

@@ -2070,9 +2070,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                             str(_stage), "--map", str(dist_map),
                             "--account", name,
                             # Record-date balance = holder of record,
-                            # i.e. the SETTLED position under CRA
-                            # timing; the project's tax_date decides.
-                            "--date-basis", tax_date]
+                            # i.e. the SETTLED position in BOTH
+                            # countries: a market fact, not the tax-
+                            # year date basis (a US project's trade
+                            # tax_date credited a buy traded on the
+                            # record date — partition INPUTS-10).
+                            "--date-basis", "settle",
+                            "--country", country]
                         # Keys go through the same ticker.map renames
                         # as the book (S025-22).
                         + (["--ticker-map", str(ticker_map)]

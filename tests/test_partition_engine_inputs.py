@@ -590,5 +590,68 @@ class TestSharedHelpersSpeakTheCountry(unittest.TestCase):
         self.assertTrue(is_registered_account("TFSA"))
 
 
+# ------------------------------------------------------ INPUTS-10, SPEC-32
+class TestRecordDateHolder(unittest.TestCase):
+    """The holder of record is the settled position in both countries:
+    a US project's trade tax_date used to credit a buy traded ON the
+    record date."""
+
+    @rule("CA-DIST-01")
+    @rule("US-DIST-01")
+    def test_same_adjust_in_both_countries(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from tax_rules.dual import projects_both
+        from test_fix_ibparse import HEAD, TRADES_H, _trade
+        csv = (HEAD + TRADES_H
+               + _trade('XYZ', '2025-06-02, 10:00:00', 100, 50, -5000)
+               # Traded on the record date, settles the next day.
+               + _trade('XYZ', '2025-12-29, 10:00:00', 50, 50, -2500))
+        with tempfile.TemporaryDirectory() as td:
+            ps = projects_both(Path(td), year=2025,
+                               accounts='[accounts.ib]\ntype = "taxable"\n',
+                               files={"inputs/ib/ib.csv": csv,
+                                      "distributions.map":
+                                      "XYZ.US 2025-12-29 0.50\n"},
+                               canada={"source_currencies": ["USD"],
+                                       "option_grant_timing_since": 2025})
+            _usd_rates(ps["canada"] / "work" / "to_base.csv")
+            adj, err = {}, {}
+            for c, root in ps.items():
+                r = _run_offline(root, td, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                base = json.loads((root / "work" / "ib_base.json")
+                                  .read_text())
+                adj[c] = [t["net_amount"] for t in base["transactions"]
+                          if t["action"] == "ADJUST"]
+                err[c] = "".join(p.read_text() for p in
+                                 (root / "work").glob("*.diag")) + r.stderr
+        # 100 settled shares x 0.50 — the 50 bought on the record date
+        # are not the holder's yet, in either country.
+        self.assertEqual(adj["canada"], [50.0])
+        self.assertEqual(adj["usa"], [50.0])
+        # The income note names the country's slip.
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_apply_distributions import (
+            apply_distributions)
+        book = {"transactions": [dict(action="BUYSELL", date="2025-06-02",
+                                      date_settle="2025-06-03",
+                                      symbol="XYZ.US", quantity=100.0)]}
+        notes = {}
+        for c in C.COUNTRIES:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                apply_distributions(json.loads(json.dumps(book)),
+                                    [("XYZ.US", "2025-12-29", 0.5)], "ib",
+                                    country=c)
+            notes[c] = buf.getvalue()
+        self.assertIn("T3/T5", notes["canada"])
+        self.assertIn("1099-DIV", notes["usa"])
+        self.assertNotIn("T3", notes["usa"])
+        self.assertNotIn("ACB", notes["usa"])
+
+
 if __name__ == "__main__":
     unittest.main()

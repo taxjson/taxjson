@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **distributions.map sizes on the holder of record in both countries.**
+  The record-date balance followed the project's tax-year date basis, so
+  a US project (trade dates) credited a buy traded on the record date.
+  It is now always the settled position (unchanged for Canada's default).
+  The income note names Form 1099-DIV in a US project (it said T3/T5).
 - **US: a return of capital beyond basis is booked (§301(c)(3)).** It
   was a warning only, and the excess came back as extra gain when the
   shares were sold — right total, wrong year. Now the part beyond each
