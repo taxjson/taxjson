@@ -365,6 +365,29 @@ Examples:
             sys.exit(1)
         parsed_files.append((input_path, extractor, transactions))
 
+    # A Corporate Actions `Ca` cancellation whose original sits in
+    # ANOTHER of the account's statements (IB: booked in the 2025
+    # statement, cancelled and rebooked in the 2026 one) undoes it there
+    # (audit S059-04); the rest are warned about once.
+    for _i, (_p, _ex, _txs) in enumerate(parsed_files):
+        for _ca in getattr(_ex, 'unmatched_ca', None) or ():
+            _done = False
+            for _j in range(len(parsed_files) - 1, -1, -1):
+                _other = parsed_files[_j][1]
+                if _j != _i and getattr(_other, 'ca_undo', None) \
+                        and _other.ca_undo(_ca):
+                    print(f"note: {_p.name}: IB cancelled (Ca) "
+                          f"{_ca['desc']!r} ({_ca['qty']:g} on "
+                          f"{_ca['date']}); its original in "
+                          f"{parsed_files[_j][0].name} is undone.",
+                          file=sys.stderr)
+                    _done = True
+                    break
+            if not _done and getattr(_ex, 'account_context', None) \
+                    is not None:
+                print(ib_extractor.unmatched_ca_warning(_ca),
+                      file=sys.stderr)
+
     # An option trade on its expiry day is clamped to the expiry by each
     # parser — but only against the expiry rows of ITS file. The expiry
     # of a Dec-31 0DTE contract posts the next business day, i.e. in the

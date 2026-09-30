@@ -369,7 +369,10 @@ class TestCorporateActionCancellation(unittest.TestCase):
         parser, txs, err = _parse(HEAD + CA_H
                                   + self._ca(self.DESC3, -200, 'Ca'))
         self.assertEqual(txs, [])
-        self.assertIn('its original row is not in this statement', err)
+        # Worded for the account: taxjson-brokerage first offers the
+        # row to the account's other statements (audit S059-04).
+        self.assertIn("its original row is not in this account's "
+                      "statements", err)
         self.assertEqual(parser._skip_counts.get(
             'Corporate Actions Ca row whose original is not in this '
             'statement (see warning)'), 1)

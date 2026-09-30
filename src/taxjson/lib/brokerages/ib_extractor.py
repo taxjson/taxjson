@@ -340,6 +340,14 @@ def _warn_coverage_gaps(periods, today=None) -> None:
               file=sys.stderr)
 
 
+def unmatched_ca_warning(ca: Dict[str, Any]) -> str:
+    return (f"warning: {ca['where']}: IB cancelled (Ca) the corporate "
+            f"action {ca['desc']!r} ({ca['qty']:g} on {ca['date']}) but "
+            f"its original row is not in this account's statements — "
+            f"nothing undone; if the original was booked another way, "
+            f"reverse it by hand in a .tt file.")
+
+
 def _ib_split_datetime(raw: str, where: str):
     """(date, time) from IB's `YYYY-MM-DD, HH:MM:SS`; a date in any
     other shape (Flex `20250328;093000`, `03/28/2025`) is refused —
@@ -2659,13 +2667,16 @@ class IbBrokerage(BaseBrokerage):
         # `Ca` rows whose original never appeared: a cancellation of
         # something booked in an EARLIER statement (or a restatement
         # this parser cannot pair). Nothing is guessed — loud skip.
+        # Kept for taxjson-brokerage, which offers each unmatched Ca row
+        # to the account's OTHER statements (a split booked in the 2025
+        # statement and cancelled in the 2026 one — audit S059-04).
+        # Under an account context it also prints the warning for the
+        # rows no statement matched; a lone parse warns here.
+        self.ca_undo = _ca_undo
+        self.unmatched_ca = list(pending_ca)
         for _ca in pending_ca:
-            print(f"warning: {_ca['where']}: IB cancelled (Ca) the "
-                  f"corporate action {_ca['desc']!r} ({_ca['qty']:g} on "
-                  f"{_ca['date']}) but its original row is not in this "
-                  f"statement — nothing undone; if the original was "
-                  f"booked from an earlier statement, reverse it by "
-                  f"hand in a .tt file.", file=sys.stderr)
+            if self.account_context is None:
+                print(unmatched_ca_warning(_ca), file=sys.stderr)
             self.count_skip("Corporate Actions Ca row whose original is "
                             "not in this statement (see warning)")
 

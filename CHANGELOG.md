@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **An IB corporate-action cancellation reaches the other statement.** A
+  split booked in one yearly statement and cancelled (`Ca`) in the next
+  is undone when both are in the account's inputs; it used to stay
+  applied with a "reverse it by hand" warning (audit S059-04).
 - **Generic importer: one spelling per security.** `BRK-B` and `BRK/B`
   are `BRK.B` (they were separate ACB pools, so a cross-account
   superficial loss was missed), an OCC symbol padded to 21 characters is

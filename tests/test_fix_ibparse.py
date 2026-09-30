@@ -810,5 +810,28 @@ class TestGenericSymbolSpelling(unittest.TestCase):
             self._parse('2025-03-10,BUY,QZY 21MAR25 50 C,1,200,200,0,USD\n')
 
 
+class TestIbCorporateActionCancelAcrossStatements(unittest.TestCase):
+    """S059-04: a split booked in the 2025 statement and cancelled (Ca)
+    and rebooked in the 2026 statement stayed applied (x3 then x2)."""
+
+    def test_cancel_in_the_next_statement_undoes_the_original(self):
+        desc3 = ('QZX(US9990000301) Split 3 for 1 (QZX, QZX CORP, '
+                 'US9990000301)')
+        desc2 = ('QZX(US9990000301) Split 2 for 1 (QZX, QZX CORP, '
+                 'US9990000301)')
+        a = (HEAD + TRADES_H
+             + _trade('QZX', '2025-06-02, 10:00:00', 100, 10, -1000, -1)
+             + CA_H + _ca(desc3, 200, when='2025-12-30, 20:25:00'))
+        b = (HEAD + CA_H
+             + _ca(desc3, -200, when='2026-01-05, 20:25:00', code='Ca')
+             + _ca(desc2, 100, when='2026-01-05, 20:25:00'))
+        rc, out, err, _ = _brokerage_cli({'a.csv': a, 'b.csv': b})
+        self.assertEqual(rc, 0, err)
+        splits = [(t['date'], t['quantity']) for t in out['transactions']
+                  if t['action'] == 'SPLIT']
+        self.assertEqual(splits, [('2026-01-05', 2.0)])
+        self.assertNotIn('nothing undone', err)
+
+
 if __name__ == '__main__':
     unittest.main()
