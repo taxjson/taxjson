@@ -2243,7 +2243,8 @@ def stage_cross_reports(all_gains: List[Path],
                         sheltered_base: Optional[Path],
                         reports_dir: Path,
                         ticker_map: Optional[Path] = None,
-                        phantoms: Optional[Path] = None) -> None:
+                        phantoms: Optional[Path] = None,
+                        country: Optional[str] = None) -> None:
     if not all_gains:
         return
     print("==> cross-account reports")
@@ -2266,7 +2267,7 @@ def stage_cross_reports(all_gains: List[Path],
                 "--taxable", str(tb),
                 "--json-out", str(reports_dir / f"wash_radar_{stem}.json"),
                 "--account", stem,
-            ] + _radar_engine_args([tb], phantoms)
+            ] + _radar_engine_args([tb], phantoms, country)
                 + sheltered_arg, reports_dir / f"wash_radar_{stem}.rpt",
                 capture_diag=False)
         if len(taxable_equity_base) > 1:
@@ -2282,7 +2283,7 @@ def stage_cross_reports(all_gains: List[Path],
                 "--json-out",
                 str(reports_dir / "wash_radar_COMBINED.json"),
                 "--account", "COMBINED",
-            ] + _radar_engine_args(taxable_equity_base, phantoms)
+            ] + _radar_engine_args(taxable_equity_base, phantoms, country)
                 + sheltered_arg, reports_dir / "wash_radar_COMBINED.rpt",
                 capture_diag=False)
         else:
@@ -2775,7 +2776,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             o["base"] for _, o, is_crypto in taxable_outputs
             if not is_crypto or _crypto_wash_covered]
         stage_cross_reports(all_gains, taxable_equity_base, sheltered_base, reports_dir,
-                            ticker_map_arg, phantoms=phantoms_arg)
+                            ticker_map_arg, phantoms=phantoms_arg,
+                            country=settings.get("country", "canada"))
         # Overlap notes per blended group — the note says the blended
         # pass covers the symbol, so it must only name accounts a blend
         # actually spans (crypto blends only in Canada; equity and
@@ -8938,16 +8940,36 @@ def _explain_wash_sales(root: Path, cache: Path,
     raise SystemExit(rc)
 
 
-def _taxable_equity_account_names(root: Path) -> List[str]:
-    """Wash-checkable taxable account names from taxjson.toml (soft-read,
-    like the sibling query commands — no hard exit when the config is
-    absent). Crypto accounts are excluded only for US projects (§1091
-    does not reach digital assets); Canada's superficial-loss rule
-    covers any identical property, so Canadian crypto accounts are
+def _radar_config(root: Path, prog: str = "taxjson") -> Dict[str, Any]:
+    """taxjson.toml for the radar family (wash-radar, watch, buy-check,
+    sell-check): {} when the project has none — a bare work/ directory
+    still runs — but a file that EXISTS and does not parse stops the
+    command. Soft-reading it as {} fell back to globbing every
+    *_base.json, sheltered books included, as TAXABLE: registered
+    accounts' sales became "losses" with rescue advice to sell RRSP
+    shares (2026-09 audit S048-13)."""
+    cfg_path = root / "taxjson.toml"
+    if cfg_path.exists() and tomllib is not None:
+        try:
+            tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            sys.exit(f"{prog}: taxjson.toml cannot be read ({e}) — fix "
+                     f"it first; the radar will not guess which "
+                     f"accounts are taxable.")
+    return _soft_config(root)
+
+
+def _taxable_equity_account_names(root: Path,
+                                  prog: str = "taxjson") -> List[str]:
+    """Wash-checkable taxable account names from taxjson.toml (no hard
+    exit when the config is absent; an unreadable one stops — see
+    _radar_config). Crypto accounts are excluded only for US projects
+    (§1091 does not reach digital assets); Canada's superficial-loss
+    rule covers any identical property, so Canadian crypto accounts are
     included — matching _wash_flags and the run pipeline's second pass.
     Empty list means 'unknown', so the caller falls back to globbing
     base files."""
-    cfg = _soft_config(root)
+    cfg = _radar_config(root, prog)
     if not cfg:
         return []
     crypto_covered = _normalize_country(
@@ -8974,7 +8996,8 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         if not base.exists():
             sys.exit(f"taxjson wash-radar: no {base.name} in {cache} "
                      f"(run `taxjson run` first, or check the name).")
-        _acct_cfg = _soft_config(root).get("accounts") or {}
+        _acct_cfg = _radar_config(
+            root, "taxjson wash-radar").get("accounts") or {}
         if (_acct_cfg.get(args.account) or {}).get("type") == "sheltered":
             sys.exit(f"taxjson wash-radar: {args.account} is a "
                      f"sheltered account — the radar advises on "
@@ -8985,7 +9008,10 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         bases = _radar_taxable_bases(root, cache, "taxjson wash-radar")
 
     cmd = _cmd("taxjson-wash-radar") + ["--taxable", *[str(b) for b in bases]]
-    cmd += _radar_engine_args(bases, root / "phantoms.json")
+    cmd += _radar_engine_args(
+        bases, root / "phantoms.json",
+        _radar_config(root, "taxjson wash-radar").get(
+            "settings", {}).get("country", "canada"))
     # Cross-account superficial-loss detection needs the pooled sheltered
     # history; pass it when the pipeline has built it.
     sheltered_base = cache / "sheltered_base.json"
@@ -9024,7 +9050,7 @@ def _radar_taxable_bases(root: Path, cache: Path,
     radar'd; crypto is included only where the jurisdiction's wash
     rule covers it — see _taxable_equity_account_names). Fall back to
     globbing base files when there's no readable config."""
-    names = _taxable_equity_account_names(root)
+    names = _taxable_equity_account_names(root, prog)
     if names:
         bases = [cache / f"{n}_base.json" for n in sorted(names)
                  if (cache / f"{n}_base.json").exists()]
@@ -9040,14 +9066,18 @@ def _radar_taxable_bases(root: Path, cache: Path,
 
 
 def _radar_engine_args(bases: List[Path],
-                       phantoms: Optional[Path] = None) -> List[str]:
+                       phantoms: Optional[Path] = None,
+                       country: Optional[str] = None) -> List[str]:
     """The radar's engine context, shared by every radar run (wash-radar,
     watch, buy-check, sell-check and the run's reports/wash_radar_*):
     the taxable accounts' gains files (wash-adjusted, s.47-blended — the
-    engine decides which sales were losses) and the project's
-    phantoms.json (the same openings the gains pass applies)."""
+    engine decides which sales were losses), the project's
+    phantoms.json (the same openings the gains pass applies) and its
+    country (Canada's per-holder s.54 test vs the US s.1091 rules)."""
     from taxjson.lib.report_model import resolve_gains_files
     out: List[str] = []
+    if country:
+        out += ["--country", _normalize_country(str(country))]
     by_dir: Dict[Path, Dict[str, Path]] = {}
     for b in bases:
         b = Path(b)
@@ -9081,7 +9111,10 @@ def cmd_watch(args: argparse.Namespace) -> None:
     bases = _radar_taxable_bases(root, cache, "taxjson watch")
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
-    cmd += _radar_engine_args(bases, root / "phantoms.json")
+    cmd += _radar_engine_args(
+        bases, root / "phantoms.json",
+        _radar_config(root, "taxjson watch").get(
+            "settings", {}).get("country", "canada"))
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -9811,7 +9844,10 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     bases = _radar_taxable_bases(root, cache, prog)
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
-    cmd += _radar_engine_args(bases, root / "phantoms.json")
+    cmd += _radar_engine_args(
+        bases, root / "phantoms.json",
+        _radar_config(root, prog).get("settings", {}).get("country",
+                                                         "canada"))
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -10116,15 +10152,17 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
 def cmd_sell_check(args: argparse.Namespace) -> None:
     """`taxjson sell-check SYMBOL...`: is selling this ticker AT A
     LOSS today safe from the superficial-loss / wash-sale rules?
-    UNSAFE when a recent affiliated buy still held would deny the
-    loss (LOCKED — permanently for the registered-matched portion);
-    ACTION when a rescueable violation is already open (sell the FULL
-    position before the deadline); SAFE* for conditional cases
-    (full-exit-only, sheltered-holds forward caveat); SAFE otherwise
+    UNSAFE when a registered account's recent buy it still holds
+    would deny the loss on the WHOLE taxable position (LOCKED), or when
+    an open violation is backed by a registered account's in-window
+    buy; ACTION when a violation can be rescued by selling the taxable
+    replacement; SAFE* for conditional cases (full-exit-only,
+    sheltered-holds forward caveat); PARTIAL when only some units of a
+    LOCKED position are at risk; SAFE otherwise
     — with the standard rule: no rebuy on EITHER side for 30 days
     after. Root-matched with ticker.map equivalences. Exit 1 when any
-    queried symbol is UNSAFE. Whether the sale would BE a loss at
-    today's price is `taxjson harvest`'s job."""
+    queried symbol is UNSAFE or PARTIAL. Whether the sale would BE a
+    loss at today's price is `taxjson harvest`'s job."""
     root = Path(args.dir).resolve()
     cache = root / "work"
     radar, _canon, _last_loss = _wash_class_context(
@@ -10141,7 +10179,21 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
             cat = r.get("category") or ""
             adv = r.get("advisory") or ""
             if cat == "LOCKED":
-                verdict = "UNSAFE"
+                # A registered account's in-window buy it still holds
+                # denies the loss on up to that many units — the rest of
+                # a sale stands (s.54, per holder). UNSAFE only when the
+                # whole taxable position is at risk; a fraction is
+                # PARTIAL, its line stating the units (still exit 1: a
+                # part of the loss would be lost for good). An older
+                # radar without at_risk_qty stays UNSAFE.
+                _risk = r.get("at_risk_qty")
+                _tq = abs(float(r.get("taxable_qty") or 0.0))
+                if (_risk is not None and _tq > 1e-9
+                        and float(_risk) < _tq - 1e-6):
+                    if verdict != "UNSAFE":
+                        verdict = "PARTIAL"
+                else:
+                    verdict = "UNSAFE"
                 _cd = r.get("clears_at")
                 if _cd:                     # worst case across the class
                     clears = max(clears, _cd) if clears else _cd
@@ -10159,26 +10211,37 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                     # missed the tighter leg's rescue by days
                     # (2026-09 audit).
                     act_by = min(act_by, _cd) if act_by else _cd
-                _shl = float(r.get("sheltered_qty") or 0.0)
-                if abs(_shl) > 0.01:
-                    # A registered account holds it too. The
-                    # registered-matched portion is denied for good
-                    # ONLY if the sheltered side still holds at the
-                    # window's end (s.40(2)(g)(ii) still-held test) —
-                    # exiting BOTH sides before the deadline defeats
-                    # it. Say that, instead of the old blanket
-                    # "cannot be rescued" that contradicted the
-                    # rescue advisory on the same line.
+                _rescue = r.get("rescue")
+                if _rescue is None:
+                    # A radar from before the per-holder rule: any
+                    # sheltered holding was treated as backing.
+                    _shl_accts = (["a sheltered account"]
+                                  if abs(float(r.get("sheltered_qty")
+                                               or 0.0)) > 0.01 else [])
+                else:
+                    # Only a registered account that bought inside the
+                    # window and still holds backs the denial (s.54,
+                    # per holder); shares it held before the window
+                    # never do.
+                    _shl_accts = sorted({
+                        f"'{x.get('account') or 'unknown'}'"
+                        for x in _rescue
+                        if x.get("holder") == "sheltered"})
+                if _shl_accts:
+                    # The registered-matched portion is denied for good
+                    # ONLY if that account still holds at the window's
+                    # end — selling there too before the deadline
+                    # defeats it.
                     verdict = "UNSAFE"
                     lines.append(
-                        f"{t}: {adv} A sheltered account also holds "
-                        f"this: unless the SHELTERED shares are also "
-                        f"sold by that trade date"
-                        + (f" ({_cd})" if _cd else "")
+                        f"{t}: {adv} Registered holder(s) "
+                        f"{', '.join(_shl_accts)} bought inside the "
+                        f"window: unless they also sell by that trade "
+                        f"date" + (f" ({_cd})" if _cd else "")
                         + f", the registered-matched portion is "
                         f"permanently denied.")
                 else:
-                    if verdict != "UNSAFE":
+                    if verdict not in ("UNSAFE", "PARTIAL"):
                         verdict = "ACTION"
                     lines.append(f"{t}: {adv}")
             elif cat in ("EXITABLE", "CAUTION", "RISK"):
@@ -10211,7 +10274,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
         _lll = _last_loss_line(_last_loss.get(wroot))
         if _lll:
             lines.append(_lll)
-        if verdict == "UNSAFE":
+        if verdict in ("UNSAFE", "PARTIAL"):
             unsafe += 1
         results.append({"symbol": want.strip().upper(),
                         "verdict": verdict,
@@ -11433,12 +11496,14 @@ def main() -> None:
         "sell-check",
         help="Is selling a ticker AT A LOSS today safe from the "
              "superficial-loss / wash-sale rules? UNSAFE when a "
-             "recent affiliated buy would deny it (LOCKED); ACTION "
-             "when a rescueable violation is open (sell the FULL "
-             "position); SAFE*/SAFE otherwise with the applicable "
-             "caveats. buy-check's sell-side twin; whether it IS a "
-             "loss at today's price is `taxjson harvest`'s job. "
-             "Exit 1 on unsafe")
+             "registered account's recent buy it still holds would "
+             "deny the loss on the whole position (LOCKED); PARTIAL "
+             "when only some of the units are at risk (the line says "
+             "how many); ACTION when a rescueable violation is open "
+             "(sell the replacement); SAFE*/SAFE otherwise with the "
+             "applicable caveats. buy-check's sell-side twin; whether "
+             "it IS a loss at today's price is `taxjson harvest`'s "
+             "job. Exit 1 on UNSAFE or PARTIAL")
     p_sellchk.add_argument("symbol", nargs="+",
                            help="Ticker(s) to check (root or full, "
                                 "e.g. NU or NU.US)")

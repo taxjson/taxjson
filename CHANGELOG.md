@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **The wash radar follows the engine's per-holder superficial-loss
+  rule.** A loss is superficial only for units a holder — your taxable
+  accounts together, or one registered account — bought inside the
+  ±30-day window and still holds. A registered account's shares held
+  before the window no longer turn a full taxable exit into a
+  "PERMANENTLY denied" EXITABLE/VIOLATION, a registered buyer that has
+  sold out no longer LOCKs the name, a new short sale or written option
+  is no longer a "recent buy" or a trigger (Canada), a long rebuy now
+  triggers a short-cover loss, and a replacement under 0.01 units
+  (crypto DCA) still counts. VIOLATION names who must sell what; LOCKED
+  says how many shares' loss a sale today would lose and that the
+  registered account can still defeat it by selling within 30 days.
+  `sell-check` answers PARTIAL (exit 1) when only part of a LOCKED
+  position is at risk and ACTION for a violation only taxable shares
+  back. Also: an exercised option is no longer booked as a loss on the
+  option, a sale executed before a split that settles after it is
+  re-denominated like the engine does, own-account registered moves keep
+  each account's balance, `country = "usa"` projects get §1091's
+  re-short and IRA rules, and an unreadable `taxjson.toml` stops
+  wash-radar / buy-check / sell-check / watch instead of treating every
+  book as taxable (audit R1-231, R1-232, R1-234, R1-241, S047-09,
+  S048-13, S053-14, S053-20, S054-00, S054-03, S054-04, S054-08,
+  S054-15, S054-20, S055-01).
+
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
   is undone when both are in the account's inputs; it used to stay
