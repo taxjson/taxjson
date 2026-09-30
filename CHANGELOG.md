@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Shared helpers no longer carry one country's law.** The warrant /
+  right replacement warning said "the loss may be superficial" in US runs
+  (now "may be a wash sale"); the §355 tax-free spin-off could book
+  Canada's s.86.1(3) `allocated_acb_cad` hint in CAD if called directly
+  (only the Canadian election reads it now); the registered-account
+  fallback for unconfigured accounts knew only Canadian plan names (IRA,
+  Roth, 401(k), HSA ... are recognised; by country when it is known).
 - **Manual loss checks next to phantom-basis sales follow the country.**
   With `phantoms.json`, the "check by hand" warnings measured the window
   on settle dates in every project (the US rule runs on trade dates) and

@@ -29,11 +29,32 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                              normalize_symbol_new)
 
 
-# Canadian registered-account labels. Short positions are prohibited by
-# CRA in these accounts, so a negative balance is almost certainly phantom.
+# Registered-account labels, the fallback for an account whose type the
+# caller does not know (standalone tools outside a project). Short
+# positions are prohibited in these accounts, so a negative balance is
+# almost certainly phantom. Canadian plans match as substrings (as
+# before); US plans need a non-letter on each side ('ROTH_IRA', 'IRA-2',
+# not 'MIRAGE'). Canada-only labels used to be the whole list, so an
+# IRA was never recognised (partition ENGINE-14).
 REGISTERED_ACCOUNT_PATTERNS = (
     'LIRA', 'RRSP', 'RRIF', 'TFSA', 'RESP', 'LIF', 'FHSA', 'LRIF', 'PRPP', 'RDSP',
 )
+US_REGISTERED_ACCOUNT_PATTERNS = (
+    'IRA', 'ROTH', '401K', '403B', '457B', 'HSA', 'SEP', '529',
+)
+
+
+def _registered_label(upper: str, country: Optional[str]) -> bool:
+    import re as _re
+    from taxjson.lib.country import canonical_country
+    c = canonical_country(country) if country else None
+    if c in (None, 'canada') and any(p in upper
+                                     for p in REGISTERED_ACCOUNT_PATTERNS):
+        return True
+    if c in (None, 'usa'):
+        return any(_re.search(rf'(?<![A-Z]){p}(?![A-Z])', upper)
+                   for p in US_REGISTERED_ACCOUNT_PATTERNS)
+    return False
 
 
 # OCC option-symbol detection uses the canonical engine-side definition
@@ -45,19 +66,20 @@ REGISTERED_ACCOUNT_PATTERNS = (
 from taxjson.lib.core import is_option_symbol  # noqa: F401 — re-exported
 
 
-def is_registered_account(account: str, registered_accounts=None) -> bool:
+def is_registered_account(account: str, registered_accounts=None,
+                          country: Optional[str] = None) -> bool:
     """Registered (sheltered) status. When the caller knows the configured
     accounts, pass `registered_accounts` — {account: True for type =
     "sheltered", False for taxable}: a KNOWN account's type is the
     answer, never its label (audit S076-08 — a taxable 'sunlife' matched
     'LIF', a sheltered 'retireA' matched nothing). An account it does not
-    list (or no mapping) falls back to the label heuristic."""
+    list (or no mapping) falls back to the label heuristic: that
+    country's plan names, or both countries' when it is not known."""
     if not account:
         return False
     if registered_accounts is not None and account in registered_accounts:
         return bool(registered_accounts[account])
-    upper = account.upper()
-    return any(p in upper for p in REGISTERED_ACCOUNT_PATTERNS)
+    return _registered_label(account.upper(), country)
 
 
 def _project_doc_near(path) -> Dict[str, Any]:
@@ -146,6 +168,7 @@ def detect_phantoms(
     include_options: bool = False,
     include_broker_shorts: bool = False,
     registered_accounts=None,
+    country: Optional[str] = None,
 ) -> List[PhantomCandidate]:
     """Walk transactions per (symbol, account, currency) and return one
     PhantomCandidate per pair whose running position ever went negative.
@@ -263,7 +286,8 @@ def detect_phantoms(
             peak_short=s['peak_short'],
             end_position=s['running'],
             disposition_count=s['disposition_count'],
-            registered=is_registered_account(account, registered_accounts),
+            registered=is_registered_account(account, registered_accounts,
+                                             country),
             broker_marked_short=marked,
         ))
     out.sort(key=lambda c: (c.symbol, c.account))

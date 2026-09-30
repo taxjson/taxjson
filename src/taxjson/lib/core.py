@@ -403,7 +403,13 @@ def detect_right_replacement_matches(loss_entries, events, *, date_of,
     return out
 
 
-def _emit_option_replacement_stderr(warnings) -> None:
+# What a denied loss is called, by the engine that prints the warning
+# (partition ENGINE-09: the shared helper said "superficial" in US runs).
+_LOSS_TERM = {'canada': 'the loss may be superficial',
+              'usa': 'the loss may be a wash sale'}
+
+
+def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
     for w in warnings:
         held = ''
         if w['held_at_window_end'] is not None:
@@ -413,8 +419,8 @@ def _emit_option_replacement_stderr(warnings) -> None:
                     'apply)')
         verdict = ("this loss would be denied"
                    if w['rule'] != 'right_vs_share_loss' else
-                   "a warrant/right is a right to acquire the shares, so "
-                   "the loss may be superficial — review it by hand")
+                   f"a warrant/right is a right to acquire the shares, so "
+                   f"{_LOSS_TERM[country]} — review it by hand")
         print(
             f"warning: option-replacement (warn-only, numbers unchanged): "
             f"{w['loss_symbol']} loss {w['loss_amount']:+,.2f} on "
@@ -3636,7 +3642,8 @@ class CanadaTaxRules(TaxRules):
                 all_txs, date_of=get_sort_date,
                 canonical=alias_of,
                 statute_label="ITA s.54 ('a right to acquire')")
-        _emit_option_replacement_stderr(option_replacement_warnings)
+        _emit_option_replacement_stderr(option_replacement_warnings,
+                                        country='canada')
 
         # Conservation post-conditions (see the helpers' docstrings).
         _pool_qty: Dict[str, float] = {}
@@ -5309,7 +5316,8 @@ class USATaxRules(TaxRules):
             date_of=lambda t: t.date,
             canonical=split_timeline.canonical,
             statute_label="IRS §1091 ('contract or option to acquire')")
-        _emit_option_replacement_stderr(option_replacement_warnings)
+        _emit_option_replacement_stderr(option_replacement_warnings,
+                                        country='usa')
 
         # Conservation post-condition (see _verify_share_conservation).
         _inv_qty: Dict[str, float] = {}

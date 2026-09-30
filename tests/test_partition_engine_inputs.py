@@ -534,5 +534,61 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         self.assertFalse(res[True].get("superficial_loss_warnings"))
 
 
+# ------------------------------------------------ ENGINE-08, -09, -14
+class TestSharedHelpersSpeakTheCountry(unittest.TestCase):
+    """Shared helpers used to carry one country's law or words."""
+
+    @rule("CA-SL-14")
+    @rule_absent("CA-SL-14", country="usa")
+    @rule("US-WASH-14")
+    @rule_absent("US-WASH-14", country="canada")
+    def test_warrant_warning_wording(self):
+        book = [tx("BUYSELL", "2025-01-02", "KKK.US", 100, 1000),
+                tx("BUYSELL", "2025-02-03", "KKK.US", -100, 800),
+                tx("BUYSELL", "2025-02-10", "KKK.WS.US", 10, 20)]
+        r = gains_both(book)
+        ca, us = r["canada"]["_stderr"], r["usa"]["_stderr"]
+        self.assertIn("right_vs_share_loss", ca)
+        self.assertIn("superficial", ca)
+        self.assertNotIn("§1091", ca)
+        self.assertIn("right_vs_share_loss", us)
+        self.assertIn("wash sale", us)
+        self.assertNotIn("superficial", us)
+        # Warn-only in both: nothing denied.
+        for c in C.COUNTRIES:
+            self.assertEqual(r[c]["summary"]["total_disallowed"], 0)
+
+    def test_us_spinoff_never_books_a_canadian_cad_allocation(self):
+        from taxjson.lib import corp_actions as ca
+        ev = ca.CorporateAction(
+            date="2025-06-02", time="09:30:00", action_type="spinoff",
+            source_symbol="PPP.US", source_isin="", target_symbol="QQQ.US",
+            target_isin="", ratio_new=1, ratio_old=10, qty_disposed=100,
+            qty_received=10, currency="USD", fmv=0.0, target_currency="USD",
+            account="margin")
+        us = ca.RULES_BY_COUNTRY["usa"]["spinoff"].apply(
+            ev, "tax_free_355", {"allocated_acb_cad": 100.0})
+        self.assertTrue(all(r.get("currency") != "CAD" for r in us), us)
+        self.assertFalse(any(float(r.get("net_amount") or 0) for r in us))
+        can = ca.RULES_BY_COUNTRY["canada"]["spinoff"].apply(
+            ev, "rollover_s_86_1", {"allocated_acb_cad": 100.0})
+        self.assertEqual({r["currency"] for r in can}, {"CAD"})
+        self.assertAlmostEqual(sum(float(r["net_amount"]) for r in can
+                                   if r["action"] == "BUYSELL"), 100.0)
+
+    def test_registered_label_fallback_knows_each_countrys_plans(self):
+        from taxjson.lib.phantom_holdings import is_registered_account
+        self.assertTrue(is_registered_account("ROTH_IRA", country="usa"))
+        self.assertTrue(is_registered_account("IRA-2", country="usa"))
+        self.assertFalse(is_registered_account("MIRAGE", country="usa"))
+        self.assertFalse(is_registered_account("ROTH_IRA",
+                                               country="canada"))
+        self.assertTrue(is_registered_account("RRSP", country="canada"))
+        self.assertFalse(is_registered_account("RRSP", country="usa"))
+        # Country unknown (a standalone tool outside a project): either.
+        self.assertTrue(is_registered_account("ROTH_IRA"))
+        self.assertTrue(is_registered_account("TFSA"))
+
+
 if __name__ == "__main__":
     unittest.main()

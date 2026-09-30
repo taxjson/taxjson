@@ -415,6 +415,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Shares never replace an option; an option is replaced "
                  "only by the identical contract; a put never replaces "
                  "the shares.", cont=True),
+            Rule("CA-SL-14",
+                 "A warrant or right bought in the window is flagged for a "
+                 "manual superficial-loss check only (the shares it "
+                 "converts into are not in the books).", cont=True),
             Rule("CA-SL-07",
                  "Only purchases count: writing an option or shorting "
                  "again never replaces, including after a loss on covering "
@@ -664,6 +668,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
                  "engine)."),
+            Rule("US-WASH-14",
+                 "A warrant or right bought in the window is flagged for a "
+                 "manual wash-sale check only.", cont=True),
             Rule("US-WASH-13",
                  "Crypto is not subject to the wash-sale rule."),
         ]),
