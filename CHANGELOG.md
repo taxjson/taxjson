@@ -9,7 +9,9 @@
   re-buy within 30 days could deny. Trades at one moment now follow the
   export's row order in both countries (the US engine already did); the
   fixed places (opening balance, split, assignment legs, adjustments)
-  stay. The wash radar and `t1135` follow; the missing-history walks
+  stay. The wash radar and `t1135` follow (a same-moment sale listed
+  before the purchase is a short covered at once, not property held
+  for the T1135 cost test); the missing-history walks
   still read a same-moment pair buys first (they only look for missing
   history). Questrade and generic-importer files listed newest first are
   read bottom-up, as RBC's always were. tax-logic CA-DATE-14 /
