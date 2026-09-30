@@ -131,6 +131,8 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     # capacity intact, and the ledger re-suggested a T1A carryback the
     # user had already filed.
     pending_by_year: Dict[int, float] = {}
+    # Claims whose carryback window closed before any loss met them.
+    expired: Dict[int, float] = {}
     # Remaining carryback capacity per gain year (advisory; reduced by
     # claims against that year and by earlier loss-years' suggestions so
     # two loss years never point at the same dollar of gain).
@@ -142,6 +144,14 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             balance += loss
         if claimed.get(y):
             pending_by_year[y] = pending_by_year.get(y, 0.0) + claimed[y]
+        # A claim recorded against year C can only be met by a loss
+        # of a year up to C+3: a net capital loss carries BACK at most
+        # three years (ITA s.111(1)(b); form T1A). Past that window a
+        # still-pending claim can never be matched — a later loss must
+        # not silently absorb it (S001-03: a pre-book 2021 claim ate
+        # 3,000 of a 2025 loss's carryforward).
+        for _cy in [c for c in pending_by_year if y > c + 3]:
+            expired[_cy] = expired.get(_cy, 0.0) + pending_by_year.pop(_cy)
         # Fold claims oldest-recorded-first: each consumed dollar
         # shelters the gains of ITS recorded year, whose carryback
         # capacity it therefore consumes.
@@ -187,9 +197,13 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
         })
     out = {'country': 'canada', 'rows': rows,
            'final_carryforward': round(balance, 2)}
-    _unmatched = sum(pending_by_year.values())
+    _unmatched = sum(pending_by_year.values()) + sum(expired.values())
     if _unmatched > 0.005:
         out['unmatched_claims'] = round(_unmatched, 2)
+    _exp = {str(k): round(v, 2) for k, v in sorted(expired.items())
+            if v > 0.005}
+    if _exp:
+        out['expired_claims'] = _exp
     return out
 
 
@@ -327,6 +341,13 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
             lines.append(f"  warning: {_money(ledger['unmatched_claims'])} "
                          f"of --claimed amounts exceed the losses this "
                          f"history supports — check the claimed file.")
+        for _y, _amt in (ledger.get('expired_claims') or {}).items():
+            lines.append(f"  warning: {_money(_amt)} claimed for {_y} "
+                         f"was never met by a loss of {_y} or earlier "
+                         f"in these books, and a later loss can reach "
+                         f"back only 3 years (ITA 111(1)(b)) — it came "
+                         f"from losses before this history, so it does "
+                         f"not reduce the carryforward shown.")
     else:
         lines.append(f"  Carryover after {rows[-1]['year']}: "
                      f"ST {_money(ledger['final_st_carryover'])} + "

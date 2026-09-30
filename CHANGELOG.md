@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **carryover: an old claim no longer eats a later loss.** A
+  `claimed_losses.txt` amount recorded for a year the books show no loss
+  for was held and taken by the next loss in ANY later year, lowering
+  its carryforward. A loss carries back only 3 years (ITA 111(1)(b)), so
+  a claim left unmet past that window now stays unmatched, with a
+  warning, and the carryforward is untouched.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;
