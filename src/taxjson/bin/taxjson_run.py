@@ -1636,6 +1636,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                             # i.e. the SETTLED position under CRA
                             # timing; the project's tax_date decides.
                             "--date-basis", tax_date]
+                        # Keys go through the same ticker.map renames
+                        # as the book (S025-22).
+                        + (["--ticker-map", str(ticker_map)]
+                           if ticker_map else [])
                         # Size record-date balances WITH the phantom
                         # openings the gains stage synthesizes (S000-08).
                         + (["--incomplete-history",

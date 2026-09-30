@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`distributions.map` rows find their shares.** A map whose first line
+  carried a byte-order mark, a lowercase symbol, a key naming the
+  listing a `ticker.map` rule consolidates, or the old ticker after a
+  ticker change was skipped as "no shares held" (or booked on a dead
+  pool) and the ACB increase was lost. Keys are now matched
+  case-insensitively, through `ticker.map`, and onto the ticker live on
+  the record date; a sale executed before a split but settling after it
+  no longer inflates the record-date balance. The NOTE also says the
+  distribution is income to report from the T3/T5 slip.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;
