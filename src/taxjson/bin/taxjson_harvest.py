@@ -101,6 +101,10 @@ def load_positions(files: List[Path],
                 "qty": qty,
                 "cost": float(h.get("total_cost", 0) or 0),
                 "deferred_wash": float(h.get("deferred_wash", 0) or 0),
+                # A written option's premium already taxed at the write
+                # (grant timing): not part of what a buy-back recovers.
+                "recognised_premium": float(
+                    h.get("recognised_premium", 0) or 0),
                 "start": str(h.get("position_start_date") or "") or None,
                 "is_option": is_opt,
             })
@@ -151,6 +155,71 @@ def load_inventory_agg(files: List[Path],
     return out
 
 
+def _option_quote_symbols(option_tickers: List[str], files: List[Path],
+                          ticker_map: Optional[Path]) -> Dict[str, Optional[str]]:
+    """{position symbol: symbol to QUOTE} for option positions. The
+    pipeline moves an option onto its underlying's ticker.map rule
+    (TOBASE KGC.US K.TO books KGC...US calls as K...TO), so the wash
+    inventory can name a contract nobody holds — pricing it quoted the
+    Montreal contract in CAD (2026-09 audit S034-11). The contract held
+    is the account's native inventory (<acct>_raw_gains.json next to
+    the gains file) mapped the same way. None = cannot tell which
+    listing is held: the row is omitted with a warning, never marked
+    from a different contract."""
+    out: Dict[str, Optional[str]] = {t: t for t in option_tickers}
+    if not option_tickers or ticker_map is None or not Path(ticker_map).exists():
+        return out
+    try:
+        from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                    map_symbol,
+                                                    merge_renames)
+        renames = merge_renames(load_map_file(Path(ticker_map)),
+                                to_base=True)
+    except Exception as e:
+        warn(PROG, f"could not read {ticker_map} ({e}) — option quotes "
+                   f"use the books' symbols.")
+        return out
+    if not renames:
+        return out
+    sources: Dict[str, set] = {}
+    seen_raw = False
+    for f in files:
+        acct = _account_of(Path(f))
+        raw = Path(f).parent / f"{acct}_raw_gains.json"
+        try:
+            doc = json.loads(raw.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        seen_raw = True
+        for h in doc.get("inventory") or []:
+            sym = str(h.get("symbol") or "")
+            if not sym or not float(h.get("qty", 0) or 0) \
+                    or not is_option_symbol(sym):
+                continue
+            sources.setdefault(map_symbol(sym, renames), set()).add(sym)
+    targets = {v.strip().upper() for v in renames.values()}
+    for t in option_tickers:
+        und = (parse_option_underlying(t) or "").strip().upper()
+        src = sources.get(t)
+        if src and len(src) == 1:
+            out[t] = next(iter(src))
+        elif src and len(src) > 1:
+            warn(PROG, f"{t}: the books consolidate several contracts "
+                       f"onto it ({', '.join(sorted(src))}) — omitted; "
+                       f"price them with `taxjson harvest` per account "
+                       f"or check ticker.map.")
+            out[t] = None
+        elif und in targets:
+            warn(PROG, f"{t}: its underlying is a ticker.map rename "
+                       f"target and the native inventory "
+                       f"({'no matching row' if seen_raw else 'no <acct>_raw_gains.json'}) "
+                       f"does not say which listing's contract is held "
+                       f"— omitted rather than quoted from another "
+                       f"contract.")
+            out[t] = None
+    return out
+
+
 def _days_from_today(iso: Optional[str],
                      today: Optional[date] = None) -> Optional[int]:
     """Signed day offset from today: negative in the past ("-13d" =
@@ -191,8 +260,25 @@ def load_radar(paths: List[Path]) -> Dict[str, Dict[str, Any]]:
                 if t and t not in out:
                     out[t] = {"category": r.get("category") or "",
                               "advisory": r.get("advisory") or "",
-                              "clears_at": r.get("clears_at")}
+                              "clears_at": r.get("clears_at"),
+                              # LOCKED: taxable units whose loss a sale
+                              # today would lose (the rest is claimable).
+                              "at_risk_qty": r.get("at_risk_qty"),
+                              "taxable_qty": r.get("taxable_qty")}
     return out
+
+
+def _locked_fraction(rec: Optional[Dict[str, Any]]) -> float:
+    """Share of a LOCKED position's loss that a sale today would lose
+    (1.0 when the radar does not say — an older sidecar)."""
+    try:
+        risk = float((rec or {}).get("at_risk_qty"))
+        tq = abs(float((rec or {}).get("taxable_qty")))
+    except (TypeError, ValueError):
+        return 1.0
+    if tq <= 1e-9:
+        return 1.0
+    return max(0.0, min(1.0, risk / tq))
 
 
 # Source marks on the PRICE cell (replaces the SRC column):
@@ -239,6 +325,17 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
             # advisory column shows the gap.
             out["no_clear"] += loss
             continue
+        if cat == "LOCKED":
+            # Only the units a registered account bought in the window
+            # and still holds are denied (s.54, per holder); the rest of
+            # the loss is claimable TODAY. Bucketing the whole loss at
+            # the clear date deferred 96% claimable losses (2026-09
+            # audit R1-232).
+            frac = _locked_fraction(rec)
+            out["now"] += loss * (1.0 - frac)
+            loss *= frac
+            if loss <= 1e-9:
+                continue
         if cat in ("CLEAR", "RISK", "VIOLATION", "EXITABLE", "CAUTION",
                    "BLOCKED"):
             # RISK = sellable now with a forward-window caveat — the
@@ -300,21 +397,27 @@ def _advisory_display(rec: Optional[Dict[str, Any]],
             days = (date.fromisoformat(clears) - (today or date.today())).days
         except ValueError:
             days = None
+        if cat == "VIOLATION" and days is not None and days >= 0:
+            # clears_at is the LAST trade date that rescues the loss —
+            # inclusive: on the day itself an exit still rescues it
+            # (2026-09 audit S033-24).
+            return f"{cat}(sell-by:{clears},{days:+d}d)"
         if days is not None and days > 0:
+            if cat == "LOCKED" and _locked_fraction(rec) < 1.0 - 1e-9:
+                return (f"{cat}(at-risk:{_qfmt(float(rec['at_risk_qty']))}/"
+                        f"{_qfmt(abs(float(rec['taxable_qty'])))}sh,"
+                        f"clears:{clears},{days:+d}d)")
             if cat == "BLOCKED":
                 # Sellable at a loss NOW; the date is the earliest
                 # safe REBUY. "clears:" read as "cannot sell until".
                 return f"{cat}(sell-ok,no-rebuy-until:{clears},{days:+d}d)"
-            if cat == "VIOLATION":
-                # Last TRADE date to rescue the loss by a full exit.
-                return f"{cat}(sell-by:{clears},{days:+d}d)"
             return f"{cat}(clears:{clears},{days:+d}d)"
         if days is not None and days <= 0 and cat in ("LOCKED", "BLOCKED",
                                                       "COOLING"):
             # The window has passed since the sidecar was generated —
             # bare "LOCKED" misled; say it cleared.
             return f"{cat}(cleared:{clears})"
-        if days is not None and days <= 0 and cat == "VIOLATION":
+        if days is not None and days < 0 and cat == "VIOLATION":
             return f"{cat}(deadline-passed:{clears})"
     return cat
 
@@ -411,6 +514,14 @@ def main(argv: Optional[List[str]] = None,
                    default=DEFAULT_MAX_CACHE_AGE_DAYS, metavar="DAYS",
                    help="Days before a cache-served price warns "
                         "(default: %(default)s)")
+    p.add_argument("--ticker-map", type=Path, default=None, metavar="FILE",
+                   help="The project's ticker.map. With --options, a "
+                        "contract the pipeline renamed onto another "
+                        "listing's code (TOBASE KGC.US K.TO turns "
+                        "KGC...US calls into K...TO) is quoted as the "
+                        "contract actually held — found in the "
+                        "account's <acct>_raw_gains.json — in its own "
+                        "currency")
     p.add_argument("--json", action="store_true",
                    help="Emit the report as JSON instead of text")
     p.add_argument("--verbose", "-v", action="store_true",
@@ -474,18 +585,27 @@ def main(argv: Optional[List[str]] = None,
                           ibkr_port=args.ibkr_port,
                           verbose=args.verbose,
                           fetchers=fetchers)
+    # The contract to QUOTE for each option position (see --ticker-map).
+    opt_quote = _option_quote_symbols(option_tickers, files,
+                                      args.ticker_map)
     if option_tickers:
-        quotes.update(fetch_option_prices(
-            option_tickers, cache_path=cache_path,
+        _oq = fetch_option_prices(
+            sorted({opt_quote[t] for t in option_tickers
+                    if opt_quote.get(t)}),
+            cache_path=cache_path,
             max_cache_age_days=args.price_cache_age,
             use_ibkr=not args.no_ibkr,
             ibkr_host=args.ibkr_host, ibkr_port=args.ibkr_port,
-            verbose=args.verbose, fetchers=option_fetchers))
+            verbose=args.verbose, fetchers=option_fetchers)
+        for t in option_tickers:
+            if opt_quote.get(t) and opt_quote[t] in _oq:
+                quotes[t] = _oq[opt_quote[t]]
     unpriced = sorted(set(tickers) - set(quotes))
     if unpriced:
         warn(PROG, f"no price from any tier for: {', '.join(unpriced)} "
                    f"— rows omitted.")
-    unpriced_opts = sorted(set(option_tickers) - set(quotes))
+    unpriced_opts = sorted(t for t in set(option_tickers) - set(quotes)
+                           if opt_quote.get(t))
     if unpriced_opts:
         warn(PROG, f"{len(unpriced_opts)} option position(s) unpriced "
                    f"(options quote only through IBKR — start TWS/"
@@ -511,9 +631,11 @@ def main(argv: Optional[List[str]] = None,
         if r.get("is_option"):
             # Premium currency follows the UNDERLYING's listing — the
             # OCC string itself may carry no suffix (or embed it before
-            # the contract block), which would misread as USD.
-            qcur = quote_currency(
-                parse_option_underlying(r["symbol"]) or r["symbol"])
+            # the contract block), which would misread as USD. The
+            # listing is the contract QUOTED (a ticker.map rename's
+            # source), not the pipeline's consolidated code.
+            _qs = opt_quote.get(r["symbol"]) or r["symbol"]
+            qcur = quote_currency(parse_option_underlying(_qs) or _qs)
         else:
             qcur = quote_currency(yf_map.get(r["symbol"], r["symbol"]))
         fx = 1.0
@@ -531,8 +653,14 @@ def main(argv: Optional[List[str]] = None,
                            f"({rate_date}) — run `taxjson run` to refresh.")
         mult = OPTION_MULTIPLIER if r.get("is_option") else 1.0
         value = r["qty"] * q.price * mult * fx
-        unreal = value - r["cost"]
-        pct = (unreal / abs(r["cost"]) * 100) if r["cost"] else 0.0
+        # A written option's premium already recognised at the write
+        # (grant timing) is not recovered by the buy-back: the close
+        # books the whole buy-back cost as the loss. Netting it against
+        # the buy-back value showed a GAIN where the engine books a loss
+        # (2026-09 audit R1-230).
+        cost_basis = r["cost"] + (r.get("recognised_premium") or 0.0)
+        unreal = value - cost_basis
+        pct = (unreal / abs(cost_basis) * 100) if cost_basis else 0.0
         verdict = ("LOSS" if unreal < -0.005
                    else "GAIN" if unreal > 0.005 else "FLAT")
         # NATIVE-currency price at which a full exit TODAY books no
@@ -558,7 +686,10 @@ def main(argv: Optional[List[str]] = None,
         tx = taxable_agg.get(r["symbol"])
         rows.append({
             **r,
+            "cost_basis": cost_basis,
             "multiplier": mult,
+            "quote_symbol": (opt_quote.get(r["symbol"])
+                             if r.get("is_option") else None),
             "expiry": expiry,
             "dte": dte,
             "taxable_last_add": (tx or {}).get("last_add"),
@@ -583,7 +714,7 @@ def main(argv: Optional[List[str]] = None,
                                   if is_usa else None),
             "radar": radar.get(r["symbol"]),
         })
-        tot_cost += r["cost"]
+        tot_cost += cost_basis
         tot_value += value
     rows.sort(key=lambda x: x["unrealized"])    # harvestable losses first
 
@@ -640,7 +771,7 @@ def main(argv: Optional[List[str]] = None,
         # qty contracts x 100 shares, so divide by the multiplier too —
         # COST/SH then compares 1:1 against the per-share premium.
         denom = r["qty"] * r.get("multiplier", 1.0)
-        cps = r["cost"] / denom if denom else 0.0
+        cps = r.get("cost_basis", r["cost"]) / denom if denom else 0.0
         cells = [r["account"], r["symbol"], _qfmt(r["qty"])]
         if show_sheltered:
             cells.append(_qfmt(r["sheltered_qty"])
@@ -736,6 +867,11 @@ def main(argv: Optional[List[str]] = None,
               "today books no base-currency loss — book cost converted "
               "at today's FX rate, plus a 2% buffer for fees/slippage/"
               "FX drift. LOSS rows (long) only."]
+    if any((r.get("recognised_premium") or 0) > 0.005 for r in rows):
+        legend.append("Written options under grant timing: the premium "
+                      "was taxed when the option was written, so COST "
+                      "leaves it out and UNREALIZED is the capital loss "
+                      "a buy-back books today (the whole buy-back cost).")
     if show_options:
         legend.append("Options: PRICE and COST/SH are per-share premium "
                       "(UNREALIZED carries the x100 contract "

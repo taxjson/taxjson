@@ -166,7 +166,7 @@ class TestStillHeldTest(unittest.TestCase):
         line = self._line(_run(self._TAX, shl, "2026-07-27"))
         self.assertIn("CAUTION", line)
         self.assertNotIn("LOCKED", line)
-        self.assertIn("all sheltered accounts are now at 0", line)
+        self.assertIn("holds none of it now", line)
         self.assertIn("30 days AFTER your sale", line)
 
     def test_still_holding_sheltered_buyer_stays_locked(self):
@@ -177,10 +177,14 @@ class TestStillHeldTest(unittest.TestCase):
         self.assertIn("LOCKED", line)
         self.assertIn("lira", line)
 
-    def test_other_sheltered_holder_blocks_downgrade(self):
-        # Fungibility (real ALK.TO case): the acquirer sold out, but a
-        # DIFFERENT sheltered account still holds identical shares —
-        # the group's holding keeps the loss superficial: LOCKED.
+    def test_other_sheltered_holder_does_not_block_downgrade(self):
+        # Real ALK.TO shape: the acquirer sold out while a DIFFERENT
+        # sheltered account holds shares it bought before the window.
+        # Those are not substituted property (s.54, per holder: min of
+        # acquired in the window and held at its end — the engine's
+        # rule since the 2026-09 audit), so the loss stands on a full
+        # exit: CAUTION, not LOCKED. This test used to pin LOCKED
+        # (medium audit R1-231 / S054-08).
         shl = [dict(action="BUYSELL", date="2025-01-10", time="09:30:00",
                     symbol="MTZ.US", quantity=100, net_amount=40000.0,
                     currency="CAD", account="rrsp"),
@@ -191,8 +195,8 @@ class TestStillHeldTest(unittest.TestCase):
                     symbol="MTZ.US", quantity=-5, net_amount=2400.0,
                     currency="CAD", account="lira")]
         line = self._line(_run(self._TAX, shl, "2026-07-27"))
-        self.assertIn("LOCKED", line)
-        self.assertNotIn("CAUTION", line)
+        self.assertIn("CAUTION", line)
+        self.assertNotIn("LOCKED", line)
 
     def test_combined_with_flat_sheltered_is_exitable_with_note(self):
         # Real SLV.US case: taxable in-window buy AND a sheltered

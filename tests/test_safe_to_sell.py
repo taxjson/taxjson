@@ -39,8 +39,11 @@ class TestAssignIsAnAcquisition(unittest.TestCase):
         out = _run(rows, "2026-09-10")
         line = next(ln for ln in out.splitlines() if ln.startswith("ASG.TO"))
         self.assertIn("200.0000", line)          # inventory counts it
-        self.assertIn("LOCKED", line)
-        self.assertIn("Last Buy 2026-09-01", line)
+        # The radar's verdict (medium audit: this view now reads the
+        # radar's walk): a taxable in-window acquisition makes a
+        # PARTIAL loss sale superficial; a full exit is clean.
+        self.assertIn("FULL-EXIT-ONLY", line)
+        self.assertIn("2026-09-01", line)
 
     def test_plain_old_position_stays_safe(self):
         rows = [_tx("BUYSELL", "2026-01-05", "ASG.TO", 100, 5000.0)]

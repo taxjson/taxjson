@@ -3635,6 +3635,14 @@ class CanadaTaxRules(TaxRules):
             zero_ratio_skips=False)     # CA applies a ratio-0 SPLIT blindly
         _warn_stranded_basis(final_global_pools)
 
+        def _recognised_premium(p) -> Dict[str, float]:
+            if p['qty'] >= 0:
+                return {}
+            rp = round(sum(float(l['units']) * float(l['per_unit'])
+                           for l in (p.get('grants') or [])
+                           if l.get('rec')), 4)
+            return {'recognised_premium': rp} if rp > 1e-9 else {}
+
         return {
             'transactions': processed_gains,
             'by_ticker': by_ticker,
@@ -3675,6 +3683,12 @@ class CanadaTaxRules(TaxRules):
                     # pool's ACB (deferred; recovered on a clean sale).
                     'deferred_wash': round(
                         float(p.get('deferred_wash', 0.0)), 4),
+                    # Written-option lots whose premium was already
+                    # recognised at the write (grant timing, s.49(1)):
+                    # their buy-back is a loss of the whole amount paid,
+                    # so a harvest view must not net this premium
+                    # against the buy-back value (2026-09 audit R1-230).
+                    **_recognised_premium(p),
                 }
                 for s, p in final_global_pools.items() if abs(p['qty']) > 1e-6
             ],

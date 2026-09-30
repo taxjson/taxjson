@@ -81,7 +81,13 @@ _EPS = 0.005
 # Thin alias so existing importers (tests, taxjson_reconcile_slips)
 # keep working; the implementation is the shared report-layer loader.
 def load_json(path: Path) -> Any:
-    return load_report_json(path)
+    try:
+        return load_report_json(path)
+    except json.JSONDecodeError as e:
+        # Name the file: "Expecting property name" alone did not say
+        # which gains file was truncated (R1-277).
+        raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc, e.pos) \
+            from None
 
 
 def load_manual_rows(paths: List[Path], year: Optional[int],
@@ -774,6 +780,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Also write the rows as CSV to this path")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    parser.add_argument("--date-basis", choices=("settle", "trade"),
+                        default=None,
+                        help="Date the gains files were year-scoped on "
+                             "(the wrapper passes the project's "
+                             "tax_date). Default: the files' own "
+                             "summary.tax_date_basis, else the form's "
+                             "convention (8949/txf trade, Schedule 3 "
+                             "settle).")
     args = parser.parse_args(argv)
 
     for p in args.files + args.crypto:
@@ -781,8 +795,45 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"taxjson-form-export: no such file: {p}", file=sys.stderr)
             return 2
 
-    # IRS attributes the year by TRADE date; CRA by SETTLEMENT date.
-    date_key = "date" if args.form in ("8949", "txf") else "date_settle"
+    try:
+        return _main(args)
+    except (OSError, ValueError) as e:
+        # A truncated gains file crashed with a raw JSONDecodeError
+        # traceback (R1-277).
+        print(f"taxjson-form-export: could not read the gains files: "
+              f"{e} — re-run `taxjson run` to rebuild them.",
+              file=sys.stderr)
+        return 2
+
+
+def _files_date_basis(paths: List[Path]) -> Optional[str]:
+    """The tax_date basis the gains files record (summary.
+    tax_date_basis); None when none records one. Files that disagree
+    are refused."""
+    seen = set()
+    for p in paths:
+        b = ((load_json(p) or {}).get("summary") or {}).get(
+            "tax_date_basis")
+        if b in ("settle", "trade"):
+            seen.add(b)
+    if len(seen) > 1:
+        raise ValueError(f"the gains files were built on different date "
+                         f"bases ({', '.join(sorted(seen))}) — rebuild "
+                         f"them with one `taxjson run`")
+    return seen.pop() if seen else None
+
+
+def _main(args) -> int:
+    # Rows are picked by the date the gains files were scoped on: an
+    # explicit tax_date different from the country default dropped a
+    # year-end sale from the export (R1-200). Without a recorded basis,
+    # IRS attributes the year by TRADE date and CRA by SETTLEMENT date.
+    basis = args.date_basis or _files_date_basis(
+        list(args.files) + list(args.crypto))
+    if basis:
+        date_key = "date" if basis == "trade" else "date_settle"
+    else:
+        date_key = "date" if args.form in ("8949", "txf") else "date_settle"
     _crypto = {p.resolve() for p in args.crypto}
     entries, tainted = load_dispositions(
         [p for p in args.files if p.resolve() not in _crypto],

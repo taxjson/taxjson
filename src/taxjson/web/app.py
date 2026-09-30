@@ -85,8 +85,17 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
             try:
                 st.ctx = ProjectContext.load(st.ctx.root)
                 st._cfg_mtime = m
-            except Exception:
-                pass
+                st.cfg_error = None
+            except Exception as exc:
+                # Keep serving the last good snapshot — but SAY so: an
+                # edit that `taxjson run` refuses (a mis-cased type, a
+                # quoted boolean) used to be ignored in silence while
+                # the pages kept the old account types (S078-15).
+                st.cfg_error = (
+                    f"taxjson.toml was edited but cannot be loaded "
+                    f"({exc}) — these pages still use the last valid "
+                    f"configuration. Fix taxjson.toml (`taxjson run` "
+                    f"refuses it too).")
         return st.ctx
 
     def page(name, request, status_code: int = 200, **ctx_vars):
@@ -95,6 +104,7 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
         return templates.TemplateResponse(
             request=request, name=name, status_code=status_code,
             context={"ctx": cur(), "accounts": cur().accounts,
+                     "cfg_error": getattr(app.state, "cfg_error", None),
                      "holdings_accounts": data.holdings_accounts(cur()),
                      "freshness": data.freshness(cur()),
                      **ctx_vars})
@@ -179,7 +189,9 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
                 error, status = str(e), 404
             except ReportArtifactError as e:
                 error = str(e)
+        stale = data.radar_staleness(cur(), acct) if acct else None
         return page("wash_radar.html", request, status_code=status,
+                    errors=[stale] if stale else [],
                     account=acct,
                     radar_accounts=(with_reports or candidates),
                     sections=sections, error=error)

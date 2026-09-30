@@ -143,7 +143,8 @@ class TestViews(unittest.TestCase):
     def test_window_excludes_out_of_period_dispositions(self):
         from taxjson.bin.taxjson_run import cmd_leaps_sum
         with tempfile.TemporaryDirectory() as tmp:
-            stale = dict(LEAP_GAIN, date="2024-12-20")
+            stale = dict(LEAP_GAIN, date="2024-12-20",
+                         date_settle="2024-12-23")
             root = _project(tmp, gains=[stale])
             text = self._run(cmd_leaps_sum, dir=str(root), period=None)
         # Tax-year 2025 window: the 2024 close contributes nothing.

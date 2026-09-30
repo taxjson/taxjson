@@ -230,7 +230,8 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 default_rate: Decimal, base_currency: str,
                 tmap, replacement_lookup: Dict[str, Dict[str, Any]],
                 checks_supplied: bool,
-                futures_native: Optional[Dict[str, float]] = None
+                futures_native: Optional[Dict[str, float]] = None,
+                filled_index: Optional[Dict[str, Dict[str, Any]]] = None
                 ) -> Dict[str, Any]:
     """Assemble the full provenance record for one engine disposition."""
     gid = g.get("id") or ""
@@ -283,6 +284,16 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
             rate, kind, src_date = rate_with_provenance(
                 cur, rate_date, fx_history, default_rate)
             nominal = float(raw.get("net_amount") or 0.0)
+            priced_by_fill = False
+            _filled = (filled_index or {}).get(gid)
+            if abs(nominal) < 1e-12 and _filled is not None \
+                    and float(_filled.get("net_amount") or 0.0):
+                # A coin-denominated fee (or other zero-priced row) is
+                # priced by the fill-crypto-prices stage; the parsed
+                # row's 0.00 is not what the converter multiplied
+                # (R1-271).
+                nominal = float(_filled.get("net_amount") or 0.0)
+                priced_by_fill = True
             book = float(base_row.get("net_amount") or 0.0)
             settled = base_row.get("type") == "futures_settlement"
             notional = nominal
@@ -297,6 +308,7 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
             fx = {"from": cur, "to": base_currency,
                   "rate": float(rate), "rate_kind": kind,
                   "rate_date": rate_date, "rate_source_date": src_date,
+                  "priced_by_fill": priced_by_fill,
                   "nominal_net": nominal, "computed_net": computed,
                   "book_net": book, "ties": ties}
             if settled:
@@ -572,7 +584,9 @@ def render_reconciliation(events: List[Dict[str, Any]],
     total_dis = sum(float(e.get("disallowed_amount") or 0) for e in events)
     tied = sum(1 for e in events if (e["tie_out"].get("ties") is True))
     untied = sum(1 for e in events if (e["tie_out"].get("ties") is False))
-    nocheck = sum(1 for e in events if e["tie_out"].get("ties") is None)
+    nocheck = sum(1 for e in events if e["tie_out"].get("ties") is None
+                  and not e["tie_out"].get("out_of_scope"))
+    outside = sum(1 for e in events if e["tie_out"].get("out_of_scope"))
     fx_ok = sum(1 for e in events
                 if e.get("fx") and not e["fx"].get("native")
                 and e["fx"].get("ties"))
@@ -607,6 +621,10 @@ def render_reconciliation(events: List[Dict[str, Any]],
                    f"MISMATCHED, {nocheck:,} not found  "
                    + mark(untied + nocheck,
                           untied == 0 and nocheck == 0))
+        if outside:
+            out.append(f"                     {outside:,} outside the "
+                       f"saved books' tax year — not tied out (the "
+                       f"work/ gains files hold one year)")
     else:
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
@@ -658,6 +676,15 @@ def parse_args(argv=None):
     p.add_argument("--check", action="append", default=[],
                    help="Pipeline gains JSON (repeatable) to tie out "
                         "against.")
+    p.add_argument("--check-year", type=int, default=None,
+                   help="The tax year the --check files hold (pipeline "
+                        "gains files are year-scoped): dispositions of "
+                        "other years are reported as not tied out "
+                        "instead of MISSING.")
+    p.add_argument("--filled", action="append", default=[],
+                   help="Price-filled stage JSON (<acct>_filled.json, "
+                        "repeatable): the nominal for rows the parse "
+                        "left at 0 and the fill stage priced.")
     p.add_argument("--symbol", action="append", default=[],
                    help="Filter: symbol prefix (repeatable).")
     p.add_argument("--id", dest="gain_id", help="Filter: tx id prefix.")
@@ -837,12 +864,33 @@ def main(argv=None) -> int:
                                g.get("symbol") or ""))
 
     futures_native = futures_native_nets(source_index, base_index)
+    filled_index: Dict[str, Dict[str, Any]] = {}
+    for fp in args.filled:
+        for row in (_load_doc(Path(fp)).get("transactions") or []):
+            if row.get("id"):
+                filled_index[row["id"]] = row
     events = [build_event(g, base_index, source_index, check_index,
                           fx_history, Decimal(str(args.default_rate)),
                           base_currency, tmap, replacement_lookup,
                           checks_supplied=bool(args.check),
-                          futures_native=futures_native)
+                          futures_native=futures_native,
+                          filled_index=filled_index)
               for g in merged]
+    if args.check and args.check_year:
+        # The saved gains files hold ONE tax year; `audit --year Y`
+        # for another year (or --all-years) reported every other
+        # year's disposition MISSING — "stale or truncated saved
+        # books" on fresh books (R1-191).
+        _cy = str(args.check_year)
+        for e in events:
+            eff = str(e.get(date_key) or e.get("date") or "")
+            if e["tie_out"].get("ties") is None \
+                    and not eff.startswith(_cy):
+                e["tie_out"]["out_of_scope"] = True
+                e["warnings"] = [
+                    w for w in e.get("warnings") or []
+                    if not w.startswith("disposition not found in the "
+                                        "pipeline gains file")]
 
     # The tie-out must catch OMISSIONS and FABRICATIONS, not just
     # per-event drift (2026-09 audit: a check file missing a whole
@@ -874,18 +922,23 @@ def main(argv=None) -> int:
                 f"gain {_g:,.2f}) that the engine re-run did not "
                 f"produce — fabricated or double-counted record.")
         for e in events:
-            if e["tie_out"].get("ties") is None and args.check:
+            if e["tie_out"].get("ties") is None and args.check \
+                    and not e["tie_out"].get("out_of_scope"):
                 reconciliation_failures.append(
                     f"engine disposition {e['id'][:12]} "
                     f"({e['symbol']} {e['date']}, gain "
                     f"{float(e.get('gain') or 0):,.2f}) is MISSING "
                     f"from the check file(s) — stale or truncated "
                     f"saved books.")
-        eng_total = sum(float(e.get("gain") or 0) for e in events)
-        chk_total = sum(float(c.get("gain") or 0.0)
-                        for recs in check_index.values()
-                        for c in recs if _chk_in_scope(c))
-        if abs(eng_total - chk_total) > TIE:
+        eng_total = sum(float(e.get("gain") or 0) for e in events
+                        if not e["tie_out"].get("out_of_scope"))
+        _chk_rows = [c for recs in check_index.values() for c in recs
+                     if _chk_in_scope(c)]
+        chk_total = sum(float(c.get("gain") or 0.0) for c in _chk_rows)
+        # The saved file rounds each row to 4 dp: a few thousand rows
+        # drift past a fixed half-cent even when every row ties
+        # (S026-16). Allow the rounding bound, 0.00005 per saved row.
+        if abs(eng_total - chk_total) > TIE + 0.00005 * len(_chk_rows):
             reconciliation_failures.append(
                 f"in-scope totals do not tie: engine "
                 f"{eng_total:,.2f} vs check files {chk_total:,.2f}.")

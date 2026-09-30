@@ -33,9 +33,12 @@ What it changes, and nothing else:
     stable same-shape pseudonym, so rows that shared an id still share
     one and distinct rows stay distinct;
   * anything matching the private denylist (`~/.config/taxjson/
-    pii-denylist`, the same file scripts/check-pii.sh uses) or `--also`
-    — case-insensitive. An invalid pattern FAILS CLOSED on the command
-    line (exit 2, nothing written).
+    pii-denylist`, or $TAXJSON_PII_DENYLIST — the same file
+    scripts/check-pii.sh uses, matched the same way: case-insensitive,
+    a 4+ digit run also matching with spaces or dashes between digits)
+    or `--also`, in the text and in the output FILE NAME. An invalid
+    pattern, or a TAXJSON_PII_DENYLIST naming a missing file, FAILS
+    CLOSED on the command line (exit 2, nothing written).
 Binary input (.xlsx — Questrade's default export — .xls, .pdf, .zip) is
 REFUSED: export CSV (or run taxjson-xlsx-to-csv) and redact that.
 Encoding: UTF-8 (BOM kept), UTF-16 (BOM or NUL-stuffed; re-written as
@@ -81,6 +84,30 @@ _ACCOUNT_COLS = ("account #", "account", "xfer account", "account number",
                  "account no", "account no.", "acct", "acct #", "account id",
                  "clientaccountid", "client account id", "acctid",
                  "accountid", "account_number", "accountnumber")
+# Other id columns: client / plan / portfolio / customer numbers, and
+# the bilingual "Numéro de compte" labels. A header cell (or a
+# `Label:` cell) naming one is an account-id column.
+_ACCT_COL_RE = re.compile(
+    r"(?:account|acct|a/c|client|plan|portfolio|customer|member|contract"
+    r"|policy)[ _.-]*(?:#|no\.?|num\.?|nbr|number|id|identifier)"
+    r"|(?:num[ée]ro|no\.?|n°)\s*(?:de\s+|du\s+)?(?:compte|client|contrat"
+    r"|r[ée]gime|portefeuille)|compte",
+    re.IGNORECASE)
+
+
+def _is_account_col(h: str) -> bool:
+    """A header / label naming an account (or client / plan) id."""
+    h = h.strip().strip('"').strip().lower()
+    if not h:
+        return False
+    if h in _ACCOUNT_COLS or _ACCT_COL_RE.fullmatch(h):
+        return True
+    # Bilingual labels: "Account Number / Numéro de compte".
+    return "/" in h and h != "a/c" and any(
+        p.strip() in _ACCOUNT_COLS or _ACCT_COL_RE.fullmatch(p.strip())
+        for p in re.split(r"\s/\s|/(?!c\b)", h) if p.strip())
+
+
 _ALIAS_COLS = ("accountalias", "account alias", "acctalias", "acct alias",
                "account name", "accountname", "account nickname",
                "nickname", "client name", "holder", "account holder",
@@ -92,6 +119,48 @@ _ALIAS_COLS = ("accountalias", "account alias", "acctalias", "acct alias",
 _HOLDER_NAME_COLS = ("name", "full name", "holder name",
                      "account holder name", "customer name", "user",
                      "user name", "username")
+# Columns that always name a person (registered-plan parties, holders):
+# RRSP/RRIF annuitant, RESP subscriber and beneficiary, joint holders.
+_PERSON_COL_RE = re.compile(
+    r".*\b(?:annuitant|subscriber|beneficiar(?:y|ies)|holder|owner"
+    r"|contributor|spouse|successor|titulaire|b[ée]n[ée]ficiaire"
+    r"|souscripteur|rentier|cotisant)s?\b.*"
+    r"|(?:customer|client|member|first|last|full|given|family|middle|legal"
+    r"|registered|primary|secondary|joint)[ _]*name",
+    re.IGNORECASE)
+
+
+def _is_person_col(h: str) -> bool:
+    h = h.strip().strip('"').strip().lower()
+    return bool(h) and (h in _ALIAS_COLS or bool(_PERSON_COL_RE.fullmatch(h)))
+
+
+# `Label:` cells whose value (the next non-empty cell) is identity.
+_IDENTITY_LABELS = ("name", "nom", "full name", "nom complet", "client",
+                    "client name", "nom du client", "account holder",
+                    "holder", "titulaire", "owner", "primary owner",
+                    "customer", "customer name", "user", "user name",
+                    "address", "adresse", "mailing address", "street",
+                    "rue", "city", "ville", "postal code", "code postal",
+                    "zip", "phone", "téléphone", "telephone", "email",
+                    "e-mail", "courriel")
+
+
+def _label_kind(cell: str) -> Optional[str]:
+    """'account' / 'identity' for a `Label:` cell (trailing colon), else
+    None. Bilingual 'English / Français:' labels match on either half."""
+    t = cell.strip().strip('"').strip()
+    if not t.endswith(":"):
+        return None
+    t = t[:-1].strip().lower()
+    if _is_account_col(t):
+        return "account"
+    parts = [t] + [p.strip() for p in t.split("/") if p.strip()]
+    if any(p in _IDENTITY_LABELS for p in parts):
+        return "identity"
+    return None
+
+
 _IDENTITY_ROWS = ("name", "account alias", "address", "street", "city",
                   "state", "postal code", "zip", "country", "phone",
                   "email", "customer id", "client name", "holder",
@@ -105,8 +174,12 @@ _HEADER_LINE = re.compile(
 _ACCOUNT_HEADER_NAME = re.compile(
     r'^(\s*"?(?:account|acct)[^:\r\n"]{0,20}:[^,"\r\n]*,\s*)', re.IGNORECASE)
 
+# Letters, accented ones included (Canada-first: Josée, Hélène, Côté).
+_UP = "A-ZÀ-ÖØ-Þ"
+_AL = "A-Za-zÀ-ÖØ-öø-ÿ"
 # A capitalised name: 1-4 words, Title-case or UPPER, or initials.
-_NAME_WORDS = r"(?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)(?:[ ]+(?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)){0,3}"
+_NAME_WORD = rf"(?-i:[{_UP}][{_AL}'’-]+|[{_UP}]\.?)"
+_NAME_WORDS = _NAME_WORD + r"(?:[ ]+" + _NAME_WORD + r"){0,3}"
 _NAME_AFTER = re.compile(
     r"(\b(?:initiated|requested|authori[sz]ed|ordered)\s+by\s+"
     r"|\b(?:beneficiary|payee|remitter|ordering customer|in favou?r of)\s*[:-]?\s*"
@@ -117,7 +190,7 @@ _NAME_AFTER = re.compile(
 _NAME_FROM_TO = re.compile(
     r"(\b(?:wire|e-?transfer|interac|payment|transfer|deposit|withdrawal"
     r"|cheque|check|paid|sent|received|funds)\s+(?:from|to)\s+)"
-    r"((?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)(?:[ ]+(?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)){1,3})",
+    r"(" + _NAME_WORD + r"(?:[ ]+" + _NAME_WORD + r"){1,3})",
     re.IGNORECASE)
 
 # Canada Post alphabet: no D F I O Q U anywhere, no W Z as first letter.
@@ -140,6 +213,19 @@ _STREET = re.compile(
     r"(?:" + _STREET_SUFFIX + r")\b\.?"
     r"(?:\s+(?:N|S|E|W|NE|NW|SE|SW|North|South|East|West)\b\.?)?"
     r"(?:\s*,?\s*(?:unit|apt|suite|ste|#)\.?\s*#?\s*\w+)?", re.IGNORECASE)
+# French order (Québec): number, the generic word first and lower-case,
+# then the capitalised name — "1234 rue Saint-Denis", "55 boulevard de
+# la Concorde", "10, chemin du Lac".
+_STREET_FR = re.compile(
+    r"(?<![\w.-])(?:(?:app|apt|bureau|unit|suite)\.?\s*#?\s*\w+\s*[,-]\s*)?"
+    r"\d{1,6}[A-Za-z]?(?:-\d{1,6})?\s*,?\s+"
+    r"(?:rue|avenue|av|boulevard|boul|bd|chemin|ch|route|rte|rang|place"
+    r"|mont[ée]e|c[ôo]te|all[ée]e|impasse|promenade|croissant|terrasse"
+    r"|carr[ée]|autoroute|ruelle|quai|square)\.?\s+"
+    r"(?:(?:de\s+la|de\s+l['’]|de|du|des|la|le|les|l['’]|d['’])\s*)?"
+    rf"(?-i:[{_UP}][\w'’.-]*)(?:[ -](?-i:[{_UP}][\w'’.-]*)){{0,3}}"
+    r"(?:\s*,?\s*(?:app|apt|bureau|unit|suite|#)\.?\s*#?\s*\w+)?",
+    re.IGNORECASE)
 _PO_BOX = re.compile(r"\b(?:P\.?\s*O\.?\s*Box|Postal Box)\s*#?\s*\d+", re.IGNORECASE)
 _SIN_SEP = re.compile(r"(?<![\d-])\d{3}([ -])\d{3}\1\d{3}(?![\d-])")
 _SIN_CTX = re.compile(
@@ -171,7 +257,9 @@ _FREE_TEXT_COLS = ("description", "notes", "note", "memo", "comment",
                    "comments", "details", "remarks", "payee", "narrative",
                    "particulars", "security description",
                    "transaction description", "activity description")
-_REVIEW_NAME = re.compile(r"(?-i:\b[A-Z][a-z]+(?:\s+[A-Z]\.)?\s+[A-Z][a-z]+\b)")
+_REVIEW_NAME = re.compile(
+    r"(?-i:(?<![\w])[" + _UP + r"][a-zß-öø-ÿ]+(?:\s+[" + _UP + r"]\.)?\s+["
+    + _UP + r"][a-zß-öø-ÿ]+(?![\w]))")
 _REVIEW_DIGITS = re.compile(r"(?<![A-Za-z0-9.])\d{7,}(?![A-Za-z0-9])")
 # Words that make a capitalised phrase NOT a person's name (preamble
 # lines, the review pass). Lower-case; compared case-insensitively.
@@ -218,6 +306,9 @@ class Report:
         self.review: List[Tuple[int, str]] = []  # (line number, reason)
         self.encoding = "utf-8"
         self.notes: List[str] = []
+        # Compiled denylist / --also patterns, also applied to the
+        # output FILE NAME (check-pii scans names too).
+        self.name_patterns: List[re.Pattern] = []
 
     def found_anything(self) -> bool:
         return bool(self.accounts or self.identity_rows or self.emails
@@ -339,11 +430,22 @@ def _collect_ids(lines: List[str]) -> List[str]:
         if not cells:
             continue
         low = [c.strip().lower() for c in cells]
-        if len(low) > 1 and low[1] == "header":               # IB sections
-            col_idx[low[0]] = [i for i, c in enumerate(low) if c in _ACCOUNT_COLS]
+        # `Account Number:,,,,<id>,` (Webull preamble): the id is
+        # the next non-empty cell after the label cell.
+        labelled = False
+        for i, c in enumerate(cells):
+            if _label_kind(c) == "account":
+                nxt = next((v for v in cells[i + 1:] if v.strip()), "")
+                if nxt:
+                    add(nxt)
+                labelled = True
+        if labelled:
             continue
-        if any(c in _ACCOUNT_COLS for c in low) and "data" not in low[:2]:
-            col_idx["__flat__"] = [i for i, c in enumerate(low) if c in _ACCOUNT_COLS]
+        if len(low) > 1 and low[1] == "header":               # IB sections
+            col_idx[low[0]] = [i for i, c in enumerate(low) if _is_account_col(c)]
+            continue
+        if any(_is_account_col(c) for c in low) and "data" not in low[:2]:
+            col_idx["__flat__"] = [i for i, c in enumerate(low) if _is_account_col(c)]
             continue
         if len(low) > 1 and low[1] == "data":
             for i in col_idx.get(low[0], []):
@@ -360,12 +462,35 @@ def _collect_ids(lines: List[str]) -> List[str]:
     return ids
 
 
+def _field_spans(body: str) -> List[Tuple[int, int]]:
+    """(start, end) of each comma-separated field of one raw CSV line."""
+    spans, start, in_q = [], 0, False
+    for i, ch in enumerate(body):
+        if ch == '"':
+            in_q = not in_q
+        elif ch == "," and not in_q:
+            spans.append((start, i))
+            start = i + 1
+    spans.append((start, len(body)))
+    return spans
+
+
 def _replace_field(line: str, cells: List[str], idx: int, value: str) -> str:
     """Replace one CSV field in the RAW line, leaving every other byte
-    (quoting, spacing, line ending) as it was."""
+    (quoting, spacing, line ending) as it was. The field is located by
+    POSITION — the same text in an earlier cell (a holder's name in
+    both a Subscriber and a Beneficiary column) must not be hit."""
     old = cells[idx]
     if not old:
         return line
+    body = line.rstrip("\r\n")
+    spans = _field_spans(body)
+    if len(spans) == len(cells):
+        s, e = spans[idx]
+        raw = body[s:e]
+        lead = raw[:len(raw) - len(raw.lstrip())]
+        rep = f'"{value}"' if raw.strip().startswith('"') else value
+        return line[:s] + lead + rep + line[e:]
     # The field may or may not be quoted in the raw text; try both.
     for form in (f'"{old}"', old):
         pos = line.find(form)
@@ -385,19 +510,37 @@ def compile_patterns(pats: List[str]) -> Tuple[List[re.Pattern], List[str]]:
     return good, bad
 
 
-def _looks_like_name_line(text: str) -> bool:
-    """A preamble line that is nothing but a person's name: 2-5
-    capitalised alphabetic words, none of them statement vocabulary."""
+def _name_line_kind(text: str) -> Optional[str]:
+    """'name' for a line that is nothing but a person's name (2-5
+    capitalised words, accented letters included, no statement
+    vocabulary); 'mixed' when some — not all — of those words are
+    statement vocabulary ("Bill Sample", "Jane Price": a name the
+    redactor will not guess at, so the line goes to REVIEW); else None."""
     words = text.split()
     if not 2 <= len(words) <= 5 or ":" in text:
-        return False
+        return None
+    vocab = 0
     for w in words:
         core = w.strip(".,'’-")
-        if not core or not re.fullmatch(r"[A-Za-z][A-Za-z'’.-]*", w.strip(",")):
-            return False
-        if not core[0].isupper() or core.lower() in _VOCAB:
-            return False
-    return True
+        if not core or not re.fullmatch(rf"[{_AL}][{_AL}'’.-]*", w.strip(",")):
+            return None
+        if not core[0].isupper():
+            return None
+        vocab += core.lower() in _VOCAB
+    if not vocab:
+        return "name"
+    return "mixed" if vocab < len(words) else None
+
+
+def _looks_like_name_line(text: str) -> bool:
+    return _name_line_kind(text) == "name"
+
+
+def _vocab_split(words: List[str]) -> Tuple[int, int]:
+    """(statement-vocabulary words, words) of a candidate name."""
+    n = sum(1 for w in words
+            if w.lower() in _VOCAB or re.fullmatch(r"[A-Z]{3}", w))
+    return n, len(words)
 
 
 def _blank_cells(line: str) -> str:
@@ -424,10 +567,14 @@ def _mapper(table: Dict[str, str],
     return repl
 
 
-def _redact_contact(line: str, rep: Report) -> str:
+def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     """Phones, postal codes, street addresses, SIN/SSN, honorific /
-    initiated-by names — anywhere on the line."""
+    initiated-by names — anywhere on the line. A candidate name that
+    mixes a statement word with other words ("FROM BILL SAMPLE") is
+    kept but its line is listed for REVIEW."""
     line, k = _STREET.subn("REDACTED", line)
+    rep.addresses += k
+    line, k = _STREET_FR.subn("REDACTED", line)
     rep.addresses += k
     line, k = _PO_BOX.subn("REDACTED", line)
     rep.addresses += k
@@ -450,20 +597,21 @@ def _redact_contact(line: str, rep: Report) -> str:
     line, k = _SSN.subn("REDACTED", line)
     rep.sins += k
 
-    def name(m: re.Match) -> str:
-        if any(w.strip(".").lower() in _VOCAB for w in m.group(2).split()):
-            return m.group(0)
-        rep.names += 1
-        return m.group(1) + "REDACTED"
-    line = _NAME_AFTER.sub(name, line)
+    mixed = []
 
-    def name_from_to(m: re.Match) -> str:
-        words = [w.strip(".") for w in m.group(2).split()]
-        if any(w.lower() in _VOCAB or re.fullmatch(r"[A-Z]{3}", w) for w in words):
-            return m.group(0)
-        rep.names += 1
-        return m.group(1) + "REDACTED"
-    line = _NAME_FROM_TO.sub(name_from_to, line)
+    def decide(m: re.Match) -> str:
+        v, n = _vocab_split([w.strip(".") for w in m.group(2).split()])
+        if v == 0:
+            rep.names += 1
+            return m.group(1) + "REDACTED"
+        if v < n:
+            mixed.append(True)
+        return m.group(0)
+    line = _NAME_AFTER.sub(decide, line)
+    line = _NAME_FROM_TO.sub(decide, line)
+    if mixed and lineno:
+        rep.review.append((lineno, "a name-like phrase containing a "
+                                   "statement word (not redacted)"))
     return line
 
 
@@ -489,10 +637,10 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
 def _identity_cols(low: List[str]) -> List[int]:
     """Header positions holding holder identity: alias columns always;
     a name column only beside an account or alias column."""
-    cols = [i for i, c in enumerate(low) if c in _ALIAS_COLS]
-    if cols or any(c in _ACCOUNT_COLS for c in low):
+    cols = [i for i, c in enumerate(low) if _is_person_col(c)]
+    if cols or any(_is_account_col(c) for c in low):
         cols += [i for i, c in enumerate(low) if c in _HOLDER_NAME_COLS]
-    return sorted(cols)
+    return sorted(set(cols))
 
 
 # HTML statements (IB's .html reports): a label cell naming an identity
@@ -534,6 +682,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                 ) -> Tuple[str, Report]:
     rep = Report()
     compiled, bad = compile_patterns(extra_patterns or [])
+    rep.name_patterns = compiled
     for b in bad:
         rep.notes.append(f"pattern skipped (not a valid regex): {b}")
     text = _redact_html_identity(text, rep)
@@ -567,8 +716,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
             free_cols[low[0]] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                  if c in _FREE_TEXT_COLS]
         elif low and len(nonempty) >= 3 and not is_ib_row and (
-                any(c in _ALIAS_COLS + _TXID_COLS + _FREE_TEXT_COLS + _ACCOUNT_COLS
-                    for c in low)
+                any(c in _TXID_COLS + _FREE_TEXT_COLS or _is_person_col(c)
+                    or _is_account_col(c) for c in low)
                 or all(not any(ch.isdigit() for ch in c) for c in nonempty)):
             # A flat CSV's column header row.
             header_row = True
@@ -576,6 +725,9 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
             txid_cols["__flat__"] = [i for i, c in enumerate(low) if c in _TXID_COLS]
             free_cols["__flat__"] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                      if c in _FREE_TEXT_COLS]
+            for _i, _name in free_cols["__flat__"]:
+                if _name not in rep.description_columns:
+                    rep.description_columns.append(_name)
         if len(nonempty) >= 3:
             in_preamble = False
         sect = low[0] if is_ib_row else "__flat__"
@@ -595,7 +747,21 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                     if v not in rep.txids:
                         rep.txids[v] = _pseudonym(v, len(rep.txids) + 1)
                     line = _replace_field(line, cells, i, rep.txids[v])
-        m = _HEADER_LINE.match(line)
+        label_done = False
+        if cells and not is_ib_row and not header_row:
+            for i, c in enumerate(cells):
+                if c.strip() and _label_kind(c) == "identity":
+                    j = next((k for k in range(i + 1, len(cells))
+                              if cells[k].strip()), None)
+                    if j is not None and not _is_id(cells[j]):
+                        line = _replace_field(line, cells, j, "REDACTED")
+                        cells = _split(line.rstrip("\r\n")) or []
+                        rep.identity_rows += 1
+                    label_done = True
+                    break
+                if c.strip():
+                    break
+        m = None if label_done else _HEADER_LINE.match(line)
         if m and not is_ib_row:
             rest = line[m.end():]
             if rest.startswith('"'):
@@ -620,10 +786,15 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
         # identity in its entirety (name, street, "City, PROV <postal code>").
         if in_preamble and not is_ib_row and nonempty:
             joined = " ".join(c.strip() for c in nonempty)
-            if (_looks_like_name_line(joined) or _STREET.search(joined)
+            kind = _name_line_kind(joined)
+            if (kind == "name" or _STREET.search(joined)
+                    or _STREET_FR.search(joined)
                     or _POSTAL.search(joined) or _PO_BOX.search(joined)):
                 line = _blank_cells(line)
                 rep.identity_rows += 1
+            elif kind == "mixed":
+                rep.review.append((lineno, "name-like words (one of them a "
+                                           "statement word) in a preamble line"))
         for orig, ph in ordered:
             if orig in line:
                 line = id_pats[orig].sub(ph, line)
@@ -633,7 +804,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
         line = _WALLET.sub(wallet_repl, line)
         line = _TXID.sub(txid_repl, line)
         if not header_row:
-            line = _redact_contact(line, rep)
+            line = _redact_contact(line, rep, lineno)
         for pat in compiled:
             line, k = pat.subn("REDACTED", line)
             rep.patterns += k
@@ -705,21 +876,79 @@ def decode_export(raw: bytes) -> Tuple[str, str, bytes]:
         return raw.decode("cp1252", errors="replace"), "cp1252", b""
 
 
+class DenylistMissing(Exception):
+    """TAXJSON_PII_DENYLIST names a file that does not exist."""
+
+
+def loosen(pattern: str) -> str:
+    """scripts/check-pii.sh's loosen(): every run of 4+ literal digits
+    also matches with a space or dash between digits (1234 5678,
+    1234-5678). Escapes, bracket expressions and {m,n} are copied
+    verbatim, so the result is still a valid pattern."""
+    out: List[str] = []
+    run = ""
+    i, n = 0, len(pattern)
+
+    def flush() -> None:
+        nonlocal run
+        out.append(run[0] + "".join("[ -]?" + d for d in run[1:])
+                   if len(run) >= 4 else run)
+        run = ""
+    while i < n:
+        c = pattern[i]
+        if c.isdigit() and c.isascii():
+            run += c; i += 1; continue
+        flush()
+        if c == "\\":
+            out.append(pattern[i:i + 2]); i += 2; continue
+        if c == "[":
+            j = i + 1
+            if pattern[j:j + 1] == "^":
+                j += 1
+            if pattern[j:j + 1] == "]":
+                j += 1
+            while j < n:
+                if pattern[j:j + 2] == "[:":
+                    e = pattern.find(":]", j + 2)
+                    if e >= 0:
+                        j = e + 2; continue
+                if pattern[j] == "]":
+                    break
+                j += 1
+            out.append(pattern[i:j + 1]); i = j + 1; continue
+        if c == "{":
+            j = pattern.find("}", i)
+            if j >= 0:
+                out.append(pattern[i:j + 1]); i = j + 1; continue
+        out.append(c); i += 1
+    flush()
+    return "".join(out)
+
+
 def load_denylist(path: Optional[str] = None) -> List[str]:
-    p = Path(path or os.environ.get("TAXJSON_PII_DENYLIST")
-             or Path.home() / ".config" / "taxjson" / "pii-denylist")
+    """The private denylist's patterns, digit runs loosened exactly as
+    check-pii.sh loosens them. A TAXJSON_PII_DENYLIST (or `path`) that
+    names a missing file raises DenylistMissing — a typo must not turn
+    the denylist off silently. The default path may be absent."""
+    explicit = path or os.environ.get("TAXJSON_PII_DENYLIST")
+    p = Path(explicit or Path.home() / ".config" / "taxjson" / "pii-denylist")
     if not p.is_file():
+        if explicit:
+            raise DenylistMissing(str(p))
         return []
     pats = []
     for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
         s = ln.strip()
         if s and not s.startswith("#"):
-            pats.append(s)
+            pats.append(loosen(s))
     return pats
 
 
-def redacted_name(src: Path, accounts: Dict[str, str]) -> str:
+def redacted_name(src: Path, accounts: Dict[str, str],
+                  patterns: Optional[List[re.Pattern]] = None) -> str:
     stem = src.stem
+    for pat in patterns or []:
+        stem = pat.sub("REDACTED", stem)
     for orig, ph in sorted(accounts.items(), key=lambda kv: -len(kv[0])):
         stem = stem.replace(orig, ph)
     # Ids that appear only in the name (IB names downloads after the account).
@@ -745,6 +974,8 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"`taxjson-xlsx-to-csv`) and redact the CSV.")
     text, enc, bom = decode_export(raw)
     new, rep = redact_text(text, extra)
+    # A denylisted string in the file NAME counts as a finding too.
+    rep.patterns += sum(len(p.findall(src.stem)) for p in rep.name_patterns)
     rep.encoding = enc
     if enc != "utf-8":
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
@@ -755,7 +986,7 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     if dst_dir.exists() and not dst_dir.is_dir():
         raise SystemExit(f"taxjson redact: --out {dst_dir} is not a directory")
     dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / redacted_name(src, rep.accounts)
+    dst = dst_dir / redacted_name(src, rep.accounts, rep.name_patterns)
     if dst.resolve() == src.resolve():
         raise SystemExit(f"taxjson redact: refusing to overwrite {src}")
     if dst.is_symlink():
@@ -773,7 +1004,8 @@ _REVIEW_SHOWN = 25
 
 
 def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
-    shown_src = redacted_name(src, rep.accounts).replace(".redacted", "")
+    shown_src = redacted_name(src, rep.accounts,
+                              rep.name_patterns).replace(".redacted", "")
     where = f" -> {dst}" if dst else " (check only)"
     print(f"{shown_src}{where}")
     if rep.accounts and rep.unreplaced:
@@ -836,7 +1068,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Fail CLOSED on a bad pattern: silently skipping it would publish
     # exactly the string the user asked to remove.
     _, bad_also = compile_patterns(list(args.also))
-    deny = [] if args.no_denylist else load_denylist()
+    try:
+        deny = [] if args.no_denylist else load_denylist()
+    except DenylistMissing as e:
+        print(f"taxjson redact: TAXJSON_PII_DENYLIST names {e}, which does "
+              f"not exist — fix the path (or pass --no-denylist). "
+              f"Nothing written.", file=sys.stderr)
+        return 2
     bad_deny = [i for i, p in enumerate(deny, 1) if compile_patterns([p])[1]]
     if bad_also or bad_deny:
         for b in bad_also:
