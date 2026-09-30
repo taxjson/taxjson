@@ -71,12 +71,26 @@ class PhantomCandidate:
     end_position: float      # position at end of data
     disposition_count: int   # how many dispositions in the negative state
     registered: bool         # account looks registered (LIRA/RRSP/TFSA/etc.)
+    # Every sale that took the position short carries the broker's own
+    # short-sale marker (RBC "... SHORT."): a real short, not missing
+    # history (audit R1-8).
+    broker_marked_short: bool = False
+
+
+# The broker's short-sale marker on a sale's description: RBC writes
+# "<name> SHORT. UNSOLICITED ..." (and "COVER SHORT." on the buy back).
+_BROKER_SHORT_RE = re.compile(r'(?<![A-Z])SHORT\.(?=\s|$)')
+
+
+def _is_marked_short(tx) -> bool:
+    return bool(_BROKER_SHORT_RE.search((tx.description or '').upper()))
 
 
 def detect_phantoms(
     transactions: Iterable[TaxTransaction],
     *,
     include_options: bool = False,
+    include_broker_shorts: bool = False,
 ) -> List[PhantomCandidate]:
     """Walk transactions per (symbol, account, currency) and return one
     PhantomCandidate per pair whose running position ever went negative.
@@ -90,6 +104,12 @@ def detect_phantoms(
     rarely indicate truncated history. Futures (`F:`-prefixed) are
     skipped likewise — a short future is an ordinary opening position.
     Pass include_options=True to include both anyway.
+
+    A pair whose every short-opening sale carries the broker's own
+    short-sale marker (RBC "SHORT.") is a REAL short: it is left out
+    unless include_broker_shorts=True (then flagged
+    broker_marked_short) — a phantom for it removed a real loss and
+    left phantom shares (audit R1-8).
     """
     # state[(symbol, account, currency)] -> running, peak_short, first_neg, count
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
@@ -128,6 +148,8 @@ def detect_phantoms(
             'first_negative_date': None,
             'disposition_count': 0,
             'currencies': set(),
+            'marked': False,
+            'unmarked': False,
         })
         if tx.currency:
             s['currencies'].add(tx.currency)
@@ -162,6 +184,9 @@ def detect_phantoms(
         # disposition" and "was already negative when this disposition fired."
         if tx.quantity < 0 and (prev < 0 or s['running'] < 0):
             s['disposition_count'] += 1
+            if prev <= 1e-9:
+                # A sale that OPENS (or extends) the short side.
+                s['marked' if _is_marked_short(tx) else 'unmarked'] = True
 
         if s['running'] < s['peak_short']:
             s['peak_short'] = s['running']
@@ -172,6 +197,9 @@ def detect_phantoms(
     for (symbol, account, currency), s in state.items():
         if s['peak_short'] >= -1e-6:
             continue
+        marked = bool(s.get('marked')) and not s.get('unmarked')
+        if marked and not include_broker_shorts:
+            continue
         out.append(PhantomCandidate(
             symbol=symbol,
             account=account,
@@ -181,6 +209,7 @@ def detect_phantoms(
             end_position=s['running'],
             disposition_count=s['disposition_count'],
             registered=is_registered_account(account),
+            broker_marked_short=marked,
         ))
     out.sort(key=lambda c: (c.symbol, c.account))
     return out
