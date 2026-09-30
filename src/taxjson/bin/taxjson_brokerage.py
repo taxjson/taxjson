@@ -234,11 +234,32 @@ Examples:
     lint_problems = 0
     kept_aside: list = []
 
+    # Account-wide context: a parser that learns identities (a symbol's
+    # listing, an option code's contract, a temporary code's company)
+    # or de-duplicates overlapping downloads needs ALL of the account's
+    # files at once — per-file state made the answer depend on how the
+    # rows were split across yearly exports (RBC, 2026-09 audit).
+    shared_context = None
+    _prepare = getattr(extractor_class, 'prepare_files', None)
+    if _prepare is not None:
+        try:
+            shared_context = _prepare(input_paths)
+        except csv.Error as e:
+            print(f"taxjson-brokerage: error: the CSV module refused an "
+                  f"input file ({e}) — see the per-file error below by "
+                  f"parsing the files one at a time.", file=sys.stderr)
+            sys.exit(2)
+        except BrokerageParseError as e:
+            print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
+            sys.exit(1)
+
     for input_path in input_paths:
         # Fresh extractor per file so any extractor-level state (e.g.
         # IB's `unhandled_ca_tickers` warning bucket) doesn't bleed
         # across files and emit confused diagnostics.
         extractor = extractor_class()
+        if shared_context is not None:
+            extractor.account_context = shared_context
         if hasattr(extractor, 'foreign_return_of_capital'):
             extractor.foreign_return_of_capital = args.foreign_roc
         if hasattr(extractor, 'futures_settle'):
