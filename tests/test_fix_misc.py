@@ -519,5 +519,25 @@ class TestToBaseOptionCollision(unittest.TestCase):
         self.assertIn("kept separate", run_err)
 
 
+class TestNonNorthAmericanSettlement(unittest.TestCase):
+    """G5-0: LSE (GBP) and ASX (AUD) shares settle T+2, not the US T+1."""
+
+    def test_gbp_and_aud_settle_t2(self):
+        from taxjson.lib.brokerages.ib_extractor import get_ib_settlement
+        from taxjson.lib.dates import settlement_lag_days
+        self.assertEqual(get_ib_settlement("2025-03-28", "Stocks", "GBP"), "2025-04-01")
+        self.assertEqual(get_ib_settlement("2026-05-14", "Stocks", "AUD"), "2026-05-18")
+        # A Dec-30 sale settles in the next tax year.
+        self.assertEqual(get_ib_settlement("2026-12-30", "Stocks", "GBP")[:4], "2027")
+        self.assertEqual(get_ib_settlement("2026-12-30", "Stocks", "AUD")[:4], "2027")
+        # North America unchanged; the UK/EU move to T+1 on 2027-10-11.
+        self.assertEqual(get_ib_settlement("2025-03-28", "Stocks", "USD"), "2025-03-31")
+        self.assertEqual(get_ib_settlement("2025-03-28", "Stocks", "CAD"), "2025-03-31")
+        self.assertEqual(settlement_lag_days("2027-10-08", "GBP"), 2)
+        self.assertEqual(settlement_lag_days("2027-10-11", "GBP"), 1)
+        self.assertEqual(settlement_lag_days("2027-10-11", "EUR"), 1)
+        self.assertEqual(settlement_lag_days("2027-10-11", "AUD"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

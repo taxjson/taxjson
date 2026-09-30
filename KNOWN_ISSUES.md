@@ -127,10 +127,10 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Impact:** registered accounts — none. Taxable accounts — ACB is understated (gain overstated at sale) until the declared amount is supplied; the zero-basis walk also surfaces the position via `taxjson find-missing-history`.
 - **Workaround (the intended flow):** add the fund's declared per-share amount for the record date to `distributions.map`; `taxjson run` converts it into the ACB-raising ADJUST.
 
-### IB settlement T+2→T+1 cutoff is hardcoded to the US/CA date `2024-05-28`
-- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — per-currency cutovers (US 2024-05-28 / CA 2024-05-27) hardcoded in the settle-date back-computation.
-- **Current behavior:** the US/Canada T+1 transition date is applied to all IB venues. EU moved to T+1 on 2027-10-11, so non-US/CA IB trades get T+1 settle dates years too early, which can shift a Dec/Jan trade into the wrong tax year under `--tax-date settle`.
-- **Why deferred:** only US/CA IB venues have been exercised in practice, so it hasn't fired; a real fix needs a per-venue settlement calendar.
+### Settlement cycles outside North America are keyed on currency, with weekends-only calendars
+- **Where:** `src/taxjson/lib/dates.py` (`_T1_CUTOVER`), `src/taxjson/lib/market_calendar.py`.
+- **Current behavior:** the settlement lag follows the trade currency: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other currency (the ASX's AUD, HKD, JPY, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. IB stamps ASX fills in US Eastern time, which is already the next day in Sydney; the trade date is taken as stamped.
+- **Why deferred:** per-market holiday calendars and venue time zones for markets the books rarely touch.
 
 ---
 ---

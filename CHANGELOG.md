@@ -1755,6 +1755,11 @@
   THE RETURN block, `form-export` and docs/filing.md now say that
   capital gains on T3 (box 21, line 17600) and T5/T5013 (box 18, line
   17400) slips are not in their rows and are entered from the slips.
+- **LSE, ASX and other non-North-American shares settle T+2.** The
+  settlement lag followed the US T+1 cycle for every currency but CAD, so
+  a GBP or AUD sale on the second-to-last trading day of the year landed
+  in that year; GBP/EUR/CHF now move to T+1 on 2027-10-11 and every
+  other non-North-American currency stays T+2.
 
 ## v0.16.0 (2026-09-25)
 
