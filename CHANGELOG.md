@@ -44,6 +44,28 @@
   book as taxable (audit R1-231, R1-232, R1-234, R1-241, S047-09,
   S048-13, S053-14, S053-20, S054-00, S054-03, S054-04, S054-08,
   S054-15, S054-20, S055-01).
+- **redact matches the private denylist the way check-pii does.** A
+  denylisted number written with spaces or dashes (`1122 3344`) is
+  replaced, a denylisted word in the file name is replaced in the output
+  name (and counts for `--check`), and a `TAXJSON_PII_DENYLIST` that
+  names a missing file stops the run instead of silently turning the
+  denylist off (audit R1-345).
+
+- **redact: Québec addresses and accented or ambiguous names.** A
+  French-order street line (`1234 rue Saint-Denis`) is blanked like an
+  English one; names with accented letters (`Josée Tremblay`) are
+  recognised; a name that contains a statement word (`Bill Sample`,
+  `Jane Price`) is listed under REVIEW instead of passing silently, and
+  a flat CSV's Description column gets the "may still name people" note
+  (audit S036-16, S037-05).
+
+- **redact: label cells, other id columns, plan parties.** A Webull-style
+  `Account Number / Numéro de compte:,,,,<id>` or `Name:,<name>` preamble
+  row has its value replaced (the id survived and the report said "none
+  found"); client / plan / portfolio / acct-number columns are id
+  columns; annuitant, subscriber, beneficiary and holder/customer-name
+  columns are blanked, each cell in its own position (audit R1-341,
+  S037-00, S037-02).
 
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
