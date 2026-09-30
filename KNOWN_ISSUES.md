@@ -74,10 +74,15 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 Capabilities one broker parser has that a comparable one lacks. The ones below are deferred because they need a real broker sample to implement safely, or are a design decision.
 
-### Webull does not handle option expiry/assignment
-- **Where:** `src/taxjson/lib/brokerages/webull.py` — only `action_raw in ('BUY','SELL')` rows are processed.
-- **Current behavior:** A Webull option that expires/gets assigned under a non-BUY/SELL action code is skipped (the long position never closes → phantom). The skip is at least COUNTED now (the parser's skipped-actions summary names the unhandled code), and settlement dates are correct — the CSV Date column IS the settlement date, with the trade date back-computed era-aware (fixed in the 2026-07 date-semantics audit). IB/Questrade/RBC all distinguish expiry/assignment.
-- **Why deferred:** no Webull options-with-expiry CSV sample on hand to confirm the action-code/field layout; implementing blind risks mis-parsing. Provide a Webull options statement to graduate this.
+### Webull exercise/assignment inference
+- **Where:** `src/taxjson/lib/brokerages/webull.py` — `_mark_assignments`.
+- **Current behavior:** Webull's Trading Summary shows an exercise or assignment only as a $0 option close plus an ordinary stock trade at the strike. The parser pairs them (both legs ASSIGN, premium folded into the shares under s.49(3)) when the stock trade is on the same underlying (the row's own `@Symbol`), for 100 x contracts shares in the matching direction, at the strike, settling -1..+7 days from the close, AND carries Webull's $1.00 exercise/assignment charge; the smallest settle gap wins across every option, and exports beside the file are searched too (a Dec-31 assignment whose shares settle in January). Every inferred pair is named on stderr. A trade at the strike with an ordinary commission is NOT paired (a limit order at a round strike after a worthless expiry) and is named as a warning instead.
+- **Why this is the choice:** the export has no action code for exercise/assignment; the $1.00 charge is the only evidence that separates a real one from a coincidental trade. If Webull changes that charge, a real assignment is booked as an expiry plus a trade, with the warning naming it.
+
+### Webull Trading Summary carries no income
+- **Where:** `src/taxjson/lib/brokerages/webull.py` — the Trading Summary holds BUY/SELL rows only.
+- **Current behavior:** Webull interest and dividends (T5 slips) are not in any Webull input, so the account's income summary leaves them out. Enter them by hand in a `.tt` file in the account's folder: `INTEREST 2025-12-31 16:00:00 USD 1149.27` (T5 box 13; a slip with a blank box 27 is CAD), `DIVIDEND ...` for dividends.
+- **Why:** Webull exports no income file the parser could read.
 
 ### Questrade emits no standalone INTEREST or withholding-TAX rows
 - **Where:** `src/taxjson/lib/brokerages/questrade.py` — strips `TAX WITHHELD`/`NON-RES` only as description-key noise; no TAX/INTEREST emission.
