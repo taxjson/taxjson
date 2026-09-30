@@ -153,8 +153,9 @@ def write_snapshot(root: Path, year, country: str, basis: str,
 
 
 def _canonical_country(settings: Dict[str, Any]) -> str:
-    c = str(settings.get("country") or "canada").strip().lower()
-    return {"ca": "canada", "us": "usa"}.get(c, c)
+    """lib/country.settings_country: missing / unknown raises."""
+    from taxjson.lib.country import settings_country
+    return settings_country(settings)
 
 
 def _tax_date(settings: Dict[str, Any], country: str) -> str:
@@ -164,7 +165,8 @@ def _tax_date(settings: Dict[str, Any], country: str) -> str:
     the checklist then reported as drift (S031-21)."""
     raw = settings.get("tax_date")
     if raw in (None, ""):
-        return "trade" if country in ("us", "usa") else "settle"
+        from taxjson.lib.country import default_tax_date
+        return default_tax_date(country)
     td = str(raw).strip().lower()
     if td not in ("settle", "trade"):
         raise ValueError(f"[settings] tax_date must be settle|trade, "
@@ -210,8 +212,7 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
     # US crypto runs --taxable --no-wash in the pipeline (§1091 does
     # not reach digital assets) — the recompute must match or every US
     # crypto account with a wash-window loss drifts on every check.
-    crypto_no_wash = (str(settings.get("country", "")).strip().lower()
-                      in ("us", "usa"))
+    crypto_no_wash = _canonical_country(settings) == "usa"
     if not crypto_no_wash and len(crypto_accounts) >= 2:
         out.update(_recompute_blended(cache, crypto_accounts, year,
                                       settings, basis, run_gains_cmd,
@@ -257,7 +258,7 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     cmd = ["--country", str(country), "--year", str(year),
            "--tax-date", tax_date, "--taxable"]
     if per_account_basis is None:
-        per_account_basis = str(country).strip().lower() in ("us", "usa")
+        per_account_basis = country == "usa"
     if per_account_basis:
         cmd.append("--per-account-basis")
     sheltered = cache / "sheltered_base.json"

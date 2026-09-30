@@ -389,7 +389,7 @@ class TestExitableWithShelteredHolding(unittest.TestCase):
                  'currency': 'CAD', 'account': 'resp'}]}))
             r = subprocess.run(
                 [sys.executable, '-m',
-                 'taxjson.bin.taxjson_wash_radar',
+                 'taxjson.bin.taxjson_wash_radar', '--country', 'canada',
                  '--taxable', str(tax), '--sheltered', str(shl),
                  '--date', '2026-01-29'],
                 cwd=REPO_ROOT, capture_output=True, text=True)

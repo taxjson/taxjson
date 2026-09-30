@@ -31,6 +31,7 @@ import unittest
 from contextlib import redirect_stderr
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules
+from tax_rules import rule
 
 # Default raised 25 → 200 (2026-09 round-four audit): mutation testing
 # showed 10 surviving engine mutants that the SAME invariants kill at
@@ -583,15 +584,18 @@ class TestWindowBoundaryGoldens(unittest.TestCase):
         return round(sum(float(w.get("disallowed_amount") or 0)
                          for w in r.get("wash_sales") or []), 2)
 
+    @rule("CA-SL-01")
     def test_rebuy_on_day_30_denies(self):
         # 2025-03-03 + 30d = 2025-04-02: still inside the window.
         self.assertGreater(self._denied("2025-04-02"), 0)
 
+    @rule("CA-SL-01")
     def test_rebuy_on_day_31_allows(self):
         # 2025-03-03 + 31d = 2025-04-03: the FIRST safe day — pinning
         # exactly this day is what kills a 30->31 window mutant.
         self.assertEqual(self._denied("2025-04-03"), 0)
 
+    @rule("CA-SL-01")
     def test_prebuy_on_day_minus_30_denies(self):
         # Buy 2025-02-01, loss 2025-03-03 (30 days later), still held.
         txs = [self._T(date="2025-01-06", quantity=100,
@@ -605,11 +609,13 @@ class TestWindowBoundaryGoldens(unittest.TestCase):
             float(w.get("disallowed_amount") or 0)
             for w in r.get("wash_sales") or []), 2), 0)
 
+    @rule("CA-SL-02")
     def test_full_exit_on_day_30_rescues(self):
         # Selling the rebought shares ON day +30 defeats still-held.
         self.assertEqual(
             self._denied("2025-03-10", sell_all_by="2025-04-02"), 0)
 
+    @rule("CA-SL-02")
     def test_full_exit_on_day_31_too_late(self):
         self.assertGreater(
             self._denied("2025-03-10", sell_all_by="2025-04-03"), 0)
@@ -657,6 +663,7 @@ class TestWindowBoundaryGoldens(unittest.TestCase):
         self.assertAlmostEqual(
             float(g.get("disallowed_amount") or 0), 0.0, places=2)
 
+    @rule("CA-SL-10")
     def test_postloss_trigger_allocated_first(self):
         # Two triggers, one pre-loss one post-loss: the post-loss buy
         # is the primary replacement and must carry the deferral (its
@@ -782,6 +789,7 @@ class TestUsRenameSplitConservation(unittest.TestCase):
         d.update(kw)
         return TaxTransaction(**d)
 
+    @rule("US-BASIS-01")
     def test_conservation_across_rename_split(self):
         txs = [
             # A1 long since early January — held long enough that the

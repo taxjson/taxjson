@@ -47,6 +47,10 @@ fi
 
 # 2. Release consistency, then the full unit suite.
 stage consistency bash scripts/check-consistency.sh
+# tax-logic is the spec: every rule id known, every test's country
+# consistent, no rule without a test beyond the shrink-only baseline
+# (scripts/check_tax_rules.py; tests/tax_rules/).
+stage tax-rules "$PY" scripts/check_tax_rules.py
 stage pii bash scripts/check-pii.sh
 stage suite "$PY" -m unittest discover -s tests -p "test_*.py" -q
 

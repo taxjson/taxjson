@@ -29,7 +29,7 @@ def _run(taxable, sheltered, date):
         t.write_text(json.dumps({"transactions": taxable}))
         s.write_text(json.dumps({"transactions": sheltered}))
         r = subprocess.run(
-            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
              "--taxable", str(t), "--sheltered", str(s), "--date", date],
             cwd=REPO_ROOT, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
@@ -244,7 +244,7 @@ def _run_json(taxable, date):
         t = Path(tmp) / "t.json"
         t.write_text(json.dumps({"transactions": taxable}))
         r = subprocess.run(
-            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
              "--taxable", str(t), "--date", date, "--json"],
             cwd=REPO_ROOT, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr

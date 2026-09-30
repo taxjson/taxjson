@@ -483,12 +483,25 @@ class TestEstimateAndInstalmentsAgree(unittest.TestCase):
     def test_us_project_never_gets_a_canadian_instalment_doc(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
+            us_toml = ((root / "taxjson.toml").read_text()
+                       .replace('country = "canada"', 'country = "usa"')
+                       .replace('"CAD"', '"USD"')
+                       .replace('province = "ON"\n', ''))
+            (root / "taxjson.toml").write_text(us_toml)
+            # [instalments] is Canada-only (lib/country CONFIG_COUNTRY):
+            # every command refuses the config, naming the table.
+            for cmd in (["instalments"],
+                        ["sum", "--other-income", "0", "--json"]):
+                r = _cli(root, *cmd)
+                self.assertNotEqual(r.returncode, 0, cmd)
+                self.assertIn("[instalments] is Canada-only", r.stderr)
+            # Without the table the command itself is Canada-only
+            # (COMMAND_COUNTRY), and `sum` carries no instalment doc.
             (root / "taxjson.toml").write_text(
-                (root / "taxjson.toml").read_text()
-                .replace('country = "canada"', 'country = "usa"'))
+                us_toml.split("[instalments]")[0])
             r = _cli(root, "instalments")
             self.assertNotEqual(r.returncode, 0)
-            self.assertIn("canada only", r.stderr)
+            self.assertIn("`taxjson instalments` is Canada-only", r.stderr)
             doc = json.loads(_cli(root, "sum", "--other-income", "0",
                                   "--json").stdout)
         self.assertNotIn("instalments", doc)
@@ -555,7 +568,7 @@ class TestConfigAbuse(unittest.TestCase):
     def test_unknown_key_warns_with_a_suggestion(self):
         from taxjson.bin.taxjson_run import validate_config
         w = validate_config(
-            {"settings": {"year": 2026},
+            {"settings": {"year": 2026, "country": "canada"},
              "accounts": {"m": {"type": "taxable"}},
              "instalments": {"priorr_year_net_tax": 60000}})
         self.assertTrue(any("prior_year_net_tax" in x for x in w), w)

@@ -31,6 +31,7 @@ from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 from taxjson.lib.brokerages.webull import WebullBrokerage
 from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
 from taxjson.lib.brokerages.kraken import KrakenBrokerage
+from tax_rules import rule
 
 
 def _parse_csv(parser_cls, content):
@@ -619,6 +620,7 @@ class TestCoinbaseActivities(unittest.TestCase):
         t = _find(txs, symbol='ETH', action='BUYSELL')
         self.assertAlmostEqual(t['quantity'], -0.25)
 
+    @rule("CA-INC-04")
     def test_staking_income(self):
         """Coinbase 'Staking Income' rows are the dominant source of
         crypto-asset dividend income for ADA/AVAX/DOT/ETH/SOL holders
@@ -753,6 +755,7 @@ class TestKrakenActivities(unittest.TestCase):
         t = txs[0]
         self.assertAlmostEqual(t['quantity'], -0.05)
 
+    @rule("CA-INC-04")
     def test_ledgers_staking_reward(self):
         """Kraken ledger format: earn/reward rows produce a DIVIDEND
         plus a zero-cost BUYSELL pair (the rewarded shares become
@@ -878,6 +881,7 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertEqual(t['symbol'], 'BTC')
         self.assertEqual(t['currency'], 'USD')  # DAI normalized to USD
 
+    @rule("CA-CRYPTO-01")
     def test_ledgers_crypto_to_crypto_emits_two_legs(self):
         """A crypto-to-crypto swap is a taxable disposition of the spent
         crypto at FMV (CRA s. 40(1) / IRS Notice 2014-21). The parser
@@ -923,6 +927,7 @@ class TestKrakenActivities(unittest.TestCase):
         self.assertAlmostEqual(sell['fee'], 0.0)
         self.assertAlmostEqual(buy['fee'], 0.0)
 
+    @rule("CA-CRYPTO-01")
     def test_trades_csv_crypto_to_crypto_two_legs(self):
         """A crypto-to-crypto trades-CSV fill emits the same two-leg
         SELL+BUY as the ledgers path (both USD-denominated, price=0

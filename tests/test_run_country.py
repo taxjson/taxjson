@@ -26,7 +26,15 @@ class TestCountryNormalization(unittest.TestCase):
         self.assertTrue(_country_has_corp_rules("ca"))
         self.assertTrue(_country_has_corp_rules("usa"))
         self.assertTrue(_country_has_corp_rules("us"))
-        self.assertFalse(_country_has_corp_rules("germany"))
+        # Any other country is refused by the one resolver, never
+        # quietly skipped (lib/country, partition R1).
+        with self.assertRaises(SystemExit):
+            _country_has_corp_rules("germany")
+
+    def test_unknown_spellings_are_refused(self):
+        for bad in ("United States", "U.S.", "CAN", "germany", ""):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                _normalize_country(bad)
 
 
 if __name__ == "__main__":

@@ -882,7 +882,9 @@ class GainsRequest:
     """Everything that shapes a gains run. `tax_date` and `detect_wash`
     default country-aware / policy-aware here — ONE place — instead of
     being re-derived by each caller."""
-    country: str = "canada"
+    # Required: "canada" | "usa" (any lib/country alias; canonicalised
+    # in __post_init__, an unknown or missing value raises CountryError).
+    country: str
     year: Optional[int] = None
     taxable: bool = False
     tax_date: Optional[str] = None            # None → country-aware default
@@ -905,14 +907,18 @@ class GainsRequest:
     # (ITA s.47), so this is forwarded to the US engine only.
     per_account_basis: bool = False
 
+    def __post_init__(self):
+        from taxjson.lib.country import canonical_country
+        self.country = canonical_country(self.country,
+                                         what="GainsRequest.country")
+
     def effective_tax_date(self) -> str:
         # Country-aware default: CRA times dispositions on the SETTLEMENT
-        # date, the IRS on the TRADE date. Explicit value wins.
-        if self.tax_date is not None:
-            return self.tax_date
-        return ('trade'
-                if (self.country or '').strip().lower() in ('us', 'usa')
-                else 'settle')
+        # date, the IRS on the TRADE date. Explicit value wins
+        # (lib/country.resolve_tax_date, the one resolver).
+        from taxjson.lib.country import resolve_tax_date
+        return resolve_tax_date(self.country, self.tax_date,
+                                what="tax_date")
 
     def effective_detect_wash(self) -> bool:
         # Wash-sale detection: only meaningful for taxable accounts. The
@@ -939,7 +945,9 @@ def run_gains(transactions, sheltered_transactions=(),
     `books_prepared=True` skips prepare_books for callers that already
     ran it (the CLI's --suggest-phantoms path preprocesses first).
     """
-    req = req or GainsRequest()
+    if req is None:
+        raise TypeError("run_gains needs a GainsRequest (its country is "
+                        "required)")
     tax_date = req.effective_tax_date()
 
     if books_prepared:
@@ -953,10 +961,9 @@ def run_gains(transactions, sheltered_transactions=(),
 
     rules = get_tax_rules(req.country)
     _extra = {}
-    if (req.per_account_basis
-            and (req.country or '').strip().lower() in ('us', 'usa')):
+    if req.per_account_basis and req.country == 'usa':
         _extra['per_account_basis'] = True
-    if (req.country or '').strip().lower() not in ('us', 'usa'):
+    if req.country == 'canada':
         _extra['option_premium_timing'] = req.option_premium_timing or 'close'
         _extra['option_grant_since'] = req.option_grant_since
         _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
@@ -1009,7 +1016,7 @@ def run_gains(transactions, sheltered_transactions=(),
                 if (w.get('loss_date') or '').startswith(year_str)]
         results['summary']['year'] = year_str
         results['summary']['tax_date_basis'] = tax_date
-        if (req.country or '').strip().lower() not in ('us', 'usa'):
+        if req.country == 'canada':
             results['summary']['option_premium_timing'] = req.option_premium_timing or 'close'
             results['summary']['option_grant_since'] = req.option_grant_since
             results['summary']['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
@@ -1250,10 +1257,15 @@ def option_timing_from_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     `option_grant_timing_since` (Canada). Default: statutory grant timing
     from the project year on — earlier contracts keep close timing so a
     premium that was open at a prior year end is not taxed nowhere."""
-    country = str(settings.get("country", "canada")).strip().lower()
-    if country in ("us", "usa"):
+    from taxjson.lib.country import settings_country
+    if settings_country(settings) == "usa":
         return {}
-    timing = str(settings.get("option_premium_timing", "grant")).strip().lower()
+    timing = str(settings.get("option_premium_timing")
+                 or "grant").strip().lower()
+    if timing not in ("grant", "close"):
+        raise ValueError(
+            f"[settings] option_premium_timing must be \"grant\" or "
+            f"\"close\" (got {settings.get('option_premium_timing')!r})")
     since = settings.get("option_grant_timing_since")
     if since in (None, ""):
         since = settings.get("year")

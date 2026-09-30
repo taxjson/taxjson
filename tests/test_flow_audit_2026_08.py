@@ -53,7 +53,7 @@ class TestSettingsKeyWhitelist(unittest.TestCase):
         # config must WARN, not silently pass as known.
         from taxjson.bin.taxjson_run import validate_config
         warnings = validate_config(
-            {"settings": {"year": 2026, "sectors_file": "sectors.txt"},
+            {"settings": {"year": 2026, "sectors_file": "sectors.txt", "country": "canada"},
              "accounts": {"m": {"type": "taxable"}}})
         self.assertTrue([w for w in warnings if "sectors_file" in w],
                         "removed setting should warn as unknown")

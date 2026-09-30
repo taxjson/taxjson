@@ -192,8 +192,8 @@ class TestBrokerageExitCodes(unittest.TestCase):
 
 class TestCorpActionsExitCodes(unittest.TestCase):
     def test_missing_input_csv_exits_2_with_prefix(self):
-        r = _run('taxjson_corp_actions', '--brokerage', 'ib',
-                 '/no/such/events.csv')
+        r = _run('taxjson_corp_actions', '--country', 'canada',
+                 '--brokerage', 'ib', '/no/such/events.csv')
         self.assertEqual(r.returncode, 2)
         self.assertIn('taxjson-corp-actions: error: input CSV not found',
                       r.stderr)

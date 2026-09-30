@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.tax_logic import render, sections
+from tax_rules import rule
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -19,6 +20,7 @@ class TestTaxLogic(unittest.TestCase):
         self.assertIn("right to acquire", text)
         self.assertIn("a put never replaces the shares", text)
 
+    @rule("CA-OPT-05")
     def test_settings_change_the_text(self):
         st = {"tax_date": "trade", "option_premium_timing": "close",
               "futures_settle": "next_day",

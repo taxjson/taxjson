@@ -544,7 +544,8 @@ class TestFuzzE_ShortConventionCanonical(unittest.TestCase):
         (root / "work").mkdir()
         (root / "taxjson.toml").write_text(
             f'[settings]\nyear = 2025\ncountry = "{country}"\n'
-            'base_currency = "CAD"\nsource_currencies = []\n'
+            f'base_currency = "{"USD" if country == "usa" else "CAD"}"\n'
+            'source_currencies = []\n'
             '[accounts.margin]\ntype = "taxable"\n')
         (root / "work" / "margin_gains.json").write_text(json.dumps(gains))
         return root

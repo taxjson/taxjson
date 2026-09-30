@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction
 from taxjson.bin.taxjson_gains import TransferValidationError, _handle_transfers
+from tax_rules import rule
 
 
 def _tx(action, date, symbol, qty, price=0.0, net=0.0, account='Margin',
@@ -98,6 +99,7 @@ class TestHandleTransfersSheltered(unittest.TestCase):
 
 
 class TestHandleTransfersTaxable(unittest.TestCase):
+    @rule("CA-ACB-10")
     def test_taxable_with_transfer_exits(self):
         txs = [
             _tx('TRANSFER', '2024-01-15', 'AAPL.US', 100, net=15000.0, account='Margin'),

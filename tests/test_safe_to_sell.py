@@ -25,7 +25,7 @@ def _run(taxable, date):
         t = Path(tmp) / "t.json"
         t.write_text(json.dumps({"transactions": taxable}))
         r = subprocess.run(
-            [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell",
+            [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell", "--country", "canada",
              "--taxable", str(t), "--date", date],
             cwd=REPO_ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

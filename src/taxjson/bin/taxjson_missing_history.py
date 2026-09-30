@@ -155,7 +155,18 @@ def main(argv=None):
     # the base files sit in a project (audit S076-08, S075-16).
     from taxjson.lib.phantom_holdings import account_types_near, tax_date_near
     types = account_types_near(args.files[0])
-    basis = tax_date_near(args.files[0])
+    from taxjson.lib.country import CountryError
+    try:
+        basis = tax_date_near(args.files[0])
+    except CountryError as e:
+        print(f"taxjson-missing-history: taxjson.toml: {e}", file=sys.stderr)
+        return 2
+    if basis is None:
+        basis = "settle"
+        print("taxjson-missing-history: note: no taxjson.toml beside the "
+              "input — a row's tax year is taken from its SETTLEMENT date "
+              "(run it on a project's work/ files to use the project's "
+              "country and tax_date)", file=sys.stderr)
     candidates = detect_phantoms(txs, include_options=args.include_options,
                                  include_broker_shorts=True,
                                  registered_accounts=types or None)

@@ -24,6 +24,7 @@ from taxjson.bin.taxjson_t1135 import (
     main,
     walk_costs,
 )
+from tax_rules import rule
 
 
 def tx(action="BUYSELL", date="2025-01-15", symbol="AAPL.US", qty=0.0,
@@ -38,6 +39,7 @@ def tx(action="BUYSELL", date="2025-01-15", symbol="AAPL.US", qty=0.0,
 
 
 class TestClassify(unittest.TestCase):
+    @rule("CA-RPT-02")
     def test_suffixes(self):
         self.assertEqual(classify_country("AAPL.US", {}), "USA")
         self.assertEqual(classify_country("BP.L", {}), "GBR")
@@ -49,6 +51,7 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(classify_country("AAPL250117C00150000.US", {}), "USA")
         self.assertIsNone(classify_country("MDA251219P00029000.TO", {}))
 
+    @rule("CA-RPT-02")
     def test_no_suffix_is_crypto_bucket(self):
         # Suffix-less = crypto: its own "check where held" bucket
         # (counted toward the threshold), not the unclassified "??".
@@ -59,6 +62,7 @@ class TestClassify(unittest.TestCase):
     def test_unknown_suffix_is_review(self):
         self.assertEqual(classify_country("SAP.DE", {}), REVIEW)
 
+    @rule("CA-RPT-02")
     def test_overrides_win(self):
         ov = {"ENB.US": None, "GLXY.TO": "USA"}
         self.assertIsNone(classify_country("ENB.US", ov))
@@ -105,6 +109,7 @@ class TestWalkCosts(unittest.TestCase):
         self.assertAlmostEqual(s["max_cost"], 15000.0, places=2)
         self.assertAlmostEqual(s["year_end_cost"], 7500.0, places=2)
 
+    @rule("CA-RPT-01")
     def test_threshold_uses_simultaneous_total_not_sum_of_maxima(self):
         # Hold A ($90k), sell it entirely, THEN buy B ($90k): total never
         # exceeds $90k even though the per-symbol maxima sum to $180k.
@@ -298,6 +303,7 @@ class TestBuildReport(unittest.TestCase):
         self.assertTrue(rep["filing_required"])
         self.assertFalse(rep["simplified_method_available"])
 
+    @rule("CA-RPT-01")
     def test_below_threshold(self):
         with tempfile.TemporaryDirectory() as td:
             base = self._write(td, "base.json", {"transactions": [
@@ -339,6 +345,7 @@ class TestCli(unittest.TestCase):
             rc = main(["/nonexistent/base.json", "--year", "2025"])
         self.assertEqual(rc, 2)
 
+    @rule("CA-RPT-02")
     def test_map_override_excludes(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td) / "base.json"

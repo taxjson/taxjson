@@ -14,6 +14,7 @@ from taxjson.lib.core import (
     _verify_share_conservation,
     _warn_stranded_basis,
 )
+from tax_rules import rule
 
 
 def tx(action='BUYSELL', date='2025-03-10', symbol='X.US', qty=0.0,
@@ -38,11 +39,13 @@ class TestShareCountChecker(unittest.TestCase):
     def test_correct_inventory_is_silent(self):
         self.assertEqual(check(self.ROWS, {'X.US': 200.0}), '')
 
+    @rule("CA-CORP-01")
     def test_double_applied_split_warns(self):
         err = check(self.ROWS, {'X.US': 400.0})
         self.assertIn('conservation: test share-count mismatch', err)
         self.assertIn('X.US', err)
 
+    @rule("CA-CORP-02")
     def test_rename_chain_aliases_collapse(self):
         rows = [
             tx(symbol='OLD.TO', qty=100),

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from taxjson.lib.tax_estimate import (_bracket_tax, estimate_canada,
                                       estimate_usa)
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -108,10 +109,12 @@ class TestUsaEstimate(unittest.TestCase):
         self.assertAlmostEqual(st["estimated_tax"], 220.0, delta=0.5)
         self.assertAlmostEqual(lt["estimated_tax"], 150.0, delta=0.5)
 
+    @rule("US-RPT-04")
     def test_qualified_dividend_stacks_with_lt(self):
         r = self._run(qualified_div=1000.0)
         self.assertAlmostEqual(r["estimated_tax"], 150.0, delta=0.5)
 
+    @rule("US-RPT-04")
     def test_losses_net_st_first_then_lt_then_3000_ordinary(self):
         r = self._run(st=2000.0, lt=1000.0, other_losses=6000.0)
         self.assertEqual(r["st_net"], 0.0)
@@ -121,6 +124,7 @@ class TestUsaEstimate(unittest.TestCase):
         # The offset SAVES tax: 3,000 off the 22% bracket -> -660.
         self.assertAlmostEqual(r["estimated_tax"], -660.0, delta=0.5)
 
+    @rule("US-RPT-04")
     def test_niit_over_threshold(self):
         # other 190k, LT 20k -> MAGI 210k: NIIT on 10k = 380.
         # ordinary taxable 175k; LT stacks 175k-195k at 15% = 3,000.
@@ -269,6 +273,7 @@ class TestSumEstimateCli(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("province", r.stderr)
 
+    @rule("US-RPT-04")
     def test_usa_st_lt_split(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

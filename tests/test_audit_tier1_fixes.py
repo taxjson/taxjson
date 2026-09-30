@@ -157,7 +157,7 @@ def _radar(taxable_txs, date, extra_env=None):
         if extra_env:
             env.update(extra_env)
         r = subprocess.run(
-            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
              "--taxable", str(f), "--date", date],
             cwd=REPO_ROOT, capture_output=True, text=True, env=env)
         assert r.returncode == 0, r.stderr

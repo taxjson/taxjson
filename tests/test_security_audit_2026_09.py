@@ -149,7 +149,8 @@ class TestServeToken(unittest.TestCase):
         from taxjson.web.context import ProjectContext
         root = Path(tmp)
         (root / "taxjson.toml").write_text(
-            'year = 2025\n[accounts.margin]\ntype = "taxable"\n')
+            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            '[accounts.margin]\ntype = "taxable"\n')
         return create_app(ProjectContext.load(root), **kw)
 
     def test_non_loopback_requires_token_then_cookie(self):
@@ -193,7 +194,8 @@ class TestServeToken(unittest.TestCase):
         app_mod.create_app, uvicorn.run = fake_create_app, lambda *a, **k: None
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                (Path(tmp) / "taxjson.toml").write_text("year = 2025\n")
+                (Path(tmp) / "taxjson.toml").write_text(
+                    '[settings]\nyear = 2025\ncountry = "canada"\n')
                 import contextlib
                 import io
                 err = io.StringIO()

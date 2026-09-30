@@ -1407,7 +1407,7 @@ class TestRadarViolationRescueDeadline(unittest.TestCase):
             t = Path(tmp) / "t.json"
             t.write_text(_json.dumps({"transactions": self.BASE}))
             r = subprocess.run(
-                [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+                [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
                  "--taxable", str(t), "--date", "2025-02-20"],
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)

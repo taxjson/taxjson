@@ -36,7 +36,8 @@ class TestWashRadarWithoutSheltered(unittest.TestCase):
             import contextlib, io
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
-                stage_cross_reports([gains], [base], None, reports)
+                stage_cross_reports([gains], [base], None, reports,
+                                    country="canada")
 
             rpt = reports / "wash_radar_margin.rpt"
             self.assertTrue(rpt.exists(),

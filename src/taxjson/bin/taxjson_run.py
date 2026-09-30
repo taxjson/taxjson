@@ -431,33 +431,19 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     audit and close-year passed the raw strings to the gains engine,
     whose argparse refused "Canada"/"CA"/"Settle" — the filed-year
     drift guard went silently off and the checklist called the crash
-    drift (S031-21, S031-24)."""
-    settings = cfg.get("settings")
-    if not isinstance(settings, dict):
-        return
-    country = settings.get("country")
-    if country is not None:
-        canon = _normalize_country(str(country))
-        if canon not in _COUNTRY_CANON.values():
-            _die(f"[settings] country must be canada|ca|usa|us, "
-                 f"got {country!r}")
-        settings["country"] = canon
-    tax_date = settings.get("tax_date")
-    if tax_date is not None and tax_date not in ("settle", "trade"):
-        _die(f"[settings] tax_date must be settle|trade, "
-             f"got {tax_date!r}")
-    # base_currency: " CAD" / "Cad " passed validation and failed later
-    # as a misdiagnosed "rows still carry a non-CAD currency — fix the
-    # rates file" error, and "cad" silently priced every native-CAD fee
-    # at the default FX rate in fees.rpt (R1-153). One canonical,
-    # checked spelling for every reader.
-    base = settings.get("base_currency")
-    if base is not None:
-        if not isinstance(base, str) \
-                or not re.fullmatch(r"[A-Za-z]{3}", base.strip()):
-            _die(f"[settings] base_currency must be a 3-letter currency "
-                 f"code such as \"CAD\" or \"USD\", got {base!r}")
-        settings["base_currency"] = base.strip().upper()
+    drift (S031-21, S031-24). A missing country, a setting or table the
+    country does not own, and a base currency that is not the
+    country's are refused here, for every command."""
+    from taxjson.lib.config_check import settings_problems
+    problems = settings_problems(cfg)
+    if problems:
+        # The country, its ownership of every setting (partition audit
+        # R1/R2: a missing country was Canada everywhere but `run`; a
+        # Canada-only key was silently ignored or honoured in a US
+        # project) and the base currency: lib/config_check.
+        _die(problems[0] if len(problems) == 1 else
+             "taxjson.toml:\n  " + "\n  ".join(problems))
+    settings = cfg["settings"]
     srcs = settings.get("source_currencies")
     if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
         settings["source_currencies"] = [c.strip().upper() for c in srcs]
@@ -659,12 +645,11 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
     return oi_f, ol_f
 
 
-_SETTINGS_KEYS = ("year", "country", "base_currency", "tax_date",
-                  "source_currencies", "cross_asset", "province",
-                  "fx_cash_gains", "option_premium_timing",
-                  "option_grant_timing_since", "option_buyback_loss_superficial",
-                  "foreign_return_of_capital", "futures_settle",
-                  "prior_year_record")
+# Every known [settings] key, and the country that owns it, lives in
+# lib/country.SETTING_COUNTRY (one table for the config check, the
+# commands and scripts/check_tax_rules.py).
+from taxjson.lib.country import SETTING_COUNTRY as _SETTING_COUNTRY  # noqa: E402
+_SETTINGS_KEYS = tuple(_SETTING_COUNTRY)
 _ACCOUNT_KEYS = ("type", "crypto", "transfers", "plan",
                  "brokerage", "account", "query_id", "holdings")
 _ACCOUNT_TYPES = ("taxable", "sheltered")
@@ -694,14 +679,15 @@ def validate_config(cfg: Dict[str, Any],
     year = settings.get("year")
     if year is not None and not isinstance(year, int):
         _die(f"[settings] year must be an integer, got {year!r}")
-    country = settings.get("country")
-    if country is not None and _normalize_country(str(country)) not in _COUNTRY_CANON.values():
-        _die(f"[settings] country must be canada|ca|usa|us, "
-                 f"got {country!r}")
-    tax_date = settings.get("tax_date")
-    if tax_date is not None and tax_date not in ("settle", "trade"):
-        _die(f"[settings] tax_date must be settle|trade, "
-                 f"got {tax_date!r}")
+    # Country (required), date basis, base currency, and every
+    # setting/table the country does not own: the same check every
+    # config reader applies (lib/config_check.settings_problems).
+    from taxjson.lib.config_check import settings_problems
+    _problems = settings_problems(cfg)
+    if _problems:
+        _die(_problems[0] if len(_problems) == 1 else
+             "taxjson.toml:\n  " + "\n  ".join(_problems))
+    settings = cfg["settings"]
     _opt = settings.get("option_premium_timing")
     if _opt is not None and str(_opt).strip().lower() not in ("grant", "close"):
         _die(f"[settings] option_premium_timing must be \"grant\" or "
@@ -732,14 +718,6 @@ def validate_config(cfg: Dict[str, Any],
             "share loss (s.54 'a right to acquire'); shares never replace "
             "an option, and only the identical contract replaces an "
             "option. Delete the line.")
-    _base = settings.get("base_currency")
-    if (_base and _base != "CAD" and _normalize_country(
-            str(settings.get("country", "canada"))) == "canada"):
-        warnings.append(
-            f"[settings] base_currency is {_base!r} but country is "
-            f"canada — a Canadian return is filed in CAD, so every "
-            f"FOR THE RETURN figure would be in the wrong currency "
-            f"(R1-153)")
     src = settings.get("source_currencies")
     if src is not None and (not isinstance(src, list)
                             or not all(isinstance(c, str) for c in src)):
@@ -865,7 +843,9 @@ CORP_ACTION_BROKERS = {"ib", "interactive_brokers", "questrade", "qt",
 # engine accepts all four, but taxjson-corp-actions only knows the canonical
 # names. Normalize once so an alias like "ca" doesn't abort the corp-actions
 # stage at argparse (which restricts --country to RULES_BY_COUNTRY's keys).
-_COUNTRY_CANON = {"ca": "canada", "canada": "canada", "us": "usa", "usa": "usa"}
+# The one resolver lives in lib/country.py (partition audit R1): an
+# unknown or missing country is refused everywhere with one message.
+from taxjson.lib.country import command_country_problem  # noqa: E402
 
 
 _US_EXPERIMENTAL_NOTE = (
@@ -876,14 +856,53 @@ _US_EXPERIMENTAL_NOTE = (
 
 
 def _normalize_country(c: str) -> str:
-    key = (c or "").strip().lower()
-    return _COUNTRY_CANON.get(key, key)
+    """Canonical canada|usa (lib/country.canonical_country); dies with
+    the resolver's message on anything else."""
+    from taxjson.lib.country import CountryError, canonical_country
+    try:
+        return canonical_country(c)
+    except CountryError as e:
+        _die(str(e))
+
+
+def _country(settings: Optional[Dict[str, Any]]) -> str:
+    """The project's canonical country from a [settings] table. A
+    missing or unknown value dies with the one resolver message — never
+    a silent Canada (partition audit R1: every reader but `run` used to
+    default to it)."""
+    from taxjson.lib.country import CountryError, settings_country
+    try:
+        return settings_country(settings)
+    except CountryError as e:
+        _die(f"{e}{'' if (settings or {}).get('country') else ' in taxjson.toml'}")
+
+
+def _home_currency(settings: Dict[str, Any]) -> str:
+    """The currency the project's country files in (CAD / USD)."""
+    from taxjson.lib.country import home_currency
+    return home_currency(_country(settings))
+
+
+def _base(settings: Dict[str, Any]) -> str:
+    """[settings] base_currency, else the country's currency. The
+    config readers refuse a base that is not the country's."""
+    b = settings.get("base_currency")
+    return str(b).strip().upper() if b else _home_currency(settings)
+
+
+def _tax_date(settings: Dict[str, Any]) -> str:
+    """The date basis in force: [settings] tax_date, else the country
+    default (lib/country.settings_tax_date)."""
+    from taxjson.lib.country import CountryError, resolve_tax_date
+    try:
+        return resolve_tax_date(_country(settings), settings.get("tax_date"))
+    except CountryError as e:
+        _die(str(e))
 
 
 def _country_has_corp_rules(country: str) -> bool:
-    """Whether taxjson-corp-actions has election rules for this jurisdiction.
-    Only Canada today; the corp-actions stage is skipped otherwise (running it
-    would just fail argparse / have no rules to apply)."""
+    """Whether taxjson-corp-actions has election rules for this
+    jurisdiction (both countries do: RULES_BY_COUNTRY)."""
     from taxjson.lib.corp_actions import RULES_BY_COUNTRY
     return _normalize_country(country) in RULES_BY_COUNTRY
 
@@ -1344,8 +1363,7 @@ def _crypto_broker_files(root: Path, cfg: Dict[str, Any]
 
 
 def _is_us(cfg: Dict[str, Any]) -> bool:
-    return _normalize_country(
-        (cfg.get("settings") or {}).get("country", "canada")) in ("us",
+    return _country((cfg.get("settings") or {})) in ("us",
                                                                  "usa")
 
 
@@ -1399,7 +1417,10 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
             return
         if adoc["undecided"] and interactive and not unparsed:
             if CS.prompt_undecided(adoc["sends"], Path(adoc["manifest"]),
-                                   allow_gift=not _is_us(cfg)):
+                                   allow_gift=command_country_problem(
+                                       "crypto-sends",
+                                       _country(cfg.get("settings")),
+                                       "gift") is None):
                 report = CS.build_report(root, cfg, files,
                                          CS.yahoo_usd_price(root),
                                          want=name)
@@ -1425,17 +1446,17 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
 
 def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
     """How the IB parser books an issuer-designated '(Return of
-    Capital)' from a non-Canadian issuer: [settings]
-    foreign_return_of_capital when set, else "dividend" in a Canadian
-    project (ITA s.90(2)) and "acb" in a US one — for a US filer a
-    return of capital the issuer designates is a nondividend
-    distribution that reduces basis (IRC s.301(c)(2)); the Canadian
-    rule used to decide it there too (audit S013-01)."""
-    explicit = settings.get("foreign_return_of_capital")
-    if explicit:
-        return str(explicit)
-    return ("acb" if _normalize_country(settings.get("country", "canada"))
-            == "usa" else "dividend")
+    Capital)' from a non-Canadian issuer: lib/country.foreign_roc_mode
+    (the one resolver `run` and tax-logic share). Canada: [settings]
+    foreign_return_of_capital, default "dividend" (ITA s.90(2)). USA:
+    always "acb" (IRC s.301(c)(2); the key is Canada-only and refused
+    in a US project — audit S013-01, partition INPUTS-02)."""
+    from taxjson.lib.country import CountryError, foreign_roc_mode
+    _country(settings)
+    try:
+        return foreign_roc_mode(settings)
+    except CountryError as e:
+        _die(str(e))
 
 
 def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
@@ -1527,9 +1548,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     year = settings["year"]
     # Country-aware default: CRA times dispositions on SETTLEMENT date;
     # the IRS recognizes on the TRADE date. An explicit config wins.
-    tax_date = settings.get("tax_date") or (
-        "trade" if _normalize_country(settings.get("country", "canada"))
-        in ("us", "usa") else "settle")
+    tax_date = _tax_date(settings)
     is_crypto = acfg.get("crypto", False)
     is_taxable = acfg.get("type", "sheltered") == "taxable"
     include_transfers = acfg.get("transfers", False)
@@ -1592,7 +1611,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     src_manifest = cache / f"{name}_sources.list"
     # Parser option (IB foreign ROC): in the manifest so a toggle re-parses.
     _froc_acb = ib_foreign_roc_mode(settings) == "acb"
-    _fut_next = settings.get("futures_settle") == "next_day"
+    from taxjson.lib.country import futures_settle_mode
+    _fut_next = futures_settle_mode(settings) == "next_day"
     # Membership covers EVERY input kind that feeds the merge — CSVs and
     # .tt files alike. Listing only CSVs left a deleted .tt's
     # transactions in the cached books under --fast (its converted JSON
@@ -2145,8 +2165,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             raw_gains = cache / f"{name}_raw_gains.json"
             if force or needs_rebuild(raw_gains, raw_json):
                 print("  raw gains")
-                # Match the country to the rest of the pipeline. Without
-                # this, taxjson-gains defaults to Canada and the US
+                # Match the country to the rest of the pipeline (it is
+                # required; it used to default to Canada, and the US
                 # raw-holdings inventory would aggregate FIFO lots as a
                 # Canadian-style ACB blended pool — wrong total_cost per
                 # symbol on the holdings.toml handoff.
@@ -2296,9 +2316,7 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
         "--taxable",
         "--country", _normalize_country(settings["country"]),
         "--year", str(settings["year"]),
-        "--tax-date", settings.get("tax_date") or (
-            "trade" if _normalize_country(settings.get("country", "canada"))
-            in ("us", "usa") else "settle"),
+        "--tax-date", _tax_date(settings),
         "--sheltered", str(sheltered_base),
         "--full-traces", str(wash_traces),
     ]
@@ -2399,9 +2417,7 @@ def stage_blended_wash_pass(names: List[str],
         "--taxable",
         "--country", country,
         "--year", str(settings["year"]),
-        "--tax-date", settings.get("tax_date") or (
-            "trade" if _normalize_country(settings.get("country", "canada"))
-            in ("us", "usa") else "settle"),
+        "--tax-date", _tax_date(settings),
         "--full-traces", str(wash_traces),
     ]
     if _normalize_country(country) in ("us", "usa"):
@@ -2530,7 +2546,7 @@ def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
     overlap = sorted(s for s, accts in by_symbol.items() if len(accts) > 1)
     if not overlap:
         return
-    country = _normalize_country(settings.get("country", "canada"))
+    country = _country(settings)
     consequence = (
         "the blended pass matches US §1091 wash sales across accounts "
         "(FIFO basis stays per account)"
@@ -2568,7 +2584,7 @@ def stage_cross_reports(all_gains: List[Path],
                         reports_dir: Path,
                         ticker_map: Optional[Path] = None,
                         phantoms: Optional[Path] = None,
-                        country: Optional[str] = None) -> None:
+                        *, country: str) -> None:
     if not all_gains:
         return
     print("==> cross-account reports")
@@ -2737,7 +2753,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     _CONFIG_PATH = root / "taxjson.toml"
     settings = cfg.get("settings", {})
     accounts = cfg.get("accounts", {})
-    if _normalize_country(str(settings.get("country", "canada"))) == "usa":
+    if _country(settings) == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
     _since_warn = _grant_since_warning(settings)
     if _since_warn and any(_c.get("type") == "taxable" and not _c.get("crypto")
@@ -2996,7 +3012,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     # blended wash file with a one-exchange one).
     _crypto_blend_names: List[str] = []
     _crypto_blend = (
-        _normalize_country(settings.get("country", "canada"))
+        _country(settings)
         not in ("us", "usa")
         and sum(1 for _c in accounts.values()
                 if _c.get("type") == "taxable" and _c.get("crypto")) >= 2)
@@ -3025,8 +3041,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         # crypto in the main pass, so the advisory tooling must not go
         # silent on exactly the account type where 30-day rebuys are
         # most common.
-        _crypto_wash_covered = _normalize_country(
-            settings.get("country", "canada")) not in ("us", "usa")
+        _crypto_wash_covered = _country(settings) not in ("us", "usa")
         if not is_crypto:
             # Equity taxable accounts are handled by ONE blended pass
             # after this loop (Canada ACB blending / US cross-account
@@ -3170,14 +3185,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         # Radar/lint bases: equity always; crypto too when the
         # jurisdiction's wash rule covers it (Canada s.54 identical
         # property — same condition as the second pass above).
-        _crypto_wash_covered = _normalize_country(
-            settings.get("country", "canada")) not in ("us", "usa")
+        _crypto_wash_covered = _country(settings) not in ("us", "usa")
         taxable_equity_base = [
             o["base"] for _, o, is_crypto in taxable_outputs
             if not is_crypto or _crypto_wash_covered]
         stage_cross_reports(all_gains, taxable_equity_base, sheltered_base, reports_dir,
                             ticker_map_arg, phantoms=phantoms_arg,
-                            country=settings.get("country", "canada"))
+                            country=_country(settings))
         # Overlap notes per blended group — the note says the blended
         # pass covers the symbol, so it must only name accounts a blend
         # actually spans (crypto blends only in Canada; equity and
@@ -3627,7 +3641,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cfg = load_config(root)
     accounts = cfg.get("accounts", {})
-    country = _normalize_country(cfg.get("settings", {}).get("country", "canada"))
+    country = _country(cfg.get("settings", {}))
     cache = root / "work"
     inputs_dir = root / "inputs"
 
@@ -4049,8 +4063,7 @@ def _settle_basis(root: Path, doc: Optional[Dict[str, Any]] = None) -> bool:
     td = str(settings.get("tax_date") or "").strip().lower()
     if td in ("settle", "trade"):
         return td == "settle"
-    return _normalize_country(str(settings.get("country") or "canada")) \
-        not in ("us", "usa")
+    return _tax_date(settings) == "settle"
 
 
 def _gains_row_date(t: Dict[str, Any], keep, settle: bool) -> str:
@@ -4369,9 +4382,7 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
     # SETTLEMENT date on a settle-basis project — what a .tt line's one
     # date means there (README "Importing manual cost basis").
     _st = _soft_settings(root)
-    settle_dates = (not prefix and (_st.get("tax_date") or (
-        "trade" if _normalize_country(_st.get("country", "canada"))
-        in ("us", "usa") else "settle")) == "settle")
+    settle_dates = (not prefix and _tax_date(_st) == "settle")
     skipped = 0
     out_lines = []
     buys: Dict[str, float] = {}
@@ -4558,7 +4569,6 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         _die("no crypto transfer evidence in work/ — run `taxjson run` "
              "first (the parse keeps withdrawals/sends in "
              "work/<acct>_<exchange>_transfers.json).")
-    us = _is_us(cfg)
     try:
         if sets:
             light = CS.build_report(root, cfg, None, None, want=acct,
@@ -4572,11 +4582,14 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                 if dec not in CS.DECISIONS:
                     _die(f"decision {dec!r} for {sid} — expected one of "
                          f"{', '.join(CS.DECISIONS)}.")
-                if dec == "gift" and us:
-                    _die("US project: a gift is not a sale for the donor "
-                         "(the recipient takes over your basis) — record "
-                         "it as `self` (no tax event) or, if you were "
-                         "paid, `payment`.")
+                _gift_no = command_country_problem(
+                    "crypto-sends", _country(cfg.get("settings")), dec)
+                if _gift_no:
+                    # lib/country.COMMAND_COUNTRY["crypto-sends:gift"]
+                    _die(f"{_gift_no}. A US donor's gift is not a sale (the "
+                         f"recipient takes over your basis) — record it "
+                         f"as `self` (no tax event) or, if you were paid, "
+                         f"`payment`.")
                 if sid not in by_id:
                     _die(f"no unmatched send {sid!r} in account {acct!r} — "
                          f"`taxjson crypto-sends {acct}` lists the ids.")
@@ -6086,7 +6099,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     reports = root / "reports"
     cfg = load_config(root)
     settings = cfg.get("settings", {})
-    country = _normalize_country(str(settings.get("country", "canada")))
+    country = _country(settings)
     accounts = cfg.get("accounts", {}) or {}
     if not accounts:
         sys.exit("taxjson scan: no accounts in taxjson.toml.")
@@ -6558,7 +6571,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                      f"(enter losses as a positive amount), "
                      f"got {_v!r}")
         _settings0 = cfg.get("settings") or {}
-        if _normalize_country(str(_settings0.get("country", "canada"))) \
+        if _country(_settings0) \
                 == "canada":
             # Validate the province BEFORE printing anything: a missing
             # or unsupported one used to fail only after the whole sum
@@ -6730,7 +6743,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                                                  mark_crypto)
     _settings = cfg.get("settings") or {}
     _fyear = year or _settings.get("year")
-    _is_us = _normalize_country(str(_settings.get("country", "canada"))) \
+    _is_us = _country(_settings) \
         in ("us", "usa")
     # The date the gains files were scoped on — an explicit tax_date
     # that differs from the country default dropped a year-end sale
@@ -7140,8 +7153,7 @@ def _instalments_doc(root: Path, r: Dict[str, Any], year,
     # safe harbours and penalty basis, and its estimate total omits
     # NIIT — so a US project must not receive a Canadian doc, not
     # even through `sum --estimate --json`.
-    if _normalize_country(str(_soft_settings(root).get("country",
-                                                      "canada"))) \
+    if _country(_soft_settings(root)) \
             not in ("canada", "ca"):
         return None
     net = _net_tax_owing(r, float(icfg.get("withheld") or 0.0))
@@ -7182,8 +7194,8 @@ def cmd_instalments(args: argparse.Namespace) -> None:
              "  paid = [{ date = \"2026-03-15\", amount = 15000 }]")
     settings = _soft_settings(root)
     year = settings.get("year")
-    base = str(settings.get("base_currency", "CAD"))
-    if _normalize_country(str(settings.get("country", "canada"))) \
+    base = str(_base(settings))
+    if _country(settings) \
             not in ("canada", "ca"):
         _die("instalments are modeled for canada only (US estimated "
              "taxes use a different regime — see KNOWN_ISSUES).")
@@ -7335,7 +7347,7 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
     from taxjson.lib.tax_estimate import estimate_canada, estimate_usa
     settings = cfg.get("settings", {})
     _est_year = settings.get("year")
-    country = _normalize_country(str(settings.get("country", "canada")))
+    country = _country(settings)
     if country == "canada":
         prov = (province or str(settings.get("province", "") or "")).strip()
         if not prov:
@@ -7847,7 +7859,7 @@ def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
     moves every year — consecutive default projects tax a year-straddling
     premium twice (2026-09 audit: +399 in 2025, +298 in 2026, for a 298
     economic gain). None when the key is set or does not apply."""
-    if _normalize_country(str(settings.get("country", "canada"))) in (
+    if _country(settings) in (
             "us", "usa"):
         return None
     if str(settings.get("option_premium_timing", "grant")).strip().lower() \
@@ -7870,17 +7882,34 @@ def cmd_tax_logic(args: argparse.Namespace) -> None:
     """`taxjson tax-logic`: a short statement of every rule taxjson
     applies for the project's country, with the project's settings
     filled in (lib/tax_logic). Works outside a project too (defaults)."""
-    from taxjson.lib.tax_logic import render, sections
+    from taxjson.lib.country import CountryError
+    from taxjson.lib.tax_logic import render, rule_sections, sections
     root = Path(args.dir).resolve()
     settings = dict((_soft_config(root).get("settings") or {}))
-    country = (args.country or settings.get("country") or "canada")
-    country = _normalize_country(str(country))
-    if getattr(args, "json", False):
-        _json_out({"country": country, "year": settings.get("year"),
-                   "sections": [{"title": t, "rules": r}
-                                for t, r in sections(country, settings)]})
-        return
-    print(render(country, settings))
+    if args.country:
+        country = _normalize_country(args.country)
+    elif settings:
+        country = _country(settings)
+    else:
+        _die("no taxjson.toml here to read the country from — pass "
+             "--country canada|usa (or -C DIR to a project)")
+    try:
+        if getattr(args, "json", False):
+            _json_out({"country": country, "year": settings.get("year"),
+                       "sections": [{"title": t, "rules": r}
+                                    for t, r in sections(country, settings)],
+                       "rule_ids": [
+                           {"title": t, "rules": [
+                               {"id": r.id, "text": r.text,
+                                "continues": r.cont} for r in rs]}
+                           for t, rs in rule_sections(country, settings)]})
+            return
+        print(render(country, settings, ids=getattr(args, "ids", False)))
+    except (CountryError, ValueError) as e:
+        # The same resolvers the engine uses refused a setting: the
+        # text would otherwise describe a value `run` reads differently
+        # (partition SPEC-12).
+        _die(str(e))
 
 
 def cmd_spinoffs(args: argparse.Namespace) -> None:
@@ -8097,7 +8126,7 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     year = settings.get("year")
     if not isinstance(year, int):
         sys.exit("taxjson checklist: [settings] year is required")
-    country = _normalize_country(str(settings.get("country", "canada")))
+    country = _country(settings)
 
     ids = [s[0] for s in cl.STEPS]
     if args.note and not (args.done or args.skip):
@@ -8182,7 +8211,7 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
     take a minute on a big book), with why it matters and what was found,
     then the user's decision is recorded. Ends with the summary; exit 1
     while anything is still open (also after [q]uit)."""
-    country = ctx.settings.get("country", "canada")
+    country = _country(ctx.settings)
     ids = [s[0] for s in cl.STEPS if not only or s[0] in only]
     keys = "[d]one  [s]kip  [r]e-check  [n]ext  [q]uit  (Enter = next)"
     print(f"Filing checklist walk. For each open step: {keys}\n")
@@ -8691,8 +8720,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
                      f"calendar date")
         from taxjson.lib.dispatch import run_cmd as _run_cmd
         settings = _soft_settings(root)
-        country = _normalize_country(str(settings.get("country",
-                                                      "canada")))
+        country = _country(settings)
         year = str(settings.get("year", "") or as_of[:4])
         # Accounts and their TYPES come from the config — never from
         # globbing work/ (which also holds *_raw_base.json derivatives
@@ -8715,7 +8743,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
             in ("trade", "settle")
         _asof_basis = (str(settings.get("tax_date")).strip().lower()
                        if _asof_basis_set else
-                       ("trade" if country in ("us", "usa") else "settle"))
+                       _tax_date({"country": country}))
         files = {}
         tmp_docs = {}
         _no_input = _accounts_skipped_for_no_inputs(root)
@@ -8934,8 +8962,10 @@ def _soft_settings(root: Path) -> Dict[str, Any]:
 
 
 def _base_currency(root: Path) -> str:
-    """Base currency label from taxjson.toml (soft-read; 'CAD' default)."""
-    return _soft_settings(root).get("base_currency", "CAD")
+    """Base currency label from taxjson.toml: [settings] base_currency,
+    else the country's own currency (never a silent CAD for a US
+    project)."""
+    return _base(_soft_settings(root))
 
 
 def cmd_wash_sales(args: argparse.Namespace) -> None:
@@ -9069,7 +9099,7 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     year = settings.get("year")
     if year is None:
         sys.exit("taxjson t1135: no [settings] year in taxjson.toml")
-    base_currency = str(settings.get("base_currency", "CAD"))
+    base_currency = str(_base(settings))
     if base_currency.upper() != "CAD":
         print(f"note: base_currency is {base_currency} — T1135 amounts must "
               f"be reported in CAD; these figures are in {base_currency}.",
@@ -9183,8 +9213,8 @@ def cmd_carryover(args: argparse.Namespace) -> None:
         crypto_argv = []
 
     argv = base_argv + crypto_argv + [
-        "--country", _normalize_country(str(settings.get("country", "canada"))),
-        "--base-currency", str(settings.get("base_currency", "CAD")),
+        "--country", _country(settings),
+        "--base-currency", str(_base(settings)),
         # The same year attribution as run / close-year (R1-192).
         "--tax-date", _tax_date_basis(settings),
     ] + option_timing_flags(settings)       # same timing as the returns
@@ -9292,7 +9322,7 @@ def cmd_form_export(args: argparse.Namespace) -> None:
     cache = root / "work"
     _cfg = load_config(root)
     settings = _cfg.get("settings", {})
-    country = _normalize_country(settings.get("country", ""))
+    country = _country(settings)
     form = args.form or ("8949" if country == "usa" else "schedule3")
     year = settings.get("year")
     _txf_only = [f for f, v in (("--out", getattr(args, "out", None)),
@@ -9387,9 +9417,8 @@ def cmd_harvest(args: argparse.Namespace) -> None:
                  f"(run `taxjson run` first).")
     cmd = _cmd("taxjson-harvest") + files + [
         "--price-cache", str(cache / ".price_cache.json"),
-        "--country", _normalize_country(str(settings.get("country",
-                                                         "canada"))),
-        "--base-currency", str(settings.get("base_currency", "CAD")),
+        "--country", _country(settings),
+        "--base-currency", str(_base(settings)),
     ]
     # --options was defined-but-never-forwarded: the wrapper (and the
     # GUI's include-options toggle, which calls through it) silently
@@ -9440,7 +9469,7 @@ def cmd_harvest(args: argparse.Namespace) -> None:
             "--taxable", *[str(b) for b in _bases],
             "--json-out", str(_live), "--account", "LIVE"]
         _rcmd += _radar_engine_args(_bases, root / "phantoms.json",
-                                    settings.get("country", "canada"))
+                                    _country(settings))
         if (cache / "sheltered_base.json").exists():
             _rcmd += ["--sheltered", str(cache / "sheltered_base.json")]
         _res = _run_live(_rcmd, capture_output=True)
@@ -9529,10 +9558,7 @@ def _tax_date_basis(settings: Dict[str, Any]) -> str:
     """The date the project's gains files are year-scoped on: the
     explicit [settings] tax_date, else the country default (CRA:
     settlement, IRS: trade) — what stage_account feeds the engine."""
-    return settings.get("tax_date") or (
-        "trade" if _normalize_country(str(settings.get("country",
-                                                       "canada")))
-        in ("us", "usa") else "settle")
+    return _tax_date(settings)
 
 
 def _has_inputs(root: Path, name: str) -> bool:
@@ -9735,10 +9761,8 @@ def _handoff_gains_flags(settings: Dict[str, Any]) -> List[str]:
     """The taxjson-gains flags a full-history run of this project uses
     (no --year: the hand-off needs every year's pools)."""
     from taxjson.lib.pipeline import option_timing_flags
-    country = _normalize_country(settings.get("country", "canada"))
-    flags = ["--country", country, "--tax-date",
-             settings.get("tax_date") or (
-                 "trade" if country in ("us", "usa") else "settle")]
+    country = _country(settings)
+    flags = ["--country", country, "--tax-date", _tax_date(settings)]
     if country in ("us", "usa"):
         flags.append("--per-account-basis")
     return flags + option_timing_flags(settings)
@@ -9998,9 +10022,7 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         # explicit tax_date config wins. Without this, a USA year-end
         # sale settling in January was on the 1099-B (and in
         # form-export) but missing from the computed side.
-        tax_date = settings.get("tax_date") or (
-            "trade" if _normalize_country(settings.get("country", "canada"))
-            in ("us", "usa") else "settle")
+        tax_date = _tax_date(settings)
         argv += ["--date-basis", tax_date]
     if args.tolerance is not None:
         argv += ["--tolerance", str(args.tolerance)]
@@ -10038,8 +10060,7 @@ def _explain_wash_sales(root: Path, cache: Path,
 
     settings = _soft_settings(root)
     common: List[str] = ["--wash-sales"]
-    if settings.get("country"):
-        common += ["--country", _normalize_country(settings["country"])]
+    common += ["--country", _country(settings)]
     if settings.get("tax_date"):
         common += ["--tax-date", settings["tax_date"]]
     # Sheltered history makes the ±30-day affiliated-balance window accurate
@@ -10060,7 +10081,7 @@ def _explain_wash_sales(root: Path, cache: Path,
     # gains" for a real denial, or a denial the books do not have
     # (S046-09).
     _acfg = _soft_config(root).get("accounts") or {}
-    _crypto_blend = _normalize_country(settings.get("country", "canada")) \
+    _crypto_blend = _country(settings) \
         not in ("us", "usa")
     _by_name = {p.name[:-len("_base.json")]: p for p in bases}
     if account and account in _acfg:
@@ -10140,8 +10161,7 @@ def _taxable_equity_account_names(root: Path,
     cfg = _radar_config(root, prog)
     if not cfg:
         return []
-    crypto_covered = _normalize_country(
-        (cfg.get("settings") or {}).get("country", "canada")) \
+    crypto_covered = _country((cfg.get("settings") or {})) \
         not in ("us", "usa")
     return [n for n, c in (cfg.get("accounts") or {}).items()
             if (c or {}).get("type") == "taxable"
@@ -10178,8 +10198,8 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
     cmd = _cmd("taxjson-wash-radar") + ["--taxable", *[str(b) for b in bases]]
     cmd += _radar_engine_args(
         bases, root / "phantoms.json",
-        _radar_config(root, "taxjson wash-radar").get(
-            "settings", {}).get("country", "canada"))
+        _country(_radar_config(root, "taxjson wash-radar").get(
+            "settings", {})))
     # Cross-account superficial-loss detection needs the pooled sheltered
     # history; pass it when the pipeline has built it.
     sheltered_base = cache / "sheltered_base.json"
@@ -10248,8 +10268,8 @@ def _radar_taxable_bases(root: Path, cache: Path,
 
 
 def _radar_engine_args(bases: List[Path],
-                       phantoms: Optional[Path] = None,
-                       country: Optional[str] = None) -> List[str]:
+                       phantoms: Optional[Path],
+                       country: str) -> List[str]:
     """The radar's engine context, shared by every radar run (wash-radar,
     watch, buy-check, sell-check and the run's reports/wash_radar_*):
     the taxable accounts' gains files (wash-adjusted, s.47-blended — the
@@ -10257,9 +10277,8 @@ def _radar_engine_args(bases: List[Path],
     phantoms.json (the same openings the gains pass applies) and its
     country (Canada's per-holder s.54 test vs the US s.1091 rules)."""
     from taxjson.lib.report_model import resolve_gains_files
-    out: List[str] = []
-    if country:
-        out += ["--country", _normalize_country(str(country))]
+    # --country is required by the radar (lib/country): never omitted.
+    out: List[str] = ["--country", _normalize_country(str(country))]
     by_dir: Dict[Path, Dict[str, Path]] = {}
     for b in bases:
         b = Path(b)
@@ -10295,8 +10314,8 @@ def cmd_watch(args: argparse.Namespace) -> None:
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
     cmd += _radar_engine_args(
         bases, root / "phantoms.json",
-        _radar_config(root, "taxjson watch").get(
-            "settings", {}).get("country", "canada"))
+        _country(_radar_config(root, "taxjson watch").get(
+            "settings", {})))
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -11033,12 +11052,12 @@ def _fx_cash_doc(root: Path, cache: Path):
     from taxjson.lib.price_chain import load_fx_history
     cfg = _soft_config(root)
     settings = cfg.get("settings", {}) or {}
-    base = str(settings.get("base_currency", "CAD")).upper()
+    base = str(_base(settings)).upper()
     year = settings.get("year")
     if not year:
         sys.exit("taxjson fx-cash: needs [settings] year in "
                  "taxjson.toml.")
-    country = _normalize_country(str(settings.get("country", "canada")))
+    country = _country(settings)
     txs: List[Dict[str, Any]] = []
     found = False
     for name, acfg in sorted((cfg.get("accounts") or {}).items()):
@@ -11124,8 +11143,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
     cmd += _radar_engine_args(
         bases, root / "phantoms.json",
-        _radar_config(root, prog).get("settings", {}).get("country",
-                                                         "canada"))
+        _country(_radar_config(root, prog).get("settings", {})))
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -11662,10 +11680,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
     if not settings:
         _die("no taxjson.toml here — audit is a project command "
              "(run it from the project root, or pass -C).")
-    country = _normalize_country(settings.get("country", "canada"))
-    tax_date = settings.get("tax_date") or (
-        "trade" if country in ("us", "usa") else "settle")
-    base_currency = str(settings.get("base_currency") or "CAD").upper()
+    country = _country(settings)
+    tax_date = _tax_date(settings)
+    base_currency = str(settings.get("base_currency")
+                        or _home_currency(settings)).upper()
     year = None if getattr(args, "all_years", False) else (
         getattr(args, "year", None) or settings.get("year"))
 
@@ -11938,14 +11956,12 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                     "r", suffix=".json", delete=False) as tmp:
                 tmp_path = tmp.name
             cmd = _cmd("taxjson-gains") + ["--suggest-phantoms", tmp_path]
-            # The project's jurisdiction, as the pipeline passes it —
-            # without it every account printed "--country not given;
-            # assuming canada", even on a USA project. (Sheltered books
+            # The project's jurisdiction, as the pipeline passes it
+            # (taxjson-gains requires it). (Sheltered books
             # stay in: a short in a registered account is the MOST
             # certain phantom, and `run` applies phantoms.json to every
             # account's gains stage.)
-            cmd += ["--country", _normalize_country(str(
-                _soft_settings(root).get("country") or "canada"))]
+            cmd += ["--country", _country(_soft_settings(root))]
             if year:
                 cmd += ["--year", str(year)]
             if args.include_options:
@@ -12085,7 +12101,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     # file exists, else report native per-brokerage amounts (no conversion).
     rates = cache / "to_base.csv"
     if rates.exists():
-        cmd += ["--to", settings.get("base_currency", "CAD"),
+        cmd += ["--to", _base(settings),
                 "--rates", str(rates)]
     if args.by_account:
         cmd += ["--by-account"]
@@ -12691,10 +12707,18 @@ def main() -> None:
         "tax-logic",
         help="A short statement of every rule taxjson applies for this "
              "project's country, with its settings filled in")
-    p_logic.add_argument("--country", choices=("canada", "ca", "usa", "us"),
-                         help="Country (default: the project's, else canada)")
+    from taxjson.lib.country import country_arg as _country_arg
+    p_logic.add_argument("--country", type=_country_arg,
+                         metavar="{canada,ca,usa,us}",
+                         help="Country (default: the project's; required "
+                              "outside a project)")
+    p_logic.add_argument("--ids", action="store_true",
+                         help="Prefix each statement with its rule id "
+                              "(e.g. [CA-SL-02]), the id tests and code "
+                              "cite")
     p_logic.add_argument("--json", action="store_true",
-                         help="Emit JSON instead of text")
+                         help="Emit JSON instead of text (each rule with "
+                              "its id)")
     p_logic.set_defaults(func=cmd_tax_logic)
 
     p_ck = sub.add_parser(
@@ -13202,6 +13226,7 @@ def main() -> None:
             # `taxjson run` first)" — send the user to the real problem.
             _die(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
+        _enforce_command_country(args)
         try:
             args.func(args)
         except SystemExit as e:
@@ -13219,6 +13244,26 @@ def main() -> None:
                      f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+def _enforce_command_country(args: argparse.Namespace) -> None:
+    """Refuse a command (or command:variant) the project's country does
+    not own — lib/country.COMMAND_COUNTRY — before it runs, once, for
+    every entry point (partition audit R3: t1135, option-boundary and
+    form-export --form schedule3 ran in US projects and gave Canadian
+    advice; 8949/txf in a Canada project failed only by accident)."""
+    from taxjson.lib.country import command_country, command_country_problem
+    cmd = getattr(args, "cmd", "") or ""
+    variant = getattr(args, "form", None) if cmd == "form-export" else None
+    if command_country(cmd, variant) is None:
+        return
+    settings = _soft_settings(Path(args.dir).resolve())
+    if not settings:
+        _die("no taxjson.toml here — this command needs a project "
+             "(its country decides whether it applies).")
+    msg = command_country_problem(cmd, _country(settings), variant)
+    if msg:
+        _die(msg)
 
 
 def _parses_ok(parser: argparse.ArgumentParser, seg: List[str]) -> bool:

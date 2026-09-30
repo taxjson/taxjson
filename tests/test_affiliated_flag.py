@@ -11,6 +11,7 @@ cases — but the basis bump lands on different property.
 import unittest
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 
 class TestAffiliatedFlagCanada(unittest.TestCase):
@@ -53,6 +54,7 @@ class TestAffiliatedFlagCanada(unittest.TestCase):
                                    "user's ACB — gain stays at qty × "
                                    "(price − own_avg_cost).")
 
+    @rule("CA-SL-04")
     def test_spouse_buy_triggers_wash_sale(self):
         rules = CanadaTaxRules()
         taxable = [
@@ -121,6 +123,7 @@ class TestAffiliatedFlagCanada(unittest.TestCase):
         self.assertTrue(spouse_row['affiliated'])
         self.assertFalse(spouse_row['sheltered'])
 
+    @rule("CA-SL-04")
     def test_omitting_affiliated_is_no_op(self):
         """Confirm the flag is purely additive — omitting it changes
         nothing compared to baseline."""

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.option_boundary import straddling
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OPT = "ZZZ260116C00050000.US"
@@ -165,6 +166,7 @@ class TestBoundaryAttention(unittest.TestCase):
         rows = straddling(self.BOOK, 2026, "grant", 2026, set())
         self.assertFalse(rows[0]["attention"])
 
+    @rule("CA-OPT-04")
     def test_expired_without_expiry_row(self):
         book = [T("BUYSELL", "2025-03-03", "ZZZ250620P00040000.US", -2, 300.0)]
         rows = straddling(book, 2025, "grant", 2025)

@@ -49,7 +49,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.cli_diag import note
+from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import load_transactions
 from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
@@ -448,10 +448,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--sheltered", action="append", type=Path,
                         default=[], help="Sheltered book(s) for wash-window "
                                          "context (repeatable)")
-    parser.add_argument("--country", default=None,
-                        choices=["canada", "ca", "usa", "us"],
-                        help="Country for tax rules (default: canada, with "
-                             "a stderr note when omitted)")
+    add_country_argument(parser)
     parser.add_argument("--tax-date", choices=["settle", "trade"],
                         default=None,
                         help="Year-attribution basis (default: country-aware)")
@@ -487,9 +484,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # returns were filed on grant timing (2026-09 audit: filed 2025 -601
     # vs ledger -1,000 on the same book).
     parser.add_argument("--option-premium-timing", choices=["grant", "close"],
-                        default="close",
-                        help="Canada: written-option premium timing (grant "
-                             "— ITA s.49(1) — or close). Ignored for the US.")
+                        default=None,
+                        help="Canada only: written-option premium timing "
+                             "(grant — ITA s.49(1) — or close; default "
+                             "close). Refused with --country usa.")
     parser.add_argument("--option-grant-since", type=int, default=None,
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
@@ -498,12 +496,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Canada, grant timing: buy-back loss of a "
                              "written option can be superficial.")
     args = parser.parse_args(argv)
+    refuse_foreign_flags(args, "taxjson-carryover")
+    if args.option_premium_timing is None:
+        args.option_premium_timing = "close"
 
-    if args.country is None:
-        # Silent default was audit finding A4; `taxjson carryover` always
-        # passes --country, so the note only reaches direct CLI users.
-        note("taxjson-carryover", "--country not given; assuming canada")
-        args.country = "canada"
 
     for p in args.files + args.sheltered:
         if not p.exists():
@@ -521,8 +517,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     for p in args.sheltered:
         sheltered.extend(load_transactions(p))
 
-    country = ('usa' if args.country.strip().lower() in ('us', 'usa')
-               else 'canada')
+    country = args.country
     crypto_txs = []
     for cp in args.crypto:
         crypto_txs.extend(load_transactions(cp))

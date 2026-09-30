@@ -20,6 +20,7 @@ from taxjson.bin.taxjson_form_export import (build_8949, build_schedule3,
                                              filing_lines, filing_parts_8949,
                                              filing_totals, main, mark_crypto,
                                              property_class)
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -47,6 +48,7 @@ COIN = ent("BTC", 40000.0, 50000.0, account="kr1")
 
 
 class TestRouting(unittest.TestCase):
+    @rule("CA-DISP-03")
     def test_property_classes(self):
         self.assertEqual(property_class(SHARE), "shares")
         self.assertEqual(property_class(OPTION), "option")
@@ -54,6 +56,7 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(property_class(mark_crypto([COIN])[0]), "crypto")
         self.assertEqual(property_class(COIN), "shares")   # unflagged
 
+    @rule("CA-DISP-03")
     def test_2025_lines_and_totals(self):
         rep = build_schedule3([SHARE, OPTION, FUTURE] + mark_crypto([COIN]),
                               2025)
@@ -79,6 +82,7 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(rep["lines"][0]["title"],
                          "Part 3, line 4 (lines 13199/13200)")
 
+    @rule("CA-DISP-03")
     def test_2024_crypto_goes_with_other_properties(self):
         coin = mark_crypto([dict(COIN, date="2024-06-10",
                                  date_settle="2024-06-10")])
@@ -98,6 +102,7 @@ class TestRouting(unittest.TestCase):
 
 
 class TestFooting(unittest.TestCase):
+    @rule("CA-DISP-01")
     def test_denied_row_foots_with_reduced_acb(self):
         rep = build_schedule3([DENIED], 2025)
         r = rep["rows"][0]
@@ -112,6 +117,7 @@ class TestFooting(unittest.TestCase):
         self.assertIn("ACB shown reduced", r["notes"])
         self.assertIn("replacement", r["notes"])
 
+    @rule("CA-DISP-01")
     def test_every_row_and_line_foots(self):
         ents = [SHARE, OPTION, FUTURE, DENIED,
                 ent("SHOP.TO", 100.0, 300.0, disallowed=50.0,

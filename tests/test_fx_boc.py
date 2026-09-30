@@ -19,6 +19,7 @@ from taxjson.bin.taxjson_convert_currency import (
     load_exchange_rates, load_rate_sources,
 )
 from taxjson.lib.offline import offline_enabled
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TODAY = "2026-09-28"                                   # a Monday
@@ -74,6 +75,7 @@ class _CacheCase(unittest.TestCase):
 
 
 class TestBankOfCanadaPrimary(_CacheCase):
+    @rule("CA-FX-01")
     def test_boc_from_2017_yahoo_only_before(self):
         rows, errors, _ = self.build()
         self.assertEqual(errors, [])
@@ -153,6 +155,7 @@ class TestBankOfCanadaPrimary(_CacheCase):
         self.assertEqual(src["2025-03-01"], "yahoo")
         self.assertEqual(src["2025-04-15"], "boc")
 
+    @rule("US-FX-02")
     def test_non_cad_target_is_yahoo_only(self):
         rows, _, _ = self.build(frm="CAD", to="USD", start="2025-01-01",
                                 end="2025-01-10")

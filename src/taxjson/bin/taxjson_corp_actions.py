@@ -36,6 +36,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from taxjson.lib.country import add_country_argument
+
 from taxjson.lib.corp_actions import (
     CorporateAction,
     ElectionRecord,
@@ -43,7 +45,6 @@ from taxjson.lib.corp_actions import (
     HINTS_BY_ELECTION,
     IGNORE_ELECTION,
     Manifest,
-    RULES_BY_COUNTRY,
     combine_broker_copies,
     options_for,
     parse_ib_corporate_actions,
@@ -331,10 +332,9 @@ def main():
             "passing more than one file."
         ),
     )
-    parser.add_argument(
-        '--country', default='canada', choices=sorted(RULES_BY_COUNTRY),
-        help="Tax jurisdiction whose election rules to apply (default: canada)",
-    )
+    add_country_argument(
+        parser, help="Tax jurisdiction whose election rules to apply "
+                     "(required): canada | usa")
     parser.add_argument(
         '--manifest',
         help=(

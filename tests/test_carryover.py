@@ -229,7 +229,8 @@ class TestCliAndRender(unittest.TestCase):
 
     def test_missing_file(self):
         with redirect_stderr(io.StringIO()):
-            self.assertEqual(main(["/nonexistent.json"]), 2)
+            self.assertEqual(main(["--country", "canada",
+                                   "/nonexistent.json"]), 2)
 
 
 class TestRunWrapper(unittest.TestCase):

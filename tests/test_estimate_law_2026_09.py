@@ -19,6 +19,7 @@ from taxjson.lib import tax_estimate as te
 from taxjson.lib.tax_estimate import (apply_vintage, ca_fed_bpa,
                                       estimate_canada,
                                       ontario_health_premium)
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -245,6 +246,7 @@ class TestStakingIsOrdinaryIncome(unittest.TestCase):
         self.assertAlmostEqual(wrong["estimated_tax"]
                                - r["estimated_tax"], -150.0, delta=0.01)
 
+    @rule("CA-INC-04")
     def test_crypto_account_dividends_route_to_staking(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

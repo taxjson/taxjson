@@ -28,6 +28,7 @@ from taxjson.lib.phantom_holdings import (
     load_phantoms,
     synthesize_openings,
 )
+from tax_rules import rule
 
 
 def _tx(action, date, symbol, qty, price=0.0, net=0.0, account='Margin', currency='USD'):
@@ -220,6 +221,7 @@ class TestSynthesisAndTaint(unittest.TestCase):
             txs, _ = synthesize_openings(txs, phantoms)
         return CanadaTaxRules().compute_gains(txs, detect_wash_sales=False)
 
+    @rule("CA-ACB-11")
     def test_case1_simple_phantom_sell_tainted(self):
         """Case #1: phantom sell → gain record marked tainted."""
         txs = [

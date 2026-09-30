@@ -36,6 +36,8 @@ import sys
 from pathlib import Path
 
 from taxjson.lib.core import get_tax_rules, load_transactions
+from taxjson.lib.country import (add_country_argument, default_tax_date,
+                                 refuse_foreign_flags)
 from taxjson.lib.pipeline import load_stdin_transactions, prepare_books
 from taxjson.lib.trace_format import render_gain_block
 
@@ -63,12 +65,7 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--country",
-        choices=["canada", "ca", "usa", "us"],
-        default="canada",
-        help="Country for tax rules (default: canada)",
-    )
+    add_country_argument(parser)
     parser.add_argument(
         "input",
         nargs="?",
@@ -240,9 +237,7 @@ def _timing_default_note(args, prog):
     (`taxjson run`) defaults to s.49(1) grant timing from the project
     year: say so instead of silently disagreeing with the .sum (audit
     R1-177)."""
-    if (args.option_premium_timing is None
-            and str(args.country or 'canada').strip().lower()
-            not in ('us', 'usa')):
+    if args.option_premium_timing is None and args.country == 'canada':
         print(f"{prog}: note: --option-premium-timing not given — using "
               f"close timing. `taxjson run` on a Canada project uses "
               f"grant timing from the project year; pass "
@@ -254,13 +249,12 @@ def _timing_default_note(args, prog):
 
 def main():
     args = parse_args()
+    refuse_foreign_flags(args, "taxjson-explain")
     _timing_default_note(args, "taxjson-explain")
     # Country-aware --tax-date default (matches taxjson-gains): settle for
     # canada (CRA), trade for usa (IRS).
     if args.tax_date is None:
-        args.tax_date = ('trade'
-                         if (args.country or '').strip().lower() in ('us', 'usa')
-                         else 'settle')
+        args.tax_date = default_tax_date(args.country)
     transactions = load_input(args)
     sheltered = load_transactions(Path(args.sheltered)) if args.sheltered else []
     affiliated = load_transactions(Path(args.affiliated)) if args.affiliated else []
@@ -285,7 +279,7 @@ def main():
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
         _kw = {}
-        if str(args.country).strip().lower() not in ("us", "usa"):
+        if args.country == "canada":
             _kw = {"option_premium_timing": args.option_premium_timing,
                    "option_grant_since": args.option_grant_since,
                    "option_buyback_loss_superficial": args.option_buyback_wash}

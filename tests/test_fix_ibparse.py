@@ -14,6 +14,7 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -761,8 +762,13 @@ class TestExpiryClampAcrossFiles(unittest.TestCase):
 
 class TestUsProjectReturnOfCapital(unittest.TestCase):
     """S013-01: a US project booked a US issuer's return of capital as
-    a dividend under Canada's s.90(2) default."""
+    a dividend under Canada's s.90(2) default. Partition INPUTS-02 /
+    SPEC-08: an explicit foreign_return_of_capital = "dividend" was then
+    still honoured in a US project (and this test pinned it); the key is
+    Canada-only now — refused by every config reader — and the resolver
+    returns "acb" for a US project whatever the table says."""
 
+    @rule("CA-ACB-08")
     def test_default_follows_the_country(self):
         from taxjson.bin.taxjson_run import ib_foreign_roc_mode
         self.assertEqual(ib_foreign_roc_mode({'country': 'usa'}), 'acb')
@@ -770,7 +776,7 @@ class TestUsProjectReturnOfCapital(unittest.TestCase):
                          'dividend')
         self.assertEqual(ib_foreign_roc_mode(
             {'country': 'usa', 'foreign_return_of_capital': 'dividend'}),
-            'dividend')
+            'acb')
 
 
 class TestGenericSymbolSpelling(unittest.TestCase):

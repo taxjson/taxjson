@@ -690,8 +690,10 @@ def build_report(root: Path, cfg: Dict[str, Any],
     `broker_files` ({acct: [(broker, csv)]}) feeds the stablecoin pool;
     None skips it (the checklist needs only the decisions)."""
     settings = cfg.get("settings") or {}
-    base = str(settings.get("base_currency") or "CAD").upper()
-    country = str(settings.get("country") or "canada").lower()
+    from taxjson.lib.country import home_currency, settings_country
+    country = settings_country(settings)
+    base = str(settings.get("base_currency")
+               or home_currency(country)).upper()
     cache = root / "work"
     accts = crypto_accounts(cfg)
     rows = load_transfer_rows(cache, accts)

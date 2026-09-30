@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule, rule_absent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HDR = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,"
@@ -27,7 +28,7 @@ KR2 = (HDR + "TXB1,OB1,BTC/CAD,2025-01-16 10:00:00.1234,buy,limit,90000,"
 
 def _project(td, accounts, country="canada"):
     root = Path(td)
-    cur = "CAD"
+    cur = "USD" if country == "usa" else "CAD"
     cfg = (f'[settings]\nyear = 2025\ncountry = "{country}"\n'
            f'base_currency = "{cur}"\nsource_currencies = []\n')
     for name, body in accounts.items():
@@ -46,6 +47,7 @@ def _cli(root, *a):
 
 
 class TestCryptoBlend(unittest.TestCase):
+    @rule("CA-SL-13")
     def test_two_exchanges_blend_and_everything_ties(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, {"kr1": KR1, "kr2": KR2})
@@ -68,6 +70,7 @@ class TestCryptoBlend(unittest.TestCase):
             k = _cli(root, "check-filed")
             self.assertEqual(k.returncode, 0, k.stdout + k.stderr)
 
+    @rule("CA-SL-13")
     def test_single_crypto_account_is_unchanged(self):
         with tempfile.TemporaryDirectory() as td:
             root = _project(td, {"kr1": KR1})
@@ -79,9 +82,14 @@ class TestCryptoBlend(unittest.TestCase):
             s = json.loads(_cli(root, "sum", "--json").stdout)["filing"]
             self.assertAlmostEqual(s["totals"]["gain"], -10000.0, places=2)
 
+    @rule("US-WASH-13")
+    @rule_absent("CA-SL-13", country="usa")
     def test_us_crypto_stays_per_account_without_the_false_note(self):
         with tempfile.TemporaryDirectory() as td:
-            root = _project(td, {"kr1": KR1, "kr2": KR2}, country="usa")
+            # A US book trades BTC/USD (a US project files in USD).
+            root = _project(td, {"kr1": KR1.replace("BTC/CAD", "BTC/USD"),
+                                 "kr2": KR2.replace("BTC/CAD", "BTC/USD")},
+                            country="usa")
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("crypto pass", r.stdout)

@@ -23,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -127,12 +128,14 @@ class TestCountryAwareTaxDate(unittest.TestCase):
             assert r.returncode == 0, r.stderr
             return json.loads(r.stdout)
 
+    @rule("US-DATE-01")
     def test_usa_defaults_to_trade_year(self):
         out = self._run_gains("usa")
         gains = [t for t in out["transactions"] if t.get("qty")]
         self.assertTrue(gains, "IRS recognizes on the TRADE date → 2025")
         self.assertEqual(out["summary"].get("tax_date_basis"), "trade")
 
+    @rule("CA-DATE-01")
     def test_canada_defaults_to_settle_year(self):
         out = self._run_gains("canada")
         gains = [t for t in out["transactions"] if t.get("qty")]
@@ -228,7 +231,7 @@ class TestRadarSettleBasis(unittest.TestCase):
             f = Path(tmp) / "t.json"
             f.write_text(json.dumps({"transactions": txs}))
             r = subprocess.run(
-                [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+                [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
                  "--taxable", str(f), "--date", "2025-04-10"],
                 cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -239,6 +242,7 @@ class TestRadarSettleBasis(unittest.TestCase):
 
 
 class TestIbCadCutover(unittest.TestCase):
+    @rule("CA-DATE-04")
     def test_cad_trade_on_0527_settles_t1(self):
         from taxjson.lib.brokerages.ib_extractor import get_ib_settlement
         # 2024-05-27 was a TSX trading day AFTER Canada's T+1 cutover but
@@ -250,6 +254,7 @@ class TestIbCadCutover(unittest.TestCase):
 
 
 class TestIncomeYearOnPayDate(unittest.TestCase):
+    @rule("CA-DATE-11")
     def test_dividend_filtered_by_pay_date_under_settle(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "b.json"

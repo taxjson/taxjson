@@ -484,7 +484,7 @@ class TestSpreadsheetInSubfolderWarns(unittest.TestCase):
             (inputs / "margin" / "2025").mkdir(parents=True)
             (inputs / "margin" / "2025" / "Activity.xlsx").write_bytes(b"x")
             warnings = validate_config(
-                {"settings": {"year": 2025},
+                {"settings": {"year": 2025, "country": "canada"},
                  "accounts": {"margin": {"type": "taxable"}}}, inputs)
         self.assertTrue(any("inputs/margin/2025/" in w for w in warnings),
                         warnings)
@@ -589,7 +589,7 @@ class TestRadarSidecarNames(unittest.TestCase):
                     R.stage_cross_reports(
                         [d / "x_gains.json"],
                         [d / "a_base_x_base.json", d / "a_x_base.json"],
-                        None, d)
+                        None, d, country="canada")
         finally:
             R.run_to_file = saved
         self.assertIn("wash_radar_a_base_x.rpt", outs)

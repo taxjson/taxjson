@@ -1,0 +1,4 @@
+# Rule ids that tax-logic no longer states. Never reuse one: a test that
+# names an id listed here fails scripts/check_tax_rules.py.
+# id            retired      why
+US-META-01      2026-09-30   audit-proposed id for "an unknown country renders Canada"; that fallback is gone (lib/country refuses it), so it is not a statement

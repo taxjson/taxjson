@@ -22,7 +22,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
@@ -91,15 +91,18 @@ def account_types_near(path) -> Dict[str, bool]:
             and a.get('type') in ('taxable', 'sheltered')}
 
 
-def tax_date_near(path) -> str:
-    """The project's tax_date basis ('settle' | 'trade'); the country
-    default ('settle' for Canada) when unset or outside a project."""
-    st = _project_doc_near(path).get('settings') or {}
-    td = str(st.get('tax_date') or '').strip().lower()
-    if td in ('settle', 'trade'):
-        return td
-    return ('trade' if str(st.get('country') or '').strip().lower()
-            in ('us', 'usa') else 'settle')
+def tax_date_near(path) -> Optional[str]:
+    """The project's tax_date basis ('settle' | 'trade') through the one
+    resolver (lib/country.settings_tax_date: the explicit value, else
+    the country default); a missing or unknown country in that project
+    raises CountryError. None outside a project — the caller decides
+    and says so (it used to read the raw TOML and map an unknown
+    country to Canada's settle basis, partition INPUTS-08)."""
+    doc = _project_doc_near(path)
+    if not doc:
+        return None
+    from taxjson.lib.country import settings_tax_date
+    return settings_tax_date(doc.get('settings') or {})
 
 
 def _drop_duplicate_splits(txs):

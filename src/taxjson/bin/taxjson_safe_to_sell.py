@@ -25,6 +25,8 @@ import sys
 from datetime import datetime
 from typing import List, Optional
 
+from taxjson.lib.country import add_country_argument
+
 # Radar category -> this view's status. EXITABLE: only a FULL exit is
 # clean (a partial loss sale is superficial); LOCKED: a registered
 # account's in-window buy it still holds denies the loss (PARTIAL when
@@ -54,8 +56,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "the engine decides which sales were losses)")
     parser.add_argument("--incomplete-history", metavar="FILE", default=None,
                         help="phantoms.json (passed to the radar)")
-    parser.add_argument("--country", default="canada",
-                        help="Project country (passed to the radar)")
+    add_country_argument(parser, help="Project country (required; passed "
+                                      "to the radar)")
     args = parser.parse_args(argv)
 
     if args.date:

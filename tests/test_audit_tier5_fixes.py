@@ -25,6 +25,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -38,6 +39,7 @@ def _tt(action, date, symbol, qty, price=0.0, net=0.0, account="acct",
 
 
 class TestSettleBasisWashWindow(unittest.TestCase):
+    @rule("CA-SL-01")
     def test_trigger_admitted_on_settle_basis(self):
         # Loss settles 2026-02-03; rebuy trades 30d after the TRADE date but
         # settles inside the window measured from the SETTLE date. With the
@@ -132,7 +134,8 @@ class TestWhatIfMultiLotAndStaleFx(unittest.TestCase):
         (root / "reports").mkdir()
         (root / "taxjson.toml").write_text(
             f'[settings]\nyear = 2026\ncountry = "{country}"\n'
-            f'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
+            f'base_currency = "{"USD" if country == "usa" else "CAD"}"\n'
+            f'[accounts.margin]\ntype = "taxable"\n')
         return root
 
     def test_us_multi_lot_sell_accepted(self):
@@ -140,10 +143,10 @@ class TestWhatIfMultiLotAndStaleFx(unittest.TestCase):
         from taxjson.web import data
         txs = [{"action": "BUYSELL", "date": "2025-01-02", "symbol": "AAPL",
                 "quantity": 100, "price": 10.0, "net_amount": 1000.0,
-                "currency": "CAD", "account": "margin"},
+                "currency": "USD", "account": "margin"},
                {"action": "BUYSELL", "date": "2025-02-02", "symbol": "AAPL",
                 "quantity": 100, "price": 12.0, "net_amount": 1200.0,
-                "currency": "CAD", "account": "margin"}]
+                "currency": "USD", "account": "margin"}]
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp, country="usa")
             (root / "work" / "margin_base.json").write_text(

@@ -29,6 +29,9 @@ def _tx(action, dt, symbol, qty, price, net, currency="CAD", time="09:30:00"):
 def _project(tmp, files):
     root = Path(tmp)
     (root / "work").mkdir()
+    # The date basis of a view is the country's (lib/country): a bare
+    # work/ with no taxjson.toml is refused rather than read as Canada.
+    (root / "taxjson.toml").write_text('[settings]\ncountry = "canada"\n')
     for name, txs in files.items():
         (root / "work" / name).write_text(json.dumps({"transactions": txs}))
     return root
@@ -271,6 +274,8 @@ class TestInstrumentFilters(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             (root / "work" / "margin_raw_gains.json").write_text(json.dumps({
                 "transactions": [
                     {"date": recent, "symbol": self.EQ, "qty": 10,
@@ -343,6 +348,8 @@ class TestGainsCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             (root / "work" / "margin_raw_gains.json").write_text(json.dumps({
                 "transactions": [
                     # disposition (no action) — should show
@@ -367,6 +374,8 @@ class TestGainsCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             r = _runsub(root, "gains", "30d")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no native gains files", r.stderr)
@@ -376,6 +385,8 @@ class TestGainsCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             (root / "work" / "margin_raw_gains.json").write_text(json.dumps({
                 "transactions": [{"date": recent, "symbol": "AAA.US", "qty": 5,
                                   "currency": "USD", "proceeds": 100.0,
@@ -404,6 +415,8 @@ class TestFindMissingHistory(unittest.TestCase):
             root = Path(tmp)
             (root / "work").mkdir()
             (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
+            (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2026\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
             # sell with no prior buy → running qty goes negative → truncated
@@ -421,6 +434,8 @@ class TestFindMissingHistory(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             r = _runsub(root, "find-missing-history", "nope")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("nope_base.json", r.stderr)
@@ -429,6 +444,8 @@ class TestFindMissingHistory(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2026\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
@@ -458,6 +475,8 @@ class TestFindMissingHistory(unittest.TestCase):
             root = Path(tmp)
             (root / "work").mkdir()
             (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
+            (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2025\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')
             base = root / "work" / "margin_base.json"
@@ -486,6 +505,8 @@ class TestFindMissingHistory(unittest.TestCase):
             root = Path(tmp)
             (root / "work").mkdir()
             (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
+            (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2026\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n'
                 '[accounts.lira]\ntype = "sheltered"\n')
@@ -510,6 +531,8 @@ class TestSummaryCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             (root / "work" / "margin_gains.json").write_text(json.dumps({
                 "summary": {"year": "2026"}, "transactions": [
                     {"symbol": "AAA.TO", "gain": 100.0, "cost": 900.0,
@@ -542,6 +565,8 @@ class TestSummaryCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             r = _runsub(root, "sum")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no gains files", r.stderr)
@@ -604,6 +629,8 @@ class TestPositionsCmd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             r = _runsub(root, "list")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no gains files", r.stderr)
@@ -936,6 +963,8 @@ class TestPeriodSums(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\ncountry = "canada"\n')
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2026\ncountry = "canada"\n'
                 'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n')

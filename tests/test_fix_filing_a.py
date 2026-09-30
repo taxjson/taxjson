@@ -241,7 +241,8 @@ class TestConfigNormalization(unittest.TestCase):
         from taxjson.bin import taxjson_run as R
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            _write_toml(root, 'year = 2025\ntax_date = "Setle"',
+            _write_toml(root, 'year = 2025\ncountry = "canada"\n'
+                              'tax_date = "Setle"',
                         '[accounts.m]\ntype = "taxable"\n')
             with self.assertRaises(SystemExit) as cm:
                 R.load_config(root)
@@ -550,8 +551,8 @@ class TestAccountTypeValidatedForChecklist(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "taxjson.toml").write_text(
-                '[settings]\nyear = 2025\n[accounts.cash]\n'
-                'type = "Taxable"\n')
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[accounts.cash]\ntype = "Taxable"\n')
             with self.assertRaises(SystemExit):
                 R.load_config(root)
 

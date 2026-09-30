@@ -12,6 +12,7 @@ from pathlib import Path
 from taxjson.lib.brokerages.base import is_roc_description
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+from tax_rules import rule
 
 
 def _parse_with(parser, content):
@@ -42,6 +43,7 @@ class TestQuestradeRoc(unittest.TestCase):
     HDR = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
            'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,Account #,Activity Type,Account Type\n')
 
+    @rule("CA-ACB-06")
     def test_roc_row_becomes_negative_adjust(self):
         csv = (self.HDR +
                '2025-03-31 09:30:00 AM,2025-03-31 12:00:00 AM,DIV,XEI.TO,'
@@ -151,6 +153,7 @@ class TestIbRoc(unittest.TestCase):
         self.assertEqual(len(adjusts), 1)
         self.assertAlmostEqual(adjusts[0]['net_amount'], 24.00, places=2)
 
+    @rule("CA-ACB-08")
     def test_foreign_issuer_roc_is_a_dividend_s90_2(self):
         # A US corporation's "(Return of Capital)" distribution: ITA
         # s.90(2) deems it a dividend for Canadian purposes (s.90(3) is
@@ -176,6 +179,7 @@ class TestIbRoc(unittest.TestCase):
         # The per-share rate still reconciles the row.
         self.assertAlmostEqual(divs[0]['price'], 0.12)
 
+    @rule("CA-ACB-09")
     def test_foreign_roc_acb_opt_out(self):
         # [settings] foreign_return_of_capital = "acb" (taxjson-brokerage
         # --foreign-roc acb): the earlier ACB-reduction treatment.
@@ -276,6 +280,7 @@ class TestNegativeAcbWarning(unittest.TestCase):
             CanadaTaxRules().compute_gains(txs)
         return err.getvalue()
 
+    @rule("CA-ACB-07")
     def test_negative_acb_flags_s40_3(self):
         err = self._run(-1200.0)          # ROC exceeds the $1000 ACB
         # 2026-09: booked, not just flagged — a deemed gain of the excess

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_fx_cash import (apply_jurisdiction,
                                          build_ledger)
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -120,6 +121,7 @@ class TestLedger(unittest.TestCase):
 
 
 class TestJurisdiction(unittest.TestCase):
+    @rule("CA-FX-07")
     def test_ca_200_de_minimis_both_directions(self):
         self.assertEqual(apply_jurisdiction(150.0, "canada")
                          ["reportable"], 0.0)

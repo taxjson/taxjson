@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime, timedelta
 
+from taxjson.lib.country import check_engine_allowed as _check_engine_allowed
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                             normalize_symbol_new, split_seen,
                                             SPLIT_DATE_WINDOW_DAYS)
@@ -1273,6 +1274,7 @@ class CanadaTaxRules(TaxRules):
         wash detection; passing them only ever increases the set of
         candidate-replacement trades.
         """
+        _check_engine_allowed("canada")  # test-only guard (lib/country)
         # One corporate split = one application: collapse per-account SPLIT
         # duplicates across all three lists (shared `seen`) before any
         # symbol-global pool or window walk sees them.
@@ -3742,6 +3744,7 @@ class USATaxRules(TaxRules):
     WASH_WINDOW_DAYS = 30
 
     def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False) -> Dict[str, Any]:
+        _check_engine_allowed("usa")  # test-only guard (lib/country)
         # §1091 contemplates a narrower "related party" rule than CRA's
         # affiliated-persons test, but the mechanics are the same: an
         # affiliated person's BUY/SELL is treated as a replacement for
@@ -5337,8 +5340,8 @@ class USATaxRules(TaxRules):
         }
 
 def get_tax_rules(country: str) -> TaxRules:
-    if country.lower() in ("canada", "ca"):
-        return CanadaTaxRules()
-    if country.lower() in ("usa", "us"):
-        return USATaxRules()
-    raise ValueError(f"Unsupported country: {country}")
+    """The engine for a country (lib/country.canonical_country: an
+    unknown value raises CountryError, a ValueError)."""
+    from taxjson.lib.country import canonical_country
+    c = canonical_country(country)
+    return CanadaTaxRules() if c == "canada" else USATaxRules()
