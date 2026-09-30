@@ -68,6 +68,13 @@ def aggregates_from_gains(doc: Dict[str, Any],
             st_gain += float(e.get("gain") or 0.0)
         elif term == "LONG_TERM":
             lt_gain += float(e.get("gain") or 0.0)
+    # Phantom-basis dispositions: the pipeline MOVES them to
+    # manual_reporting_required (its 'tainted' key popped), so the
+    # 'tainted' test above only sees hand-run files. Count both.
+    for e in doc.get("manual_reporting_required") or []:
+        if account is not None and e.get("account") != account:
+            continue
+        tainted += 1
     return {
         "realized": round(realized, 2),
         "disallowed": round(disallowed, 2),
@@ -119,6 +126,10 @@ def write_snapshot(root: Path, year, country: str, basis: str,
         "closed_at": datetime.now().isoformat(timespec="seconds"),
         "accounts": accounts,
         "totals": totals,
+        # 'tainted' includes manual_reporting_required rows; locks
+        # written before this flag counted 0 for pipeline files, so
+        # check-filed compares 'tainted' only when it is set.
+        "tainted_counts_manual": True,
     }
     if option_timing:
         doc["option_timing"] = dict(option_timing)
@@ -300,6 +311,9 @@ def diff_snapshot(snapshot: Dict[str, Any],
                     f"{cur[key]:,.2f} (drift "
                     f"{cur[key] - filed[key]:+,.2f})")
         for key in ("dispositions", "tainted"):
+            if key == "tainted" and not snapshot.get(
+                    "tainted_counts_manual"):
+                continue        # pre-fix lock: its count missed them
             if int(filed[key]) != int(cur[key]):
                 lines.append(f"{acct}: {key} filed {filed[key]} -> now "
                              f"{cur[key]}")

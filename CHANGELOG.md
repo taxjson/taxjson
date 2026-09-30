@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The filed-year lock counts phantom-basis sales.** Its `tainted`
+  count read a flag pipeline gains files never carry, so it was always 0
+  and a phantom-basis sale appearing or disappearing never showed as
+  drift. New locks count them; older locks skip that one comparison.
 - **Phantom-basis sales no longer vanish from `form-export`.** Sales
   drawn on `phantoms.json` openings (cost unknown) were left out of the
   Schedule 3 / Form 8949 / TXF output with no warning, and the checklist

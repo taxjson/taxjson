@@ -522,5 +522,38 @@ class TestManualRowsReachFormExport(unittest.TestCase):
         self.assertIn("phantom-basis", r.detail)
 
 
+class TestFiledLockCountsManualRows(unittest.TestCase):
+    """Sibling of R1-199: aggregates_from_gains counted rows flagged
+    'tainted', which pipeline files never carry (they are moved to
+    manual_reporting_required), so the lock's tainted count was always
+    0 and a phantom-basis sale appearing or vanishing never drifted."""
+
+    DOC = {"transactions": [
+        {"date": "2025-05-02", "symbol": "OKK.TO", "qty": -10,
+         "gain": 20.0, "proceeds": 120.0, "account": "margin"}],
+        "manual_reporting_required": [
+            {"date": "2025-06-02", "symbol": "PHX.TO", "qty": -20,
+             "proceeds": 500.0, "account": "margin"},
+            {"date": "2025-06-03", "symbol": "PHX.TO", "qty": -5,
+             "proceeds": 50.0, "account": "other"}]}
+
+    def test_manual_rows_count_as_tainted(self):
+        from taxjson.bin.taxjson_filed import aggregates_from_gains
+        self.assertEqual(aggregates_from_gains(self.DOC)["tainted"], 2)
+        self.assertEqual(
+            aggregates_from_gains(self.DOC, account="margin")["tainted"], 1)
+
+    def test_old_locks_do_not_drift_on_tainted(self):
+        from taxjson.bin.taxjson_filed import (aggregates_from_gains,
+                                               diff_snapshot)
+        cur = aggregates_from_gains(self.DOC, account="margin")
+        old = dict(cur, tainted=0)
+        self.assertEqual(diff_snapshot({"accounts": {"margin": old}},
+                                       {"margin": cur}), [])
+        new_lock = {"accounts": {"margin": old},
+                    "tainted_counts_manual": True}
+        self.assertTrue(diff_snapshot(new_lock, {"margin": cur}))
+
+
 if __name__ == '__main__':
     unittest.main()
