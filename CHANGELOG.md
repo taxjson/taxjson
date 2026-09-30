@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Each option assignment's premium goes to its own stock leg.** Both
+  engines staged every assignment's premium per (account, underlying)
+  and handed the whole sum to the first stock trade that came along: a
+  spread assigned on one day put the put's premium and the call's into
+  one leg, two stock legs of one assignment did not share it, and a
+  missing stock leg let an unrelated trade months later absorb it. The
+  premium is now matched to the leg in the assignment's direction
+  (buy for an assigned put / exercised call, sell otherwise), per share,
+  within 7 days of the option leg; a premium no leg claims is named in
+  the end-of-run "unconsumed" warning instead of moving into another
+  trade (and another year).
+- **Option roots that differ from the stock ticker.** An assignment of
+  a Montreal `RCI` option into `RCI.B.TO`, an OCC `BRKB` option into
+  `BRK.B.US`, or a futures option into its dated contract (`F:CL` into
+  `F:CLG6.US`) was treated as cash-settled, so the premium was realized
+  in the wrong year. The option is now matched to the one stock line in
+  its account that trades at the assignment (a note names it); an
+  ambiguous match warns and stays cash-settled.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

@@ -581,7 +581,7 @@ def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
 _MARKED_LEG_MAX_LAG_DAYS = 7
 
 
-def _marked_leg_gate_windows(transactions, key_of):
+def _marked_leg_gate_windows(transactions, key_of, underlying_of=None):
     """Windows during which a staged option premium is RESERVED for a
     marked assignment stock leg (action='ASSIGN' on a non-option
     symbol), per (account, underlying).
@@ -613,7 +613,8 @@ def _marked_leg_gate_windows(transactions, key_of):
                    if t.action == 'ASSIGN' and is_option_symbol(t.symbol)),
                   key=key_of)
     for o in opts:
-        und = parse_option_underlying(o.symbol)
+        und = (underlying_of(o) if underlying_of
+               else parse_option_underlying(o.symbol))
         cands = legs.get((o.account, und)) if und else None
         if not cands:
             continue
@@ -639,6 +640,238 @@ def _marked_leg_gate_windows(transactions, key_of):
 
 def _in_marked_leg_window(windows, acct, sym, key) -> bool:
     return any(lo <= key <= hi for lo, hi in windows.get((acct, sym), ()))
+
+
+def _day_gap(a: str, b: str) -> Optional[int]:
+    """|a - b| in days for two ISO dates, or None when either is unparsable."""
+    try:
+        return abs((datetime.strptime(a, '%Y-%m-%d')
+                    - datetime.strptime(b, '%Y-%m-%d')).days)
+    except (TypeError, ValueError):
+        return None
+
+
+_FUTURES_MONTH_RE = r'[FGHJKMNQUVXZ]\d{1,2}'
+_FUTURES_PREFIX_RE = re.compile(r'^(F:|[\\/])')
+
+
+def _split_underlying(sym: str):
+    """('RCI', 'TO') for 'RCI.TO'; ('F:CL', 'US') for 'F:CL.US'."""
+    if '.' in sym:
+        base, _, ext = sym.rpartition('.')
+        if ext.isalpha() and ext.isupper() and len(ext) <= 3:
+            return base, ext
+    return sym, ''
+
+
+def _root_matches_stock(root_base: str, stock_base: str) -> bool:
+    """Does an option ROOT name this stock line? Montreal / OCC roots
+    drop the share class ('RCI' for RCI.B, 'BRKB' or 'BRK' for BRK.B)
+    and OCC-adjusted roots carry a digit ('XYZ1' after a corporate
+    action). Futures roots name the contract family ('F:CL' for the
+    dated 'F:CLG6')."""
+    if root_base == stock_base:
+        return True
+    if _FUTURES_PREFIX_RE.match(root_base):
+        return bool(re.fullmatch(re.escape(root_base) + _FUTURES_MONTH_RE,
+                                 stock_base))
+    if _FUTURES_PREFIX_RE.match(stock_base):
+        return False
+    if (root_base.replace('.', '').replace('-', '')
+            == stock_base.replace('.', '').replace('-', '')):
+        return True
+    head = re.split(r'[.\-]', stock_base)[0]
+    if head != stock_base and root_base == head:
+        return True
+    r_nodigit = root_base.rstrip('0123456789')
+    return r_nodigit != root_base and r_nodigit in (stock_base, head)
+
+
+def _make_assign_underlying_resolver(transactions, date_of):
+    """Return resolve(option_tx) -> underlying stock symbol for an option
+    ASSIGN, or None when no stock line in the option's own account
+    matches (a cash-settled index option, or a missing stock leg).
+
+    The option root is used as-is when that exact symbol trades as stock
+    in the account. Otherwise the root is matched to the account's stock
+    lines by class / futures-month / OCC-adjustment spelling
+    (_root_matches_stock) and must name exactly ONE line that trades
+    within _MARKED_LEG_MAX_LAG_DAYS of the assignment (audit R1-35,
+    S019-01, S070-17, R1-176: RCI for RCI.B.TO, BRKB for BRK.B.US,
+    F:CL for F:CLG6.US used to be treated as cash-settled, realizing the
+    premium in the wrong year). An ambiguous match is left unresolved
+    with a warning naming the candidates."""
+    dates: Dict[Any, list] = {}
+    for t in transactions:
+        if is_option_symbol(t.symbol) or t.action not in ('BUYSELL', 'ASSIGN'):
+            continue
+        dates.setdefault((t.account, t.symbol), []).append(t.date or '')
+    by_acct: Dict[str, list] = {}
+    for (acct, sym) in dates:
+        by_acct.setdefault(acct, []).append(sym)
+    cache: Dict[Any, Optional[str]] = {}
+
+    def resolve(tx):
+        und = parse_option_underlying(tx.symbol)
+        if not und:
+            return None
+        if (tx.account, und) in dates:
+            return und
+        ck = (tx.account, und, tx.date)
+        if ck in cache:
+            return cache[ck]
+        root_base, ext = _split_underlying(und)
+        near = []
+        for sym in sorted(by_acct.get(tx.account, ())):
+            s_base, s_ext = _split_underlying(sym)
+            if s_ext != ext or not _root_matches_stock(root_base, s_base):
+                continue
+            gaps = [_day_gap(d, tx.date or '') for d in dates[(tx.account, sym)]]
+            if any(g is not None and g <= _MARKED_LEG_MAX_LAG_DAYS
+                   for g in gaps):
+                near.append(sym)
+        out = None
+        if len(near) == 1:
+            out = near[0]
+            print(f"note: {tx.symbol}: option root {und} resolved to "
+                  f"{out}, the stock line this account trades at the "
+                  f"assignment — the premium rolls into its cost/proceeds.",
+                  file=sys.stderr)
+        elif len(near) > 1:
+            print(f"warning: {tx.symbol}: option root {und} matches "
+                  f"several stock lines traded at the assignment "
+                  f"({', '.join(near)}) — treated as cash-settled. Map "
+                  f"the option to its stock in ticker.map and re-run.",
+                  file=sys.stderr)
+        cache[ck] = out
+        return out
+
+    return resolve
+
+
+class _AssignPremiumLedger:
+    """Staged option-assignment premiums, each paired with ITS OWN stock
+    leg(s) (audit R1-28/32/34/178, S070-18/20, S071-11).
+
+    An option ASSIGN stages the amount its stock leg must absorb (the
+    negative of the option's would-be gain: a BUY subtracts it from cost,
+    a SELL adds it to proceeds) with the share direction the assignment
+    implies (short put assigned / long call exercised -> the account
+    BUYS; short call assigned / long put exercised -> it SELLS) and the
+    share count (contracts x 100; x 1 for a futures option).
+
+    A stock trade takes only entries on its own (account, symbol) whose
+    option leg traded within _MARKED_LEG_MAX_LAG_DAYS, in its own
+    direction, per share: a spread's put premium goes to the put's
+    shares and the call premium to the call's; two legs of one
+    assignment split it; an exact-size leg later in the window keeps
+    its entry from a smaller unrelated trade sorted in between. The
+    last matching leg in the window takes any residual (mini / adjusted
+    deliverables). An entry no leg claims in its window is never folded
+    into an unrelated trade months later — it stays undrained and the
+    end-of-run warning names it."""
+
+    def __init__(self, stream, is_leg):
+        self._pos: Dict[int, int] = {}
+        self._legs: Dict[Any, list] = {}
+        for i, t in enumerate(stream):
+            self._pos[id(t)] = i
+            if is_leg(t):
+                self._legs.setdefault((t.account, t.symbol), []).append(
+                    (i, t.date or '', float(t.quantity or 0.0)))
+        self._e: Dict[Any, list] = {}
+
+    @staticmethod
+    def _direction(opt_tx) -> Optional[int]:
+        right = parse_option_right(opt_tx.symbol)
+        q = float(opt_tx.quantity or 0.0)
+        if right not in ('C', 'P') or abs(q) < 1e-12:
+            return None
+        return 1 if (right == 'P') == (q > 0) else -1
+
+    def stage(self, opt_tx, underlying: str, amount: float) -> None:
+        key = (opt_tx.account, underlying)
+        lst = self._e.setdefault(key, [])
+        for e in lst:
+            if e['src'] == opt_tx.id:
+                e['amt'] += amount
+                return
+        fut = bool(_FUTURES_PREFIX_RE.match(opt_tx.symbol or ''))
+        shares = abs(float(opt_tx.quantity or 0.0)) * (
+            1.0 if fut else OPTION_CONTRACT_SHARES)
+        lst.append({'src': opt_tx.id, 'amt': amount,
+                    'dir': self._direction(opt_tx),
+                    'shares': shares if shares > 1e-9 else None,
+                    'date': opt_tx.date or ''})
+
+    @staticmethod
+    def _in_window(e, date: str) -> bool:
+        g = _day_gap(e['date'], date)
+        return g is None or g <= _MARKED_LEG_MAX_LAG_DAYS
+
+    def _later_legs(self, e, acct, sym, idx):
+        out = []
+        for (i, d, q) in self._legs.get((acct, sym), ()):
+            if i <= idx or abs(q) < 1e-12:
+                continue
+            if e['dir'] is not None and (1 if q > 0 else -1) != e['dir']:
+                continue
+            if self._in_window(e, d):
+                out.append(abs(q))
+        return out
+
+    def take(self, tx) -> float:
+        key = (tx.account, tx.symbol)
+        lst = self._e.get(key)
+        if not lst:
+            return 0.0
+        idx = self._pos.get(id(tx), -1)
+        q = float(tx.quantity or 0.0)
+        need = abs(q)
+        sign = 1 if q > 0 else -1
+        date = tx.date or ''
+        cands = [e for e in lst if self._in_window(e, date)]
+        same = [e for e in cands if e['dir'] in (None, sign)]
+        # An opposite-direction entry is taken only when no leg of its
+        # own direction is still coming in its window (a parser whose
+        # option-leg sign disagrees must not strand the premium).
+        other = [e for e in cands if e['dir'] not in (None, sign)
+                 and not self._later_legs(e, tx.account, tx.symbol, idx)]
+        chosen = same or other
+        chosen.sort(key=lambda e: 0 if (e['shares'] is not None and abs(
+            e['shares'] - need) < 1e-6) else 1)
+        total = 0.0
+        for e in chosen:
+            if need <= 1e-9:
+                break
+            if e['shares'] is None:
+                total += e['amt']
+                lst.remove(e)
+                continue
+            later = self._later_legs(e, tx.account, tx.symbol, idx)
+            if (abs(e['shares'] - need) > 1e-6
+                    and any(abs(l - e['shares']) < 1e-6 for l in later)):
+                continue    # reserved for its exact-size leg
+            take_sh = min(need, e['shares'])
+            if take_sh >= e['shares'] - 1e-9 or not later:
+                total += e['amt']
+                lst.remove(e)
+            else:
+                part = e['amt'] * take_sh / e['shares']
+                e['amt'] -= part
+                e['shares'] -= take_sh
+                total += part
+            need -= take_sh
+        if not lst:
+            self._e.pop(key, None)
+        return total
+
+    def undrained(self) -> Dict[Any, float]:
+        out: Dict[Any, float] = {}
+        for k, lst in self._e.items():
+            for e in lst:
+                out[k] = out.get(k, 0.0) + e['amt']
+        return out
 
 
 def _verify_share_conservation(position_rows, actual_qty_by_symbol,
@@ -1006,8 +1239,14 @@ class CanadaTaxRules(TaxRules):
         # books behave identically (the account component is constant).
         # Scoped to each option ASSIGN's OWN paired marked leg (audit
         # R1-33): see _marked_leg_gate_windows.
+        # Option root -> the stock line its assignment delivers (the
+        # root can differ from the ticker: RCI for RCI.B.TO, F:CL for
+        # F:CLG6.US); see _make_assign_underlying_resolver.
+        _assign_underlying = _make_assign_underlying_resolver(
+            transactions, get_sort_date)
         _marked_windows = _marked_leg_gate_windows(
-            transactions, lambda _t: (get_sort_date(_t), _t.time or ''))
+            transactions, lambda _t: (get_sort_date(_t), _t.time or ''),
+            underlying_of=_assign_underlying)
 
         def _upcoming_marked_leg(acct, sym, d, tm):
             return _in_marked_leg_window(_marked_windows, acct, sym,
@@ -1306,7 +1545,14 @@ class CanadaTaxRules(TaxRules):
             # Pools indexed by symbol
             global_pools = {}  # symbol -> {'qty', 'total_cost', 'last_acq_date', 'currency', 'tainted'}
 
-            pending_adjustments = {} # symbol -> amount
+            # Staged option-assignment premiums, paired with their own
+            # stock legs (see _AssignPremiumLedger).
+            pending_adjustments = _AssignPremiumLedger(
+                current_tx_list,
+                lambda _t: (not is_option_symbol(_t.symbol)
+                            and _t.action in ('BUYSELL', 'ASSIGN')
+                            and _t.id not in sheltered_ids
+                            and _t.id not in affiliated_ids))
             iteration_realized_gains = []
             iteration_losses = []
             iteration_trace = []
@@ -1389,13 +1635,16 @@ class CanadaTaxRules(TaxRules):
                 # downstream skips pool mutation for is_other_scope),
                 # leaving a later taxable trade on the same underlying
                 # with no premium roll.
-                if is_other_scope:
+                if (is_other_scope or is_option_symbol(symbol)
+                        or tx.action not in ('BUYSELL', 'ASSIGN')):
+                    # Only a stock trade can be an assignment's leg (an
+                    # ADJUST / SPLIT / OB row on the underlying used to
+                    # pop — and drop — the staged premium).
                     internal_adj = 0.0
                 elif (tx.action == 'ASSIGN'
                       or not _upcoming_marked_leg(
                           tx.account, symbol, get_sort_date(tx), tx.time)):
-                    internal_adj = pending_adjustments.pop(
-                        (tx.account, symbol), 0.0)
+                    internal_adj = pending_adjustments.take(tx)
                 else:
                     # A marked ASSIGN stock leg exists in the stream —
                     # the premium belongs to it, not to this unrelated
@@ -1414,7 +1663,8 @@ class CanadaTaxRules(TaxRules):
                 
                 is_option_assign = False
                 if action == 'ASSIGN' and is_option_symbol(symbol):
-                    _und = parse_option_underlying(symbol)
+                    _und = (None if is_other_scope
+                            else _assign_underlying(tx))
                     if (_und and (tx.account, _und)
                             in taxable_stock_symbols) \
                             or is_other_scope:
@@ -1435,11 +1685,12 @@ class CanadaTaxRules(TaxRules):
                         # being staged forever and dropped. The note
                         # keeps the missing-data case diagnosable.
                         print(f"note: {symbol}: assignment treated as "
-                              f"cash-settled ({_und or '?'} never "
-                              f"trades as stock in this book) — option "
-                              f"P&L realized directly. If a stock leg "
-                              f"is missing from your input, add it and "
-                              f"re-run.", file=sys.stderr)
+                              f"cash-settled ("
+                              f"{parse_option_underlying(symbol) or '?'}"
+                              f" never trades as stock in this book) — "
+                              f"option P&L realized directly. If a stock "
+                              f"leg is missing from your input, add it "
+                              f"and re-run.", file=sys.stderr)
                 
                 if action == 'DISALLOW':
                     note = "DISALLOWANCE"
@@ -1972,10 +2223,10 @@ class CanadaTaxRules(TaxRules):
                                     })
                             
                             if is_option_assign:
-                                underlying = parse_option_underlying(symbol)
+                                underlying = _assign_underlying(tx)
                                 if underlying:
-                                    _pk = (tx.account, underlying)
-                                    pending_adjustments[_pk] = pending_adjustments.get(_pk, 0.0) - gain
+                                    pending_adjustments.stage(
+                                        tx, underlying, -gain)
 
                             pool['total_cost'] -= D(cost_basis)
                             # Deferred-wash dollars are part of the ACB,
@@ -3088,7 +3339,7 @@ class CanadaTaxRules(TaxRules):
                 f"gains-disallowed={sum_disallowed_on_gains:.4f} vs wash-sales={sum_disallowed_on_washes:.4f}",
                 file=sys.stderr,
             )
-        _warn_undrained_adjustments(pending_adjustments, "canada")
+        _warn_undrained_adjustments(pending_adjustments.undrained(), "canada")
 
         # Options as replacement property are ENFORCED in the solver
         # above (a long call vs a share loss, s.54 para (i)); nothing is
@@ -3505,7 +3756,8 @@ class USATaxRules(TaxRules):
         # as a separate gain (IRS Pub 550). Key: underlying symbol, value:
         # negative of the would-be gain on the option close, matching the
         # Canada engine's sign convention (so SELL adds, BUY subtracts).
-        pending_option_adjustments: Dict[str, float] = {}
+        # (The staging ledger itself is built below, once the main
+        # pass's sorted stream exists — see _AssignPremiumLedger.)
 
         def _rep_units_factor(sym: str, from_date: str, to_date: str) -> float:
             """Cumulative split factor converting a share quantity denominated
@@ -3596,8 +3848,11 @@ class USATaxRules(TaxRules):
         # identically.
         # Scoped to each option ASSIGN's OWN paired marked leg (audit
         # R1-33): see _marked_leg_gate_windows.
+        _assign_underlying = _make_assign_underlying_resolver(
+            transactions, lambda _t: _t.date)
         _marked_windows = _marked_leg_gate_windows(
-            transactions, lambda _t: (_t.date, _t.time or ''))
+            transactions, lambda _t: (_t.date, _t.time or ''),
+            underlying_of=_assign_underlying)
 
         def _upcoming_marked_leg(acct, sym, d, tm):
             return _in_marked_leg_window(_marked_windows, acct, sym,
@@ -3615,6 +3870,20 @@ class USATaxRules(TaxRules):
             transactions,
             key=lambda x: event_sort_key(x, profile='us_main',
                                          date_of=get_sort_date))
+        pending_option_adjustments = _AssignPremiumLedger(
+            taxable_sorted,
+            lambda _t: (not is_option_symbol(_t.symbol)
+                        and _t.action in ('BUYSELL', 'ASSIGN')))
+
+        def _take_option_adj(tx) -> float:
+            if (is_option_symbol(tx.symbol)
+                    or tx.action not in ('BUYSELL', 'ASSIGN')):
+                return 0.0
+            if (tx.action == 'ASSIGN'
+                    or not _upcoming_marked_leg(tx.account, tx.symbol,
+                                                tx.date, tx.time)):
+                return pending_option_adjustments.take(tx)
+            return 0.0
 
         # Blended (combined multi-account) mode: FIFO basis pools are
         # per-(account, symbol) — the IRS keys basis per account — while
@@ -3885,17 +4154,23 @@ class USATaxRules(TaxRules):
             # would-be gain is staged in pending_option_adjustments[underlying]
             # and consumed by the stock-leg BUYSELL processed next.
             is_option_assign = (tx.action == 'ASSIGN')
-            underlying_for_assign = option_underlying(symbol) if is_option_assign else None
-            if not underlying_for_assign:
+            underlying_for_assign = (_assign_underlying(tx)
+                                     if is_option_assign
+                                     and option_underlying(symbol)
+                                     else None)
+            if not is_option_assign or not option_underlying(symbol):
                 is_option_assign = False
-            elif (tx.account, underlying_for_assign) not in taxable_stock_symbols:
+                underlying_for_assign = None
+            elif (underlying_for_assign is None
+                  or (tx.account, underlying_for_assign)
+                  not in taxable_stock_symbols):
                 # Cash-settled assignment/exercise (index options): the
                 # underlying never trades as stock in this book, so no
                 # stock leg can consume a staged premium — realize the
                 # option's own P&L via normal disposition accounting
                 # (mirrors the Canada engine, note and all).
                 print(f"note: {symbol}: assignment treated as "
-                      f"cash-settled ({underlying_for_assign} never "
+                      f"cash-settled ({option_underlying(symbol)} never "
                       f"trades as stock in this book) — option P&L "
                       f"realized directly. If a stock leg is missing "
                       f"from your input, add it and re-run.",
@@ -3922,13 +4197,7 @@ class USATaxRules(TaxRules):
                 # (mirrors the Canada engine): an unrelated same-symbol
                 # trade sorted between the option leg and the stock leg
                 # used to hijack the premium.
-                if (tx.action == 'ASSIGN'
-                        or not _upcoming_marked_leg(tx.account, symbol,
-                                                    tx.date, tx.time)):
-                    option_adj = pending_option_adjustments.pop(
-                        (tx.account, symbol), 0.0)
-                else:
-                    option_adj = 0.0
+                option_adj = _take_option_adj(tx)
 
                 # --- buy-to-close: pop short lots FIFO ---
                 while qty_remaining > epsilon and inventory_short[ikey]:
@@ -3999,9 +4268,8 @@ class USATaxRules(TaxRules):
                         # CanadaTaxRules / Pub 550 convention: BUY of stock
                         # subtracts pending_adj from cost; SELL of stock adds
                         # pending_adj to proceeds).
-                        _pk = (tx.account, underlying_for_assign)
-                        pending_option_adjustments[_pk] = \
-                            pending_option_adjustments.get(_pk, 0.0) - raw_gain
+                        pending_option_adjustments.stage(
+                            tx, underlying_for_assign, -raw_gain)
                         if trace:
                             symbol_traces[symbol].append(
                                 f"# {tx.date} ASSIGN-CLOSE {chunk_qty:10.4f} | "
@@ -4263,13 +4531,7 @@ class USATaxRules(TaxRules):
             # of the stock sold at strike. Stored as -gain (Canada convention)
             # — subtracting it from per-chunk proceeds yields proceeds + gain.
             # Same marked-leg gate as the BUY path above.
-            if (tx.action == 'ASSIGN'
-                    or not _upcoming_marked_leg(tx.account, symbol,
-                                                tx.date, tx.time)):
-                option_adj_sell = pending_option_adjustments.pop(
-                    (tx.account, symbol), 0.0)
-            else:
-                option_adj_sell = 0.0
+            option_adj_sell = _take_option_adj(tx)
 
             # --- sell-to-close: pop long lots FIFO ---
             while qty_remaining > epsilon and inventory_long[ikey]:
@@ -4323,9 +4585,8 @@ class USATaxRules(TaxRules):
 
                 if is_option_assign:
                     # Long option exercised: roll premium into underlying.
-                    _pk = (tx.account, underlying_for_assign)
-                    pending_option_adjustments[_pk] = \
-                        pending_option_adjustments.get(_pk, 0.0) - raw_gain
+                    pending_option_adjustments.stage(
+                        tx, underlying_for_assign, -raw_gain)
                     if trace:
                         symbol_traces[symbol].append(
                             f"# {tx.date} ASSIGN-EXERCISE {chunk_qty:10.4f} | "
@@ -4621,7 +4882,7 @@ class USATaxRules(TaxRules):
                 f"allowed-raw={sum_allowed - sum_raw:.4f} vs disallowed={sum_disallowed:.4f}",
                 file=sys.stderr,
             )
-        _warn_undrained_adjustments(pending_option_adjustments, "usa")
+        _warn_undrained_adjustments(pending_option_adjustments.undrained(), "usa")
 
         # Warn-only call-as-replacement scan (the experimental US engine
         # does not enforce it; always on — cross_asset is retired).
