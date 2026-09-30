@@ -8823,8 +8823,24 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
 
     _slips = (args.slip_csv if isinstance(args.slip_csv, list)
               else [args.slip_csv])
-    argv = list(_slips) + _taxable_gains_argv(
+    gains_argv = _taxable_gains_argv(
         root, cache, exclude_crypto=True, prog="taxjson reconcile-slips")
+    # Books built for another tax year made every slip row read
+    # MISSING_FROM_COMPUTED "dropped CSV rows or a missing statement?"
+    # — the wrong cause (S047-24, S049-06).
+    _stale = _artifact_year_mismatch(
+        {Path(g).name: Path(g) for g in gains_argv[1::2]}, year)
+    if _stale:
+        got = ", ".join(f"{a} ({y})" for a, y in sorted(_stale.items()))
+        _die(f"[settings].year is {year} but the work/ books were built "
+             f"for another tax year: {got}. Rebuild with `taxjson run` "
+             f"before reconciling the {year} slips.")
+    argv = list(_slips) + gains_argv
+    tmap = root / "ticker.map"
+    if tmap.exists():
+        # Slips print the broker's symbols; the books carry the
+        # ticker.map consolidations (KGC -> K, R1-19).
+        argv += ["--ticker-map", str(tmap)]
     if year is not None:
         argv += ["--year", str(year)]
         # Same date convention stage_account feeds the gains engine:

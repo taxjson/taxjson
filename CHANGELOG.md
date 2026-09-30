@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **reconcile-slips reads real slips.** A blank proceeds cell beside a
+  cost (an option that expired worthless) is nil proceeds, and a
+  worthless expiry with no slip row no longer fails the check. A written
+  option booked twice under grant timing counts its contracts once. Slip
+  symbols go through the project's ticker.map (KGC ↔ K.TO), and broker
+  option descriptions, share classes (`BRK B`), UTF-16 files, French and
+  T5008 box headings are read. Two listings of one root (AMZN.TO and
+  AMZN.US) are no longer folded together. A row with amounts but no
+  symbol, or an unreadable quantity, counts as not reconciled; a second
+  column that also looks like quantity/proceeds/cost is refused instead
+  of silently taking over. Books built for another tax year are refused
+  with a rebuild message instead of "dropped CSV rows".
+
 - **Filing checklist fixes.**
   - run-clean compares the inputs with what the last full run was built
     from (content, not dates): a deleted input, a corrected export copied

@@ -834,10 +834,17 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
         parts = [f"{c.get('mismatch', 0)} mismatch",
                  f"{c.get('missing_from_computed', 0)} missing from computed",
                  f"{c.get('missing_from_slip', 0)} missing from slip"]
+        if c.get("ambiguous_listing"):
+            parts.append(f"{c['ambiguous_listing']} ambiguous listing")
         if rep.get("unreadable_rows"):
             parts.append(f"{rep['unreadable_rows']} unreadable slip row(s)")
+        # Real mismatches first as the examples (R1-1).
+        _rank = {"MISMATCH": 0, "AMBIGUOUS_LISTING": 1,
+                 "MISSING_FROM_COMPUTED": 2, "MISSING_FROM_SLIP": 3}
         bad = [f"{r.get('symbol')} {r.get('status')}"
-               for r in (rep.get("rows") or []) if r.get("status") != "OK"]
+               for r in sorted((r for r in (rep.get("rows") or [])
+                                if r.get("status") in _rank),
+                               key=lambda r: _rank[r.get("status")])]
         if bad:
             parts.append("e.g. " + ", ".join(bad[:3]) + (" ..." if len(bad) > 3 else ""))
         return ", ".join(parts)
