@@ -770,6 +770,12 @@ def main():
                         parts = line.split()
                         if len(parts) >= 2:
                             tv_map[parts[0]] = parts[1]
+                        else:
+                            # Warn like the sibling map loaders do
+                            # (audit S077-07: silently dropped).
+                            print(f"warning: {map_file}: expected "
+                                  f"`SYMBOL EXCHANGE`, got {line!r} — "
+                                  f"line ignored", file=sys.stderr)
                 break
 
     # The holdings aggregation applies JOURNAL renames — they net

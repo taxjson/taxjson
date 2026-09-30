@@ -132,6 +132,29 @@ class TestYfMapLoader(unittest.TestCase):
         self.assertIn("line ignored", err.getvalue())
 
 
+class TestTvExchangeMapShortLine(unittest.TestCase):
+    """S077-07 (sibling): tv_exchange.map dropped a line with no
+    exchange silently."""
+
+    def test_warns(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "tv_exchange.map").write_text("NVDA.US\n")
+            gains = tmp / "gains.json"
+            gains.write_text(json.dumps({"inventory": [
+                {"symbol": "NVDA.US", "qty": 1, "total_cost": 100,
+                 "currency": "USD"}]}))
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_export",
+                 "--tradingview", str(gains)],
+                cwd=Path(__file__).resolve().parent.parent,
+                capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("line ignored", r.stderr)
+
+
 class TestBocDegradedAnswer(unittest.TestCase):
     """S055-03: an HTTP 200 with no (or truncated) observations was
     recorded as coverage for good, so the dates kept a Yahoo close or a
