@@ -249,6 +249,12 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--override-log", metavar="PATH", default=None,
+        help=("With --security-overrides: write which parsed (symbol, "
+              "currency) pairs an override renamed, and which it left "
+              "alone, as JSON — `taxjson run` renames the corporate-"
+              "action rows of the same security the same way."))
+    parser.add_argument(
         "--foreign-roc", dest="foreign_roc", choices=("dividend", "acb"),
         default="dividend",
         help=(
@@ -301,6 +307,11 @@ Examples:
         print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
         sys.exit(1)
     override_hits: dict = {}
+    # (symbol|CURRENCY) the overrides renamed (-> new symbols) or left
+    # alone — the corp-action stage's rows of the same security follow
+    # the rename through --override-log (S004-00).
+    override_renamed: dict = {}
+    override_kept: set = set()
     normalized = []
     # Parser-declared contract multipliers, parallel to `normalized`
     # (not a TaxTransaction field — they feed only the schema notional
@@ -408,7 +419,16 @@ Examples:
         # and before the id hash is computed, so dedup and every
         # downstream tool see the right symbol.
         for t in transactions:
+            _before = t.get('symbol') or ''
             apply_security_override(t, overrides, override_hits)
+            if overrides and _before and not is_option_symbol(_before) \
+                    and not _before.startswith('F:'):
+                _key = f"{_before}|{(t.get('currency') or '').upper()}"
+                if t.get('symbol') != _before:
+                    override_renamed.setdefault(_key, set()).add(
+                        t.get('symbol'))
+                else:
+                    override_kept.add(_key)
 
         if not args.transfers:
             # Custody evidence, not tax events: a taxable book's basis
@@ -577,6 +597,14 @@ Examples:
                           "brokerage": brokerage_id}},
             indent=2, sort_keys=True), encoding="utf-8")
         _tmp.replace(_sp)
+    if args.override_log:
+        _lp = Path(args.override_log)
+        _lt = _lp.with_suffix(_lp.suffix + ".part")
+        _lt.write_text(json.dumps(
+            {"renamed": {k: sorted(v)
+                         for k, v in sorted(override_renamed.items())},
+             "kept": sorted(override_kept)}, indent=2), encoding="utf-8")
+        _lt.replace(_lp)
     json.dump(output_data, sys.stdout, indent=2, sort_keys=True)
     print()
 

@@ -2,6 +2,121 @@
 
 ## Unreleased
 
+- **holdings.toml states what its base-currency cost is**:
+  `meta.base_cost_basis` says `base_total_cost` is per-account and
+  per-listing, before superficial-loss adjustments and the s.47 blend
+  (the filing ACB is `taxjson list`) (audit S037-24).
+- **Corporate actions follow ticker_extraction_overrides.txt.** The
+  overrides renamed a security's trades but not its merger/spin-off rows,
+  so the event consumed an empty pool under the broker's spelling while
+  the real position stayed put (a taxable merger's gain vanished). The
+  corp-action rows now take the same rename; when the overrides rename
+  some of a spelling's rows and not others, a corporate action on it is
+  refused instead of guessed (audit S004-00).
+- **Election hints must be non-negative amounts.** `elect --hint`, the
+  interactive prompt and a hand-edited manifest.json refuse a negative,
+  nan or inf hint (a negative allocated ACB created basis from nothing,
+  a negative FMV booked negative dividend income, and nan was saved to
+  fail only on the next run) (audit S039-00).
+- **audit fails when a configured account has no books** (it printed
+  "✓" over the others and exited 0, and the checklist marked every
+  disposition tied) (audit S047-16).
+- **The checklist's run-clean step flags unblended books.** With two or
+  more taxable equity accounts and no blended pass (`run --account` on
+  each, or a run stopped at pending elections) the filing figures are
+  per-account ACB; run-clean now says so instead of "done", and every
+  command that reports the run state carries it (audit S004-07).
+- **LEAPS views: long positions only, through ticker.map, with the
+  registered accounts split out.** `leaps` / `leaps-sum` no longer count
+  the write and buy-back of a contract that qualified through a long buy
+  (those legs are covered-call P&L, already in `ccd-sum`), a LEAPS whose
+  root ticker.map TOBASE-renames (BCE...US -> BCE...TO) is no longer
+  dropped, and `leaps`, `leaps-sum` and `ccd-sum` print the TAXABLE and
+  SHELTERED parts of their total (`--json`: `taxable_gain`,
+  `sheltered_gain`) (audit R1-172, R1-237, R1-182).
+- **`list --date` applies phantoms.json**, so phantom-backed positions no
+  longer show as large shorts. Plain `list` is labelled with the date the
+  books run to, not "as of tax year" (it shows end-of-data positions),
+  and `--date` no longer claims "pre-ticker.map" (audit R1-187, R1-282).
+- **`fetch` never loses input activity.** `--trim-overlap` finds the
+  trade date by the "Transaction Date" header (a manual export with
+  Settlement Date first lost a trade the API file did not hold) and
+  writes the trimmed file atomically at 0600; the overlap guard sees an
+  upper-case `.CSV` sibling like `run` does; an IBKR Flex download that
+  does not cover the tax-year activity already in `ib_flex.csv` is
+  refused (saved as `ib_flex.csv.new`), the replaced file is kept as a
+  numbered `.bak`, and a past year's download that does not span the
+  year warns (audit R1-74, S046-14, S007-00).
+- **buy-check / sell-check read broker spellings and Montreal option
+  roots.** RCI-B, "RCI B", RCI/B and RCI-B.TO are read as RCI.B(.TO) (they
+  answered SAFE beside a loss on RCI.B.TO), and an option on a root that
+  names no share listing but exactly one class share of it (RBC's
+  RCI270115C00046000.TO for RCI.B.TO shares) is in that share's class
+  (audit S007-02, S047-01).
+- **The wash tools name a taxable account with no books.** wash-radar,
+  watch, buy-check and sell-check warned about nothing when a configured
+  taxable account's base book was missing, so a sibling's recent buy read
+  as SAFE (audit S046-11).
+- **The web radar opens on the COMBINED view** when there are two or
+  more taxable accounts, and a per-account view says it sees only its own
+  book (it read "CLEAR — safe to sell at a loss" while a sibling's buy
+  made the loss superficial) (audit R1-229).
+- **Radar sidecar names follow the account name exactly**: account
+  `a_base_x` no longer overwrites account `a_x`'s radar, and an account
+  named COMBINED is refused (audit S038-10).
+- **`run --fast` sees content, not only mtimes.** Each account's input
+  files and the project-root maps (ticker.map, overrides,
+  distributions.map, phantoms.json, crypto_ticker.map) are fingerprinted
+  by content; a CSV replaced by an export with an older mtime, or a
+  ticker.map restored the same way, kept the old parse at exit 0 (audit
+  R1-253, R1-294).
+- **FX rates: freshness is judged per currency.** to_base.csv holds one
+  block per source currency; a USD block cut short by a failed download
+  hid behind a fresh AUD last line and was served for days. Each
+  configured currency must now reach the last few days (audit S046-06).
+- **A full run removes sidecars the config no longer produces.**
+  work/sheltered_base.json after the last sheltered account is removed
+  (the filed-year lock and the radar kept reading it), and the
+  `_gains_wash.json` / `_wash.sum` of an account re-typed to sheltered
+  (every query preferred them) (audit S004-05, S038-19).
+- **`taxjson-merge` fails on an unreadable input** instead of writing a
+  book without it (`run --account <sheltered>` rebuilt
+  sheltered_base.json without a sibling's rows) (audit S038-18).
+- **The FILING REQUIRED reminder survives an unreadable manifest.json**:
+  the file is named and the other accounts' reminders still print
+  (audit S038-23).
+- **A spreadsheet in an account subfolder** gets the same "not read"
+  warning as a CSV there (audit S043-13).
+- **Broker detection: prefixes, then content, then venue words.** A
+  `generic_`/`cb_`/`kr_` prefix now always wins, and an IB, Questrade or
+  Webull export is recognised by its content even when its name mentions
+  coinbase or kraken; `generic_kraken_export.csv` and
+  `kr_trades_moved_from_coinbase.csv` went to the wrong crypto parser
+  (0 rows, exit 0), and an IB export named after Kraken Robotics was
+  refused as crypto data. The crypto/equity refusal names the files
+  (audit R1-127, S044-01, S044-02).
+- **taxjson.toml is checked the same way by every command.**
+  `base_currency` is trimmed and upper-cased (" CAD" failed later with a
+  misleading "fix the rates file" error; "cad" priced CAD fees at the
+  default FX rate) and must be a 3-letter code; a Canada project with a
+  non-CAD base warns. `[settings] year` must be a plausible tax year
+  (1900 to next year, like `init`), and `run` warns when no transaction
+  in the books falls in the configured year. A misspelled top-level
+  table (`[estimates]`, `[instalment]`) and an unknown `[estimate]` /
+  `[instalments]` key now warn in `estimate`, `sum` and `instalments`,
+  not only (or never) in `run`. `[instalments]` withheld, prior-year
+  figures and prescribed rates must be non-negative finite numbers
+  (rates below 1); a TOML boolean is refused there and in `[estimate]`
+  (audit R1-153, R1-256, R1-216, R1-257, S038-13, R1-217).
+- **Net tax owing guidance names the right lines.** The init template,
+  README and the instalments report said "line 48500 minus withholding";
+  48500 also subtracts the instalments paid, so following it read "no
+  instalments required". They now give CRA's instalment-chart
+  definition (42000 + 42200 + 42800 (+ 43200) minus 43700 and the
+  refundable credits) (audit R1-215).
+- **`init --force` never overwrites an earlier backup.** A second
+  `--force` replaced taxjson.toml.bak (the user's config) with the first
+  template; later backups are numbered (audit R1-255).
 - **harvest: claimable-now losses and option marks that match the
   books.** A LOCKED position counts the part of its loss a sale today
   keeps as claimable now (only the units a registered account bought in

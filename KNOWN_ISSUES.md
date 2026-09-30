@@ -323,6 +323,11 @@ reported manually" instead of counting them as missing.
 ### A merger's per-account empirical ratios are blended
 - **Where:** `lib/core.py` folds one merger's rename SPLITs with different per-account ratios into a single holdings-weighted ratio (2026-09). Totals and the shared ACB pool are right; each account's wash-walk balance can be a fraction of a share off.
 
+### Canadian payments in lieu are estimated as ordinary income
+- **Where:** `lib/tax_estimate.py` `estimate_canada` adds every payment in lieu (`dil-sum`) to ordinary income, and the README calls them ordinary income with no gross-up or credit.
+- **Question:** ITA s.260(5)/(5.1)(a) deems a dealer's compensation payment for a public corporation's taxable dividend to be a taxable dividend (eligible where s.260(1.1) applies), and IB's T5 box 24 includes it; a trust unit's (s.260(5.1)(b)) follows the trust income instead. Whether to split PIL by the issuer's type (which the exports do not state) is an owner decision.
+- **Current behaviour:** the Canada estimate overstates tax slightly (about $113 on the owner's 2025 books); filed and fileable numbers are unaffected (form-export carries no income). Treat the `dil-sum` total for Canadian issuers as dividends when entering it (2026-09 audit S049-18).
+
 ### `wash-sales --explain` traces each account on its own
 - The explain trace predates the blended passes; the numbers in the table are the blended ones.
 

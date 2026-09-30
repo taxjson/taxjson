@@ -505,8 +505,11 @@ def render(doc: Dict[str, Any], base: str) -> str:
             lines.append("")
             lines.append(wrap(
                 "If those are placeholders rather than your real "
-                "figures, replace them: line 48500 minus amounts "
-                "withheld, from each Notice of Assessment. They "
+                "figures, replace them with each year's net tax "
+                "owing as CRA's instalment chart defines it: lines "
+                "42000 + 42200 + 42800 (+ 43200) minus 43700 and the "
+                "refundable credits — not line 48500, which also "
+                "subtracts the instalments paid. They "
                 "decide both whether instalments are owed at all and "
                 "which basis CRA charges interest on."))
         return "\n".join(lines)
