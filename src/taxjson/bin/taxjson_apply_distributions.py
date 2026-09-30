@@ -118,7 +118,7 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     # so upstream dedup keeps both). The gains engine dedupes these per
     # corporate event; without the same dedup here, the blended
     # per-account split apportioned DOUBLED quantities (2026-09 audit).
-    from taxjson.lib.corporate_timeline import split_event_key
+    from taxjson.lib.corporate_timeline import split_seen
     _seen_splits = set()
     for t in rows:
         if _row_date(t, date_basis) > date:
@@ -132,13 +132,13 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
             ratio = float(t.get("quantity") or 0.0)
             if not ratio:
                 continue
-            _k = split_event_key(str(t.get("symbol") or ""),
-                                 str(t.get("date") or ""), ratio,
-                                 t.get("symbol_new") or "",
-                                 account=str(t.get("account") or ""))
-            if _k in _seen_splits:
+            # split_seen: the same split booked on two dates by two
+            # brokers (within a week) is still ONE event.
+            if split_seen(_seen_splits, str(t.get("symbol") or ""),
+                          str(t.get("date") or ""), ratio,
+                          t.get("symbol_new") or "",
+                          account=str(t.get("account") or "")) is not None:
                 continue
-            _seen_splits.add(_k)
             bal *= ratio
     return bal
 
