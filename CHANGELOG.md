@@ -157,6 +157,61 @@
   gain against the USD pool's average cost instead of a sale line. If you
   already declared a send by hand (a `tao_payment.tt`), delete that file
   when you adopt `crypto_sends.tt` — the command warns while both exist.
+- **The filed-year lock counts phantom-basis sales.** Its `tainted`
+  count read a flag pipeline gains files never carry, so it was always 0
+  and a phantom-basis sale appearing or disappearing never showed as
+  drift. New locks count them; older locks skip that one comparison.
+- **Phantom-basis sales no longer vanish from `form-export`.** Sales
+  drawn on `phantoms.json` openings (cost unknown) were left out of the
+  Schedule 3 / Form 8949 / TXF output with no warning, and the checklist
+  marked the export complete. They are still not in the computed rows or
+  totals, but form-export now warns with each one's proceeds, lists them
+  in a MANUAL REPORTING section (MANUAL rows in the CSV), and the
+  checklist keeps the step open. `t1135` names them too.
+- **`distributions.map` counts `phantoms.json` shares.** The record-date
+  balance was taken from the book without the phantom openings, so a
+  position with pre-window history got too small an ACB adjustment (or
+  none, "no shares held"). Removing `phantoms.json` now rebuilds the
+  adjusted books under `--fast` too.
+- **`phantoms.json` openings reach the superficial-loss context.** An
+  opening for a registered (or affiliated) account was applied to that
+  account's own report but not to the context the taxable gains are
+  tested against, so a TFSA with truncated history looked short and its
+  in-window rebuy did not deny the taxable loss (permanently, as s.54
+  requires). The openings now apply to every book.
+- **`check-filed` compares every taxable account, not only the locked
+  ones.** An account added (or renamed) after `close-year` was never
+  recomputed, so its dispositions were missing from the comparison and
+  the check said OK. It is now recomputed in the same blend and reported
+  as drift when it has activity in the filed year.
+- **`phantoms.json` entries for an unknown account stop the run.** The
+  file is keyed by account name, so renaming an account silently dropped
+  its openings and changed the filed gain. `taxjson run` now names each
+  entry whose account is not in `[accounts]` and suggests the closest
+  current name.
+- **Same-moment replacements: taxable first, then registered.** When a
+  taxable rebuy and a TFSA/RRSP buy carried the same timestamp (common
+  with Webull and Questrade stamps), a hash of the rows decided whether
+  a superficial loss was deferred into the taxable ACB or lost for good,
+  so a one-cent change on the TFSA row could move the taxable gain.
+  At a tie the taxable acquisition now takes the denial first, then
+  sheltered, then affiliated accounts (both engines; `taxjson
+  tax-logic` lists the rule).
+- **Moving shares between your own registered accounts no longer flips
+  a superficial loss.** A custody move such as rrsp -> rrsp2 was netted
+  out of the superficial-loss context, but the "still held at day 30"
+  test runs per account: the receiving account looked short (a
+  permanent denial for its in-window rebuy was missed) and the sending
+  account looked long (a denial was invented). Netted moves now stay in
+  the context as balance-only rows; they are never replacement
+  property. The misleading "rrsp2 go short" hint goes away with it.
+- **An IB/RBC-style assignment keeps its own premium when a Webull-style
+  assignment on the same stock comes later.** The option premium of a
+  plain-convention assignment (stock leg booked as an ordinary buy/sell)
+  was held back for ANY later marked `ASSIGN` stock leg on that stock in
+  the account, even a year later, and moved to that year. A marked leg
+  now reserves only the premium of its own option leg (same account and
+  underlying, within 7 days).
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is

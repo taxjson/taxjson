@@ -1609,7 +1609,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         _apply_dists = is_taxable and dist_map.exists()
         deps = list(sources) + [rates, src_manifest] \
             + ([ticker_map] if ticker_map else []) \
-            + ([dist_map] if _apply_dists else [])
+            + ([dist_map] if _apply_dists else []) \
+            + ([incomplete_history]
+               if _apply_dists and incomplete_history else [])
         if force or needs_rebuild(base_json, *deps):
             print("  merge2 (sort, dedup, ticker-map, convert-currency, validate)")
             if not _apply_dists:
@@ -1633,7 +1635,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                             # Record-date balance = holder of record,
                             # i.e. the SETTLED position under CRA
                             # timing; the project's tax_date decides.
-                            "--date-basis", tax_date],
+                            "--date-basis", tax_date]
+                        # Size record-date balances WITH the phantom
+                        # openings the gains stage synthesizes (S000-08).
+                        + (["--incomplete-history",
+                            str(incomplete_history)]
+                           if incomplete_history else []),
                         capture_output=True)
                     if _dres.stderr:
                         sys.stderr.write(_dres.stderr)
@@ -2253,6 +2260,44 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
 
 # ---------------------------------------------------------------- entry points
 
+def _refuse_phantoms_for_unknown_accounts(phantoms: Path,
+                                          accounts: Dict[str, Any]) -> None:
+    """phantoms.json is keyed by account LABEL. An entry whose account is
+    not in [accounts] (the account was renamed or removed) used to be
+    skipped silently — its opening vanished and the filed gain changed
+    (audit S021-05: a pure relabel moved a real book by -71,734.84).
+    Refuse the run and name each stale label with a suggestion."""
+    import difflib
+    from taxjson.lib.phantom_holdings import load_phantoms
+    try:
+        pairs = load_phantoms(phantoms)
+    except (OSError, ValueError) as e:
+        sys.exit(f"taxjson run: {phantoms}: {e}")
+    stale: Dict[str, List[str]] = {}
+    for sym, acct in sorted(pairs):
+        if acct not in accounts:
+            stale.setdefault(acct, []).append(sym)
+    if not stale:
+        return
+    known = sorted(accounts)
+    lines = []
+    for acct, syms in sorted(stale.items()):
+        near = difflib.get_close_matches(acct, known, n=1, cutoff=0.0)
+        hint = f" — did you rename it to {near[0]!r}?" if near else ""
+        more = f" (+{len(syms) - 5} more)" if len(syms) > 5 else ""
+        lines.append(f"  {acct!r}: {len(syms)} entr"
+                     f"{'y' if len(syms) == 1 else 'ies'} "
+                     f"({', '.join(syms[:5])}{more}){hint}")
+    sys.exit(
+        f"taxjson run: {phantoms} names account(s) that are not in "
+        f"taxjson.toml [accounts] ({', '.join(known) or 'none'}):\n"
+        + "\n".join(lines)
+        + "\n  Those openings would be skipped and the gains would "
+        "change silently. Edit the \"account\" of each entry to the "
+        "current account name (or delete the entries if the account "
+        "is gone), then run again.")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     # Full rebuild is the DEFAULT: stale cached artifacts must never
     # feed a filing decision. `--fast` opts back into the mtime cache.
@@ -2353,6 +2398,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     # it feeds every account's gains run via --incomplete-history.
     phantoms = root / "phantoms.json"
     phantoms_arg = phantoms if phantoms.exists() else None
+    if phantoms_arg:
+        _refuse_phantoms_for_unknown_accounts(phantoms_arg, accounts)
     # Deletion detection: needs_rebuild compares mtimes of EXISTING inputs,
     # so removing phantoms.json left cached gains — built WITH phantoms —
     # looking fresh forever. Track application with a marker; on removal,
@@ -2369,6 +2416,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         import os as _os
         for _f in cache.glob("*_base.json"):
             _os.utime(_f)
+        # distributions.map ADJUSTs in the taxable base books were
+        # sized WITH the phantom openings (S000-08): drop those books
+        # so the merge stage rebuilds them, not just the gains.
+        if (root / "distributions.map").exists():
+            for _n, _c in accounts.items():
+                if isinstance(_c, dict) and _c.get("type") == "taxable":
+                    (cache / f"{_n}_base.json").unlink(missing_ok=True)
 
     # Same deletion-blindness class for the project-root map files:
     # needs_rebuild only sees deps that EXIST, so deleting ticker.map /
@@ -5902,8 +5956,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
         # files).
         print(f"taxjson sum: warning: {tainted_routed} tainted "
               f"disposition(s) were routed to manual reporting — "
-              f"these totals EXCLUDE them (see the account .sum's "
-              f"MANUAL REPORTING section; report them by hand).",
+              f"these totals EXCLUDE them (`taxjson form-export` "
+              f"lists them in its MANUAL REPORTING section; report "
+              f"them by hand).",
               file=sys.stderr)
     # Scope: unlike the filing commands (carryover/t1135/form-export,
     # taxable-only by law), this summary rolls up EVERY account — say so
@@ -8550,6 +8605,14 @@ def _check_filed_years(root: Path, cache: Path,
     for year, path in snaps:
         snap = _json.loads(path.read_text(encoding="utf-8"))
         _snap_accts = list(snap.get("accounts", {}))
+        # Taxable accounts the BOOKS have but the lock does not (added
+        # or renamed after close-year) are recomputed too — in the same
+        # blend — so diff_snapshot can report them instead of saying OK.
+        _snap_accts += sorted(
+            a for a, c in _acct_cfg.items()
+            if isinstance(c, dict) and c.get("type") == "taxable"
+            and a not in _snap_accts
+            and (cache / f"{a}_base.json").exists())
         _crypto = [a for a in _snap_accts
                    if (_acct_cfg.get(a) or {}).get("crypto")]
         _equity = [a for a in _snap_accts if a not in _crypto]

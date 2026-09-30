@@ -47,9 +47,13 @@ return reports). Column conventions:
          denial (the denied amount goes onto the replacement's ACB).
          Crypto is known by account: pass crypto books with --crypto.
 
-Tainted dispositions (phantom cost basis) are SKIPPED with a warning — they
-are routed to `manual_reporting_required` by the pipeline and must be
-resolved, not filed.
+Tainted dispositions (phantom cost basis) have no computable gain: the
+pipeline routes them to `manual_reporting_required`. They are left out of the
+rows and totals above (which are the allowed, computed numbers), but NEVER
+silently: every one is listed in a MANUAL REPORTING section of the report
+(rows marked MANUAL in the CSV, `manual_reporting_required` in the JSON) and
+named in a stderr warning with its proceeds — they must be reported by hand
+once their cost is known.
 
 Usage:
     taxjson-form-export --form 8949 --year 2025 margin_gains.json [...]
@@ -80,10 +84,36 @@ def load_json(path: Path) -> Any:
     return load_report_json(path)
 
 
+def load_manual_rows(paths: List[Path], year: Optional[int],
+                     date_key: str) -> List[Dict[str, Any]]:
+    """In-year phantom-basis dispositions: the pipeline's
+    manual_reporting_required rows (its 'tainted' key is popped there,
+    and gain/cost stripped) plus any hand-run file's rows still flagged
+    'tainted' in transactions. Audit R1-199: keyed only on 'tainted',
+    form-export never saw the pipeline's rows and left them out of the
+    export without a word."""
+    out: List[Dict[str, Any]] = []
+    ystr = str(year) if year else None
+    for p in paths:
+        data = load_json(p)
+        rows = list(data.get("manual_reporting_required") or [])
+        rows += [e for e in data.get("transactions", [])
+                 if e.get("tainted") and "qty" in e
+                 and e.get("action") not in _INCOME_ACTIONS]
+        for e in rows:
+            date = e.get(date_key) or e.get("date") or ""
+            if ystr and not str(date).startswith(ystr):
+                continue
+            out.append(e)
+    return out
+
+
 def load_dispositions(paths: List[Path], year: Optional[int],
                       date_key: str) -> Tuple[List[Dict[str, Any]], int]:
     """Disposition entries (sells) from gains files; income rows and
-    tainted rows are excluded. Returns (entries, tainted_skipped)."""
+    tainted rows are excluded. Returns (entries, tainted_skipped) —
+    tainted_skipped counts the in-year manual_reporting_required rows
+    too (see load_manual_rows for the rows themselves)."""
     entries: List[Dict[str, Any]] = []
     tainted_skipped = 0
     ystr = str(year) if year else None
@@ -101,7 +131,34 @@ def load_dispositions(paths: List[Path], year: Optional[int],
                 tainted_skipped += 1
                 continue
             entries.append(e)
+        for e in data.get("manual_reporting_required") or []:
+            date = e.get(date_key) or e.get("date") or ""
+            if ystr and not str(date).startswith(ystr):
+                continue
+            tainted_skipped += 1
     return entries, tainted_skipped
+
+
+def manual_section(rows: List[Dict[str, Any]], cur: str) -> List[str]:
+    """The MANUAL REPORTING block every text report ends with when
+    phantom-basis dispositions exist in the year."""
+    if not rows:
+        return []
+    total = sum(abs(float(r.get("proceeds") or 0.0)) for r in rows)
+    lines = [f"MANUAL REPORTING REQUIRED — {len(rows)} disposition(s) "
+             f"with unknown cost (phantoms.json), proceeds "
+             f"{total:,.2f} {cur}: NOT in the rows or totals above. "
+             f"Report each by hand once its cost is known "
+             f"(`taxjson find-missing-history`)."]
+    table = [(str(r.get("symbol") or ""), str(r.get("date") or ""),
+              _qty_str(abs(float(r.get("qty") or 0.0))),
+              f"{abs(float(r.get('proceeds') or 0.0)):,.2f}",
+              str(r.get("account") or ""))
+             for r in rows]
+    lines += _table(("SYMBOL", "DATE", "UNITS", "PROCEEDS", "ACCOUNT"),
+                    table, right={2, 3})
+    lines.append("")
+    return lines
 
 
 def _acquired_date(e: Dict[str, Any]) -> str:
@@ -575,6 +632,8 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
                          f"adjustments {t['adjustment']:,.2f} | gain "
                          f"{t['gain']:,.2f}")
         lines.append("")
+    lines += manual_section(rep.get("manual_reporting_required") or [],
+                            cur)
     lines.append("Notes:")
     lines.append("  - Code W rows are wash sales; column (g) is the "
                  "disallowed loss added back, so (h) is the allowed amount.")
@@ -613,6 +672,8 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
         lines.append(f"  Line {ln['gain_code']} (gain/loss): "
                      f"{ln['gain']:,.2f}")
         lines.append("")
+    lines += manual_section(rep.get("manual_reporting_required") or [],
+                            cur)
     lines.append("Notes:")
     lines.append("  - Each disposition is on the line for its property "
                  "type: shares and fund units on 13199/13200; options, "
@@ -651,6 +712,15 @@ def write_csv(rep: Dict[str, Any], path: Path) -> None:
                                 r["date_sold"], r["proceeds"], r["cost"],
                                 r["code"], r["adjustment"], r["gain"],
                                 r["account"]])
+            # Phantom-basis dispositions: cost unknown — flagged rows,
+            # blank cost/gain, never mistaken for a computed row.
+            for m in rep.get("manual_reporting_required") or []:
+                w.writerow(["MANUAL",
+                            f"{_qty_str(abs(float(m.get('qty') or 0.0)))}"
+                            f" {m.get('symbol') or ''}", "",
+                            m.get("date") or "",
+                            round(abs(float(m.get("proceeds") or 0.0)), 2),
+                            "", "", "", "", m.get("account") or ""])
         else:
             w.writerow(["line", "proceeds_line", "gain_line", "property",
                         "units", "symbol", "acq_year", "proceeds", "acb",
@@ -661,6 +731,14 @@ def write_csv(rep: Dict[str, Any], path: Path) -> None:
                             r["acq_year"], r["proceeds"], r["acb"],
                             r["outlays"], r["gain"], r["denied"],
                             r["notes"]])
+            for m in rep.get("manual_reporting_required") or []:
+                w.writerow(["MANUAL", "", "", "",
+                            abs(float(m.get("qty") or 0.0)),
+                            m.get("symbol") or "", "",
+                            round(abs(float(m.get("proceeds") or 0.0)), 2),
+                            "", "", "", "",
+                            "cost unknown (phantoms.json) - report by "
+                            "hand"])
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -714,11 +792,23 @@ def main(argv: Optional[List[str]] = None) -> int:
             sorted(_crypto), args.year, date_key)
         entries += mark_crypto(c_entries)
         tainted += c_tainted
-    if tainted:
-        print(f"warning: skipped {tainted} tainted disposition(s) with "
-              f"phantom cost basis — resolve via find-missing-history "
-              f"(they are listed under manual_reporting_required), do not "
-              f"file them from this report.", file=sys.stderr)
+    manual = load_manual_rows(list(args.files) + list(args.crypto),
+                              args.year, date_key)
+    manual_proceeds = round(sum(abs(float(m.get("proceeds") or 0.0))
+                                for m in manual), 2)
+    if tainted or manual:
+        _names = ", ".join(
+            f"{m.get('symbol')} {m.get('date')} "
+            f"({abs(float(m.get('proceeds') or 0.0)):,.2f})"
+            for m in manual[:8])
+        _more = f" (+{len(manual) - 8} more)" if len(manual) > 8 else ""
+        print(f"warning: {max(tainted, len(manual))} tainted "
+              f"disposition(s) with phantom cost basis are NOT in the "
+              f"{'TXF' if args.form == 'txf' else 'form'} rows or totals "
+              f"— proceeds {manual_proceeds:,.2f}: {_names}{_more}. "
+              f"Report them by hand once their cost is known "
+              f"(`taxjson find-missing-history`); they are listed in the "
+              f"MANUAL REPORTING section.", file=sys.stderr)
 
     if args.form == "txf":
         if args.csv or args.json:
@@ -747,10 +837,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.form == "8949":
         rep = build_8949(entries)
         rep["currency"] = args.base_currency or "USD"
-        text = render_8949(rep, args.year, rep["currency"])
     else:
         rep = build_schedule3(entries, args.year)
         rep["currency"] = args.base_currency or "CAD"
+    rep["manual_reporting_required"] = manual
+    rep["manual_proceeds"] = manual_proceeds
+    if args.form == "8949":
+        text = render_8949(rep, args.year, rep["currency"])
+    else:
         text = render_schedule3(rep, args.year, rep["currency"])
 
     if args.csv:

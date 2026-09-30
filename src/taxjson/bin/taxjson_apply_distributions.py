@@ -30,6 +30,11 @@ skipped with a NOTE. The pipeline wires this in for taxable equity
 accounts whenever `distributions.map` exists; run it manually as:
 
     taxjson-apply-distributions work/margin_base.json --map distributions.map
+
+With `--incomplete-history phantoms.json` (the pipeline passes it when the
+project has one) the record-date balance includes the phantom openings the
+gains stage will synthesize, so a position with pre-window history gets the
+right share count.
 """
 
 import argparse
@@ -143,15 +148,37 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     return bal
 
 
+def _phantom_openings(txs: List[dict], phantoms) -> List[dict]:
+    """The OPENING_BALANCE rows the gains stage will synthesize from
+    phantoms.json for this book — the SAME synthesize_openings call, so
+    the record-date balance here agrees with the position the engine
+    books. Used for sizing only; never written to the base book (the
+    gains stage adds its own)."""
+    if not phantoms:
+        return []
+    from taxjson.lib.core import coerce_transaction_row
+    from taxjson.lib.phantom_holdings import synthesize_openings
+    rows = [coerce_transaction_row(t, i, PROG) for i, t in enumerate(txs)]
+    out, _log = synthesize_openings(rows, phantoms)
+    return [t.to_dict() for t in out[len(rows):]
+            if t.action == "OPENING_BALANCE"]
+
+
 def apply_distributions(doc: dict, map_rows, account: str,
-                        date_basis: str = "settle") -> Tuple[dict, int]:
+                        date_basis: str = "settle",
+                        phantoms=None) -> Tuple[dict, int]:
+    """`phantoms` — the (symbol, account) set from phantoms.json. The
+    record-date balance must include the phantom openings the gains
+    stage synthesizes (audit S000-08: sized on the phantom-less book, a
+    phantom-backed position got half the ADJUST, or none)."""
     txs = doc.get("transactions", [])
     # Regenerate, never accumulate: drop rows this tool added before.
     txs = [t for t in txs
            if not str(t.get("id") or "").startswith("DIST-")]
+    sizing = txs + _phantom_openings(txs, phantoms)
     applied = 0
     for sym, date, per_share in map_rows:
-        bal = balance_on(txs, sym, date, date_basis)
+        bal = balance_on(sizing, sym, date, date_basis)
         if bal <= 1e-9:
             print(f"NOTE: distributions.map: no {sym} shares held on "
                   f"{date} in this book — row skipped.", file=sys.stderr)
@@ -189,6 +216,11 @@ def main(argv=None) -> int:
                          "balance on: settle (holder of record = "
                          "settled position; CRA default) or trade. "
                          "`taxjson run` passes the project's tax_date.")
+    ap.add_argument("--incomplete-history", type=Path, default=None,
+                    metavar="PHANTOMS_JSON",
+                    help="phantoms.json: size each record-date balance "
+                         "with the phantom openings the gains stage "
+                         "will synthesize (`taxjson run` passes it).")
     args = ap.parse_args(argv)
 
     if not args.map.exists():
@@ -203,8 +235,17 @@ def main(argv=None) -> int:
     account = args.account or next(
         (t.get("account") for t in doc.get("transactions", [])
          if t.get("account")), "")
+    phantoms = None
+    if args.incomplete_history is not None:
+        from taxjson.lib.phantom_holdings import load_phantoms
+        try:
+            phantoms = load_phantoms(args.incomplete_history)
+        except (OSError, ValueError) as e:
+            cli_diag.error(PROG, f"could not read "
+                                 f"{args.incomplete_history}: {e}")
+            return 2
     doc, applied = apply_distributions(doc, load_map(args.map), account,
-                                       args.date_basis)
+                                       args.date_basis, phantoms=phantoms)
 
     tmp = args.base_json.with_name(args.base_json.name + ".part")
     tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",

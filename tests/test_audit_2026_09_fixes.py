@@ -239,7 +239,10 @@ class TestShelteredContributionIsATrigger(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             _, sh, _, _ = prepare_books([], shel, taxable=False,
                                         phantom_hint=False)
-        self.assertEqual(sh, [])
+        # Kept only as balance-only TRANSFER rows (never a trigger;
+        # the per-holder still-held test needs them — S018-05).
+        self.assertEqual([(t.action, t.type) for t in sh],
+                         [('TRANSFER', 'own_account_move')] * 2)
 
 
 class TestEstimateConfigGuard(unittest.TestCase):

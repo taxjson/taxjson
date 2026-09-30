@@ -574,6 +574,73 @@ def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
     )
 
 
+# A marked assignment stock leg (the Webull two-row convention) is
+# stamped with its option leg's trade date by the parser; allow a short
+# posting lag, never more (a marked leg a year later belongs to a
+# different assignment).
+_MARKED_LEG_MAX_LAG_DAYS = 7
+
+
+def _marked_leg_gate_windows(transactions, key_of):
+    """Windows during which a staged option premium is RESERVED for a
+    marked assignment stock leg (action='ASSIGN' on a non-option
+    symbol), per (account, underlying).
+
+    Each taxable option ASSIGN is paired with the first unclaimed marked
+    stock leg on its own (account, underlying) that sorts at or after it
+    and whose trade date is within _MARKED_LEG_MAX_LAG_DAYS of the
+    option leg's. The window [option key, leg key] is the only span in
+    which a plain same-symbol trade must NOT consume the premium (an
+    unrelated BUYSELL sorted between the pair used to hijack it). An
+    option ASSIGN with no paired marked leg (IB/RBC plain convention)
+    opens no window, so its own plain BUYSELL stock leg pops the premium
+    even when an unrelated marked leg exists later (audit R1-33: a 2026
+    Webull leg used to pull a 2025 IB premium a year forward).
+
+    `key_of(tx)` returns the engine's (date, time) ordering key.
+    Returns {(account, symbol): [(lo_key, hi_key), ...]}."""
+    legs: Dict[Any, list] = {}
+    for t in transactions:
+        if t.action == 'ASSIGN' and not is_option_symbol(t.symbol):
+            legs.setdefault((t.account, t.symbol), []).append(
+                [key_of(t), t.date or '', False])
+    for v in legs.values():
+        v.sort(key=lambda r: r[0])
+    windows: Dict[Any, list] = {}
+    if not legs:
+        return windows
+    opts = sorted((t for t in transactions
+                   if t.action == 'ASSIGN' and is_option_symbol(t.symbol)),
+                  key=key_of)
+    for o in opts:
+        und = parse_option_underlying(o.symbol)
+        cands = legs.get((o.account, und)) if und else None
+        if not cands:
+            continue
+        ok = key_of(o)
+        try:
+            od = datetime.strptime(o.date, '%Y-%m-%d')
+        except (TypeError, ValueError):
+            continue
+        for leg in cands:
+            if leg[2] or leg[0] < ok:
+                continue
+            try:
+                gap = (datetime.strptime(leg[1], '%Y-%m-%d') - od).days
+            except (TypeError, ValueError):
+                continue
+            if gap > _MARKED_LEG_MAX_LAG_DAYS:
+                break
+            leg[2] = True
+            windows.setdefault((o.account, und), []).append((ok, leg[0]))
+            break
+    return windows
+
+
+def _in_marked_leg_window(windows, acct, sym, key) -> bool:
+    return any(lo <= key <= hi for lo, hi in windows.get((acct, sym), ()))
+
+
 def _verify_share_conservation(position_rows, actual_qty_by_symbol,
                                 engine_label, *, zero_ratio_skips):
     """Conservation post-condition: replay signed position quantities with
@@ -937,16 +1004,14 @@ class CanadaTaxRules(TaxRules):
         # nor absorb another account's premium — assignment legs and
         # their stock legs always share an account. Single-account
         # books behave identically (the account component is constant).
-        assign_stock_leg_keys: Dict[Any, list] = {}
-        for _t in transactions:
-            if _t.action == 'ASSIGN' and not is_option_symbol(_t.symbol):
-                assign_stock_leg_keys.setdefault(
-                    (_t.account, _t.symbol), []).append(
-                    (get_sort_date(_t), _t.time or ''))
+        # Scoped to each option ASSIGN's OWN paired marked leg (audit
+        # R1-33): see _marked_leg_gate_windows.
+        _marked_windows = _marked_leg_gate_windows(
+            transactions, lambda _t: (get_sort_date(_t), _t.time or ''))
 
         def _upcoming_marked_leg(acct, sym, d, tm):
-            return any(k >= (d, tm or '')
-                       for k in assign_stock_leg_keys.get((acct, sym), ()))
+            return _in_marked_leg_window(_marked_windows, acct, sym,
+                                         (d, tm or ''))
 
         # (ACCOUNT, underlying) pairs that actually trade as STOCK in
         # the taxable book. An option ASSIGN whose underlying is absent
@@ -2315,6 +2380,10 @@ class CanadaTaxRules(TaxRules):
                     if t.id in sheltered_ids or t.id in affiliated_ids:
                         return ('other', t.account)
                     return ('taxable',)
+
+                def _holder_rank(t):
+                    return (2 if t.id in affiliated_ids
+                            else 1 if t.id in sheltered_ids else 0)
                 _bal_end_h: Dict[Any, float] = {}
                 for t in current_tx_list:
                     if (alias_of(t.symbol) == loss_alias
@@ -2406,11 +2475,25 @@ class CanadaTaxRules(TaxRules):
                                  if _ev_key(t) > _loss_key]
                     pre_loss = [t for t in potential_triggers
                                 if t not in post_loss]
-                    ordered = (sorted(post_loss,
-                                      key=lambda x: (_ev_key(x), x.id))
-                               + sorted(pre_loss,
-                                        key=lambda x: (_ev_key(x), x.id),
-                                        reverse=True))
+                    # Triggers at the SAME moment have no acquisition
+                    # order. The tie goes to the taxpayer's own (taxable)
+                    # acquisition first, then registered, then
+                    # affiliated accounts, then by account label — never
+                    # by the rows' content-hash id, which let a one-cent
+                    # change on a TFSA row flip a deferral into a
+                    # permanent denial (audit S018-06). Rationale: the
+                    # denial is permanent only for property an
+                    # affiliated person acquires (s.40(2)(g)(i)); with
+                    # no order between the two acquisitions the
+                    # taxpayer's own substituted property is the one
+                    # s.53(1)(f) reaches first.
+                    def _tie(x):
+                        return (_holder_rank(x), x.account or '',
+                                x.id or '')
+                    ordered = (sorted(sorted(post_loss, key=_tie),
+                                      key=_ev_key)
+                               + sorted(sorted(pre_loss, key=_tie),
+                                        key=_ev_key, reverse=True))
                     per_share_loss = loss['loss_amount'] / loss['qty']
                     allocations = []      # (trigger, qty, amount)
                     perm_amt = 0.0
@@ -3489,8 +3572,15 @@ class USATaxRules(TaxRules):
             # deferred loss + holding period was effectively random — and a
             # sheltered same-date lot could beat an earlier-acquired taxable
             # one, flipping a deferral into a permanent denial. Tie-break by
-            # intra-day time, then id for determinism.
-            out.sort(key=lambda r: (r['date'], r['tx'].time or '', r['tx'].id))
+            # intra-day time; at the SAME moment the taxpayer's own
+            # (taxable) lot first, then sheltered, then affiliated, then
+            # by account label — never by the content-hash id alone,
+            # which let a one-cent change on an IRA row flip a deferral
+            # into a permanent denial (audit S018-06).
+            out.sort(key=lambda r: (r['date'], r['tx'].time or '',
+                                    2 if r['is_affiliated']
+                                    else 1 if r['is_sheltered'] else 0,
+                                    r['tx'].account or '', r['tx'].id))
             return out
 
         # === MAIN PASS ===
@@ -3504,16 +3594,14 @@ class USATaxRules(TaxRules):
         # gate nor absorb another account's premium; see the Canada
         # twin for the full rationale. Single-book callers behave
         # identically.
-        assign_stock_leg_keys: Dict[Any, list] = {}
-        for _t in transactions:
-            if _t.action == 'ASSIGN' and not is_option_symbol(_t.symbol):
-                assign_stock_leg_keys.setdefault(
-                    (_t.account, _t.symbol), []).append(
-                    (_t.date, _t.time or ''))
+        # Scoped to each option ASSIGN's OWN paired marked leg (audit
+        # R1-33): see _marked_leg_gate_windows.
+        _marked_windows = _marked_leg_gate_windows(
+            transactions, lambda _t: (_t.date, _t.time or ''))
 
         def _upcoming_marked_leg(acct, sym, d, tm):
-            return any(k >= (d, tm or '')
-                       for k in assign_stock_leg_keys.get((acct, sym), ()))
+            return _in_marked_leg_window(_marked_windows, acct, sym,
+                                         (d, tm or ''))
         # (ACCOUNT, underlying) pairs that trade as STOCK in the
         # taxable book — an ASSIGN whose underlying is absent for ITS
         # OWN account is cash-settled; see the Canada twin (OB

@@ -150,6 +150,10 @@ def _canada(s: Dict[str, Any]) -> List[Section]:
             "The denied amount is added to the replacement's ACB and "
             "comes back when it is sold. If the replacement is in a "
             "sheltered account, that part is lost for good.",
+            "Replacements are matched in acquisition order: purchases "
+            "after the sale first, then earlier ones, latest first. "
+            "Purchases at the same moment go to your taxable accounts "
+            "first, then sheltered, then affiliated.",
             ("A loss on buying back a written option is superficial when "
              "the same option is bought, and still held at day 30, "
              "within the window (option_buyback_loss_superficial = true)."

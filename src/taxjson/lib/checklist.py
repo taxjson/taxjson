@@ -776,6 +776,16 @@ def d_form_export(ctx: Ctx) -> Result:
     if abs(t["gain"] - realized) > 0.05:
         problems.append(f"{label} gain {t['gain']:,.2f} vs realized {realized:,.2f} "
                         f"in the taxable accounts' .sum")
+    # Phantom-basis dispositions are not in the rows (their cost is
+    # unknown) — the export is not complete until they are reported by
+    # hand (audit R1-199: this step showed [x] while they were missing).
+    manual = rep.get("manual_reporting_required") or []
+    if manual:
+        problems.append(
+            f"{len(manual)} phantom-basis disposition(s) (proceeds "
+            f"{float(rep.get('manual_proceeds') or 0.0):,.2f}) are not in "
+            f"the {label} rows — report them by hand (form-export's "
+            f"MANUAL REPORTING section)")
     if problems:
         return Result("form-export", "attention", "; ".join(problems))
     return Result("form-export", "done",

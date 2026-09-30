@@ -539,7 +539,13 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None):
     return filtered, dropped
 
 
-def _net_cross_account_transfers(transactions, main_transactions=()):
+# type of a netted own-account registered move kept in the wash context
+# as a balance-only TRANSFER row (see _net_cross_account_transfers).
+OWN_MOVE_TYPE = 'own_account_move'
+
+
+def _net_cross_account_transfers(transactions, main_transactions=(),
+                                 netted_out: Optional[list] = None):
     """Net out TRANSFER groups that cancel at the SYMBOL level across
     accounts within one time cluster — a registered-to-registered move
     of the user's own shares (rrsp → rrsp2). Ownership never changed, so
@@ -565,7 +571,20 @@ def _net_cross_account_transfers(transactions, main_transactions=()):
         were. Custody moves away from loss windows still net silently.
 
     Segments whose lo..hi span exceeds _TRANSFER_SEGMENT_MAX_SPAN_DAYS
-    are never netted (chained-gap residue — see that constant)."""
+    are never netted (chained-gap residue — see that constant).
+
+    The netted legs are removed from the returned list and, when
+    `netted_out` is given, appended to it: _handle_transfers keeps them
+    in the wash context as balance-only rows (action TRANSFER,
+    type=OWN_MOVE_TYPE) — audit S018-05 / G2-0. The
+    Canada engine's s.54 still-held test runs PER HOLDER (each
+    registered account on its own), so dropping both legs left the
+    receiving account short (its in-window rebuy looked sold: a
+    permanent denial was missed) and the sending account long (an
+    in-window round trip looked held: a denial was invented). A
+    TRANSFER row is never a wash trigger and never touches a pool; it
+    only moves the per-account balance, which is what an own-account
+    move does."""
     epsilon = 1e-9
     from collections import defaultdict
     from datetime import datetime as _dt, timedelta as _td
@@ -625,6 +644,9 @@ def _net_cross_account_transfers(transactions, main_transactions=()):
                 drop_idx.add(idx)
     if not drop_idx:
         return transactions
+    if netted_out is not None:
+        netted_out.extend(t for i, t in enumerate(transactions)
+                          if i in drop_idx)
     return [t for i, t in enumerate(transactions) if i not in drop_idx]
 
 
@@ -683,8 +705,10 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable):
     # TransferValidationError hard-error path instead).
     sheltered_transactions, _sh_pairs = _drop_self_cancelling_transfers(
         sheltered_transactions, main_transactions=transactions)
+    _own_moves: list = []
     sheltered_transactions = _net_cross_account_transfers(
-        sheltered_transactions, main_transactions=transactions)
+        sheltered_transactions, main_transactions=transactions,
+        netted_out=_own_moves)
     n_sh_rewritten = 0
     _sh_out = []
     for t in sheltered_transactions:
@@ -697,6 +721,12 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable):
                                   'type': 'transfer_rewrite'})
             n_sh_rewritten += 1
         _sh_out.append(t)
+    # Netted own-account moves stay as balance-only TRANSFER rows: the
+    # per-holder still-held test needs each registered account's real
+    # balance (see _net_cross_account_transfers). The engines never
+    # treat a TRANSFER as a trigger or a pool event.
+    _sh_out.extend(TaxTransaction(**{**t.to_dict(), 'type': OWN_MOVE_TYPE})
+                   for t in _own_moves)
     sheltered_transactions = _sh_out
     n_sh_stripped = n_sh_before - n_sh_rewritten
 
@@ -796,6 +826,27 @@ def prepare_books(transactions, sheltered_transactions=(),
     if incomplete_history:
         phantoms = load_phantoms(Path(incomplete_history))
         transactions, phantom_application_log = synthesize_openings(transactions, phantoms)
+        # The wash context too (audit S021-09): a registered or
+        # affiliated account with truncated history otherwise looks
+        # short here, so its in-window rebuy is not "still held at day
+        # 30" and a permanent superficial-loss denial is missed. Each
+        # pair's opening is sized on its own account's rows, so the
+        # three books never double-apply one entry.
+        sheltered_transactions, _sh_log = synthesize_openings(
+            sheltered_transactions, phantoms)
+        affiliated_transactions, _af_log = synthesize_openings(
+            affiliated_transactions, phantoms)
+        _ctx = {}
+        for _label, _log in (('sheltered', _sh_log),
+                             ('affiliated', _af_log)):
+            for _e in _log:
+                if _e.get('inserted'):
+                    _ctx[(_e['symbol'], _e['account'])] = dict(
+                        _e, context=_label)
+        phantom_application_log = [
+            _ctx.get((_e['symbol'], _e['account']), _e)
+            if not _e.get('inserted') else _e
+            for _e in phantom_application_log]
     elif phantom_hint:
         # No phantom file supplied — but if the data has positions that go
         # negative, the user may have truncated history they haven't told
