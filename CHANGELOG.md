@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`scan` US-LISTING respects DISTINCT and the US line's own dividends.**
+  A US stock was called a "Canadian issuer held via its US listing" when
+  any `.TO` symbol shared its root, even one `ticker.map` declared
+  `DISTINCT` (a CDR), and a non-paying US line borrowed the `.TO` line's
+  dividends. The check now needs the US line itself to pay, and a
+  `DISTINCT` ruling silences it (audit S042-06, S049-09).
 - **Query views stop on an unreadable file.** `list`, `shares`, `winners`,
   `wash-sales`, `ccd-sum`, `leaps`, `gains`, the transaction views and the
   -sum roll-ups warned about a truncated work/ file and printed a partial

@@ -315,5 +315,42 @@ class TestUnreadableInputsAreErrors(unittest.TestCase):
             self.assertIn("taxjson.toml", r.stderr)
 
 
+class TestScanUsListing(unittest.TestCase):
+    """S042-06 / S049-09: US-LISTING needs the US line itself to pay and
+    ticker.map to say the listings are one security; DISTINCT wins."""
+
+    def _proj(self, tmp, tmap):
+        toml = ('[settings]\nyear = 2026\ncountry = "canada"\n'
+                'base_currency = "CAD"\n'
+                '[accounts.margin]\ntype = "taxable"\n'
+                '[accounts.tfsa]\ntype = "sheltered"\n')
+        root = _project(tmp, toml)
+        (root / "ticker.map").write_text(tmap)
+        (root / "reports").mkdir()
+        (root / "reports" / "margin_holdings.toml").write_text(
+            "".join(f'[[holding]]\nsymbol = "{s}"\nquantity = 10\n'
+                    for s in ("EFX.US", "ZZZ.US", "CNQ.US")))
+        (root / "reports" / "tfsa_holdings.toml").write_text(
+            "".join(f'[[holding]]\nsymbol = "{s}"\nquantity = 10\n'
+                    for s in ("EFX.TO", "ZZZ.TO")))
+        _write(root, "margin_raw.json", [
+            _div("2026-03-02", "EFX.US", 10.0, cur="USD"),
+            _div("2026-03-02", "CNQ.US", 10.0, cur="USD")])
+        _write(root, "tfsa_raw.json", [_div("2026-03-02", "ZZZ.TO", 10.0)])
+        return root
+
+    def test_distinct_pairs_and_non_payers_are_not_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d, "DISTINCT EFX.US EFX.TO\n"
+                                 "DISTINCT ZZZ.US ZZZ.TO\n"
+                                 "TOBASE CNQ.US CNQ.TO\n")
+            r = _runsub(root, "scan")
+        flagged = [ln for ln in r.stdout.splitlines() if "US-LISTING" in ln]
+        self.assertFalse(any("EFX" in ln or "ZZZ" in ln for ln in flagged),
+                         r.stdout)
+        # Control: a mapped pair whose US line pays is still flagged.
+        self.assertTrue(any("CNQ.US" in ln for ln in flagged), r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

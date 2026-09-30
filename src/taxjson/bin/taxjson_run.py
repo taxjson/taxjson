@@ -5582,10 +5582,18 @@ def cmd_scan(args: argparse.Namespace) -> None:
         _see(new)
 
     def _has_ca_twin(rt: str, sym_u: str) -> bool:
-        if "TO" in (seen_suffixes.get(rt) or set()):
-            return True
+        # ticker.map (GLOBAL/TOBASE onto a .TO listing) is the identity
+        # ruling; without one, a .TO sighting of the same root is only
+        # evidence (MAP-GAP asks for the ruling too). A DISTINCT ruling
+        # settles it the other way: the .TO line is a CDR or another
+        # issuer, and "hold it instead" is wrong advice (audit S042-06,
+        # S049-09).
         tgt = renames_u.get(sym_u, "")
-        return tgt.endswith(".TO")
+        if tgt.endswith(".TO"):
+            return not _declared_distinct(sym_u, tgt)
+        if _declared_distinct(sym_u, f"{rt}.TO"):
+            return False
+        return "TO" in (seen_suffixes.get(rt) or set())
 
     findings = []                     # (check, account, symbol, message)
     if country == "canada":
@@ -5601,16 +5609,19 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 if suf != "US":
                     continue
                 sym_u = sym.upper()
-                pays = (sym_u in div_syms
-                        or f"{rt}.TO" in div_syms)
+                # The US line itself must pay: borrowing the .TO line's
+                # dividends through the bare root flagged a US holding
+                # that pays nothing (audit S049-09).
+                pays = sym_u in div_syms
                 if not pays:
                     continue
                 if _has_ca_twin(rt, sym_u):
+                    _ca = renames_u.get(sym_u) or f"{rt}.TO"
                     findings.append((
                         "US-LISTING", name, sym,
                         f"Canadian issuer held via its US listing in a "
                         f"{plan} account while paying dividends — hold "
-                        f"{rt}.TO instead for clean eligible-dividend "
+                        f"{_ca} instead for clean eligible-dividend "
                         f"treatment (and no USD conversion drag)."))
                 elif plan == "tfsa":
                     findings.append((
