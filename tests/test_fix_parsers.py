@@ -387,5 +387,27 @@ class TestCanadianListingIdentity(unittest.TestCase):
                            'taxable': True}])
 
 
+# ------------------------------------------------------- decimal commas
+class TestStrictNumbersElsewhere(unittest.TestCase):
+    def test_reconcile_slips_refuses_decimal_comma(self):
+        from taxjson.bin.taxjson_reconcile_slips import _clean_amount
+        self.assertIsNone(_clean_amount('1234,56'))
+        self.assertEqual(_clean_amount('1,234.56'), 1234.56)
+        self.assertEqual(_clean_amount('$(12.00)'), -12.0)
+        self.assertIsNone(_clean_amount(''))
+
+    def test_ib_open_position_decimal_comma_is_not_scaled(self):
+        # "0,5" used to read as 5 shares; it is now a counted skip.
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        text = (IB_HEAD
+                + 'Open Positions,Header,DataDiscriminator,Asset Category,'
+                  'Currency,Symbol,Quantity\n'
+                + 'Open Positions,Data,Summary,Stocks,CAD,QZP,"0,5"\n')
+        p = IbBrokerage()
+        _parse(p, text)
+        self.assertTrue(any('malformed' in k for k in p._skip_counts),
+                        p._skip_counts)
+
+
 if __name__ == '__main__':
     unittest.main()

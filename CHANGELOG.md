@@ -38,6 +38,9 @@
 - **Questrade preferred shares are dotted.** `FTN.PRA.TO` is now
   `FTN.PR.A.TO`, as IB, RBC and Webull spell it, so the pools no longer
   split. An existing `GLOBAL FTN.PRA.TO FTN.PR.A.TO` rule is harmless.
+- **Decimal commas are refused in the IB diagnostics and slip
+  reconciliation too** (open-position, dividend-accrual and slip cells
+  were still comma-stripped and read 100x too large).
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is

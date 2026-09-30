@@ -1335,7 +1335,10 @@ class IbBrokerage(BaseBrokerage):
                                         f"summary)")
                     continue
                 try:
-                    if abs(float(qty_raw.replace(',', ''))) < 1e-9:
+                    # Strict: a decimal comma is refused (a skip), not
+                    # read 100x too large.
+                    if abs(parse_strict_number(qty_raw,
+                                               field='Quantity')) < 1e-9:
                         self.count_nonevent(f"{section} zero-quantity "
                                             f"row")
                         continue
@@ -1409,7 +1412,8 @@ class IbBrokerage(BaseBrokerage):
                     self.count_skip(f"malformed {section} row")
                     continue
                 try:
-                    gross = float(row[gross_idx].replace(',', ''))
+                    gross = parse_strict_number(row[gross_idx],
+                                                field='Gross Amount')
                 except (ValueError, IndexError) as e:
                     print(f"warning: skipping malformed IB {section} row ({e}): {row}",
                           file=sys.stderr)
@@ -1441,7 +1445,8 @@ class IbBrokerage(BaseBrokerage):
                 rate_idx = header_map.get('Gross Rate')
                 if rate_idx is not None and rate_idx < len(row):
                     try:
-                        r = float(row[rate_idx].replace(',', ''))
+                        r = parse_strict_number(row[rate_idx],
+                                                field='Gross Rate')
                     except (ValueError, IndexError):
                         r = 0.0
                     if r and (symbol, pay_date) not in accrual_rate:

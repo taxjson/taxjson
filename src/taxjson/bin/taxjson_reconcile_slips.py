@@ -65,13 +65,16 @@ def norm_symbol(sym: str) -> str:
 
 
 def _clean_amount(raw: str) -> Optional[float]:
-    s = (raw or "").strip().replace(",", "").replace("$", "")
-    if s.startswith("(") and s.endswith(")"):
-        s = "-" + s[1:-1]
+    """A slip cell as a number; None when blank or unreadable (the caller
+    reports it). Parsed strictly (brokerages.base.parse_strict_number):
+    a decimal comma ('1234,56') is unreadable, never stripped into a
+    value 100x too large; '1,234.56', '$', '(12.00)' are fine."""
+    from taxjson.lib.brokerages.base import parse_strict_number
+    s = (raw or "").strip().replace("$", "")
     if not s:
         return None
     try:
-        return float(s)
+        return parse_strict_number(s, field="amount")
     except ValueError:
         return None
 
