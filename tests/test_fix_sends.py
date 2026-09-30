@@ -201,6 +201,10 @@ class TestCryptoSendsProject(unittest.TestCase):
         self.assertEqual(set(sends), {TAO_ID, BTC_ID, KR_USDC_ID,
                                       CB_USDC_ID, HYBRID_ID})
         self.assertEqual(doc["accounts"]["crypto"]["matched"], 1)
+        # A Kraken Hybrid Earn sweep keeps the coins yours: decided
+        # automatically, never asked about.
+        self.assertEqual(sends[HYBRID_ID]["decision"], "self")
+        self.assertTrue(sends[HYBRID_ID]["auto"])
         tao = sends[TAO_ID]
         self.assertIsNone(tao["decision"])
         self.assertEqual(tao["ref"], "LG***")
@@ -281,9 +285,8 @@ class TestCryptoSendsProject(unittest.TestCase):
                and abs(float(t["quantity"]) + 0.1) < 1e-12]
         self.assertEqual(len(tao), 1)
         self.assertAlmostEqual(float(tao[0]["net_amount"]), 38.78, places=2)
-        # One undecided send left (the Hybrid Earn sweep).
-        self.assertIn("1 crypto send(s) not yet classified",
-                      r.stderr + r.stdout)
+        # Nothing left to classify: the Hybrid Earn sweep is automatic.
+        self.assertNotIn("not yet classified", r.stderr + r.stdout)
 
     def test_e_duplicate_hand_written_line_is_flagged(self):
         dup = self.root / "inputs" / "crypto" / "tao_payment.tt"
@@ -304,11 +307,7 @@ class TestCryptoSendsProject(unittest.TestCase):
         cfg = tomllib.loads((self.root / "taxjson.toml").read_text())
         ctx = cl.Ctx(root=self.root, cfg=cfg, year=2026, today=date.today(),
                      run_sub=lambda argv, timeout=900: (0, "", ""))
-        res = cl.DETECTORS["crypto-sends"](ctx)
-        # The hybrid sweep is still undecided (whatever order the tests
-        # ran in).
-        self.assertEqual(res.status, "attention", res.detail)
-        self.assertIn("undecided", res.detail)
+        # An explicit decision still overrides the automatic one.
         r = _cli(self.root, self.home, "crypto-sends", "crypto", "--set",
                  f"{HYBRID_ID}=self")
         self.assertEqual(r.returncode, 0, r.stderr)

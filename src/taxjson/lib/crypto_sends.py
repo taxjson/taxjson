@@ -724,6 +724,14 @@ def build_report(root: Path, cfg: Dict[str, Any],
                         key=lambda s: (_dt(s), ids[id(s)])):
             sid = ids[id(s)]
             rec = decisions.get(sid) or {}
+            if not rec and s["kind"].lower().startswith("hybridearn"):
+                # Kraken Hybrid Earn: the coins leave the spot ledger for
+                # Kraken's Earn product and keep earning rewards for you —
+                # still your property. Decided automatically; --set
+                # overrides it.
+                rec = {"decision": "self", "auto": True,
+                       "note": "Kraken Hybrid Earn: still yours "
+                               "(automatic)"}
             stable = s["symbol"] in STABLECOINS
             fv = fair_value(s, rates, usd_price, rec.get("price"))
             entry = {
@@ -733,6 +741,7 @@ def build_report(root: Path, cfg: Dict[str, Any],
                 "fee_booked": s["fee"], "ref": s["ref"],
                 "summary": _summary(s), "stable": stable,
                 "decision": rec.get("decision"), "note": rec.get("note", ""),
+                "auto": bool(rec.get("auto")),
                 "fair_value": fv, "tt": None, "fx": None,
             }
             if not stable and fv is not None:

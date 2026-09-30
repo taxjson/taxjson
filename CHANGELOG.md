@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
+  Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
+  and keep earning rewards) as `self` automatically instead of asking;
+  `--set ID=gift|payment` still overrides it.
 - **One split booked on two dates applies once.** IB and Questrade date
   the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
   were applied, scaling the pool by the ratio twice. Copies of one split
