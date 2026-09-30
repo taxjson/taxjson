@@ -118,6 +118,34 @@
   "understates activity" — and the report shows the ledger's foreign
   cash at Dec 31 to compare with the brokers' balances.
 
+- **Instalment interest on the least amount due by each date.** ITA
+  161(4.01) deems the requirement on each due date to be the least
+  cumulative amount any method (current-year, prior-year, CRA reminder)
+  calls for by that day. `taxjson instalments` priced each method as a
+  whole year and took the cheapest, which overstated interest and the
+  s.163.1 penalty whenever the cheapest method changed between dates.
+  The report now shows the mixed schedule when no single method
+  governs.
+- **Instalment rates for 2023 and a flag before the table.** The
+  built-in CRA overdue-tax rates now start with 2023 (Q1 8%, Q2-Q4 9%).
+  A 2023 year was charged 2024's 10% all year and the report called it
+  the published rate; a year before 2023 now says its days ASSUME the
+  earliest rate (`rate_extrapolated`).
+- **One low prior year no longer waives instalments.** With only one
+  of `prior_year_net_tax` / `second_prior_net_tax` set and at or below
+  $3,000, `taxjson instalments` said "No instalments required" and
+  printed the unset year as 0.00. Both preceding years must be at or
+  below $3,000 (ITA s.156.1(1)); with one unknown the test is now
+  unknown (instalments assumed required) and an unset year prints as
+  "not set".
+- **Instalment interest keeps compounding after you catch up.**
+  `taxjson instalments` now computes interest the way CRA publishes it:
+  interest on each required instalment from its due date, minus
+  interest on each payment from its date (or January 1), both to the
+  balance-due date and compounded daily. The old running balance
+  stopped compounding the accrued charge once payments caught up,
+  which understated interest by a few percent and could drop a charge
+  under the $25 threshold.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

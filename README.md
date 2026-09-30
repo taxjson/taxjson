@@ -326,8 +326,9 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # prior_year_net_tax = 55000   # last year's net tax owing (line 48500
 # second_prior_net_tax = 41000 #   minus withholding, per the NOA).
 #                              # Supply BOTH even on current_year: CRA
-#                              # assesses interest on the least of the
-#                              # methods your figures support, and they
+#                              # assesses interest on the least amount
+#                              # the methods your figures support
+#                              # require BY EACH due date, and they
 #                              # also decide whether instalments are
 #                              # owed at all. A placeholder 0 reads as
 #                              # "I owed nothing" and suppresses both.
