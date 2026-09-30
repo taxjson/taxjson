@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
                                          is_roc_description)
 from taxjson.lib.corp_actions import (
@@ -103,10 +104,10 @@ _RBC_USD_DLR_RE = re.compile(r'\bU\s?\.?\s?S\.?\s+DLR\s+CURRENCY\s+ETF\b',
 _RBC_OPTION_PATTERNS = (
     re.compile(
         r'^(?:(?:EXP|ASN|XCH)\s*-\s*)?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+'
-        r'(\d{1,2}/\d{1,2}/\d{2})\s+([\d\.]+)', re.I),
+        r'(\d{1,2}/\d{1,2}/\d{2})\s+' + OPTION_STRIKE_RE, re.I),
     re.compile(
         r'ASSIGNMENT OF OPTION.*?(CALL|PUT)\s+\.?([A-Z0-9\s\.]+?)\s+'
-        r'(\d{1,2}/\d{1,2}/\d{2})\s+([\d\.]+)', re.I),
+        r'(\d{1,2}/\d{1,2}/\d{2})\s+' + OPTION_STRIKE_RE, re.I),
 )
 
 # Row classes that are recognised NON-events (cash moves, statement
@@ -183,7 +184,9 @@ def _err(path: Path, line: int, msg: str) -> RbcFormatError:
 
 
 _NUM_RE = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)')
-_THOUSANDS_RE = re.compile(r'[+-]?\d{1,3}(?:,\d{3})+(?:\.\d*)?')
+# A first group of 0 is a decimal comma ('0,125'), never thousands
+# (audit S055-08).
+_THOUSANDS_RE = re.compile(r'[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?')
 
 
 def rbc_number(raw: Optional[str], *, path: Path, line: int,

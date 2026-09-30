@@ -159,8 +159,10 @@ def get_ib_settlement(date_str: str, asset_cat: str,
     return add_settlement_days(date_str, days, currency).isoformat()
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
                                          encode_occ_strike,
+                                         option_strike_text,
                                          is_roc_description,
                                          parse_strict_number)
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
@@ -549,13 +551,16 @@ class IbBrokerage(BaseBrokerage):
         DFDV1 251121P... after a corporate action), so the opening and
         the assigned leg share ONE symbol and the premium folds."""
         symbol = raw
-        opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+([\d\.]+)\s+([PC])$', raw)
-        opt_match_monthly = (re.search(r'^(.+?)\s+([A-Z]{3})(\d{2})\s+([\d\.]+)\s+([PC])$', raw)
+        # Strikes may carry a thousands separator (5,000): OPTION_STRIKE_RE
+        # tries the grouped form first; the commas are dropped below.
+        opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
+        opt_match_monthly = (re.search(r'^(.+?)\s+([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
                              if not opt_match else None)
-        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+([\d\.]+)', raw)
+        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+' + OPTION_STRIKE_RE, raw)
                             if not (opt_match or opt_match_monthly) else None)
         if opt_match:
             base, day, mon, yr, strike, right = opt_match.groups()
+            strike = option_strike_text(strike)
             month = _MON_MAP.get(mon.upper())
             if month:
                 if asset_cat == 'Equity and Index Options':
@@ -566,6 +571,7 @@ class IbBrokerage(BaseBrokerage):
                 symbol = f"{base}{yr}{month}{day}{right}{encode_occ_strike(strike)}"
         elif opt_match_monthly:
             base, mon, yr, strike, right = opt_match_monthly.groups()
+            strike = option_strike_text(strike)
             month = _MON_MAP.get(mon.upper())
             if month:
                 base = base.replace(' ', '.')
@@ -594,6 +600,7 @@ class IbBrokerage(BaseBrokerage):
                 symbol = f"{base}{ymd}{right}{encode_occ_strike(strike)}"
         elif opt_match_legacy:
             base, exp, right, strike = opt_match_legacy.groups()
+            strike = option_strike_text(strike)
             base = base.replace(' ', '.')
             symbol = f"{base}{exp[2:]}{right}{encode_occ_strike(strike)}"
         # Strip all spaces as a fallback / cleanup
@@ -1892,11 +1899,18 @@ class IbBrokerage(BaseBrokerage):
                         pending_cil[symbol] = pending_cil.get(symbol, 0.0) - qty
                     handled = True
 
-                split_match = re.search(r'^([A-Z0-9\s\.]+)\s*\(([^)]+)\)\s+Split\s+([\d\.]+)\s+for\s+([\d\.]+)', description, re.IGNORECASE)
+                # Ratio terms may be comma-grouped ('Split 1 for 1,000'):
+                # the old [\d\.]+ stopped at the comma and read it as 1
+                # for 1 (audit S058-19). Parsed strictly.
+                split_match = re.search(r'^([A-Z0-9\s\.]+)\s*\(([^)]+)\)\s+Split\s+([\d\.,]+)\s+for\s+([\d\.,]+)', description, re.IGNORECASE)
                 if split_match and not handled:
                     ticker = split_match.group(1).strip().replace(' ', '.')
-                    new_sh = float(split_match.group(3))
-                    old_sh = float(split_match.group(4))
+                    new_sh = parse_strict_number(split_match.group(3),
+                                                 field='split ratio',
+                                                 where=where)
+                    old_sh = parse_strict_number(split_match.group(4),
+                                                 field='split ratio',
+                                                 where=where)
                     ratio = new_sh / old_sh if old_sh != 0 else 1.0
                     symbol = f"{ticker}.{ext}"
                     split_key = (symbol, date, round(ratio, 9))

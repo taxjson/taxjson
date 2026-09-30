@@ -203,5 +203,105 @@ class TestTransferSidecarDedup(unittest.TestCase):
         self.assertEqual(len(side['transactions']), 2)
 
 
+# ------------------------------------------------ detection, schema, numbers
+class TestDetectUtf16(unittest.TestCase):
+    """R1-70: detection opened every file as utf-8-sig, so a UTF-16
+    export the parsers read could not be routed."""
+
+    def test_utf16_ib_statement_is_detected(self):
+        from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
+        body = HEAD + TRADES_H + _trade('QZA', '2025-05-01, 09:30:00',
+                                        10, 10, -100, -1)
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / 'x.csv'
+            p.write_bytes(body.encode('utf-16'))
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(detect_brokerage(p), 'ib')
+
+
+class TestSchemaTrades(unittest.TestCase):
+    def _v(self, **tx):
+        from taxjson.lib.brokerages.schema import validate_transactions
+        base = {'action': 'BUYSELL', 'date': '2025-06-02',
+                'symbol': 'ZZZ250620C00050000.TO', 'currency': 'CAD'}
+        base.update(tx)
+        return validate_transactions([base])
+
+    def test_sell_whose_commission_exceeds_gross_is_legal(self):
+        # S017-00: closing an option at 0.01 nets negative proceeds;
+        # the engine models it, the schema refused it (every run rc 1).
+        errs, _ = self._v(quantity=-1, price=0.01, net_amount=-9.95,
+                          fee=10.95)
+        self.assertEqual(errs, [])
+
+    def test_negative_buy_net_is_still_an_error(self):
+        errs, _ = self._v(quantity=1, price=0.01, net_amount=-9.95)
+        self.assertTrue(errs)
+
+    def test_assign_stock_leg_notional_is_checked(self):
+        # S017-02: a Webull assignment stock leg with Proceeds x10 off
+        # (or blank) booked silently — ASSIGN skipped the check.
+        for net in (1900.0, 0.0):
+            errs, warns = self._v(action='ASSIGN', symbol='ABBV.US',
+                                  currency='USD', quantity=100,
+                                  price=190.0, net_amount=net)
+            self.assertTrue(any('far from' in w for w in warns + errs),
+                            net)
+        errs, warns = self._v(action='ASSIGN', symbol='ABBV.US',
+                              currency='USD', quantity=100, price=190.0,
+                              net_amount=19000.0)
+        self.assertEqual((errs, warns), ([], []))
+
+
+class TestCommaNumbers(unittest.TestCase):
+    def test_leading_zero_group_is_not_a_thousands_separator(self):
+        # S055-08: '0,125' is a decimal comma, never 125.
+        from taxjson.lib.brokerages.base import (parse_strict_number,
+                                                 check_comma_grouping)
+        for bad in ('0,125', '00,125', '-0,500'):
+            with self.assertRaises(BrokerageParseError, msg=bad):
+                parse_strict_number(bad)
+            with self.assertRaises(BrokerageParseError, msg=bad):
+                check_comma_grouping(bad)
+        self.assertEqual(parse_strict_number('1,250'), 1250.0)
+        self.assertEqual(parse_strict_number('0.125'), 0.125)
+
+    def test_sibling_helpers_refuse_leading_zero_group(self):
+        from taxjson.lib.brokerages._crypto_common import strict_money
+        with self.assertRaises(ValueError):
+            strict_money('0,125')
+        self.assertEqual(strict_money('1,250.5'), 1250.5)
+        from taxjson.lib.brokerages.rbc_direct import rbc_number
+        with self.assertRaises(Exception):
+            rbc_number('0,125', path=Path('r.csv'), line=1, column='Price')
+        from taxjson.bin.xlsx_to_csv import _GROUPED_NUMBER_RE
+        self.assertIsNone(_GROUPED_NUMBER_RE.match('0,125'))
+
+    def test_option_strike_with_thousands_separator(self):
+        # R1-170: '5,000.00' was cut at the comma -> strike 5.
+        from taxjson.lib.brokerages.questrade import QuestradeBrokerage
+        q = QuestradeBrokerage()
+        o = q.parse_option_from_description('CALL SPX 12/19/25 5,000.00')
+        self.assertEqual(q.format_occ_symbol(o['right'], o['base'],
+                                             o['expiry'], o['strike']),
+                         'SPX251219C05000000')
+        from taxjson.lib.brokerages.webull import WebullBrokerage
+        w = WebullBrokerage()
+        a = w.parse_option_from_description('CALL BKNG06/20/25 5,025')
+        self.assertEqual(a['strike'], '5025')
+
+    def test_ib_split_ratio_with_thousands_separator(self):
+        # S058-19: 'Split 1 for 1,000' was read as 1 for 1.
+        body = (HEAD + TRADES_H
+                + _trade('QZX', '2025-01-10, 10:00:00', 5500, 1, -5500, -1)
+                + CA_H
+                + _ca('QZX(US9990000301) Split 1 for 1,000 (QZX, QZX CORP, '
+                      'US9990000301)', -5494.5))
+        _, txs, _ = _parse_ib(body)
+        sp = [t for t in txs if t['action'] == 'SPLIT']
+        self.assertEqual(len(sp), 1)
+        self.assertAlmostEqual(sp[0]['quantity'], 0.001)
+
+
 if __name__ == '__main__':
     unittest.main()

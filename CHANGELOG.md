@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A penny option close no longer stops `taxjson run`.** A sell whose
+  commission exceeds its gross (closing at 0.01) nets negative proceeds;
+  the schema used to refuse it on the always-strict parse, although the
+  engine books it. An assignment stock leg's money is now checked
+  against quantity x strike like any trade (audit S017-00, S017-02).
+- **Comma-grouped numbers read right.** `0,125` is refused as a decimal
+  comma everywhere (it read as 125); an option strike written `5,000.00`
+  keeps its thousands (it was cut to strike 5); an IB `Split 1 for
+  1,000` is 1-for-1000 (audit S055-08, R1-170, S058-19).
+- **UTF-16 exports are routed.** Broker detection decodes a UTF-16 BOM
+  the way the IB, Questrade and RBC parsers do (audit R1-70).
 - **Security overrides are stricter and reach every row.**
   `ticker_extraction_overrides.txt` keys now match whole words (on IB,
   where the description is the bare ticker, `BN` no longer rewrites
