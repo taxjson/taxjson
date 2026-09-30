@@ -183,10 +183,17 @@ def _prompt_election(event: CorporateAction, country: str) -> ElectionRecord:
                     continue
                 raw = '0'
             try:
-                hints[hint_key] = float(raw)
-                break
+                val = float(raw)
             except ValueError:
                 print(f"  '{raw}' isn't a number — try again", file=sys.stderr)
+                continue
+            from taxjson.lib.corp_actions import hint_value_problem
+            prob = hint_value_problem(hint_key, val)
+            if prob:
+                print(f"  {prob} — try again", file=sys.stderr)
+                continue
+            hints[hint_key] = val
+            break
 
     notes = _ask("Notes (optional, will be saved with the election): ")
     return ElectionRecord(

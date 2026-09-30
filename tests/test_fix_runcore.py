@@ -917,5 +917,36 @@ class TestUnblendedBooksAreNotRunClean(unittest.TestCase):
             self.assertNotIn("blended", res.detail)
 
 
+class TestElectionHintsAreAmounts(unittest.TestCase):
+    """S039-00: `elect --hint allocated_acb=-2000` (and the interactive
+    prompt) saved a negative hint — basis created from nothing, negative
+    dividend income — and nan/inf failed only on the next run."""
+
+    def test_cli_refuses_negative_and_non_finite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            for v in ("-2000", "nan", "inf"):
+                with self.subTest(v=v):
+                    r = _run_cli(root, "elect", "margin", "--set",
+                                 "ev1=rollover_s_86_1", "--hint",
+                                 f"allocated_acb_cad={v}")
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn("allocated_acb_cad", r.stderr)
+            self.assertFalse((root / "inputs" / "margin" / "manifest.json")
+                             .exists() and "-2000" in (
+                root / "inputs" / "margin" / "manifest.json").read_text())
+
+    def test_hand_edited_negative_hint_is_refused_on_load(self):
+        from taxjson.lib.corp_actions import Manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "manifest.json"
+            p.write_text(json.dumps({"elections": {"ev1": {
+                "summary": "x", "election": "taxable_deemed_dividend",
+                "hints": {"fmv_per_share": -3}}}}))
+            with self.assertRaises(ValueError) as cm:
+                Manifest.load(p)
+        self.assertIn("fmv_per_share", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3671,6 +3671,14 @@ def cmd_elect(args: argparse.Namespace) -> None:
             k, v = h.split("=", 1)
             try:
                 hints[k.strip()] = float(v)
+                from taxjson.lib.corp_actions import hint_value_problem
+                _prob = hint_value_problem(k.strip(), hints[k.strip()])
+                if _prob:
+                    # A negative allocated ACB created basis from
+                    # nothing and a negative FMV booked negative
+                    # dividend income, saved at exit 0; nan/inf failed
+                    # only on the next run (S039-00).
+                    sys.exit(f"taxjson elect --hint: {_prob}")
             except ValueError:
                 # Every hint consumer float()s its value — storing the
                 # raw string reported "Election saved" and then crashed

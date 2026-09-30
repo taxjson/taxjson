@@ -2151,6 +2151,27 @@ class ElectionRecord:
     hints: Dict[str, Any] = field(default_factory=dict)
 
 
+def hint_value_problem(key: str, value: Any) -> Optional[str]:
+    """Why an election hint value is unusable, or None. Every hint (an
+    FMV per share, an allocated ACB, cash boot, a source basis) is a
+    non-negative amount: a negative one created cost basis from nothing
+    or booked negative dividend income, and nan/inf was saved and only
+    failed the next run (S039-00)."""
+    import math
+    if isinstance(value, bool):
+        return f"{key}={value!r} is not a number"
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return f"{key}={value!r} is not a number"
+    if not math.isfinite(f):
+        return f"{key}={value!r} is not a finite number"
+    if f < 0:
+        return (f"{key}={value!r} is negative — every election hint is "
+                f"an amount (enter it as a positive figure)")
+    return None
+
+
 class Manifest:
     """JSON-backed elections store.
 
@@ -2199,6 +2220,11 @@ class Manifest:
             )
         records = {}
         for eid, rec in (data.get('elections') or {}).items():
+            for hk, hv in (rec.get('hints') or {}).items():
+                prob = hint_value_problem(hk, hv)
+                if prob:
+                    raise ValueError(f"manifest at {path}: election "
+                                     f"{eid}: hint {prob}")
             records[eid] = ElectionRecord(
                 event_id=eid,
                 summary=rec.get('summary', ''),

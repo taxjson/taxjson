@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Election hints must be non-negative amounts.** `elect --hint`, the
+  interactive prompt and a hand-edited manifest.json refuse a negative,
+  nan or inf hint (a negative allocated ACB created basis from nothing,
+  a negative FMV booked negative dividend income, and nan was saved to
+  fail only on the next run) (audit S039-00).
 - **audit fails when a configured account has no books** (it printed
   "✓" over the others and exited 0, and the checklist marked every
   disposition tied) (audit S047-16).
