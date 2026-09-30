@@ -32,7 +32,7 @@ Everything runs locally on your machine. Your transaction data never leaves your
 | Questrade             | Yes      | Yes     | —      | Account activity CSV                               |
 | RBC Direct Investing  | Yes      | Yes     | —      | Transaction history CSV                            |
 | Webull                | Yes      | Yes     | —      | Account statement CSV; option expiry/assignment rows not yet parsed (see KNOWN_ISSUES) |
-| Kraken                | —        | —       | Yes    | Trades + Ledgers CSV (same folder: the ledger says which coin paid each fee) |
+| Kraken                | —        | —       | Yes    | Trades + Ledgers CSV (same folder: the ledger says which coin paid each fee; a ledger trade the trades export lacks is an `UNBOOKED` warning, fatal under `run --strict`) |
 | Coinbase              | —        | —       | Yes    | Transaction history CSV                            |
 | **Any other broker**  | Yes      | —       | —      | `generic_*.csv` + a TOML column mapping (see `examples/generic_wealthsimple.toml`) |
 
@@ -363,7 +363,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `inputs/slips/` | Broker T5008 / 1099-B slip CSVs for `taxjson reconcile-slips` (the checklist looks here). Not an account folder — needs no `[accounts.slips]`. |
 | `ticker.map` | Symbol rules, one per line: `GLOBAL from to` (plain rename, every stage), `TOBASE from to` (cross-listing consolidated in the base pipeline only), `JOURNAL from to` (Norbert's Gambit pair — consolidated AND netted in holdings), `DELETE from` (drop a pure artifact), `DISTINCT a b` (records that two look-alike listings are deliberately separate securities — a CDR vs its US underlying — and silences the scan's MAP-GAP nag; changes no symbol). For TOBASE pairs the holdings view keeps the listings separate **except** where the broker's own transfer rows prove a depot flip — the holdings export applies those evidenced quantities from the transfer sidecars (see `taxjson transfers`), so `JOURNAL` is only for intrinsically fungible classes like DLR's gambit units. `taxjson init` writes a commented stub. |
 | `distributions.map` | Non-cash fund distributions: `SYMBOL RECORD_DATE PER_SHARE` (negative = ROC). |
-| `t1135.map`, `yf_ticker.map`, `sector.map`, `crypto_ticker.map` | Per-symbol overrides: T1135 domicile, yfinance spelling, timeline sectors, crypto Yahoo-collision fixes. |
+| `t1135.map`, `yf_ticker.map`, `sector.map`, `crypto_ticker.map` | Per-symbol overrides: T1135 domicile, yfinance spelling, timeline sectors, crypto Yahoo-collision fixes (`crypto_ticker.map` is read from the project root whatever the cwd; editing it re-prices under `run --fast`). |
 | `phantoms.json`, `claimed_losses.txt` | Missing-basis phantoms (auto-applied); losses actually claimed on filed returns (`YEAR AMOUNT`). |
 | `work/` | Intermediate per-stage artifacts and price/FX caches. Rebuildable; gitignored. |
 | `reports/` | Everything you read: `<account>.sum`, `wash_radar_*`, `fees.rpt`, holdings, `exports/`. Rebuildable. |

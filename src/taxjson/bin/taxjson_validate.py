@@ -23,7 +23,14 @@ from taxjson.lib import cli_diag
 
 PROG = "taxjson-validate"
 
-def validate_transactions(transactions, filename="input"):
+def validate_transactions(transactions, filename="input",
+                          require_prices=False):
+    """`require_prices`: a BUYSELL/DIVIDEND that moves a nonzero
+    quantity at price 0 AND net 0 is an ERROR — the crypto path, where
+    such a row is one taxjson-fill-crypto could not price (a failed
+    Yahoo lookup): $0 income, $0 cost or $0 proceeds, never a real
+    value. Equity books legitimately carry $0 rows (spin-off receipts,
+    gifted units), so the check is opt-in."""
     issues = defaultdict(list)
     warnings = defaultdict(list)
     
@@ -166,6 +173,21 @@ def validate_transactions(transactions, filename="input"):
             if price_val is not None and price_val < 0:
                 issues[context].append(f"Price is negative: {price_val}")
 
+        if (require_prices and action in {"BUYSELL", "DIVIDEND"}
+                and symbol not in ("USD", "CAD")
+                and nums["quantity"] is not None
+                and abs(nums["quantity"]) > 1e-12
+                and nums["price"] is not None and abs(nums["price"]) < 1e-8
+                and nums["net_amount"] is not None
+                and abs(nums["net_amount"]) < 1e-8):
+            issues[context].append(
+                f"Unpriced {action} {symbol} {date}: quantity "
+                f"{nums['quantity']:g} at price 0 and net 0 — the crypto "
+                f"price lookup failed, so this books $0 "
+                f"{'income' if action == 'DIVIDEND' else 'cost/proceeds'}"
+                f". Re-run online, add the price, or fix the symbol in "
+                f"crypto_ticker.map.")
+
         # 6. Currency validation
         currency = _s("currency")
         if not currency:
@@ -179,6 +201,11 @@ def main():
     parser = argparse.ArgumentParser(description="Validate taxjson for obvious mistakes")
     parser.add_argument("files", nargs="+", help="Input JSON file(s)")
     parser.add_argument("--warnings", action="store_true", help="Show warnings as well as errors")
+    parser.add_argument("--require-prices", action="store_true",
+                        help="ERROR on a BUYSELL/DIVIDEND with a nonzero "
+                             "quantity but price 0 and net 0 (an unpriced "
+                             "crypto row; `taxjson run` sets it for crypto "
+                             "accounts)")
     args = parser.parse_args()
     
     global_total_issues = 0
@@ -208,7 +235,8 @@ def main():
             global_total_issues += 1
             continue
             
-        issues, warnings = validate_transactions(data, filename=filename)
+        issues, warnings = validate_transactions(
+            data, filename=filename, require_prices=args.require_prices)
         for r in fx_fallback:
             if isinstance(r, dict):
                 issues[f"TX {r.get('id')} ({r.get('action')} "

@@ -2272,7 +2272,10 @@ class TestParserAudit202609Fixes(unittest.TestCase):
         # dedicated note.
         self.assertEqual(txs, [])
         self.assertIn("deposit x1", err)
-        self.assertIn("2 trade row(s) ignored", err)
+        # R1-104: with no trades export beside it, the unbooked trade
+        # is a loud UNBOOKED warning (counted per trade, not per row).
+        self.assertIn("warning: UNBOOKED:", err)
+        self.assertIn("1 trade(s) of 1", err)
         self.assertIn("supply the trades export", err)
         self.assertIn("not parsed", err)
         self.assertNotIn("trade x2", err)

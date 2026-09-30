@@ -94,6 +94,33 @@
   trade in that broker's CSVs vanished with exit 0. Converted .tt files
   now live at `work/<account>_tt_<stem>.json`; the first run after
   upgrading removes the old `<account>_<stem>.json` copies as stale.
+- **Coinbase Advanced Trade on a crypto-quoted pair books both coins.**
+  A fill on `ETH-BTC` booked only the ETH; the BTC spent (or received)
+  was never disposed of (or acquired), so its gain went missing and a
+  phantom BTC position stayed in the book. The quote coin's leg is now
+  booked at the fill's stated value; Notes that don't say how much of it
+  moved stop the parse.
+- **Coinbase Buy/Sell with a blank Total.** It booked $0 cost or $0
+  proceeds with no warning. The Total is now rebuilt from Subtotal ± fee
+  (or quantity × price ± fee), with a note; a row with nothing to rebuild
+  it from stops the parse, naming the row.
+- **Kraken ledger trades missing from the trades export.** They were
+  dropped behind the same note a complete run prints. Each unmatched
+  trade is now an `UNBOOKED` warning on the console (count, dates,
+  masked refids), and `taxjson run --strict` stops on it. A ledger whose
+  trades are all matched no longer prints the "parsed to 0 transactions"
+  warning.
+- **Crypto price lookups that fail are no longer $0.** A Yahoo error, or
+  a reply with no usable close, left staking income and cost basis at $0
+  and the run said "Validation passed". Now fill-crypto warns, each
+  unpriced row is a validation ERROR on the console, and `run --strict`
+  stops. A crypto validation error also no longer crashes `taxjson run`
+  with a TypeError.
+- **`crypto_ticker.map` at the project root is always read.** It was
+  ignored unless the cwd was the project root, and a map in the cwd
+  applied to whatever project was run. `run --fast` now re-prices after
+  the map is added, edited or deleted.
+
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
   new shares' cost), flagging a taxable spin-off booked at $0 and showing

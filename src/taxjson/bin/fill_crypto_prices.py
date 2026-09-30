@@ -4,6 +4,7 @@ import argparse
 import urllib.request
 import json
 import calendar
+import math
 import time
 import os
 
@@ -111,7 +112,15 @@ def get_crypto_price(symbol, date_str):
         closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
         for c in closes:
             if c is not None:
-                return float(c)
+                v = float(c)
+                if math.isfinite(v) and v > 0:
+                    return v
+        # HTTP 200 with a null/empty/non-positive close (a data gap or
+        # an unfinished candle) is a failed lookup like any other — it
+        # used to fall through to `return 0.0` with no warning at all
+        # (audit S000-00).
+        raise ValueError(f"Yahoo returned no usable close for "
+                         f"{y_symbol}-USD (close={closes!r})")
     except Exception as e:
         cli_diag.warn(PROG, f"failed to fetch crypto price for {symbol} on {date_str}: {e}")
     return 0.0
@@ -119,15 +128,34 @@ def get_crypto_price(symbol, date_str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", nargs="?", help="Input JSON file (taxjson schema)")
+    parser.add_argument(
+        "--project-root", metavar="DIR",
+        help="Read crypto_ticker.map from this project root (then the "
+             "input file's folder) instead of the current directory. "
+             "`taxjson run` always passes it, so the project's own map "
+             "applies whatever the cwd and a map in the cwd never "
+             "leaks into another project.")
     args = parser.parse_args()
 
-    # User overrides: cwd first, then the input file's directory (the
-    # closer to the data, the higher the precedence).
-    _dirs = ["."]
+    # User overrides: the project root (or, standalone, the cwd), then
+    # the input file's directory (the closer to the data, the higher
+    # the precedence).
+    _dirs = [args.project_root or "."]
     if args.input:
         _dirs.append(os.path.dirname(os.path.abspath(args.input)) or ".")
+    # Applied for THIS run only: `taxjson run` dispatches the tool
+    # in-process, and a permanent update of the module-level table
+    # carried one project's map into every later run in the process.
+    _saved = dict(SYMBOL_OVERRIDES)
     SYMBOL_OVERRIDES.update(load_symbol_overrides(_dirs))
+    try:
+        return _fill(args)
+    finally:
+        SYMBOL_OVERRIDES.clear()
+        SYMBOL_OVERRIDES.update(_saved)
 
+
+def _fill(args):
     cache = load_cache()
     cache_dirty = False
 
@@ -143,6 +171,7 @@ def main():
         sys.exit(1)
 
     transactions = []
+    unpriced = []
     for tx in loaded:
         if tx.action in ('BUYSELL', 'DIVIDEND'):
             # Stablecoin (or a hand-entered `USD`-symbol DIVIDEND, i.e.
@@ -214,6 +243,8 @@ def main():
                         cache_dirty = True
 
                 fetched_price = cache.get(cache_key, 0.0)
+                if not fetched_price > 0:
+                    unpriced.append(tx)
                 if fetched_price > 0:
                     tx.price = fetched_price
                     # DIVIDEND rows from staking carry the reward qty (set by
@@ -231,6 +262,22 @@ def main():
 
     if cache_dirty:
         save_cache(cache)
+    if unpriced:
+        # Never silently 0 (R1-105): these rows still carry price 0 —
+        # $0 income, $0 cost basis, or $0 proceeds. The crypto path's
+        # `taxjson-validate --require-prices` turns each into an ERROR
+        # (fatal under `taxjson run --strict`).
+        shown = ", ".join(f"{t.action} {t.symbol} {t.date}"
+                          for t in unpriced[:10])
+        more = (f" (+{len(unpriced) - 10} more)"
+                if len(unpriced) > 10 else "")
+        cli_diag.warn(
+            PROG,
+            f"{len(unpriced)} row(s) left UNPRICED (price 0 -> $0 "
+            f"income/cost/proceeds): {shown}{more}. The price lookup "
+            f"failed (see above); re-run when Yahoo is reachable, add "
+            f"the price to the row, or map the symbol in "
+            f"crypto_ticker.map.")
 
     output_data = {
         "transactions": [tx.to_dict() for tx in transactions]
