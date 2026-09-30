@@ -63,6 +63,24 @@ class LabelValueCells(unittest.TestCase):
             self.assertEqual(main([str(p), "--check", "--no-denylist"]), 1)
 
 
+class FrenchStreet(unittest.TestCase):
+    """S036-16: '1234 rue Saint-Denis' in a statement preamble."""
+
+    def test_preamble_and_free_text(self):
+        out, rep = redact_text("JANE SAMPLE\n1234 rue Saint-Denis\n"
+                               "Date,Symbol,Side,Qty,Price\n2025-01-01,XYZ,Buy,1,2\n")
+        self.assertNotIn("Saint-Denis", out)
+        out, rep = redact_text("Date,Description,Amount\n"
+                               "2025-01-01,Cheque to 55 boulevard de la Concorde,10\n")
+        self.assertNotIn("Concorde", out)
+        self.assertGreaterEqual(rep.addresses, 1)
+
+    def test_no_false_positive_on_quantities(self):
+        text = "Date,Description,Qty\n2025-01-01,Bought 100 Route Inc shares,100\n"
+        out, _ = redact_text(text)
+        self.assertIn("100", out)
+
+
 class IdColumnLabels(unittest.TestCase):
     """S037-00: client / plan / portfolio / acct-number columns."""
 
@@ -101,6 +119,33 @@ class PersonColumns(unittest.TestCase):
         text = "Symbol,Account #,Owner\nABC,55512345,ABC\n"  # pii-ok
         out, _ = redact_text(text)
         self.assertEqual(out.splitlines()[1], "ABC,99900001,REDACTED")
+
+
+class NameShapes(unittest.TestCase):
+    """S037-05: accented names, statement-vocabulary names, UPPER case."""
+
+    def test_accented_names(self):
+        out, rep = redact_text("Josée Tremblay\nDate,Description,Amount,Symbol\n"
+                               "2025-01-01,E-TRANSFER FROM JOSÉE TREMBLAY,100,\n")
+        self.assertNotIn("Tremblay".upper(), out.upper())
+
+    def test_vocabulary_word_names_go_to_review(self):
+        text = ("Bill Sample\nJane Price\nDate,Description,Amount,Symbol\n"
+                "2025-01-02,E-TRANSFER FROM BILL SAMPLE,100,\n"
+                "2025-01-03,Wire from Bill Sample,100,\n")
+        out, rep = redact_text(text)
+        flagged = {n for n, _ in rep.review}
+        self.assertTrue({1, 2, 4, 5} <= flagged, rep.review)
+
+    def test_all_vocabulary_phrase_not_flagged(self):
+        out, rep = redact_text("Date,Description,Amount\n"
+                               "2025-01-02,Transfer to Margin Account,100\n")
+        self.assertEqual(rep.review, [])
+        self.assertIn("Margin Account", out)
+
+    def test_flat_description_note(self):
+        _, rep = redact_text("Date,Description,Amount,Symbol\n2025-01-01,x,1,\n")
+        self.assertTrue(rep.description_columns)
 
 
 if __name__ == "__main__":

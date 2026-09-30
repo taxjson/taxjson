@@ -171,8 +171,12 @@ _HEADER_LINE = re.compile(
 _ACCOUNT_HEADER_NAME = re.compile(
     r'^(\s*"?(?:account|acct)[^:\r\n"]{0,20}:[^,"\r\n]*,\s*)', re.IGNORECASE)
 
+# Letters, accented ones included (Canada-first: Josée, Hélène, Côté).
+_UP = "A-ZÀ-ÖØ-Þ"
+_AL = "A-Za-zÀ-ÖØ-öø-ÿ"
 # A capitalised name: 1-4 words, Title-case or UPPER, or initials.
-_NAME_WORDS = r"(?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)(?:[ ]+(?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)){0,3}"
+_NAME_WORD = rf"(?-i:[{_UP}][{_AL}'’-]+|[{_UP}]\.?)"
+_NAME_WORDS = _NAME_WORD + r"(?:[ ]+" + _NAME_WORD + r"){0,3}"
 _NAME_AFTER = re.compile(
     r"(\b(?:initiated|requested|authori[sz]ed|ordered)\s+by\s+"
     r"|\b(?:beneficiary|payee|remitter|ordering customer|in favou?r of)\s*[:-]?\s*"
@@ -183,7 +187,7 @@ _NAME_AFTER = re.compile(
 _NAME_FROM_TO = re.compile(
     r"(\b(?:wire|e-?transfer|interac|payment|transfer|deposit|withdrawal"
     r"|cheque|check|paid|sent|received|funds)\s+(?:from|to)\s+)"
-    r"((?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)(?:[ ]+(?-i:[A-Z][A-Za-z'’-]+|[A-Z]\.?)){1,3})",
+    r"(" + _NAME_WORD + r"(?:[ ]+" + _NAME_WORD + r"){1,3})",
     re.IGNORECASE)
 
 # Canada Post alphabet: no D F I O Q U anywhere, no W Z as first letter.
@@ -206,6 +210,19 @@ _STREET = re.compile(
     r"(?:" + _STREET_SUFFIX + r")\b\.?"
     r"(?:\s+(?:N|S|E|W|NE|NW|SE|SW|North|South|East|West)\b\.?)?"
     r"(?:\s*,?\s*(?:unit|apt|suite|ste|#)\.?\s*#?\s*\w+)?", re.IGNORECASE)
+# French order (Québec): number, the generic word first and lower-case,
+# then the capitalised name — "1234 rue Saint-Denis", "55 boulevard de
+# la Concorde", "10, chemin du Lac".
+_STREET_FR = re.compile(
+    r"(?<![\w.-])(?:(?:app|apt|bureau|unit|suite)\.?\s*#?\s*\w+\s*[,-]\s*)?"
+    r"\d{1,6}[A-Za-z]?(?:-\d{1,6})?\s*,?\s+"
+    r"(?:rue|avenue|av|boulevard|boul|bd|chemin|ch|route|rte|rang|place"
+    r"|mont[ée]e|c[ôo]te|all[ée]e|impasse|promenade|croissant|terrasse"
+    r"|carr[ée]|autoroute|ruelle|quai|square)\.?\s+"
+    r"(?:(?:de\s+la|de\s+l['’]|de|du|des|la|le|les|l['’]|d['’])\s*)?"
+    rf"(?-i:[{_UP}][\w'’.-]*)(?:[ -](?-i:[{_UP}][\w'’.-]*)){{0,3}}"
+    r"(?:\s*,?\s*(?:app|apt|bureau|unit|suite|#)\.?\s*#?\s*\w+)?",
+    re.IGNORECASE)
 _PO_BOX = re.compile(r"\b(?:P\.?\s*O\.?\s*Box|Postal Box)\s*#?\s*\d+", re.IGNORECASE)
 _SIN_SEP = re.compile(r"(?<![\d-])\d{3}([ -])\d{3}\1\d{3}(?![\d-])")
 _SIN_CTX = re.compile(
@@ -237,7 +254,9 @@ _FREE_TEXT_COLS = ("description", "notes", "note", "memo", "comment",
                    "comments", "details", "remarks", "payee", "narrative",
                    "particulars", "security description",
                    "transaction description", "activity description")
-_REVIEW_NAME = re.compile(r"(?-i:\b[A-Z][a-z]+(?:\s+[A-Z]\.)?\s+[A-Z][a-z]+\b)")
+_REVIEW_NAME = re.compile(
+    r"(?-i:(?<![\w])[" + _UP + r"][a-zß-öø-ÿ]+(?:\s+[" + _UP + r"]\.)?\s+["
+    + _UP + r"][a-zß-öø-ÿ]+(?![\w]))")
 _REVIEW_DIGITS = re.compile(r"(?<![A-Za-z0-9.])\d{7,}(?![A-Za-z0-9])")
 # Words that make a capitalised phrase NOT a person's name (preamble
 # lines, the review pass). Lower-case; compared case-insensitively.
@@ -485,19 +504,37 @@ def compile_patterns(pats: List[str]) -> Tuple[List[re.Pattern], List[str]]:
     return good, bad
 
 
-def _looks_like_name_line(text: str) -> bool:
-    """A preamble line that is nothing but a person's name: 2-5
-    capitalised alphabetic words, none of them statement vocabulary."""
+def _name_line_kind(text: str) -> Optional[str]:
+    """'name' for a line that is nothing but a person's name (2-5
+    capitalised words, accented letters included, no statement
+    vocabulary); 'mixed' when some — not all — of those words are
+    statement vocabulary ("Bill Sample", "Jane Price": a name the
+    redactor will not guess at, so the line goes to REVIEW); else None."""
     words = text.split()
     if not 2 <= len(words) <= 5 or ":" in text:
-        return False
+        return None
+    vocab = 0
     for w in words:
         core = w.strip(".,'’-")
-        if not core or not re.fullmatch(r"[A-Za-z][A-Za-z'’.-]*", w.strip(",")):
-            return False
-        if not core[0].isupper() or core.lower() in _VOCAB:
-            return False
-    return True
+        if not core or not re.fullmatch(rf"[{_AL}][{_AL}'’.-]*", w.strip(",")):
+            return None
+        if not core[0].isupper():
+            return None
+        vocab += core.lower() in _VOCAB
+    if not vocab:
+        return "name"
+    return "mixed" if vocab < len(words) else None
+
+
+def _looks_like_name_line(text: str) -> bool:
+    return _name_line_kind(text) == "name"
+
+
+def _vocab_split(words: List[str]) -> Tuple[int, int]:
+    """(statement-vocabulary words, words) of a candidate name."""
+    n = sum(1 for w in words
+            if w.lower() in _VOCAB or re.fullmatch(r"[A-Z]{3}", w))
+    return n, len(words)
 
 
 def _blank_cells(line: str) -> str:
@@ -524,10 +561,14 @@ def _mapper(table: Dict[str, str],
     return repl
 
 
-def _redact_contact(line: str, rep: Report) -> str:
+def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     """Phones, postal codes, street addresses, SIN/SSN, honorific /
-    initiated-by names — anywhere on the line."""
+    initiated-by names — anywhere on the line. A candidate name that
+    mixes a statement word with other words ("FROM BILL SAMPLE") is
+    kept but its line is listed for REVIEW."""
     line, k = _STREET.subn("REDACTED", line)
+    rep.addresses += k
+    line, k = _STREET_FR.subn("REDACTED", line)
     rep.addresses += k
     line, k = _PO_BOX.subn("REDACTED", line)
     rep.addresses += k
@@ -550,20 +591,21 @@ def _redact_contact(line: str, rep: Report) -> str:
     line, k = _SSN.subn("REDACTED", line)
     rep.sins += k
 
-    def name(m: re.Match) -> str:
-        if any(w.strip(".").lower() in _VOCAB for w in m.group(2).split()):
-            return m.group(0)
-        rep.names += 1
-        return m.group(1) + "REDACTED"
-    line = _NAME_AFTER.sub(name, line)
+    mixed = []
 
-    def name_from_to(m: re.Match) -> str:
-        words = [w.strip(".") for w in m.group(2).split()]
-        if any(w.lower() in _VOCAB or re.fullmatch(r"[A-Z]{3}", w) for w in words):
-            return m.group(0)
-        rep.names += 1
-        return m.group(1) + "REDACTED"
-    line = _NAME_FROM_TO.sub(name_from_to, line)
+    def decide(m: re.Match) -> str:
+        v, n = _vocab_split([w.strip(".") for w in m.group(2).split()])
+        if v == 0:
+            rep.names += 1
+            return m.group(1) + "REDACTED"
+        if v < n:
+            mixed.append(True)
+        return m.group(0)
+    line = _NAME_AFTER.sub(decide, line)
+    line = _NAME_FROM_TO.sub(decide, line)
+    if mixed and lineno:
+        rep.review.append((lineno, "a name-like phrase containing a "
+                                   "statement word (not redacted)"))
     return line
 
 
@@ -592,7 +634,7 @@ def _identity_cols(low: List[str]) -> List[int]:
     cols = [i for i, c in enumerate(low) if _is_person_col(c)]
     if cols or any(_is_account_col(c) for c in low):
         cols += [i for i, c in enumerate(low) if c in _HOLDER_NAME_COLS]
-    return sorted(cols)
+    return sorted(set(cols))
 
 
 # HTML statements (IB's .html reports): a label cell naming an identity
@@ -676,6 +718,9 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
             txid_cols["__flat__"] = [i for i, c in enumerate(low) if c in _TXID_COLS]
             free_cols["__flat__"] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                      if c in _FREE_TEXT_COLS]
+            for _i, _name in free_cols["__flat__"]:
+                if _name not in rep.description_columns:
+                    rep.description_columns.append(_name)
         if len(nonempty) >= 3:
             in_preamble = False
         sect = low[0] if is_ib_row else "__flat__"
@@ -734,10 +779,15 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
         # identity in its entirety (name, street, "City, PROV <postal code>").
         if in_preamble and not is_ib_row and nonempty:
             joined = " ".join(c.strip() for c in nonempty)
-            if (_looks_like_name_line(joined) or _STREET.search(joined)
+            kind = _name_line_kind(joined)
+            if (kind == "name" or _STREET.search(joined)
+                    or _STREET_FR.search(joined)
                     or _POSTAL.search(joined) or _PO_BOX.search(joined)):
                 line = _blank_cells(line)
                 rep.identity_rows += 1
+            elif kind == "mixed":
+                rep.review.append((lineno, "name-like words (one of them a "
+                                           "statement word) in a preamble line"))
         for orig, ph in ordered:
             if orig in line:
                 line = id_pats[orig].sub(ph, line)
@@ -747,7 +797,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
         line = _WALLET.sub(wallet_repl, line)
         line = _TXID.sub(txid_repl, line)
         if not header_row:
-            line = _redact_contact(line, rep)
+            line = _redact_contact(line, rep, lineno)
         for pat in compiled:
             line, k = pat.subn("REDACTED", line)
             rep.patterns += k

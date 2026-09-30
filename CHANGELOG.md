@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **redact: Québec addresses and accented or ambiguous names.** A
+  French-order street line (`1234 rue Saint-Denis`) is blanked like an
+  English one; names with accented letters (`Josée Tremblay`) are
+  recognised; a name that contains a statement word (`Bill Sample`,
+  `Jane Price`) is listed under REVIEW instead of passing silently, and
+  a flat CSV's Description column gets the "may still name people" note
+  (audit S036-16, S037-05).
+
 - **redact: label cells, other id columns, plan parties.** A Webull-style
   `Account Number / Numéro de compte:,,,,<id>` or `Name:,<name>` preamble
   row has its value replaced (the id survived and the report said "none
