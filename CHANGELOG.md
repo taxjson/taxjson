@@ -95,6 +95,40 @@
   `amountusd` now uses it for both legs, and `taxjson-fill-crypto`
   values both legs at the received coin's fair value (the spent coin's
   when the received one has no price).
+- **`taxjson fetch` covers the superficial-loss window and keeps
+  tokens out of error messages.** The default Questrade window for a
+  tax year now runs Dec 1 of the prior year through Jan 31 of the next
+  (was Dec 15 .. Jan 15): a repurchase on Jan 16-30 or Dec 1-14 in a
+  fetch-only account (an RRSP buying back what the margin account sold
+  at a loss) was never seen, so a permanently denied loss was allowed.
+  An activity with no `netAmount`/`grossAmount`/`commission` is written
+  with a blank cell, so the parser refuses it instead of dropping a
+  dividend as a "zero-net" row. A refused redirect no longer prints the
+  redirect URL's query (the Flex token or Questrade refresh token). The
+  live-holdings snapshot takes an option's suffix from the account's
+  books when they hold that contract, so a CDR such as AMZN.TO no longer
+  makes the account's US AMZN option look Montreal-listed (a false
+  verify/sanity mismatch).
+- **taxjson-merge never emits a partial merge.** The legacy merge that
+  builds the crypto books, the blended base, `sheltered_base.json` and
+  the audit tie-out printed "cannot read" and exited 0 with the
+  unreadable file's rows missing — `run --fast` over a damaged cached
+  Coinbase book dropped half the crypto gains with a clean console. A
+  missing or unreadable input is now an error (exit 1, nothing on
+  stdout), as in taxjson-merge2.
+- **ticker.map means one thing everywhere.** Rule symbols are
+  upper-cased on load (a lower-case rule used to rename nothing while
+  `taxjson scan` called it live), a BOM and inline `# notes` are
+  stripped, and renames chain to their end (`GLOBAL OLD.US NEW.US` plus
+  `TOBASE NEW.US NEW.TO` now sends OLD.US to NEW.TO instead of splitting
+  the pool into a phantom short). `taxjson run` refuses a map with a
+  rename cycle, one symbol renamed to two different targets, or a
+  `DISTINCT` pair that the renames pool together. Scan's MAP-UNUSED
+  note follows chains and judges a rule the way the engine applies it:
+  a suffix-less `GLOBAL QQOL QQNW` that matches only `QQOL.US` is
+  reported with a hint to write the suffixed form. A malformed
+  `ticker_extraction_overrides.txt` line now stops the run by
+  file:line instead of being skipped.
 - **Corporate-action elections say what the law says.** The s.85.1
   share-for-share rollover is automatic when it applies (you opt out by
   reporting the gain); taxjson described it backwards and printed a
