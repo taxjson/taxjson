@@ -193,10 +193,12 @@ TAXABLE_ONLY = {"inputs-frozen", "roc-entered", "missing-history", "audit",
 
 
 def is_us(country: str) -> bool:
-    return str(country or "").strip().lower() in ("us", "usa")
+    """Strict (lib/country): an unknown or missing country raises."""
+    from taxjson.lib.country import is_usa
+    return is_usa(country)
 
 
-def step_meta(sid: str, country: str = "canada") -> Tuple[str, int, str, str, str]:
+def step_meta(sid: str, country: str) -> Tuple[str, int, str, str, str]:
     """(id, stage, title, command, why) for this project's country."""
     base = next(s for s in STEPS if s[0] == sid)
     if is_us(country) and isinstance(US_STEPS.get(sid), tuple):
@@ -730,7 +732,7 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
     names = _accounts_of(ctx, "taxable") + _accounts_of(ctx, "crypto")
     trade_basis = (str(ctx.settings.get("tax_date") or "").lower() == "trade"
                    or (not ctx.settings.get("tax_date")
-                       and is_us(ctx.settings.get("country", "canada"))))
+                       and is_us(ctx.settings.get("country"))))
     denied = perm = 0.0
     seen = False
     for n in names:
@@ -906,7 +908,7 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
 
 
 def d_t5008(ctx: Ctx) -> Result:
-    slip = "1099-B" if is_us(ctx.settings.get("country", "canada")) else "T5008"
+    slip = "1099-B" if is_us(ctx.settings.get("country")) else "T5008"
     files = slip_files(ctx.root)
     unread = _unread_slip_files(ctx.root)
     if not files:
@@ -997,7 +999,7 @@ def d_form_export(ctx: Ctx) -> Result:
 
 
 def d_t1135(ctx: Ctx) -> Result:
-    if str(ctx.settings.get("country", "canada")).lower() in ("us", "usa"):
+    if is_us(ctx.settings.get("country")):
         return Result("t1135", "n/a", "US project")
     code, out, err = ctx.sub("t1135", "--json")
     try:
@@ -1016,7 +1018,7 @@ def d_carryover(ctx: Ctx) -> Result:
     claimed = (ctx.root / "claimed_losses.txt").is_file()
     if code != 0 and not out:
         return Result("carryover", "blocked", _last_line(err) or f"exit {code}")
-    if is_us(ctx.settings.get("country", "canada")):
+    if is_us(ctx.settings.get("country")):
         what = ("record each year's Schedule D line 21 deduction against "
                 "ordinary income (not the line 6 / 14 carryover)")
     else:
@@ -1192,7 +1194,7 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
     if state.get("year") not in (None, ctx.year) and overrides:
         # Marks from another year's project copied along — not this year's.
         overrides = {}
-    us = is_us(ctx.settings.get("country", "canada"))
+    us = is_us(ctx.settings.get("country"))
     has_taxable = any(a.get("type") == "taxable" for a in ctx.accounts.values())
     results: List[Result] = []
     for sid, stage, title, cmd, why in STEPS:
@@ -1209,7 +1211,7 @@ def evaluate(ctx: Ctx, only: Optional[List[str]] = None,
             r = Result(sid, "todo", "skipped by --quick (run without it to check)")
         else:
             if progress and sid in SLOW:
-                progress(sid, step_meta(sid, ctx.settings.get("country", "canada"))[3])
+                progress(sid, step_meta(sid, ctx.settings.get("country"))[3])
             try:
                 r = DETECTORS[sid](ctx)
             except Exception as e:      # a detector must never take the list down

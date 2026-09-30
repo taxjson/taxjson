@@ -12,6 +12,7 @@ from pathlib import Path
 from taxjson.bin.taxjson_ticker_map import (
     _parse_map_file, load_map_file, map_file_problems, map_symbol,
     merge_renames)
+from tax_rules import rule
 
 
 def _map(text: str, bom: bool = False) -> Path:
@@ -94,6 +95,7 @@ class TestDistinctConflict(unittest.TestCase):
     """S053-03: DISTINCT UNH.US UNH.TO next to TOBASE UNH.US UNH.TO —
     the engine pooled them while sell-check said they stay separate."""
 
+    @rule("CA-ACB-04")
     def test_distinct_pair_joined_by_rename_is_a_problem(self):
         probs = map_file_problems(_map("TOBASE UNH.US UNH.TO\n"
                                        "DISTINCT UNH.US UNH.TO\n"))

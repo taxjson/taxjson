@@ -9,6 +9,7 @@ from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.option_boundary import straddling
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OPT = "Q260116C00050000.TO"
@@ -29,6 +30,7 @@ class TestStraddling(unittest.TestCase):
             T(date="2025-03-01", date_settle="2025-03-03", symbol="Z260116C00010000.TO", quantity=-1, price=2, net_amount=199.0),
             T(date="2025-04-01", date_settle="2025-04-02", symbol="Z260116C00010000.TO", quantity=1, price=1, net_amount=101.0)]
 
+    @rule("CA-OPT-07")
     def test_rows_and_instructions_under_grant_timing(self):
         rows = straddling(self.BOOK, 2025, "grant", 2025, filed_years={2025})
         kinds = {(r["close_kind"], r["units"]) for r in rows}
@@ -42,6 +44,7 @@ class TestStraddling(unittest.TestCase):
         rows = straddling(self.BOOK, 2025, "grant", 2025, filed_years=set())
         self.assertTrue({r["close_kind"]: r for r in rows}["assignment"]["action"].startswith("if 2025 was filed"))
 
+    @rule("CA-OPT-07")
     def test_close_timing_and_transition_wording(self):
         rows = straddling(self.BOOK, 2025, "close", None)
         self.assertTrue(all(r["timing"] == "close" for r in rows))
@@ -57,6 +60,7 @@ class TestStraddling(unittest.TestCase):
 
 
 class TestCommand(unittest.TestCase):
+    @rule("CA-OPT-07")
     def test_cli_reads_taxable_books_and_filed_locks(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

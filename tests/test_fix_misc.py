@@ -5,6 +5,7 @@ found unpinned (G1-*), plus the misc fixes. All data is synthetic."""
 import unittest
 
 from taxjson.lib import tax_estimate as te
+from tax_rules import rule
 
 
 class _EstimateCase(unittest.TestCase):
@@ -225,16 +226,18 @@ class TestOptionTimingFlagsPinned(unittest.TestCase):
 
     def test_flags(self):
         from taxjson.lib.pipeline import option_timing_flags as f
-        self.assertEqual(f({"year": 2026, "option_grant_timing_since": 2025}),
+        self.assertEqual(f({"year": 2026, "option_grant_timing_since": 2025,
+                            "country": "canada"}),
                          ["--option-premium-timing", "grant",
                           "--option-grant-since", "2025"])
         # Default: since = the project year.
-        self.assertEqual(f({"year": 2026}),
+        self.assertEqual(f({"year": 2026, "country": "canada"}),
                          ["--option-premium-timing", "grant",
                           "--option-grant-since", "2026"])
-        self.assertEqual(f({"option_premium_timing": "close"}),
+        self.assertEqual(f({"option_premium_timing": "close", "country": "canada"}),
                          ["--option-premium-timing", "close"])
-        self.assertEqual(f({"year": 2025, "option_buyback_loss_superficial": True}),
+        self.assertEqual(f({"year": 2025, "option_buyback_loss_superficial": True,
+                            "country": "canada"}),
                          ["--option-premium-timing", "grant",
                           "--option-grant-since", "2025", "--option-buyback-wash"])
         self.assertEqual(f({"year": 2025, "country": "us"}), [])
@@ -593,6 +596,7 @@ class TestExpiredOpenOptionWarns(unittest.TestCase):
     BUY = ("BUYSELL 2025-02-03 10:00:00 ZZQ251219C00015000.TO 1.00000000 CAD "
            "2.01000000 201.00000 0.00000\n")
 
+    @rule("CA-OPT-04")
     def test_missing_expiry_row_is_named(self):
         err, summ = self._run(self.BUY)
         for txt in (err, summ):

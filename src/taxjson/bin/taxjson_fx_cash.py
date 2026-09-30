@@ -223,8 +223,9 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
 def apply_jurisdiction(net_gain: float, country: str) -> Dict[str, Any]:
     """The reportable figure. Canada (s.39(1.1)): only the net beyond
     $200 counts, symmetric for losses. US (§988): ordinary income, no
-    de-minimis modeled."""
-    if country in ("us", "usa"):
+    de-minimis modeled. An unknown country raises (lib/country)."""
+    from taxjson.lib.country import is_usa
+    if is_usa(country):
         return {"rule": "§988 (ordinary income)",
                 "reportable": round(net_gain, 2),
                 "note": "§988 FX gain/loss on investment cash is "

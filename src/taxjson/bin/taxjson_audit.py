@@ -48,6 +48,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import get_tax_rules, load_transactions
+from taxjson.lib.country import (add_country_argument, canonical_country,
+                                 refuse_foreign_flags)
 from taxjson.lib.pipeline import prepare_books
 from taxjson.lib.trace_format import render_gain_block
 
@@ -642,7 +644,7 @@ def parse_args(argv=None):
         description="Authoritative per-disposition audit: broker row -> "
                     "ticker map -> FX -> pool -> gain, every step "
                     "cross-checked. Exit 1 when any check fails.")
-    p.add_argument("--country", default="canada")
+    add_country_argument(p)
     p.add_argument("--year", type=int, help="Tax year filter.")
     p.add_argument("--tax-date", choices=["trade", "settle"], default=None)
     p.add_argument("--base", required=True,
@@ -655,7 +657,8 @@ def parse_args(argv=None):
     p.add_argument("--per-account-basis", action="store_true")
     p.add_argument("--cross-asset", action="store_true",
                    help=argparse.SUPPRESS)    # retired, ignored
-    p.add_argument("--option-premium-timing", choices=["grant", "close"], default="close")
+    p.add_argument("--option-premium-timing", choices=["grant", "close"],
+                   default=None, help="Canada only (default: close)")
     p.add_argument("--option-grant-since", type=int, default=None)
     p.add_argument("--option-buyback-wash", action="store_true")
     p.add_argument("--no-wash", action="store_true",
@@ -720,13 +723,15 @@ def unique_prefix_len(ids, minimum: int = 10) -> int:
 
 
 def _norm_country(c: str) -> str:
-    c = (c or "").strip().lower()
-    return "usa" if c in ("us", "usa") else "canada"
+    """Canonical canada|usa (lib/country); anything else is refused —
+    it used to map every unrecognised value to canada (ENGINE-06)."""
+    return canonical_country(c, what="--country")
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     country = _norm_country(args.country)
+    refuse_foreign_flags(args, "taxjson-audit")
     if args.tax_date is None:
         args.tax_date = "trade" if country == "usa" else "settle"
 
@@ -794,7 +799,7 @@ def main(argv=None) -> int:
     if country == "usa":
         kwargs["per_account_basis"] = args.per_account_basis
     else:
-        kwargs["option_premium_timing"] = args.option_premium_timing
+        kwargs["option_premium_timing"] = args.option_premium_timing or "close"
         kwargs["option_grant_since"] = args.option_grant_since
         kwargs["option_buyback_loss_superficial"] = args.option_buyback_wash
     from taxjson.lib.core import AmbiguousTransferDateError

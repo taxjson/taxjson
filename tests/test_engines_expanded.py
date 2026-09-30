@@ -28,6 +28,7 @@ Canada:
 import unittest
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 
 # ============================================================================
@@ -55,6 +56,7 @@ class TestUSAHoldingPeriod(unittest.TestCase):
         g = self._gain_of('2024-03-15', '2025-03-16')
         self.assertEqual(g['term'], 'LONG_TERM')
 
+    @rule("US-HOLD-01", "US-HOLD-02")
     def test_end_of_month_acquisition_rev_rul_66_7(self):
         """Rev. Rul. 66-7: property acquired on the LAST day of a month
         starts its holding period on the 1st of the next month and is
@@ -138,6 +140,7 @@ class TestUSAWashSalePartialCoverage(unittest.TestCase):
 class TestUSAShelteredReplacement(unittest.TestCase):
     """Rev. Rul. 2008-5: replacement bought in an IRA = permanent disallowance."""
 
+    @rule("US-WASH-04")
     def test_sheltered_replacement_is_permanent(self):
         rules = USATaxRules()
         taxable = [
@@ -387,6 +390,7 @@ class TestCanadaPoolResetAtZero(unittest.TestCase):
 class TestCanadaSplit(unittest.TestCase):
     """SPLIT multiplies pool qty (cost basis stays the same → acb/share falls)."""
 
+    @rule("CA-CORP-01")
     def test_two_for_one_split(self):
         rules = CanadaTaxRules()
         txs = [

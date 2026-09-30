@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -48,6 +49,7 @@ def _project(tmp, country, accounts):
 
 
 class TestCanadaAcbBlending(unittest.TestCase):
+    @rule("CA-ACB-01")
     def test_blended_acb_across_accounts(self):
         # A buys 100 @ 10; B buys 100 @ 20; A sells 100 @ 16.
         # Isolated A: gain +600. Blended s.47 ACB/sh = 15 → gain +100.
@@ -98,6 +100,7 @@ class TestCanadaAcbBlending(unittest.TestCase):
 
 
 class TestUsCrossAccountWash(unittest.TestCase):
+    @rule("US-BASIS-01", "US-WASH-04", "US-WASH-08")
     def test_wash_matches_across_taxable_accounts(self):
         # Loss in m1; rebuy in m2 within 30 days → disallowed, basis
         # transferred into m2's lot; m1's per-account FIFO untouched.

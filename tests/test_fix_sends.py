@@ -18,6 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from taxjson.lib import crypto_sends as cs
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -196,6 +197,7 @@ class TestCryptoSendsProject(unittest.TestCase):
         self.assertIn("taxjson crypto-sends", err)
         self.assertIn("not yet classified", err)
 
+    @rule("CA-CRYPTO-07")
     def test_b_listing_unmatched_sends_with_fair_values(self):
         sends, doc = self._list()
         self.assertEqual(set(sends), {TAO_ID, BTC_ID, KR_USDC_ID,
@@ -226,6 +228,7 @@ class TestCryptoSendsProject(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(doc))
             self.assertNotIn(f" {secret}", text)
 
+    @rule("CA-CRYPTO-08")
     def test_c_stablecoins_get_the_fx_gain_not_a_sale(self):
         sends, _ = self._list()
         k = sends[KR_USDC_ID]
@@ -240,6 +243,7 @@ class TestCryptoSendsProject(unittest.TestCase):
         self.assertLess(c["fx"]["gain"], 0)
         self.assertTrue(c["fx"]["superficial"])
 
+    @rule("CA-CRYPTO-05")
     def test_d_set_write_and_run_books_the_lines(self):
         for sid, dec in ((TAO_ID, "payment"), (BTC_ID, "gift"),
                          (KR_USDC_ID, "gift"), (CB_USDC_ID, "gift")):
@@ -334,6 +338,7 @@ class TestCryptoSendsProject(unittest.TestCase):
 
 
 class TestUsGift(unittest.TestCase):
+    @rule("US-SEND-02")
     def test_us_project_refuses_gift(self):
         with tempfile.TemporaryDirectory() as td:
             root, home = _project(td, country="usa")

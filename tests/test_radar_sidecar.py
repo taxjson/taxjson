@@ -33,7 +33,7 @@ _TAXABLE = [
 def _run_radar(tmp, json_out=None):
     t = Path(tmp) / "t.json"
     t.write_text(json.dumps({"transactions": _TAXABLE}))
-    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
            "--taxable", str(t), "--date", "2026-06-15"]
     if json_out:
         cmd += ["--json-out", str(json_out), "--account", "margin"]

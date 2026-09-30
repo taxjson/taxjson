@@ -239,7 +239,7 @@ class TestFetchCli(unittest.TestCase):
         # (R1-216); the retired one says where its settings went.
         from taxjson.bin.taxjson_run import validate_config
         warnings = validate_config(
-            {"settings": {"year": 2026},
+            {"settings": {"year": 2026, "country": "canada"},
              "accounts": {"margin": {"type": "taxable"}},
              "fetch": {"margin": {"source": "questrade",
                                   "number": "1"}}})
@@ -345,7 +345,7 @@ class TestAccountLevelFetchConfig(unittest.TestCase):
     def test_account_keys_do_not_warn_and_resolve(self):
         from taxjson.bin.taxjson_run import (_fetch_sources,
                                              validate_config)
-        cfg = {"settings": {"year": 2026},
+        cfg = {"settings": {"year": 2026, "country": "canada"},
                "accounts": {"margin": {"type": "taxable",
                                        "brokerage": "questrade",
                                        "account": 12345678},
@@ -361,7 +361,7 @@ class TestAccountLevelFetchConfig(unittest.TestCase):
     def test_unknown_brokerage_warns_with_suggestion(self):
         from taxjson.bin.taxjson_run import validate_config
         w = validate_config(
-            {"settings": {"year": 2026},
+            {"settings": {"year": 2026, "country": "canada"},
              "accounts": {"m": {"type": "taxable",
                                 "brokerage": "questrde"}}})
         self.assertTrue(any("questrade" in x for x in w), w)

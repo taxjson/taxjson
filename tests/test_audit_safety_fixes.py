@@ -26,6 +26,7 @@ from taxjson.bin.taxjson_run import (
     stage_currency_rates,
     validate_config,
 )
+from tax_rules import rule
 
 TODAY = date(2026, 7, 5)
 
@@ -278,6 +279,7 @@ class TestUndrainedAssignPremiumWarning(unittest.TestCase):
         err = self._gains(CanadaTaxRules, self.WITH_STOCK_LEG)
         self.assertNotIn("unconsumed option-assignment", err)
 
+    @rule("US-OPT-03")
     def test_usa_warns_on_missing_stock_leg(self):
         # See the Canada twin: realized as cash-settled, note emitted.
         from taxjson.lib.core import USATaxRules
@@ -336,14 +338,15 @@ class TestCorpActionsUnavailableGuard(unittest.TestCase):
         finally:
             run_mod.run_to_file = orig
 
-    def test_ruleless_country_with_rbc_warns_loudly(self):
-        # Canada AND the US both have election rules now, so the guard
-        # only fires for a hypothetical rule-less jurisdiction — keep the
-        # path covered, it protects the next country addition.
-        err, _out, _ = self._run_stage("germany")
-        self.assertIn("no corp-action election rules", err)
-        self.assertIn("rbc_direct", err)
-        self.assertIn("MISSING", err)
+    def test_ruleless_country_is_refused_before_any_stage(self):
+        # Canada AND the US both have election rules; any other country
+        # is refused by the one resolver (lib/country) before a stage
+        # runs, so a rule-less jurisdiction can no longer reach the
+        # corp-actions block and lose merger rows (partition R1).
+        with self.assertRaises(SystemExit) as cm:
+            self._run_stage("germany")
+        self.assertIn("country must be canada, ca, usa or us",
+                      str(cm.exception.code))
 
     def test_usa_now_has_rules_no_warning_and_manifest_created(self):
         # The audit's shares-vanish scenario: country=usa + RBC merger

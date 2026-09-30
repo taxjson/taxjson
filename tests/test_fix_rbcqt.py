@@ -14,6 +14,7 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
+from tax_rules import rule
 
 REPO = Path(__file__).resolve().parent.parent
 QH = ('Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,'
@@ -312,6 +313,7 @@ class TestQtRowShapes(unittest.TestCase):
                                price='10', gross='-10', comm='0', net='-10'))
         self.assertEqual(txs[0]['date_settle'], '2023-12-29')
 
+    @rule("CA-DATE-08")
     def test_warrant_expiry_books_on_its_expiry_date(self):
         """S065-04."""
         txs, _, _ = qt_parse(q(td='2028-01-03', action='EXP', sym='QZWW',

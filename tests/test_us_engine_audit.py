@@ -5,6 +5,7 @@ import unittest
 from contextlib import redirect_stderr
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules
+from tax_rules import rule
 
 
 def _T(**kw):
@@ -82,6 +83,7 @@ class TestAssignLegOrdering(unittest.TestCase):
                            account="m"),
         ] + legs
 
+    @rule("US-OPT-02")
     def test_stock_leg_listed_first_still_gets_premium(self):
         """Same-timestamp assignment legs listed stock-first used to
         drop the premium (an "unconsumed option-assignment adjustment"

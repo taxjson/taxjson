@@ -37,7 +37,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.cli_diag import note, warn
+from taxjson.lib.cli_diag import warn
+from taxjson.lib.country import add_country_argument
 from taxjson.lib.core import (is_option_symbol, parse_option_expiry,
                               parse_option_underlying)
 from taxjson.lib.price_chain import (DEFAULT_IBKR_HOST, DEFAULT_IBKR_PORT,
@@ -491,9 +492,8 @@ def main(argv: Optional[List[str]] = None,
                         "cache) — with no gateway running they are "
                         "listed as unpriced, never marked from a bad "
                         "source. Adds a DTE (days-to-expiry) column")
-    p.add_argument("--country", default=None,
-                   help="Project country (adds the LT IN column for usa; "
-                        "default: canada, with a stderr note when omitted)")
+    add_country_argument(p, help="Project country (required; adds the LT "
+                                 "IN column for usa)")
     p.add_argument("--base-currency", default="CAD", metavar="CURR",
                    help="Base currency of the books (default: %(default)s). "
                         "Quotes in other currencies convert via --rates")
@@ -528,10 +528,7 @@ def main(argv: Optional[List[str]] = None,
                    help="Show per-tier price-chain diagnostics")
     args = p.parse_args(argv)
 
-    if args.country is None:
-        note(PROG, "--country not given; assuming canada")
-        args.country = "canada"
-    is_usa = args.country.strip().lower() in ("us", "usa")
+    is_usa = args.country == "usa"
 
     files = [Path(f) for f in args.files]
     positions = load_positions(files, include_options=args.options)

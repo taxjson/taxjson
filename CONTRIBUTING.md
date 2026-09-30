@@ -137,6 +137,54 @@ is interrupted restore with `git checkout -- src/taxjson/lib/`.
 
 Country-specific cost-basis and wash-sale logic lives in `src/taxjson/lib/core.py`. The Canadian ACB and US FIFO paths are the templates; add a new branch keyed off the `--country` CLI flag and write tests that exercise the boundary conditions (year-end carryover, multi-account aggregation, settlement-date edge cases).
 
+## Canada and US law never mix
+
+- **One country resolver.** Read a project's or a flag's country only
+  through `src/taxjson/lib/country.py` (`canonical_country`,
+  `settings_country`, `country_arg`, `resolve_tax_date`,
+  `home_currency`). A missing or unknown country is an error there, never
+  a silent Canada.
+- **Ownership tables.** A setting, config table, engine flag or command
+  that belongs to one country goes in `SETTING_COUNTRY`,
+  `CONFIG_COUNTRY`, `FLAG_COUNTRY` or `COMMAND_COUNTRY` (with its
+  `*_WHY` reason). The config readers, the engine CLIs and `taxjson`'s
+  dispatch refuse the other country's entries from those tables; tax-logic
+  states them.
+- **Country gates live in the engine, command or config layer.** Parsers
+  emit neutral facts; they never decide one country's tax treatment.
+
+## tax-logic is the spec
+
+Every statement `taxjson tax-logic` prints is a `Rule` with a stable id in
+`src/taxjson/lib/tax_logic.py` (`CA-...` in the Canada section, `US-...` in
+the US section; `taxjson tax-logic --ids` shows them). A change in tax
+logic changes or adds a Rule in the right country's section, and the test
+that pins it cites the id:
+
+```python
+from tax_rules import rule, rule_absent
+from tax_rules.dual import gains_both, tx
+
+@rule("CA-SL-02")                         # Canada applies it ...
+@rule_absent("CA-SL-02", country="usa")   # ... the same book under the US does not
+@rule("US-WASH-06")
+def test_still_held_at_day_30(self):
+    r = gains_both(book)                  # one synthetic book, both countries
+    ...
+```
+
+While a test runs, its markers restrict which country's engine may run (an
+`AssertionError` otherwise, also in a `taxjson` subprocess). Behaviour that
+belongs to one country needs a dual-country test like the one above.
+`scripts/check_tax_rules.py` (a stage of `scripts/ci.sh`) fails on an unknown
+or retired id, a one-country test that names the other country's engine, a
+rule without a test beyond the shrink-only baseline
+(`tests/tax_rules/baseline-unpinned.txt`), a partition rule
+(`PARTITION_RULES`) without its `@rule_absent` pair beyond
+`baseline-unpaired.txt`, and a `[settings]` key no rule names. When a rule
+gains a test, delete its baseline line; a new rule can never be baselined.
+Retire an id in `tests/tax_rules/retired.txt`; never reuse one.
+
 ## Pull request checklist
 
 - [ ] Tests pass locally (`./run_tests.sh`)

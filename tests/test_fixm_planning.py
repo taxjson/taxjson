@@ -48,7 +48,7 @@ def _radar(tmp, taxable, as_of, sheltered=None, gains=None, extra=()):
     tmp = Path(tmp)
     t = tmp / "margin_base.json"
     t.write_text(json.dumps({"transactions": taxable}))
-    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
            "--taxable", str(t), "--date", as_of, "--all", "--json",
            *extra]
     if sheltered is not None:
@@ -329,8 +329,10 @@ def _work_project(tmp, taxable, sheltered=None, config=None):
     if sheltered is not None:
         (root / "work" / "sheltered_base.json").write_text(
             json.dumps({"transactions": sheltered}))
-    if config is not None:
-        (root / "taxjson.toml").write_text(config)
+    # No accounts table (the radar globs work/), but the country is
+    # required: a bare work/ is never read as Canada (lib/country).
+    (root / "taxjson.toml").write_text(
+        config if config is not None else '[settings]\ncountry = "canada"\n')
     return root
 
 
@@ -522,7 +524,7 @@ def _sts(taxable, as_of=None, sheltered=None, extra=()):
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp) / "t.json"
         t.write_text(json.dumps({"transactions": taxable}))
-        cmd = [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell",
+        cmd = [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell", "--country", "canada",
                "--taxable", str(t), *extra]
         if as_of:
             cmd += ["--date", as_of]

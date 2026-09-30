@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from tax_rules import rule
 
 
 def _parse(csv_text, toml_text):
@@ -301,6 +302,7 @@ class TestGenericSettlement(unittest.TestCase):
             _parse(csv, toml)
         self.assertIn("line 2", str(cm.exception))
 
+    @rule("CA-DATE-06")
     def test_settle_on_trade_date_option(self):
         csv = _HDR + "2025-12-31,SELL,BTC,1,20,,0,CAD\n"
         txs, _ = _parse(csv, _TOML + "[options]\nsettle_on_trade_date = true\n")

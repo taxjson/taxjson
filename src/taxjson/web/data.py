@@ -453,8 +453,7 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     from taxjson.lib.dates import settlement_date
     mkt_cur = (price_currency or ctx.base_currency or "CAD").strip().upper()
     settle_on = settlement_date(on, mkt_cur, multiplier == 100)
-    basis = str(ctx.settings.get("tax_date") or (
-        "trade" if ctx.country in ("usa", "us") else "settle")).lower()
+    basis = ctx.tax_date
     tax_year = int((settle_on if basis == "settle" else on)[:4])
     if tax_year != int(on[:4]):
         warnings.append(
@@ -483,19 +482,27 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # and US crypto is property — §1091 doesn't reach it. Previously
     # hard-set True, so sheltered simulations wash-checked themselves.
     acct_cfg = ctx.account(account)
-    is_usa = ctx.country.strip().lower() in ("us", "usa")
+    is_usa = ctx.country == "usa"
     detect_wash = (acct_cfg is not None and acct_cfg.type == "taxable"
                    and not (acct_cfg.crypto and is_usa))
     rules = get_tax_rules(ctx.country)
     from taxjson.lib.core import AmbiguousTransferDateError
     from taxjson.lib.pipeline import option_timing_from_settings
 
+    # The run's option kwargs, grant-year basis included (run_gains
+    # passes option_grant_basis = tax_date; the what-if omitted it, so a
+    # trade-basis project tested the since year on settle dates —
+    # partition SPEC-13).
+    _timing_kw = dict(option_timing_from_settings(ctx.settings))
+    if _timing_kw:
+        _timing_kw["option_grant_basis"] = basis
+
     def _simulate(main_rows, context_rows):
         try:
             after = rules.compute_gains(
                 main_rows + [synth], sheltered_transactions=context_rows,
                 detect_wash_sales=detect_wash,
-                **option_timing_from_settings(ctx.settings))
+                **_timing_kw)
         except AmbiguousTransferDateError as e:
             # Surface as a structured error instead of a 500.
             raise ValueError(str(e))

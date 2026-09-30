@@ -78,9 +78,9 @@ def groups(cfg: Dict[str, Any]) -> Dict[str, List[str]]:
 
 
 def _basis(settings: Dict[str, Any]) -> str:
-    country = str(settings.get("country") or "canada").lower()
-    return settings.get("tax_date") or (
-        "trade" if country in ("us", "usa") else "settle")
+    """The date basis in force (lib/country.settings_tax_date)."""
+    from taxjson.lib.country import settings_tax_date
+    return settings_tax_date(settings)
 
 
 # ------------------------------------------------------------ snapshot

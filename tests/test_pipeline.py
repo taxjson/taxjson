@@ -20,6 +20,7 @@ from pathlib import Path
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
                                   prepare_books, run_gains)
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,6 +35,8 @@ def tx(action="BUYSELL", date="2025-01-15", symbol="AAA.TO", qty=0.0,
 
 
 class TestGainsRequestDefaults(unittest.TestCase):
+    @rule("US-DATE-01")
+    @rule("CA-DATE-01")
     def test_tax_date_country_aware(self):
         self.assertEqual(GainsRequest(country="canada").effective_tax_date(),
                          "settle")
@@ -48,13 +51,22 @@ class TestGainsRequestDefaults(unittest.TestCase):
                          "settle")                      # explicit wins
 
     def test_detect_wash_policy(self):
-        self.assertFalse(GainsRequest().effective_detect_wash())
-        self.assertTrue(GainsRequest(taxable=True).effective_detect_wash())
-        self.assertFalse(GainsRequest(taxable=True,
-                                      no_wash=True).effective_detect_wash())
-        self.assertTrue(GainsRequest(detect_wash=True).effective_detect_wash())
-        self.assertFalse(GainsRequest(taxable=True,
-                                      detect_wash=False).effective_detect_wash())
+        R = lambda **kw: GainsRequest(country="canada", **kw)  # noqa: E731
+        self.assertFalse(R().effective_detect_wash())
+        self.assertTrue(R(taxable=True).effective_detect_wash())
+        self.assertFalse(R(taxable=True, no_wash=True).effective_detect_wash())
+        self.assertTrue(R(detect_wash=True).effective_detect_wash())
+        self.assertFalse(R(taxable=True,
+                           detect_wash=False).effective_detect_wash())
+
+    def test_country_is_required_and_canonical(self):
+        # lib/country: no default, no silent Canada (partition R1).
+        with self.assertRaises(TypeError):
+            GainsRequest()
+        self.assertEqual(GainsRequest(country=" US ").country, "usa")
+        for bad in ("United States", "", None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                GainsRequest(country=bad)
 
 
 class TestPrepareBooks(unittest.TestCase):

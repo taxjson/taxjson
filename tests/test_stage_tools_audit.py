@@ -84,7 +84,8 @@ class TestD1NullNumerics(unittest.TestCase):
     def test_gains_cli_reports_cleanly_not_traceback(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = _write(tmp, 'a.json', [{**ROW, 'net_amount': None}])
-            r = _run('taxjson.bin.taxjson_gains', str(p))
+            r = _run('taxjson.bin.taxjson_gains', '--country', 'canada',
+                     str(p))
         self.assertNotEqual(r.returncode, 0)
         self.assertNotIn('Traceback', r.stderr)
         self.assertIn('taxjson-gains: error', r.stderr)

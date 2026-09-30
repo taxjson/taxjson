@@ -199,7 +199,7 @@ class TestSpreadsheetInputsRefused(unittest.TestCase):
             (inputs / "tfsa").mkdir()
             (inputs / "tfsa" / "export.xlsx").write_bytes(b"PK")
             warns = validate_config(
-                {"settings": {}, "accounts": {"margin": {"type": "taxable"}}},
+                {"settings": {"country": "canada"}, "accounts": {"margin": {"type": "taxable"}}},
                 inputs)
         self.assertTrue(any("inputs/tfsa/" in w for w in warns), warns)
 

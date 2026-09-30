@@ -43,7 +43,7 @@ def _radar(tmp, taxable, as_of, sheltered=None, gains=None,
     tmp = Path(tmp)
     t = tmp / "margin_base.json"
     t.write_text(json.dumps({"transactions": taxable}))
-    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+    cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
            "--taxable", str(t), "--date", as_of, "--all", "--json"]
     if sheltered is not None:
         s = tmp / "sheltered_base.json"

@@ -45,8 +45,8 @@ class TestRemovedAliasesStayRemoved(unittest.TestCase):
     silently doing the polite thing."""
 
     def test_wash_radar_account_name_is_gone(self):
-        r = _run_mod("taxjson_wash_radar", "--taxable", "/dev/null",
-                     "--account-name", "margin")
+        r = _run_mod("taxjson_wash_radar", "--country", "canada",
+                     "--taxable", "/dev/null", "--account-name", "margin")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("--account-name", r.stderr)   # named as unrecognized
 
@@ -82,7 +82,8 @@ class TestExtendShapes(unittest.TestCase):
     """--taxable/--sheltered: `--taxable a b` == `--taxable a --taxable b`."""
 
     def _radar(self, *args):
-        return _run_mod("taxjson_wash_radar", "--date", "2026-06-15", *args)
+        return _run_mod("taxjson_wash_radar", "--country", "canada",
+                        "--date", "2026-06-15", *args)
 
     def test_wash_radar_both_shapes_equal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,8 +105,11 @@ class TestExtendShapes(unittest.TestCase):
             a.write_text(json.dumps({"transactions": [
                 _tx("BUYSELL", "2026-01-05", "WSP.TO", 50, 100.0, 5000.0)]}))
             for mod in ("taxjson_safe_to_sell", "taxjson_lint_crosslistings"):
-                one = _run_mod(mod, "--taxable", str(a))
-                two = _run_mod(mod, "--taxable", str(a), "--taxable", str(a))
+                cc = (["--country", "canada"]
+                      if mod == "taxjson_safe_to_sell" else [])
+                one = _run_mod(mod, *cc, "--taxable", str(a))
+                two = _run_mod(mod, *cc, "--taxable", str(a),
+                               "--taxable", str(a))
                 self.assertEqual(one.returncode, 0, (mod, one.stderr))
                 self.assertEqual(two.returncode, 0, (mod, two.stderr))
 
@@ -127,27 +131,42 @@ class TestExtendShapes(unittest.TestCase):
         self.assertEqual(one.stdout, two.stdout)  # empty sheltered book twice
 
 
-class TestCountryDefaultNote(unittest.TestCase):
-    def test_gains_notes_when_country_defaulted(self):
+class TestCountryIsRequired(unittest.TestCase):
+    """Every standalone tool that applies one country's rules requires
+    --country (lib/country.add_country_argument). It used to default to
+    Canada — with a stderr note in gains/carryover (audit A4), silently
+    in wash-radar, safe-to-sell, audit, explain and corp-actions
+    (partition R1: COMMANDS-14, ENGINE-06)."""
+
+    TOOLS = ("taxjson_gains", "taxjson_carryover", "taxjson_explain",
+             "taxjson_wash_radar", "taxjson_safe_to_sell",
+             "taxjson_audit", "taxjson_harvest", "taxjson_corp_actions")
+
+    def test_missing_country_is_a_usage_error(self):
+        for mod in self.TOOLS:
+            with self.subTest(mod=mod):
+                r = _run_mod(mod, "/dev/null")
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("--country", r.stderr)
+                self.assertNotIn("assuming canada", r.stderr)
+
+    def test_unknown_country_is_refused_by_name(self):
+        for mod in self.TOOLS:
+            for bad in ("United States", "U.S.", "germany"):
+                with self.subTest(mod=mod, bad=bad):
+                    r = _run_mod(mod, "--country", bad, "/dev/null")
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn("--country must be canada, ca, usa or us",
+                                  r.stderr)
+
+    def test_gains_explicit_country_gives_the_old_default_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = Path(tmp) / "t.json"
             t.write_text(json.dumps({"transactions": []}))
-            defaulted = _run_mod("taxjson_gains", str(t))
-            explicit = _run_mod("taxjson_gains", "--country", "canada", str(t))
-        self.assertIn("taxjson-gains: note: --country not given; "
-                      "assuming canada", defaulted.stderr)
-        self.assertNotIn("assuming canada", explicit.stderr)
-        self.assertEqual(defaulted.stdout, explicit.stdout)
-
-    def test_carryover_notes_when_country_defaulted(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            t = Path(tmp) / "t.json"
-            t.write_text(json.dumps({"transactions": [
-                _tx("BUYSELL", "2024-01-05", "WSP.TO", 50, 100.0, 5000.0)]}))
-            r = _run_mod("taxjson_carryover", str(t))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("taxjson-carryover: note: --country not given; "
-                      "assuming canada", r.stderr)
+            ca = _run_mod("taxjson_gains", "--country", "ca", str(t))
+            canada = _run_mod("taxjson_gains", "--country", "canada", str(t))
+        self.assertEqual(ca.returncode, 0, ca.stderr)
+        self.assertEqual(ca.stdout, canada.stdout)
 
 
 class TestOptionalPeriod(unittest.TestCase):

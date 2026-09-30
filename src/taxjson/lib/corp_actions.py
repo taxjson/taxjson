@@ -14,7 +14,13 @@ Three layers:
    to a list of taxjson transaction dicts. Currently implemented:
    - canada/merger: `taxable_disposition`, `rollover_s_85_1_5`
    - canada/spinoff: `taxable_deemed_dividend`, `rollover_s_86_1`
-   `IGNORE_ELECTION` is universal (skips emit for IB-noise rows).
+   - usa/merger: `taxable_exchange`, `reorg_368`, `reorg_368_boot`
+   - usa/spinoff: `taxable_distribution_301`, `tax_free_355`
+   - both: `rename` (auto-elected)
+   `IGNORE_ELECTION` is universal (skips emit for IB-noise rows). Every
+   lookup canonicalises the country through lib/country (an alias such
+   as "us" works; an unknown country raises instead of offering only
+   `ignore`).
 
 3. `Manifest` (JSON on disk, atomic save) records the user's election
    decision per `event_id`. Re-running with the same manifest is
@@ -3257,6 +3263,12 @@ RULES_BY_COUNTRY: Dict[str, Dict[str, RuleSpec]] = {
 }
 
 
+def _canon(country: str) -> str:
+    """lib/country.canonical_country: 'us' -> 'usa'; unknown raises."""
+    from taxjson.lib.country import canonical_country
+    return canonical_country(country)
+
+
 def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
                         country: str) -> List[CorporateAction]:
     """Write auto-default elections (RuleSpec.auto_default) for any
@@ -3267,7 +3279,7 @@ def apply_auto_defaults(events: List[CorporateAction], manifest: "Manifest",
     for ev in events:
         if manifest.get(ev.event_id) is not None:
             continue
-        rule = RULES_BY_COUNTRY.get(country, {}).get(ev.action_type)
+        rule = RULES_BY_COUNTRY[_canon(country)].get(ev.action_type)
         if rule is None or not rule.auto_default:
             continue
         manifest.set(ElectionRecord(
@@ -3348,6 +3360,7 @@ def resolve_event(
     """
     if election_key == IGNORE_ELECTION[0]:
         return []
+    country = _canon(country)
     rule = RULES_BY_COUNTRY[country][event.action_type]
     valid = {key for key, _ in rule.options}
     if election_key not in valid:
@@ -3374,7 +3387,7 @@ def options_for(country: str, action_type: str) -> List[tuple]:
     given country/event-type, with the universal `ignore` appended. The
     interactive prompter uses this so each event always offers ignore
     alongside the country-specific tax treatments."""
-    rule = RULES_BY_COUNTRY.get(country, {}).get(action_type)
+    rule = RULES_BY_COUNTRY[_canon(country)].get(action_type)
     base = list(rule.options) if rule else []
     return base + [IGNORE_ELECTION]
 

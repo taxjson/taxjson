@@ -225,7 +225,7 @@ def _radar(taxable_txs, date, *extra):
         f = Path(tmp) / "t.json"
         f.write_text(json.dumps({"transactions": taxable_txs}))
         r = subprocess.run(
-            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+            [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada",
              "--taxable", str(f), "--date", date, *extra],
             cwd=REPO_ROOT, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr

@@ -11,6 +11,7 @@ import unittest
 from decimal import Decimal
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 
 # ============================================================================
@@ -648,6 +649,7 @@ class TestConsumedReplacementsCannotWash(unittest.TestCase):
         self.assertAlmostEqual(result['summary']['total_gain'], -150.0,
                                places=2)
 
+    @rule("US-WASH-06")
     def test_live_replacement_still_washes(self):
         """The normal wash is untouched: loss with a LIVE rebuy inside
         the window still defers into the replacement lot."""
@@ -768,6 +770,7 @@ class TestSplitRenamesPool(unittest.TestCase):
     depends on this rename working.
     """
 
+    @rule("CA-ACB-04")
     def test_canada_rollover_carries_acb_to_target(self):
         """Buy SSL.TO @ 80000, SPLIT to RGLD.US at 0.0625, sell RGLD.US
         @ 90000. Realized gain must reflect SSL.TO's original ACB

@@ -7,6 +7,7 @@ import unittest
 from taxjson.bin.taxjson_fx_cash import (apply_jurisdiction, build_ledger,
                                          render_report)
 from taxjson.lib.core import TaxTransaction
+from tax_rules import rule
 
 
 def _tx(action, date, cur, net, qty=0.0, **kw):
@@ -106,6 +107,7 @@ class TestNonCashLegs(unittest.TestCase):
         ])
         self.assertAlmostEqual(doc["net_gain"], 0.0, places=2)
 
+    @rule("CA-CRYPTO-02")
     def test_fiat_and_stablecoin_rewards_stay_cash(self):
         doc = build_ledger(
             [_tx("DIVIDEND", "2026-06-01", "USD", 12.0, qty=12,

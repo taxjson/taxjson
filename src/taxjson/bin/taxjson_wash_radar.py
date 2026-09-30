@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.core import TaxTransaction
+from taxjson.lib.country import add_country_argument
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
                                             split_seen)
 from taxjson.lib.ticker_map import is_option_ticker
@@ -183,8 +184,8 @@ def main():
                              "balances the gains engine applies, so "
                              "phantom-backed positions are not shown as "
                              "shorts")
-    parser.add_argument("--country", default="canada",
-                        help="Project country (default: canada). Canada "
+    add_country_argument(parser,
+                         help="Project country (required). Canada "
                              "(s.54): only a LONG acquisition still held "
                              "by the SAME holder at day 30 backs a denial "
                              "(taxable pool, or each registered account on "
@@ -194,7 +195,7 @@ def main():
                              "sold (Rev. Rul. 2008-5)")
 
     args = parser.parse_args()
-    us_mode = str(args.country or "").strip().lower() in ("us", "usa")
+    us_mode = args.country == "usa"
 
     orig_stdout = sys.stdout
     if args.json:

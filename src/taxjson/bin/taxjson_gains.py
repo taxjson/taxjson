@@ -21,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from taxjson.lib.cli_diag import note
+from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import load_transactions
 from taxjson.lib.phantom_holdings import detect_phantoms, format_suggestions
 # Back-compat re-exports: tests and older callers import these from here.
@@ -43,13 +43,7 @@ def _parse_args():
     parser = argparse.ArgumentParser(
         description="Compute capital gains for a country."
     )
-    parser.add_argument(
-        "--country",
-        choices=["canada", "ca", "usa", "us"],
-        default=None,
-        help="Country for tax rules (default: canada, with a stderr note "
-             "when omitted)",
-    )
+    add_country_argument(parser)
     parser.add_argument("input", nargs="?", help="Path to merged transactions JSON (default: stdin)")
     parser.add_argument(
         "--sheltered",
@@ -201,11 +195,8 @@ def _parse_args():
         ),
     )
     args = parser.parse_args()
-    if args.country is None:
-        # Silent default was audit finding A4; the `taxjson run` pipeline
-        # always passes --country, so the note only reaches direct CLI users.
-        note("taxjson-gains", "--country not given; assuming canada")
-        args.country = "canada"
+    # --country is required (partition audit R1: a missing country was
+    # a noted Canada here and a silent one elsewhere).
     return args
 
 
@@ -242,8 +233,7 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
     if args.year and not args.all_history:
         year_str = str(args.year)
         basis = args.tax_date or (
-            'trade' if str(args.country).strip().lower() in ('us', 'usa')
-            else 'settle')
+            'trade' if args.country == 'usa' else 'settle')
         rows = assess_tax_year_relevance(all_for_detection, candidates,
                                          args.year, date_basis=basis)
         keep = {(r.candidate.symbol, r.candidate.account)
@@ -273,9 +263,7 @@ def _timing_default_note(args, prog):
     (`taxjson run`) defaults to s.49(1) grant timing from the project
     year: say so instead of silently disagreeing with the .sum (audit
     R1-177)."""
-    if (args.option_premium_timing is None
-            and str(args.country or 'canada').strip().lower()
-            not in ('us', 'usa')):
+    if args.option_premium_timing is None and args.country == 'canada':
         print(f"{prog}: note: --option-premium-timing not given — using "
               f"close timing. `taxjson run` on a Canada project uses "
               f"grant timing from the project year; pass "
@@ -296,10 +284,8 @@ def main():
 
 def _main():
     args = _parse_args()
+    refuse_foreign_flags(args, "taxjson-gains")
     _timing_default_note(args, "taxjson-gains")
-
-    if not args.country:
-        sys.exit(2)                            # unreachable: argparse default
 
     # Argparse can't enforce flag dependencies; surface obvious mistakes early.
     if args.include_options_in_suggestions and not args.suggest_phantoms:

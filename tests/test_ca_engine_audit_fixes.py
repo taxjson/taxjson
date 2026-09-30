@@ -7,6 +7,7 @@ from contextlib import redirect_stderr
 from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules
+from tax_rules import rule
 
 
 def T(action="BUYSELL", date="", symbol="", quantity=0.0, net_amount=0.0,
@@ -261,6 +262,7 @@ class TestRocOnEmptyPool(unittest.TestCase):
                 T(date="2026-04-01", symbol=s, quantity=50, net_amount=500.0, currency="CAD"),
                 T(date="2026-06-01", symbol=s, quantity=-50, net_amount=500.0, currency="CAD")]
 
+    @rule("CA-ACB-07")
     def test_post_drain_roc_is_a_gain_in_its_year_and_does_not_leak(self):
         r = ca(self._book())
         recs = [(g["date"], round(g["gain"], 2)) for g in records(r)]

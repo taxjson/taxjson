@@ -167,7 +167,7 @@ class TestPortedTT(unittest.TestCase):
             
             # Run radar with target date 2025-01-05 (4 days after buy)
             # Use the module path since it's installed
-            cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--taxable", str(tax_file), "--date", "2025-01-05"]
+            cmd = [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar", "--country", "canada", "--taxable", str(tax_file), "--date", "2025-01-05"]
             env = os.environ.copy()
             result = subprocess.run(cmd, capture_output=True, text=True, env=env)
             

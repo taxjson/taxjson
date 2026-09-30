@@ -774,7 +774,7 @@ class TestElections(unittest.TestCase):
                                  hints={'fmv_per_shar': 5.0}))
             m.save(mp)
             r = subprocess.run(
-                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
+                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions", "--country", "canada",
                  "--brokerage", "ib", "--account-name", "margin",
                  "--manifest", str(mp), "--no-input", str(csvp)],
                 cwd=REPO_ROOT, capture_output=True, text=True)

@@ -32,6 +32,7 @@ from taxjson.lib.brokerages.kraken import KrakenBrokerage
 from taxjson.lib.brokerages.questrade import QuestradeBrokerage
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
 from taxjson.lib.core import TaxTransaction, get_tax_rules
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NE = IbBrokerage.KNOWN_NONEVENT_PREFIX
@@ -130,6 +131,7 @@ class TestIbForexRows(unittest.TestCase):
 
 # ---------------------------------------------------- 2. stablecoin reward
 class TestKrakenStablecoinReward(unittest.TestCase):
+    @rule("CA-CRYPTO-02")
     def test_usdc_reward_is_income_worth_its_quantity(self):
         csv = KR_LEDGER_H + (
             '"L1","","2026-01-15 10:00:00","earn","reward","currency",'
@@ -253,6 +255,8 @@ class TestIbExerciseCode(unittest.TestCase):
         self.assertEqual(len(stock), 1)
         return stock[0]
 
+    @rule("CA-OPT-06")
+    @rule("US-OPT-02")
     def test_call_exercise_premium_rolls_into_stock_cost_both_engines(self):
         _, txs, _ = _parse(IbBrokerage, self.CALL)
         for country in ("canada", "usa"):
@@ -262,6 +266,8 @@ class TestIbExerciseCode(unittest.TestCase):
             self.assertAlmostEqual(e["proceeds"], 5999.0, places=2, msg=country)
             self.assertAlmostEqual(e["gain"], 798.0, places=2, msg=country)
 
+    @rule("CA-OPT-06")
+    @rule("US-OPT-02")
     def test_put_exercise_premium_reduces_stock_proceeds_both_engines(self):
         _, txs, _ = _parse(IbBrokerage, self.PUT)
         for country in ("canada", "usa"):

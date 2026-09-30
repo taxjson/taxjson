@@ -105,3 +105,46 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
             out.append(f"[settings] option_buyback_loss_superficial must "
                        f"be true or false, unquoted (got {v!r})")
     return out
+
+
+def settings_problems(cfg: Dict[str, Any]) -> List[str]:
+    """Canonicalise [settings] in place and return what is wrong with
+    it: the country (required; one spelling table, lib/country), the
+    date basis, the base currency's spelling, and every setting or
+    table the project's country does not own (lib/country
+    SETTING_COUNTRY / CONFIG_COUNTRY), including a base currency that
+    is not the country's. The one home for these checks: `taxjson`'s
+    config readers die on the list, the web UI raises it. Stops at the
+    first country problem (the ownership checks need a country)."""
+    from taxjson.lib.country import (CountryError, config_country_problems,
+                                     settings_country, TAX_DATES)
+    settings = cfg.get("settings")
+    if settings is None:
+        settings = {}
+    if not isinstance(settings, dict):
+        return ["[settings] must be a table"]
+    try:
+        settings["country"] = settings_country(settings)
+        if "settings" not in cfg:
+            cfg["settings"] = settings
+    except CountryError as e:
+        return [str(e)]
+    out: List[str] = []
+    tax_date = settings.get("tax_date")
+    if tax_date is not None and tax_date not in TAX_DATES:
+        out.append(f"[settings] tax_date must be settle|trade, "
+                   f"got {tax_date!r}")
+    # base_currency: " CAD" / "Cad " passed validation and failed later
+    # as a misdiagnosed "rows still carry a non-CAD currency" error
+    # (R1-153). One canonical, checked spelling for every reader.
+    import re
+    base = settings.get("base_currency")
+    if base is not None:
+        if not isinstance(base, str) \
+                or not re.fullmatch(r"[A-Za-z]{3}", base.strip()):
+            out.append(f"[settings] base_currency must be a 3-letter "
+                       f"currency code such as \"CAD\" or \"USD\", got "
+                       f"{base!r}")
+            return out
+        settings["base_currency"] = base.strip().upper()
+    return out + config_country_problems(cfg)

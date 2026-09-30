@@ -61,7 +61,7 @@ class TestCorpActionsPendingJson(unittest.TestCase):
             csv.write_text(_SSL_RGLD_CSV)
             pending = Path(tmp) / "pending.json"
             r = subprocess.run(
-                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
+                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions", "--country", "canada",
                  "--brokerage", "ib", "--no-input",
                  "--pending-json", str(pending), str(csv)],
                 cwd=REPO_ROOT, capture_output=True, text=True)

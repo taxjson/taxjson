@@ -33,14 +33,22 @@ class ProjectContext:
 
     @property
     def country(self) -> str:
-        # Canonical spelling: " canada" / "CA" raised "Unsupported
-        # country" in the what-if view (S031-24).
-        c = str(self.settings.get("country", "canada")).strip().lower()
-        return {"ca": "canada", "us": "usa"}.get(c, c)
+        # Canonical (lib/country); load() refused a missing / unknown
+        # country, so this never guesses (S031-24, partition INPUTS-08).
+        from taxjson.lib.country import settings_country
+        return settings_country(self.settings)
+
+    @property
+    def tax_date(self) -> str:
+        """The date basis in force (lib/country.settings_tax_date)."""
+        from taxjson.lib.country import settings_tax_date
+        return settings_tax_date(self.settings)
 
     @property
     def base_currency(self) -> str:
-        return str(self.settings.get("base_currency", "CAD"))
+        from taxjson.lib.country import home_currency
+        return str(self.settings.get("base_currency")
+                   or home_currency(self.country))
 
     @property
     def year(self) -> Optional[int]:
@@ -80,6 +88,12 @@ class ProjectContext:
                     problems.append(
                         f"[accounts.{name}] {flag} must be true/false "
                         f"(a TOML boolean, unquoted), got {a[flag]!r}")
+        if not problems:
+            # Country (required), date basis, base currency and every
+            # setting the country does not own: the same check as the
+            # CLI's config readers (lib/config_check.settings_problems).
+            from taxjson.lib.config_check import settings_problems
+            problems = settings_problems(cfg)
         if problems:
             raise ValueError(f"{toml_path}: " + "; ".join(problems))
         settings = cfg.get("settings", {})

@@ -88,14 +88,15 @@ class TestWrongYearLock(unittest.TestCase):          # B2
 class TestUntypedAccountFatal(unittest.TestCase):    # B3
     def test_missing_type_dies_listing_the_choices(self):
         with self.assertRaises(SystemExit) as cm:
-            R.validate_config({"settings": {"year": 2025},
+            R.validate_config({"settings": {"year": 2025,
+                                            "country": "canada"},
                                "accounts": {"margin": {}}})
         self.assertIn("taxable | sheltered", str(cm.exception))
 
 
 class TestInputsFolders(unittest.TestCase):          # B6 + subfolders
     def _cfg(self):
-        return {"settings": {"year": 2025},
+        return {"settings": {"year": 2025, "country": "canada"},
                 "accounts": {"margin": {"type": "taxable"}}}
 
     def test_slips_folder_is_not_an_orphan_account(self):
@@ -308,7 +309,8 @@ class TestFindMissingHistoryCountry(unittest.TestCase):   # B16
         with tempfile.TemporaryDirectory() as td:
             root = _project(td)
             (root / "taxjson.toml").write_text(
-                _TOML.format(year=2024).replace('"canada"', '"us"'))
+                _TOML.format(year=2024).replace('"canada"', '"us"')
+                .replace('"CAD"', '"USD"'))
             (root / "work" / "margin_base.json").write_text("{}")
             with mock.patch("taxjson.lib.dispatch.run_cmd", fake):
                 _call(R.cmd_find_missing_history, dir=str(root),

@@ -20,6 +20,7 @@ from contextlib import redirect_stderr
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -228,6 +229,7 @@ class TestKrakenCoinFees(unittest.TestCase):
               "L5,T3,2025-06-04 16:00:00,trade,tradespot,currency,XETH,spot,1,0,1\n"
               "L6,T3,2025-06-04 16:00:00,trade,tradespot,currency,ZCAD,spot,-3000,7.5,0\n")
 
+    @rule("CA-CRYPTO-04")
     def test_coin_fee_comes_out_of_the_coins(self):
         td, K = _kraken_dir({"kr_trades.csv": self.TRADES,
                              "kr_ledgers.csv": self.LEDGER})
@@ -358,6 +360,7 @@ class TestKrakenLegacyLedger(unittest.TestCase):
             _run(K().parse_file, Path(td.name) / "kr_ledgers.csv")
         self.assertIn("required column(s) missing: fee", str(cm.exception))
 
+    @rule("CA-CRYPTO-03")
     def test_withdrawal_coin_fee_is_disposed(self):
         csv = (_KL_H +
                "L1,F1,2026-05-04 16:00:00,withdrawal,,currency,TAO,spot,-0.1,0.002,14\n")
@@ -406,6 +409,7 @@ class TestUtcToLocal(unittest.TestCase):
         self.assertEqual((txs[0]["date"], txs[0]["time"]),
                          ("2025-12-31", "22:00:00"))
 
+    @rule("CA-DATE-12")
     def test_summer_offset_and_env_override(self):
         from taxjson.lib.brokerages._crypto_common import utc_to_local
         self.assertEqual(utc_to_local(datetime(2025, 7, 1, 3, 0)),

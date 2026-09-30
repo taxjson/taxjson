@@ -89,9 +89,8 @@ class Book:
         self.cache = root / "work"
         settings = cfg.get("settings", {}) or {}
         self.year = int(settings.get("year") or 0)
-        country = str(settings.get("country") or "canada").lower()
-        self.basis = settings.get("tax_date") or (
-            "trade" if country in ("usa", "us") else "settle")
+        from taxjson.lib.country import settings_tax_date
+        self.basis = settings_tax_date(settings)
         self.futures_settle = settings.get("futures_settle") or "trade"
         from taxjson.lib.pipeline import option_timing_from_settings
         _kw = option_timing_from_settings(settings) or {}

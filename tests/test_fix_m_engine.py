@@ -7,6 +7,7 @@ import io
 import unittest
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 
 def _tt(content, account='margin'):
@@ -213,6 +214,7 @@ class TestAssignmentRootResolution(unittest.TestCase):
         self.assertNotIn('cash-settled', err)
         self.assertEqual(_by_year(res), {'2026': 1000.0})
 
+    @rule("CA-DISP-05")
     def test_index_option_still_cash_settled(self):
         rows = """
             BUYSELL 2025-06-02 10:00:00 XSP250620P00068500.US -1 USD 2 200
@@ -338,6 +340,7 @@ class TestSuperficialLossRules(unittest.TestCase):
                       option_buyback_loss_superficial=flag)
         return res['summary']['total_disallowed']
 
+    @rule("CA-SL-11", "CA-SL-12")
     def test_buyback_flag_holds_under_every_timing(self):
         # R1-270 / R1-297: the default exempts a written-option buy-back
         # loss whether the lot is grant-timed, a pre-since transition lot
@@ -521,7 +524,7 @@ class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
         self.assertIsNone(doc['manual_reporting_required'][0]['days_held'])
 
     def test_explain_marks_phantom_rows(self):
-        p = _cli('taxjson.bin.taxjson_explain', '--list',
+        p = _cli('taxjson.bin.taxjson_explain', '--country', 'canada', '--list',
                  '--incomplete-history', self.ph, self.base)
         self.assertEqual(p.returncode, 0, p.stderr)
         line = [l for l in p.stdout.splitlines()
@@ -539,9 +542,9 @@ class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
         """, account='tfsa')
         f = self.tmp / 'tfsa_base.json'
         f.write_text(json.dumps([t.to_dict() for t in rows]))
-        p = _cli('taxjson.bin.taxjson_explain', '--list', '--wash-sales', f)
+        p = _cli('taxjson.bin.taxjson_explain', '--country', 'canada', '--list', '--wash-sales', f)
         self.assertIn('WASH+1000.00', p.stdout)
-        p = _cli('taxjson.bin.taxjson_explain', '--list', '--wash-sales',
+        p = _cli('taxjson.bin.taxjson_explain', '--country', 'canada', '--list', '--wash-sales',
                  '--no-wash', f)
         self.assertNotIn('WASH+', p.stdout)
 
@@ -669,13 +672,15 @@ class TestGrantTiming(unittest.TestCase):
         # S021-07 / S076-17.
         from taxjson.lib.config_check import account_type_problems
         from taxjson.lib.pipeline import option_timing_from_settings
-        cfg = {'settings': {'option_buyback_loss_superficial': 'false'},
+        cfg = {'settings': {'option_buyback_loss_superficial': 'false',
+                            'country': 'canada'},
                'accounts': {'rbc': {'type': 'taxable', 'crypto': 'false'}}}
         probs = account_type_problems(cfg)
         self.assertEqual(len(probs), 2, probs)
         with self.assertRaises(ValueError):
             option_timing_from_settings(cfg['settings'])
-        ok = {'settings': {'option_buyback_loss_superficial': False},
+        ok = {'settings': {'option_buyback_loss_superficial': False,
+                           'country': 'canada'},
               'accounts': {'rbc': {'type': 'taxable', 'crypto': False}}}
         self.assertEqual(account_type_problems(ok), [])
         self.assertFalse(option_timing_from_settings(ok['settings'])
@@ -694,7 +699,7 @@ class TestGrantTiming(unittest.TestCase):
         r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
                  '--option-premium-timing', 'grant', p)
         self.assertNotIn('--option-premium-timing not given', r.stderr)
-        r = _cli('taxjson.bin.taxjson_explain', '--list', p)
+        r = _cli('taxjson.bin.taxjson_explain', '--country', 'canada', '--list', p)
         self.assertIn('--option-premium-timing not given', r.stderr)
 
 

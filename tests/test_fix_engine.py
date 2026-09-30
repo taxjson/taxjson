@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -231,6 +232,7 @@ class TestSameStampTaxableBeforeRegistered(unittest.TestCase):
                    for g in res['transactions'])
         return round(gain, 2), round(perm, 2)
 
+    @rule("CA-SL-03", "CA-SL-10")
     def test_canada_same_stamp_is_deferred_whatever_the_price(self):
         seen = {self._run(CanadaTaxRules, 'TO', 'CAD', p / 100)
                 for p in range(1045, 1065)}

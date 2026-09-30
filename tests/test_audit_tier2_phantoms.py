@@ -21,6 +21,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -141,6 +142,7 @@ class TestTaintedLossesSkipSolver(unittest.TestCase):
         from taxjson.lib.core import CanadaTaxRules
         return CanadaTaxRules().compute_gains(txs)
 
+    @rule("CA-ACB-11")
     def test_fabricated_loss_does_not_adjust_clean_pool(self):
         # Phantom pool: OB 100 @$0 + BUY 100 @$50 → ACB $25/sh. Sell all 200
         # @$20 → fabricated tainted loss. Clean rebuys 100+50 @$20 inside the

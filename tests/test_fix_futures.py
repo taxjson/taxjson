@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from taxjson.bin import to_base_curr as T
+from tax_rules import rule
 
 TODAY = "2026-09-28"                                   # a Monday
 
@@ -302,12 +303,14 @@ def _gains(rows):
 
 
 class TestSettleFutures(unittest.TestCase):
+    @rule("CA-FX-06")
     def test_plain_future_vs_option_on_future(self):
         self.assertTrue(is_plain_future("F:CLZ5.US"))
         self.assertTrue(is_plain_future("/ESZ5"))
         self.assertFalse(is_plain_future("F:CL251117C00070000.US"))
         self.assertFalse(is_plain_future("AAPL.US"))
 
+    @rule("CA-FX-04")
     def test_open_carries_nothing_close_carries_native_pl(self):
         rows, st = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
         self.assertEqual([r.type for r in rows], [FUTURES_SETTLEMENT] * 2)
@@ -345,6 +348,7 @@ class TestSettleFutures(unittest.TestCase):
 
 
 class TestFuturesGainAtCloseRate(unittest.TestCase):
+    @rule("CA-FX-04")
     def test_long_gain_is_native_pl_at_the_closing_rate(self):
         conv = _convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
         g = _gains(conv)
@@ -383,6 +387,7 @@ class TestFuturesGainAtCloseRate(unittest.TestCase):
 
 
 class TestFuturesScheduleThree(unittest.TestCase):
+    @rule("CA-FX-05")
     def test_line6_shows_pl_not_notional(self):
         from taxjson.bin.taxjson_form_export import build_schedule3
         entries = _gains(_convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)]))
