@@ -892,8 +892,9 @@ class TestPeriodSums(unittest.TestCase):
         self.assertIn("TOTAL DIVIDEND IN LIEU: 15.00 CAD", summ.stdout)
         self.assertIn("ordinary income", summ.stdout)
         self.assertNotIn("30.00", summ.stdout)          # dividend excluded
-        # divs-sum still counts BOTH (dividend + in-lieu), unchanged.
-        self.assertIn("TOTAL DIVIDEND: 45.00 CAD", divs.stdout)
+        # divs-sum counts DIVIDEND rows only — the in-lieu payment is
+        # dil-sum's (audit R1-272: the two views counted it twice).
+        self.assertIn("TOTAL DIVIDEND: 30.00 CAD", divs.stdout)
 
     def test_dil_sum_empty_message(self):
         with tempfile.TemporaryDirectory() as tmp:
