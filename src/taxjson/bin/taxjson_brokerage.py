@@ -77,7 +77,7 @@ def load_security_overrides(path: Path):
     of (desc_substring_lower, currency, symbol) tuples.
     """
     overrides = []
-    for raw in path.read_text(encoding='utf-8').splitlines():
+    for raw in path.read_text(encoding='utf-8-sig').splitlines():
         line = raw.strip()
         if not line or line.startswith('#'):
             continue

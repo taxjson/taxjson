@@ -53,7 +53,7 @@ def load_map(path: Path) -> List[Tuple[str, str, float]]:
     here silently mis-adjusts ACB, so refuse rather than skip."""
     rows: List[Tuple[str, str, float]] = []
     for lineno, raw in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), 1):
+            path.read_text(encoding="utf-8-sig").splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
