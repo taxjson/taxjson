@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **No false all-clear from sanity or find-missing-history.** When a
+  configured `holdings` file is missing, `taxjson sanity` ends with an
+  `INCOMPLETE` line (`"complete": false` in `--json`), `run` prints a
+  `!!` line and the checklist keeps the step at attention.
+  `find-missing-history` (and `taxjson-missing-history`) no longer print
+  "No missing-cost-basis issues found" and exit 0 when a base book failed
+  to load or a configured account has no book; they name what was not
+  checked and exit 1 (audit R1-324, R1-336, S047-18).
 - **A sheltered-account rerun no longer serves stale wash numbers.**
   After `run --account <sheltered>` rebuilt `sheltered_base.json`, `sum`,
   `form-export` and `close-year` read the older wash-adjusted gains with

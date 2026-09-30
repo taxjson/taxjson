@@ -94,5 +94,107 @@ class TestShelteredRerunStaleness(unittest.TestCase):
             self.assertFalse((root / "filed" / "2024.json").exists())
 
 
+# --------------------------------------------------------- R1-324 sanity
+class TestSanityMissingHoldingsFile(unittest.TestCase):
+    def _root(self, tmp):
+        from test_sanity import _gains, _holdings_toml
+        root = Path(tmp)
+        (root / "taxjson.toml").write_text(
+            _config(2026, [("margin", "taxable"), ("rrsp", "sheltered")])
+            .replace('[accounts.margin]\ntype = "taxable"\n',
+                     '[accounts.margin]\ntype = "taxable"\n'
+                     'holdings = ["ext/gone.toml"]\n')
+            .replace('[accounts.rrsp]\ntype = "sheltered"\n',
+                     '[accounts.rrsp]\ntype = "sheltered"\n'
+                     'holdings = ["ext/r.toml"]\n'))
+        # margin books a position the broker does not hold.
+        _gains(root, "margin", {"FFN.TO": 500})
+        _gains(root, "rrsp", {"XIU.TO": 40})
+        (root / "ext").mkdir()
+        _holdings_toml(root / "ext" / "r.toml", "R1", {"XIU.TO": 40})
+        return root
+
+    def test_text_says_incomplete_and_checklist_attention(self):
+        from taxjson.lib import checklist as cl
+        from datetime import date
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._root(tmp)
+            r = _cli(root, "sanity")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("INCOMPLETE", r.stdout)
+            self.assertNotIn("in every group.", r.stdout)
+            j = _cli(root, "sanity", "--json")
+            self.assertFalse(json.loads(j.stdout)["complete"])
+            import tomllib
+            cfg = tomllib.loads((root / "taxjson.toml").read_text())
+            ctx = cl.Ctx(root=root, cfg=cfg, year=2026,
+                         today=date(2026, 9, 29),
+                         run_sub=cl.default_run_sub(root))
+            res = cl.d_sanity(ctx)
+        self.assertEqual(res.status, "attention", res.detail)
+        self.assertIn("NOT checked", res.detail)
+
+
+# ------------------------------------------- R1-336 / S047-18 missing-history
+class TestMissingHistoryIncomplete(unittest.TestCase):
+    CASH = ("BUYSELL 2025-02-03 10:00:00 AAA.TO 10 CAD 10.00 -100.00 0.00\n"
+            "BUYSELL 2025-04-01 10:00:00 DDD.TO -10 CAD 10.00 100.00 0.00\n")
+    MARGIN = "BUYSELL 2025-02-03 10:00:00 BBB.TO 10 CAD 10.00 -100.00 0.00\n"
+
+    def _built(self, tmp):
+        root = _project(tmp, [("margin", "taxable"), ("cash", "taxable")],
+                        {"margin": self.MARGIN, "cash": self.CASH},
+                        year=2025)
+        r = _cli(root, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        return root
+
+    def test_intact_books_report_the_short(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._built(tmp)
+            r = _cli(root, "find-missing-history")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("DDD.TO", r.stdout)
+
+    def test_corrupt_book_is_not_an_all_clear(self):
+        from taxjson.lib import checklist as cl
+        from datetime import date
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._built(tmp)
+            p = root / "work" / "cash_base.json"
+            p.write_text(p.read_text()[: len(p.read_text()) // 2])
+            r = _cli(root, "find-missing-history")
+            import tomllib
+            ctx = cl.Ctx(root=root,
+                         cfg=tomllib.loads((root / "taxjson.toml").read_text()),
+                         year=2025, today=date(2026, 9, 29),
+                         run_sub=cl.default_run_sub(root))
+            res = cl.d_missing_history(ctx)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("INCOMPLETE", r.stdout)
+        self.assertNotIn("no negative holdings", r.stdout)
+        self.assertNotEqual(res.status, "done", res.detail)
+
+    def test_configured_account_without_book_is_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._built(tmp)
+            (root / "work" / "cash_base.json").unlink()
+            r = _cli(root, "find-missing-history")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("account cash", r.stdout)
+        self.assertIn("cash_base.json", r.stderr)
+
+    def test_direct_tool_bad_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._built(tmp)
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_missing_history",
+                 str(root / "work" / "margin_base.json"),
+                 str(root / "work" / "nope_base.json")],
+                cwd=REPO_ROOT, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("INCOMPLETE", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

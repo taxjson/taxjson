@@ -2880,6 +2880,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not args.account and any((_a or {}).get("holdings")
                                 for _a in cfg.get("accounts", {}).values()):
         print("\n==> holdings sanity (taxjson.toml `holdings`)")
+        _san_notes = _sanity_items_from_config(cfg.get("accounts", {}),
+                                               root)[1]
+        for _n in _san_notes:
+            # One unreadable holdings file drops that account from the
+            # compare while sanity itself still exits 0 — say so here,
+            # or the run reads as fully checked (2026-09 audit R1-324).
+            print(f"  !! holdings check incomplete: {_n}",
+                  file=sys.stderr)
         try:
             cmd_sanity(argparse.Namespace(dir=str(root), items=[],
                                           tolerance=None, json=False))
@@ -7751,6 +7759,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             "uncovered_accounts": uncovered,
             "notes": config_notes,
             "clean": not all_rows,
+            # False when an account's CONFIGURED holdings file could
+            # not be read: its positions were never compared (2026-09
+            # audit R1-324), so "clean" covers the other groups only.
+            "complete": not config_notes,
         })
         raise SystemExit(0 if not all_rows else 1)
 
@@ -7792,9 +7804,18 @@ def cmd_sanity(args: argparse.Namespace) -> None:
               f"({len(tax[a])} position(s) unchecked)")
     if not multi or uncovered:
         print()
+    if config_notes:
+        # A configured holdings file that could not be read drops its
+        # whole account from the compare: never let that read as a
+        # clean check (the checklist and run's auto-sanity key on this
+        # line — 2026-09 audit R1-324).
+        print(f"INCOMPLETE: {len(config_notes)} account(s) with "
+              f"`holdings` in taxjson.toml were NOT checked (see the "
+              f"notes on stderr) — fix the paths, then re-run.")
     if not all_rows:
         print("OK: tickers and quantities agree"
-              + (" in every group." if multi else "."))
+              + (" in every checked group." if config_notes
+                 else " in every group." if multi else "."))
     else:
         out_lines = [("ACCOUNTS SYMBOL ISSUE TAXJSON HOLDINGS DIFF"
                       if multi else
@@ -10598,6 +10619,20 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         return
 
     cmd = _cmd("taxjson-missing-history") + [str(f) for f in files]
+    if not args.account:
+        # The glob above sees only books that exist: a CONFIGURED
+        # account whose book was never built (a failed parse, deferred
+        # elections) was skipped silently and the checklist marked the
+        # step done (2026-09 audit S047-18). Accounts `run` skipped for
+        # having no inputs at all are expected to have none.
+        _have = {f.name[: -len("_base.json")] for f in files}
+        _quiet = _accounts_skipped_for_no_inputs(root)
+        for _n in sorted((_soft_config(root).get("accounts") or {})):
+            if _n not in _have and _n not in _quiet:
+                print(f"taxjson find-missing-history: note: account {_n} "
+                      f"has no work/{_n}_base.json — not checked (run "
+                      f"`taxjson run`).", file=sys.stderr)
+                cmd += ["--unchecked-account", _n]
     if year:
         cmd += ["--year", str(year)]
     if args.include_options:
