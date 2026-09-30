@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **US projects: an IB return of capital reduces basis by default.** A
+  `country = "usa"` project no longer books an issuer-designated return
+  of capital as a dividend under Canada's s.90(2) rule; it is a
+  nondividend distribution (IRC s.301(c)(2)) unless `[settings]
+  foreign_return_of_capital` says otherwise (audit S013-01).
 - **Settle dates that pair across legs and files.** An IB assignment's
   option leg now settles with its stock leg (before the 2024 T+1 cutover
   the option settled a day earlier, and a same-day trade could consume

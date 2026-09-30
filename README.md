@@ -302,7 +302,8 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 #                                   # closing purchase is not a disposition s.54 reaches)
 # fx_cash_gains = true         # end-of-run s.39(1.1) FX-on-cash report (off by default)
 # foreign_return_of_capital = "dividend" # IB "(Return of Capital)" from a NON-Canadian
-#                                   # issuer: "dividend" (default — ITA s.90(2)) or "acb"
+#                                   # issuer: "dividend" (Canada default — ITA s.90(2)) or
+#                                   # "acb" (the default in a country = "usa" project)
 
 # Optional — inputs `taxjson estimate` (and the instalments
 # current-year basis) uses when the flags aren't given. Only these

@@ -759,5 +759,19 @@ class TestExpiryClampAcrossFiles(unittest.TestCase):
         self.assertEqual(buy['date_settle'], '2025-12-31')
 
 
+class TestUsProjectReturnOfCapital(unittest.TestCase):
+    """S013-01: a US project booked a US issuer's return of capital as
+    a dividend under Canada's s.90(2) default."""
+
+    def test_default_follows_the_country(self):
+        from taxjson.bin.taxjson_run import ib_foreign_roc_mode
+        self.assertEqual(ib_foreign_roc_mode({'country': 'usa'}), 'acb')
+        self.assertEqual(ib_foreign_roc_mode({'country': 'canada'}),
+                         'dividend')
+        self.assertEqual(ib_foreign_roc_mode(
+            {'country': 'usa', 'foreign_return_of_capital': 'dividend'}),
+            'dividend')
+
+
 if __name__ == '__main__':
     unittest.main()
