@@ -260,7 +260,7 @@ machines), resolve each with `taxjson elect <account> --set
 - `work/<account>_<broker>_transfers.json` — custody-transfer sidecar: TRANSFER rows the parse stage keeps OUT of the books (evidence, not tax events); `taxjson transfers` reads these
 - `crosslistings.rpt` — flags cross-listed (`.TO`/`.US`) tickers the radar may not consolidate
 - `fees.rpt` — trading fees by brokerage, with comparison stats
-- `ccd.rpt`, `leaps.rpt` — cross-account covered-call / LEAPS views
+- `ccd.rpt`, `leaps.rpt` — cross-account covered-call / long-option views (`leaps.rpt` lists every long option close of any tenor; `taxjson leaps-sum` is the LEAPS-only figure; phantom-basis rows are excluded and counted, as in `ccd-sum`)
 - `<account>_holdings.toml` — machine-readable positions (native + base-currency cost, and the per-position acquisition/sell `trades` history)
 - `exports/` — SeekingAlpha / FastGraph / TradingView watchlist CSVs
 

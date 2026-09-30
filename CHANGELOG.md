@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`reports/ccd.rpt` and `leaps.rpt` match their query twins.** They
+  counted phantom-basis (tainted) rows that `ccd-sum` / `leaps-sum` skip,
+  `leaps.rpt` was titled "LEAPS" while listing every long option of any
+  tenor (now titled so, pointing at `leaps-sum`), and an unreadable input
+  printed TOTAL 0.00 with exit 0 (now exit 1) (audit R1-173).
 - **`scan` US-LISTING respects DISTINCT and the US line's own dividends.**
   A US stock was called a "Canadian issuer held via its US listing" when
   any `.TO` symbol shared its root, even one `ticker.map` declared

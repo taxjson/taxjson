@@ -352,5 +352,55 @@ class TestScanUsListing(unittest.TestCase):
         self.assertTrue(any("CNQ.US" in ln for ln in flagged), r.stdout)
 
 
+def _tool(mod, *args):
+    return subprocess.run([sys.executable, "-m", f"taxjson.bin.{mod}", *args],
+                          cwd=REPO_ROOT, capture_output=True, text=True)
+
+
+class TestCrossReports(unittest.TestCase):
+    """R1-173: reports/ccd.rpt and leaps.rpt follow the query commands'
+    tainted policy, title what they hold, and fail on unreadable input."""
+
+    def _gains(self, tmp):
+        p = Path(tmp) / "g.json"
+        p.write_text(json.dumps({"summary": {"year": "2026"}, "transactions": [
+            {"date": "2026-03-01", "symbol": _CC, "qty": -1,
+             "proceeds": 0.0, "cost": -500.0, "gain": 500.0,
+             "direction": "SHORT", "currency": "CAD"},
+            {"date": "2026-03-02", "symbol": _CC, "qty": -1,
+             "proceeds": 0.0, "cost": -900.0, "gain": 900.0,
+             "direction": "SHORT", "currency": "CAD", "tainted": True},
+            {"date": "2026-03-03", "symbol": _LEAP, "qty": 1,
+             "proceeds": 800.0, "cost": 500.0, "gain": 300.0,
+             "direction": "LONG", "currency": "CAD"},
+            {"date": "2026-03-04", "symbol": _LEAP, "qty": 1,
+             "proceeds": 1500.0, "cost": 500.0, "gain": 1000.0,
+             "direction": "LONG", "currency": "CAD", "tainted": True},
+        ]}))
+        return p
+
+    def test_tainted_rows_excluded_and_counted(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = self._gains(d)
+            ccd = _tool("taxjson_ccd_gains", str(g))
+            lg = _tool("taxjson_leaps_gains", str(g))
+        self.assertRegex(ccd.stdout, r"\nTOTAL\s+500\.00\n")
+        self.assertIn("1 tainted", ccd.stdout)
+        self.assertRegex(lg.stdout, r"\nTOTAL\s+300\.00\n")
+        # Every long option of any tenor: say so, point at leaps-sum.
+        self.assertNotIn("(LEAPS)", lg.stdout)
+        self.assertIn("leaps-sum", lg.stdout)
+
+    def test_unreadable_input_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = Path(d) / "bad.json"
+            bad.write_text('{"transactions": [')
+            for mod in ("taxjson_ccd_gains", "taxjson_leaps_gains"):
+                for arg in (str(bad), str(Path(d) / "missing.json")):
+                    r = _tool(mod, arg)
+                    self.assertNotEqual(r.returncode, 0, (mod, arg))
+                    self.assertNotIn("TOTAL", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
