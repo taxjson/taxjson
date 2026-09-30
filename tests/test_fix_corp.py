@@ -1,6 +1,6 @@
 """Regression tests for the 2026-09 audit's corporate-action findings
 (area `corp`). All data synthetic: fake tickers, fake ISINs, fake broker
-account ids (U5550001 / 55500001 style)."""
+account ids in the 555 range."""
 import json
 import subprocess
 import sys
