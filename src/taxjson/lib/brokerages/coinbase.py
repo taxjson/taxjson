@@ -141,6 +141,16 @@ def _cb_symbol(asset: str) -> str:
 
 class CoinbaseBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Coinbase"
+    # USD stablecoins: US-dollar CASH (True — the default, Canada's
+    # stated approximation, tax-logic CA-CRYPTO-02) or PROPERTY like any
+    # coin (False — a US project, US-CRYPTO-02). taxjson-brokerage sets
+    # it from --country; the parser itself makes no country choice.
+    stablecoins_as_cash = True
+
+    @property
+    def _cash_coins(self):
+        """Stablecoins booked as US-dollar cash in this book."""
+        return _STABLECOINS if self.stablecoins_as_cash else frozenset()
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions: List[Dict[str, Any]] = []
@@ -309,9 +319,9 @@ class CoinbaseBrokerage(BaseBrokerage):
                     _pm = _PAIR_RE.search(
                         self._col(row, header_map, 'notes') or '')
                     if _pm and _pm.group(2).upper() not in (
-                            _FIAT | _STABLECOINS):
+                            _FIAT | self._cash_coins):
                         crypto_quote = _pm.group(2).upper()
-                        if asset.upper() in _STABLECOINS:
+                        if asset.upper() in self._cash_coins:
                             raise ValueError(
                                 f"Coinbase row "
                                 f"{self._col(row, header_map, 'timestamp')!r} "
@@ -324,7 +334,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                                 f"does not book. Enter the "
                                 f"{crypto_quote} leg via a .tt file and "
                                 f"remove the row.")
-                if (asset.upper() in _STABLECOINS
+                if (asset.upper() in self._cash_coins
                         and (is_buy or is_sell) and not is_staking):
                     # "Bought 3495.67 USDC for 5000 CAD": fiat -> USD
                     # cash under the stablecoin-as-cash model (see
@@ -420,7 +430,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                         div['id'] = f'{cb_id}-div'
                         buy['id'] = f'{cb_id}-buy'
                     transactions.append(div)
-                    if asset.upper() not in _STABLECOINS:
+                    if asset.upper() not in self._cash_coins:
                         # A stablecoin reward is USD cash income (see
                         # _STABLECOINS): no acquisition leg — the coin is
                         # never sold as an asset, so a position would sit
@@ -583,13 +593,14 @@ class CoinbaseBrokerage(BaseBrokerage):
         # USDC into ETH is a cash purchase of ETH, ETH into USDC a cash
         # sale. The fee then lands on the one crypto leg — capitalized
         # into a purchase, netted from a sale's proceeds.
-        if from_asset in _STABLECOINS and to_asset in _STABLECOINS:
+        cash = self._cash_coins
+        if from_asset in cash and to_asset in cash:
             self.count_nonevent("stablecoin <-> stablecoin convert "
                                 "(USD cash)")
             return []
-        if from_asset in _STABLECOINS:
+        if from_asset in cash:
             return [buy]
-        if to_asset in _STABLECOINS:
+        if to_asset in cash:
             if subtotal:
                 sell['net_amount'] = max(subtotal - fee, 0.0)
                 sell['fee'] = fee

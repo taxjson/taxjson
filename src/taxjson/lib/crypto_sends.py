@@ -358,8 +358,11 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
 def fair_value(send: Dict[str, Any], rates: Rates,
                usd_price: Optional[Callable[[str, str],
                                             Tuple[Optional[float], str]]],
-               manual: Optional[float] = None) -> Optional[Dict[str, Any]]:
-    """{'price': per coin in base, 'value', 'source'} or None (unpriced)."""
+               manual: Optional[float] = None,
+               stable_cash: bool = True) -> Optional[Dict[str, Any]]:
+    """{'price': per coin in base, 'value', 'source'} or None (unpriced).
+    `stable_cash`: stablecoins are US-dollar cash in the books (Canada);
+    False (a US project) prices one at its 1.00 USD par as property."""
     base = rates.base
     sym, day, qty = send["symbol"], send["date"], -send["quantity"]
     ex = _EXCH_NAME.get(send["exchange"], send["exchange"])
@@ -370,9 +373,11 @@ def fair_value(send: Dict[str, Any], rates: Rates,
         if r is None:
             return None
         price = r[0]
-        src = (f"{sym} = 1 USD (stablecoins are US-dollar cash in the "
-               f"books)" + ("" if base == "USD" else
-                            f" x {_rate_text('USD', base, r, day)}"))
+        src = ((f"{sym} = 1 USD (stablecoins are US-dollar cash in the "
+                f"books)" if stable_cash else
+                f"{sym} at its 1.00 USD par")
+               + ("" if base == "USD" else
+                  f" x {_rate_text('USD', base, r, day)}"))
     elif send["price"] > 0:
         cur = send["currency"] or "USD"
         cur = "USD" if cur in STABLECOINS else cur
@@ -747,8 +752,12 @@ def build_report(root: Path, cfg: Dict[str, Any],
                 rec = {"decision": "self", "auto": True,
                        "note": "Kraken Hybrid Earn: still yours "
                                "(automatic)"}
-            stable = s["symbol"] in STABLECOINS
-            fv = fair_value(s, rates, usd_price, rec.get("price"))
+            # A US project books stablecoins as property (tax-logic
+            # US-CRYPTO-02): a gift/payment of one is a sale line like
+            # any coin's. Canada keeps them US-dollar cash (CA-CRYPTO-08).
+            stable = s["symbol"] in STABLECOINS and country != "usa"
+            fv = fair_value(s, rates, usd_price, rec.get("price"),
+                            stable_cash=country != "usa")
             entry = {
                 "id": sid, "account": acct, "exchange": s["exchange"],
                 "kind": s["kind"], "date": s["date"], "time": s["time"],

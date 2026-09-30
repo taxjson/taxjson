@@ -379,6 +379,12 @@ Examples:
             extractor.foreign_return_of_capital = foreign_roc
         if hasattr(extractor, 'futures_settle'):
             extractor.futures_settle = args.futures_settle
+        if hasattr(extractor, 'stablecoins_as_cash'):
+            # USD stablecoins are US-dollar cash (Canada's stated
+            # approximation, and the default without a country) or
+            # property like any coin (a US project: tax-logic
+            # US-CRYPTO-02; partition COMMANDS-13).
+            extractor.stablecoins_as_cash = args.country != "usa"
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
         try:

@@ -131,6 +131,7 @@ PARTITION_RULES = frozenset({
     "US-CTRY-02",      # Canada-only settings/commands/flags refused
     "US-CTRY-03",      # base currency USD
     "US-FUT-01",       # futures P/L FIFO
+    "US-CRYPTO-02",    # stablecoins are property (CA: US-dollar cash)
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
@@ -547,7 +548,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
                  "Coinbase) are treated as US-dollar cash, an "
-                 "approximation."),
+                 "approximation (their own gain or loss, a de-peg, is not "
+                 "computed; a fill more than 2% off 1.00 USD is warned "
+                 "about)."),
             Rule("CA-CRYPTO-03",
                  "A Kraken withdrawal fee paid in a coin is a sale of that "
                  "coin."),
@@ -872,11 +875,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "value."),
             Rule("US-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
-                 "Coinbase) are treated as US-dollar cash, an "
-                 "approximation: a stablecoin's own gain or loss (a "
-                 "de-peg) is not computed, and a stablecoin payment is "
-                 "not written as a sale. A fill priced more than 2% away "
-                 "from 1.00 is warned about."),
+                 "Coinbase) are property like any coin: buying one is a "
+                 "purchase, selling or spending one is a sale (a de-peg "
+                 "is a gain or loss), and a payment in one is written as "
+                 "a sale. A swap against a stablecoin, a reward or a fee "
+                 "in one is valued at its 1.00 USD par; a sale for "
+                 "dollars at the fill's price."),
             Rule("US-CRYPTO-03",
                  "A Kraken withdrawal fee paid in a coin is a sale of that "
                  "coin."),

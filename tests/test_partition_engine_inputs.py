@@ -354,7 +354,8 @@ class TestSavedCryptoGift(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
-        from test_fix_sends import TAO_ID, _cli, _project
+        from test_fix_sends import (TAO_ID, _cad_usd_rates_file, _cli,
+                                    _project)
         out = {}
         for c in C.COUNTRIES:
             with tempfile.TemporaryDirectory() as td:
@@ -362,9 +363,11 @@ class TestSavedCryptoGift(unittest.TestCase):
                 if c == "usa":
                     (root / "taxjson.toml").write_text(
                         '[settings]\nyear = 2026\ncountry = "usa"\n'
-                        'base_currency = "USD"\nsource_currencies = []\n'
+                        'base_currency = "USD"\n'
+                        'source_currencies = ["CAD"]\n'
                         '[accounts.crypto]\ntype = "taxable"\n'
                         'crypto = true\n')
+                    _cad_usd_rates_file(root / "work" / "to_base.csv")
                     (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
                 r = _cli(root, home, "run", "--no-input")
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
@@ -761,32 +764,94 @@ class TestRulesBothCountriesState(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["cost"], 5000.0, places=6)
 
     @rule("CA-CRYPTO-02")
+    @rule_absent("CA-CRYPTO-02", country="usa")
     @rule("US-CRYPTO-02")
-    def test_stablecoin_fill_off_the_peg_is_warned(self):
-        import contextlib
-        import io
+    @rule_absent("US-CRYPTO-02", country="canada")
+    def test_stablecoins_are_cash_in_canada_property_in_the_us(self):
+        import json
+        import os
+        import subprocess
+        import sys
         import tempfile
         from pathlib import Path
-        from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
+        from tax_rules.dual import SRC
         from test_fix_sends import CB_CSV
+        from test_crypto_parse_hardening import _KT_H
         head = CB_CSV.splitlines()[0]
-        rows = (head + "\n"
-                "d1,2023-03-11 12:00:00 UTC,Sell,USDC,1000,USD,0.88,880,"
-                "880,0,Sold 1000 USDC\n"
-                "d2,2023-03-20 12:00:00 UTC,Sell,USDC,100,USD,1.00,100,"
-                "100,0,Sold 100 USDC\n")
-        with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "cb.csv"
-            p.write_text(rows)
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err):
-                txs = CoinbaseBrokerage().parse_file(p)
-        # Still USD cash in the books (no position), in both countries —
-        # but the 120.00 de-peg is said, once, for the 0.88 fill.
-        self.assertEqual([t for t in txs if t.get("symbol") == "USDC"], [])
-        self.assertEqual(err.getvalue().count("de-peg"), 1)
-        self.assertIn("0.8800", err.getvalue())
-        self.assertIn("120.00", err.getvalue())
+        cb = (head + "\n"
+              "d0,2023-03-01 12:00:00 UTC,Buy,USDC,1000,USD,1.00,1000,"
+              "1000,0,Bought 1000 USDC\n"
+              "d1,2023-03-11 12:00:00 UTC,Sell,USDC,1000,USD,0.88,880,"
+              "880,0,Sold 1000 USDC\n")
+        kr = _KT_H + ("T1,O1,USDC/USD,2023-03-01 12:00:00.1,buy,limit,"
+                      "1.00,500,0,500,,,\n"
+                      "T2,O2,USDC/USD,2023-03-11 12:00:00.1,sell,limit,"
+                      "0.88,440,0,500,,,\n"
+                      "T3,O3,SOL/USDC,2023-04-03 12:00:00.1,buy,limit,"
+                      "20,200,0,10,,,\n")
+
+        def parse(broker, name, text, country):
+            with tempfile.TemporaryDirectory() as td:
+                f = Path(td) / name
+                f.write_text(text)
+                r = subprocess.run(
+                    [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+                     "--brokerage", broker, "--country", country, str(f)],
+                    capture_output=True, text=True,
+                    env=dict(os.environ, PYTHONPATH=str(SRC),
+                             TAXJSON_LOCAL_TZ="America/Toronto"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            d = json.loads(r.stdout)
+            return (d["transactions"] if isinstance(d, dict) else d,
+                    r.stderr)
+        from taxjson.lib.core import TaxTransaction, get_tax_rules
+        for broker, name, text, units in (
+                ("coinbase", "cb.csv", cb, 1000), ("kraken", "kr_trades.csv",
+                                                   kr, 500)):
+            ca, ca_err = parse(broker, name, text, "canada")
+            us, us_err = parse(broker, name, text, "usa")
+            # Canada: US-dollar cash — no USDC position, the de-peg said.
+            self.assertEqual([t for t in ca if t["symbol"] == "USDC"], [],
+                             broker)
+            self.assertIn("de-peg", ca_err, broker)
+            # US: property — bought, then sold at 0.88: a loss.
+            usdc = [t for t in us if t["symbol"] == "USDC"
+                    and t["action"] == "BUYSELL"]
+            self.assertGreaterEqual(len(usdc), 2, broker)
+            self.assertNotIn("de-peg", us_err, broker)
+            rows = [TaxTransaction(**{k: v for k, v in t.items()
+                                      if k in TaxTransaction.__dataclass_fields__})
+                    for t in us if t["action"] == "BUYSELL"]
+            res = get_tax_rules("usa").compute_gains(rows)
+            loss = [g for g in _gain_rows(res) if g["symbol"] == "USDC"
+                    and g["date"].startswith("2023-03-11")]
+            self.assertAlmostEqual(sum(g["gain"] for g in loss),
+                                   -0.12 * units, places=2, msg=broker)
+            if broker == "kraken":
+                # A SOL buy paid in USDC: both legs at the USDC par.
+                sol = [t for t in us if t["symbol"] == "SOL"]
+                spent = [t for t in us if t["symbol"] == "USDC"
+                         and t["date"] == "2023-04-03"]
+                self.assertEqual([round(t["net_amount"], 2) for t in sol],
+                                 [200.0])
+                self.assertEqual([(t["quantity"], round(t["net_amount"], 2))
+                                  for t in spent], [(-200.0, 200.0)])
+
+    @rule("US-CRYPTO-02")
+    def test_us_stablecoin_reward_and_convert_are_property(self):
+        from test_parser_coverage_audit import KR_LEDGER_H, _parse
+        from taxjson.lib.brokerages.kraken import KrakenBrokerage
+
+        class UsKraken(KrakenBrokerage):
+            stablecoins_as_cash = False
+        csv = KR_LEDGER_H + (
+            '"L1","","2026-01-15 10:00:00","earn","reward","currency",'
+            '"USDC","earn","12.5","0","112.5"\n')
+        _, txs, _ = _parse(UsKraken, csv, prefix="kr_ledgers_")
+        self.assertEqual(sorted((t["action"], t["symbol"],
+                                 round(t["net_amount"], 2)) for t in txs),
+                         [("BUYSELL", "USDC", 12.5),
+                          ("DIVIDEND", "USDC", 12.5)])
 
     @rule("CA-CRYPTO-06")
     @rule("US-CRYPTO-05")

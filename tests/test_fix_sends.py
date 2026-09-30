@@ -91,6 +91,18 @@ def _rates_file(path: Path):
     path.write_text("\n".join(lines) + "\n")
 
 
+def _cad_usd_rates_file(path: Path):
+    """CAD->USD rates for a USD (US) project: the fixture ledger buys
+    USDC with CAD, which a US project books as a purchase of property
+    (stablecoins are property there, tax-logic US-CRYPTO-02)."""
+    d = date(2025, 1, 1)
+    lines = []
+    while d <= date.today():
+        lines.append(f"{d.isoformat()} 12:00:00 CAD USD 0.7300 yahoo")
+        d += timedelta(days=1)
+    path.write_text("\n".join(lines) + "\n")
+
+
 def _project(td, *, country="canada"):
     root = Path(td) / "proj"
     acct = root / "inputs" / "crypto"
@@ -344,9 +356,10 @@ class TestUsGift(unittest.TestCase):
             root, home = _project(td, country="usa")
             (root / "taxjson.toml").write_text(
                 '[settings]\nyear = 2026\ncountry = "usa"\n'
-                'base_currency = "USD"\nsource_currencies = []\n'
+                'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
                 '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
-            # Coinbase rows are CAD-priced; a USD project has no CAD rate.
+            _cad_usd_rates_file(root / "work" / "to_base.csv")
+            # Coinbase rows are CAD-priced; keep the US fixture to Kraken.
             (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
             r = _cli(root, home, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr[-2000:])

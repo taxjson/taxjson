@@ -159,7 +159,9 @@ Kraken and Coinbase timestamps are UTC; rows are dated in local time
 "America/Vancouver"` etc., or the `TAXJSON_LOCAL_TZ` environment variable
 outside a project, to change it — the setting wins, and a change re-dates the
 rows and re-keys crypto sends), so a fill at 03:00 UTC on January 1 belongs to
-the previous tax year. USDC/USDT/DAI are treated as US-dollar cash on both exchanges.
+the previous tax year. USDC/USDT/DAI (and PYUSD/GUSD on Coinbase) are treated
+as US-dollar cash in a Canada project (an approximation; a fill more than 2% off
+1.00 USD is warned about) and as property, like any coin, in a US project.
 
 Crypto accounts: in a US project the wash-sale rule is **not** applied to
 crypto — the IRS treats digital assets as property, not securities, so §1091

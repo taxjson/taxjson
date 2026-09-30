@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **US: stablecoins are property.** In a US project USDC, USDT, DAI (and
+  PYUSD/GUSD on Coinbase) were folded into US-dollar cash — Canada's
+  stated approximation — so a stablecoin payment never reached Form 8949
+  and a de-peg loss vanished. `taxjson run` now parses a US project's
+  Kraken and Coinbase files with stablecoins as coins: buying one is a
+  purchase, selling or spending one a sale, a swap / reward / fee in one
+  is valued at its 1.00 USD par, and `crypto-sends` writes a stablecoin
+  payment as a sale line. Canada keeps the cash treatment (with a de-peg
+  warning). tax-logic CA-CRYPTO-02 / US-CRYPTO-02.
 - **tax-logic states what US projects run.** The US section gains the
   rules its input stages and engine already applied: settlement cycles
   and holidays, the generic importer's settle column, crypto and expiry
