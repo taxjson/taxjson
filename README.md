@@ -279,7 +279,7 @@ machines), resolve each with `taxjson elect <account> --set
 - `crosslistings.rpt` — flags cross-listed (`.TO`/`.US`) tickers the radar may not consolidate
 - `fees.rpt` — trading fees by brokerage, with comparison stats
 - `ccd.rpt`, `leaps.rpt` — cross-account covered-call / long-option views (`leaps.rpt` lists every long option close of any tenor; `taxjson leaps-sum` is the LEAPS-only figure; phantom-basis rows are excluded and counted, as in `ccd-sum`)
-- `<account>_holdings.toml` — machine-readable positions (native + base-currency cost, and the per-position acquisition/sell `trades` history). `cost_per_share` is `total_cost / quantity`, so for an option it is per contract; divide by `contract_multiplier` for the per-share price the `trades` show
+- `<account>_holdings.toml` — machine-readable positions (native + base-currency cost, and the per-position acquisition/sell `trades` history). `cost_per_share` is `total_cost / quantity`, so for an option it is per contract; divide by `contract_multiplier` for the per-share price the `trades` show (a futures option carries no `contract_multiplier` — its multiplier is the future's, not 100 — and a plain future is `asset_type = "future"`)
 - `exports/` — SeekingAlpha / FastGraph / TradingView watchlist CSVs
 
 When the year is over, [`docs/filing.md`](./docs/filing.md) is the
