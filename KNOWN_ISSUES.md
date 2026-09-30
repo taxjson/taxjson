@@ -158,7 +158,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 
 ### §1256 (60/40 mark-to-market) is not implemented
-- **Where:** `src/taxjson/lib/core.py` — documented out-of-scope in the US engine's docstring, alongside §1233(b)(1)/(2) anti-conversion rules and §1259 constructive sales.
+- **Where:** `src/taxjson/lib/core.py` — documented out-of-scope in the US engine's docstring, alongside the §1233(b)(1)/(2) (long held ≤1 year) and §1233(d) (long held >1 year) short-sale rules and §1259 constructive sales.
 - **Current behavior:** futures and broad-based index options (SPX, NDX, futures) are run through the ordinary FIFO ST/LT engine — no year-end mark-to-market, no 60/40 split.
 - **Why deferred:** needs a contract-classification table (which symbols are §1256 contracts) plus a mark-to-market pass; no user data currently exercises it.
 - **Workaround:** report §1256 contracts from your broker's 1099-B (they're reported mark-to-market there) and exclude them from the tool's totals.
@@ -295,14 +295,6 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 ## Known engine corner cases (latent — not on the standard `taxjson run` path)
 
 These are real bugs in code paths the standard `taxjson run` flow never exercises. They're documented so anyone repurposing the engine knows.
-
-### `_drop_self_cancelling_transfers` intervening-event check is BUYSELL-only
-- **Where:** `src/taxjson/lib/pipeline.py:_drop_self_cancelling_transfers` (moved from taxjson_gains.py in the pipeline consolidation).
-- **Current behavior:** A pair of TRANSFER rows on the same symbol+account that net to zero is auto-dropped UNLESS a `BUYSELL` of the same symbol falls between them. The check excludes `ASSIGN` and `SPLIT` events — if an option ASSIGN or a corp-action SPLIT happens between the two TRANSFERs, the auto-drop fires anyway and the pair is removed, but the position the SPLIT/ASSIGN operated on is now misaligned with the actual brokerage record.
-- **Why deferred:** cross-listing journals (the motivating case for the auto-drop) don't normally straddle corp actions or option assignments on the same security. No observed mis-fire on real data.
-- **Fix template:** extend the intervening-event check to include `ASSIGN` and `SPLIT` actions, not just `BUYSELL`.
-
----
 
 ### `taxjson audit` reports phantom-backed dispositions as "not found"
 

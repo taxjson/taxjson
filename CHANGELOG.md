@@ -2324,8 +2324,8 @@ the engine against the Act (docs/design/canada-rules-2026-09.md):
   Grant records carry `grant: true` and a note; `audit` shows WRITE.
   `option_buyback_loss_superficial` (default false) decides whether a
   buy-back loss is fed to the superficial-loss rule; the strict reading
-  permanently denied an 18.5k loss on a real 30-second order
-  correction because a LIRA held the same series.
+  can permanently deny the whole loss on a same-minute order
+  correction when a registered account holds the same series.
 - **`taxjson option-boundary`**: every written option whose write and
   close straddle a tax-year boundary (or that is open at year end), with
   where each amount lands and — using the `filed/` locks — whether a

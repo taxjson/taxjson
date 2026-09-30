@@ -195,7 +195,7 @@ def detect_phantoms(
     # walks' convention — the engines keep the export's row order, see
     # corporate_timeline._walk_rest): a Norbert's-gambit pair — sell DLR.TO, buy
     # DLR.U.TO the same morning, folded to one symbol by the ticker map —
-    # otherwise read as a 4,000-share phantom short (real 2025 book).
+    # otherwise read as an N-share phantom short.
     sorted_txs = _drop_duplicate_splits(sorted(
         transactions,
         key=lambda t: (event_sort_key(t, profile='phantom_walk'),

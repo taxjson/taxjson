@@ -1320,7 +1320,7 @@ class CanadaTaxRules(TaxRules):
         - `affiliated_transactions`: OTHER affiliated persons' trades (e.g.
           your spouse). Trigger the same superficial-loss treatment from
           your perspective; the deferred loss attaches to the affiliated
-          person's substituted property per ITA 53(1)(f.1) — tracked by
+          person's substituted property per ITA 53(1)(f) — tracked by
           your spouse on THEIR return, not yours.
 
         Both `sheltered` and `affiliated` are pure additive context for
@@ -1571,8 +1571,9 @@ class CanadaTaxRules(TaxRules):
         # 'grant': a written option's premium is a capital gain on the
         # write date; a buy-back is a loss on its own date; expiry adds
         # nothing; a stock-settled assignment folds the premium into the
-        # share leg and its grant record is not emitted (the s.49(4)
-        # post-amendment state). Contracts written before
+        # share leg and its grant record is not emitted (s.49(3)/(3.1)
+        # deem the grant and exercise not to be dispositions; s.49(4)
+        # only lets the grant year be reassessed to match). Contracts written before
         # `option_grant_since` keep close timing.
         #
         # Every short opening of a taxable option pool — pre-since
@@ -1587,7 +1588,7 @@ class CanadaTaxRules(TaxRules):
         # rest of the pool (close-timing lots, wash residue) keeps
         # average cost among itself. When an ASSIGN consumes a
         # recognised lot its grant record is retracted for those units
-        # (s.49(4)) — the grant record is mutated in place within the
+        # (s.49(3)/(3.1); s.49(4) reassesses the grant year) — the grant record is mutated in place within the
         # same pass, which is what the old pre-scan approximated from
         # outside the walk (it missed lots with no grant record: a
         # pre-since write or a cross-zero leftover consumed by the
@@ -1684,8 +1685,9 @@ class CanadaTaxRules(TaxRules):
                     continue
                 cost += take * (lot['per_unit'] + rec_extra)
                 if is_assign:
-                    # s.49(4): the grant is deemed never to have been a
-                    # disposition — retract these units from the grant
+                    # s.49(3) (call) / s.49(3.1) (put): the granting is
+                    # deemed not to be a disposition (s.49(4) reopens
+                    # the grant year) — retract these units from the grant
                     # record; the full premium folds into the share leg.
                     _amt = take * lot['per_unit']
                     ref = lot.get('rec_ref')
@@ -2471,8 +2473,8 @@ class CanadaTaxRules(TaxRules):
                                 # published position applying the rule to it,
                                 # and the strict reading denies the loss for
                                 # good when a registered account holds the
-                                # same series (a 30-second order correction
-                                # cost 18.5k that way on a real book).
+                                # same series (a same-minute order
+                                # correction could lose the whole loss).
                                 _wash_eligible = (option_buyback_loss_superficial
                                                   or not (pool['qty'] < 0
                                                           and is_option_symbol(symbol)))
@@ -2594,7 +2596,7 @@ class CanadaTaxRules(TaxRules):
                     'pool_acb': float(pool['total_cost']),
                 }
 
-            # Grant records fully retracted by an assignment (s.49(4))
+            # Grant records fully retracted by an assignment (s.49(3)/(3.1))
             # leave the record list; their losses leave the solver.
             if _grant_mode:
                 iteration_realized_gains = [
@@ -3787,11 +3789,15 @@ class USATaxRules(TaxRules):
       opens a new short lot.
 
     Out of scope (v1) — to be added when a use case exists:
-    - §1233(b)(1) anti-conversion: long held >1yr + same-symbol short →
-      gain on short = SHORT_TERM, loss = LONG_TERM. (Detection requires
-      "substantially identical" reasoning beyond simple symbol match.)
-    - §1233(b)(2) long holding-period reset when short opens on a long
-      held ≤1 year of substantially identical property.
+    - §1233(b)(1) anti-conversion: substantially identical property
+      held NOT more than 1 year at the short sale (or acquired while the
+      short is open) → gain on closing the short = SHORT_TERM.
+    - §1233(b)(2) that long's holding period restarts when the short
+      closes (or the long is sold).
+    - §1233(d): substantially identical property held MORE than 1 year
+      at the short sale → a loss on closing the short = LONG_TERM.
+      (Each needs "substantially identical" reasoning beyond a simple
+      symbol match.)
     - §1259 constructive sale of appreciated long when hedged by short.
     - Section 1256 60/40 mark-to-market for futures and broad-based
       index options. (Affects symbols like SPX, NDX, futures.)
@@ -4842,9 +4848,9 @@ class USATaxRules(TaxRules):
 
                     # Stand-alone shorts: holding period is conventionally
                     # zero — gain on close is SHORT_TERM per §1222.
-                    # §1233(b)(1) anti-conversion rule applies only when
-                    # offsetting same-symbol long is held >1yr at short-open;
-                    # not implemented in v1.
+                    # §1233(b)(1) (a long held ≤1yr at short-open makes a
+                    # gain short-term) and §1233(d) (a long held >1yr makes
+                    # a loss long-term) are not implemented in v1.
                     is_long_term = False
                     acq_for_holding = short_lot.get('effective_open_date', short_lot['date'])
                     try:
