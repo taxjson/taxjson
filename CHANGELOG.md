@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`roc` / `roc-sum` show `distributions.map` adjustments.** The map's
+  ACB adjustments are booked only in `<acct>_base.json`, so both views
+  said there were none while the engine applied them; they are listed now
+  (MAP_ROWS), and `roc-sum` warns when the same symbol and date also has a
+  `.tt` ADJUST (the ACB would be reduced twice) (audit R1-163).
 - **`reports/ccd.rpt` and `leaps.rpt` match their query twins.** They
   counted phantom-basis (tainted) rows that `ccd-sum` / `leaps-sum` skip,
   `leaps.rpt` was titled "LEAPS" while listing every long option of any

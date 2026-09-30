@@ -402,5 +402,42 @@ class TestCrossReports(unittest.TestCase):
                     self.assertNotIn("TOTAL", r.stdout)
 
 
+class TestRocIncludesDistributionsMap(unittest.TestCase):
+    """R1-163: distributions.map ADJUSTs live only in <acct>_base.json."""
+
+    def _proj(self, tmp, manual_too=False):
+        root = _project(tmp)
+        native = [_trade("2025-03-03", "XFND.TO", 200, 10.0, 2000.0)]
+        if manual_too:
+            native.append({"action": "ADJUST", "date": "2025-12-31",
+                           "time": "09:30:00", "symbol": "XFND.TO",
+                           "currency": "CAD", "net_amount": -80.0})
+        _write(root, "margin_raw.json", native)
+        _write(root, "margin_base.json", native + [
+            {"action": "ADJUST", "date": "2025-12-31", "time": "23:59:58",
+             "date_settle": "2025-12-31", "symbol": "XFND.TO",
+             "quantity": 0.0, "currency": "CAD", "net_amount": -80.0,
+             "type": "dist", "account": "margin",
+             "id": "DIST-XFND.TO-2025-12-31-margin"}])
+        return root
+
+    def test_roc_sum_and_roc_list_map_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d)
+            doc = _json(root, "roc-sum", "all")
+            r = _runsub(root, "roc", "all")
+        self.assertAlmostEqual(doc["totals"]["CAD"], 80.0)
+        self.assertEqual(doc["rows"][0]["dist_rows"], 1)
+        self.assertIn("XFND.TO", r.stdout)
+        self.assertIn("-80.00", r.stdout)
+
+    def test_same_roc_entered_twice_is_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d, manual_too=True)
+            r = _runsub(root, "roc-sum", "all")
+        self.assertIn("160.00", r.stdout)
+        self.assertIn("twice", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3883,6 +3883,10 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
                 continue
             if keep(d):
                 rows.append((d, tx.get("time") or "", acct, tx))
+    if label == "roc":
+        for acct, tx in _dist_adjust_rows(cache, accounts, keep):
+            rows.append((tx.get("date") or "", tx.get("time") or "",
+                         acct, tx))
 
     # Chronological, oldest → latest (date, then time), across all accounts.
     rows.sort(key=lambda r: (r[0], r[1], r[2]))
@@ -4962,6 +4966,27 @@ def _account_group_of(root: Path) -> Dict[str, str]:
     return out
 
 
+def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
+    """distributions.map ACB adjustments: `run` books them (type 'dist',
+    id DIST-*) into <acct>_base.json only — the native books the
+    transaction views read never see them, so `roc` / `roc-sum` said
+    "No ACB adjustments" while the engine applied one (audit R1-163)."""
+    out: List[Tuple[str, dict]] = []
+    for acct in accounts:
+        p = cache / f"{acct}_base.json"
+        if not p.exists():
+            continue
+        doc = _load_json_or_die(p)
+        for t in (doc.get("transactions") if isinstance(doc, dict)
+                  else doc) or []:
+            if (t.get("action") == "ADJUST"
+                    and (t.get("type") or "").lower() == "dist"):
+                d = t.get("date") or ""
+                if _ISO_DATE_RE.match(d) and keep(d):
+                    out.append((acct, t))
+    return out
+
+
 def _load_json_or_die(path: Path) -> Any:
     """Read a work/ artifact a query view needs, or stop naming it. The
     views used to warn and skip the file, then print a partial report —
@@ -5165,6 +5190,24 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     T3 box 42 entries) count too."""
     rows, scope, bad, _keep = _collect_period_txs(args, "roc-sum",
                                            actions={"ADJUST"})
+    _root = Path(args.dir).resolve()
+    _accts = sorted({a for a, _t in rows}
+                    | set(_discover_tx_accounts(_root / "work")))
+    _acct_arg = _view_window(args, _root)[2]
+    if _acct_arg:
+        _accts = [_acct_arg]
+    dist_rows = _dist_adjust_rows(_root / "work", _accts, _keep)
+    # The same ROC entered as a .tt ADJUST AND in distributions.map
+    # reduces the ACB twice — say so (audit R1-163).
+    _manual_keys = {(a, str(t.get("symbol") or ""), t.get("date"))
+                    for a, t in rows}
+    for a, t in dist_rows:
+        if (a, str(t.get("symbol") or ""), t.get("date")) in _manual_keys:
+            print(f"taxjson roc-sum: warning: {t.get('symbol')} "
+                  f"{t.get('date')} ({a}) has an ADJUST in the books AND "
+                  f"a distributions.map row — the ACB is reduced twice "
+                  f"if both are the same distribution.", file=sys.stderr)
+    rows = list(rows) + dist_rows
 
     money = fmt_money               # shared report-layer formatter
 
@@ -5178,10 +5221,13 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
         returned = -float(tx.get("net_amount") or 0.0)
         key = (str(tx.get("symbol") or "?"), cur)
         rec = agg.setdefault(key, {"returned": 0.0, "roc_rows": 0,
-                                   "manual_rows": 0})
+                                   "manual_rows": 0, "dist_rows": 0})
         rec["returned"] += returned
-        if (tx.get("type") or "").lower() == "roc":
+        _typ = (tx.get("type") or "").lower()
+        if _typ == "roc":
             rec["roc_rows"] += 1
+        elif _typ == "dist":
+            rec["dist_rows"] += 1
         else:
             rec["manual_rows"] += 1
         totals[cur] = totals.get(cur, 0.0) + returned
@@ -5190,7 +5236,8 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
         _json_out({"rows": [{"symbol": sym, "currency": cur,
                              "capital_returned": round(rec["returned"], 2),
                              "roc_rows": int(rec["roc_rows"]),
-                             "manual_rows": int(rec["manual_rows"])}
+                             "manual_rows": int(rec["manual_rows"]),
+                             "dist_rows": int(rec["dist_rows"])}
                             for (sym, cur), rec in sorted(agg.items())],
                    "totals": {c: round(v, 2) for c, v in totals.items()},
                    "scope": scope})
@@ -5198,19 +5245,23 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     if not agg:
         print(f"No ACB adjustments in {scope}.")
         return
-    out_lines = ["SYMBOL CUR CAPITAL_RETURNED ROC_ROWS MANUAL_ROWS"]
+    out_lines = ["SYMBOL CUR CAPITAL_RETURNED ROC_ROWS MANUAL_ROWS "
+                 "MAP_ROWS"]
     for (sym, cur), rec in sorted(agg.items()):
         out_lines.append(" ".join([sym, cur, money(rec["returned"]),
                                    str(rec["roc_rows"]),
-                                   str(rec["manual_rows"])]))
+                                   str(rec["manual_rows"]),
+                                   str(rec["dist_rows"])]))
     print(f"RETURN OF CAPITAL / ACB ADJUSTMENTS — {scope}")
     print()
     _print_report_table(out_lines)
     tot = ", ".join(f"{money(v)} {c}" for c, v in sorted(totals.items()))
     print(f"\nTOTAL CAPITAL RETURNED (ACB reduced): {tot}")
     print("Positive = ACB reduced (capital returned). Negative rows are "
-          "reversals or manual ACB increases. Enter fund ROC from your T3 "
-          "box 42 as .tt ADJUST lines — see the README's ROC section.")
+          "reversals or manual ACB increases (MAP_ROWS: distributions.map "
+          "adjustments, a reinvested distribution shows negative). Enter "
+          "fund ROC from your T3 box 42 as .tt ADJUST lines OR in "
+          "distributions.map, never both — see the README's ROC section.")
 
 
 def cmd_trades_sum(args: argparse.Namespace) -> None:

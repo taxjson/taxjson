@@ -912,8 +912,11 @@ cases differently:
    ```
 
 Inspect what's recorded with `taxjson roc <period>` (every ADJUST row,
-taxtext) and `taxjson roc-sum` (per-ticker capital returned, split into
-broker-classified vs manual rows). If cumulative ROC ever pushes a
+taxtext, including the `distributions.map` adjustments `run` books) and
+`taxjson roc-sum` (per-ticker capital returned, split into
+broker-classified, manual and `distributions.map` rows; it warns when a
+symbol has a book ADJUST and a map row on the same date — the same ROC
+entered twice). If cumulative ROC ever pushes a
 position's ACB below zero, the excess is a deemed capital gain under
 s.40(3) — the engine flags this rather than computing it.
 
