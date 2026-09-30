@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **`divs-sum` and `winners` separate registered accounts.** Both summed
+  RRSP/TFSA/LIRA/RESP amounts into the headline (the 2025 `winners` total
+  was 2.24x the Schedule 3 gain, and the USD `divs-sum` 2.25x the slips);
+  they now print TAXABLE and SHELTERED lines, and the checklist points the
+  slip tie-out at the TAXABLE line. `divs-sum` counts DIVIDEND rows only
+  (payments in lieu are `dil-sum`; adding the two counted PIL twice), and
+  the `divs` help says it shows both (audit S040-13, S041-04, R1-272).
+- **`winners` and `ccd-sum` count routed phantom-basis sales.** The
+  "skipped N tainted" warning read only in-line rows, so a pipeline file's
+  `manual_reporting_required` sales vanished from the ranking without a
+  word (audit S040-15).
 - **Tax-year views follow the settlement date.** `winners`, `gains`,
   `ccd-sum`, `leaps` and `leaps-sum` windowed a tax year on the trade
   date, so a Dec-31 trade that settles in January dropped out of every

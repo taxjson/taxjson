@@ -596,7 +596,10 @@ they need an annual refresh, and the output says so. These are
 planning estimates, never filing numbers.
 
 **`taxjson divs-sum [PERIOD] [ACCOUNT]`** — dividends received per ticker over
-the window, with a per-currency grand total.
+the window (DIVIDEND rows; payments in lieu are in `dil-sum`), with
+per-currency totals split TAXABLE / SHELTERED when a registered account
+contributes — the TAXABLE line is the figure to compare with the T5/T3 slips.
+`winners` prints the same taxable/sheltered split under its ranking.
 
 **`taxjson trades-sum [PERIOD] [ACCOUNT]`** — per ticker: buy/sell counts, value
 bought/sold, and fees, with per-currency totals.

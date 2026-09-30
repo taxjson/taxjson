@@ -4649,6 +4649,14 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
                   file=sys.stderr)
             continue
         _settle = _settle_basis(root, data)
+        # Routed phantom-basis rows (manual_reporting_required) are
+        # tainted too — counted, never silent (audit S040-15 sibling).
+        for t in data.get("manual_reporting_required") or []:
+            sym = str(t.get("symbol") or "")
+            d = _gains_row_date(t, keep, _settle)
+            if (is_option_symbol(sym) and parse_option_right(sym) == "C"
+                    and _ISO_DATE_RE.match(d) and keep(d)):
+                tainted_skipped += 1
         for t in data.get("transactions", []):
             sym = str(t.get("symbol") or "")
             if not is_option_symbol(sym):
@@ -4766,6 +4774,9 @@ def cmd_winners(args: argparse.Namespace) -> None:
                "FEE", "DISALLOW", "ADJUST"}
     agg: Dict[str, Dict[str, float]] = {}
     tainted_skipped = 0
+    groups = _account_group_of(root)
+    grp_gain = {"taxable": 0.0, "sheltered": 0.0}
+    shel_accts = set()
     for _acct, f in resolved.items():
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
@@ -4774,6 +4785,14 @@ def cmd_winners(args: argparse.Namespace) -> None:
                   file=sys.stderr)
             continue
         _settle = _settle_basis(root, data)
+        # Pipeline files ROUTE phantom-basis rows out of transactions[]
+        # into manual_reporting_required: count them too, or the
+        # "nothing is silent" warning never fired on real books (audit
+        # S040-15).
+        for t in data.get("manual_reporting_required") or []:
+            d = _gains_row_date(t, keep, _settle)
+            if _ISO_DATE_RE.match(d) and keep(d):
+                tainted_skipped += 1
         for t in data.get("transactions", []):
             if t.get("action") in _INCOME:
                 continue
@@ -4796,6 +4815,11 @@ def cmd_winners(args: argparse.Namespace) -> None:
             rec["proceeds"] += float(t.get("proceeds") or 0.0)
             rec["cost"] += float(t.get("cost") or 0.0)
             rec["gain"] += float(t.get("gain") or 0.0)
+            _g = groups.get(_acct)
+            if _g:
+                grp_gain[_g] += float(t.get("gain") or 0.0)
+                if _g == "sheltered":
+                    shel_accts.add(_acct)
     ranked = sorted(agg.items(), key=lambda kv: -kv[1]["gain"])
     base_cur = _base_currency(root)
     if tainted_skipped:
@@ -4808,6 +4832,9 @@ def cmd_winners(args: argparse.Namespace) -> None:
                             for t, rec in ranked],
                    "total_gain": round(sum(r["gain"]
                                            for _t, r in ranked), 2),
+                   "total_gain_taxable": round(grp_gain["taxable"], 2),
+                   "total_gain_sheltered": round(grp_gain["sheltered"], 2),
+                   "sheltered_included": sorted(shel_accts),
                    "tainted_skipped": tainted_skipped,
                    "currency": base_cur, "scope": scope,
                    "basis": basis})
@@ -4845,8 +4872,18 @@ def cmd_winners(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     total = sum(r["gain"] for _t, r in ranked)
-    print(f"\n{len(ranked)} ticker(s); TOTAL REALIZED GAIN: "
-          f"{money(total)} {base_cur}")
+    if shel_accts:
+        # A registered account's gains are not taxable events; the
+        # headline alone overstated the owner's 2025 Schedule 3 gain by
+        # 124% (audit S040-13). Same split and note `sum` prints.
+        print(f"\nTAXABLE: {money(grp_gain['taxable'])} {base_cur}   "
+              f"SHELTERED ({', '.join(sorted(shel_accts))} — not taxable "
+              f"events): {money(grp_gain['sheltered'])} {base_cur}")
+        print(f"{len(ranked)} ticker(s); TOTAL REALIZED GAIN (all "
+              f"accounts): {money(total)} {base_cur}")
+    else:
+        print(f"\n{len(ranked)} ticker(s); TOTAL REALIZED GAIN: "
+              f"{money(total)} {base_cur}")
     print("Realized dispositions only (engine-allowed amounts) — "
           "dividends/PIL are not included; see divs-sum.")
 
@@ -4938,6 +4975,18 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions):
     return rows, scope, bad, keep
 
 
+def _account_group_of(root: Path) -> Dict[str, str]:
+    """{account: 'taxable'|'sheltered'} from taxjson.toml ({} without a
+    config) — the split the roll-up views print so a registered account's
+    income or gains never pass for taxable ones (audit S040-13, S041-04)."""
+    out: Dict[str, str] = {}
+    for name, a in ((_soft_config(root).get("accounts") or {}).items()):
+        t = str((a or {}).get("type") or "").strip().lower()
+        if t in ("taxable", "sheltered"):
+            out[name] = t
+    return out
+
+
 def _warn_bad_dates(bad: int) -> None:
     if bad:
         print(f"taxjson: warning: {bad} row(s) had a missing/unparseable date and were "
@@ -5005,13 +5054,21 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     """Dividend summary over a window (default: the tax year): total received
     per ticker, plus a per-currency grand total. `PERIOD` is 30d/6w/3m/1y/all;
     omit it for the tax year."""
+    # DIVIDEND rows only: a payment in lieu is ordinary income (no
+    # gross-up/credit), is not on the T5, and `dil-sum` reports it — the
+    # old {DIVIDEND, DIVIDEND_IN_LIEU} set counted it twice across the
+    # two views and put it in the slip tie-out (audit R1-272).
     rows, scope, bad, _keep = _collect_period_txs(
-        args, "divs-sum", actions={"DIVIDEND", "DIVIDEND_IN_LIEU"})
+        args, "divs-sum", actions={"DIVIDEND"})
 
     money = fmt_money               # shared report-layer formatter
+    groups = _account_group_of(Path(args.dir).resolve())
 
     agg: Dict[Tuple[str, str], float] = {}
     totals: Dict[str, float] = {}
+    by_group: Dict[str, Dict[str, float]] = {"taxable": {},
+                                             "sheltered": {}}
+    shel_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         # Signed: reversal rows (negative) net against the original posting.
@@ -5020,12 +5077,22 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
         key = (str(tx.get("symbol") or "?"), cur)
         agg[key] = agg.get(key, 0.0) + amt
         totals[cur] = totals.get(cur, 0.0) + amt
+        g = groups.get(acct)
+        if g:
+            by_group[g][cur] = by_group[g].get(cur, 0.0) + amt
+            if g == "sheltered":
+                shel_accts.add(acct)
     _warn_bad_dates(bad)
     if getattr(args, "json", False):
         _json_out({"rows": [{"symbol": sym, "currency": cur,
                              "dividend": round(amt, 2)}
                             for (sym, cur), amt in sorted(agg.items())],
                    "totals": {c: round(v, 2) for c, v in totals.items()},
+                   "totals_taxable": {c: round(v, 2) for c, v
+                                      in by_group["taxable"].items()},
+                   "totals_sheltered": {c: round(v, 2) for c, v
+                                        in by_group["sheltered"].items()},
+                   "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
     if not agg:
@@ -5034,11 +5101,25 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     out_lines = ["SYMBOL CUR DIVIDEND"]
     for (sym, cur), amt in sorted(agg.items()):
         out_lines.append(" ".join([sym, cur, money(amt)]))
-    print(f"DIVIDENDS — {scope}")
+    print(f"DIVIDENDS — {scope}  (DIVIDEND rows; payments in lieu are "
+          f"in `dil-sum`)")
     print()
     _print_report_table(out_lines)
-    tot = ", ".join(f"{money(v)} {c}" for c, v in sorted(totals.items()))
-    print(f"\nTOTAL DIVIDEND: {tot}")
+
+    def _tot(d):
+        return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
+    print()
+    if shel_accts:
+        # Registered accounts get no T5/T3 and their dividends are not
+        # income: the slip tie-out figure is the TAXABLE line (audit
+        # S041-04).
+        print(f"TAXABLE (compare with T5/T3 slips): "
+              f"{_tot(by_group['taxable']) or '0.00'}")
+        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — not "
+              f"taxable income, no slips): {_tot(by_group['sheltered'])}")
+        print(f"TOTAL DIVIDEND (all accounts): {_tot(totals)}")
+    else:
+        print(f"TOTAL DIVIDEND: {_tot(totals)}")
 
 
 def cmd_dil_sum(args: argparse.Namespace) -> None:
@@ -10948,7 +11029,8 @@ def main() -> None:
 
     p_div = sub.add_parser(
         "divs",
-        help="Like `events` but only DIVIDEND rows (native, taxtext)")
+        help="Like `events` but only DIVIDEND and DIVIDEND_IN_LIEU rows "
+             "(native, taxtext)")
     p_div.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_div.add_argument("account", nargs="?", help="Account (default: all)")
     p_div.add_argument("--json", action="store_true",

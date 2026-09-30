@@ -188,5 +188,86 @@ class TestLeapsScopeGuard(unittest.TestCase):
                 self.assertNotIn("No ", r.stdout, cmd)
 
 
+def _div(date, sym, amt, action="DIVIDEND", cur="CAD"):
+    return {"action": action, "date": date, "time": "09:30:00",
+            "symbol": sym, "quantity": 100, "price": amt / 100,
+            "gross_amount": amt, "net_amount": amt, "currency": cur}
+
+
+class TestDividendViews(unittest.TestCase):
+    def _proj(self, tmp):
+        root = _project(tmp)
+        _write(root, "margin_raw.json", [
+            _div("2026-03-02", "AAA.TO", 100.0),
+            _div("2026-03-03", "AAA.TO", 10.0, action="DIVIDEND_IN_LIEU"),
+        ])
+        _write(root, "rrsp_raw.json", [_div("2026-03-04", "BBB.TO", 50.0)])
+        return root
+
+    def test_divs_sum_excludes_payments_in_lieu(self):
+        """R1-272: dil-sum is 'split out from divs-sum' — PIL is not a
+        dividend (no gross-up) and not on the T5."""
+        with tempfile.TemporaryDirectory() as d:
+            doc = _json(self._proj(d), "divs-sum")
+        self.assertAlmostEqual(doc["totals"]["CAD"], 150.0)
+
+    def test_divs_help_matches_code(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = _runsub(self._proj(d), "--help")
+        self.assertNotIn("only DIVIDEND rows", r.stdout)
+
+    def test_divs_sum_splits_taxable_and_sheltered(self):
+        """S041-04: the slip tie-out figure is the taxable total."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d)
+            doc = _json(root, "divs-sum")
+            r = _runsub(root, "divs-sum")
+        self.assertAlmostEqual(doc["totals_taxable"]["CAD"], 100.0)
+        self.assertAlmostEqual(doc["totals_sheltered"]["CAD"], 50.0)
+        self.assertIn("TAXABLE", r.stdout)
+        self.assertIn("rrsp", r.stdout)
+
+
+class TestWinnersScope(unittest.TestCase):
+    def _proj(self, tmp):
+        root = _project(tmp)
+        summ = {"year": "2026", "tax_date_basis": "settle"}
+        _write(root, "margin_gains_wash.json", [
+            {"date": "2026-03-02", "date_settle": "2026-03-03",
+             "symbol": "AAA.TO", "qty": 10, "proceeds": 300.0,
+             "cost": 100.0, "gain": 200.0, "currency": "CAD"}],
+            summary=summ,
+            manual_reporting_required=[
+                {"date": "2026-04-01", "date_settle": "2026-04-02",
+                 "symbol": "ZZZ.TO", "qty": 10, "proceeds": 500.0,
+                 "currency": "CAD"}])
+        _write(root, "rrsp_gains.json", [
+            {"date": "2026-05-01", "date_settle": "2026-05-02",
+             "symbol": "BBB.TO", "qty": 10, "proceeds": 2000.0,
+             "cost": 1000.0, "gain": 1000.0, "currency": "CAD"}],
+            summary=summ)
+        return root
+
+    def test_winners_splits_sheltered(self):
+        """S040-13."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d)
+            doc = _json(root, "winners")
+            r = _runsub(root, "winners")
+        self.assertAlmostEqual(doc["total_gain_taxable"], 200.0)
+        self.assertAlmostEqual(doc["total_gain_sheltered"], 1000.0)
+        self.assertIn("TAXABLE", r.stdout)
+        self.assertIn("rrsp", r.stdout)
+
+    def test_winners_counts_routed_phantom_rows(self):
+        """S040-15: pipeline files route tainted rows out of transactions."""
+        with tempfile.TemporaryDirectory() as d:
+            root = self._proj(d)
+            doc = _json(root, "winners")
+            r = _runsub(root, "winners")
+        self.assertEqual(doc["tainted_skipped"], 1)
+        self.assertIn("1 tainted", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
