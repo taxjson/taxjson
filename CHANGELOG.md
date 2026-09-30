@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Corporate actions follow ticker_extraction_overrides.txt.** The
+  overrides renamed a security's trades but not its merger/spin-off rows,
+  so the event consumed an empty pool under the broker's spelling while
+  the real position stayed put (a taxable merger's gain vanished). The
+  corp-action rows now take the same rename; when the overrides rename
+  some of a spelling's rows and not others, a corporate action on it is
+  refused instead of guessed (audit S004-00).
 - **Election hints must be non-negative amounts.** `elect --hint`, the
   interactive prompt and a hand-edited manifest.json refuse a negative,
   nan or inf hint (a negative allocated ACB created basis from nothing,

@@ -948,5 +948,50 @@ class TestElectionHintsAreAmounts(unittest.TestCase):
         self.assertIn("fmv_per_share", str(cm.exception))
 
 
+_IB_MERGER = '''\
+Statement,Header,Field Name,Field Value
+Statement,Data,BrokerName,Interactive Brokers
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
+Trades,Data,Order,Stocks,CAD,SSL,"2025-02-05, 09:31:00",1600,15.90,0,-25440.0,-1,0,0,0,O
+Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
+Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (RGLD.CAD, ROYAL GOLD INC, US0000000002)",100.0026,0,25840.67184,0,
+Corporate Actions,Data,Stocks,CAD,2025-10-27,"2025-10-22, 20:25:00","SSL(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 (SSL, SANDSTORM GOLD LTD, CA0000000001)",-1600.0416,0,-25920.67392,0,
+'''
+
+
+class TestCorpActionsFollowSecurityOverrides(unittest.TestCase):
+    """S004-00: ticker_extraction_overrides.txt renamed the trades but
+    not the corporate-action rows, so a merger consumed an empty
+    un-overridden pool and the real position stayed put."""
+
+    def test_merger_consumes_the_overridden_pool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "inputs" / "margin").mkdir(parents=True)
+            _set_config(root, _CONFIG)
+            (root / "inputs" / "margin" / "ib.csv").write_text(_IB_MERGER)
+            (root / "ticker_extraction_overrides.txt").write_text(
+                "SSL | CAD | SSLX.TO\n")
+            r = _run_cli(root, "run", "--no-input")
+            if r.returncode == 3:
+                pend = json.loads((root / "work" / "pending_elections.json")
+                                  .read_text())
+                for ev in pend["accounts"]["margin"]["pending"]:
+                    _run_cli(root, "elect", "margin", "--set",
+                             f"{ev['event_id']}=taxable_disposition")
+                r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            base = json.loads((root / "work" / "margin_base.json")
+                              .read_text())["transactions"]
+            syms = {t["symbol"] for t in base}
+            self.assertNotIn("SSL.TO", syms)
+            doc = json.loads(_run_cli(root, "list", "--json").stdout)
+            held = {x["symbol"]: x["qty"] for x in doc["rows"]}
+            # The fixture's event removes 1600.0416 shares (fractional
+            # rounding in IB's own numbers); what matters is that the
+            # 1600 overridden shares were consumed, not left in place.
+            self.assertLess(abs(held.get("SSLX.TO", 0.0)), 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

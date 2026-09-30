@@ -1384,6 +1384,50 @@ def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
             == "usa" else "dividend")
 
 
+def _apply_override_log(corp_json: Path, log: Path, account: str) -> None:
+    """Rename corp-action rows the way the security overrides renamed
+    the same broker's parsed rows ((symbol, currency) -> new symbol).
+    A pair the overrides renamed for some rows and not others is
+    ambiguous (two securities share the broker's spelling): a corporate
+    action on it is refused rather than booked on a guess."""
+    import json as _json
+    if not log.exists() or not corp_json.exists():
+        return
+    try:
+        doc = _json.loads(log.read_text(encoding="utf-8"))
+        corp = _json.loads(corp_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    renamed = {k: v for k, v in (doc.get("renamed") or {}).items() if v}
+    kept = set(doc.get("kept") or [])
+    if not renamed:
+        return
+    changed = False
+    for t in corp.get("transactions", []) or []:
+        cur = str(t.get("currency") or "").upper()
+        for fld in ("symbol", "symbol_new"):
+            sym = t.get(fld) or ""
+            key = f"{sym}|{cur}"
+            if key not in renamed:
+                continue
+            targets = renamed[key]
+            if len(targets) > 1 or key in kept:
+                _die(f"{account}: a corporate action on {sym} ({cur}), "
+                     f"but ticker_extraction_overrides.txt renames some "
+                     f"{sym} rows (to {', '.join(targets)}) and not "
+                     f"others — two securities share that spelling, so "
+                     f"the event cannot be assigned. Record it with a "
+                     f".tt file (and `taxjson elect {account} --set "
+                     f"<event>=ignore`).")
+            t[fld] = targets[0]
+            changed = True
+    if changed:
+        tmp = corp_json.with_name(corp_json.name + ".part")
+        tmp.write_text(_json.dumps(corp, indent=2, sort_keys=True) + "\n",
+                       encoding="utf-8")
+        tmp.replace(corp_json)
+
+
 # Project-root files the per-account stages read (their content is part
 # of each account's input fingerprint).
 _PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
@@ -1585,7 +1629,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # is exactly what explains a confusing position later.
                 cmd += ["--transfers-out", str(_sidecar)]
             if security_overrides:
-                cmd += ["--security-overrides", str(security_overrides)]
+                cmd += ["--security-overrides", str(security_overrides),
+                        "--override-log",
+                        str(out.with_name(out.stem + ".overrides"))]
+            else:
+                out.with_name(out.stem + ".overrides").unlink(
+                    missing_ok=True)
             cmd += [str(p) for p in csvs]
             run_to_file(cmd, out)
             # Surface per-file transaction counts (and any 0-tx
@@ -1701,6 +1750,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     if e.returncode == 3 and pending_path.exists():
                         raise PendingElectionsError(name, pending_path)
                     raise
+            # ticker_extraction_overrides.txt renamed this broker's
+            # trade rows; the corp-action rows of the same security must
+            # follow, or a merger consumed an empty un-overridden pool
+            # while the real position stayed put (S004-00).
+            _apply_override_log(out, cache / f"{name}_{broker}.overrides",
+                                name)
             corp_files.append(out)
         _warn_zero_value_spinoffs(name, is_taxable, corp_files, cache)
 
