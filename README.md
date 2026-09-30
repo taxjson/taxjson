@@ -326,7 +326,7 @@ Files the pipeline reads and writes (all map files are optional):
 
 | Path | Role |
 | --- | --- |
-| `inputs/<account>/` | Drop broker CSV exports here; any `*.tt` manual-history files too. |
+| `inputs/<account>/` | Drop broker CSV exports here; any `*.tt` manual-history files too. Only `.csv` and `.tt` files are read: `taxjson run` stops on an Excel export (`.xlsx`/`.xls`) unless its CSV conversion (`taxjson-xlsx-to-csv FILE.xlsx -o FILE.csv`) sits beside it. |
 | `inputs/<account>/manifest.json` | Saved corp-action elections — **commit this**. |
 | `inputs/slips/` | Broker T5008 / 1099-B slip CSVs for `taxjson reconcile-slips` (the checklist looks here). Not an account folder — needs no `[accounts.slips]`. |
 | `ticker.map` | Symbol rules, one per line: `GLOBAL from to` (plain rename, every stage), `TOBASE from to` (cross-listing consolidated in the base pipeline only), `JOURNAL from to` (Norbert's Gambit pair — consolidated AND netted in holdings), `DELETE from` (drop a pure artifact), `DISTINCT a b` (records that two look-alike listings are deliberately separate securities — a CDR vs its US underlying — and silences the scan's MAP-GAP nag; changes no symbol). For TOBASE pairs the holdings view keeps the listings separate **except** where the broker's own transfer rows prove a depot flip — the holdings export applies those evidenced quantities from the transfer sidecars (see `taxjson transfers`), so `JOURNAL` is only for intrinsically fungible classes like DLR's gambit units. `taxjson init` writes a commented stub. |

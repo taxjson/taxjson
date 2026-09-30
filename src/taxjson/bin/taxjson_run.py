@@ -594,6 +594,32 @@ def validate_config(cfg: Dict[str, Any],
                         f"directly in inputs/{name}/ are processed; move "
                         f"them up a level (or out of inputs/ if they are "
                         f"not meant for this account)")
+    # Spreadsheet exports (Questrade's default download is .xlsx) sit
+    # next to the CSVs but are never read: the run exited 0 with every
+    # trade in them missing and never named the file (R1-64/R1-248).
+    # Fatal unless the file's CSV conversion sits beside it.
+    if inputs_dir is not None and inputs_dir.is_dir():
+        unconverted: List[str] = []
+        for name in accounts:
+            adir = inputs_dir / str(name)
+            csv_stems = {p.stem.lower() for p in input_files(adir, ".csv")}
+            for sheet in spreadsheet_inputs(adir):
+                rel = f"inputs/{name}/{sheet.name}"
+                if sheet.stem.lower() in csv_stems:
+                    warnings.append(
+                        f"{rel} is not read (spreadsheets never are); its "
+                        f"CSV conversion {sheet.stem}.csv is. Move the "
+                        f"spreadsheet out of inputs/ to silence this.")
+                else:
+                    unconverted.append(rel)
+        if unconverted:
+            _die("spreadsheet export(s) in inputs/ are NOT read — only "
+                 ".csv and .tt files are, so every trade in them would be "
+                 "missing from the books:\n    "
+                 + "\n    ".join(unconverted)
+                 + "\n  Convert each to CSV next to it (`taxjson-xlsx-to-csv "
+                 "FILE.xlsx -o FILE.csv`, or the broker's CSV download) "
+                 "and move the spreadsheet out of inputs/.")
     # Inputs dir with data but no [accounts.*] entry: today that folder is
     # silently ignored — the inverse of the configured-but-unpopulated
     # warning the run loop already prints.
@@ -604,7 +630,8 @@ def validate_config(cfg: Dict[str, Any],
             if not sub.is_dir() or sub.name in accounts \
                     or sub.name == "slips":
                 continue
-            if input_files(sub, ".csv") or input_files(sub, ".tt"):
+            if input_files(sub, ".csv") or input_files(sub, ".tt") \
+                    or spreadsheet_inputs(sub):
                 warnings.append(f"inputs/{sub.name}/ contains data but has "
                                 f"no [accounts.{sub.name}] section — it "
                                 f"will NOT be processed")
@@ -687,6 +714,20 @@ def input_files(dirpath: Path, suffix: str) -> List[Path]:
         return []
     return sorted(p for p in dirpath.iterdir()
                   if p.is_file() and p.suffix.lower() == suffix)
+
+
+# Spreadsheet suffixes a broker export may arrive in. None is read by
+# the run; validate_config refuses them unless converted (R1-64).
+SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods")
+
+
+def spreadsheet_inputs(dirpath: Path) -> List[Path]:
+    """Spreadsheet files directly in an inputs folder (never read)."""
+    if not dirpath.is_dir():
+        return []
+    return sorted(p for p in dirpath.iterdir()
+                  if p.is_file() and not p.name.startswith((".", "~$"))
+                  and p.suffix.lower() in SPREADSHEET_SUFFIXES)
 
 
 def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:

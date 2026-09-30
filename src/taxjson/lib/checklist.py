@@ -261,12 +261,14 @@ def default_run_sub(root: Path) -> Callable[..., Tuple[int, str, str]]:
 
 
 def _data_files(folder: Path) -> List[Path]:
+    """The activity files `taxjson run` actually reads: .csv and .tt
+    directly in the folder. Counting .xlsx/.txt too marked an account
+    whose only file was an unread spreadsheet as present (R1-248)."""
     if not folder.is_dir():
         return []
     return sorted(p for p in folder.iterdir()
                   if p.is_file() and not p.name.startswith(".")
-                  and p.suffix.lower() in (".csv", ".tt", ".txt", ".xlsx")
-                  and p.name != "README.txt")
+                  and p.suffix.lower() in (".csv", ".tt"))
 
 
 def _base_docs(ctx: Ctx, names: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -428,6 +430,21 @@ def d_run_clean(ctx: Ctx) -> Result:
         problems.append("pending elections (`taxjson elect --pending`)")
     if newest_input > oldest_report + 1:
         problems.append("inputs changed since the last run")
+    # An unconverted spreadsheet is never read; `taxjson run` refuses
+    # it (R1-248) — the checklist must not call that run clean.
+    sheets = []
+    for n in ctx.accounts:
+        folder = ctx.root / "inputs" / n
+        if not folder.is_dir():
+            continue
+        stems = {p.stem.lower() for p in _data_files(folder)}
+        sheets += [f"inputs/{n}/{p.name}" for p in sorted(folder.iterdir())
+                   if p.is_file() and not p.name.startswith((".", "~$"))
+                   and p.suffix.lower() in (".xlsx", ".xls", ".xlsm", ".ods")
+                   and p.stem.lower() not in stems]
+    if sheets:
+        problems.append("unread spreadsheet(s) " + ", ".join(sheets)
+                        + " — convert to CSV (taxjson-xlsx-to-csv)")
     if problems:
         return Result("run-clean", "attention", "; ".join(problems))
     stamp = datetime.fromtimestamp(oldest_report).strftime("%Y-%m-%d %H:%M")

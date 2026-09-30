@@ -166,5 +166,69 @@ class TestAccountTypeCheckedEverywhere(unittest.TestCase):
         self.assertNotIn("[accounts.", r.stderr)
 
 
+class TestSpreadsheetInputsRefused(unittest.TestCase):
+    """R1-64 / R1-248: an .xlsx export in inputs/<account>/ was never
+    read (only .csv/.tt are), run exited 0 without naming it, and the
+    checklist counted it as present activity."""
+
+    def test_unconverted_xlsx_stops_the_run_naming_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            (root / "inputs" / "margin" / "Activity_2025.xlsx").write_bytes(
+                b"PK\x03\x04 not really a workbook")
+            r = _run_cli(root, "run", "--no-input")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("inputs/margin/Activity_2025.xlsx", r.stderr)
+        self.assertIn("taxjson-xlsx-to-csv", r.stderr)
+
+    def test_xlsx_next_to_its_converted_csv_only_warns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            (root / "inputs" / "margin" / "questrade_2025.xlsx").write_bytes(
+                b"PK\x03\x04")
+            r = _run_cli(root, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("questrade_2025.xlsx", r.stderr)
+        self.assertIn("questrade_2025.csv", r.stderr)
+
+    def test_xlsx_only_folder_without_account_is_named(self):
+        from taxjson.bin.taxjson_run import validate_config
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "inputs"
+            (inputs / "margin").mkdir(parents=True)
+            (inputs / "tfsa").mkdir()
+            (inputs / "tfsa" / "export.xlsx").write_bytes(b"PK")
+            warns = validate_config(
+                {"settings": {}, "accounts": {"margin": {"type": "taxable"}}},
+                inputs)
+        self.assertTrue(any("inputs/tfsa/" in w for w in warns), warns)
+
+    def test_checklist_does_not_count_a_spreadsheet_as_activity(self):
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "export.xlsx").write_bytes(b"PK")
+            (d / "notes.txt").write_text("x")
+            self.assertEqual(cl._data_files(d), [])
+            (d / "q.csv").write_text("x")
+            self.assertEqual([p.name for p in cl._data_files(d)], ["q.csv"])
+
+    def test_checklist_run_clean_flags_an_unread_spreadsheet(self):
+        from datetime import date as _date
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input").returncode,
+                             0)
+            (root / "inputs" / "margin" / "Activity_2025.xlsx").write_bytes(
+                b"PK")
+            cfg = {"accounts": {"margin": {"type": "taxable"}}}
+            ctx = cl.Ctx(root=root, cfg=cfg, year=2025, today=_date.today(),
+                         run_sub=None)
+            res = cl.d_run_clean(ctx)
+        self.assertEqual(res.status, "attention")
+        self.assertIn("Activity_2025.xlsx", res.detail)
+
+
 if __name__ == "__main__":
     unittest.main()

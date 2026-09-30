@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **An Excel export in `inputs/<account>/` stops the run.** Only `.csv`
+  and `.tt` files are read, so a Questrade `.xlsx` dropped in unconverted
+  lost every trade in it with exit 0 and no mention. `taxjson run` now
+  names each unconverted spreadsheet and stops (a spreadsheet next to
+  its converted CSV only warns); an input folder with only a spreadsheet
+  and no `[accounts.*]` section is named too; the checklist no longer
+  counts `.xlsx`/`.txt` files as account activity and its `run-clean`
+  step flags an unread spreadsheet.
 - **Every command refuses an invalid account type, not only `run`.** An
   account `type` edited after the run (`"Taxable"`, or deleted) silently
   dropped that account from `estimate`, `instalments`, `sum`,
