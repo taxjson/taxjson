@@ -1,7 +1,7 @@
 """Regression tests for the broker-parser audit findings R1-51, R1-63,
 R1-66, R1-91, S010-05 and S014-07, plus the last comma-stripping number
 parses. Every fixture is synthetic: invented tickers, fake account ids
-(55500001 / U5550001), invented prices."""
+marked pii-ok, invented prices."""
 import contextlib
 import io
 import os
