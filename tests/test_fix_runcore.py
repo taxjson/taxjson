@@ -993,5 +993,23 @@ class TestCorpActionsFollowSecurityOverrides(unittest.TestCase):
             self.assertLess(abs(held.get("SSLX.TO", 0.0)), 1.0)
 
 
+class TestHoldingsTomlStatesItsCostBasis(unittest.TestCase):
+    """S037-24: holdings.toml's base_total_cost comes from a no-wash,
+    per-account pass (no denied-loss bump, no s.47 blend) and never said
+    so."""
+
+    def test_meta_names_the_basis(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=_QT_HEADER + _MARGIN_CSV.splitlines(
+                True)[1])
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            doc = tomllib.loads((root / "reports" / "margin_holdings.toml")
+                                .read_text())
+        self.assertIn("superficial-loss", doc["meta"]["base_cost_basis"])
+        self.assertIn("taxjson list", doc["meta"]["base_cost_basis"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **holdings.toml states what its base-currency cost is**:
+  `meta.base_cost_basis` says `base_total_cost` is per-account and
+  per-listing, before superficial-loss adjustments and the s.47 blend
+  (the filing ACB is `taxjson list`) (audit S037-24).
 - **Corporate actions follow ticker_extraction_overrides.txt.** The
   overrides renamed a security's trades but not its merger/spin-off rows,
   so the event consumed an empty pool under the broker's spelling while
