@@ -75,17 +75,25 @@ def load_security_overrides(path: Path):
 
     The currency field may be '*' to match any currency. Returns a list
     of (desc_substring_lower, currency, symbol) tuples.
+
+    A malformed line raises ValueError naming `file:line`: a skipped
+    override silently re-suffixes (splits) an ACB pool, and its warning
+    used to reach only the report banner while `run --strict` exited 0
+    (S053-04) — the same policy as ticker.map and distributions.map.
     """
     overrides = []
-    for raw in path.read_text(encoding='utf-8').splitlines():
+    for lineno, raw in enumerate(
+            path.read_text(encoding='utf-8-sig').splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith('#'):
             continue
         parts = [p.strip() for p in line.split('|')]
         if len(parts) != 3 or not parts[0] or not parts[2]:
-            print(f"warning: skipping malformed security-override line: {raw!r}",
-                  file=sys.stderr)
-            continue
+            raise ValueError(
+                f"{path.name}:{lineno}: malformed security-override line "
+                f"{raw!r} — expected `description-substring | currency | "
+                f"SYMBOL` ('|'-separated; currency may be '*'). Fix or "
+                f"delete the line.")
         desc_sub, currency, symbol = parts
         overrides.append((desc_sub.lower(), currency, symbol))
     return overrides
@@ -223,8 +231,12 @@ Examples:
 
     extractor_class = load_brokerage(brokerage_id)
     valid_keys = set(inspect.signature(TaxTransaction).parameters.keys())
-    overrides = (load_security_overrides(Path(args.security_overrides))
-                 if args.security_overrides else [])
+    try:
+        overrides = (load_security_overrides(Path(args.security_overrides))
+                     if args.security_overrides else [])
+    except ValueError as e:
+        print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
+        sys.exit(1)
     normalized = []
     # Parser-declared contract multipliers, parallel to `normalized`
     # (not a TaxTransaction field — they feed only the schema notional

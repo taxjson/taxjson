@@ -80,14 +80,18 @@ class TestLoadSecurityOverrides(unittest.TestCase):
                 ("some fund", "*", "FUND.TO"),
             ])
 
-    def test_malformed_line_skipped(self):
+    def test_malformed_line_refused(self):
+        # S053-04: a malformed line used to be skipped with a warning
+        # that reached only the report banner (the override silently
+        # not applied, even under --strict). Now it names file:line.
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / 'security_overrides.txt'
             # Missing the symbol field.
-            f.write_text("US DLR CURRENCY ETF | USD\n"
-                         "Good Fund | CAD | GF.TO\n")
-            overrides = load_security_overrides(f)
-            self.assertEqual(overrides, [("good fund", "CAD", "GF.TO")])
+            f.write_text("Good Fund | CAD | GF.TO\n"
+                         "US DLR CURRENCY ETF | USD\n")
+            with self.assertRaisesRegex(ValueError,
+                                        r"security_overrides.txt:2"):
+                load_security_overrides(f)
 
 
 if __name__ == '__main__':

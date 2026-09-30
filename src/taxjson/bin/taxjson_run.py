@@ -2424,9 +2424,12 @@ def cmd_run(args: argparse.Namespace) -> None:
         from taxjson.bin.taxjson_ticker_map import map_file_problems
         _tm_problems = map_file_problems(ticker_map)
         if _tm_problems:
-            _die(f"{len(_tm_problems)} malformed ticker.map line(s) — "
-                 f"each rule would be silently dropped, changing ACB "
-                 f"pools and gains:\n    "
+            _die(f"{len(_tm_problems)} ticker.map problem(s) — a "
+                 f"malformed line's rule would be silently dropped, and "
+                 f"contradictory rules (a cycle, two targets for one "
+                 f"symbol, a DISTINCT pair the renames pool) have no "
+                 f"single meaning; either changes ACB pools and gains:"
+                 f"\n    "
                  + "\n    ".join(_tm_problems)
                  + "\n  Fix the line (KEYWORD FROM TO, separated by "
                  "spaces; notes after `#`) or delete it.")
@@ -2434,6 +2437,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     # corrections for securities the currency->exchange suffix mislabels.
     sec_overrides = root / "ticker_extraction_overrides.txt"
     sec_overrides_arg = sec_overrides if sec_overrides.exists() else None
+    if sec_overrides_arg:
+        # Same up-front refusal as ticker.map (S053-04): a malformed
+        # line would drop its ticker fix and split an ACB pool.
+        from taxjson.bin.taxjson_brokerage import load_security_overrides
+        try:
+            load_security_overrides(sec_overrides)
+        except ValueError as e:
+            _die(str(e))
     # phantoms.json — optional project-wide list of (symbol, account) pairs
     # with missing pre-window history (from `find-missing-history
     # --gen-phantoms`). Auto-detected at the root like ticker.map; when present
@@ -5376,13 +5387,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # ticker.map consolidations (GLOBAL + TOBASE + JOURNAL) and the
     # user's declared-distinct pairs (CDRs etc. — see DISTINCT).
     renames: Dict[str, str] = {}
+    raw_rules: Dict[str, str] = {}
     distinct_pairs: set = set()
     map_file = root / "ticker.map"
     if map_file.exists():
         try:
             from taxjson.bin.taxjson_ticker_map import (load_map_file,
-                                                        merge_renames)
+                                                        merge_renames,
+                                                        raw_renames)
             _tmap = load_map_file(map_file)
+            raw_rules = raw_renames(_tmap, to_base=True)
             renames = merge_renames(_tmap, to_base=True)
             distinct_pairs = {frozenset(s.upper() for s in pair)
                               for pair in _tmap.distinct}
@@ -5467,15 +5481,18 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     "ACB pool; the radar can miss the pair)."))
 
     # MAP-UNUSED (note, not a finding): rules whose FROM symbol never
-    # occurs in any parsed source. ROOT-aware on purpose — a rule with
-    # no stock rows can still be live through OPTION trades (the
-    # underlying's root folds through it: BCE251121C00050000.US needs
-    # `TOBASE BCE.US BCE.TO`), and a bare from-symbol (`D056068`)
-    # matches with or without a currency suffix. A root-blind check
-    # once pruned ten live rules from a real map and split every
-    # affected option's identity class (2026-09-15).
+    # occurs in any parsed source — judged the way the ENGINE applies
+    # the map (taxjson_ticker_map.map_symbol): FROM must equal a symbol
+    # exactly, or an option's underlying (ROOT-aware on purpose — a
+    # rule with no stock rows is still live through OPTION trades:
+    # BCE251121C00050000.US needs `TOBASE BCE.US BCE.TO`; a root-blind
+    # check once pruned ten live rules from a real map, 2026-09-15).
+    # Chains count: a rule reached through another rule's target is
+    # live (R1-139). A suffix-less FROM (`GLOBAL QQOL QQNW`) matches
+    # only a suffix-less symbol — the engine never applies it to
+    # QQOL.US, so scan must not call it live either (S053-12).
     map_unused: list = []
-    if renames:
+    if raw_rules:
         from taxjson.lib.core import (is_option_symbol,
                                       parse_option_underlying)
         _seen_syms: set = set()
@@ -5490,24 +5507,36 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     _sym = str((_t or {}).get("symbol") or "").upper()
                     if _sym:
                         _seen_syms.add(_sym)
-        _roots: set = set()
+        _reached: set = set()
         for _sym in _seen_syms:
-            _b = _sym
+            _reached.add(_sym)
             if is_option_symbol(_sym):
                 try:
-                    _b = str(parse_option_underlying(_sym)).upper()
+                    _reached.add(str(parse_option_underlying(_sym)).upper())
                 except Exception:
                     pass
-            _roots.add(_b)
-            _roots.add(_b.rsplit(".", 1)[0])
-        for _frm, _to in sorted(renames.items()):
+        _rules_u = {k.upper(): v.upper() for k, v in raw_rules.items()}
+        _frontier = list(_reached)
+        while _frontier:
+            _nxt = _rules_u.get(_frontier.pop())
+            if _nxt and _nxt not in _reached:
+                _reached.add(_nxt)
+                _frontier.append(_nxt)
+        _suffixed = {}
+        for _sym in _reached:
+            if "." in _sym:
+                _suffixed.setdefault(_sym.rsplit(".", 1)[0], set()).add(_sym)
+        for _frm, _to in sorted(raw_rules.items()):
             _fu = _frm.upper()
-            if _fu in _roots or _fu.rsplit(".", 1)[0] == _fu and _fu in _roots:
+            if _fu in _reached:
                 continue
-            if "." not in _fu and any(r.rsplit(".", 1)[0] == _fu
-                                      for r in _roots):
-                continue
-            map_unused.append(f"{_frm} -> {_to}")
+            _hint = ""
+            if "." not in _fu and _fu in _suffixed:
+                _alts = ", ".join(sorted(_suffixed[_fu]))
+                _hint = (f" (the books only have {_alts}; a rule's FROM "
+                         f"matches exactly — write the suffixed form, "
+                         f"e.g. {sorted(_suffixed[_fu])[0]})")
+            map_unused.append(f"{_frm} -> {_to}{_hint}")
 
     if getattr(args, "online", False):
         try:
@@ -5684,7 +5713,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     if map_unused:
         print(f"NOTE: {len(map_unused)} ticker.map rule(s) match no "
               f"parsed symbol in this project (checked stock rows, "
-              f"option roots and suffix-less codes): "
+              f"option roots and rename chains): "
               f"{'; '.join(map_unused)}. Unused rules are harmless; "
               f"prune only if you know the symbol will not return.")
         print()

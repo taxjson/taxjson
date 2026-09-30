@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **ticker.map means one thing everywhere.** Rule symbols are
+  upper-cased on load (a lower-case rule used to rename nothing while
+  `taxjson scan` called it live), a BOM and inline `# notes` are
+  stripped, and renames chain to their end (`GLOBAL OLD.US NEW.US` plus
+  `TOBASE NEW.US NEW.TO` now sends OLD.US to NEW.TO instead of splitting
+  the pool into a phantom short). `taxjson run` refuses a map with a
+  rename cycle, one symbol renamed to two different targets, or a
+  `DISTINCT` pair that the renames pool together. Scan's MAP-UNUSED
+  note follows chains and judges a rule the way the engine applies it:
+  a suffix-less `GLOBAL QQOL QQNW` that matches only `QQOL.US` is
+  reported with a hint to write the suffixed form. A malformed
+  `ticker_extraction_overrides.txt` line now stops the run by
+  file:line instead of being skipped.
 - **Corporate-action elections say what the law says.** The s.85.1
   share-for-share rollover is automatic when it applies (you opt out by
   reporting the gain); taxjson described it backwards and printed a
