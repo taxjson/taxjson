@@ -26,7 +26,9 @@ apply the 50% inclusion rate on Schedule 3 / T1A, not here.
 The ledger computes what the TRANSACTION HISTORY supports. What you
 actually claimed on filed returns may differ — record reality in a
 `--claimed FILE` (lines of `YEAR AMOUNT`, `#` comments): each line is the
-loss amount actually applied against that YEAR's return. Claims fold into
+loss amount actually applied against that YEAR's return — Canada: the
+100% capital loss (line 25300 divided by the inclusion rate, x2 at 50%);
+US: the Schedule D line 21 deduction against ordinary income. Claims fold into
 the running balance (a claim recorded before the loss exists — e.g. a
 carryback entered under the target year — is held pending and consumed
 when the loss arrives).
@@ -301,6 +303,23 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
 
 _money = fmt_money                  # shared report-layer formatter
 
+# S028-03: what NET GAIN(LOSS) leaves out. A net capital loss nets
+# every taxable capital gain of the year (ITA 111(8) "net capital
+# loss"), including slip gains and the s.39(1.1) FX gain.
+SCOPE_NOTE = {
+    'canada': ("NET GAIN(LOSS) counts the dispositions in these books "
+               "only. Capital gains reported on slips (T3 box 21, T5 "
+               "box 18 -> lines 17400/17600) and the ITA s.39(1.1) FX "
+               "gain or loss on foreign cash (line 15300, `taxjson "
+               "fx-cash`) are NOT included; in a loss year they change "
+               "the net capital loss, so the carryforward and the "
+               "carryback caps shown are off by that amount."),
+    'usa': ("Net ST/LT count the dispositions in these books only. "
+            "Capital gain distributions (1099-DIV box 2a -> Schedule D "
+            "line 13) are NOT included; in a loss year they change the "
+            "carryover shown."),
+}
+
 
 def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
            claimed_used: bool) -> str:
@@ -388,6 +407,20 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
         lines.append("  - The $3,000 ordinary-income offset is ASSUMED used "
                      "whenever available; override a year with a --claimed "
                      "line (0 is valid).")
+    if ledger.get('scope_note'):
+        lines.append("  - " + ledger['scope_note'])
+    prior = [r['year'] for r in rows if r.get('prior_year')]
+    if prior:
+        py = ledger.get('project_year')
+        lines.append(f"  - warning: the rows before {py} "
+                     f"({', '.join(str(y) for y in prior)}) are rebuilt "
+                     f"from this project's books — opening *_start.tt "
+                     f"lots plus whatever prior-year exports are in "
+                     f"inputs/ — and may be partial (a missing export "
+                     f"shows a smaller gain, or a loss that never "
+                     f"happened). Verify each against the filed return "
+                     f"(Schedule 3 / Schedule D) before trusting a "
+                     f"carryforward or carryback from it.")
     if first_tx_year is not None and rows and rows[0]['year'] <= first_tx_year:
         lines.append(f"  - warning: this history starts in {first_tx_year} — "
                      f"if you traded before then, earlier gains/losses (and "
@@ -426,7 +459,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="phantoms.json for truncated-history openings")
     parser.add_argument("--claimed", type=Path, default=None,
                         help="`YEAR AMOUNT` lines: losses actually applied "
-                             "on filed returns")
+                             "on filed returns. Canada: the 100%% capital "
+                             "loss applied that year — the line 25300 "
+                             "amount divided by the inclusion rate (x2 at "
+                             "50%%). US: the Schedule D line 21 deduction "
+                             "against ordinary income that year (not the "
+                             "line 6/14 carryover coming in).")
+    parser.add_argument("--project-year", type=int, default=None,
+                        metavar="YEAR",
+                        help="The project's tax year: earlier rows are "
+                             "flagged as rebuilt from this project's "
+                             "books and possibly partial.")
     parser.add_argument("--base-currency", default="CAD",
                         help="Label for amounts (default: CAD)")
     parser.add_argument("--json", action="store_true",
@@ -527,6 +570,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if t.date[:4].isdigit()]
     first_tx_year = min(tx_years) if tx_years else None
     ledger['first_transaction_year'] = first_tx_year
+    ledger['scope_note'] = SCOPE_NOTE[country]
+    if args.project_year is not None:
+        # R1-279: a year before the project's is rebuilt from THIS
+        # project's books — opening *_start.tt lots plus whatever
+        # prior-year exports sit in inputs/ — and can be partial even
+        # when the history starts earlier (a start lot dated 2023 hid
+        # a 2024 row that held 52k of a filed 731k).
+        ledger['project_year'] = args.project_year
+        for r in ledger['rows']:
+            r['prior_year'] = r['year'] < args.project_year
     if results.get('manual_reporting_required'):
         n = len(results['manual_reporting_required'])
         print(f"warning: {n} tainted disposition(s) with phantom cost basis "

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **carryover says what its numbers leave out.** The ledger now notes
+  that slip capital gains (lines 17400/17600; US Schedule D line 13) and
+  the line-15300 FX gain on foreign cash are not in NET GAIN(LOSS), flags
+  rows before the project year as rebuilt from this project's books and
+  possibly partial, and `--claimed` / README state the units to record
+  (Canada: the 100% loss, line 25300 x2 at 50%; US: Schedule D line 21).
 - **claimed_losses.txt takes `1,234.56` and `$1,234.56`.** An amount
   written the way the return or notice of assessment prints it was
   dropped with a warning, so the carryforward kept the claimed loss. A

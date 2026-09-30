@@ -819,8 +819,21 @@ Schedule 3 / T1A, not here. The ledger shows what the *transaction history*
 supports; record what you actually claimed on filed returns in a
 `claimed_losses.txt` at the project root (`YEAR AMOUNT` lines, `#` comments
 — auto-detected, or pass `--claimed FILE`) and it's folded into the running
-balance. If the history's first year has dispositions, the ledger warns
-that pre-history balances aren't reflected. `--json` for machine output.
+balance. **Units:** Canada — the 100% capital loss applied that year, i.e.
+the line 25300 amount divided by the inclusion rate (x2 at 50%); US — the
+Schedule D line 21 deduction against ordinary income (not the line 6/14
+carryover coming in). `1,234.56` and `$1,234.56` are accepted. A claim
+recorded for a year the books show no loss for waits for a later loss, but
+only one of the next 3 years (the T1A carryback reach, ITA 111(1)(b));
+past that it is reported as unmatched. If the history's first year has
+dispositions, the ledger warns that pre-history balances aren't reflected,
+and rows before the project year are flagged as rebuilt from this
+project's books (opening `*_start.tt` lots plus whatever prior-year exports
+are in `inputs/`) and possibly partial — check them against the filed
+returns. The net per year counts dispositions only: slip capital gains
+(lines 17400/17600, US Schedule D line 13) and the line-15300 FX gain on
+foreign cash (`taxjson fx-cash`) are not in it. `--json` for machine
+output.
 
 ### Option premiums across a year end (`option_premium_timing`)
 
