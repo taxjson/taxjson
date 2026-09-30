@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- **Canadian and US law no longer mix through the country setting.**
+  Every command, the web UI and every standalone tool read the country
+  through one resolver: `[settings] country` is required (a missing one
+  was Canada everywhere but `run` — Schedule 3, T1135 and s.39(1.1) were
+  printed over US books) and only canada / ca / usa / us are accepted
+  (`taxjson-audit` read "United States" as Canada). The standalone tools
+  (`taxjson-gains`, `-explain`, `-audit`, `-carryover`, `-harvest`,
+  `-wash-radar`, `-safe-to-sell`, `-corp-actions`) now require
+  `--country` instead of assuming Canada; `taxjson` passes it for you.
+- **Settings, flags and commands belong to a country.** A Canada-only
+  setting in a US project (`province`, `option_premium_timing`,
+  `option_grant_timing_since`, `option_buyback_loss_superficial`,
+  `foreign_return_of_capital`, `[instalments]`, `[estimate]
+  deductions`/`carrying_charges`) is refused by every command, naming
+  the key — it was silently ignored, and `foreign_return_of_capital =
+  "dividend"` (ITA s.90(2)) was even applied to a US filer's IB return of
+  capital. `taxjson-gains`/`-explain`/`-audit`/`-carryover` refuse the
+  Canada-only option flags with `--country usa` and
+  `--per-account-basis` with `--country canada`. `t1135`,
+  `instalments`, `option-boundary` and `form-export --form schedule3`
+  are refused in a US project (they gave CRA advice), and `form-export
+  --form 8949`/`txf` in a Canada project with a country message.
+  `base_currency` must be the country's currency (CAD / USD): a US
+  project in CAD produced Form 8949 in CAD at Bank of Canada rates; an
+  unset `base_currency` means the country's currency, not CAD.
+- **`taxjson tax-logic` is the spec, with rule ids.** Every statement has
+  a stable id (`--ids` shows them, `--json` lists them) that the tests
+  cite; `scripts/check_tax_rules.py` (a CI stage) checks the links. It
+  reads the settings through the same resolvers the engine uses (a
+  `" Grant "` timing rendered close timing; `"nextday"` / `"ACB"` were
+  described although the run refuses them), refuses an unknown country
+  instead of rendering Canada, and now states the income dating rules
+  explicitly: dividends, payments in lieu, returns of capital and trust
+  distributions are dated by the pay date in both countries (the
+  Canadian trust payable-date rule and the US January-paid fund
+  dividend rule are stated as not applied yet), plus which settings and
+  commands the project's country refuses.
+
 - **FX before March 2017 uses the Bank of Canada noon rate.** Folio
   S5-F4-C1 names the Bank's noon rate for dates before 2017-03-01;
   those dates (back to 2007-05-01, where Valet's legacy noon series
