@@ -69,6 +69,17 @@ class ProjectContext:
         # CLI command does (R1-268).
         from taxjson.lib.config_check import account_type_problems
         problems = account_type_problems(cfg)
+        # Flags are TOML booleans, as `taxjson run` requires
+        # (validate_config): bool("false") is True, so a quoted "false"
+        # turned an equity account into a crypto one here (S078-15).
+        for name, a in (cfg.get("accounts") or {}).items():
+            if not isinstance(a, dict):
+                continue
+            for flag in ("crypto", "transfers"):
+                if flag in a and not isinstance(a[flag], bool):
+                    problems.append(
+                        f"[accounts.{name}] {flag} must be true/false "
+                        f"(a TOML boolean, unquoted), got {a[flag]!r}")
         if problems:
             raise ValueError(f"{toml_path}: " + "; ".join(problems))
         settings = cfg.get("settings", {})

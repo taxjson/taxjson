@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Web what-if follows the filing.** A native price converts at the
+  latest rate on or before the sale date (named with its date when it
+  is old), not a hardcoded 1.35, and a currency with no rates is
+  refused (audit R1-149). The simulated sale settles like a real one,
+  so the superficial-loss window runs on the settle date and a Dec-31
+  sale says it is a next-year disposition (R1-197). A Canadian project
+  with two or more taxable accounts is simulated on the blended s.47
+  pool, as filed (R1-258). A negative quantity buys to cover a short
+  position; a sale on a short is refused with that hint (S079-00).
+- **Web pages: config, radar and freshness.** A `taxjson.toml` the
+  server cannot reload (a mis-cased type, a quoted boolean) is shown as
+  an error instead of ignored, and quoted booleans are refused
+  (S078-15). A VIOLATION's rescue deadline day reads "sell TODAY", not
+  "deadline passed" (S079-06). A wash-radar report older than the books
+  (after `run --account`) carries a stale warning on every row
+  (S038-09). The "inputs have changed" banner sees the project-root
+  maps and compares against the oldest per-account report, like the
+  checklist (S078-21).
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
   is undone when both are in the account's inputs; it used to stay
