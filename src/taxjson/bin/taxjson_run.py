@@ -7734,6 +7734,12 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     t1135_map = root / "t1135.map"
     if t1135_map.exists():
         argv += ["--map", str(t1135_map)]
+    # The same phantom openings the gains stage applies (R1-321): without
+    # them a phantom-backed position read as a short that later real
+    # buys covered at zero cost.
+    phantoms = root / "phantoms.json"
+    if phantoms.exists():
+        argv += ["--incomplete-history", str(phantoms)]
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_t1135.main(argv))

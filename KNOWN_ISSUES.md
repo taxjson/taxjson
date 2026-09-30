@@ -221,8 +221,13 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`TRANSFER` in `_NON_CAPITAL`; taxable books post-sidecar contain no TRANSFER rows at all).
-- **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history shows as a phantom opening (flagged "cost understated") — the threshold test can understate until the true history is declared.
+- **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history listed in `phantoms.json` shows as a phantom opening (`taxjson t1135` applies the project's phantoms.json the way the gains stage does, and flags a still-held phantom "cost understated") — the threshold test can understate until the true history is declared.
 - **Why this is the design:** T1135 cost amount IS adjusted cost base; the tool refuses to invent one from a transfer's arrival market value. Declare the real history (the same `custody_fixes.tt` pattern the wash engine prescribes) and the threshold is right.
+
+### Futures are booked on their settled P/L (Canadian books)
+- **Where:** `src/taxjson/lib/futures.py` (applied by convert-currency / merge2 for a CAD target), `core._trade_money`, `taxjson_form_export.build_schedule3`.
+- **Current behavior:** a plain futures fill that opens a position carries no money, and a close carries the realized native P/L (average cost, commissions on both legs), converted at the closing leg's rate. So the per-account `.sum` shows COST 0 and PROCEEDS = the P/L for futures, `list`/holdings show an open futures position at ACB 0, and Schedule 3 line 6 shows a gain as proceeds and a loss as ACB. The P/L is realized at the close, not marked to market daily; converting each day's variation margin at that day's rate would differ by about P/L x the FX move over the holding period. Blended pools across accounts settle each account's futures separately. A futures row other than a BUYSELL fill (an OPENING_BALANCE, a transfer) stops the conversion with the row named. US books (USD target) keep the notional legs (see §1256 above).
+- **Why this is the design:** only the variation margin changes hands; the notional is never paid (ITA s.261(2)(b) converts amounts that arise), and the broker's T5008 reports futures the same way (cost 0, proceeds = P/L).
 
 ## CLI silent-fail conditions
 

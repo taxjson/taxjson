@@ -79,6 +79,35 @@
   reconciliation too** (open-position, dividend-accrual and slip cells
   were still comma-stripped and read 100x too large).
 
+- **Futures are booked on their settled P/L, not their notional.** Each
+  leg's notional (quantity x price x multiplier) was converted to CAD at
+  its own date's rate, so the CAD gain carried FX on money that never
+  changed hands, and Schedule 3 line 6 showed the notional as proceeds
+  and ACB. A futures fill that opens a position now carries nothing; a
+  close carries the realized native P/L (commissions included), converted
+  at the closing leg's rate. Line 6 shows a gain as proceeds and a loss as
+  ACB (the T5008 shape); `sum`, `form-export`, `audit` (which re-derives
+  the P/L from the broker rows) and `fx-cash` agree. Owner books: 2025
+  +241.09 (CL), 2026 -2,251.16. Options on futures are unchanged.
+- **T1135: a futures contract has no cost amount.** A long futures
+  position was counted at its full notional (one CL contract added about
+  80,000 CAD to the threshold test and could flip "filing required").
+  Plain futures are now listed with a nil cost and a note; options on
+  futures still count at their premium.
+- **`taxjson t1135` applies phantoms.json.** Positions whose early
+  history is cut off read as shorts that later real purchases covered at
+  zero cost, so those purchases never reached the max-cost or Dec-31
+  columns (2024 books: 313k of max cost missing). The report now adds
+  the same phantom openings the gains stage adds, and flags a still-held
+  phantom "cost understated".
+- **One Bank of Canada 404 no longer switches a currency to Yahoo for
+  good.** Any HTTP 404 from the Valet API (a maintenance page, a proxy)
+  was cached as "series not published" with no expiry, so every later
+  run of every project on the machine converted that currency at Yahoo
+  closes, cached Bank rates included. Only the Valet API's own
+  "Series FX…CAD not found" answer marks a series now; the mark carries
+  its date and is re-checked after 7 days; cached Bank observations keep
+  their source; the note names the answer and the source used.
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is

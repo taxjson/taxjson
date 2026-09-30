@@ -427,7 +427,12 @@ def main():
             print(f"error: {e}", file=sys.stderr)
             return 1
         default_rate = Decimal(str(resolve_default_rate(args.default_rate)))
-        txs = convert_transactions(txs, target_currency, history, default_rate)
+        try:
+            txs = convert_transactions(txs, target_currency, history,
+                                       default_rate)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
         emit_fallback_summary(default_rate)
         if abort_if_currency_uncovered(
                 rates_given=bool(args.rates_file),

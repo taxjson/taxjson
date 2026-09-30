@@ -54,6 +54,7 @@ import json
 import sys
 from decimal import Decimal
 from pathlib import Path
+from taxjson.lib.futures import is_plain_future
 from taxjson.lib.report_model import fmt_money, load_report_json
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -105,14 +106,32 @@ def load_json(path: Path) -> Any:
     return load_report_json(path)
 
 
-def load_transactions(paths: List[Path]) -> List[Dict[str, Any]]:
+def load_transactions(paths: List[Path],
+                      phantoms: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Every row of the base files. With `phantoms` (the project's
+    phantoms.json) each file first gets the phantom OPENING_BALANCE rows
+    the gains stage synthesizes for it (phantom_holdings.
+    synthesize_openings, per book like pipeline.prepare_books) — without
+    them a sale with cut-off history opened a fake short that the next
+    real purchases covered at zero cost, so their cost never reached the
+    max-cost or Dec-31 columns (R1-321)."""
     txs: List[Dict[str, Any]] = []
+    ph = None
+    if phantoms is not None:
+        from taxjson.lib.phantom_holdings import load_phantoms
+        ph = load_phantoms(phantoms)
     for p in paths:
         raw = load_json(p)
         rows = raw.get("transactions", []) if isinstance(raw, dict) else raw
-        for t in rows:
-            if isinstance(t, dict):
-                txs.append(t)
+        rows = [t for t in rows if isinstance(t, dict)]
+        if ph:
+            from taxjson.lib.core import coerce_transaction_row
+            from taxjson.lib.phantom_holdings import synthesize_openings
+            objs = [coerce_transaction_row(t, i, str(p))
+                    for i, t in enumerate(rows)]
+            objs, _log = synthesize_openings(objs, ph)
+            rows = [o.to_dict() for o in objs]
+        txs.extend(rows)
     return txs
 
 
@@ -195,6 +214,12 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     max_total = 0.0
     max_total_date = ""
     baseline_taken = False
+    # Plain futures contracts seen (S008-04): a futures position's cost
+    # amount is nil — nothing is paid to open it (initial margin is a
+    # deposit, variation margin settles daily) — so its notional never
+    # enters the pools or the threshold test. Options on futures stay in
+    # the walk at their premium cost.
+    futures_seen: set = set()
 
     def total_foreign_cost() -> float:
         return sum(p.cost_amount() for s, p in pools.items()
@@ -242,6 +267,11 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             continue
         symbol = tx.get("symbol") or ""
         if not symbol:
+            continue
+        if is_plain_future(symbol):
+            if date >= year_start \
+                    and classify_country(symbol, overrides) is not None:
+                futures_seen.add(symbol)
             continue
         qty = float(tx.get("quantity") or 0.0)
         net = float(tx.get("net_amount") or 0.0)
@@ -350,6 +380,7 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         "per_symbol": per_symbol,
         "max_total_cost": round(max_total, 2),
         "max_total_date": max_total_date,
+        "futures_symbols": sorted(futures_seen),
     }
 
 
@@ -404,10 +435,12 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  overrides: Dict[str, Optional[str]],
                  base_currency: str,
                  threshold: float = FILING_THRESHOLD,
-                 detailed_threshold: float = DETAILED_THRESHOLD) -> Dict[str, Any]:
-    txs = load_transactions(base_paths)
+                 detailed_threshold: float = DETAILED_THRESHOLD,
+                 phantoms: Optional[Path] = None) -> Dict[str, Any]:
+    txs = load_transactions(base_paths, phantoms)
     walk = walk_costs(txs, year, overrides)
     inc = join_income_gains(gains_paths, year)
+    futures = set(walk.get("futures_symbols") or ())
 
     rows = []
     for symbol in sorted(walk["per_symbol"]):
@@ -421,6 +454,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
             "income": round(ig.get("income", 0.0), 2),
             "gain": round(ig.get("gain", 0.0), 2),
             "unknown_acb": s["unknown_acb"],
+            "futures": False,
         })
     # Income or gain on a foreign symbol whose cost never showed up in the
     # walk (e.g. fully disposed via a corp action the walk didn't model)
@@ -439,6 +473,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
             "income": round(ig.get("income", 0.0), 2),
             "gain": round(ig.get("gain", 0.0), 2),
             "unknown_acb": False,
+            "futures": is_plain_future(symbol),
         })
 
     by_country: Dict[str, Dict[str, float]] = {}
@@ -475,6 +510,8 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "crypto_symbols": [r["symbol"] for r in rows
                            if r["country"] == CRYPTO],
         "unknown_acb_symbols": [r["symbol"] for r in rows if r["unknown_acb"]],
+        "futures_symbols": sorted(futures),
+        "phantoms_applied": phantoms is not None,
     }
 
 
@@ -514,6 +551,8 @@ def render_report(rep: Dict[str, Any]) -> str:
             notes = []
             if r["unknown_acb"]:
                 notes.append("unknown ACB (phantom opening) — cost understated")
+            if r.get("futures"):
+                notes.append("futures — cost amount nil")
             if r["country"] == REVIEW:
                 notes.append("unclassified — review / add to t1135.map")
             elif r["country"] == CRYPTO:
@@ -571,6 +610,15 @@ def render_report(rep: Dict[str, Any]) -> str:
                  "exchange IS still SFP — add `SYMBOL <ISO3>` to t1135.map. "
                  "Conversely a Canadian corp held on a US exchange is NOT "
                  "SFP — add `SYMBOL CA`.")
+    if rep.get("futures_symbols"):
+        lines.append(f"  - Futures contracts ({len(rep['futures_symbols'])}: "
+                     f"{', '.join(rep['futures_symbols'][:6])}"
+                     f"{' ...' if len(rep['futures_symbols']) > 6 else ''}) "
+                     "carry NO cost amount: nothing is paid to open one "
+                     "(initial margin is a deposit, variation margin "
+                     "settles daily), so their notional is left out of the "
+                     "cost columns and the threshold test. Options on "
+                     "futures count at their premium cost.")
     if rep.get("crypto_symbols"):
         lines.append("  - CRYPTO rows (symbols with no market suffix): crypto "
                      "held on a FOREIGN exchange or platform is generally "
@@ -614,9 +662,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Detailed-method threshold (default: 250000)")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    parser.add_argument("--incomplete-history", type=Path, default=None,
+                        metavar="PHANTOMS_JSON",
+                        help="phantoms.json: add the same phantom "
+                             "openings the gains stage adds (the project "
+                             "wrapper passes the project's file)")
     args = parser.parse_args(argv)
 
-    for p in args.files + args.gains:
+    extra = [args.incomplete_history] if args.incomplete_history else []
+    for p in args.files + args.gains + extra:
         if not p.exists():
             print(f"taxjson-t1135: no such file: {p}", file=sys.stderr)
             return 2
@@ -628,7 +682,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     rep = build_report(args.files, args.gains, args.year, overrides,
                        args.base_currency.upper(),
                        threshold=args.threshold,
-                       detailed_threshold=args.detailed_threshold)
+                       detailed_threshold=args.detailed_threshold,
+                       phantoms=args.incomplete_history)
     if args.json:
         json.dump(rep, sys.stdout, indent=2, sort_keys=True)
         print()

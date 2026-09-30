@@ -100,6 +100,36 @@ def build_source_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
     return index
 
 
+def futures_native_nets(source_index: Dict[str, List[Dict[str, Any]]],
+                        base_index: Dict[str, Dict[str, Any]]
+                        ) -> Dict[str, float]:
+    """id -> native settled net of every futures fill the base book
+    carries on the settlement basis, RE-DERIVED from the parsed broker
+    rows (lib/futures.settle_futures over them, under the book's own
+    symbols) — so the FX cross-check of a futures close compares the
+    base row with the parsed rows, not with itself."""
+    from taxjson.lib.futures import FUTURES_SETTLEMENT, settle_futures_dicts
+    rows = []
+    for rid, hits in source_index.items():
+        b = base_index.get(rid)
+        if not hits or not b or b.get("type") != FUTURES_SETTLEMENT:
+            continue
+        r = dict(hits[0]["row"])
+        r["symbol"] = b.get("symbol")          # after ticker.map
+        r["account"] = "book"                  # one book: this base file
+        rows.append(r)
+    try:
+        settled = settle_futures_dicts(rows)
+    except ValueError:
+        return {}
+    out: Dict[str, float] = {}
+    for r in settled:
+        rid = r.get("id")
+        if rid and rid in base_index and rid not in out:
+            out[rid] = float(r.get("net_amount") or 0.0)
+    return out
+
+
 def build_check_index(paths: List[Path]) -> Tuple[
         Dict[str, List[Dict[str, Any]]], List[str]]:
     """id -> [gain records] from the pipeline's saved gains files (the
@@ -199,7 +229,9 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 fx_history: Dict[str, Dict[str, Decimal]],
                 default_rate: Decimal, base_currency: str,
                 tmap, replacement_lookup: Dict[str, Dict[str, Any]],
-                checks_supplied: bool) -> Dict[str, Any]:
+                checks_supplied: bool,
+                futures_native: Optional[Dict[str, float]] = None
+                ) -> Dict[str, Any]:
     """Assemble the full provenance record for one engine disposition."""
     gid = g.get("id") or ""
     ev: Dict[str, Any] = {
@@ -252,6 +284,12 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 cur, rate_date, fx_history, default_rate)
             nominal = float(raw.get("net_amount") or 0.0)
             book = float(base_row.get("net_amount") or 0.0)
+            settled = base_row.get("type") == "futures_settlement"
+            notional = nominal
+            if settled:
+                # A futures fill converts its settled P/L, not the
+                # notional the broker row carries (lib/futures.py).
+                nominal = (futures_native or {}).get(gid, float("nan"))
             computed = nominal * float(rate)
             # Tolerance: the converter multiplied the same floats, so
             # only re-derivation slack (repr round-trip) is allowed.
@@ -261,6 +299,9 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                   "rate_date": rate_date, "rate_source_date": src_date,
                   "nominal_net": nominal, "computed_net": computed,
                   "book_net": book, "ties": ties}
+            if settled:
+                fx["futures_settlement"] = True
+                fx["notional"] = notional
             if kind == "default":
                 ev["warnings"].append(
                     f"FX fell back to the default rate {float(rate):g} "
@@ -414,6 +455,12 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
             _sec(out, paint, "FX",
                  f"{fx['from']}\u2192{fx['to']} @ {fx['rate']:.5f}  "
                  + paint(f"({kind})", "dim"))
+            if fx.get("futures_settlement"):
+                _cont(out, paint(
+                    f"futures: the settled P/L is converted at this "
+                    f"closing leg's rate; the notional "
+                    f"{_fmt(fx.get('notional') or 0.0)} {fx['from']} "
+                    f"never changes hands", "dim"))
             _cont(out, f"{_fmt(fx['nominal_net'])} {fx['from']} "
                        f"\u00d7 {fx['rate']:.5f} = "
                        f"{_fmt(fx['computed_net'])} {fx['to']}"
@@ -789,10 +836,12 @@ def main(argv=None) -> int:
     merged.sort(key=lambda g: (g.get(date_key) or g.get("date") or "",
                                g.get("symbol") or ""))
 
+    futures_native = futures_native_nets(source_index, base_index)
     events = [build_event(g, base_index, source_index, check_index,
                           fx_history, Decimal(str(args.default_rate)),
                           base_currency, tmap, replacement_lookup,
-                          checks_supplied=bool(args.check))
+                          checks_supplied=bool(args.check),
+                          futures_native=futures_native)
               for g in merged]
 
     # The tie-out must catch OMISSIONS and FABRICATIONS, not just

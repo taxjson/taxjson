@@ -40,7 +40,11 @@ CACHE: ~/.currency_price_cache.json. The legacy Yahoo entries keep their
 observations live under `_boc`, and `_coverage` records the date range
 each source has been asked for (so a range with no data — Yahoo before
 its history starts — is not re-requested every run). Older taxjson
-versions read the file unchanged.
+versions read the file unchanged. A series the Valet API definitively
+reports as not found ({"message": "Series FX<CUR>CAD not found."}) is
+marked `not_published` with the date it was seen and asked again after
+NOT_PUBLISHED_RECHECK_DAYS; a bare HTTP 404 (maintenance page, proxy) is
+a failed fetch and never marks anything.
 
 TAXJSON_OFFLINE=1: no fetch at all; rows come from the cache. The stage
 never fails for want of a rate — only the dates a transaction actually
@@ -83,7 +87,32 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class SeriesNotFound(Exception):
-    """The Bank of Canada does not publish this series."""
+    """The Bank of Canada does not publish this series — raised only on
+    the Valet API's own definitive answer (a JSON 404 whose message is
+    "Series FX<CUR>CAD not found."), never on a bare HTTP 404."""
+
+
+# A definitive "series not found" is remembered with the date it was
+# seen and re-asked after this many days (R1-145): a series can come
+# back, and a marker that never expires turned one bad answer into a
+# machine-wide, permanent switch to Yahoo.
+NOT_PUBLISHED_RECHECK_DAYS = 7
+
+
+def _valet_not_found(exc: "urllib.error.HTTPError", series: str) -> bool:
+    """True when an HTTP 404 is the Valet API's definitive answer for
+    `series` ({"message": "Series FXUSDCAD not found."}). A maintenance
+    page, proxy or CDN 404 has no such body: it is a failed fetch."""
+    try:
+        body = exc.read()
+        doc = json.loads(body.decode("utf-8", "replace")) if body else None
+    except (OSError, ValueError, AttributeError):
+        return False
+    msg = doc.get("message") if isinstance(doc, dict) else None
+    if not isinstance(msg, str):
+        return False
+    return re.fullmatch(rf"\s*Series\s+{re.escape(series)}\s+not\s+"
+                        rf"found\.?\s*", msg, re.IGNORECASE) is not None
 
 
 # ------------------------------------------------------------ cache I/O
@@ -140,7 +169,9 @@ def fetch_boc(currency: str, start: str, end: str) -> Dict[str, str]:
     """Bank of Canada Valet daily series FX<currency>CAD, start..end
     inclusive. Values are kept as the Bank's own decimal strings so the
     published rate reaches the rates file verbatim. Raises
-    SeriesNotFound on a 404 (series not published)."""
+    SeriesNotFound only on the Valet API's definitive "Series ... not
+    found." 404; any other HTTP error (an HTML 404 from a maintenance
+    page or proxy included) propagates as a failed fetch."""
     series = f"FX{currency}CAD"
     url = VALET_URL.format(series=series, start=start, end=end)
     req = urllib.request.Request(url, headers={"User-Agent": "taxjson"})
@@ -148,7 +179,7 @@ def fetch_boc(currency: str, start: str, end: str) -> Dict[str, str]:
         with urllib.request.urlopen(req, timeout=30) as res:
             doc = json.loads(res.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        if exc.code == 404:
+        if exc.code == 404 and _valet_not_found(exc, series):
             raise SeriesNotFound(series) from exc
         raise
     out: Dict[str, str] = {}
@@ -281,21 +312,47 @@ def _boc_block(cache: dict, currency: str) -> dict:
 
 # ------------------------------------------------------------ refresh
 
+def _not_published_fresh(blk: dict, today: str) -> bool:
+    """A "series not found" marker still inside its re-check window. A
+    marker without a date (written by taxjson before R1-145, possibly
+    from a transient 404) is never fresh: it is re-probed."""
+    if not blk.get("not_published"):
+        return False
+    checked = blk.get("not_published_checked")
+    if not (isinstance(checked, str) and _DATE_RE.match(checked)):
+        return False
+    return 0 <= _days(checked, today) < NOT_PUBLISHED_RECHECK_DAYS
+
+
 def refresh_boc(cache: dict, currency: str, start: str, end: str,
                 today: str, fetch=None) -> Tuple[bool, List[str]]:
     """Fill the BoC cache for [max(start, BOC_START), end]. Returns
-    (published, errors): published=False when the Bank has no such
-    series (the caller falls back to Yahoo for the whole pair)."""
+    (published, errors): published=False when the Bank answered that it
+    has no such series (the caller falls back to Yahoo for the dates
+    the cached Bank observations do not cover).
+
+    Only the Valet API's definitive "not found" sets the marker, and it
+    carries the date it was seen: after NOT_PUBLISHED_RECHECK_DAYS the
+    series is asked again, and a successful answer clears it. A failed
+    fetch (network, 5xx, a non-Valet 404) is an error for this run only
+    — its dates stay unrated, never papered over with Yahoo."""
     fetch = fetch or fetch_boc
     blk = _boc_block(cache, currency)
-    if blk.get("not_published"):
+    if _not_published_fresh(blk, today):
         return False, []
+    had_marker = bool(blk.get("not_published"))
+    dated_marker = had_marker and isinstance(
+        blk.get("not_published_checked"), str)
     lo = max(start, BOC_START)
     if lo > end:
-        return True, []
+        return (not had_marker), []
     key = f"boc:{currency}CAD"
     cov = _coverage(cache, key)
     ranges = _missing_ranges(cov, lo, end)
+    if had_marker and not ranges:
+        # Re-probe a stale marker even when the cache covers the window:
+        # one small request for the last covered week.
+        ranges = [(max(lo, _shift(end, -TAIL_REFETCH_DAYS)), end)]
     if cov and ranges and ranges[-1][1] == end and end > cov[-1][1]:
         # Re-ask for the trailing week: the Bank posts by 16:30 ET, so
         # a day "covered" from another time zone may have been empty.
@@ -307,10 +364,20 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
             got = fetch(currency, a, b)
         except SeriesNotFound:
             blk["not_published"] = True
+            blk["not_published_checked"] = today
             return False, []
         except Exception as exc:          # network, HTTP 5xx, bad JSON
             errors.append(f"Bank of Canada FX{currency}CAD {a}..{b}: {exc}")
+            if dated_marker:
+                # A re-probe of a DEFINITIVE marker that could not get an
+                # answer: keep honouring it this run (the Bank said so
+                # last time) and ask again next run.
+                return False, errors
             continue
+        if had_marker:
+            blk.pop("not_published", None)
+            blk.pop("not_published_checked", None)
+            had_marker = dated_marker = False
         blk["obs"].update(got)
         # Never mark today (or later) covered: today's rate is posted
         # late afternoon ET, so it is re-asked on the next run.
@@ -382,13 +449,16 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
     use_boc = to_curr == "CAD" and from_curr in BOC_CURRENCIES
     boc_obs: Dict[str, str] = {}
     boc_cov: List[List[str]] = []
+    # The Bank answered "series not found": its CACHED observations are
+    # still real Bank rates and keep their source; Yahoo fills only the
+    # dates they do not reach (R1-145 — the marker used to switch every
+    # date of the pair to Yahoo, cached Bank rates included).
+    withdrawn = False
     if use_boc:
         blk = (cache.get("_boc") or {}).get(pair) or {}
-        if blk.get("not_published"):
-            use_boc = False
-        else:
-            boc_obs = blk.get("obs") or {}
-            boc_cov = _coverage(cache, f"boc:{pair}")
+        withdrawn = bool(blk.get("not_published"))
+        boc_obs = blk.get("obs") or {}
+        boc_cov = _coverage(cache, f"boc:{pair}")
     boc_dates = sorted(boc_obs)
     y_obs = _yahoo_obs(cache, pair)
     y_dates = sorted(y_obs)
@@ -408,7 +478,7 @@ def resolve_rows(cache: dict, from_curr: str, to_curr: str, start: str,
         # Yahoo inside the BoC era only where the Bank's REQUESTED range
         # has no recent observation (a stopped series) — never as a
         # stand-in for a Bank fetch that did not happen.
-        if val is None and (not boc_era or boc_reach) \
+        if val is None and (not boc_era or boc_reach or withdrawn) \
                 and _reaches(y_cov, d, today):
             p = _prior(y_dates, d)
             if p and _days(p, d) <= MAX_FILL_DAYS:
@@ -466,6 +536,24 @@ def summarize(rows: List[Tuple[str, str, str]]) -> str:
     return ", ".join(parts)
 
 
+def _not_published_note(cache: dict, from_curr: str,
+                        to_curr: str) -> Optional[str]:
+    """Say which source a "series not found" pair uses, and why."""
+    if to_curr != "CAD" or from_curr not in BOC_CURRENCIES:
+        return None
+    blk = (cache.get("_boc") or {}).get(f"{from_curr}CAD") or {}
+    if not blk.get("not_published"):
+        return None
+    when = blk.get("not_published_checked")
+    seen = (f"on {when}; asked again {NOT_PUBLISHED_RECHECK_DAYS} days "
+            f"later" if when else "by an older taxjson, undated; asked "
+            "again on the next online run")
+    return (f"the Bank of Canada publishes no {from_curr}/CAD series (the "
+            f"Valet API answered \"Series FX{from_curr}CAD not found\" "
+            f"{seen}) — dates its cached observations cover keep the "
+            f"Bank's rate, the rest use Yahoo Finance {from_curr}CAD=X.")
+
+
 def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
                 today: Optional[str] = None, offline: bool = False,
                 fetch_boc_fn: Optional[Callable] = None,
@@ -483,6 +571,9 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
         notes.append("TAXJSON_OFFLINE is set — using cached rates only "
                      "(no download); a transaction whose date has no "
                      "cached rate fails at the conversion stage.")
+        n = _not_published_note(cache, from_curr, to_curr)
+        if n:
+            notes.append(n)
     elif to_curr == "CAD":
         published = from_curr in BOC_CURRENCIES
         if published:
@@ -490,8 +581,10 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
                                           today, fetch_boc_fn)
             errors += errs
         if not published:
-            notes.append(f"the Bank of Canada publishes no {from_curr}/CAD "
-                         f"series — using Yahoo Finance for {pair}.")
+            notes.append(_not_published_note(cache, from_curr, to_curr)
+                         or f"the Bank of Canada publishes no "
+                            f"{from_curr}/CAD series — using Yahoo "
+                            f"Finance for {pair}.")
         need = _yahoo_needed(cache, from_curr, start, end, published)
         if need and yf is None and fetch_yahoo_fn is None:
             notes.append(f"yfinance is not installed, so there is no "

@@ -79,6 +79,12 @@ def _canada(s: Dict[str, Any]) -> List[Section]:
             "no rate uses a recent previous day, and a longer gap stops "
             "the run. Yahoo is used only before 2017 or for a currency "
             "the Bank does not publish.",
+            "A futures contract is booked on its settled P/L: nothing is "
+            "paid to open one, so its notional is never converted. Each "
+            "close's P/L (commissions included, average cost) is "
+            "converted at that closing leg's rate; Schedule 3 shows a "
+            "gain as proceeds and a loss as ACB. Options on futures are "
+            "ordinary options.",
             "Gains on holding foreign cash (s.39(1.1)) are NOT in the "
             "Schedule 3 totals: `taxjson fx-cash` estimates the net gain "
             "beyond the $200 annual exemption.",

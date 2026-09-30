@@ -701,8 +701,12 @@ currency and reports the **maximum total cost of specified foreign property at
 any time in the year** — the ITA 233.3 test ($100,000 threshold; $250,000 for
 the detailed method). If a filing is required, it prints per-property and
 per-country tables (maximum cost in year, cost at Dec 31, income, gain/loss)
-from the same books the rest of the pipeline reports on. Registered accounts
-are excluded by law and never read. `--json` for machine-readable output.
+from the same books the rest of the pipeline reports on, with the project's
+`phantoms.json` openings applied exactly as the gains stage applies them.
+Registered accounts are excluded by law and never read. A plain futures
+contract has no cost amount (nothing is paid to open one), so its notional
+stays out of the cost columns and the threshold test; an option on futures
+counts at its premium. `--json` for machine-readable output.
 
 ```
 $ taxjson t1135
@@ -752,6 +756,11 @@ FILE` writes importable rows, `--json` the raw report.
   properties (15199 / 15300 — T4037 lists options there), **line 7**
   crypto-assets from the `crypto = true` accounts (15200 / 15301; for 2024
   and earlier returns crypto goes on 15199 / 15300), with per-line totals.
+  A futures contract is booked on its settled P/L, not its notional (the
+  notional never changes hands): the P/L of each close, commissions
+  included, is converted at that closing leg's rate and shown the way the
+  broker's T5008 shows it — a gain as proceeds with ACB 0, a loss as ACB
+  with proceeds 0, no separate outlays.
   Sell-side commissions are re-split into the outlays column (gain
   unchanged), and every row foots — proceeds − ACB − outlays = the allowed
   gain: a superficial loss denied on the row shows as an ACB reduced by the
