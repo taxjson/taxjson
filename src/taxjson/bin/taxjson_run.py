@@ -3586,6 +3586,43 @@ _PERIOD_HELP = ("Window: 30d, 6w, 3m, 1y, mtd, ytd, all, a tax year "
                 "(default: tax year)")
 
 
+def _year_keep(ys: str):
+    """A tax-year window predicate, tagged `.tax_year` so the gains views
+    can apply it on the project's tax_date basis (_gains_row_date)."""
+    keep = (lambda d: d.startswith(ys))
+    keep.tax_year = ys
+    return keep
+
+
+def _settle_basis(root: Path, doc: Optional[Dict[str, Any]] = None) -> bool:
+    """True when dispositions belong to a tax year by SETTLEMENT date: the
+    gains file's own summary.tax_date_basis when it says, else [settings]
+    tax_date, else the country default (Canada settle, USA trade) — the
+    same rule `sum`, form-export and the gains engine follow."""
+    b = str(((doc or {}).get("summary") or {}).get("tax_date_basis")
+            or "").strip().lower()
+    if b in ("settle", "trade"):
+        return b == "settle"
+    settings = _soft_settings(root)
+    td = str(settings.get("tax_date") or "").strip().lower()
+    if td in ("settle", "trade"):
+        return td == "settle"
+    return _normalize_country(str(settings.get("country") or "canada")) \
+        not in ("us", "usa")
+
+
+def _gains_row_date(t: Dict[str, Any], keep, settle: bool) -> str:
+    """The date a gains row is windowed on: its SETTLEMENT date for a
+    tax-year window on a settle-basis project (a Dec-31 trade that
+    settles in January is next year's disposition — the gains artifacts,
+    `sum` and form-export all place it there), else the trade date. The
+    trade-date window dropped such rows from every year's winners /
+    ccd-sum / leaps / gains (audit R1-171, R1-186, R1-238, R1-273)."""
+    if settle and getattr(keep, "tax_year", None):
+        return str(t.get("date_settle") or t.get("date") or "")
+    return str(t.get("date") or "")
+
+
 def _period_keep(period: str, root: Path):
     """Resolve a period token to `(keep(date_str) -> bool, scope_label)`.
     `tax_year` (or `ty`) binds the window to the config tax year; a literal
@@ -3593,14 +3630,14 @@ def _period_keep(period: str, root: Path):
     a look-back window (30d/6w/3m/1y)."""
     tok = (period or "").strip().lower()
     if _YEAR_TOKEN_RE.fullmatch(tok):
-        return (lambda d: d.startswith(tok)), f"tax year {tok}"
+        return _year_keep(tok), f"tax year {tok}"
     if tok in _TAX_YEAR_TOKENS:
         year = _soft_settings(root).get("year")
         if not year:
             _die("'tax_year' needs [settings] year in taxjson.toml "
                      "(or give an explicit window like 1y).")
         ys = str(year)
-        return (lambda d: d.startswith(ys)), f"tax year {year}"
+        return _year_keep(ys), f"tax year {year}"
     cutoff = _tx_period_cutoff(period).isoformat()      # handles all/max + errors
     if tok in ("all", "max"):
         label = "all history"
@@ -4262,7 +4299,8 @@ def _add_months(iso_date: str, months: int) -> str:
     return _date(y, m, min(d, calendar.monthrange(y, m)[1])).isoformat()
 
 
-def _warn_gains_artifact_scope(files, period_token) -> None:
+def _warn_gains_artifact_scope(files, period_token,
+                               root: Optional[Path] = None) -> None:
     """The canonical <acct>_gains[_wash].json artifacts contain ONLY
     the config tax year's dispositions, but the PERIOD grammar accepts
     any window — `winners all` / `ccd-sum 2024` printed
@@ -4282,6 +4320,17 @@ def _warn_gains_artifact_scope(files, period_token) -> None:
             years.add(y)
     if not years:
         return
+    if (tok in _TAX_YEAR_TOKENS or tok == "") and root is not None:
+        # The default / tax_year window IS [settings].year: artifacts
+        # built for another year cannot answer it, and "No realized
+        # dispositions in tax year 2025" from a 2026 build is a false
+        # statement, not an empty result (audit S048-14).
+        cfg_year = str(_soft_settings(root).get("year") or "")
+        if cfg_year and cfg_year not in years:
+            _die(f"work/ holds the gains of tax year "
+                 f"{', '.join(sorted(years))} but [settings] year is "
+                 f"{cfg_year} — run `taxjson run` to rebuild for "
+                 f"{cfg_year} (or pass the year the books cover).")
     in_scope = (tok in _TAX_YEAR_TOKENS or tok == ""
                 or (tok.isdigit() and tok in years))
     if not in_scope:
@@ -4291,6 +4340,16 @@ def _warn_gains_artifact_scope(files, period_token) -> None:
               f"window '{period_token}' may exceed that; "
               f"`taxjson gains` reads the full-history native "
               f"books).", file=sys.stderr)
+
+
+def _leaps_scope_guard(root: Path, account: Optional[str], args) -> None:
+    """leaps/leaps-sum read the same year-scoped gains artifacts as
+    ccd-sum and winners, so they carry the same scope guard: `leaps-sum
+    all` labelled 'all history' while holding one year (audit S048-11)."""
+    from taxjson.lib.report_model import resolve_gains_files
+    _warn_gains_artifact_scope(
+        resolve_gains_files(root / "work", account or None),
+        getattr(args, "period", None), root)
 
 
 def _leaps_contracts(root: Path, account: Optional[str],
@@ -4371,6 +4430,7 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     months to expiry), with lot-matched base-currency gains."""
     root = Path(args.dir).resolve()
     keep, scope, account = _view_window(args, root)
+    _leaps_scope_guard(root, account, args)
     leaps = _leaps_contracts(root, account, "leaps")
     if not leaps:
         if getattr(args, "json", False):
@@ -4463,6 +4523,7 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
             print(f"taxjson: warning: could not read {path}: {e}", file=sys.stderr)
             continue
         found = True
+        _settle = _settle_basis(root, data)
         for e in data.get("transactions", []):
             sym = e.get("symbol") or ""
             if sym not in leaps:
@@ -4471,7 +4532,7 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
                 continue
             if "gain" not in e or "qty" not in e or e.get("tainted"):
                 continue
-            d = e.get("date") or ""
+            d = _gains_row_date(e, keep, _settle)
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
             entries.append((acct, e))
@@ -4488,6 +4549,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     # `leaps-sum margin` → the lone positional is an account, not a window.
     keep, scope, account = _view_window(args, root)
+    _leaps_scope_guard(root, account, args)
     leaps = _leaps_contracts(root, account, "leaps-sum")
     if not leaps:
         if getattr(args, "json", False):
@@ -4567,7 +4629,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     keep, scope, account = _view_window(args, root)
     resolved = resolve_gains_files(cache, account or None)
     _warn_gains_artifact_scope(resolved,
-                               getattr(args, "period", None))
+                               getattr(args, "period", None), root)
     if not resolved:
         if account:
             sys.exit(f"taxjson ccd-sum: no gains for account {account!r} "
@@ -4586,13 +4648,14 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             print(f"taxjson: warning: could not read {f}: {e}",
                   file=sys.stderr)
             continue
+        _settle = _settle_basis(root, data)
         for t in data.get("transactions", []):
             sym = str(t.get("symbol") or "")
             if not is_option_symbol(sym):
                 continue
             if parse_option_right(sym) != "C":
                 continue
-            d = str(t.get("date") or "")
+            d = _gains_row_date(t, keep, _settle)
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
             if t.get("tainted"):
@@ -4694,7 +4757,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
     keep, scope, account = _view_window(args, root)
     resolved = resolve_gains_files(cache, account or None)
     _warn_gains_artifact_scope(resolved,
-                               getattr(args, "period", None))
+                               getattr(args, "period", None), root)
     if not resolved:
         sys.exit(f"taxjson winners: no gains files in {cache} "
                  f"(run `taxjson run` first).")
@@ -4710,10 +4773,11 @@ def cmd_winners(args: argparse.Namespace) -> None:
             print(f"taxjson: warning: could not read {f}: {e}",
                   file=sys.stderr)
             continue
+        _settle = _settle_basis(root, data)
         for t in data.get("transactions", []):
             if t.get("action") in _INCOME:
                 continue
-            d = str(t.get("date") or "")
+            d = _gains_row_date(t, keep, _settle)
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
             if t.get("tainted"):
@@ -4813,7 +4877,7 @@ def _view_window(args: argparse.Namespace, root: Path):
         year = _soft_settings(root).get("year")
         if year:
             ys = str(year)
-            keep, scope = (lambda d: d.startswith(ys)), f"tax year {year}"
+            keep, scope = _year_keep(ys), f"tax year {year}"
         else:
             keep, scope = (lambda d: True), "all history"
     return keep, scope, account
@@ -5203,12 +5267,13 @@ def cmd_gains(args: argparse.Namespace) -> None:
         except (OSError, json.JSONDecodeError) as e:
             print(f"taxjson: warning: could not read {f}: {e}", file=sys.stderr)
             continue
+        _settle = _settle_basis(root, data)
         for g in data.get("transactions", []):
             if g.get("action") in _INCOME:
                 continue
             if sym_filter is not None and not sym_filter(g.get("symbol") or ""):
                 continue
-            d = g.get("date") or ""
+            d = _gains_row_date(g, keep, _settle)
             if not _ISO_DATE_RE.match(d):
                 bad_dates += 1
                 continue

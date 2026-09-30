@@ -108,5 +108,85 @@ class TestFeesAndTradesSigns(unittest.TestCase):
         self.assertAlmostEqual(doc["totals"]["CAD"]["bought"], 1002.0)
 
 
+_LEAP = "AAA270115C00050000.TO"
+_CC = "BBB260220C00030000.TO"
+
+
+def _window_project(tmp, year=2026):
+    toml = _TOML.replace("year = 2026", f"year = {year}")
+    root = _project(tmp, toml)
+    _write(root, "margin_raw.json", [
+        _trade("2025-01-02", _LEAP, 1, 5.0, 500.0),
+        _trade("2025-12-31", _LEAP, -1, 5.5, 550.0, date_settle="2026-01-02"),
+        _trade("2025-12-31", _CC, -1, 1.0, 100.0, date_settle="2026-01-02"),
+        _trade("2026-03-02", "AAA.TO", -10, 30.0, 300.0),
+    ])
+    rows = [
+        {"date": "2025-12-31", "date_settle": "2026-01-02", "symbol": _LEAP,
+         "qty": 1, "proceeds": 550.0, "cost": 500.0, "gain": 50.0,
+         "direction": "LONG", "currency": "CAD", "days_held": 363},
+        {"date": "2025-12-31", "date_settle": "2026-01-02", "symbol": _CC,
+         "qty": -1, "proceeds": 0.0, "cost": -100.0, "gain": 100.0,
+         "direction": "SHORT", "currency": "CAD", "days_held": 1},
+        {"date": "2026-03-02", "date_settle": "2026-03-03",
+         "symbol": "AAA.TO", "qty": 10, "proceeds": 300.0, "cost": 100.0,
+         "gain": 200.0, "direction": "LONG", "currency": "CAD",
+         "days_held": 60},
+    ]
+    summ = {"year": "2026", "tax_date_basis": "settle"}
+    _write(root, "margin_gains_wash.json", rows, summary=summ)
+    _write(root, "margin_gains.json", rows, summary=summ)
+    _write(root, "margin_raw_gains.json", rows,
+           summary={"year": "all", "tax_date_basis": "settle"})
+    return root
+
+
+class TestSettleBasisWindows(unittest.TestCase):
+    """R1-171 / R1-186 / R1-238 / R1-273: a tax-year window on a
+    settle-basis project keeps a Dec-31 trade that settles in January
+    in the NEXT year, like `sum` and the gains artifacts."""
+
+    def test_default_window_is_settle_basis(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = _window_project(d)
+            self.assertAlmostEqual(_json(root, "winners")["total_gain"], 350.0)
+            self.assertAlmostEqual(_json(root, "ccd-sum")["total_gain"], 100.0)
+            self.assertAlmostEqual(_json(root, "leaps-sum")["total_gain"], 50.0)
+            self.assertAlmostEqual(_json(root, "leaps")["total_gain"], 50.0)
+            g = _json(root, "gains", "2026")
+            self.assertAlmostEqual(g["totals"]["CAD"], 350.0)
+            self.assertEqual(len(g["rows"]), 3)
+
+    def test_prior_year_does_not_claim_january_settlements(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = _window_project(d)
+            r = _runsub(root, "winners", "2025", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout)["total_gain"], 0.0)
+            g = _json(root, "gains", "2025")
+            self.assertEqual(g["rows"], [])
+
+
+class TestLeapsScopeGuard(unittest.TestCase):
+    def test_leaps_warn_outside_artifact_year(self):
+        """S048-11: leaps/leaps-sum warn like ccd-sum/winners."""
+        with tempfile.TemporaryDirectory() as d:
+            root = _window_project(d)
+            for cmd in ("leaps", "leaps-sum"):
+                r = _runsub(root, cmd, "all")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("cover tax year 2026 only", r.stderr, cmd)
+
+    def test_default_window_refuses_artifacts_of_another_year(self):
+        """S048-14: [settings].year = 2025 but work/ built for 2026."""
+        with tempfile.TemporaryDirectory() as d:
+            root = _window_project(d, year=2025)
+            for cmd in ("winners", "ccd-sum", "leaps", "leaps-sum"):
+                r = _runsub(root, cmd)
+                self.assertNotEqual(r.returncode, 0, (cmd, r.stdout))
+                self.assertIn("2026", r.stderr, cmd)
+                self.assertNotIn("No ", r.stdout, cmd)
+
+
 if __name__ == "__main__":
     unittest.main()
