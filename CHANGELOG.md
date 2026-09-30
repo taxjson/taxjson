@@ -1760,6 +1760,10 @@
   a GBP or AUD sale on the second-to-last trading day of the year landed
   in that year; GBP/EUR/CHF now move to T+1 on 2027-10-11 and every
   other non-North-American currency stays T+2.
+- **A spin-off booked at $0 keeps the checklist open.** `run-clean`
+  now needs attention while any taxable spin-off or merger is booked at
+  $0 (`fmv_per_share=0`, the "defer" value), and `taxjson elect --set
+  ... --hint fmv_per_share=0` says what it books.
 
 ## v0.16.0 (2026-09-25)
 

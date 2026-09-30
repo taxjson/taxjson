@@ -455,6 +455,20 @@ def d_run_clean(ctx: Ctx) -> Result:
         problems.append(f"{errors} validation error(s) in reports/*.sum")
     if pend:
         problems.append("pending elections (`taxjson elect --pending`)")
+    # A taxable spin-off or merger booked at $0 (the "0 to defer" FMV)
+    # books no income and a $0 cost; `run` warns every time, and the
+    # step must not call that clean (R1-11).
+    zero = 0
+    for p in ctx.cache.glob("*_corp_spinoff_value.diag"):
+        try:
+            zero += sum(1 for ln in p.read_text(encoding="utf-8").splitlines()
+                        if ln.startswith("warning:"))
+        except OSError:
+            continue
+    if zero:
+        problems.append(f"{zero} spin-off/merger(s) booked at $0 — set "
+                        f"fmv_per_share with `taxjson elect` (see the "
+                        f".sum DIAGNOSTICS)")
     # What the last FULL run was built from (content, not mtimes): a
     # deleted input or a corrected export copied with its old mtime
     # (cp -p, rsync -a, unzip) left this step done over stale reports

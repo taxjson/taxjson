@@ -539,5 +539,30 @@ class TestNonNorthAmericanSettlement(unittest.TestCase):
         self.assertEqual(settlement_lag_days("2027-10-11", "AUD"), 2)
 
 
+class TestZeroValueSpinoffInChecklist(unittest.TestCase):
+    """R1-11: a taxable spin-off booked at $0 keeps run-clean open."""
+
+    def test_run_clean_needs_attention(self):
+        import os
+        import tempfile
+        import time
+        from pathlib import Path
+        from taxjson.lib import checklist as cl
+        from test_fix_filing_a import _cl_ctx, _cl_project
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _cl_project(root)
+            t = time.time() + 5
+            for s in (root / "reports").glob("*.sum"):
+                os.utime(s, (t, t))
+            self.assertEqual(cl.d_run_clean(_cl_ctx(root, cfg)).status, "done")
+            (root / "work" / "margin_corp_spinoff_value.diag").write_text(
+                "warning: margin: spin-off ZZQ.US on 2025-04-04 (event e1) is booked at $0\n")
+            r = cl.d_run_clean(_cl_ctx(root, cfg))
+        self.assertEqual(r.status, "attention", r.detail)
+        self.assertIn("booked at $0", r.detail)
+        self.assertIn("fmv_per_share", r.detail)
+
+
 if __name__ == "__main__":
     unittest.main()

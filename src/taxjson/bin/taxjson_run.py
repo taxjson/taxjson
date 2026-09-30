@@ -3479,6 +3479,13 @@ def cmd_elect(args: argparse.Namespace) -> None:
         print(f"Election saved: {event_id} = {election}"
               + (f" (hints: {hints})" if hints else "")
               + f" → {manifest_path}")
+        if ("fmv_per_share" in hints and abs(hints["fmv_per_share"]) < 1e-12
+                and election.startswith("taxable_")):
+            # 0 is the documented "defer" value (R1-11): say what it books.
+            print(f"taxjson elect: warning: fmv_per_share=0 books this "
+                  f"{election} at $0 — no income and a $0 cost for the "
+                  f"new shares. Every `taxjson run` and the checklist "
+                  f"flag it until a value is set.", file=sys.stderr)
         return
 
     if not (args.redo or args.reset):
