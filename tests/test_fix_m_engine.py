@@ -551,3 +551,41 @@ class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
             out = ' '.join(_cli(mod, '--help').stdout.split())
             self.assertNotIn('related person,', out)
             self.assertIn('not affiliated', out.lower())
+
+
+class TestReturnOfCapital(unittest.TestCase):
+
+    def _adj(self, date, amt, sym='RST.TO'):
+        return TaxTransaction(action='ADJUST', date=date, time='09:30:00',
+                              symbol=sym, currency='CAD', net_amount=amt,
+                              account='margin', type='roc')
+
+    def test_deemed_gain_has_no_proceeds(self):
+        # R1-43: s.40(3) deemed gain -> 13199 = 0, 13200 = the gain.
+        txs = _tt("BUYSELL 2013-05-01 10:00:00 RST.TO 100 CAD 10 1000")
+        txs += [self._adj('2020-06-01', -1000.0),
+                self._adj('2025-05-15', -100.0)]
+        res, _ = _run(CanadaTaxRules(), txs)
+        row = [r for r in res['transactions'] if r.get('deemed')][0]
+        self.assertAlmostEqual(row['gain'], 100.0)
+        self.assertAlmostEqual(row['proceeds'], 0.0)
+        # Empty-pool branch too.
+        txs = _tt("""
+            BUYSELL 2024-02-01 10:00:00 RST.TO 100 CAD 10 1000
+            BUYSELL 2025-02-03 10:00:00 RST.TO -100 CAD 10 1000
+        """) + [self._adj('2025-03-31', -80.0)]
+        res, _ = _run(CanadaTaxRules(), txs)
+        row = [r for r in res['transactions'] if r.get('deemed')][0]
+        self.assertAlmostEqual(row['gain'], 80.0)
+        self.assertAlmostEqual(row['proceeds'], 0.0)
+
+    def test_roc_on_short_pool_is_a_compensation_payment(self):
+        # R1-157: short 100 @20, ROC 300 debited, cover @15 -> +200 (cash).
+        txs = _tt("""
+            BUYSELL 2025-01-06 10:00:00 TRU.TO -100 CAD 20 2000
+            BUYSELL 2025-04-01 10:00:00 TRU.TO 100 CAD 15 1500
+        """, account='margin') + [self._adj('2025-02-15', 300.0, 'TRU.TO')]
+        res, err = _run(CanadaTaxRules(), txs)
+        self.assertAlmostEqual(res['summary']['total_gain'], 200.0,
+                               places=2)
+        self.assertIn('SHORT position', err)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Return of capital: no invented proceeds, right sign on a short.** An
+  s.40(3) deemed gain (ROC below nil, or ROC after the position was
+  sold) was booked with proceeds equal to the gain, overstating
+  Schedule 3 line 13199; it now has no proceeds (CRA: 0 on 13199, the
+  gain on 13200). A ROC ADJUST on a SHORT position raised the short's
+  gain by the amount; it is now the short seller's compensation payment
+  and lowers it (a note names it).
 - **Traces and `taxjson-explain` tell the truth about phantom rows and
   denials.** The traces file counted phantom-basis sales (from
   `phantoms.json`) as ordinary gains in its header and per-symbol totals

@@ -888,7 +888,10 @@ Inspect what's recorded with `taxjson roc <period>` (every ADJUST row,
 taxtext) and `taxjson roc-sum` (per-ticker capital returned, split into
 broker-classified vs manual rows). If cumulative ROC ever pushes a
 position's ACB below zero, the excess is a deemed capital gain under
-s.40(3) — the engine flags this rather than computing it.
+s.40(3): the engine books it in the distribution year (a qty-0 row with
+no proceeds — T4037: enter 0 on line 13199 and the gain on 13200) and
+resets the ACB to nil. A return of capital while you are SHORT is a
+compensation payment you make: it lowers the cover's gain.
 
 ### LEAPS views
 

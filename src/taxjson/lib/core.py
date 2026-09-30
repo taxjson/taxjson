@@ -1872,6 +1872,26 @@ class CanadaTaxRules(TaxRules):
                                     f"disposition's gain) or apply it "
                                     f"manually.", file=sys.stderr)
                         _applied_adj = float(tx.net_amount)
+                        if (pool['qty'] < -1e-6
+                                and not str(tx.id or '').startswith('WASH_')):
+                            # A SHORT pool's total_cost holds the short
+                            # sale's proceeds: a return of capital while
+                            # short is a compensation payment BY the
+                            # short seller (brokers debit it; parsers
+                            # book it as a positive ADJUST), which adds
+                            # to the cost of covering — it must LOWER the
+                            # short's gain. Applied as-is it raised the
+                            # gain by the amount (2x off, audit R1-157).
+                            _applied_adj = -_applied_adj
+                            if iteration == 0:
+                                print(f"note: {symbol}: ADJUST of "
+                                      f"{float(tx.net_amount):+.2f} on "
+                                      f"{tx.date} lands on a SHORT "
+                                      f"position — booked as the short "
+                                      f"seller's compensation payment "
+                                      f"(it changes the cover's gain by "
+                                      f"{-float(tx.net_amount):+.2f}).",
+                                      file=sys.stderr)
                         if _empty_roc:
                             _applied_adj = 0.0
                             _excess = -float(tx.net_amount)
@@ -1879,8 +1899,12 @@ class CanadaTaxRules(TaxRules):
                                 iteration_realized_gains.append({
                                     'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
                                     'date_settle': tx.date_settle or tx.date,
+                                    # No actual sale: T4037 says enter
+                                    # 0 on line 13199 and the gain on
+                                    # 13200 (audit R1-43), so proceeds 0
+                                    # and the nil-reset shows as -excess.
                                     'gain': _excess, 'qty': 0.0,
-                                    'cost': 0.0, 'proceeds': _excess,
+                                    'cost': -_excess, 'proceeds': 0.0,
                                     'disallowed': 0.0, 'taxable_gain': _excess,
                                     'days_held': 0, 'account': tx.account,
                                     'currency': tx.currency,
@@ -1954,8 +1978,12 @@ class CanadaTaxRules(TaxRules):
                                 iteration_realized_gains.append({
                                     'tx_id': tx.id, 'symbol': symbol, 'date': tx.date,
                                     'date_settle': tx.date_settle or tx.date,
+                                    # No actual sale: T4037 says enter
+                                    # 0 on line 13199 and the gain on
+                                    # 13200 (audit R1-43), so proceeds 0
+                                    # and the nil-reset shows as -excess.
                                     'gain': _excess, 'qty': 0.0,
-                                    'cost': 0.0, 'proceeds': _excess,
+                                    'cost': -_excess, 'proceeds': 0.0,
                                     'disallowed': 0.0, 'taxable_gain': _excess,
                                     'days_held': 0, 'account': tx.account,
                                     'currency': tx.currency,
