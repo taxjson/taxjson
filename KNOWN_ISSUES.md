@@ -197,11 +197,6 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** the taxable-side disposition of an in-kind contribution is booked only if you record it as a `.tt` BUYSELL at fair market value in the taxable account. A loss on it is then denied indirectly (as a superficial loss against the plan's acquisition, permanent), which coincides with s.40(2)(g)(iv) — a loss on a transfer to an RRSP/TFSA is nil — in the common case; a gain is taxable as usual.
 - **Workaround:** record the contribution day as a BUYSELL sell at FMV in the taxable account (and the plan's acquisition with `transfers = true`).
 
-### Same-timestamp buy and sell rows: buys go first, whatever the export order
-- **Where:** `src/taxjson/lib/corporate_timeline.py` `CaPriority` (BUY=3 < SELL=4) in the Canada main pass.
-- **Current behavior:** rows with the same date, phase and clock time are ordered buys before sells. Webull stamps every row 09:30:00, so a write listed before its same-day buy-back (SELL then BUY in the export) is booked as a long round trip (buy, then sell) — which can expose the loss to a superficial-loss denial that a grant-timed write + buy-back would not get under `option_buyback_loss_superficial = false` (audit R1-30). On the owner's 2025 book five Webull pairs change character this way; the year totals are the same.
-- **Why deferred (owner decision):** the export's row order is the only evidence of intraday order, and it cannot be proven either way. Options: (a) give SELL the BUY rung so ties keep the export's row order (the audit's patch: only the ladder-pinning test changes); (b) keep buy-first (a same-moment pair never looks short, which the phantom and radar walks rely on too).
-
 ### Second-order superficial losses from the ACB bump's date
 - **Where:** `src/taxjson/lib/core.py` (the deferral ADJUST is dated the trigger).
 - **Current behavior:** with a rebuy, a partial sale inside the window and the rest sold later, the inner sale inherits part of the bump and can itself be denied and re-deferred; T4037 attributes the whole denied amount to the shares still held at day 30. Year totals agree unless the inner and outer sales straddle a year end; the extra DISALLOW row shows in `wash-sales`.

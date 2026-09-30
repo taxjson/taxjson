@@ -114,7 +114,6 @@ PARTITION_RULES = frozenset({
     "CA-ACB-12",       # manual phantom-loss check on settle dates
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
-    "CA-DATE-04",      # computed T+1 settlement default
     "CA-CTRY-02",      # US-only settings/commands/flags refused
     "CA-CTRY-03",      # base currency CAD
     "CA-INC-03",       # s.260 payment in lieu as a dividend (D3)
@@ -309,6 +308,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                   "Futures and futures options settle on the next "
                   "settlement day (futures_settle = \"next_day\").",
                   keys=("futures_settle",))),
+            Rule("CA-DATE-14",
+                 "Rows at the same date and time keep the export's row "
+                 "order (Webull and the generic importer print no clock "
+                 "time, Questrade stamps midnight): a write listed before "
+                 "its same-day buy-back is a write and a buy-back, and a "
+                 "sale listed before a same-day rebuy is made from the "
+                 "shares held before it. A newest-first export is read "
+                 "bottom-up; rows of different accounts at one moment "
+                 "follow the accounts' order in taxjson.toml. Fixed places "
+                 "at one "
+                 "moment: an opening balance first, then a split (effective "
+                 "at the open), an assignment's option leg before its "
+                 "stock leg, then the trades; cost adjustments last."),
             Rule("CA-DATE-11",
                  "Interest and other income belong to the year they are "
                  "PAID."),
@@ -748,6 +760,19 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   "Futures and futures options settle on the next "
                   "settlement day (futures_settle = \"next_day\").",
                   keys=("futures_settle",))),
+            Rule("US-DATE-13",
+                 "Rows at the same date and time keep the export's row "
+                 "order (Webull and the generic importer print no clock "
+                 "time, Questrade stamps midnight): a write listed before "
+                 "its same-day buy-back is a short sale closed by the "
+                 "buy-back, and FIFO takes same-moment lots in that order. "
+                 "A newest-first export is read bottom-up; rows of "
+                 "different accounts at one moment follow the accounts' "
+                 "order in taxjson.toml. Fixed places at one moment: an "
+                 "opening "
+                 "balance first, an assignment's option leg before its "
+                 "stock leg, a split before the trades; basis adjustments "
+                 "last."),
             Rule("US-DATE-03",
                  "Interest and other income belong to the year they are "
                  "paid."),

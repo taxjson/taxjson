@@ -466,6 +466,8 @@ class GenericBrokerage(BaseBrokerage):
                 f"{tax_sign!r}")
 
         transactions: List[Dict[str, Any]] = []
+        # Each consumed row's date, file order (newest-first detection).
+        row_dates: List[str] = []
         # (where, target, raw signed quantity) per trade row, for the
         # file-level sign-convention check after the loop.
         trade_signs: List[tuple] = []
@@ -604,6 +606,7 @@ class GenericBrokerage(BaseBrokerage):
                         f"date {date_raw!r} with [formats].date="
                         f"{date_fmt!r}")
                 date = dt.strftime("%Y-%m-%d")
+                row_dates.append(date)
                 where = f"{path.name} line {reader.line_num}"
                 currency = (str(cell(row, "currency")).strip()
                             or str(defaults.get("currency", ""))
@@ -738,7 +741,14 @@ class GenericBrokerage(BaseBrokerage):
                   f"and are NOT in the books: {shown}{more}. Map the "
                   f"action in [actions] (or to \"skip\" if it really "
                   f"is not an event).", file=sys.stderr)
+        # Every row is stamped 09:30:00, so a day's rows tie and keep
+        # the order they are emitted in (CA-DATE-14 / US-DATE-13): a
+        # newest-first export is read bottom-up. One row emits at most
+        # one transaction, so reversing the list reverses the rows.
+        # (After the fill marks, so a row's id does not change.)
         self.disambiguate_split_fills(transactions)
+        if self.newest_first(row_dates):
+            transactions.reverse()
         self.emit_skip_summary(path.name)
         return transactions
 
