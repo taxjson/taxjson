@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **crypto-sends: a Kraken PYUSD or GUSD send is a coin send.** The
+  Kraken parser books those two as coins, but crypto-sends treated them
+  as US-dollar cash on every exchange, so a gift or payment of them got
+  no sale line and the coins stayed in the book. tax-logic CA-CRYPTO-08
+  now also says a stablecoin currency loss flagged superficial is
+  excluded in full (the conservative reading).
 - **US: stablecoins are property.** In a US project USDC, USDT, DAI (and
   PYUSD/GUSD on Coinbase) were folded into US-dollar cash — Canada's
   stated approximation — so a stablecoin payment never reached Form 8949

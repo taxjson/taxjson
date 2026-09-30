@@ -311,7 +311,7 @@ class TestPostConversionInvariant(unittest.TestCase):
         from pathlib import Path
         import taxjson.bin.taxjson_merge2 as m2
 
-        def fake_convert(txs, target, history, default_rate):
+        def fake_convert(txs, target, history, default_rate, country=None):
             for t in txs:
                 if not leave_native:
                     t.currency = target

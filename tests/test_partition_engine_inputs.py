@@ -853,6 +853,26 @@ class TestRulesBothCountriesState(unittest.TestCase):
                          [("BUYSELL", "USDC", 12.5),
                           ("DIVIDEND", "USDC", 12.5)])
 
+    @rule("CA-CRYPTO-08")
+    def test_kraken_pyusd_is_a_coin_send(self):
+        # SPEC-26: the Kraken parser books PYUSD/GUSD as coins, so their
+        # sends are coin sends (a sale line), not stablecoin cash.
+        from taxjson.lib import crypto_sends as cs
+        self.assertFalse(cs.is_cash_stablecoin("PYUSD", "kraken"))
+        self.assertTrue(cs.is_cash_stablecoin("PYUSD", "coinbase"))
+        self.assertTrue(cs.is_cash_stablecoin("USDC", "kraken"))
+
+        class R:
+            base = "CAD"
+
+            def get(self, cur, day):
+                return (1.40, "boc", day)
+        send = {"symbol": "PYUSD", "date": "2025-05-01", "quantity": -10.0,
+                "exchange": "kraken", "price": 0.99, "currency": "USD"}
+        fv = cs.fair_value(send, R(), None)
+        self.assertIn("spot price", fv["source"])
+        self.assertAlmostEqual(fv["price"], 0.99 * 1.40, places=4)
+
     @rule("CA-CRYPTO-06")
     @rule("US-CRYPTO-05")
     def test_send_paired_with_its_arrival_within_3_days_and_90pct(self):

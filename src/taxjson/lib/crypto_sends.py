@@ -68,6 +68,17 @@ class RefusedDecision(ValueError):
 # exist.
 STABLECOINS = frozenset({"USDC", "USDT", "DAI", "PYUSD", "GUSD"})
 USD_FAMILY = STABLECOINS | {"USD"}
+# Which coins each exchange's parser books as US-dollar cash: the Kraken
+# parser folds only USDC/USDT/DAI and books PYUSD/GUSD as coins, so a
+# Kraken PYUSD send is a coin send (partition SPEC-26).
+_CASH_COINS_BY_EXCHANGE = {"kraken": frozenset({"USDC", "USDT", "DAI"}),
+                           "coinbase": STABLECOINS}
+
+
+def is_cash_stablecoin(symbol: str, exchange: str) -> bool:
+    """Whether `symbol` is US-dollar cash in `exchange`'s books (the
+    Canadian model; a US project books every stablecoin as a coin)."""
+    return symbol in _CASH_COINS_BY_EXCHANGE.get(exchange, STABLECOINS)
 
 _EXCH_ABBR = {"kraken": "kr", "coinbase": "cb"}
 _EXCH_NAME = {"kraken": "Kraken", "coinbase": "Coinbase"}
@@ -368,7 +379,8 @@ def fair_value(send: Dict[str, Any], rates: Rates,
     ex = _EXCH_NAME.get(send["exchange"], send["exchange"])
     if manual is not None:
         price, src = float(manual), "entered by hand (--price)"
-    elif sym in STABLECOINS:
+    elif sym in STABLECOINS and (not stable_cash or is_cash_stablecoin(
+            sym, send.get("exchange", ""))):
         r = rates.get("USD", day)
         if r is None:
             return None
@@ -723,7 +735,8 @@ def build_report(root: Path, cfg: Dict[str, Any],
                              s["symbol"], s["quantity"])
     pool = None
     if with_pool and broker_files is not None and base != "USD" and any(
-            s["symbol"] in STABLECOINS for s in unmatched):
+            is_cash_stablecoin(s["symbol"], s["exchange"])
+            for s in unmatched):
         flows: List[Dict[str, Any]] = []
         for acct in accts:
             for broker, p in broker_files.get(acct, []):
@@ -755,7 +768,8 @@ def build_report(root: Path, cfg: Dict[str, Any],
             # A US project books stablecoins as property (tax-logic
             # US-CRYPTO-02): a gift/payment of one is a sale line like
             # any coin's. Canada keeps them US-dollar cash (CA-CRYPTO-08).
-            stable = s["symbol"] in STABLECOINS and country != "usa"
+            stable = (is_cash_stablecoin(s["symbol"], s["exchange"])
+                      and country != "usa")
             fv = fair_value(s, rates, usd_price, rec.get("price"),
                             stable_cash=country != "usa")
             entry = {

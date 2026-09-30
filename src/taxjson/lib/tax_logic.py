@@ -577,9 +577,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "sale (stablecoins are cash in the books). It is a "
                  "currency disposition: the value at the send date's Bank "
                  "of Canada rate minus the average cost of the US-dollar "
-                 "and stablecoin pool. A loss is superficial when US "
-                 "dollars or stablecoins were acquired within 30 days and "
-                 "are still held."),
+                 "and stablecoin pool. A loss is treated as superficial "
+                 "— the whole loss excluded, a conservative reading of "
+                 "the pro-rata rule — when US dollars or stablecoins were "
+                 "acquired within 30 days and are still held. (PYUSD and "
+                 "GUSD are cash on Coinbase only; on Kraken they are "
+                 "coins.)"),
         ]),
         ("Reports", [
             Rule("CA-RPT-01",
@@ -825,7 +828,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),
             Rule("US-WASH-13",
-                 "Crypto is not subject to the wash-sale rule."),
+                 "Accounts marked crypto are not subject to the wash-sale "
+                 "rule."),
         ]),
         ("Corporate actions (elections in the account manifest)", [
             Rule("US-CORP-01",
