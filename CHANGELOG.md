@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- **Overlapping Kraken ledger exports are fine.** Two ledger exports in
+  the crypto folder that repeat rows (an all-history ledger beside the
+  yearly ones, a copy) stopped every run with a misleading "check that
+  the ledger export belongs to this account" error, and a ledger file
+  with repeated rows doubled its instant trades without a word. A
+  ledger row is now counted once per txid; the same txid with different
+  content stops the run naming the files. A Kraken row with fewer or
+  more cells than the header (a missing `fee` read as 0) is refused.
+- **Kraken rows the parser cannot book are UNBOOKED warnings.** An
+  airdrop, forced conversion, adjustment, sale, credit, Earn migration
+  or margin/rollover/settlement row used to hide behind a note saying
+  transfers "don't affect gains"; an instant-trade spend with no
+  receive leg (or the reverse) was a warning only in the report. Both
+  now print `warning: UNBOOKED:` on the console, and `run --strict`
+  refuses them. A trades fill with a nonzero `margin` value warns that
+  it is booked as spot.
+- **One crypto symbol per coin.** Lower-case codes (`eth/usd`, `dot.s`,
+  Coinbase `sol`) are upper-cased instead of opening a second pool (a
+  lower-case Kraken pair became a swap with a phantom `usd` coin);
+  Kraken's bonded staking codes (`DOT28.S`, `KSM07.S`, `SOL03.S`, ...)
+  fold to the bare coin; Coinbase `ETH2` folds to `ETH` as Kraken's
+  already did. Swapping ETH for ETH2 (a Coinbase Convert, a Kraken
+  `ETH2.S/ETH` fill or ledger wrap) is a counted non-event instead of a
+  sale at market value.
+- **Coinbase refuses what it cannot read.** A blank `Price Currency`
+  cell (the column present) no longer defaults to USD — a CAD row was
+  converted twice; a header written with spaces after the commas is
+  recognised; a cell that spans lines (an unterminated quote that
+  swallowed the rows after it) or a row wider than the header stops the
+  parse naming the line.
+- **A crypto-to-crypto swap has one value.** Both legs of a swap (Kraken
+  crypto pairs and instant trades, Coinbase Convert without a Subtotal,
+  Advanced Trade on a crypto pair) used to be priced from each coin's
+  own daily close, so the spent coin's proceeds and the received coin's
+  cost differed — a phantom gain or loss. A Kraken instant trade with
+  `amountusd` now uses it for both legs, and `taxjson-fill-crypto`
+  values both legs at the received coin's fair value (the spent coin's
+  when the received one has no price).
 - **Corporate-action elections say what the law says.** The s.85.1
   share-for-share rollover is automatic when it applies (you opt out by
   reporting the gain); taxjson described it backwards and printed a
