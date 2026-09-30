@@ -2,9 +2,41 @@
 
 Synthetic data only; account labels are fake.
 """
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _run_cli(root, *args):
+    return subprocess.run(
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+         *args], cwd=REPO_ROOT, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL)
+
+
+def _project(root, accounts, inputs, phantoms=None, extra_settings=''):
+    """accounts: {name: type}; inputs: {name: [tt lines]}."""
+    cfg = ('[settings]\nyear = 2025\ncountry = "canada"\n'
+           'base_currency = "CAD"\nsource_currencies = []\n'
+           'tax_date = "settle"\n' + extra_settings)
+    for a, typ in accounts.items():
+        cfg += f'[accounts.{a}]\ntype = "{typ}"\n'
+    (root / "taxjson.toml").write_text(cfg)
+    for a, lines in inputs.items():
+        d = root / "inputs" / a
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{a}_hist.tt").write_text("\n".join(lines) + "\n")
+    if phantoms is not None:
+        (root / "phantoms.json").write_text(json.dumps(
+            [{"symbol": s, "account": a} for s, a in phantoms]))
 
 
 def _tx(**kw):
@@ -210,6 +242,36 @@ class TestSameStampTaxableBeforeRegistered(unittest.TestCase):
                 for p in range(1045, 1065)}
         self.assertEqual(seen, {0.0},
                          "the row hash decided deferral vs permanent")
+
+
+class TestPhantomsNameUnknownAccount(unittest.TestCase):
+    """S021-05: renaming an account silently dropped its phantoms.json
+    openings (keyed by the account label) and changed the filed gain."""
+
+    def test_run_refuses_a_phantom_entry_for_an_unknown_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _project(root, {"taxA": "taxable"}, {"taxA": [
+                "BUYSELL 2025-02-03 10:00:00 XEI.TO 50 CAD 20.00 1000.00 0",
+                "BUYSELL 2025-05-01 10:00:00 XEI.TO -150 CAD 25.00 3750.00 0",
+            ]}, phantoms=[("XEI.TO", "margin")])
+            r = _run_cli(root, "run", "--no-input")
+        self.assertNotEqual(r.returncode, 0,
+                            "a stale phantoms.json account label must "
+                            "stop the run")
+        self.assertIn("phantoms.json", r.stderr)
+        self.assertIn("'margin'", r.stderr)
+        self.assertIn("taxA", r.stderr)
+
+    def test_known_accounts_still_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _project(root, {"margin": "taxable"}, {"margin": [
+                "BUYSELL 2025-02-03 10:00:00 XEI.TO 50 CAD 20.00 1000.00 0",
+                "BUYSELL 2025-05-01 10:00:00 XEI.TO -150 CAD 25.00 3750.00 0",
+            ]}, phantoms=[("XEI.TO", "margin")])
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == '__main__':

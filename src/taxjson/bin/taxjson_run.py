@@ -2104,6 +2104,44 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
 
 # ---------------------------------------------------------------- entry points
 
+def _refuse_phantoms_for_unknown_accounts(phantoms: Path,
+                                          accounts: Dict[str, Any]) -> None:
+    """phantoms.json is keyed by account LABEL. An entry whose account is
+    not in [accounts] (the account was renamed or removed) used to be
+    skipped silently — its opening vanished and the filed gain changed
+    (audit S021-05: a pure relabel moved a real book by -71,734.84).
+    Refuse the run and name each stale label with a suggestion."""
+    import difflib
+    from taxjson.lib.phantom_holdings import load_phantoms
+    try:
+        pairs = load_phantoms(phantoms)
+    except (OSError, ValueError) as e:
+        sys.exit(f"taxjson run: {phantoms}: {e}")
+    stale: Dict[str, List[str]] = {}
+    for sym, acct in sorted(pairs):
+        if acct not in accounts:
+            stale.setdefault(acct, []).append(sym)
+    if not stale:
+        return
+    known = sorted(accounts)
+    lines = []
+    for acct, syms in sorted(stale.items()):
+        near = difflib.get_close_matches(acct, known, n=1, cutoff=0.0)
+        hint = f" — did you rename it to {near[0]!r}?" if near else ""
+        more = f" (+{len(syms) - 5} more)" if len(syms) > 5 else ""
+        lines.append(f"  {acct!r}: {len(syms)} entr"
+                     f"{'y' if len(syms) == 1 else 'ies'} "
+                     f"({', '.join(syms[:5])}{more}){hint}")
+    sys.exit(
+        f"taxjson run: {phantoms} names account(s) that are not in "
+        f"taxjson.toml [accounts] ({', '.join(known) or 'none'}):\n"
+        + "\n".join(lines)
+        + "\n  Those openings would be skipped and the gains would "
+        "change silently. Edit the \"account\" of each entry to the "
+        "current account name (or delete the entries if the account "
+        "is gone), then run again.")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     # Full rebuild is the DEFAULT: stale cached artifacts must never
     # feed a filing decision. `--fast` opts back into the mtime cache.
@@ -2204,6 +2242,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     # it feeds every account's gains run via --incomplete-history.
     phantoms = root / "phantoms.json"
     phantoms_arg = phantoms if phantoms.exists() else None
+    if phantoms_arg:
+        _refuse_phantoms_for_unknown_accounts(phantoms_arg, accounts)
     # Deletion detection: needs_rebuild compares mtimes of EXISTING inputs,
     # so removing phantoms.json left cached gains — built WITH phantoms —
     # looking fresh forever. Track application with a marker; on removal,

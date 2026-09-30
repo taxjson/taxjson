@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`phantoms.json` entries for an unknown account stop the run.** The
+  file is keyed by account name, so renaming an account silently dropped
+  its openings and changed the filed gain. `taxjson run` now names each
+  entry whose account is not in `[accounts]` and suggests the closest
+  current name.
 - **Same-moment replacements: taxable first, then registered.** When a
   taxable rebuy and a TFSA/RRSP buy carried the same timestamp (common
   with Webull and Questrade stamps), a hash of the rows decided whether

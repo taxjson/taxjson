@@ -1089,7 +1089,10 @@ affecting the tax year; add `--all-history` for every candidate.
 **Review the file and delete any entry that's actually a real short position.**
 Then, if it's saved as `phantoms.json` at the project root, `taxjson run`
 auto-detects it (like `ticker.map`) and feeds it to every account's gains run
-via `--incomplete-history` — editing the file re-runs gains. In the manual
+via `--incomplete-history` — editing the file re-runs gains. Entries are keyed
+by account name: after renaming an account in `taxjson.toml`, update the
+`"account"` of its entries too (`taxjson run` stops and names any entry whose
+account is not in `[accounts]`). In the manual
 pipeline, pass it yourself: `taxjson-gains --incomplete-history phantoms.json …`.
 
 ## Quickstart (manual pipeline)
