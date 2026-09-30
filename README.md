@@ -31,7 +31,7 @@ Everything runs locally on your machine. Your transaction data never leaves your
 | Interactive Brokers   | Yes      | Yes     | —      | Activity Statement CSV; corp-action auto-detection |
 | Questrade             | Yes      | Yes     | —      | Account activity CSV                               |
 | RBC Direct Investing  | Yes      | Yes     | —      | Transaction history CSV                            |
-| Webull                | Yes      | Yes     | —      | Account statement CSV; option expiry/assignment rows not yet parsed (see KNOWN_ISSUES) |
+| Webull                | Yes      | Yes     | —      | Trading Summary CSV (BUY/SELL rows only): a $0 option close is an expiry, or an exercise/assignment when a stock trade at the strike carries Webull's $1.00 charge (see KNOWN_ISSUES). It carries no income — enter T5 interest/dividends as `.tt` `INTEREST`/`DIVIDEND` lines |
 | Kraken                | —        | —       | Yes    | Trades + Ledgers CSV (same folder: the ledger says which coin paid each fee; a ledger trade the trades export lacks is an `UNBOOKED` warning, fatal under `run --strict`) |
 | Coinbase              | —        | —       | Yes    | Transaction history CSV                            |
 | **Any other broker**  | Yes      | —       | —      | `generic_*.csv` + a TOML column mapping (see `examples/generic_wealthsimple.toml`) |
@@ -1091,6 +1091,7 @@ BUYSELL  <date>  <time>  <symbol>  <qty>  <currency>  <price>  <total>  <fee>
 | `price` | per-share price |
 | `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount), written as a positive number. A negative sell total is refused (a cash-signed `-2000` used to be booked as negative proceeds); if the commission exceeds the proceeds, enter `0`. |
 | `fee` | commission (optional) |
+| INTEREST lines | `INTEREST date time CURRENCY amount` — income with no symbol, e.g. a T5 box-13 interest figure a broker's trade export does not carry (Webull): `INTEREST 2025-12-31 16:00:00 USD 1149.27`. |
 
 Example — a confirmation for "bought 100 XYZ.US @ $45.00, $5 commission":
 

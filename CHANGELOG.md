@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Webull: exercise/assignment is inferred only on evidence.** A $0 option
+  close is paired with a stock trade at the strike only when that trade
+  carries Webull's $1.00 exercise/assignment charge; a limit order at the
+  strike after a worthless expiry keeps the expiry's gain or loss (it used
+  to fold silently into the shares' cost). Every inferred pair is named on
+  stderr, a rejected candidate is a warning, the closest option wins
+  whatever the row order, the row's own `@Symbol` names the underlying,
+  and a Dec-31 assignment settling in January pairs across the two
+  yearly exports (R1-15, R1-94, R1-175, S066-12, S066-02, S065-24).
+- **Webull: no trade row is dropped silently.** A BUY/SELL row with a
+  blank or unknown currency, or a blank Date, is refused naming the line;
+  `usd`/`Sell` spellings are read; a header with two columns matching one
+  field (an inserted `Gross Proceeds`) is refused; a cell spanning lines
+  (an unescaped quote that swallowed the next rows) is refused. Two
+  symbols sharing one Security Description, the new one opening with a
+  sale, are named as a likely ticker change with the `ticker.map` line to
+  add (R1-92, R1-97, R1-98, S066-04, S066-10).
+- **Docs: Webull income.** The Webull Trading Summary carries no income;
+  README and KNOWN_ISSUES say so and document the `.tt` `INTEREST` line
+  for T5 interest (R1-96).
 - **Corporate-action elections say what the law says.** The s.85.1
   share-for-share rollover is automatic when it applies (you opt out by
   reporting the gain); taxjson described it backwards and printed a
