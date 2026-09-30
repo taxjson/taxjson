@@ -81,6 +81,30 @@ _ACCOUNT_COLS = ("account #", "account", "xfer account", "account number",
                  "account no", "account no.", "acct", "acct #", "account id",
                  "clientaccountid", "client account id", "acctid",
                  "accountid", "account_number", "accountnumber")
+# Other id columns: client / plan / portfolio / customer numbers, and
+# the bilingual "Numéro de compte" labels. A header cell (or a
+# `Label:` cell) naming one is an account-id column.
+_ACCT_COL_RE = re.compile(
+    r"(?:account|acct|a/c|client|plan|portfolio|customer|member|contract"
+    r"|policy)[ _.-]*(?:#|no\.?|num\.?|nbr|number|id|identifier)"
+    r"|(?:num[ée]ro|no\.?|n°)\s*(?:de\s+|du\s+)?(?:compte|client|contrat"
+    r"|r[ée]gime|portefeuille)|compte",
+    re.IGNORECASE)
+
+
+def _is_account_col(h: str) -> bool:
+    """A header / label naming an account (or client / plan) id."""
+    h = h.strip().strip('"').strip().lower()
+    if not h:
+        return False
+    if h in _ACCOUNT_COLS or _ACCT_COL_RE.fullmatch(h):
+        return True
+    # Bilingual labels: "Account Number / Numéro de compte".
+    return "/" in h and h != "a/c" and any(
+        p.strip() in _ACCOUNT_COLS or _ACCT_COL_RE.fullmatch(p.strip())
+        for p in re.split(r"\s/\s|/(?!c\b)", h) if p.strip())
+
+
 _ALIAS_COLS = ("accountalias", "account alias", "acctalias", "acct alias",
                "account name", "accountname", "account nickname",
                "nickname", "client name", "holder", "account holder",
@@ -92,6 +116,48 @@ _ALIAS_COLS = ("accountalias", "account alias", "acctalias", "acct alias",
 _HOLDER_NAME_COLS = ("name", "full name", "holder name",
                      "account holder name", "customer name", "user",
                      "user name", "username")
+# Columns that always name a person (registered-plan parties, holders):
+# RRSP/RRIF annuitant, RESP subscriber and beneficiary, joint holders.
+_PERSON_COL_RE = re.compile(
+    r".*\b(?:annuitant|subscriber|beneficiar(?:y|ies)|holder|owner"
+    r"|contributor|spouse|successor|titulaire|b[ée]n[ée]ficiaire"
+    r"|souscripteur|rentier|cotisant)s?\b.*"
+    r"|(?:customer|client|member|first|last|full|given|family|middle|legal"
+    r"|registered|primary|secondary|joint)[ _]*name",
+    re.IGNORECASE)
+
+
+def _is_person_col(h: str) -> bool:
+    h = h.strip().strip('"').strip().lower()
+    return bool(h) and (h in _ALIAS_COLS or bool(_PERSON_COL_RE.fullmatch(h)))
+
+
+# `Label:` cells whose value (the next non-empty cell) is identity.
+_IDENTITY_LABELS = ("name", "nom", "full name", "nom complet", "client",
+                    "client name", "nom du client", "account holder",
+                    "holder", "titulaire", "owner", "primary owner",
+                    "customer", "customer name", "user", "user name",
+                    "address", "adresse", "mailing address", "street",
+                    "rue", "city", "ville", "postal code", "code postal",
+                    "zip", "phone", "téléphone", "telephone", "email",
+                    "e-mail", "courriel")
+
+
+def _label_kind(cell: str) -> Optional[str]:
+    """'account' / 'identity' for a `Label:` cell (trailing colon), else
+    None. Bilingual 'English / Français:' labels match on either half."""
+    t = cell.strip().strip('"').strip()
+    if not t.endswith(":"):
+        return None
+    t = t[:-1].strip().lower()
+    if _is_account_col(t):
+        return "account"
+    parts = [t] + [p.strip() for p in t.split("/") if p.strip()]
+    if any(p in _IDENTITY_LABELS for p in parts):
+        return "identity"
+    return None
+
+
 _IDENTITY_ROWS = ("name", "account alias", "address", "street", "city",
                   "state", "postal code", "zip", "country", "phone",
                   "email", "customer id", "client name", "holder",
@@ -339,11 +405,22 @@ def _collect_ids(lines: List[str]) -> List[str]:
         if not cells:
             continue
         low = [c.strip().lower() for c in cells]
-        if len(low) > 1 and low[1] == "header":               # IB sections
-            col_idx[low[0]] = [i for i, c in enumerate(low) if c in _ACCOUNT_COLS]
+        # `Account Number:,,,,555123456,` (Webull preamble): the id is
+        # the next non-empty cell after the label cell.
+        labelled = False
+        for i, c in enumerate(cells):
+            if _label_kind(c) == "account":
+                nxt = next((v for v in cells[i + 1:] if v.strip()), "")
+                if nxt:
+                    add(nxt)
+                labelled = True
+        if labelled:
             continue
-        if any(c in _ACCOUNT_COLS for c in low) and "data" not in low[:2]:
-            col_idx["__flat__"] = [i for i, c in enumerate(low) if c in _ACCOUNT_COLS]
+        if len(low) > 1 and low[1] == "header":               # IB sections
+            col_idx[low[0]] = [i for i, c in enumerate(low) if _is_account_col(c)]
+            continue
+        if any(_is_account_col(c) for c in low) and "data" not in low[:2]:
+            col_idx["__flat__"] = [i for i, c in enumerate(low) if _is_account_col(c)]
             continue
         if len(low) > 1 and low[1] == "data":
             for i in col_idx.get(low[0], []):
@@ -360,12 +437,35 @@ def _collect_ids(lines: List[str]) -> List[str]:
     return ids
 
 
+def _field_spans(body: str) -> List[Tuple[int, int]]:
+    """(start, end) of each comma-separated field of one raw CSV line."""
+    spans, start, in_q = [], 0, False
+    for i, ch in enumerate(body):
+        if ch == '"':
+            in_q = not in_q
+        elif ch == "," and not in_q:
+            spans.append((start, i))
+            start = i + 1
+    spans.append((start, len(body)))
+    return spans
+
+
 def _replace_field(line: str, cells: List[str], idx: int, value: str) -> str:
     """Replace one CSV field in the RAW line, leaving every other byte
-    (quoting, spacing, line ending) as it was."""
+    (quoting, spacing, line ending) as it was. The field is located by
+    POSITION — the same text in an earlier cell (a holder's name in
+    both a Subscriber and a Beneficiary column) must not be hit."""
     old = cells[idx]
     if not old:
         return line
+    body = line.rstrip("\r\n")
+    spans = _field_spans(body)
+    if len(spans) == len(cells):
+        s, e = spans[idx]
+        raw = body[s:e]
+        lead = raw[:len(raw) - len(raw.lstrip())]
+        rep = f'"{value}"' if raw.strip().startswith('"') else value
+        return line[:s] + lead + rep + line[e:]
     # The field may or may not be quoted in the raw text; try both.
     for form in (f'"{old}"', old):
         pos = line.find(form)
@@ -489,8 +589,8 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
 def _identity_cols(low: List[str]) -> List[int]:
     """Header positions holding holder identity: alias columns always;
     a name column only beside an account or alias column."""
-    cols = [i for i, c in enumerate(low) if c in _ALIAS_COLS]
-    if cols or any(c in _ACCOUNT_COLS for c in low):
+    cols = [i for i, c in enumerate(low) if _is_person_col(c)]
+    if cols or any(_is_account_col(c) for c in low):
         cols += [i for i, c in enumerate(low) if c in _HOLDER_NAME_COLS]
     return sorted(cols)
 
@@ -567,8 +667,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
             free_cols[low[0]] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                  if c in _FREE_TEXT_COLS]
         elif low and len(nonempty) >= 3 and not is_ib_row and (
-                any(c in _ALIAS_COLS + _TXID_COLS + _FREE_TEXT_COLS + _ACCOUNT_COLS
-                    for c in low)
+                any(c in _TXID_COLS + _FREE_TEXT_COLS or _is_person_col(c)
+                    or _is_account_col(c) for c in low)
                 or all(not any(ch.isdigit() for ch in c) for c in nonempty)):
             # A flat CSV's column header row.
             header_row = True
@@ -595,7 +695,21 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                     if v not in rep.txids:
                         rep.txids[v] = _pseudonym(v, len(rep.txids) + 1)
                     line = _replace_field(line, cells, i, rep.txids[v])
-        m = _HEADER_LINE.match(line)
+        label_done = False
+        if cells and not is_ib_row and not header_row:
+            for i, c in enumerate(cells):
+                if c.strip() and _label_kind(c) == "identity":
+                    j = next((k for k in range(i + 1, len(cells))
+                              if cells[k].strip()), None)
+                    if j is not None and not _is_id(cells[j]):
+                        line = _replace_field(line, cells, j, "REDACTED")
+                        cells = _split(line.rstrip("\r\n")) or []
+                        rep.identity_rows += 1
+                    label_done = True
+                    break
+                if c.strip():
+                    break
+        m = None if label_done else _HEADER_LINE.match(line)
         if m and not is_ib_row:
             rest = line[m.end():]
             if rest.startswith('"'):

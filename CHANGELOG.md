@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **redact: label cells, other id columns, plan parties.** A Webull-style
+  `Account Number / Numéro de compte:,,,,<id>` or `Name:,<name>` preamble
+  row has its value replaced (the id survived and the report said "none
+  found"); client / plan / portfolio / acct-number columns are id
+  columns; annuitant, subscriber, beneficiary and holder/customer-name
+  columns are blanked, each cell in its own position (audit R1-341,
+  S037-00, S037-02).
+
 - **An IB corporate-action cancellation reaches the other statement.** A
   split booked in one yearly statement and cancelled (`Ca`) in the next
   is undone when both are in the account's inputs; it used to stay
