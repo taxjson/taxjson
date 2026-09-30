@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note
-from taxjson.lib.pipeline import option_timing_flags
+from taxjson.lib.pipeline import option_timing_flags, tt_json_path
 from taxjson.lib.report_model import (align_columns, fmt_money,
                                       fmt_qty, format_report_table)
 
@@ -1161,10 +1161,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     raise
             corp_files.append(out)
 
-    # 3. starting-position .tt files
+    # 3. starting-position .tt files. Their converted JSON lives in its
+    # own `<acct>_tt_<stem>` namespace: `<acct>_<stem>` collided with
+    # the broker parse (`questrade.tt` overwrote <acct>_questrade.json,
+    # silently dropping every CSV trade) and with pipeline
+    # intermediates like <acct>_base.json (R1-116).
     tt_jsons: List[Path] = []
     for tt in input_files(acct_dir, ".tt"):
-        out = cache / f"{name}_{tt.stem}.json"
+        out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt):
             print(f"  convert-tt {tt.name}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
@@ -1179,7 +1183,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         | {f"{name}_{b}_corp" for b in grouped} \
         | ({f"{name}_{b}_transfers" for b in grouped}
            if not include_transfers else set()) \
-        | {f"{name}_{tt.stem}" for tt in input_files(acct_dir, ".tt")}
+        | {tt_json_path(cache, name, tt.name).stem
+           for tt in input_files(acct_dir, ".tt")}
     # Prefix-sibling guard: for account `m`, the glob also matches
     # account `m_extra`'s artifacts — deleting those every run
     # destroyed m_extra's parsed books and (worse) its elections
@@ -1500,6 +1505,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     if any(_sc.name.startswith(_pre)
                            for _pre in _sibling_prefixes):
                         continue     # another account's sidecar
+                    if _sc.name.startswith(f"{name}_tt_"):
+                        continue     # a converted .tt, not a sidecar
                     export_cmd += ["--transfer-evidence", str(_sc)]
             export_cmd += ["--base-gains", str(raw_base_gains),
                            "--base-currency", base_currency,

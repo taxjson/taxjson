@@ -59,7 +59,7 @@ def _project(rows_by_file, crypto=False):
     for (kind, name), rows in rows_by_file.items():
         if kind == "tt":
             lines.append(f"tt/{name}")
-            (work / f"m_{Path(name).stem}.json").write_text(json.dumps(rows))
+            (work / f"m_tt_{Path(name).stem}.json").write_text(json.dumps(rows))
         else:
             lines.append(f"{kind}/{name}")
             (work / f"m_{kind}.json").write_text(json.dumps(rows))

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A .tt file named after a broker no longer erases that broker's
+  trades.** `questrade.tt` (or `webull.tt`, `ib.tt`, `generic.tt` ...)
+  wrote its converted JSON over the broker's parse in `work/`, so every
+  trade in that broker's CSVs vanished with exit 0. Converted .tt files
+  now live at `work/<account>_tt_<stem>.json`; the first run after
+  upgrading removes the old `<account>_<stem>.json` copies as stale.
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
   new shares' cost), flagging a taxable spin-off booked at $0 and showing
