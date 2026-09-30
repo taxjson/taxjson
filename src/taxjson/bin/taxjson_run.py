@@ -4588,6 +4588,20 @@ def _leaps_contracts(root: Path, account: Optional[str],
                "books).")
     leaps: set = set()
     qty_by_symbol: Dict[str, float] = {}
+    # The native books carry the broker's listing (pre-TOBASE: BCE...US)
+    # while the gains files carry the ticker.map spelling (BCE...TO);
+    # without the rename a genuine LEAPS never matched a gains row and
+    # vanished from both views (R1-237).
+    _renames: Dict[str, str] = {}
+    _tm = root / "ticker.map"
+    if _tm.exists():
+        try:
+            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                        merge_renames)
+            _renames = merge_renames(_parse_map_file(_tm)[0], True)
+        except Exception:                               # noqa: BLE001
+            _renames = {}
+    from taxjson.bin.taxjson_ticker_map import map_symbol as _map_sym
     for acct in accounts:
         native = _native_tx_file(cache, acct)
         if native is None:
@@ -4615,8 +4629,9 @@ def _leaps_contracts(root: Path, account: Optional[str],
             qty = float(tx.get("quantity") or 0.0)
             prev_bal = acct_bal.get(sym, 0.0)
             acct_bal[sym] = prev_bal + qty
-            qty_by_symbol[sym] = qty_by_symbol.get(sym, 0.0) + qty
-            if sym in leaps or tx.get("action") != "BUYSELL" or qty <= 0:
+            msym = _map_sym(sym, _renames) if _renames else sym
+            qty_by_symbol[msym] = qty_by_symbol.get(msym, 0.0) + qty
+            if msym in leaps or tx.get("action") != "BUYSELL" or qty <= 0:
                 continue                       # entry must be a LONG buy
             if prev_bal < -1e-9:
                 # A BUY against THIS ACCOUNT'S short position is a
@@ -4632,7 +4647,7 @@ def _leaps_contracts(root: Path, account: Optional[str],
             if not expiry or not _ISO_DATE_RE.match(d):
                 continue
             if expiry > _add_months(d, _LEAPS_MONTHS):
-                leaps.add(sym)
+                leaps.add(msym)
     return {sym: qty_by_symbol.get(sym, 0.0) for sym in leaps}
 
 
@@ -4667,10 +4682,13 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
 
     entries.sort(key=lambda ae: (ae[1].get("date") or "",
                                  ae[1].get("symbol") or ""))
+    _split = _scope_split(root, [(a, e.get("gain")) for a, e in entries])
     if getattr(args, "json", False):
         _json_out({"rows": [dict(e, account=acct) for acct, e in entries],
                    "total_gain": round(sum(float(e.get("gain") or 0)
                                            for _a, e in entries), 2),
+                   "taxable_gain": _split["taxable"],
+                   "sheltered_gain": _split["sheltered"],
                    "currency": base_cur, "basis": basis})
         return
     out_lines = ["DATE CONTRACT QTY PROCEEDS COST GAIN DAYS_HELD"]
@@ -4689,9 +4707,35 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
+    _print_scope_split(_split, base_cur)
     print(f"Amounts are the engine's allowed figures — lot-matched, "
           f"basis: {basis}. Partial closes of a contract "
           f"appear as they are realized; still-open contracts are absent.")
+
+
+def _scope_split(root: Path, pairs) -> Dict[str, float]:
+    """{'taxable': x, 'sheltered': y} over (account, gain) pairs, by
+    the config's account types (an unknown account counts as taxable,
+    the side that must never be understated). The cross-account views
+    added registered-account P&L into one headline total with no
+    account column (R1-182)."""
+    _acfg = _soft_config(root).get("accounts") or {}
+    out = {"taxable": 0.0, "sheltered": 0.0}
+    for acct, gain in pairs:
+        scope = ("sheltered" if (_acfg.get(acct) or {}).get("type")
+                 == "sheltered" else "taxable")
+        out[scope] += float(gain or 0.0)
+    return {k: round(v, 2) for k, v in out.items()}
+
+
+def _print_scope_split(split: Dict[str, float], base_cur: str) -> None:
+    if abs(split.get("sheltered", 0.0)) < 0.005:
+        return
+    money = fmt_money
+    print(f"  TAXABLE accounts:   {money(split['taxable'])} {base_cur}")
+    print(f"  SHELTERED accounts: {money(split['sheltered'])} {base_cur}"
+          f"  (registered — not taxable events; the return uses the "
+          f"taxable figure)")
 
 
 def _leaps_empty_doc(root: Path, account: Optional[str],
@@ -4742,6 +4786,12 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
                 continue
             if "gain" not in e or "qty" not in e or e.get("tainted"):
                 continue
+            # LONG dispositions only: the write (grant record) and the
+            # buy-back of a contract that qualified through a long entry
+            # are covered-call legs — counted in ccd-sum, and counted a
+            # second time here (R1-172).
+            if e.get("direction") == "SHORT" or e.get("grant"):
+                continue
             d = e.get("date") or ""
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
@@ -4781,6 +4831,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
 
     money = fmt_money               # shared report-layer formatter
 
+    _split = _scope_split(root, [(a, e.get("gain")) for a, e in entries])
     agg: Dict[str, Dict[str, float]] = {}
     for _acct, e in entries:
         sym = str(e.get("symbol") or "?")
@@ -4804,6 +4855,8 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
                                                    key=sort_key)],
                    "total_gain": round(sum(r2["gain"]
                                            for r2 in agg.values()), 2),
+                   "taxable_gain": _split["taxable"],
+                   "sheltered_gain": _split["sheltered"],
                    "currency": base_cur, "basis": basis})
         return
     for sym, rec in sorted(agg.items(), key=sort_key):
@@ -4817,6 +4870,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
+    _print_scope_split(_split, base_cur)
     print(f"Engine-allowed amounts (lot-matched, basis: {basis}, "
           f"base currency); closed portions only — still-open "
           f"contracts carry no mark-to-market here.")
@@ -4849,6 +4903,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     basis = gains_basis_label(resolved)
 
     agg: Dict[str, Dict[str, float]] = {}
+    _ccd_pairs: List[Tuple[str, float]] = []
     tainted_skipped = 0
     for acct, f in resolved.items():
         try:
@@ -4904,6 +4959,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             premium, buyback = ((cost, proceeds) if inferred
                                 else (-cost, -proceeds))
             und = parse_option_underlying(sym) or sym
+            _ccd_pairs.append((acct, gain))
             rec = agg.setdefault(und, {"contracts": 0, "qty": 0.0,
                                        "proceeds": 0.0, "cost": 0.0,
                                        "gain": 0.0})
@@ -4924,6 +4980,10 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
                             for und, rec in sorted(agg.items())],
                    "total_gain": round(sum(r["gain"]
                                            for r in agg.values()), 2),
+                   "taxable_gain": _scope_split(root, _ccd_pairs)[
+                       "taxable"],
+                   "sheltered_gain": _scope_split(root, _ccd_pairs)[
+                       "sheltered"],
                    "tainted_skipped": tainted_skipped,
                    "currency": base_cur, "scope": scope,
                    "basis": basis})
@@ -4946,6 +5006,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL COVERED-CALL GAIN: {money(total)} {base_cur}")
+    _print_scope_split(_scope_split(root, _ccd_pairs), base_cur)
     print("PREMIUM = proceeds of the sold calls; BUYBACK = cost to "
           "close (0 for expiries); assignments' share gains are NOT "
           "here — they land in the stock's own rows.")

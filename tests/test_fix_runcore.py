@@ -777,5 +777,94 @@ class TestListAsOf(unittest.TestCase):
             self.assertIn("as of 2025-06-30", r.stdout)
 
 
+def _otx(date, symbol, qty, net, currency="CAD"):
+    return {"action": "BUYSELL", "date": date, "date_settle": date,
+            "time": "09:30:00", "symbol": symbol, "quantity": qty,
+            "net_amount": net, "currency": currency}
+
+
+def _gain(symbol, date, gain, direction="LONG", account="margin", **kw):
+    return dict({"symbol": symbol, "date": date, "date_settle": date,
+                 "qty": -1, "proceeds": 0.0, "cost": 0.0, "gain": gain,
+                 "raw_gain": gain, "disallowed_amount": 0.0,
+                 "days_held": 30, "direction": direction,
+                 "account": account}, **kw)
+
+
+class TestLeapsViews(unittest.TestCase):
+    """R1-172 / R1-237: leaps / leaps-sum counted the SHORT write and
+    buy-back of a qualifying contract (also in ccd-sum), and dropped
+    LEAPS whose root ticker.map TOBASE-renames. R1-182: leaps-sum /
+    ccd-sum totals mixed registered accounts into the headline."""
+
+    LEAP = "ABC280121C00050000.TO"
+    MAPPED_RAW = "BCE280121C00025000.US"
+    MAPPED = "BCE280121C00025000.TO"
+    TFSA_LEAP = "XYZ280121C00010000.TO"
+
+    def _project(self, tmp):
+        root = Path(tmp)
+        (root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            'base_currency = "CAD"\n[accounts.margin]\ntype = "taxable"\n'
+            '[accounts.tfsa]\ntype = "sheltered"\n')
+        (root / "ticker.map").write_text("TOBASE BCE.US BCE.TO\n")
+        work = root / "work"
+        work.mkdir()
+        (work / "margin_raw.json").write_text(json.dumps({"transactions": [
+            _otx("2025-02-03", self.LEAP, 1, 200.0),
+            _otx("2025-03-03", self.LEAP, -1, 350.0),
+            _otx("2025-04-01", self.LEAP, -3, 2700.0),
+            _otx("2025-05-01", self.LEAP, 3, 900.0),
+            _otx("2025-02-03", self.MAPPED_RAW, 1, 100.0),
+            _otx("2025-06-03", self.MAPPED_RAW, -1, 180.0)]}))
+        (work / "margin_gains_wash.json").write_text(json.dumps(
+            {"transactions": [
+                _gain(self.LEAP, "2025-03-03", 150.0),
+                _gain(self.LEAP, "2025-04-01", 2700.0, "SHORT",
+                      grant=True, cost=-2700.0),
+                _gain(self.LEAP, "2025-05-01", -900.0, "SHORT",
+                      proceeds=-900.0),
+                _gain(self.MAPPED, "2025-06-03", 80.0)]}))
+        (work / "tfsa_raw.json").write_text(json.dumps({"transactions": [
+            _otx("2025-02-03", self.TFSA_LEAP, 1, 100.0),
+            _otx("2025-03-03", self.TFSA_LEAP, -1, 60.0)]}))
+        (work / "tfsa_gains.json").write_text(json.dumps(
+            {"transactions": [_gain(self.TFSA_LEAP, "2025-03-03", -40.0,
+                                    account="tfsa")]}))
+        return root
+
+    def _json(self, root, *cmd):
+        r = _run_cli(root, *cmd, "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_leaps_sum_is_long_only_and_follows_tobase(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            doc = self._json(root, "leaps-sum", "margin")
+            rows = {r["contract"]: r for r in doc["rows"]}
+            self.assertAlmostEqual(rows[self.LEAP]["gain"], 150.0)
+            self.assertAlmostEqual(rows[self.LEAP]["qty"], 1.0)
+            self.assertIn(self.MAPPED, rows)
+            self.assertAlmostEqual(doc["total_gain"], 230.0)
+            rows = self._json(root, "leaps", "margin")["rows"]
+            self.assertFalse([r for r in rows
+                              if r.get("direction") == "SHORT"])
+
+    def test_totals_split_taxable_and_sheltered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp)
+            doc = self._json(root, "leaps-sum")
+            self.assertAlmostEqual(doc["total_gain"], 190.0)
+            self.assertAlmostEqual(doc["taxable_gain"], 230.0)
+            self.assertAlmostEqual(doc["sheltered_gain"], -40.0)
+            r = _run_cli(root, "leaps-sum")
+            self.assertIn("SHELTERED", r.stdout)
+            doc = self._json(root, "ccd-sum")
+            self.assertAlmostEqual(doc["taxable_gain"], doc["total_gain"])
+            self.assertAlmostEqual(doc["sheltered_gain"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

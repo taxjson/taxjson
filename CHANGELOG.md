@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **LEAPS views: long positions only, through ticker.map, with the
+  registered accounts split out.** `leaps` / `leaps-sum` no longer count
+  the write and buy-back of a contract that qualified through a long buy
+  (those legs are covered-call P&L, already in `ccd-sum`), a LEAPS whose
+  root ticker.map TOBASE-renames (BCE...US -> BCE...TO) is no longer
+  dropped, and `leaps`, `leaps-sum` and `ccd-sum` print the TAXABLE and
+  SHELTERED parts of their total (`--json`: `taxable_gain`,
+  `sheltered_gain`) (audit R1-172, R1-237, R1-182).
 - **`list --date` follows the project's tax_date and applies
   phantoms.json.** On the settle basis a Dec-31 trade settling in January
   is no longer counted as held at Dec 31 (the view disagreed with T1135
