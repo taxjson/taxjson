@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **IB: overnight-session and ASX fills are dated by the exchange's
+  trade date.** IB stamps US Eastern clock time: a US stock or ETF
+  filled in the overnight session (20:00 ET onward, Sunday to Thursday
+  nights) now trades on the NEXT trading day and settles T+1 from it —
+  a Dec 30 20:30 sale trades Dec 31 and settles in January, and a
+  Christmas-night fill settles Dec 29 instead of Dec 26. An ASX fill,
+  stamped in the ET evening, is dated in Sydney time. The overnight row
+  sorts before that day's regular session; the broker's stamp is kept
+  as `broker_time`. tax-logic CA-DATE-SESSION / US-DATE-SESSION.
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the

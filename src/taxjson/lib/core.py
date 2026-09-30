@@ -86,6 +86,12 @@ class TaxTransaction:
     income_label: str = ''
     dealer_country: str = ''
     issuer_country: str = ''
+    # The broker's own clock stamp ("2025-12-25 22:07:41 ET") on a trade
+    # whose exchange trade date differs from it — an overnight-session US
+    # fill, an ASX fill stamped in the US Eastern evening (tax-logic
+    # CA-DATE-SESSION / US-DATE-SESSION). Evidence only: NOT part of compute_id,
+    # left out of to_dict() when empty.
+    broker_time: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -127,7 +133,7 @@ class TaxTransaction:
 
     def to_dict(self):
         d = asdict(self)
-        for k in INCOME_FACT_FIELDS:
+        for k in INCOME_FACT_FIELDS + ('broker_time',):
             if not d.get(k):
                 d.pop(k, None)
         return d
@@ -550,7 +556,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'date_settle', 'account', 'type', 'description',
                  'symbol_new', 'corp_event_id', 'corp_election', 'id',
                  'record_date', 'ex_date', 'income_label',
-                 'dealer_country', 'issuer_country'):
+                 'dealer_country', 'issuer_country', 'broker_time'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]

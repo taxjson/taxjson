@@ -367,6 +367,51 @@ def _ib_split_datetime(raw: str, where: str):
     return date, time
 
 
+# IB stamps Trades rows with the US Eastern CLOCK time. Two kinds of fill
+# have an official trade date other than that clock date (tax-logic
+# CA-DATE-SESSION / US-DATE-SESSION):
+#   * a US-listed stock or ETF filled in the overnight session (20:00 ET
+#     onward, Sunday to Thursday nights) trades on the NEXT trading day;
+#   * an ASX fill is stamped in the ET evening, which is already the next
+#     day in Sydney: its trade date is the Sydney date.
+_IB_OVERNIGHT_OPEN = '20:00:00'
+_IB_CLOCK_TZ = 'America/New_York'
+_IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney'}
+
+
+def _ib_market_trade_date(date: str, time: str, asset_cat: str,
+                          currency: str, ext: str):
+    """(trade date, time, broker stamp) of a Trades row whose exchange
+    trade date is not the clock date IB printed; the broker stamp is ''
+    when nothing changes. An overnight fill is placed at 00:00:00 of
+    its trade date — before that day's regular session, the fills of
+    one night keeping their export (clock) order. A Friday- or
+    Saturday-night US fill is left as stamped: there is no session
+    then, and `taxjson check-dates` flags it."""
+    if asset_cat != 'Stocks':
+        return date, time, ''
+    stamp = f"{date} {time} ET"
+    if ext == 'US' and time >= _IB_OVERNIGHT_OPEN:
+        from taxjson.lib.market_calendar import is_trading_day
+        d = datetime.strptime(date, "%Y-%m-%d").date()
+        if d.weekday() in (6, 0, 1, 2, 3):          # Sunday .. Thursday
+            nxt = d + timedelta(days=1)
+            while not is_trading_day(nxt, 'USD'):
+                nxt += timedelta(days=1)
+            return nxt.isoformat(), '00:00:00', stamp
+        return date, time, ''
+    zone = _IB_LOCAL_TZ_BY_CURRENCY.get((currency or '').upper())
+    if zone:
+        from zoneinfo import ZoneInfo
+        clock = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
+        local = clock.replace(tzinfo=ZoneInfo(_IB_CLOCK_TZ)).astimezone(
+            ZoneInfo(zone))
+        ld, lt = local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S")
+        if ld != date:
+            return ld, lt, stamp
+    return date, time, ''
+
+
 def _ib_require_date(raw: str, where: str, field: str = 'Date') -> str:
     d = (raw or '').strip()
     if not _IB_DATE_RE.match(d):
@@ -1426,6 +1471,13 @@ class IbBrokerage(BaseBrokerage):
                         f"{asset_cat} trade row")
                 date, time = _ib_split_datetime(
                     self._cell(row, header_map, 'Date/Time'), where)
+                # The exchange's trade date when it is not the ET clock
+                # date (an overnight-session US fill, an ASX fill):
+                # tax-logic CA-DATE-SESSION / US-DATE-SESSION.
+                date, time, broker_time = _ib_market_trade_date(
+                    date, time, asset_cat, currency,
+                    _ib_listing_ext(asset_cat, symbol, currency, fii)
+                    if asset_cat in ('Stocks', 'Warrants') else '')
                 date_settle = get_ib_settlement(date, asset_cat, currency,
                                                 futures_settle=self.futures_settle)
                 qty = _num('Quantity')
@@ -1543,6 +1595,8 @@ class IbBrokerage(BaseBrokerage):
                     'account': 'IB',
                     'description': description,
                 }
+                if broker_time:
+                    _trade_tx['broker_time'] = broker_time
                 # `Ca` = IB CANCELLED an earlier fill: this row reverses
                 # it (opposite quantity, same date/time and price). It
                 # used to book as an ordinary trade — a phantom round

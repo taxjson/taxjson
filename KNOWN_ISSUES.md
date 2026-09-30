@@ -130,7 +130,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Settlement cycles outside North America are keyed on currency, with weekends-only calendars
 - **Where:** `src/taxjson/lib/dates.py` (`_T1_CUTOVER`), `src/taxjson/lib/market_calendar.py`.
-- **Current behavior:** the settlement lag follows the trade currency: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other currency (the ASX's AUD, HKD, JPY, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. IB stamps ASX fills in US Eastern time, which is already the next day in Sydney; the trade date is taken as stamped.
+- **Current behavior:** the settlement lag follows the trade currency: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other currency (the ASX's AUD, HKD, JPY, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. IB stamps ASX fills in US Eastern time; the parser dates them in Sydney time (tax-logic CA-DATE-SESSION), but only the ASX has a venue time zone — another non-North-American market is dated as IB stamps it.
 - **Why deferred:** per-market holiday calendars and venue time zones for markets the books rarely touch.
 
 ---

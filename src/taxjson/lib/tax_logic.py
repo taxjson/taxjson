@@ -308,6 +308,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                   "Futures and futures options settle on the next "
                   "settlement day (futures_settle = \"next_day\").",
                   keys=("futures_settle",))),
+            Rule("CA-DATE-SESSION",
+                 "A trade is dated by its exchange's trade date, not the "
+                 "broker's clock: IB stamps US Eastern time, so a US stock "
+                 "or ETF filled in the overnight session (20:00 ET or "
+                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "trading day and settles from it (a Dec 30 20:30 fill "
+                 "trades Dec 31 and settles in January), and an ASX fill "
+                 "is dated in Sydney time. The overnight fill sorts before "
+                 "that day's other trades; the broker's stamp is kept "
+                 "(broker_time)."),
             Rule("CA-DATE-14",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
@@ -760,6 +770,16 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   "Futures and futures options settle on the next "
                   "settlement day (futures_settle = \"next_day\").",
                   keys=("futures_settle",))),
+            Rule("US-DATE-SESSION",
+                 "A trade is dated by its exchange's trade date, not the "
+                 "broker's clock: IB stamps US Eastern time, so a US stock "
+                 "or ETF filled in the overnight session (20:00 ET or "
+                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "trading day and settles from it (a Dec 30 20:30 fill "
+                 "trades Dec 31 and settles in January), and an ASX fill "
+                 "is dated in Sydney time. The overnight fill sorts before "
+                 "that day's other trades; the broker's stamp is kept "
+                 "(broker_time)."),
             Rule("US-DATE-13",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
