@@ -409,13 +409,26 @@ class TestWebStatus(unittest.TestCase):              # web polish
                 self.assertEqual(c.get(url).status_code, 404, url)
 
     def test_negative_whatif_qty_rejected(self):
+        # A negative qty is a buy-to-cover since S079-00: on a LONG
+        # position it is refused, never simulated as a sale of abs(qty).
         from taxjson.web.context import ProjectContext
         from taxjson.web.data import what_if_sell
         with tempfile.TemporaryDirectory() as td:
-            ctx = ProjectContext.load(_project(td))
-            r = what_if_sell(ctx, "margin", "AAA.TO", -10, 15.0)
+            root = _project(td)
+            (root / "work" / "margin_base.json").write_text(json.dumps(
+                {"transactions": [{
+                    "action": "BUYSELL", "date": "2024-02-01",
+                    "symbol": "AAA.TO", "quantity": 10, "price": 10.0,
+                    "net_amount": 100.0, "currency": "CAD",
+                    "account": "margin"}]}))
+            ctx = ProjectContext.load(root)
+            r = what_if_sell(ctx, "margin", "AAA.TO", -10, 15.0,
+                             on="2024-06-03")
+            r0 = what_if_sell(ctx, "margin", "AAA.TO", 0, 15.0)
         self.assertFalse(r["ok"])
-        self.assertIn("positive", r["reason"])
+        self.assertIn("SHORT", r["reason"])
+        self.assertFalse(r0["ok"])
+        self.assertIn("non-zero", r0["reason"])
 
 
 if __name__ == "__main__":
