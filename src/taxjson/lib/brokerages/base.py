@@ -654,6 +654,28 @@ class BaseBrokerage:
             return exp.strftime("%Y-%m-%d")
         return posting_iso
 
+    # "... AS OF mm/dd/yy EXPIRED", "... WARRANT EXP mm/dd/yy - EXPIRED"
+    _DESC_EXPIRY_RE = re.compile(
+        r'\b(?:AS\s+OF|EXP(?:IRY|IRES|IRED|\.)?)\s+'
+        r'(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\b', re.IGNORECASE)
+
+    @classmethod
+    def non_option_expiry_booking_date(cls, posting_iso: str,
+                                       desc: str) -> str:
+        """The date a rights/warrant EXPIRY row belongs on (audit
+        S065-04): like an option, an expiring right or warrant has no
+        settlement cycle and brokers post it a business day or so late,
+        so a Dec-31 expiry posted Jan 2 moved its loss into the next
+        year. The expiry date comes from the description's "AS OF
+        mm/dd/yy" / "EXP mm/dd/yy" when it is at most a week before the
+        posting date; otherwise the posting date is kept."""
+        m = cls._DESC_EXPIRY_RE.search(desc or '')
+        if not m:
+            return posting_iso
+        mm, dd, yy = m.groups()
+        return cls.option_expiry_booking_date(
+            posting_iso, f"{int(mm):02d}/{int(dd):02d}/{yy[-2:]}")
+
     @staticmethod
     def clamp_settlement_to_expiry(transactions: List[Dict[str, Any]],
                                    expiries: List[Dict[str, Any]]) -> None:

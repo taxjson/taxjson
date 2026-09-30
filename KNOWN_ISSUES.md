@@ -52,8 +52,8 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Workaround:** price lookups that need the venue use `yf_ticker.map` (`PNG.TO PNG.V`).
 
 ### Trade reversals across export files
-- **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI).
-- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. A Questrade CIL/REI reversal must find its original in the SAME export file, else the parse is refused.
+- **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI / stock dividend).
+- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. A Questrade CIL/REI/stock-dividend reversal must find its original in the SAME export file, else the parse is refused.
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
@@ -197,7 +197,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Currency⇒exchange suffix map is duplicated in ~6 places
 - **Where:** `base.py`, `corp_actions.py`, `ib_extractor.py` (×3), `ticker_map.py` — each hardcodes `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
-- **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
+- **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. An explicit `.TO` in a Questrade or generic export is kept whatever the row currency (`DLR.U.TO` bought in USD), so the known USD-on-TSX case no longer depends on the map. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
 
 ## Test coverage gaps (tracked; lower priority)
 

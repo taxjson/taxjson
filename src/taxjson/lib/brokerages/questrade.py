@@ -3,11 +3,13 @@ import io
 import math
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          _parse_div_qty_rate,
+                                         canonical_ca_listing,
                                          is_roc_description,
                                          parse_strict_number)
 
@@ -61,6 +63,15 @@ _INTERNAL_CODE_RE = re.compile(r'^[A-Z]\d+$')
 # Patterns to strip when building a "description key" for matching
 # dividend rows to the underlying trade rows. Mirrors qt_dividends.pl.
 _DESC_NOISE_RES = [
+    # Event suffixes on quantity-bearing rows (audit S063-03): a stock
+    # split / stock dividend ("... STK SPLIT ON 40 SHS", "... STK DIV ON
+    # 1390 SHS" -- the ' DIV ON' rule below left a stray 'STK'), a DRIP
+    # ("... REINV@C$3.82621") and a cash-in-lieu ("... CASH IN LIEU OF
+    # .50000"). Stripped FIRST, so the key equals the trade row's.
+    re.compile(r'\s+(?:STK\.?|STOCK)\s+(?:SPLIT|DIV(?:IDEND)?)\b.*$',
+               re.IGNORECASE),
+    re.compile(r'\s+REINV\s*@.*$', re.IGNORECASE),
+    re.compile(r'\s+CASH\s+IN\s+LIEU\b.*$', re.IGNORECASE),
     # Dividend-specific suffixes.
     re.compile(r'\s+CASH DIV ON.*$', re.IGNORECASE),
     re.compile(r'\s+RTS DIST ON.*$', re.IGNORECASE),
@@ -80,7 +91,12 @@ _DESC_NOISE_RES = [
     re.compile(r'\s+(?:RBC|BMO|TD|CIBC|SCOTIA|NATIONAL BANK)\s.*$', re.IGNORECASE),
     re.compile(r'\s+DOMINION SECURITIES.*$', re.IGNORECASE),
     re.compile(r'\s+TFER\s+(?:FROM|TO).*$', re.IGNORECASE),
-    re.compile(r'\s+TRANSFER\s+(?:FROM|TO|BOOK\s+VALUE).*$', re.IGNORECASE),
+    re.compile(r'\s+TRANSFER\s+(?:FROM|TO|IN\b|BOOK\s+VALUE).*$',
+               re.IGNORECASE),
+    # Interactive Brokers' two transfer wordings (audit S063-09):
+    # "<name> TRANSFER IN INTERACTIVE BROKER" (above) and
+    # "<name> INTERACTIVE BROKERS LLC 146.16 TRANSFER".
+    re.compile(r'\s+INTERACTIVE\s+BROKERS?\s+LLC\b.*$', re.IGNORECASE),
     re.compile(r'\s+BOOK\s+VALUE.*$', re.IGNORECASE),
     # Cosmetic suffixes seen on various row types.
     re.compile(r'\s+COMMON STOCK.*$', re.IGNORECASE),
@@ -118,6 +134,158 @@ def _get_desc_key(desc: str) -> str:
     for pat in _DESC_NOISE_RES:
         desc = pat.sub('', desc)
     return desc.strip().upper()
+
+
+# Questrade writes 'Buy'/'Sell' and upper-case codes (DIV, TF6, DIS, ...).
+# An export in another case ('BUY', 'buy') was skipped as an unknown
+# action and the sale opened a phantom short (audit R1-71).
+_QT_ACTION_CANON = {'BUY': 'Buy', 'SELL': 'Sell'}
+
+
+def _canon_action(raw: Optional[str]) -> str:
+    a = (raw or '').strip()
+    return _QT_ACTION_CANON.get(a.upper(), a.upper())
+
+
+def _read_qt_rows(path: Path) -> List[tuple]:
+    """(line number, row) for every data row of a Questrade export. The
+    header must carry every column in _QT_COLUMNS."""
+    path = Path(path)
+    raw = path.read_bytes()
+    text = (raw.decode('utf-16') if raw[:2] in (b'\xff\xfe', b'\xfe\xff')
+            else raw.decode('utf-8-sig'))
+    reader = csv.DictReader(io.StringIO(text, newline=''))
+    header = [h.strip() if h else h for h in (reader.fieldnames or [])]
+    missing = [c for c in _QT_COLUMNS if c not in header]
+    if missing:
+        raise BrokerageParseError(
+            f"{path.name}: Questrade export is missing required "
+            f"column(s) {', '.join(repr(c) for c in missing)} — "
+            f"refusing to guess (a missing money column read as 0 "
+            f"corrupts the return). Export Activity with the "
+            f"standard English columns.")
+    reader.fieldnames = header
+    rows = []
+    for lineno, row in enumerate(reader, 2):
+        vals = [str(v or '').strip() for k, v in row.items()
+                if k is not None]
+        if not any(vals):
+            continue              # blank trailer line: not a row
+        rows.append((lineno, row))
+    return rows
+
+
+@dataclass
+class QtAccountContext:
+    """Identity maps learned from ALL of one account's Questrade exports
+    (audit R1-67: a dividend or ROC under an internal code whose trade
+    sits in LAST year's export stayed on a phantom code pool and the ROC
+    became a s.40(3) gain). A lone file gets a context of its own."""
+    files: List[str]
+    # desc key -> {(symbol as exported, listing currency), ...}
+    desc_to_ticker: Dict[str, set]
+    # symbol as exported (upper) -> the listing currencies it trades in
+    sym_curs: Dict[str, set]
+    # listing symbol -> [(date, signed quantity)] from Trades/Transfers
+    timelines: Dict[str, List[Tuple[str, float]]]
+    messages: List[str] = field(default_factory=list)
+    emitted: bool = False
+
+    def emit(self) -> None:
+        if self.emitted:
+            return
+        self.emitted = True
+        for m in self.messages:
+            print(m, file=sys.stderr)
+
+    def position_on(self, listing: str, date: str, *,
+                    before: bool = False) -> float:
+        return sum(q for d, q in self.timelines.get(listing, ())
+                   if (d < date if before else d <= date))
+
+
+def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
+    helper = helper or QuestradeBrokerage()
+    files = list(dict.fromkeys(str(Path(p).resolve()) for p in paths))
+    ctx = QtAccountContext(files=files, desc_to_ticker={}, sym_curs={},
+                           timelines={})
+    by_name: Dict[tuple, set] = {}
+    where: Dict[str, str] = {}
+    for k in files:
+        for lineno, row in _read_qt_rows(Path(k)):
+            act = (row.get('Activity Type') or '').strip()
+            if act not in ('Trades', 'Transfers'):
+                continue
+            sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
+            cur = (row.get('Currency') or '').strip().upper()
+            desc = row.get('Description') or ''
+            if cur == 'CAD' and _FX_SETTLED_RE.search(desc):
+                cur = 'USD'          # listing currency, not settlement
+            if not sym or not cur or _INTERNAL_CODE_RE.match(sym):
+                continue
+            key = _get_desc_key(desc)
+            if key:
+                ctx.desc_to_ticker.setdefault(key, set()).add((sym, cur))
+            if helper.parse_option_from_description(desc):
+                continue             # a contract, not a listing
+            ctx.sym_curs.setdefault(sym, set()).add(cur)
+            dt = helper.parse_date(
+                (row.get('Transaction Date') or '').strip(), *_DATE_FMTS)
+            try:
+                q = parse_strict_number(row.get('Quantity'),
+                                        field='Quantity', allow_blank=True,
+                                        blank=0.0)
+            except BrokerageParseError:
+                continue             # parse_file names the row
+            action = _canon_action(row.get('Action'))
+            if act == 'Trades':
+                if action not in ('Buy', 'Sell'):
+                    continue
+                q = -abs(q) if action == 'Sell' else abs(q)
+            if dt is None or abs(q) < 1e-12:
+                continue
+            listing = helper.apply_currency_suffix(sym, cur)
+            ctx.timelines.setdefault(listing, []).append(
+                (dt.strftime('%Y-%m-%d'), q))
+            where.setdefault(listing, Path(k).name)
+            if key:
+                by_name.setdefault((key, cur), set()).add(listing)
+    for tl in ctx.timelines.values():
+        tl.sort(key=lambda e: (e[0], -e[1]))
+    _detect_qt_ticker_changes(ctx, by_name, where)
+    return ctx
+
+
+def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
+    """A ticker change with no corporate-action row (audit S062-06 /
+    S063-12): the old symbol stops with shares still open and a symbol
+    with the same Description and currency opens with a SALE those
+    shares cover. As exported that is a stranded long and a short, and
+    the year's gain drops out. The export has no CUSIP, so this is not
+    certain enough to merge silently: warn with the ticker.map line."""
+    for (key, _cur), listings in sorted(by_name.items()):
+        if len(listings) < 2:
+            continue
+        for a in sorted(listings):
+            for b in sorted(listings):
+                ta, tb = ctx.timelines.get(a), ctx.timelines.get(b)
+                if a == b or not ta or not tb or ta[-1][0] > tb[0][0]:
+                    continue
+                open_a = sum(q for _d, q in ta)
+                first_b = next((q for _d, q in tb if abs(q) > 1e-9), 0.0)
+                if (open_a <= 1e-9 or first_b >= -1e-9
+                        or -first_b > open_a + 1e-6):
+                    continue
+                ctx.messages.append(
+                    f"warning: {where.get(b, '?')}: Questrade symbol {a} "
+                    f"stops on {ta[-1][0]} with {open_a:g} share(s) still "
+                    f"open, and {b} — same Description {key!r} — first "
+                    f"appears on {tb[0][0]} with a SALE of {-first_b:g}. "
+                    f"That looks like a ticker change booked without a "
+                    f"corporate-action row: as exported it is a stranded "
+                    f"long {a} and a short {b} (the sale's gain drops "
+                    f"out). If they are the same security, add this line "
+                    f"to ticker.map:\n    GLOBAL {a} {b}")
 
 
 class QuestradeBrokerage(BaseBrokerage):
@@ -175,26 +343,77 @@ class QuestradeBrokerage(BaseBrokerage):
             return self.account_taxable
         return self._qt_taxable_hint
 
-    def _resolve_symbol(self, row: Dict[str, Any], currency: str):
+    def apply_currency_suffix(self, symbol: str, currency: str) -> str:
+        """Questrade names the LISTING in the symbol: XEI.TO is a TSX
+        listing and a bare symbol a US one. A .TO symbol keeps .TO
+        whatever currency the row settled in — DLR.U.TO / XUS.U.TO trade
+        on the TSX in USD and became DLR.U.US, a separate pool from the
+        same units at RBC or IB (which a JOURNAL rule then never met),
+        and a US-looking symbol on the T1135 (audit R1-68; the generic
+        importer's R1-122). Anything else follows the base rule."""
+        sym = (symbol or '').strip().replace(' ', '.')
+        if sym.upper().endswith('.TO') and len(sym) > 3:
+            return canonical_ca_listing(sym, 'CAD')
+        return super().apply_currency_suffix(symbol, currency)
+
+    @classmethod
+    def prepare_files(cls, paths) -> QtAccountContext:
+        """Read ALL of one account's Questrade exports once and build the
+        identity maps every per-file parse shares (description ->
+        traded symbol, a symbol's listing currency, position timelines).
+        Account-level warnings print here, once."""
+        ctx = build_qt_account_context(list(paths), helper=cls())
+        ctx.emit()
+        return ctx
+
+    # Set by taxjson-brokerage (see `prepare_files`); None = this file alone.
+    account_context: Optional[QtAccountContext] = None
+
+    def _unbooked(self, lineno: int, msg: str) -> None:
+        """A real row the parser could not book: `taxjson run` echoes
+        the UNBOOKED prefix to the console and `run --strict` refuses
+        to publish (the old skip note reached only the .sum banner)."""
+        print(f"warning: UNBOOKED: {self._where(lineno)}: {msg}",
+              file=sys.stderr)
+
+    def _listing_currency(self, sym: str, currency: str) -> str:
+        """The currency whose suffix a real (non-code) symbol takes: a
+        symbol with no Canadian venue suffix that the account trades in
+        exactly ONE listing currency keeps that listing — a USD stock
+        bought from the CAD side (EXCHANGE RATE) paid a CAD dividend or
+        ROC that landed on a phantom .TO pool (audit R1-68)."""
+        if canonical_ca_listing(sym, currency) is not None:
+            return currency
+        curs = self._ctx.sym_curs.get(sym.upper()) if self._ctx else None
+        if curs and len(curs) == 1:
+            return next(iter(curs))
+        return currency
+
+    def _resolve_symbol(self, row: Dict[str, Any], currency: str,
+                        lineno: Optional[int] = None):
         """(symbol, suffix currency) for a non-trade row. Questrade
         writes some rows under an internal code (S098765, a TF6's
         R223608) or a dotted dividend code (.BTO for B2Gold held as
         BTG on the NYSE); ONLY those are rebound to the traded symbol
-        of the same security (matched on the description). A real
-        ticker is kept: first-match-wins used to rebind, e.g., an
-        FTN.PR dividend onto FTN.PRA because both share a description.
-        A description that maps to several symbols is never guessed."""
-        raw = (row.get('Symbol') or '').strip()
+        of the same security (matched on the description, in ANY of
+        the account's exports). A real ticker is kept: first-match-wins
+        used to rebind, e.g., an FTN.PR dividend onto FTN.PRA because
+        both share a description. A description that maps to several
+        symbols is never guessed, and an internal code nothing resolves
+        is said out loud (a ticker.map GLOBAL line fixes it)."""
+        raw = (row.get('Symbol') or '').strip().upper()
         sym = raw.lstrip('.')
         code_like = (not sym or bool(_INTERNAL_CODE_RE.match(sym))
                      or raw.startswith('.'))
         cands = self._desc_to_ticker.get(
             _get_desc_key(row.get('Description') or ''), set())
         if not code_like:
-            bare = re.sub(r'\.TO$', '', sym, flags=re.IGNORECASE)
-            others = sorted({s for s, _ in cands} - {bare})
+            cur = self._listing_currency(sym, currency)
+            own = self.apply_currency_suffix(sym, cur)
+            others = sorted({self.apply_currency_suffix(s, c)
+                             for s, c in cands} - {own})
             if others:
-                key = (bare, tuple(others))
+                key = (own, tuple(others))
                 if key not in self._ambiguous_warned:
                     self._ambiguous_warned.add(key)
                     print(f"warning: {self._qt_name}: {sym!r} is booked "
@@ -203,7 +422,7 @@ class QuestradeBrokerage(BaseBrokerage):
                           f"trades as {', '.join(others)} — if they are "
                           f"one security, fold them with a ticker.map "
                           f"rule.", file=sys.stderr)
-            return sym, currency
+            return sym, cur
         if len(cands) == 1:
             return next(iter(cands))
         if len(cands) > 1:
@@ -216,38 +435,46 @@ class QuestradeBrokerage(BaseBrokerage):
                       f"({', '.join(s for s, _ in sorted(cands))}) — not "
                       f"rebound; map it with a ticker.map rule.",
                       file=sys.stderr)
+        elif _INTERNAL_CODE_RE.match(sym) and sym not in self._code_warned:
+            # A row booked under Questrade's internal code that no trade
+            # or transfer in any export of the account resolves: the
+            # position fragments (a ROC hits an empty pool and becomes a
+            # gain; stock-dividend / DRIP / spinoff shares sit on a
+            # phantom pool while the sale goes short). Loud, and a lint
+            # finding (audit R1-67, S062-24, R1-3).
+            self._code_warned.add(sym)
+            where = self._where(lineno) if lineno else self._qt_name
+            msg = (f"{where}: {(row.get('Action') or '').strip() or '?'} "
+                   f"row keeps internal symbol code {sym!r} "
+                   f"({(row.get('Description') or '')[:60]!r}) — no trade "
+                   f"or transfer in this account's exports resolves it. "
+                   f"Map it to the real ticker with a ticker.map line "
+                   f"(GLOBAL {self.apply_currency_suffix(sym, currency)} "
+                   f"<TICKER>.{self.apply_currency_suffix('X', currency)[2:]}"
+                   f") or the position will fragment.")
+            print(f"warning: {msg}", file=sys.stderr)
+            self.lint_findings.append(msg)
         return sym, currency
 
     # ------------------------------------------------------------- parse
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
-        # Read once into memory so we can do two passes: first to build a
-        # description→(ticker, market-currency) map from trade rows,
-        # second to emit transactions (internal-code and dotted-code
-        # rows resolve to the traded symbol; see _resolve_symbol).
+        # The description -> (ticker, listing currency) map and the
+        # position timelines come from ALL of the account's exports (the
+        # shared context taxjson-brokerage builds via prepare_files); a
+        # lone file gets a context of its own.
+        path = Path(path)
         self._qt_name = path.name
         self._ambiguous_warned: set = set()
-        raw = Path(path).read_bytes()
-        text = (raw.decode('utf-16') if raw[:2] in (b'\xff\xfe', b'\xfe\xff')
-                else raw.decode('utf-8-sig'))
-        reader = csv.DictReader(io.StringIO(text, newline=''))
-        header = [h.strip() if h else h for h in (reader.fieldnames or [])]
-        missing = [c for c in _QT_COLUMNS if c not in header]
-        if missing:
-            raise BrokerageParseError(
-                f"{path.name}: Questrade export is missing required "
-                f"column(s) {', '.join(repr(c) for c in missing)} — "
-                f"refusing to guess (a missing money column read as 0 "
-                f"corrupts the return). Export Activity with the "
-                f"standard English columns.")
-        reader.fieldnames = header
-        rows = []
-        for lineno, row in enumerate(reader, 2):
-            vals = [str(v or '').strip() for k, v in row.items()
-                    if k is not None]
-            if not any(vals):
-                continue              # blank trailer line: not a row
-            rows.append((lineno, row))
+        self._code_warned: set = set()
+        self.lint_findings: List[str] = []
+        ctx = self.account_context
+        if ctx is None or str(path.resolve()) not in ctx.files:
+            ctx = build_qt_account_context([path], helper=self)
+            ctx.emit()
+        self._ctx = ctx
+        self._desc_to_ticker = ctx.desc_to_ticker
+        rows = _read_qt_rows(path)
 
         # Taxable hint from the Account Type column: a registered-plan
         # marker -> sheltered; "margin"/"cash" without one -> taxable;
@@ -263,34 +490,12 @@ class QuestradeBrokerage(BaseBrokerage):
         else:
             self._qt_taxable_hint = None
 
-        # desc_key -> {(clean_symbol, market_currency), ...}. Built from
-        # both Trade AND Transfer rows: a position established purely by
-        # transfer-in (typical for LIRA/RRSP carry-overs) still needs its
-        # market identity learned somewhere. A key with more than one
-        # symbol is ambiguous and never used to rebind.
-        self._desc_to_ticker: Dict[str, set] = {}
-
-        def _record_ticker(row):
-            sym = (row.get('Symbol') or '').strip().lstrip('.').rstrip()
-            sym = re.sub(r'\.TO$', '', sym, flags=re.IGNORECASE)
-            cur = (row.get('Currency') or '').strip()
-            desc = row.get('Description') or ''
-            if cur.upper() == 'CAD' and _FX_SETTLED_RE.search(desc):
-                cur = 'USD'          # listing currency, not settlement
-            key = _get_desc_key(desc)
-            if key and sym and cur and not _INTERNAL_CODE_RE.match(sym):
-                self._desc_to_ticker.setdefault(key, set()).add((sym, cur))
-
-        for _, row in rows:
-            if (row.get('Activity Type') or '').strip() in ('Trades',
-                                                             'Transfers'):
-                _record_ticker(row)
-
         transactions: List[Dict[str, Any]] = []
         expiries: List[Dict[str, Any]] = []     # EXP rows (settle == date)
         ca_legs: List[str] = []                 # quantity-bearing DIS legs
         net_of_tax: List[str] = []              # NON-RES TAX WITHHELD divs
         no_book_value: List[str] = []           # transfer-ins at $0 cost
+        journals: List[str] = []                # BRW listing journals
         # CIL / REI reversals (audit R1-66): a same-code row with the
         # signs negated cancels its original. Originals by key -> list of
         # emitted leg groups; reversal rows -> (key, lineno), paired at
@@ -300,7 +505,7 @@ class QuestradeBrokerage(BaseBrokerage):
         self._rows_seen = 0
         for lineno, row in rows:
             self._rows_seen += 1
-            action_raw = (row.get('Action') or '').strip()
+            action_raw = _canon_action(row.get('Action'))
             activity_type = (row.get('Activity Type') or '').strip()
             desc = row.get('Description') or ''
             if [(row.get(c) or '').strip() for c in _QT_COLUMNS[:5]] == \
@@ -336,9 +541,14 @@ class QuestradeBrokerage(BaseBrokerage):
                 else:
                     self.count_skip("stock-split row not understood "
                                     "(see warning)")
+                    self._unbooked(lineno, f"stock-split row not "
+                                   f"understood ({desc[:60]!r}) — NOT "
+                                   f"booked; the position's share count "
+                                   f"is wrong until it is (a .tt SPLIT).")
                 continue
 
-            if action_raw == 'DIS' and _STK_DIV_RE.search(desc):
+            if (action_raw == 'DIS' and _STK_DIV_RE.search(desc)
+                    and abs(self._num(row, 'Quantity', lineno)) > 1e-9):
                 # STOCK dividend: new shares delivered in kind. This
                 # row previously fell into the dividend branch, whose
                 # zero-cash guard silently DISCARDED it — the position
@@ -349,35 +559,69 @@ class QuestradeBrokerage(BaseBrokerage):
                 # in registered accounts; taxable accounts surface it
                 # via the zero-basis walk, and distributions.map can
                 # supply the declared per-share amount as an ADJUST.
-                self.note_row_consumed()
                 qty = self._num(row, 'Quantity', lineno)
-                if qty > 0:
-                    date = self._date(row, 'Transaction Date',
-                                      lineno).strftime('%Y-%m-%d')
-                    sym_raw, scur = self._resolve_symbol(row, currency)
-                    print(f"NOTE: {sym_raw}: stock dividend of {qty:g} "
-                          f"share(s) on {date} entered at $0 cost — in "
-                          f"a taxable account, add the fund's declared "
-                          f"amount via distributions.map for the "
-                          f"correct ACB.", file=sys.stderr)
-                    transactions.append({
-                        'action': 'BUYSELL',
-                        'date': date, 'time': '09:30:00',
-                        'date_settle': date,
-                        'symbol': self.apply_currency_suffix(
-                            sym_raw, scur),
-                        'quantity': qty, 'currency': currency,
-                        'price': 0.0, 'net_amount': 0.0,
-                        'gross_amount': 0.0,
-                        'account': self.DEFAULT_ACCOUNT,
-                        'description': desc,
-                    })
+                net_sd = parse_strict_number(
+                    row.get('Net Amount'), field='Net Amount',
+                    where=self._where(lineno), allow_blank=True, blank=0.0)
+                if abs(net_sd) > 0.005:
+                    # Shares AND cash on one row (audit R1-72): booking
+                    # the shares dropped the cash.
+                    raise BrokerageParseError(
+                        f"{self._where(lineno)}: a stock-dividend DIS row "
+                        f"carries both a quantity ({qty:g}) and cash "
+                        f"({net_sd:,.2f}; {desc[:50]!r}) — refusing to "
+                        f"guess which part is the dividend. Split it into "
+                        f"a share row and a cash row, or book it in a .tt "
+                        f"file.")
+                date = self._date(row, 'Transaction Date',
+                                  lineno).strftime('%Y-%m-%d')
+                sym_raw, scur = self._resolve_symbol(row, currency, lineno)
+                sym = self.apply_currency_suffix(sym_raw, scur)
+                sd_key = ('STK DIV', sym, round(abs(qty), 6), 0.0)
+                self.note_row_consumed()
+                if qty < 0:
+                    # A negated STK DIV row is Questrade REVERSING a
+                    # stock dividend: it cancels the original (paired at
+                    # the end of the parse). It used to be counted as
+                    # consumed and dropped, leaving phantom shares that
+                    # diluted the ACB (audit R1-65).
+                    reversals.append((sd_key, lineno, desc))
+                    continue
+                print(f"NOTE: {sym_raw}: stock dividend of {qty:g} "
+                      f"share(s) on {date} entered at $0 cost — in "
+                      f"a taxable account, add the fund's declared "
+                      f"amount via distributions.map for the "
+                      f"correct ACB.", file=sys.stderr)
+                sd_tx = {
+                    'action': 'BUYSELL',
+                    'date': date, 'time': '09:30:00',
+                    'date_settle': date,
+                    'symbol': sym,
+                    'quantity': qty, 'currency': currency,
+                    'price': 0.0, 'net_amount': 0.0,
+                    'gross_amount': 0.0,
+                    'account': self.DEFAULT_ACCOUNT,
+                    'description': desc,
+                }
+                transactions.append(sd_tx)
+                rev_originals.setdefault(sd_key, []).append([sd_tx])
                 continue
 
             if action_raw == 'DIV' or activity_type == 'Dividends':
                 qty_col = self._num(row, 'Quantity', lineno)
                 net_col = self._num(row, 'Net Amount', lineno)
-                if abs(qty_col) > 1e-9 and abs(net_col) < 1e-9:
+                if abs(qty_col) > 1e-9 and abs(net_col) >= 1e-9:
+                    # Shares AND cash on one income row (audit R1-72):
+                    # the dividend branch booked the cash and silently
+                    # dropped the delivered shares.
+                    raise BrokerageParseError(
+                        f"{self._where(lineno)}: a {action_raw or 'DIS'} "
+                        f"row carries both a quantity ({qty_col:g}) and "
+                        f"cash ({net_col:,.2f}; {desc[:50]!r}) — refusing "
+                        f"to book the cash and drop the shares. Split it "
+                        f"into a share row and a cash row, or book it in "
+                        f"a .tt file.")
+                if abs(qty_col) > 1e-9:
                     # A quantity-bearing, zero-cash DIS row is a
                     # CORPORATE-ACTION leg (warrant spinoff / rights
                     # distribution chain: +100 / -100 / +100), not an
@@ -387,6 +631,10 @@ class QuestradeBrokerage(BaseBrokerage):
                     _sym = (row.get('Symbol') or '').strip() or '?'
                     if _QT_CA_LEG_RE.search(desc):
                         ca_legs.append(f"{_sym} {qty_col:+g}")
+                        if _INTERNAL_CODE_RE.match(_sym.upper()):
+                            # Say it when nothing resolves the code
+                            # (audit R1-3): the chain would book on it.
+                            self._resolve_symbol(row, currency, lineno)
                         self.count_nonevent(
                             "DIS corporate-action leg (quantity-bearing; "
                             "booked by taxjson-corp-actions)")
@@ -394,6 +642,12 @@ class QuestradeBrokerage(BaseBrokerage):
                         self.count_skip(
                             f"DIS row with a quantity and no cash "
                             f"({_sym}) — not a dividend, not booked")
+                        self._unbooked(
+                            lineno, f"DIS row moves {qty_col:g} {_sym} "
+                            f"with no cash ({desc[:60]!r}) — not a "
+                            f"dividend, split, stock dividend or spinoff "
+                            f"leg the parser knows; NOT booked. Book it "
+                            f"in a .tt file.")
                     continue
                 tx = self._parse_dividend(row, currency, desc, lineno)
                 if tx:
@@ -484,20 +738,63 @@ class QuestradeBrokerage(BaseBrokerage):
             is_expired = code_expired or word_expired
             is_assigned = code_assigned or word_assigned
             if not (is_trade or is_expired or is_assigned):
+                _q = parse_strict_number(
+                    row.get('Quantity'), field='Quantity',
+                    where=self._where(lineno), allow_blank=True, blank=0.0)
+                if action_raw == 'BRW' and 'JOURNAL' in _du:
+                    # "... JOURNAL POSITION TO USD" / "FROM CAD": units
+                    # journaled between the CAD and USD lines of ONE
+                    # security (DLR.TO <-> DLR.U.TO). Not a disposition;
+                    # the two lines are one pool under a ticker.map
+                    # JOURNAL rule.
+                    self.count_nonevent(
+                        "same-security journal between listings (BRW) — "
+                        "one pool under a ticker.map JOURNAL rule")
+                    journals.append(
+                        f"{(row.get('Symbol') or '').strip()} {_q:+g}")
+                    continue
                 # Previously a silent drop — a new Questrade action code
                 # lost rows with zero signal. Count it; the summary at
                 # the end of the parse names every dropped category.
                 self.count_skip(f"action {action_raw or activity_type or '?'!s}")
+                if abs(_q) > 1e-9:
+                    # A row that moves shares and is not booked changes
+                    # the position: say so where `taxjson run` shows it
+                    # (audit R1-71; the note reached only the .sum).
+                    self._unbooked(
+                        lineno, f"action {action_raw or '?'!r} moves "
+                        f"{_q:g} {(row.get('Symbol') or '').strip() or '?'}"
+                        f" ({desc[:60]!r}) — not an action the parser "
+                        f"knows; NOT booked. Book it in a .tt file.")
                 continue
 
             dt = self._date(row, 'Transaction Date', lineno)
             date = dt.strftime("%Y-%m-%d")
             time = dt.strftime("%H:%M:%S")
 
+            opt = self.parse_option_from_description(desc)
+            _sym_col = (row.get('Symbol') or '').strip().upper()
+            if opt and _sym_col and re.sub(
+                    r'\.TO$', '', _sym_col) == opt['base'].upper():
+                # The Symbol column names the UNDERLYING's listed ticker:
+                # this is the stock leg of an assignment/exercise whose
+                # description quotes the contract ("ABC CORP ASSIGNMENT
+                # OF OPTION CALL ABC 05/16/25 50"). Taking the option
+                # identity from the text booked -100 contracts at $0
+                # and dropped the sale (audit S062-19).
+                opt = None
             settle_dt = self._date(row, 'Settlement Date', lineno,
                                    required=False)
             if settle_dt:
                 date_settle = settle_dt.strftime("%Y-%m-%d")
+            elif opt and not (code_assigned or word_assigned):
+                # Options settle T+1 in every era; the equity fallback
+                # (T+2 before the 2024 cutover) moved a Dec-28 option
+                # sale into the next tax year (audit R1-194). An
+                # exercise/assignment leg keeps its stock leg's cycle
+                # below — the two rows are one event.
+                date_settle = self.settlement_date_t1(
+                    date, "%Y-%m-%d", currency=currency)
             else:
                 # Era- and market-aware fallback for a BLANK settlement
                 # cell only (T+2 pre-cutover equities); a present but
@@ -506,7 +803,6 @@ class QuestradeBrokerage(BaseBrokerage):
                     date, currency, "%Y-%m-%d")
 
             qty = self._num(row, 'Quantity', lineno)
-            opt = self.parse_option_from_description(desc)
             mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
             # The row's OWN money decides whether it is a zero-cash
             # option leg (audit R1-63). A word in the description used
@@ -588,6 +884,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 # Commission column's (checked in _check_trade_money).
                 cash = -net_signed if qty > 0 else net_signed
                 fx_settled = bool(_FX_SETTLED_RE.search(desc))
+                _rate = 1.0
                 if fx_settled:
                     # Net is CAD, Gross USD: compare in USD.
                     _fx = _FX_SETTLED_RE.search(desc)
@@ -601,7 +898,8 @@ class QuestradeBrokerage(BaseBrokerage):
                 net = (gross + comm) if qty > 0 else (gross - comm)
                 self._check_trade_money(lineno, desc, qty, price,
                                         gross_signed, comm_signed,
-                                        diff, mult, fx_settled)
+                                        diff, mult, fx_settled,
+                                        cash=cash, rate=_rate)
 
             # CAD-settled US trade (see _FX_SETTLED_RE): the security is
             # the US listing, and the ACB is the CAD the account paid —
@@ -615,9 +913,12 @@ class QuestradeBrokerage(BaseBrokerage):
                 rate = float(fx_m.group(1))
                 listing_currency = 'USD'
                 price = round(price * rate, 8)
-                net_col = abs(net_signed)
-                if net_col > 0:
-                    net = net_col
+                # SIGNED, like the non-FX branch (audit S014-06): a buy's
+                # cost is -Net, a sale's proceeds +Net — abs() turned a
+                # sale whose commission exceeded its gross (Net < 0)
+                # into positive proceeds.
+                if abs(net_signed) > 0:
+                    net = -net_signed if qty > 0 else net_signed
                 else:
                     net = round(net * rate, 8)
 
@@ -626,7 +927,9 @@ class QuestradeBrokerage(BaseBrokerage):
             if opt:
                 symbol = self.format_occ_symbol(opt['right'], opt['base'], opt['expiry'], opt['strike'])
             else:
-                symbol = row.get('Symbol') or ''
+                # Upper-cased: 'xyz.to' split the pool from XYZ.TO
+                # (audit R1-71).
+                symbol = (row.get('Symbol') or '').strip().upper()
             symbol = self.apply_currency_suffix(symbol, listing_currency)
             self.note_row_consumed()
 
@@ -641,6 +944,10 @@ class QuestradeBrokerage(BaseBrokerage):
                     date = self.option_expiry_booking_date(
                         date, opt['expiry'])
                     time = '16:00:00'
+                else:
+                    # A right / warrant: its expiry date from the
+                    # description too (audit S065-04).
+                    date = self.non_option_expiry_booking_date(date, desc)
                 date_settle = date
 
             _tx = {
@@ -696,20 +1003,38 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
                   file=sys.stderr)
         if no_book_value and taxable is not False:
+            # What actually happens (audit S063-00): a TAXABLE account's
+            # TRANSFER rows are custody evidence kept OUT of the books,
+            # so the shares never enter the pool and their later sale
+            # reads short — no gain at all. The remedy the pipeline
+            # accepts is the real acquisition as a backdated .tt BUYSELL
+            # (or phantoms.json); a .tt TRANSFER is refused in a taxable
+            # account and there is no OPENING_BALANCE .tt action.
             print(f"warning: {path.name}: {len(no_book_value)} "
-                  f"transfer-in(s) carry no TRANSFER BOOK VALUE and are "
-                  f"booked at $0 cost ({'; '.join(no_book_value[:6])}"
+                  f"transfer-in(s) carry no TRANSFER BOOK VALUE "
+                  f"({'; '.join(no_book_value[:6])}"
                   f"{'; ...' if len(no_book_value) > 6 else ''}). In a "
-                  f"TAXABLE account the whole sale price would be gain: "
-                  f"supply the ACB from the sending broker (a .tt "
-                  f"OPENING_BALANCE or TRANSFER row)."
+                  f"TAXABLE account transfers are kept out of the books, "
+                  f"so these shares have no cost and their sale will "
+                  f"read as a short: book the real acquisition (date, "
+                  f"quantity, the sending broker's ACB) as a .tt BUYSELL "
+                  f"row, or declare it in phantoms.json (`taxjson "
+                  f"find-missing-history --gen-phantoms`)."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
+                  file=sys.stderr)
+        if journals:
+            print(f"note: {path.name}: {len(journals)} BRW journal row(s) "
+                  f"move units between the CAD and USD lines of one "
+                  f"security ({', '.join(journals[:6])}) and are not "
+                  f"booked — the two lines must be ONE pool: a ticker.map "
+                  f"JOURNAL rule (e.g. JOURNAL DLR.U.TO DLR.TO).",
                   file=sys.stderr)
         self.emit_skip_summary(path.name)
         return transactions
 
     def _check_trade_money(self, lineno, desc, qty, price, gross, comm,
-                           diff, mult, fx_settled) -> None:
+                           diff, mult, fx_settled, *, cash=None,
+                           rate=1.0) -> None:
         """Per-row money check that FAILS CLOSED: |Net Amount| must
         differ from |Gross Amount| by exactly |Commission| (`diff`), and
         |Gross| must be |qty| x Price x multiplier (100 per option). A
@@ -734,6 +1059,23 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"{gross:,.2f} by {abs(diff):,.2f}, not by the "
                 f"Commission {abs(comm):,.2f} ({desc[:50]!r}) — a "
                 f"swapped or mislabelled column; refusing to book it.")
+        if fx_settled and cash is not None and abs(cash) > 0:
+            # CAD-settled US trade (audit R1-73): the CAD cash (a buy's
+            # cost, a sale's proceeds) must be the USD Gross at the
+            # stated rate, give or take the Commission (Questrade's
+            # column may carry it in either currency). The exemption
+            # above let a wrong or column-swapped CAD Net book.
+            expected = abs(gross) * rate
+            resid = abs(cash - expected)
+            tol = 0.011 + 1e-5 * abs(cash)
+            if not any(abs(resid - c) <= tol
+                       for c in (abs(comm), abs(comm) * rate)):
+                raise BrokerageParseError(
+                    f"{where}: CAD Net Amount {abs(cash):,.2f} is not the USD "
+                    f"Gross {abs(gross):,.2f} x EXCHANGE RATE {rate:g} = "
+                    f"{expected:,.2f} give or take the Commission "
+                    f"{abs(comm):,.2f} ({desc[:50]!r}) — a wrong or "
+                    f"swapped column; refusing to book it.")
 
     def _parse_cash_in_lieu(self, row, currency, desc, lineno,
                             rev_originals, reversals):
@@ -749,7 +1091,7 @@ class QuestradeBrokerage(BaseBrokerage):
         if frac <= 0 or cash <= 0:
             self.count_skip("CIL row with no fraction/cash")
             return []
-        sym_raw, scur = self._resolve_symbol(row, currency)
+        sym_raw, scur = self._resolve_symbol(row, currency, lineno)
         sym = self.apply_currency_suffix(sym_raw, scur)
         key = ('CIL', sym, round(frac, 6), round(cash, 2))
         if net < 0:
@@ -839,7 +1181,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"and Net Amount {net_s:,.2f} of the same sign "
                 f"({desc[:50]!r}) — a reinvestment buys shares for cash "
                 f"(or a reversal returns both); refusing to guess.")
-        sym_raw, scur = self._resolve_symbol(row, currency)
+        sym_raw, scur = self._resolve_symbol(row, currency, lineno)
         key = ('REI', self.apply_currency_suffix(sym_raw, scur),
                round(qty, 6), round(net, 2))
         if qty_s < 0:
@@ -889,12 +1231,9 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"(need 'ON N SHS' and a nonzero quantity), skipping: "
                   f"{desc!r}", file=sys.stderr)
             return None
-        ratio = (held + received) / held
-
-        symbol, scur = self._resolve_symbol(row, currency)
-        raw_sym = (row.get('Symbol') or '').strip().lstrip('.')
-        if (not symbol or _INTERNAL_CODE_RE.match(symbol)) and (
-                symbol == raw_sym):
+        symbol, scur = self._resolve_symbol(row, currency, lineno)
+        raw_sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
+        if not symbol and not raw_sym:
             print(f"warning: Questrade stock split: couldn't resolve a traded "
                   f"ticker for {symbol!r} ({desc!r}); the SPLIT may not apply "
                   f"to the right pool — add a ticker.map rule if needed.",
@@ -902,6 +1241,23 @@ class QuestradeBrokerage(BaseBrokerage):
         symbol = self.apply_currency_suffix(symbol, scur)
 
         dt = self._date(row, 'Transaction Date', lineno)
+        # On a SHORT position the split DEBITS shares (Quantity < 0 for
+        # a forward split): (held + received)/held gave 0.95 for a
+        # 21-for-20 and 0 for a 2-for-1 (audit S063-08). The account's
+        # own trades say which side the pool is on; a long (or unknown)
+        # pool keeps the signed rule (a negative quantity is then a
+        # reverse split).
+        pos = self._ctx.position_on(symbol, dt.strftime("%Y-%m-%d"),
+                                    before=True) if self._ctx else 0.0
+        if pos < -1e-9:
+            ratio = (held - received) / held
+        else:
+            ratio = (held + received) / held
+        if ratio <= 0:
+            print(f"warning: Questrade stock-split row gives a ratio of "
+                  f"{ratio:g} for {symbol} ({desc!r}) — not booked.",
+                  file=sys.stderr)
+            return None
         return {
             'action': 'SPLIT',
             'date': dt.strftime("%Y-%m-%d"),
@@ -943,7 +1299,8 @@ class QuestradeBrokerage(BaseBrokerage):
         dt = self._date(row, 'Transaction Date', lineno)
         date = dt.strftime("%Y-%m-%d")
         time = dt.strftime("%H:%M:%S")
-        symbol_raw, suffix_currency = self._resolve_symbol(row, currency)
+        symbol_raw, suffix_currency = self._resolve_symbol(row, currency,
+                                                           lineno)
         symbol = self.apply_currency_suffix(symbol_raw, suffix_currency) if symbol_raw else ''
         # Surface the share count and implied per-share rate so the
         # dividend record reconciles against the T5 / per-share rate
@@ -999,21 +1356,24 @@ class QuestradeBrokerage(BaseBrokerage):
         date = dt.strftime("%Y-%m-%d")
         time = dt.strftime("%H:%M:%S")
 
-        symbol_raw, suffix_currency = self._resolve_symbol(row, currency)
-        symbol_raw = symbol_raw.replace(' ', '.')
-        if symbol_raw and _INTERNAL_CODE_RE.match(symbol_raw):
-            # A transfer-in of a security never TRADED in this file
-            # keeps Questrade's internal code (e.g. R223608): the
-            # position then fragments from later trades/dividends
-            # booked under the real ticker, with nothing to say why.
-            # Parse it anyway (the row is real) but say so loudly —
-            # a ticker.map GLOBAL line fixes the identity.
-            print(f"warning: questrade transfer on {date} keeps "
-                  f"internal symbol code {symbol_raw!r} (no trade row "
-                  f"in this file resolves it) — map it to the real "
-                  f"ticker with a ticker.map GLOBAL line or the "
-                  f"position will fragment.", file=sys.stderr)
-        symbol = self.apply_currency_suffix(symbol_raw, suffix_currency) if symbol_raw else ''
+        # A transferred OPTION (audit S062-14): the contract identity and
+        # the x100 multiplier come from the description, exactly as on
+        # the Buy/Sell/EXP path — the Symbol column (QZSL16Oct26C62.50)
+        # put the transfer and the later close on two symbols.
+        opt = self.parse_option_from_description(desc)
+        if opt:
+            symbol = self.apply_currency_suffix(
+                self.format_occ_symbol(opt['right'], opt['base'],
+                                       opt['expiry'], opt['strike']),
+                currency)
+        else:
+            # An internal code no trade resolves is warned about (and
+            # kept) by _resolve_symbol.
+            symbol_raw, suffix_currency = self._resolve_symbol(
+                row, currency, lineno)
+            symbol_raw = symbol_raw.replace(' ', '.')
+            symbol = (self.apply_currency_suffix(symbol_raw, suffix_currency)
+                      if symbol_raw else '')
 
         # Cost basis: prefer the "BOOK VALUE" note in the description;
         # fall back to the Net Amount column when it isn't present.
@@ -1022,8 +1382,10 @@ class QuestradeBrokerage(BaseBrokerage):
         if m:
             net = parse_strict_number(m.group(1), field='TRANSFER BOOK VALUE',
                                       where=self._where(lineno))
-        price = round(net / abs(qty_signed), 8) if abs(qty_signed) > 1e-9 else 0.0
-        return {
+        mult = float(self.OPTION_MULTIPLIER) if opt else 1.0
+        price = (round(net / (abs(qty_signed) * mult), 8)
+                 if abs(qty_signed) > 1e-9 else 0.0)
+        tx = {
             'action': 'TRANSFER',
             'date': date,
             'time': time,
@@ -1035,6 +1397,14 @@ class QuestradeBrokerage(BaseBrokerage):
             'net_amount': net,
             'gross_amount': net,
             'account': self.DEFAULT_ACCOUNT,
+            # Carried like every other row so a description-keyed
+            # --security-overrides rule reaches transfers too (audit
+            # R1-69: the override moved the trades and dividends of a
+            # mislabelled listing but not its transfer-in).
+            'description': desc,
             # Popped by parse_file (the no-book-value report).
             '_book_value': bool(m) or net > 0,
         }
+        if opt:
+            tx['multiplier'] = mult
+        return tx

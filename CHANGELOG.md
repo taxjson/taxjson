@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- **Questrade keeps a TSX listing traded in USD on `.TO`.** `DLR.U.TO`
+  and `XUS.U.TO` bought in USD became `DLR.U.US` / `XUS.U.US`: a pool
+  apart from the same units at RBC or IB, a `JOURNAL DLR.U.TO DLR.TO`
+  rule that never fired, and a Canadian ETF listed as US property on the
+  T1135. A `.TO` symbol now keeps `.TO` whatever the row currency, so the
+  API (`FNV.TO`) and web (`.FNV`) spellings of a USD dividend agree; a
+  CAD dividend or ROC on a US stock bought from the CAD side (`EXCHANGE
+  RATE`) now reaches the `.US` pool instead of a phantom `.TO` one.
+- **Questrade learns identities from all of an account's exports.** A
+  dividend, ROC, stock dividend, DRIP or cash-in-lieu row under an
+  internal code (`A020626`) whose trade sits in last year's export stayed
+  on the code, and a ROC there became a capital gain. The
+  description map now spans every export of the account; the event
+  wording (`STK DIV ON`, `STK SPLIT ON`, `REINV@C$`, `CASH IN LIEU OF`)
+  and Interactive Brokers' transfer wording no longer block the match;
+  a code nothing resolves is a warning (and a `--lint` finding) with the
+  `ticker.map` line to add, and a spinoff chain booked under an internal
+  code is flagged at the election step.
+- **Questrade flags a ticker change with no corporate-action row.** A
+  symbol that stops with shares open while another with the same
+  description opens with a sale they cover gets a warning with the
+  ready `GLOBAL old new` line (the sale's gain used to drop out).
+- **Questrade row shapes.** `BUY`/`buy` and lower-case symbols are read
+  like `Buy`; an unknown action that moves shares is an `UNBOOKED`
+  warning on the console (fatal under `run --strict`); a `BRW` journal
+  between `DLR.TO` and `DLR.U.TO` is a note pointing at a `JOURNAL`
+  rule; a negated stock-dividend row cancels its original; a DIS or
+  stock-dividend row carrying both shares and cash is refused; a
+  CAD-settled US trade's CAD net must match the USD gross at the stated
+  rate and keeps its sign; a blank settlement date on an option is T+1;
+  a transferred option books under its OCC symbol at 1/100 of the book
+  value per share; a stock leg whose description quotes the contract
+  books as the stock; a split on a short position scales it up; a
+  warrant expiry books on the date in its description; a transfer row
+  carries its description, so `--security-overrides` reaches it; the
+  no-book-value warning names the remedy that works (a `.tt` BUYSELL).
+  A Questrade DIS chain that removes units is an `UNBOOKED` warning.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;
