@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+- **Corporate-action elections say what the law says.** The s.85.1
+  share-for-share rollover is automatic when it applies (you opt out by
+  reporting the gain); taxjson described it backwards and printed a
+  FILING REQUIRED reminder for a form that does not exist. The option
+  text now says when s.85.1 applies (not to a Canadian company bought
+  by a foreign purchaser) and the reminder is gone for it. An s.86.1
+  spin-off now takes the allocated cost in CAD (`--hint
+  allocated_acb_cad=`, the parent's CAD ACB times the spin-off's share of
+  the combined FMV, s.86.1(3)); the old source-currency `allocated_acb`
+  still works but warns, since converting it at the spin-off date moved
+  FX drift between the pools. A misspelled hint in a hand-edited
+  `manifest.json` (`fmv`, `allocated_ACB`) now stops the run by name
+  instead of booking $0, and a taxable merger at $0 FMV warns on every
+  run even when cash-in-lieu was paid.
+- **IB mergers are never dropped half-way.** A merger whose out-leg and
+  in-leg sit in two statements (a year-end event split across yearly
+  downloads) or carry Date/Times a day apart was skipped with no warning:
+  the old shares stayed and the new ones never arrived. The legs are now
+  paired across all of the account's statements and within a week; a
+  leg with no partner stops the run as an unsupported event naming it.
+  A merger held in both the TSX and NYSE listings becomes one event per
+  listing (the second listing's shares were never converted), a merger
+  of a short position is refused instead of booked as `OLD -> OLD`, and
+  a cross-listing journal listed before its merger is folded once
+  instead of also becoming its own election.
+- **Questrade spin-offs land on the parser's symbols.** A dotted target
+  (`ABC.WS`, a class share) was left without its market suffix and a
+  Venture `.VN` listing became `ABC.VN.TO`, so the spun-off lot and its
+  later sale sat in two pools (a phantom long, a short sale, no gain).
+  The extractor now uses the parser's own suffix rule, reads a padded or
+  UTF-16 header like the parser (the whole spin-off used to vanish), picks
+  an interlisted parent by the listing held on the spin-off date (never
+  by file order; ambiguity is refused with a warning), and nets a DIS
+  chain whose rows straddle two yearly exports.
+- **RBC spin-off parents and merger sources resolve to the right pool.**
+  The parent took its market suffix from the spun-off shares' row (a TSX
+  parent became `.US`), could resolve to a covered call's option code or
+  to another company sharing its first word (`BROOKFIELD CORP` →
+  Brookfield Renewable), and an interlisted company was resolved by
+  file order. A spin-off's s.86.1 ACB reduction then landed on an empty
+  pool as a phantom gain. The parent now uses its own listing, options
+  never qualify, a fuzzy match needs both names to agree, a merger's
+  temporary code prefers the removal's currency, and an ambiguous
+  listing is refused with a warning. A spin-off debited from a short
+  parent is refused instead of booked as a long buy and a negative
+  dividend.
+- **RBC reorganizations pair on evidence.** A ratio written with a
+  thousands comma (`1 FOR 1,000`, `1 NEW = 1,000 OLD`) was read as
+  1-for-1, so the cash-in-lieu row sold almost the whole position. Two
+  option contracts adjusted the same day now pair by the closest strike
+  (they swapped ACB by file order); a removal no longer pairs with a
+  lone unrelated receipt or a half-name match; a company named "ROC ..."
+  no longer turns merger cash into a return of capital; an exchange into
+  a different company worded `XCH TO` asks for the merger election
+  instead of rolling over silently; and a merger of a short position is
+  refused loudly instead of renaming the new ticker into the temporary
+  code.
+- **`distributions.map` rows find their shares.** A map whose first line
+  carried a byte-order mark, a lowercase symbol, a key naming the
+  listing a `ticker.map` rule consolidates, or the old ticker after a
+  ticker change was skipped as "no shares held" (or booked on a dead
+  pool) and the ACB increase was lost. Keys are now matched
+  case-insensitively, through `ticker.map`, and onto the ticker live on
+  the record date; a sale executed before a split but settling after it
+  no longer inflates the record-date balance. The NOTE also says the
+  distribution is income to report from the T3/T5 slip.
 - **Filing checklist fixes.**
   - run-clean compares the inputs with what the last full run was built
     from (content, not dates): a deleted input, a corrected export copied

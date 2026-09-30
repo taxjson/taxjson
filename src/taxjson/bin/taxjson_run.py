@@ -765,7 +765,8 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
     account's .sum — until a value is set (2026-09 audit: it was silent
     after the prompt). Registered accounts: no tax effect, no warning."""
     import json as _json
-    from taxjson.lib.corp_actions import zero_value_spinoff_rows
+    from taxjson.lib.corp_actions import (zero_value_merger_rows,
+                                          zero_value_spinoff_rows)
     diag = cache / f"{name}_corp_spinoff_value.diag"
     lines: List[str] = []
     if is_taxable:
@@ -783,6 +784,19 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"dividend income and a $0 cost for the new shares, "
                     f"so a later sale overstates the gain by the same "
                     f"amount. Set its value: taxjson elect {name} --set "
+                    f"{eid}={r.get('corp_election')} --hint "
+                    f"fmv_per_share=<value>")
+            # A taxable merger at $0 (the "0 to defer" FMV, with or
+            # without cash-in-lieu): a fake loss on the old shares and a
+            # $0 cost for the new ones (audits S020-06, S074-00).
+            for r in zero_value_merger_rows(rows):
+                eid = r.get("corp_event_id", "?")
+                lines.append(
+                    f"warning: {name}: merger into {r.get('symbol')} on "
+                    f"{r.get('date')} (event {eid}) is booked at $0 — the "
+                    f"old shares' proceeds are only any cash-in-lieu (a "
+                    f"fake loss) and the new shares cost $0. Set its "
+                    f"value: taxjson elect {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
     if lines:
@@ -1660,6 +1674,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                             # i.e. the SETTLED position under CRA
                             # timing; the project's tax_date decides.
                             "--date-basis", tax_date]
+                        # Keys go through the same ticker.map renames
+                        # as the book (S025-22).
+                        + (["--ticker-map", str(ticker_map)]
+                           if ticker_map else [])
                         # Size record-date balances WITH the phantom
                         # openings the gains stage synthesizes (S000-08).
                         + (["--incomplete-history",
