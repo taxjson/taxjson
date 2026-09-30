@@ -196,5 +196,41 @@ class TestMissingHistoryIncomplete(unittest.TestCase):
         self.assertIn("INCOMPLETE", r.stdout)
 
 
+# ------------------------------------------------------------ S029-16 diff
+class TestDiffManualReporting(unittest.TestCase):
+    ROW = {"account": "margin", "date": "2025-01-10", "symbol": "ZZZ.TO",
+           "qty": 10.0, "proceeds": 500.0, "raw_gain": 500.0}
+    KEEP = {"account": "margin", "date": "2025-03-10", "symbol": "AAA.TO",
+            "qty": 10.0, "proceeds": 250.0, "gain": 50.0}
+
+    def _diff(self, a, b):
+        with tempfile.TemporaryDirectory() as tmp:
+            pa, pb = Path(tmp) / "a.json", Path(tmp) / "b.json"
+            pa.write_text(json.dumps(a))
+            pb.write_text(json.dumps(b))
+            return subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_diff",
+                 "--no-color", str(pa), str(pb)],
+                cwd=REPO_ROOT, capture_output=True, text=True)
+
+    def test_added_and_modified_manual_rows(self):
+        run1 = {"transactions": [self.KEEP],
+                "manual_reporting_required": [self.ROW]}
+        second = {**self.ROW, "date": "2025-02-10", "qty": 5.0,
+                  "proceeds": 300.0}
+        run2 = {"transactions": [self.KEEP],
+                "manual_reporting_required": [self.ROW, second]}
+        r = self._diff(run1, run2)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("1 added", r.stdout)
+        self.assertIn("[manual_reporting_required]", r.stdout)
+        run3 = {"transactions": [self.KEEP],
+                "manual_reporting_required": [{**self.ROW,
+                                               "proceeds": 600.0}]}
+        r = self._diff(run1, run3)
+        self.assertIn("1 modified", r.stdout)
+        self.assertIn("proceeds", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

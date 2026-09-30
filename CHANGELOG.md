@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`taxjson-diff` sees hand-reported dispositions.** Rows the pipeline
+  moves to `manual_reporting_required` (phantom basis) are compared too,
+  so adding, dropping or changing one is no longer "0 added | 0 removed"
+  (audit S029-16).
 - **No false all-clear from sanity or find-missing-history.** When a
   configured `holdings` file is missing, `taxjson sanity` ends with an
   `INCOMPLETE` line (`"complete": false` in `--json`), `run` prints a
