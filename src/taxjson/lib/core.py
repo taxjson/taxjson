@@ -8,7 +8,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
-                                            normalize_symbol_new, split_seen)
+                                            normalize_symbol_new, split_seen,
+                                            SPLIT_DATE_WINDOW_DAYS)
 from decimal import Decimal
 
 from taxjson.lib.numeric import D
@@ -1157,7 +1158,7 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
     before. Per-account balances in the wash walks become the weighted
     share of that total (a fraction of a share off per account)."""
     lists = (taxable, sheltered, affiliated)
-    groups: Dict[tuple, list] = {}
+    by_pair: Dict[tuple, list] = {}
     for li, lst in enumerate(lists):
         for i, t in enumerate(lst):
             if t.action != 'SPLIT' or not t.date:
@@ -1165,7 +1166,25 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
             new = normalize_symbol_new(t.symbol, getattr(t, 'symbol_new', ''))
             if not new:
                 continue
-            groups.setdefault((t.symbol, t.date, new), []).append((li, i, t))
+            by_pair.setdefault((t.symbol, new), []).append((li, i, t))
+    # One merger booked by two brokers on different dates (IB 06-11,
+    # RBC 06-15) is ONE event: rows of a (symbol, target) pair within
+    # SPLIT_DATE_WINDOW_DAYS of each other form one group, keyed by its
+    # earliest date (audit S071-01 — an exact-date key left the second
+    # broker's row to find an empty pool and drop its extra share).
+    groups: Dict[tuple, list] = {}
+    for (sym, new), rows in by_pair.items():
+        rows.sort(key=lambda r: r[2].date)
+        cluster: list = []
+        for r in rows:
+            if cluster:
+                gap = _day_gap(cluster[-1][2].date, r[2].date)
+                if gap is None or gap > SPLIT_DATE_WINDOW_DAYS:
+                    groups[(sym, cluster[0][2].date, new)] = cluster
+                    cluster = []
+            cluster.append(r)
+        if cluster:
+            groups[(sym, cluster[0][2].date, new)] = cluster
     todo = {k: rows for k, rows in groups.items()
             if len({round(float(r[2].quantity or 0), 9) for r in rows}) > 1}
     if not todo:

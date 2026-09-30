@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A merger two brokers book on different dates is one event.** The
+  per-account merger-ratio fold grouped rows by exact date, so when IB
+  booked a merger on 06-11 and RBC on 06-15 the first renamed the whole
+  pool at its own ratio and the second found it empty: the extra share
+  RBC delivered was never sold in the books. Rows within 7 days now fold
+  into one event.
 - **Option-timing settings read the same everywhere.** A quoted
   `option_buyback_loss_superficial = "false"` or `crypto = "false"`
   counted as TRUE in every command except `run` (carryover, check-filed,

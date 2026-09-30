@@ -696,3 +696,29 @@ class TestGrantTiming(unittest.TestCase):
         self.assertNotIn('--option-premium-timing not given', r.stderr)
         r = _cli('taxjson.bin.taxjson_explain', '--list', p)
         self.assertIn('--option-premium-timing not given', r.stderr)
+
+
+class TestMergerFold(unittest.TestCase):
+
+    def test_merger_booked_on_two_dates_folds_into_one_event(self):
+        # S071-01: IB books 15 OLD -> 15 NEW on 06-11, RBC 40 -> 41 on
+        # 06-15; the pool must end at exactly 56 NEW, every share sold.
+        def split(acct, d, r):
+            return TaxTransaction(action='SPLIT', date=d, time='09:30:00',
+                                  symbol='OLD.US', symbol_new='NEW.US',
+                                  quantity=r, currency='USD', account=acct)
+        for d2 in ('2026-06-11', '2026-06-15'):
+            txs = (_tt("""
+                BUYSELL 2026-01-05 10:00:00 OLD.US 15 USD 10 150
+                BUYSELL 2026-08-03 10:00:00 NEW.US -15 USD 30 450
+            """, account='ib') + _tt("""
+                BUYSELL 2026-01-06 10:00:00 OLD.US 40 USD 10 400
+                BUYSELL 2026-08-04 10:00:00 NEW.US -41 USD 30 1230
+            """, account='rbc') + [split('ib', '2026-06-11', 1.0),
+                                   split('rbc', d2, 1.025)])
+            res, err = _run(CanadaTaxRules(), txs)
+            self.assertAlmostEqual(res['summary']['total_gain'], 1130.0,
+                                   places=2, msg=d2)
+            self.assertIn('holdings-weighted ratio', err)
+            self.assertFalse([r for r in res['inventory']
+                              if abs(r['qty']) > 1e-6], d2)
