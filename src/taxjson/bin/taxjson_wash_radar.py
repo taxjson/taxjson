@@ -54,6 +54,83 @@ _CATEGORY_TITLE = {
 }
 
 
+class _EngineLosses:
+    """The gains engine's dispositions, keyed by (account, tx id), from
+    the --gains files. `rows_for(tx)` is None when the files do not
+    cover the row's account and tax year (the radar then uses its own
+    pool), else the engine's LOSS rows for it (possibly empty: the
+    engine booked a gain, or no disposition at all)."""
+
+    def __init__(self):
+        self.by_key: Dict[tuple, list] = {}
+        self.cover: Dict[str, set] = {}     # account -> {(year, basis)}
+
+    @classmethod
+    def load(cls, paths):
+        self = cls()
+        for p in paths or []:
+            try:
+                doc = json.loads(Path(p).read_text(encoding='utf-8'))
+            except (OSError, ValueError) as e:
+                sys.exit(f"taxjson-wash-radar: --gains {p}: {e}")
+            summ = doc.get('summary') or {}
+            year = str(summ.get('year') or '').strip()
+            if not year:
+                # A gains file with no year covers nothing we can
+                # bound — refuse rather than guess.
+                sys.exit(f"taxjson-wash-radar: --gains {p}: no "
+                         f"summary.year — pass the pipeline's "
+                         f"work/<acct>_gains*.json files")
+            basis = str(summ.get('tax_date_basis') or 'settle').lower()
+            buyback_wash = bool(summ.get('option_buyback_loss_superficial'))
+            grant_mode = (str(summ.get('option_premium_timing') or 'close')
+                          .lower() == 'grant')
+            accts = set()
+            meta_acct = ((doc.get('metadata') or {}).get('account') or '')
+            if meta_acct:
+                accts.add(meta_acct)
+            else:
+                stem = Path(p).name
+                for suf in ('_gains_wash.json', '_gains.json'):
+                    if stem.endswith(suf):
+                        accts.add(stem[:-len(suf)])
+            for r in doc.get('transactions') or []:
+                if r.get('action') or not r.get('qty') or 'id' not in r:
+                    continue
+                acct = str(r.get('account') or meta_acct or '')
+                accts.add(acct)
+                rows = self.by_key.setdefault((acct, str(r['id'])), [])
+                g = r.get('raw_gain', r.get('gain'))
+                if g is None or float(g) >= -0.01 or r.get('grant') \
+                        or r.get('deemed'):
+                    continue
+                # A buy-back loss on a grant-timed written option is not
+                # fed to the engine's superficial-loss solver unless the
+                # project opts in (core.py _wash_eligible): its cost is
+                # 0 (the premium was recognised at the write).
+                if (grant_mode and not buyback_wash
+                        and r.get('is_option')
+                        and (r.get('direction') or '') == 'SHORT'
+                        and abs(float(r.get('cost') or 0.0)) <= 0.005):
+                    continue
+                rows.append({**r, 'raw_gain': float(g)})
+            for a in accts:
+                self.cover.setdefault(a, set()).add((year, basis))
+        return self
+
+    def rows_for(self, tx):
+        acct = (getattr(tx, 'account', '') or '').strip()
+        cov = self.cover.get(acct)
+        if not cov:
+            return None
+        for year, basis in cov:
+            d = (tx.date if basis == 'trade'
+                 else (tx.date_settle or tx.date)) or ''
+            if d[:4] == year:
+                return self.by_key.get((acct, str(tx.id)), [])
+        return None
+
+
 def _advisory_category(adv: str) -> str:
     return adv.split(":", 1)[0].strip() if adv else ""
 
@@ -92,6 +169,23 @@ def main():
                         help="Print the structured radar document (the "
                              "--json-out payload) to stdout instead of "
                              "the text report")
+    parser.add_argument("--gains", nargs='+', action='extend', default=[],
+                        metavar="FILE",
+                        help="The engine's gains files for the taxable "
+                             "accounts (work/<acct>_gains_wash.json or "
+                             "_gains.json; repeatable). A disposition the "
+                             "engine computed is a loss or not by the "
+                             "ENGINE's raw_gain (s.47 blend across taxable "
+                             "accounts, denied-loss ACB bumps, option cost "
+                             "folded on exercise), not by the radar's own "
+                             "per-account pool. Dispositions outside the "
+                             "files' tax year fall back to the radar's pool.")
+    parser.add_argument("--incomplete-history", metavar="FILE",
+                        default=None,
+                        help="phantoms.json: synthesize the same opening "
+                             "balances the gains engine applies, so "
+                             "phantom-backed positions are not shown as "
+                             "shorts")
 
     args = parser.parse_args()
 
@@ -187,7 +281,45 @@ def main():
     _tax_rows, _ = _drop_self_cancelling_transfers(_tax_rows)
     _shl_rows, _ = _drop_self_cancelling_transfers(_shl_rows)
     _shl_rows = _net_cross_account_transfers(_shl_rows)
+
+    # Phantom openings (phantoms.json): the SAME OPENING_BALANCE rows
+    # the gains pass synthesizes (lib/pipeline.prepare_books), or a
+    # phantom-backed position walks negative here — shown as a short,
+    # its rebuys booked as short covers with invented losses, and real
+    # superficial-loss violations missed (2026-09 audit). Pairs are
+    # (symbol, account), so each group's rows are walked separately.
+    if args.incomplete_history:
+        from taxjson.lib.phantom_holdings import (load_phantoms,
+                                                  synthesize_openings)
+        try:
+            _phantoms = load_phantoms(Path(args.incomplete_history))
+        except (OSError, ValueError) as e:
+            sys.exit(f"taxjson-wash-radar: --incomplete-history "
+                     f"{args.incomplete_history}: {e}")
+
+        def _with_openings(rows, group):
+            new_rows, _log = synthesize_openings(rows, _phantoms)
+            for t in new_rows:
+                if not hasattr(t, '_group'):
+                    t._group = group
+                    t._file = str(args.incomplete_history)
+                    _d = t.date_settle or t.date
+                    t._epoch = date_to_epoch(_d)
+                    t._epoch_full = date_time_to_epoch(_d, t.time)
+            return new_rows
+        _tax_rows = _with_openings(_tax_rows, 'TAXABLE')
+        _shl_rows = _with_openings(_shl_rows, 'SHELTERED')
     transactions = _tax_rows + _shl_rows
+
+    # As-of filter: a trade is in the books once it is MADE (trade date
+    # on or before the as-of date), even though it settles later. The
+    # old settle-date filter hid every trade made today (T+1) — and
+    # Friday's trades all weekend — so buy-check said SAFE right after
+    # a loss sale and sell-check said SAFE right after a buy (2026-09
+    # audit). Windows stay settle-based (the rows keep their settle
+    # epochs); only the "is it booked yet" test uses the trade date.
+    def _booked(t):
+        return date_to_epoch(t.date or t.date_settle) <= today_epoch
 
     transactions.sort(key=lambda x: (x._epoch_full, get_tx_priority(x)))
 
@@ -200,7 +332,7 @@ def main():
     # denied the loss (2026-09 audit). Pools stay keyed by raw symbol
     # (rows print per ticker); only the MATCHING is class-level.
     alias_of = SplitTimeline.from_transactions(
-        [t for t in transactions if t._epoch <= today_epoch],
+        [t for t in transactions if _booked(t)],
         date_of=lambda t: t.date_settle or t.date).canonical
 
     account_pool_qty = {} # (symbol, group, account) -> qty
@@ -222,8 +354,38 @@ def main():
         return alias_of(und) if und else None
     seen_splits = set()   # (symbol, account, date, ratio, symbol_new) dedup
 
+    engine = _EngineLosses.load(args.gains)
+
+    def _record_loss(cls, tx, loss):
+        recent_losses.setdefault(cls, []).append(loss)
+
+    def _engine_record(cls, tx):
+        """Record the engine's losses for this row. Returns False when
+        the engine does not cover the row (the caller falls back to the
+        radar's own pool), True when it does (losses, if any, recorded)."""
+        if tx._group != 'TAXABLE' or tx.action in ('TRANSFER',
+                                                   'OPENING_BALANCE'):
+            return False
+        rows = engine.rows_for(tx)
+        if rows is None:
+            return False
+        for r in rows:
+            _record_loss(cls, tx, {
+                'date': tx.date,
+                'epoch': tx._epoch,
+                'qty': abs(float(r.get('qty') or 0.0)),
+                'loss': -float(r['raw_gain']),
+                'direction': r.get('direction') or 'LONG',
+                'currency': (getattr(tx, 'currency', '')
+                             or '').strip().upper(),
+                'is_option': bool(r.get('is_option',
+                                        is_option_ticker(tx.symbol))),
+                'source': 'engine',
+            })
+        return True
+
     for tx in transactions:
-        if tx._epoch > today_epoch:
+        if not _booked(tx):
             continue
 
         # Cash-flow events don't change the share count. Their `quantity` is
@@ -301,6 +463,12 @@ def main():
         current_inv = account_pool_qty[key]
         is_opening = (current_inv > 1e-6 and qty_raw > 0) or (current_inv < -1e-6 and qty_raw < 0) or (abs(current_inv) <= 1e-6)
 
+        # The engine's verdict on this row, when its gains files cover
+        # it: an OPENING here can still be an engine disposition when
+        # the two pools disagree (the engine is the authority).
+        if is_opening:
+            _engine_record(cls, tx)
+
         if is_opening:
             # Net amount in TaxTransaction includes fees. A TRANSFER-in
             # with no stated book value (Questrade emits 0.0) must not
@@ -367,8 +535,16 @@ def main():
             closing_qty = min(abs_qty, abs(current_inv))
             cost_of_shares_closed = closing_qty * avg_cost_unit
             
-            # Calculate gain only if taxable
-            if tx._group == 'TAXABLE' and tx.action != 'TRANSFER':
+            # Calculate gain only if taxable — from the ENGINE's gains
+            # when they cover this row (its s.47 blended pool, the
+            # s.53(1)(f) bump of an earlier denied loss, option cost
+            # folded on exercise); the radar's own per-account pool
+            # missed real losses that way and buy-check said SAFE
+            # (2026-09 audit). The own-pool figure is the fallback for
+            # rows outside the engine's tax year.
+            if _engine_record(cls, tx):
+                pass
+            elif tx._group == 'TAXABLE' and tx.action != 'TRANSFER':
                 # Prorate proceeds to the CLOSED portion: a sale that
                 # crosses zero (sell 150 holding 100) otherwise nets the
                 # FULL proceeds against only the closed shares' cost —

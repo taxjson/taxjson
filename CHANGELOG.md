@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **The wash radar sees today's trades.** `wash-radar`, `buy-check`,
+  `sell-check`, `watch` and `reports/wash_radar_*` dropped every trade
+  that had not settled yet, so right after a loss sale `buy-check` said
+  SAFE (and right after a buy `sell-check` said SAFE). A trade now
+  counts from its trade date; the windows stay settlement-based.
+- **The wash radar takes losses from the engine.** Whether a sale was a
+  loss came from the radar's own per-account pool, which missed the
+  s.47 blend across taxable accounts, the cost added back by an earlier
+  denied loss, and option cost folded in on exercise; real losses showed
+  no window and `buy-check` said SAFE. The radar now reads the engine's
+  gains files (grant-timed buy-back losses are not wash losses unless
+  `option_buyback_loss_superficial` is on).
+- **The wash radar applies `phantoms.json`.** Phantom-backed positions
+  showed as shorts (rebuys as short covers with invented losses) in the
+  radar, `watch`, `buy-check`, `sell-check`, harvest's ADVISORY and the
+  web UI, and real violations were missed.
 - **One split booked on two dates applies once.** IB and Questrade date
   the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
   were applied, scaling the pool by the ratio twice. Copies of one split

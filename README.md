@@ -628,7 +628,15 @@ included automatically for cross-account detection when present. `--verbose` for
 more detail; `--all` to also list CLEAR (no-risk) positions. Sections group by
 advisory in fixed order (VIOLATION, BLOCKED, LOCKED, EXITABLE — loss OK only with a FULL exit, CAUTION — sheltered leg exited so a full-exit loss stands unless re-bought within 30 days, COOLING, RISK, CLEAR). The
 same reports are written to `reports/wash_radar_<account>.rpt` during `taxjson
-run`. This is **forward-looking** (what you can/can't sell or buy now); for a
+run`. A trade is counted from its **trade date** (a sale made today settles
+tomorrow but is already in the books), while the ±30-day windows run on
+settlement dates, as in the engine. Whether a sale was a loss comes from the
+engine's own gains files (the s.47 pool blended across taxable accounts, denied
+losses added to cost, option cost folded in on exercise); sales outside the
+project's tax year fall back to the radar's own per-account pool. The project's
+`phantoms.json` openings are applied as in the gains pass. `buy-check`,
+`sell-check`, `watch` and `harvest`'s ADVISORY column read the same radar.
+This is **forward-looking** (what you can/can't sell or buy now); for a
 record of wash sales that already happened, use `wash-sales` below.
 
 **`taxjson wash-sales [ACCOUNT]`** — details each wash sale (superficial loss)

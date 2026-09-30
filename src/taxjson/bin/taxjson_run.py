@@ -2066,7 +2066,8 @@ def stage_cross_reports(all_gains: List[Path],
                         taxable_equity_base: List[Path],
                         sheltered_base: Optional[Path],
                         reports_dir: Path,
-                        ticker_map: Optional[Path] = None) -> None:
+                        ticker_map: Optional[Path] = None,
+                        phantoms: Optional[Path] = None) -> None:
     if not all_gains:
         return
     print("==> cross-account reports")
@@ -2089,7 +2090,8 @@ def stage_cross_reports(all_gains: List[Path],
                 "--taxable", str(tb),
                 "--json-out", str(reports_dir / f"wash_radar_{stem}.json"),
                 "--account", stem,
-            ] + sheltered_arg, reports_dir / f"wash_radar_{stem}.rpt",
+            ] + _radar_engine_args([tb], phantoms)
+                + sheltered_arg, reports_dir / f"wash_radar_{stem}.rpt",
                 capture_diag=False)
         if len(taxable_equity_base) > 1:
             # Cross-account radar: a loss sold in one taxable account
@@ -2104,7 +2106,8 @@ def stage_cross_reports(all_gains: List[Path],
                 "--json-out",
                 str(reports_dir / "wash_radar_COMBINED.json"),
                 "--account", "COMBINED",
-            ] + sheltered_arg, reports_dir / "wash_radar_COMBINED.rpt",
+            ] + _radar_engine_args(taxable_equity_base, phantoms)
+                + sheltered_arg, reports_dir / "wash_radar_COMBINED.rpt",
                 capture_diag=False)
         else:
             # Down to one taxable account: a leftover COMBINED pair
@@ -2549,7 +2552,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             o["base"] for _, o, is_crypto in taxable_outputs
             if not is_crypto or _crypto_wash_covered]
         stage_cross_reports(all_gains, taxable_equity_base, sheltered_base, reports_dir,
-                            ticker_map_arg)
+                            ticker_map_arg, phantoms=phantoms_arg)
         # Overlap notes per blended group — the note says the blended
         # pass covers the symbol, so it must only name accounts a blend
         # actually spans (crypto blends only in Canada; equity and
@@ -8441,6 +8444,7 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
         bases = _radar_taxable_bases(root, cache, "taxjson wash-radar")
 
     cmd = _cmd("taxjson-wash-radar") + ["--taxable", *[str(b) for b in bases]]
+    cmd += _radar_engine_args(bases, root / "phantoms.json")
     # Cross-account superficial-loss detection needs the pooled sheltered
     # history; pass it when the pipeline has built it.
     sheltered_base = cache / "sheltered_base.json"
@@ -8494,6 +8498,30 @@ def _radar_taxable_bases(root: Path, cache: Path,
     return bases
 
 
+def _radar_engine_args(bases: List[Path],
+                       phantoms: Optional[Path] = None) -> List[str]:
+    """The radar's engine context, shared by every radar run (wash-radar,
+    watch, buy-check, sell-check and the run's reports/wash_radar_*):
+    the taxable accounts' gains files (wash-adjusted, s.47-blended — the
+    engine decides which sales were losses) and the project's
+    phantoms.json (the same openings the gains pass applies)."""
+    from taxjson.lib.report_model import resolve_gains_files
+    out: List[str] = []
+    by_dir: Dict[Path, Dict[str, Path]] = {}
+    for b in bases:
+        b = Path(b)
+        if not b.name.endswith("_base.json"):
+            continue
+        name = b.name[:-len("_base.json")]
+        found = by_dir.setdefault(b.parent, resolve_gains_files(b.parent))
+        g = found.get(name)
+        if g is not None:
+            out += ["--gains", str(g)]
+    if phantoms is not None and Path(phantoms).exists():
+        out += ["--incomplete-history", str(phantoms)]
+    return out
+
+
 def cmd_watch(args: argparse.Namespace) -> None:
     """`taxjson watch`: report only what CHANGED since the last watch
     run — new/changed/cleared radar advisories, moved clear dates, and
@@ -8512,6 +8540,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
     bases = _radar_taxable_bases(root, cache, "taxjson watch")
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
+    cmd += _radar_engine_args(bases, root / "phantoms.json")
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -9240,6 +9269,7 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     bases = _radar_taxable_bases(root, cache, prog)
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
+    cmd += _radar_engine_args(bases, root / "phantoms.json")
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -9430,7 +9460,12 @@ def _last_loss_line(ll) -> Optional[str]:
     from datetime import date as _date
     try:
         _ago = (_date.today() - _date.fromisoformat(ll["date"])).days
-        _ago_s = f"{_ago} days ago"
+        # `date` is the settle date: a sale made today settles later
+        # (T+1), so a negative age means "not settled yet", not
+        # "-1 days ago".
+        _ago_s = (f"{_ago} days ago" if _ago >= 0 else
+                  f"traded, settles in {-_ago} day"
+                  f"{'s' if _ago < -1 else ''}")
         _inout = ("INSIDE the 30-day window" if _ago <= 30
                   else "outside the 30-day window")
     except ValueError:
