@@ -26,6 +26,18 @@
   gross became a "fee", so even `--strict` passed). Such a row, a row
   wider or narrower than its header, and a decimal comma are refused
   with the file line; a $0 net is never turned into a full-gross fee.
+- **One spelling per Canadian listing.** Questrade's TSX-Venture, CSE
+  and NEO symbols (`VVV.VN`, `CCC.CN`, `XYZ.NE`) became `VVV.V`,
+  `CCC.CN.TO`, `XYZ.NE.TO`, while IB, RBC and Webull book every Canadian
+  listing `.TO`; the pools split and a superficial loss across accounts
+  was missed. Every Canadian venue is now `ROOT.TO` in every parser, the
+  generic importer and the live-position mapping (`yf_ticker.map` still
+  aliases a price lookup, e.g. `PNG.TO PNG.V`). `taxjson-lint-
+  crosslistings` warns when one root is held under two Canadian
+  suffixes (a `.tt` line or a map rule).
+- **Questrade preferred shares are dotted.** `FTN.PRA.TO` is now
+  `FTN.PR.A.TO`, as IB, RBC and Webull spell it, so the pools no longer
+  split. An existing `GLOBAL FTN.PRA.TO FTN.PR.A.TO` rule is harmless.
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is

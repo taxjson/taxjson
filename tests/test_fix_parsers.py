@@ -316,5 +316,76 @@ class TestWebullProceeds(unittest.TestCase):
             WebullBrokerage().back_compute_fee(-100, 55.0, 0.0, False), 0.0)
 
 
+# ----------------------------------------------- Canadian listing identity
+class TestCanadianListingIdentity(unittest.TestCase):
+    """S010-05 / S014-07: one spelling per Canadian listing, whichever
+    parser read it."""
+
+    def test_questrade_venues_match_ib(self):
+        txs, _ = _qt([
+            _qt_row('2026-04-10', 'Buy', 'VVV.VN', 'VVV MINING', 1000, 1,
+                    -1000, 0, -1000),
+            _qt_row('2026-04-10', 'Buy', 'CCC.CN', 'CCC CANNABIS', 1000, 1,
+                    -1000, 0, -1000),
+            _qt_row('2026-04-10', 'Buy', 'NNN.NE', 'NNN FUND', 1000, 1,
+                    -1000, 0, -1000),
+            _qt_row('2026-04-10', 'Buy', 'TTT.TO', 'TTT CORP', 1000, 1,
+                    -1000, 0, -1000)])
+        qt = sorted(t['symbol'] for t in txs)
+        ib, _ = _ib([_ib_trade(s, '2026-03-02, 10:00:00', 1000, 1, -1000)
+                     for s in ('VVV', 'CCC', 'NNN', 'TTT')])
+        self.assertEqual(qt, sorted(t['symbol'] for t in ib))
+        self.assertEqual(qt, ['CCC.TO', 'NNN.TO', 'TTT.TO', 'VVV.TO'])
+
+    def test_questrade_preferred_is_dotted(self):
+        txs, _ = _qt([_qt_row('2025-06-05', 'Buy', 'FTN.PRA.TO',
+                              'FINANCIAL 15 SPLIT CORP PFD', 100, 10,
+                              -1000, 0, -1000)])
+        self.assertEqual(txs[0]['symbol'], 'FTN.PR.A.TO')
+        ib, _ = _ib([_ib_trade('FTN.PR.A', '2025-06-02, 10:00:00', 100,
+                               10, -1000)])
+        self.assertEqual(ib[0]['symbol'], 'FTN.PR.A.TO')
+
+    def test_owner_global_rule_is_harmless(self):
+        # `GLOBAL FTN.PRA.TO FTN.PR.A.TO` in a ticker.map: its source
+        # never appears any more, and the target is left alone.
+        from taxjson.bin.taxjson_ticker_map import apply_mapping
+        t = _tt([{'action': 'BUYSELL', 'date': '2025-06-05',
+                  'symbol': 'FTN.PR.A.TO', 'quantity': 100,
+                  'currency': 'CAD', 'net_amount': 1000}])[0]
+        self.assertEqual(
+            apply_mapping(t, {'FTN.PRA.TO': 'FTN.PR.A.TO'}).symbol,
+            'FTN.PR.A.TO')
+
+    def test_helpers(self):
+        from taxjson.lib.brokerages.base import (canonical_ca_listing,
+                                                 canonical_ca_root)
+        self.assertEqual(canonical_ca_root('BCE.PRAA'), 'BCE.PR.AA')
+        self.assertEqual(canonical_ca_root('TD.PFB'), 'TD.PF.B')
+        self.assertEqual(canonical_ca_root('BBD.B'), 'BBD.B')
+        self.assertEqual(canonical_ca_listing('ABC.V', 'CAD'), 'ABC.TO')
+        self.assertIsNone(canonical_ca_listing('ABC.V', 'USD'))
+        self.assertIsNone(canonical_ca_listing('AAPL', 'CAD'))
+
+    def test_generic_and_live_positions_agree(self):
+        from taxjson.bin.taxjson_fetch import qt_position_symbol as q
+        self.assertEqual(q('ABC.VN'), 'ABC.TO')
+        self.assertEqual(q('CCC.CN'), 'CCC.TO')
+        self.assertEqual(q('FTN.PRA.TO'), 'FTN.PR.A.TO')
+        from taxjson.lib.brokerages.generic import GenericBrokerage
+        g = GenericBrokerage()
+        self.assertEqual(g._listing_symbol('ABC.V', 'USD'), 'ABC.TO')
+        self.assertEqual(g._listing_symbol('CCC.CN', 'CAD'), 'CCC.TO')
+
+    def test_lint_flags_a_venue_split(self):
+        from taxjson.bin.taxjson_lint_crosslistings import venue_splits
+        tax = [{'symbol': 'VVV.TO', 'action': 'BUYSELL', 'quantity': -10}]
+        shl = [{'symbol': 'VVV.V', 'action': 'BUYSELL', 'quantity': 10},
+               {'symbol': 'OK.TO', 'action': 'BUYSELL', 'quantity': 1}]
+        self.assertEqual(venue_splits(tax, shl),
+                         [{'root': 'VVV', 'symbols': ['VVV.TO', 'VVV.V'],
+                           'taxable': True}])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -128,7 +128,7 @@ class TestQuestradePositionSymbols(unittest.TestCase):
     def test_real_exchange_suffixes_pass_through(self):
         from taxjson.bin.taxjson_fetch import qt_position_symbol as q
         self.assertEqual(q("SHOP.TO"), "SHOP.TO")
-        self.assertEqual(q("ABC.VN"), "ABC.V")
+        self.assertEqual(q("ABC.VN"), "ABC.TO")   # one Canadian spelling (S010-05)
         self.assertEqual(q("AAPL"), "AAPL.US")
 
     def test_montreal_options_follow_the_underlying(self):
