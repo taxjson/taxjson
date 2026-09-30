@@ -778,13 +778,16 @@ def validate_config(cfg: Dict[str, Any],
             for sub in sorted(adir.iterdir()):
                 if not sub.is_dir() or sub.name.startswith("."):
                     continue
+                # Spreadsheets too: an .xlsx here got no word at all
+                # (S043-13).
                 n_csv = sum(1 for f in sub.rglob("*")
                             if f.is_file() and f.suffix.lower()
-                            in (".csv", ".tt"))
+                            in (".csv", ".tt") + SPREADSHEET_SUFFIXES)
                 if n_csv:
                     warnings.append(
                         f"inputs/{name}/{sub.name}/ holds {n_csv} "
-                        f"CSV/.tt file(s) that are NOT read — only files "
+                        f"CSV/.tt/spreadsheet file(s) that are NOT read "
+                        f"— only CSV and .tt files "
                         f"directly in inputs/{name}/ are processed; move "
                         f"them up a level (or out of inputs/ if they are "
                         f"not meant for this account)")
@@ -1048,32 +1051,47 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
 
 # ---------------------------------------------------------------- stages
 
-def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None) -> bool:
+def _rates_coverage_stale(rates_path: Path, today: Optional[date_cls] = None,
+                          currencies: Optional[List[str]] = None) -> bool:
     """Whether to_base.csv's DATA has aged out. Freshness is a property of
     the data, not the file's mtime: coverage ends at the generation date,
     so on a stable install (no package/config mtime bumps to invalidate
     the cache) the file would otherwise be reused forever and every trade
     after its last row would silently convert at the --default-rate.
     Stale when the newest rate row is more than 3 days old (tolerates
-    weekends/short holidays without refetching daily)."""
+    weekends/short holidays without refetching daily) — judged PER
+    CURRENCY when `currencies` is given: the file concatenates one block
+    per source currency, and a USD block cut short by a failed download
+    hid behind a fresh AUD last line (S046-06)."""
     today = today or date_cls.today()
+    newest: Dict[str, date_cls] = {}
     try:
-        last_line = ""
         with rates_path.open("r", encoding="utf-8") as f:
             for line in f:
-                if line.strip():
-                    last_line = line
-        if not last_line:
-            return True                      # sources configured, no rows
-        last_date = datetime.strptime(last_line.split()[0], "%Y-%m-%d").date()
+                parts = line.split()
+                if not parts:
+                    continue
+                d = datetime.strptime(parts[0], "%Y-%m-%d").date()
+                cur = parts[2].upper() if len(parts) > 2 else ""
+                for key in (cur, "*"):
+                    if key not in newest or d > newest[key]:
+                        newest[key] = d
     except (OSError, ValueError, IndexError):
         return True                          # unreadable/malformed: refetch
-    return (today - last_date).days > 3
+    if "*" not in newest:
+        return True                          # sources configured, no rows
+    keys = [c.upper() for c in currencies] if currencies else ["*"]
+    return any(k not in newest or (today - newest[k]).days > 3
+               for k in keys)
 
 
 def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     """Build to_base.csv by appending taxjson-to-base-curr output for each
-    configured source currency. Caches across runs."""
+    configured source currency. Caches across runs while every source
+    currency's rates reach the last few days: a refresh whose download
+    failed for one currency (its block ends early) is refetched on the
+    next run instead of being served for days behind another currency's
+    fresh last line (S046-06)."""
     base = settings["base_currency"]
     sources = [c for c in settings.get("source_currencies", ["USD"]) if c != base]
     # Ensure the cache dir exists before any write — applies to both
@@ -1098,7 +1116,8 @@ def stage_currency_rates(settings: Dict[str, Any], cache: Path) -> Path:
     # this, switching from CAD-base to USD-base silently reused the
     # old rates. The coverage check catches the inverse failure: an
     # mtime-fresh file whose data ends in the past.
-    if not needs_rebuild(rates_path) and not _rates_coverage_stale(rates_path):
+    if (not needs_rebuild(rates_path)
+            and not _rates_coverage_stale(rates_path, currencies=sources)):
         return rates_path
     had_previous = rates_path.exists() and rates_path.stat().st_size > 0
     parts: List[bytes] = []
@@ -1357,6 +1376,27 @@ def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
             == "usa" else "dividend")
 
 
+# Project-root files the per-account stages read (their content is part
+# of each account's input fingerprint).
+_PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
+                        "distributions.map", "phantoms.json",
+                        "crypto_ticker.map")
+
+
+def _inputs_fingerprint(paths: List[Path]) -> str:
+    """One line per existing file: name, size and SHA-256 of the
+    content (mtimes deliberately left out — see R1-253)."""
+    lines = []
+    for p in sorted(set(paths), key=str):
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        lines.append(f"{p.name} {len(data)} "
+                     f"{hashlib.sha256(data).hexdigest()}")
+    return "\n".join(lines) + "\n"
+
+
 def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   inputs_dir: Path, cache: Path, reports_dir: Path,
                   rates: Path, ticker_map: Optional[Path],
@@ -1472,6 +1512,26 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if (not src_manifest.exists()
             or src_manifest.read_text(encoding="utf-8") != src_txt):
         src_manifest.write_text(src_txt, encoding="utf-8")
+    # Content, not just membership: `run --fast` compared mtimes only,
+    # so a CSV replaced by a corrected export carrying an OLDER mtime
+    # (cp -p, rsync -a, unzip) — or a ticker.map restored the same way
+    # — kept the previous parse at exit 0 (R1-253, R1-294). A digest of
+    # every input and project-root map file; when it changes, the
+    # sources manifest (a dep of every parse/corp/merge stage) is
+    # touched so the rebuild cascades.
+    _fp_file = cache / f"{name}_inputs.fingerprint"
+    _fp_txt = _inputs_fingerprint(
+        [p for csvs in grouped.values() for p in csvs]
+        + list(input_files(acct_dir, ".tt"))
+        + [_c.with_name(_c.name + ".toml")
+           for _c in grouped.get("generic", [])]
+        + [acct_dir / "generic.toml"]
+        + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS])
+    if (not _fp_file.exists()
+            or _fp_file.read_text(encoding="utf-8") != _fp_txt):
+        _fp_file.write_text(_fp_txt, encoding="utf-8")
+        import os as _os
+        _os.utime(src_manifest)
 
     # 1. brokerage parse per broker
     parsed: List[Path] = []
@@ -1644,7 +1704,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     tt_jsons: List[Path] = []
     for tt in input_files(acct_dir, ".tt"):
         out = tt_json_path(cache, name, tt.name)
-        if force or needs_rebuild(out, tt):
+        if force or needs_rebuild(out, tt, src_manifest):
             print(f"  convert-tt {tt.name}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
                         out)
@@ -2744,6 +2804,20 @@ def cmd_run(args: argparse.Namespace) -> None:
               f"last-built books"
               + (f" (missing: {', '.join(_missing)} — never built; "
                  f"run without --account)" if _missing else ""))
+    _pending_sheltered = {pe.account for pe in pending_accounts}
+    if (not _sheltered_merge_inputs and not args.account
+            and not _pending_sheltered):
+        # No sheltered account produced books in this FULL run (the last
+        # one was removed, or its inputs emptied): the previous run's
+        # combined book must go, or the filed-year lock, check-filed and
+        # the radar keep reading registered holdings that no longer
+        # exist — a false OK on a moved filed number (S004-05).
+        for _ghost in (cache / "sheltered_base.json",
+                       cache / "sheltered_base.json.diag"):
+            if _ghost.exists():
+                _ghost.unlink()
+                print(f"  removed stale {_ghost.name} (no sheltered "
+                      f"account has books)")
     if _sheltered_merge_inputs:
         print("==> merge sheltered accounts → sheltered_base.json")
         sheltered_base = cache / "sheltered_base.json"
@@ -2853,6 +2927,22 @@ def cmd_run(args: argparse.Namespace) -> None:
                                 reports_dir, sheltered_base,
                                 incomplete_history=phantoms_arg,
                                 tag="cryptoblend")
+    if not args.account and not pending_accounts:
+        # A sheltered account never gets a wash pass. One re-typed from
+        # taxable kept its old <name>_gains_wash.json / _wash.sum, which
+        # resolve_gains_files prefers forever — the "run a full `taxjson
+        # run`" remedy never cleared them (S038-19).
+        for _n, _c in accounts.items():
+            if (_c or {}).get("type") != "sheltered":
+                continue
+            for _stale in (cache / f"{_n}_gains_wash.json",
+                           cache / f"{_n}_gains_wash.traces",
+                           cache / f"{_n}_gains_wash.json.diag",
+                           reports_dir / f"{_n}_wash.sum"):
+                if _stale.exists():
+                    _stale.unlink()
+                    print(f"  removed stale {_stale.name} ({_n} is "
+                          f"sheltered — no wash pass)")
 
     if pending_accounts:
         # Some account(s) stopped at unresolved corp-action elections.
@@ -3020,7 +3110,18 @@ def cmd_run(args: argparse.Namespace) -> None:
             _mp = _manifest_path_for(inputs_dir / _name, cache, _name)
             if not _mp.exists():
                 continue
-            for _rec in Manifest.load(_mp).records.values():
+            try:
+                _recs = list(Manifest.load(_mp).records.values())
+            except (OSError, ValueError, AttributeError) as _e:
+                # One unreadable manifest used to discard every
+                # account's reminder in silence (S038-23): name it and
+                # keep going.
+                print(f"taxjson: warning: could not read {_mp} ({_e}) — "
+                      f"its elections are not checked for a FILING "
+                      f"REQUIRED reminder; fix the file (`taxjson elect "
+                      f"{_name}` reads it too).", file=sys.stderr)
+                continue
+            for _rec in _recs:
                 _todo = FILING_REQUIRED_ELECTIONS.get(_rec.election)
                 if not _todo:
                     continue

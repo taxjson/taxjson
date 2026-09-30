@@ -292,5 +292,203 @@ class TestBrokerDetectionPrecedence(unittest.TestCase):
                                       "coinbase_2025.csv"), "coinbase")
 
 
+class TestRatesRebuiltByDefaultRun(unittest.TestCase):
+    """S046-06: the default (force) run reused a to_base.csv built during
+    a partly failed refresh; freshness looked only at the file's LAST
+    line, so a USD block cut short hid behind a fresh AUD block."""
+
+    @staticmethod
+    def _line(d, cur):
+        return f"{d.isoformat()} 12:00:00 {cur} CAD 1.3500 boc\n"
+
+    def test_coverage_is_judged_per_currency(self):
+        from datetime import date, timedelta
+        from taxjson.bin.taxjson_run import _rates_coverage_stale
+        today = date(2026, 9, 29)
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "to_base.csv"
+            p.write_text(self._line(today - timedelta(days=9), "USD")
+                         + self._line(today, "AUD"))
+            self.assertTrue(_rates_coverage_stale(
+                p, today, currencies=["USD", "AUD"]))
+            self.assertFalse(_rates_coverage_stale(
+                p, today, currencies=["AUD"]))
+
+    def test_a_short_currency_block_is_refetched(self):
+        from datetime import date, timedelta
+        from taxjson.bin import taxjson_run as R
+        calls = []
+        saved = (R.run_capture, R.needs_rebuild)
+        R.run_capture = lambda cmd: (calls.append(cmd)
+                                     or self._line(date.today(),
+                                                   cmd[-2]).encode())
+        R.needs_rebuild = lambda *a, **k: False      # mtime says fresh
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                cache = Path(td)
+                (cache / "to_base.csv").write_text(
+                    self._line(date.today() - timedelta(days=9), "USD")
+                    + self._line(date.today(), "AUD"))
+                with redirect_stdout(io.StringIO()):
+                    R.stage_currency_rates(
+                        {"base_currency": "CAD",
+                         "source_currencies": ["USD", "AUD"]}, cache)
+        finally:
+            R.run_capture, R.needs_rebuild = saved
+        self.assertEqual(len(calls), 2)
+
+
+class TestFastCacheSeesContent(unittest.TestCase):
+    """R1-253 / R1-294: `run --fast` kept the parse of a CSV replaced by
+    one with an OLDER mtime (cp -p, rsync -a, unzip), and ignored a
+    ticker.map rule restored with an old mtime."""
+
+    def _gain(self, root):
+        doc = json.loads(_run_cli(root, "sum", "margin", "--json").stdout)
+        return json.dumps(doc, sort_keys=True)
+
+    def test_csv_with_an_old_mtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=_QT_HEADER + _MARGIN_CSV.splitlines(
+                True)[1])
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            csv = root / "inputs" / "margin" / "questrade_2025.csv"
+            old = csv.stat().st_mtime - 3600
+            csv.write_text(_MARGIN_CSV)
+            os.utime(csv, (old, old))
+            r = _run_cli(root, "run", "--fast", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            fast = self._gain(root)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            self.assertEqual(fast, self._gain(root))
+            self.assertIn("480.1", fast)
+
+    def test_ticker_map_with_an_old_mtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            tm = root / "ticker.map"
+            tm.write_text("GLOBAL XEI.TO XEIX.TO\n")
+            os.utime(tm, (1577836800, 1577836800))
+            r = _run_cli(root, "run", "--fast", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            base = (root / "work" / "margin_base.json").read_text()
+            self.assertIn("XEIX.TO", base)
+
+
+_TWO_ACCOUNTS = _CONFIG + """
+[accounts.tfsa]
+type = "sheltered"
+"""
+
+_TFSA_CSV = _QT_HEADER + (
+    "2025-06-25 09:30:00 AM,2025-06-26 12:00:00 AM,Buy,XEI.TO,ISHARES COMP,"
+    "10,14.00,140.00,0.00,-140.00,CAD,55500002,Trades,TFSA\n")
+
+
+class TestStaleSidecarsRemovedByFullRun(unittest.TestCase):
+    """S004-05: work/sheltered_base.json outlived the last sheltered
+    account and kept feeding the filed-year lock and the radar.
+    S038-19: an account re-typed taxable -> sheltered kept its old
+    _gains_wash.json / _wash.sum, which every query preferred."""
+
+    def test_sheltered_base_goes_with_the_last_sheltered_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _TWO_ACCOUNTS)
+            (root / "inputs" / "tfsa").mkdir()
+            (root / "inputs" / "tfsa" / "q.csv").write_text(_TFSA_CSV)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            sb = root / "work" / "sheltered_base.json"
+            self.assertTrue(sb.exists())
+            _set_config(root, _CONFIG)
+            import shutil
+            shutil.rmtree(root / "inputs" / "tfsa")
+            for p in (root / "work").glob("tfsa_*"):
+                p.unlink()
+            for p in (root / "reports").glob("tfsa*"):
+                p.unlink()
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse(sb.exists())
+
+    def test_retyped_account_drops_its_wash_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            wash = root / "work" / "margin_gains_wash.json"
+            self.assertTrue(wash.exists())
+            _set_config(root, _CONFIG.replace('"taxable"', '"sheltered"'))
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse(wash.exists())
+            self.assertFalse((root / "reports" / "margin_wash.sum")
+                             .exists())
+
+
+class TestMergeRefusesUnreadableInput(unittest.TestCase):
+    """S038-18: taxjson-merge logged an unreadable book and exited 0, so
+    `run --account <sheltered>` rebuilt sheltered_base.json without a
+    sibling account's rows."""
+
+    def test_unreadable_book_fails_the_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            good = Path(tmp) / "a.json"
+            good.write_text(json.dumps({"transactions": []}))
+            bad = Path(tmp) / "b.json"
+            bad.write_text('{"transactions": [')
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_merge",
+                 str(good), str(bad)], capture_output=True, text=True,
+                cwd=REPO_ROOT)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("b.json", r.stderr)
+
+
+class TestFilingReminderSurvivesABadManifest(unittest.TestCase):
+    """S038-23: one unreadable manifest.json silently dropped the end-
+    of-run FILING REQUIRED reminder for every account."""
+
+    def test_other_accounts_reminder_still_prints(self):
+        cfg = _CONFIG + "\n[accounts.zmargin]\ntype = \"taxable\"\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, cfg)
+            (root / "inputs" / "zmargin").mkdir()
+            (root / "inputs" / "zmargin" / "q.csv").write_text(
+                _MARGIN_CSV.replace("55500001", "55500003"))
+            (root / "inputs" / "margin" / "manifest.json").write_text(
+                json.dumps({"elections": {"ev1": {
+                    "summary": "2025-03-01 spin-off XEI.TO",
+                    "election": "rollover_s_86_1",
+                    "hints": {"allocated_acb_cad": 10.0}}}}))
+            (root / "inputs" / "zmargin" / "manifest.json").write_text(
+                "<<<<<<< HEAD\n{}\n")
+            r = _run_cli(root, "run", "--no-input")
+        self.assertIn("FILING REQUIRED", r.stderr)
+        self.assertIn("zmargin", r.stderr)
+        self.assertIn("manifest.json", r.stderr)
+
+
+class TestSpreadsheetInSubfolderWarns(unittest.TestCase):
+    """S043-13: the not-read-subfolder warning counted only .csv/.tt,
+    so an .xlsx in inputs/<account>/2025/ got no word."""
+
+    def test_xlsx_in_a_subfolder(self):
+        from taxjson.bin.taxjson_run import validate_config
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "inputs"
+            (inputs / "margin" / "2025").mkdir(parents=True)
+            (inputs / "margin" / "2025" / "Activity.xlsx").write_bytes(b"x")
+            warnings = validate_config(
+                {"settings": {"year": 2025},
+                 "accounts": {"margin": {"type": "taxable"}}}, inputs)
+        self.assertTrue(any("inputs/margin/2025/" in w for w in warnings),
+                        warnings)
+
+
 if __name__ == "__main__":
     unittest.main()

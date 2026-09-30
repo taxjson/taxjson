@@ -20,6 +20,7 @@ def main():
         "sources": []
     }
 
+    unreadable = []
     for file_path in args.files:
         path = Path(file_path)
         if not path.exists():
@@ -37,7 +38,14 @@ def main():
                     "original_metadata": data.get("metadata", {})
                 })
         except Exception as e:
+            # Fatal: the merged book would silently lack this file's
+            # rows — `run --account <sheltered>` rebuilt
+            # sheltered_base.json without a sibling account and the
+            # radar under-counted its holdings, at exit 0 (S038-18).
             cli_diag.error(PROG, f"cannot read {file_path}: {e}")
+            unreadable.append(file_path)
+    if unreadable:
+        sys.exit(1)
 
     output = {
         "transactions": merged_transactions,

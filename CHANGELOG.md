@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **`run --fast` sees content, not only mtimes.** Each account's input
+  files and the project-root maps (ticker.map, overrides,
+  distributions.map, phantoms.json, crypto_ticker.map) are fingerprinted
+  by content; a CSV replaced by an export with an older mtime, or a
+  ticker.map restored the same way, kept the old parse at exit 0 (audit
+  R1-253, R1-294).
+- **FX rates: freshness is judged per currency.** to_base.csv holds one
+  block per source currency; a USD block cut short by a failed download
+  hid behind a fresh AUD last line and was served for days. Each
+  configured currency must now reach the last few days (audit S046-06).
+- **A full run removes sidecars the config no longer produces.**
+  work/sheltered_base.json after the last sheltered account is removed
+  (the filed-year lock and the radar kept reading it), and the
+  `_gains_wash.json` / `_wash.sum` of an account re-typed to sheltered
+  (every query preferred them) (audit S004-05, S038-19).
+- **`taxjson-merge` fails on an unreadable input** instead of writing a
+  book without it (`run --account <sheltered>` rebuilt
+  sheltered_base.json without a sibling's rows) (audit S038-18).
+- **The FILING REQUIRED reminder survives an unreadable manifest.json**:
+  the file is named and the other accounts' reminders still print
+  (audit S038-23).
+- **A spreadsheet in an account subfolder** gets the same "not read"
+  warning as a CSV there (audit S043-13).
 - **Broker detection: prefixes, then content, then venue words.** A
   `generic_`/`cb_`/`kr_` prefix now always wins, and an IB, Questrade or
   Webull export is recognised by its content even when its name mentions
