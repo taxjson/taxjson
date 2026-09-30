@@ -100,11 +100,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** RBC now emits a TRANSFER for an in-kind security move (Activity `Transfers`, e.g. a DTC transfer-in). For sheltered accounts (`transfers = true`) it's kept; for **taxable** accounts `transfers` stays **off**, so the row is dropped.
 - **Why this is intentional (decided 2026-06):** taxable cost basis must be computed from *actual* buys and sells — a transfer-in carries no reliable ACB (RBC ships book value 0), so accepting it would fabricate basis. Dropping it instead leaves the position looking short until the user supplies the real acquisition history; that phantom short is the **correct signal** (surfaced by `taxjson-missing-history`) that actual buys are missing, not something to paper over with a transfer. Do not flip the taxable default.
 
-### Trust distributions are dated by pay date, not record date
-- **Where:** `src/taxjson/lib/brokerages/rbc_direct.py`, `questrade.py` — a DIVIDEND row is dated by the export's Date / Transaction Date (the pay date); the `REC mm/dd/yy PAY mm/dd/yy` in the description is not read.
-- **Current behavior:** a Canadian trust ETF's distribution with a December record date paid in January (XIC, HDIV, SMAX, a money-market fund) is on the PRIOR year's T3 (s.104(13): payable in the trust's year) but lands in the next year of `divs-sum`, `estimate` and the instalment figures. Filed numbers come from the slips and capital gains / ACB are unaffected, but the "slips vs `divs-sum`" check in docs/filing.md disagrees by those payments every year.
-- **Why deferred (owner decision):** the fix must tell a TRUST (record-date year) from a CORPORATION paying a "distribution" (split-share corps FFN, FTN, DFN, BK, LFE, YCM: T5, taxed when received), and neither export says which. Options: (a) keep pay date and document the reconciling items; (b) date "DIST ON ... REC 12/xx PAY 01/xx" rows to the record year with a per-symbol trust/corporation list (`distributions.map` or a new map); (c) record-date for every DIST row with a corporate exception list. (2026-09 audit R1-7, S062-01.)
-- **Workaround:** when reconciling, move the January rows whose REC date is in December to the prior year by hand.
+### IB income rows carry no record date
+- **Where:** `lib/brokerages/ib_extractor.py` (the Dividends section has only the pay date); `lib/income_dating.py`.
+- **Current behavior:** in a Canada project a Canadian trust's distribution or return of capital is dated by the record date Questrade and RBC print (s.104(13), s.53(2)(h); tax-logic CA-INC-DATE-TRUST / CA-INC-DATE-ROC-TRUST). An IB row has no record date, so a December-record trust distribution IB pays in January stays in the pay year of `divs-sum` and the estimate, and a January-paid IB ROC on a Canadian trust stays on its pay date — the run warns about the ROC with the two `.tt` ADJUST lines that move it to Dec 31.
+- **Also:** a Canadian issuer is recognised by its listing (or an IB CA ISIN); the split-share corporations that also say "Distribution" are a short built-in list (`SPLIT_SHARE_ROOTS`) — add any other corporation to `[settings] corporate_distributions`.
+- **Workaround:** compare `divs-sum` with the T3; the slip is authoritative.
 
 ### RBC exports by Date miss back-dated year-end book-cost rows
 - **Where:** the RBC export window (not the parser: `rbc_direct.py:_build_book_adjust` books the rows correctly when present).
@@ -113,8 +113,8 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### RBC notional distributions raise ACB only
 - **Where:** `src/taxjson/lib/brokerages/rbc_direct.py:_build_book_adjust`.
-- **Current behavior:** a "NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST $x" row becomes an ACB increase (ADJUST `dist`), and the parse now warns that the distribution itself is income on the fund's T3 (usually box 21) and is NOT in taxjson's income totals (2026-09 audit S063-17).
-- **Why deferred (owner decision):** booking it as income needs its character (capital-gain distribution vs other income), which only the T3 gives; booking it as a dividend would gross it up as eligible. Take the amount from the slip.
+- **Current behavior:** a "NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST $x" row becomes an ACB increase (ADJUST `dist`), and the parse warns that the distribution itself is income on the fund's T3 (usually box 21) and is NOT in taxjson's income totals (2026-09 audit S063-17). Stated in tax-logic (CA-DIST-02 / US-DIST-02).
+- **Why (owner decision 2026-09-30, D6: stays a warning):** booking it as income needs its character (capital-gain distribution vs other income), which only the T3 gives; booking it as a dividend would gross it up as eligible. Take the amount from the slip.
 
 ### RBC export "as of" date is not a coverage check
 - **Where:** `rbc_direct.py:_find_header` skips the "Activity Export as of <date>" preamble; `checklist.py` `inputs-frozen` looks at the latest activity across ALL sources.
@@ -334,10 +334,14 @@ reported manually" instead of counting them as missing.
 ### A merger's per-account empirical ratios are blended
 - **Where:** `lib/core.py` folds one merger's rename SPLITs with different per-account ratios into a single holdings-weighted ratio (2026-09). Totals and the shared ACB pool are right; each account's wash-walk balance can be a fraction of a share off.
 
-### Canadian payments in lieu are estimated as ordinary income
-- **Where:** `lib/tax_estimate.py` `estimate_canada` adds every payment in lieu (`dil-sum`) to ordinary income, and the README calls them ordinary income with no gross-up or credit.
-- **Question:** ITA s.260(5)/(5.1)(a) deems a dealer's compensation payment for a public corporation's taxable dividend to be a taxable dividend (eligible where s.260(1.1) applies), and IB's T5 box 24 includes it; a trust unit's (s.260(5.1)(b)) follows the trust income instead. Whether to split PIL by the issuer's type (which the exports do not state) is an owner decision.
-- **Current behaviour:** the Canada estimate overstates tax slightly (about $113 on the owner's 2025 books); filed and fileable numbers are unaffected (form-export carries no income). Treat the `dil-sum` total for Canadian issuers as dividends when entering it (2026-09 audit S049-18).
+### Payments in lieu: what the exports cannot say
+- **Where:** `lib/income_dating.py` (`pil_is_dividend`), `lib/brokerages/ib_extractor.py`, `rbc_direct.py`.
+- **Current behaviour:** in a Canada project a payment in lieu on a Canadian issuer's share paid by a Canadian dealer is a taxable (eligible) dividend (ITA s.260; tax-logic CA-INC-03); the dealer comes from the IB statement's BrokerName ("Interactive Brokers Canada Inc."). An IB file without that header row leaves the dealer unknown and the payment ordinary income. A payment in lieu on a Canadian TRUST unit is trust income under s.260(5.1)(b), not a dividend; the exports do not say which issuers are trusts, so it is counted as a dividend. RBC books its "CASH IN LIEU OF DIVIDEND" rows as plain dividends (RBC is a Canadian dealer, so the Canadian-issuer case is right; a foreign issuer's is a foreign dividend rather than other income).
+- **Workaround:** the dealer's T5 (box 24 and the other income boxes) is authoritative; compare with `divs-sum` / `dil-sum`.
+
+### US January fund and REIT dividends need a list
+- **Where:** `lib/income_dating.py`; tax-logic US-INC-DATE-RIC.
+- **Current behaviour:** §852(b)(7) / §857(b)(9) put a fund or REIT dividend declared in October–December and paid in January on Dec 31, but no export says which payer is a fund. A US project keeps the pay date, warns when a January dividend has an October–December ex date (IB accruals) or record date (Questrade/RBC), and moves the payments in `[settings] ric_january_dividends` to Dec 31.
 
 ### `wash-sales --explain` traces each account on its own
 - The explain trace predates the blended passes; the numbers in the table are the blended ones.
@@ -354,6 +358,7 @@ reported manually" instead of counting them as missing.
 ## Graduated (fixed)
 
 - **Option premium timing across a year end (ITA s.49(1); IT-479R paras 23–32)** — 2026-09: a written option's premium is now a gain in the year written under `option_premium_timing = "grant"` (Canada default), a buy-back a loss in its own year, an assignment folded with no grant record; `taxjson option-boundary` names any filed year to amend. Previously the premium was recognised at the close (the US §1234 convention).
+- **Income dating and payments in lieu (partition Phase C, 2026-09-30)** — a Canadian trust's distribution is now income of its record-date year and its return of capital lowers the ACB on the record date (Questrade/RBC); a Canadian dealer's payment in lieu on a Canadian issuer's share is a dividend (s.260); US January fund/REIT dividends are warned about and can be listed. Previously every row was dated by its pay date and every payment in lieu was ordinary income.
 - **Negative ACB after a return of capital (s.40(3))** — 2026-09: booked as a deemed gain in the distribution year with the ACB reset to nil; previously only a warning, with the whole amount landing in the sale year.
 - **Re-short "superficial loss" (s.54)** — 2026-09: a new short sale or written option no longer triggers a denial of a cover loss (it acquires nothing); a long purchase held at day 30 still does. Previously the US §1091(e) re-short branch applied.
 

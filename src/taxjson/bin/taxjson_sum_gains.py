@@ -64,6 +64,10 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
             # profit without inflating the T5/Schedule B dividend total.
             pil = float(tx.get('pil', 0) or 0)
             tick_stats['pil'] = tick_stats.get('pil', 0.0) + pil
+            # A Canadian s.260 payment in lieu (a Canadian dealer, a
+            # Canadian issuer) is a taxable dividend: the gains run
+            # carries its amount as 'dividend' (lib/income_dating).
+            tick_stats['div'] += float(tx.get('dividend', 0) or 0)
         else:
             cost = float(tx.get('cost', 0) or 0)
             proceeds = float(tx.get('proceeds', 0) or 0)

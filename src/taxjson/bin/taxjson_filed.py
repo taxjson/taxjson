@@ -23,7 +23,7 @@ the filing basis recorded at close time): realized total (non-tainted),
 total disallowed, disposition count, dividend+PIL income, tainted count.
 """
 
-from taxjson.lib.pipeline import option_timing_flags
+from taxjson.lib.pipeline import income_dating_flags, option_timing_flags
 import json
 import sys
 import tempfile
@@ -308,6 +308,7 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
     if basis == "wash-adjusted" and sheltered.exists():
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
+    cmd += income_dating_flags(dict(settings, country=country))
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
     # phantom openings and check-filed recompute WITHOUT them: a
@@ -354,6 +355,7 @@ def recompute_year(cache: Path, account: str, year: int,
     if basis == "wash-adjusted" and sheltered.exists():
         cmd += ["--sheltered", str(sheltered)]
     cmd += _lock_timing_flags(settings, year, option_timing)
+    cmd += income_dating_flags(dict(settings, country=country))
     # phantoms.json lives at the PROJECT ROOT (cache is
     # <root>/work) — looking in work/ made close-year snapshot WITH
     # phantom openings and check-filed recompute WITHOUT them: a

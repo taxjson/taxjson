@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Canada: a Canadian trust's distribution counts in its record-date
+  year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
+  on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the
+  .sum, the estimate and instalments — as on the T3. Split-share
+  corporations (FTN, FFN, DFN, BK, LFE, YCM ...) stay on the pay date,
+  as does any symbol in the new `[settings] corporate_distributions`.
+  tax-logic CA-INC-DATE-TRUST.
+- **Canada: a Canadian trust's return of capital lowers the ACB on its
+  record date** (s.53(2)(h)), so a sale between the record date and a
+  January pay date uses the reduced ACB and any s.40(3) gain is in the
+  record year; `roc-sum` counts it there. IB rows (no record date) keep
+  the pay date and a January one on a Canadian trust is warned about.
+  tax-logic CA-INC-DATE-ROC-TRUST / CA-INC-DATE-ROC.
+- **Canada: a payment in lieu from a Canadian dealer on a Canadian
+  issuer's share is a dividend.** ITA s.260 deems it a taxable dividend
+  and the dealer's T5 box 24 includes it; it now counts in `divs-sum`
+  and as an eligible dividend in the estimate (`dil-sum` shows each
+  row's treatment). The IB parser records the dealer from the
+  statement's BrokerName and the issuer's ISIN country. tax-logic
+  CA-INC-03; US-INC-01 (US: always ordinary income).
+- **US: January fund/REIT dividends.** A January dividend with an
+  October–December ex or record date is warned about (§852(b)(7),
+  §857(b)(9)); `[settings] ric_january_dividends` (US-only) moves the
+  listed payments to Dec 31 of the prior year. tax-logic
+  US-INC-DATE-RIC.
+- **tax-logic states RBC notional distributions and DRIP** (CA-DIST-02/03,
+  US-DIST-02/03).
+
 - **crypto-sends: a Kraken PYUSD or GUSD send is a coin send.** The
   Kraken parser books those two as coins, but crypto-sends treated them
   as US-dollar cash on every exchange, so a gift or payment of them got

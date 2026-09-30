@@ -29,6 +29,7 @@ from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
+                                         income_facts_from_description,
                                          is_roc_description)
 from taxjson.lib.corp_actions import (
     RBC_REORG_CODES, RbcReorgPairing, pair_rbc_reorganizations,
@@ -1837,7 +1838,7 @@ class RbcBrokerage(BaseBrokerage):
                 'account': self.DEFAULT_ACCOUNT,
                 'description': f"{desc} (Implied Tax)",
             })
-        out.append({
+        div = {
             'action': 'DIVIDEND',
             'date': date, 'time': '09:30:00', 'date_settle': date,
             'symbol': symbol, 'quantity': qty, 'currency': currency,
@@ -1845,7 +1846,11 @@ class RbcBrokerage(BaseBrokerage):
             'net_amount': net, 'gross_amount': gross_amount,
             'type': 'dividend', 'account': self.DEFAULT_ACCOUNT,
             'description': desc,
-        })
+        }
+        # "REC mm/dd/yy" and the "Distribution" activity / "DIST ON"
+        # label, as neutral facts (lib/income_dating dates the row).
+        div.update(income_facts_from_description(desc, r.activity or ''))
+        out.append(div)
         return out
 
     def _build_tax(self, r):

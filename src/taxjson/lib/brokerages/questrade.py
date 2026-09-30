@@ -11,6 +11,7 @@ from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          _parse_div_qty_rate,
                                          canonical_ca_listing,
+                                         income_facts_from_description,
                                          is_roc_description,
                                          parse_strict_number)
 
@@ -1374,7 +1375,7 @@ class QuestradeBrokerage(BaseBrokerage):
             return self.tx_roc_adjust(symbol=symbol, currency=currency,
                                       date=date, desc=desc, amount=net)
         qty, price = _parse_div_qty_rate(desc, net)
-        return {
+        tx = {
             'action': 'DIVIDEND',
             'date': date,
             'time': time,
@@ -1389,6 +1390,10 @@ class QuestradeBrokerage(BaseBrokerage):
             'description': desc,
             'account': self.DEFAULT_ACCOUNT,
         }
+        # "DIST ON ... REC mm/dd/yy": the record date and the
+        # distribution label, as neutral facts (lib/income_dating).
+        tx.update(income_facts_from_description(desc))
+        return tx
 
     def _parse_transfer(self, row, currency, lineno):
         """Questrade TF6 row: asset transfer in or out. Quantity is signed

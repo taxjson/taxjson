@@ -69,6 +69,23 @@ class TaxTransaction:
     corp_event_id: str = ''
     corp_election: str = ''
     id: Optional[str] = None
+    # Neutral income facts a parser read from the export (empty when the
+    # export does not say). NOT part of compute_id, and left out of
+    # to_dict() when empty. What they mean for the tax year or the
+    # character of the income is decided per country in
+    # lib/income_dating — never by the parser.
+    #   record_date     the record date the broker prints ("REC 12/30/24")
+    #   ex_date         the ex-dividend date (IB's dividend accruals)
+    #   income_label    "distribution" when the broker calls the payment
+    #                   a distribution ("DIST ON ...", RBC "Distribution")
+    #   dealer_country  the country of the dealer that paid the row
+    #                   ("CA" for Interactive Brokers Canada Inc.)
+    #   issuer_country  the issuer's country from its ISIN ("CA", "US")
+    record_date: str = ''
+    ex_date: str = ''
+    income_label: str = ''
+    dealer_country: str = ''
+    issuer_country: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -109,7 +126,17 @@ class TaxTransaction:
         return hashlib.sha256(raw_id.encode('utf-8')).hexdigest()[:16]
 
     def to_dict(self):
-        return asdict(self)
+        d = asdict(self)
+        for k in INCOME_FACT_FIELDS:
+            if not d.get(k):
+                d.pop(k, None)
+        return d
+
+
+# The optional income facts on TaxTransaction (see the class): omitted
+# from to_dict() when empty so every other row keeps its shape.
+INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
+                      'dealer_country', 'issuer_country')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or
@@ -521,7 +548,9 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                              f"fix the input data.")
     for _fld in ('action', 'date', 'symbol', 'currency', 'time',
                  'date_settle', 'account', 'type', 'description',
-                 'symbol_new', 'corp_event_id', 'corp_election', 'id'):
+                 'symbol_new', 'corp_event_id', 'corp_election', 'id',
+                 'record_date', 'ex_date', 'income_label',
+                 'dealer_country', 'issuer_country'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]

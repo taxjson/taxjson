@@ -180,6 +180,7 @@ _CA_ONLY_SETTINGS = {
     "option_grant_timing_since": "2025",
     "option_buyback_loss_superficial": "true",
     "foreign_return_of_capital": '"dividend"',
+    "corporate_distributions": '["XYZ.TO"]',
 }
 _CA_ONLY_TABLES = {
     "[instalments]": '[instalments]\nbasis = "current_year"\n',
@@ -201,7 +202,10 @@ class TestSettingOwnership(unittest.TestCase):
                          set(_CA_ONLY_SETTINGS))
         self.assertEqual(set(C.owners(C.CONFIG_COUNTRY, "canada")),
                          set(_CA_ONLY_TABLES))
-        self.assertEqual(C.owners(C.SETTING_COUNTRY, "usa"), [])
+        # The one US-only key: the §852(b)(7) January-dividend list
+        # (partition Phase C, D8; tests/test_fix_income.py).
+        self.assertEqual(list(C.owners(C.SETTING_COUNTRY, "usa")),
+                         ["ric_january_dividends"])
 
     @rule("US-CTRY-02")
     @rule_absent("US-CTRY-02", country="canada")
@@ -590,10 +594,13 @@ class TestRuleMarkers(unittest.TestCase):
 class TestIncomeDating(unittest.TestCase):
     """Owner request (2026-09-30): the record-date / pay-date rules stated
     in tax-logic with their own ids, each pinned under both countries.
-    Current behaviour: every income row, and a return of capital, is
-    dated by the day it is PAID. A row's date_settle is set to the
-    record / payable date below to show the pay date wins under either
-    country's tax_date basis."""
+    A corporation's dividend, a payment in lieu and a corporate or
+    foreign return of capital are dated by the day they are PAID; a
+    row's date_settle is set to the record / payable date below to show
+    the pay date wins under either country's tax_date basis. The
+    record-date rules (Phase C: Canadian trusts, US January fund
+    dividends) read the parsers' record_date / income_label facts and
+    are pinned here and in tests/test_fix_income.py."""
 
     @staticmethod
     def _years(res):
@@ -679,31 +686,52 @@ class TestIncomeDating(unittest.TestCase):
         self.assertEqual(t["date_settle"][:10], "2026-01-15")
 
     @rule("CA-INC-DATE-ROC-TRUST")
+    @rule_absent("CA-INC-DATE-ROC-TRUST", country="usa")
     @rule("US-INC-DATE-ROC")
-    def test_canadian_trust_roc_uses_the_pay_date_not_payable(self):
-        """By law a Canadian trust's ROC (T3 box 42) lowers the ACB when
-        payable; taxjson uses the pay date today in both countries (a
-        later change moves Canadian trust units in Canada projects)."""
-        r = gains_both(self._roc_book("XYZ.UN.TO"), year=2026)
+    def test_canadian_trust_roc_lowers_the_acb_when_payable(self):
+        """A Canadian trust's ROC (T3 box 42) lowers the ACB on its record
+        date in a Canada project (s.53(2)(h)); a US project keeps the pay
+        date. With no record date (the IB case) both use the pay date."""
+        book = self._roc_book("XYZ.UN.TO")
+        r = gains_both(book, year=2026)
         for c in C.COUNTRIES:
-            with self.subTest(country=c):
+            with self.subTest(country=c, record_date=False):
                 self.assertEqual(self._sale_gains(r[c]), [100.0, 200.0])
+        book[2].record_date = "2025-12-31"
+        r = gains_both(book, year=2026)
+        self.assertEqual(self._sale_gains(r["canada"]), [150.0, 150.0])
+        self.assertEqual(self._sale_gains(r["usa"]), [100.0, 200.0])
 
     @rule("CA-INC-DATE-TRUST")
+    @rule_absent("CA-INC-DATE-TRUST", country="usa")
     @rule("US-INC-DATE-RIC")
-    def test_trust_or_fund_distribution_is_the_pay_years(self):
-        """A trust distribution payable in December and paid in January,
-        and a US fund / REIT dividend declared in December and paid in
-        January, both land in the pay year — the s.104(13) and
-        §852(b)(7) / §857(b)(9) year moves are not applied yet."""
-        for sym in ("XYZ.UN.TO", "VNQ.US"):
-            book = self._book(sym, "DIVIDEND", "2026-01-20", "2025-12-31")
+    @rule_absent("US-INC-DATE-RIC", country="canada")
+    def test_trust_or_fund_distribution_year(self):
+        """A Canadian trust distribution payable in December and paid in
+        January is the December year's income in Canada (s.104(13)); a
+        US fund dividend listed in ric_january_dividends is Dec 31's in
+        the US (§852(b)(7)). Each only in its own country; with neither
+        the facts nor the list, the pay year everywhere."""
+        trust = self._book("XYZ.UN.TO", "DIVIDEND", "2026-01-20",
+                           "2025-12-31")
+        fund = self._book("VNQ.US", "DIVIDEND", "2026-01-20", "2025-12-31")
+        for book in (trust, fund):
             for year, want in ((2025, set()),
                                (2026, {("DIVIDEND", "2026")})):
                 r = gains_both(book, year=year)
                 for c in C.COUNTRIES:
-                    with self.subTest(sym=sym, year=year, country=c):
+                    with self.subTest(sym=book[0].symbol, year=year,
+                                      country=c):
                         self.assertEqual(self._years(r[c]), want)
+        trust[1].record_date = "2025-12-31"
+        trust[1].income_label = "distribution"
+        got = {c: gains_both(trust, year=2025)[c] for c in C.COUNTRIES}
+        self.assertEqual(self._years(got["canada"]), {("DIVIDEND", "2026")})
+        self.assertEqual(self._years(got["usa"]), set())
+        got = gains_both(fund, year=2025,
+                         usa={"ric_january_dividends": ("VNQ.US",)})
+        self.assertEqual(self._years(got["usa"]), {("DIVIDEND", "2026")})
+        self.assertEqual(self._years(got["canada"]), set())
 
     @rule("CA-DATE-11")
     @rule("US-DATE-03")

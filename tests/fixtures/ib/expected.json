@@ -23,6 +23,7 @@
   "date_settle": "2025-06-12",
   "description": "MSFT(US5949181045) Cash Dividend USD 0.75 per Share",
   "gross_amount": 37.5,
+  "issuer_country": "US",
   "net_amount": 37.5,
   "price": 0.75,
   "quantity": 50.0,

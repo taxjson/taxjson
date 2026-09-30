@@ -37,6 +37,7 @@
   "date_settle": "2024-03-28",
   "description": "ISHARES REIT ETF CASH DIST ON 100 SHS",
   "gross_amount": 12.34,
+  "income_label": "distribution",
   "net_amount": 12.34,
   "price": 0.1234,
   "quantity": 100.0,

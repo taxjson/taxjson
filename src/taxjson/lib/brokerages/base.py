@@ -54,6 +54,36 @@ def is_roc_description(desc: Optional[str]) -> bool:
     return bool(ROC_DESC_RE.search(desc or ''))
 
 
+# The record date Questrade and RBC print in an income row's description
+# ("... DIST ON 512 SHS REC 12/30/24 PAY 01/05/25"), and their word for a
+# distribution ("DIST ON"). Neutral facts: which tax year they decide is
+# a per-country rule (lib/income_dating), never the parser's.
+_REC_DATE_RE = re.compile(r'\bREC\s+(\d{1,2})/(\d{1,2})/(\d{2}(?:\d{2})?)\b',
+                          re.IGNORECASE)
+_DIST_LABEL_RE = re.compile(r'\bDIST\s+ON\b', re.IGNORECASE)
+
+
+def income_facts_from_description(desc: Optional[str],
+                                  activity: str = '') -> Dict[str, str]:
+    """{record_date, income_label} read from an income row's description
+    (and the broker's activity label): only the keys it finds. An
+    impossible REC date is left out (the row keeps its pay date)."""
+    out: Dict[str, str] = {}
+    m = _REC_DATE_RE.search(desc or '')
+    if m:
+        mm, dd, yy = (int(g) for g in m.groups())
+        if yy < 100:
+            yy += 2000
+        try:
+            out['record_date'] = datetime(yy, mm, dd).strftime('%Y-%m-%d')
+        except ValueError:
+            pass
+    if (_DIST_LABEL_RE.search(desc or '')
+            or 'distribution' in (activity or '').lower()):
+        out['income_label'] = 'distribution'
+    return out
+
+
 # Shared dividend-description parsers. Real broker dividend rows include
 # the share count and/or per-share rate as plain English inside the
 # Description column; extracting them lets us populate `quantity` and
@@ -497,8 +527,13 @@ class BaseBrokerage:
         for a broker reversal row (which then nets out as a positive
         ADJUST). ROC must NOT be booked as dividend income: that
         double-errs (income overstated now, ACB overstated → gains
-        understated at sale)."""
-        return {
+        understated at sale).
+
+        The row is dated by its posting (pay) date; a record date the
+        description prints ("REC 12/30/24") rides along as the neutral
+        `record_date` fact — lib/income_dating decides, per country,
+        which date lowers the cost."""
+        tx = {
             'action': 'ADJUST',
             'date': date, 'time': '09:30:00', 'date_settle': date,
             'symbol': symbol, 'quantity': 0.0, 'currency': currency,
@@ -506,6 +541,10 @@ class BaseBrokerage:
             'account': account or getattr(self, 'DEFAULT_ACCOUNT', 'PORTFOLIO'),
             'description': desc,
         }
+        rec = income_facts_from_description(desc).get('record_date')
+        if rec:
+            tx['record_date'] = rec
+        return tx
 
     # ----------------------------------------------------------- sign / coerce
 

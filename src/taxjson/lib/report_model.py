@@ -288,7 +288,7 @@ def gains_basis_label(files) -> str:
 
 def build_account_report(gains_data, account: str,
                          basis: Optional[str] = None,
-                         base_transactions=None) -> dict:
+                         base_transactions=None, rules=None) -> dict:
     """The structured dict work/<account>_report.json carries — the machine
     twin of the text reports, written by `taxjson run` after the .sum stage.
 
@@ -338,7 +338,7 @@ def build_account_report(gains_data, account: str,
         "income": summarize_income(
             (base_transactions if base_transactions is not None
              else gains_data.get("transactions", [])),
-            target_year=year),
+            target_year=year, rules=rules),
         "wash": {"count": len(washes),
                  "total_disallowed": round(sum(_amt(w) for w in washes), 2)},
     }

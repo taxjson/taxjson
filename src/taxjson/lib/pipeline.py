@@ -26,7 +26,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from taxjson.lib.core import TaxTransaction, get_tax_rules, is_stock_dividend
 from taxjson.lib.numeric import round_floats
@@ -906,11 +906,30 @@ class GainsRequest:
     # Canada needs no flag — its symbol-global pools already blend
     # (ITA s.47), so this is forwarded to the US engine only.
     per_account_basis: bool = False
+    # Income dating overrides (lib/income_dating): Canada — symbols
+    # whose "distribution" is a corporation's payout (dated when paid);
+    # USA — January RIC/REIT dividends received on Dec 31 of the prior
+    # year ("SYM" or "SYM YYYY-01-DD"). Each is refused in the other
+    # country (lib/income_dating.IncomeRules).
+    corporate_distributions: Tuple[str, ...] = ()
+    ric_january_dividends: Tuple[str, ...] = ()
 
     def __post_init__(self):
         from taxjson.lib.country import canonical_country
         self.country = canonical_country(self.country,
                                          what="GainsRequest.country")
+        self.income_rules()             # refuse a foreign override now
+
+    def income_rules(self):
+        from taxjson.lib.income_dating import IncomeRules, parse_ric_entries
+        return IncomeRules(
+            country=self.country,
+            corporate_distributions=tuple(
+                str(s).strip().upper()
+                for s in (self.corporate_distributions or ())),
+            ric_january_dividends=parse_ric_entries(
+                list(self.ric_january_dividends or ()),
+                key="--ric-january-dividend"))
 
     def effective_tax_date(self) -> str:
         # Country-aware default: CRA times dispositions on the SETTLEMENT
@@ -960,6 +979,20 @@ def run_gains(transactions, sheltered_transactions=(),
             phantom_hint=req.phantom_hint)
 
     rules = get_tax_rules(req.country)
+    income_rules = req.income_rules()
+    _warn_year = int(req.year) if req.year else None
+    for _w in income_rules.warnings(transactions, _warn_year):
+        print(f"warning: {_w}", file=sys.stderr)
+    if req.country == 'canada':
+        # A Canadian trust's return of capital lowers the ACB when it
+        # becomes payable (s.53(2)(h)): an ADJUST with a printed record
+        # date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The
+        # row keeps its id; only its dates move.
+        for _t in transactions:
+            _rec = income_rules.roc_record_date(_t)
+            if _rec:
+                _t.date = _rec
+                _t.date_settle = _rec
     if req.country == 'canada':
         # The parsers book a stock dividend as a neutral $0 event; the
         # Canadian cost is its declared amount, which the export does
@@ -1000,6 +1033,31 @@ def run_gains(transactions, sheltered_transactions=(),
         t for t in results.get('transactions', []) if t.get('tainted', False)
     ]
 
+    # Income rows: the date whose year they belong to, and (Canada) the
+    # character of a payment in lieu — lib/income_dating, the same rules
+    # the .sum income section and the views apply.
+    _by_id = {getattr(t, 'id', None): t for t in transactions}
+    for _e in results.get('transactions', []):
+        if _e.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
+            continue
+        _src = _by_id.get(_e.get('id'))
+        if _src is None:
+            continue
+        _idate = income_rules.income_date(_src)
+        if _idate and _idate != _e.get('date'):
+            _e['income_date'] = _idate
+            if _src.record_date:
+                _e['record_date'] = _src.record_date
+        if income_rules.pil_is_dividend(_src):
+            # ITA s.260(5)/(5.1): a Canadian dealer's payment in lieu
+            # on a Canadian issuer's share is a taxable dividend (the
+            # dealer's T5 box 24): counted with the dividends, kept
+            # recognisable as a payment in lieu.
+            _amt = float(_e.get('pil') or 0.0)
+            _e['dividend'] = _amt
+            _e['pil'] = 0.0
+            _e['deemed_dividend'] = 'ITA s.260'
+
     # Filter by year if specified. --tax-date picks which date drives the
     # filter: 'trade' (default) or 'settle'. Trades that close on Dec 30/31
     # but settle on Jan 1/2 of the following year fall in different tax
@@ -1017,7 +1075,11 @@ def run_gains(transactions, sheltered_transactions=(),
             # the latent divergence (and the sum_income tool already filters
             # on 'date', so the .sum sections agree by construction).
             if rec.get('action') in _INCOME_ACTIONS:
-                key = 'date'
+                # lib/income_dating: a Canadian trust's distribution by
+                # its record date, a listed US January RIC dividend on
+                # Dec 31; everything else by its pay date.
+                return (rec.get('income_date') or rec.get('date')
+                        or '').startswith(year_str)
             return (rec.get(key) or rec.get('date', '')).startswith(year_str)
 
         results['transactions'] = [t for t in results['transactions'] if in_year(t)]
@@ -1077,6 +1139,10 @@ def run_gains(transactions, sheltered_transactions=(),
                 if action == 'DIVIDEND':
                     stats['total_div'] += float(t.get('dividend', 0.0) or 0.0)
                 elif action == 'DIVIDEND_IN_LIEU':
+                    # A Canadian s.260 payment in lieu carries its
+                    # amount as 'dividend' (see the income pass above).
+                    stats['total_div'] += float(t.get('dividend', 0.0)
+                                                or 0.0)
                     # PIL is its own bucket — same per-ticker association
                     # as a dividend but bucketed separately so downstream
                     # T5 totals stay clean. Before this branch, PIL rows
@@ -1309,6 +1375,14 @@ def option_timing_from_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
             f"false, unquoted (got {bb!r})")
     return {"option_premium_timing": timing, "option_grant_since": since,
             "option_buyback_loss_superficial": bool(bb)}
+
+
+def income_dating_flags(settings: Dict[str, Any]) -> List[str]:
+    """The project's income-dating overrides ([settings]
+    corporate_distributions / ric_january_dividends) as taxjson-gains /
+    taxjson-sum-income flags (lib/income_dating)."""
+    from taxjson.lib.income_dating import IncomeRules
+    return IncomeRules.from_settings(settings).cli_flags()
 
 
 def option_timing_flags(settings: Dict[str, Any]) -> List[str]:
