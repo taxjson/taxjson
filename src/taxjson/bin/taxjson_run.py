@@ -7883,10 +7883,11 @@ def cmd_positions(args: argparse.Namespace) -> None:
     as_of = getattr(args, "date", None)
     if as_of:
         # Positions AS OF a date: recompute each account's books from
-        # its base.json with the engine's --as-of cutoff. Full ACB
-        # fidelity (incl. deferred wash) but PRE-WASH and PRE-ticker.map
+        # its base.json with the engine's --as-of cutoff. Deferred wash
+        # within the account is kept, but it is PER-ACCOUNT ACB (no s.47
+        # blend across taxable accounts), PRE-WASH and PRE-ticker.map
         # (the cross-account pass only exists for full runs) — the
-        # basis label says so.
+        # basis label says so (2026-09 audit S044-21).
         import re as _re
         if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", as_of):
             sys.exit("taxjson list: --date expects YYYY-MM-DD")
@@ -7952,7 +7953,28 @@ def cmd_positions(args: argparse.Namespace) -> None:
         if not files:
             sys.exit(f"taxjson list: no base files in {cache} "
                      f"(run `taxjson run` first).")
-        basis = f"as of {as_of} (pre-wash, pre-ticker.map)"
+        basis = (f"as of {as_of} (per-account ACB, pre-wash, "
+                 f"pre-ticker.map)")
+        # A symbol held in two taxable accounts has ONE s.47 ACB on the
+        # return (plain `list` shows it); this view recomputes each
+        # account alone, so its cost differs — say so rather than
+        # present it as the filing ACB (2026-09 audit S044-21).
+        _held: Dict[str, List[str]] = {}
+        for n, doc in tmp_docs.items():
+            if accounts_cfg.get(n, {}).get("type") != "taxable":
+                continue
+            for it in (doc.get("inventory") or []):
+                if abs(float(it.get("qty") or 0.0)) > 1e-9:
+                    _held.setdefault(str(it.get("symbol")), []).append(n)
+        _shared = sorted(s_ for s_, a in _held.items() if len(set(a)) > 1)
+        if _shared:
+            print(f"taxjson list: note: --date shows each account's OWN "
+                  f"ACB; {len(_shared)} symbol(s) held in more than one "
+                  f"taxable account ({', '.join(_shared[:5])}"
+                  f"{' ...' if len(_shared) > 5 else ''}) have one "
+                  f"blended (s.47) ACB on the return — plain `taxjson "
+                  f"list` shows it for the current books.",
+                  file=sys.stderr)
     else:
         files = resolve_gains_files(cache, args.account or None)
         if not files:
@@ -11208,9 +11230,10 @@ def main() -> None:
              "after ticker.map consolidation and base-currency conversion")
     p_pos.add_argument("account", nargs="?", help="Account (default: all)")
     p_pos.add_argument("--date", metavar="YYYY-MM-DD", default=None,
-                       help="Positions AS OF this date — books recomputed "
-                            "with the engine's --as-of cutoff (full "
-                            "ACB/deferred fidelity; pre-wash, "
+                       help="Positions AS OF this date — each account's "
+                            "books recomputed alone with the engine's "
+                            "--as-of cutoff (per-account ACB: no s.47 "
+                            "blend across taxable accounts; pre-wash, "
                             "pre-ticker.map)")
     p_pos.add_argument("--negative", action="store_true",
                        help="Show only positions with negative quantity "

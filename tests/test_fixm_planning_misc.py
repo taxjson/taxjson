@@ -397,5 +397,25 @@ class TestGainsNamesSkippedRawStage(unittest.TestCase):
             self.assertIn("rerunning will not create them", g1.stderr)
 
 
+# ------------------------------------------------- S044-21 list --date
+class TestListAsOfSaysPerAccount(unittest.TestCase):
+    def test_label_and_note_name_the_per_account_basis(self):
+        a = "BUYSELL 2025-03-03 10:00:00 ZZZ.TO 100 CAD 30.00 -3000.00 0.00\n"
+        b = "BUYSELL 2025-03-03 10:00:00 ZZZ.TO 100 CAD 10.00 -1000.00 0.00\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, [("acctA", "taxable"), ("acctB", "taxable")],
+                            {"acctA": a, "acctB": b}, year=2025)
+            r = _cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            j = _cli(root, "list", "--date", "2025-06-30", "--json")
+            t = _cli(root, "list", "--date", "2025-06-30")
+            h = _cli(root, "list", "--help")
+        self.assertEqual(j.returncode, 0, j.stderr)
+        self.assertIn("per-account ACB", json.loads(j.stdout)["basis"])
+        self.assertIn("ZZZ.TO", t.stderr)
+        self.assertIn("s.47", t.stderr)
+        self.assertNotIn("full ACB", h.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

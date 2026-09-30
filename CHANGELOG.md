@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`list --date` says its ACB is per account.** The as-of view
+  recomputes each account alone, so a symbol held in two taxable
+  accounts shows each account's own cost, not the s.47 blend the return
+  uses. The label, `--help` and README now say so (they claimed "full
+  ACB fidelity"), and a note names the shared symbols (audit S044-21).
 - **Account names that collide with work/ artifacts are refused.** A
   name ending in `_raw`, `_base`, `_gains`, `_wash`, `_tt` (and a few
   other artifact suffixes), or the name `sheltered`, now stops every
