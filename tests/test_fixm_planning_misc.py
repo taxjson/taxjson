@@ -8,7 +8,7 @@ artifact findings.
   R1-336  taxjson-missing-history gives no all-clear when an input failed
   S047-18 find-missing-history names configured accounts with no book
   S029-16 taxjson-diff compares manual_reporting_required rows
-  S030-08 holdings TOML cost_per_share is per share for options
+  S030-08 holdings TOML states cost_per_share is per contract for options
   R1-208  the .sum TOTAL PROCEEDS/COST say they are the engine convention
   R1-310  sum-income year filter, withholding and grand total pinned
   S022-00 / S041-14  account names that shadow artifact suffixes refused
@@ -230,6 +230,30 @@ class TestDiffManualReporting(unittest.TestCase):
         r = self._diff(run1, run3)
         self.assertIn("1 modified", r.stdout)
         self.assertIn("proceeds", r.stdout)
+
+
+# --------------------------------------------------------- S030-08 TOML
+class TestHoldingsTomlOptionUnits(unittest.TestCase):
+    def test_option_cost_per_share_unit_is_stated(self):
+        import tomllib
+        tt = ("BUYSELL 2026-03-02 10:00:00 XYZ270115C00050000.TO 2 CAD 5.00 "
+              "-1001.30 1.30\n"
+              "BUYSELL 2026-03-09 10:00:00 XYZ270115C00050000.TO -1 CAD 4.00 "
+              "399.35 0.65\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, [("margin", "taxable")], {"margin": tt},
+                            year=2026)
+            r = _cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            text = (root / "reports" / "margin_holdings.toml").read_text()
+        doc = tomllib.loads(text)
+        h = [x for x in doc["holding"] if x["asset_type"] == "option"][0]
+        # Unchanged value convention (shared with the broker files):
+        # total_cost / quantity.
+        self.assertAlmostEqual(h["cost_per_share"],
+                               h["total_cost"] / h["quantity"], places=4)
+        self.assertIn("per CONTRACT", text)
+        self.assertIn("contract_multiplier", text)
 
 
 if __name__ == "__main__":

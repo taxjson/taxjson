@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Holdings TOML states its option cost unit.** `cost_per_share` in
+  `reports/<account>_holdings.toml` is `total_cost / quantity` (per
+  contract for an option, the convention the broker holdings files
+  share); the file and README now say so next to `contract_multiplier`
+  and the per-share trade prices (audit S030-08).
 - **`taxjson-diff` sees hand-reported dispositions.** Rows the pipeline
   moves to `manual_reporting_required` (phantom basis) are compared too,
   so adding, dropping or changing one is no longer "0 added | 0 removed"
