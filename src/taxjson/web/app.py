@@ -141,9 +141,10 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
             holding, error, status = None, str(e), 404
         except ReportArtifactError as e:
             holding, error = None, str(e)
+        from taxjson.lib.core import is_option_symbol
         return page("holding_detail.html", request, status_code=status,
                     account=account, symbol=symbol, holding=holding,
-                    error=error)
+                    error=error, is_option=is_option_symbol(symbol))
 
     @app.get("/wash-radar", response_class=HTMLResponse)
     def wash_radar(request: Request, account: str = ""):

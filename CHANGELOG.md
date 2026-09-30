@@ -14,6 +14,16 @@
   no window and `buy-check` said SAFE. The radar now reads the engine's
   gains files (grant-timed buy-back losses are not wash losses unless
   `option_buyback_loss_superficial` is on).
+- **Web what-if prices options per contract.** Selling an option on the
+  holding page used qty x price, 100 times too little, and showed a ~99%
+  loss. Proceeds are now qty x premium x 100 (the page labels the field
+  as the per-share premium and the cost as per contract); a futures
+  option is refused rather than priced with a guessed multiplier.
+- **Web what-if maps cross-listed options like the pipeline.** An option
+  on a `TOBASE`/`GLOBAL`-mapped underlying (a `.US` call booked as
+  `.TO`) was looked up under its unmapped name, and the what-if
+  simulated writing a new short. It now follows the underlying's rule,
+  and a sale that would open a short is refused.
 - **The wash radar applies `phantoms.json`.** Phantom-backed positions
   showed as shorts (rebuys as short covers with invented losses) in the
   radar, `watch`, `buy-check`, `sell-check`, harvest's ADVISORY and the

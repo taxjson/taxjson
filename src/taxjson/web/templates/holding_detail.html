@@ -9,7 +9,7 @@
   {% if holding.mixed_currency %}
   cost <b>MIXED</b> ({% for k, v in holding.items() | sort if k.startswith('total_cost_') %}{{ v }} {{ k[11:] | upper }}{% if not loop.last %} + {% endif %}{% endfor %}) ·
   {% else %}
-  cost/sh {{ holding.cost_per_share }} {{ holding.currency }} ·
+  {% if is_option %}cost/contract{% else %}cost/sh{% endif %} {{ holding.cost_per_share }} {{ holding.currency }} ·
   {% endif %}
   base {{ holding.base_cost_per_share | default('—') }} {{ holding.base_currency | default('') }} ·
   since {{ holding.position_start_date | default('—') }}
@@ -37,9 +37,10 @@
   <input type="hidden" name="symbol" value="{{ symbol }}">
   <input type="hidden" name="price_currency" value="{{ holding.currency or ctx.base_currency }}">
   <label>Qty <input name="qty" type="number" step="any" value="{{ holding.quantity }}" required></label>
-  <label>Price ({{ holding.currency or ctx.base_currency }}) <input name="price" type="number" step="any" required></label>
+  <label>{% if is_option %}Premium per share{% else %}Price{% endif %} ({{ holding.currency or ctx.base_currency }}) <input name="price" type="number" step="any" required></label>
   <button type="submit">Simulate</button>
 </form>
+{% if is_option %}<p class="muted">Option: enter the quoted premium per share (as in the trade table); proceeds are qty &times; premium &times; 100 per contract.</p>{% endif %}
 <p class="muted">Enter the price in the holding's own currency ({{ holding.currency or ctx.base_currency }}); it is converted to {{ ctx.base_currency }} at today's rate before the engine computes the gain and any superficial-loss.</p>
 {% else %}
 <p class="muted">No open position for {{ symbol }} in {{ account }}.</p>
