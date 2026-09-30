@@ -1,4 +1,4 @@
-"""The account-type check every config reader applies.
+"""The account-type (and account-name) check every config reader applies.
 
 Every filing command partitions accounts with an exact match on
 `type == "taxable"` / `"sheltered"`. A typo'd or missing type matches
@@ -13,6 +13,37 @@ from typing import Any, Dict, List
 
 ACCOUNT_TYPES = ("taxable", "sheltered")
 
+# Every per-account artifact is work/<name>_<suffix>.json, so an account
+# named `<other>_raw` owns `<other>_raw_base.json` — the other account's
+# native books — and the gains discovery skips any `*_raw_gains.json`
+# as a derivative: the account's gains vanished from sum/estimate, or
+# overwrote a sibling's (2026-09 audit S022-00, S041-14). A name ending
+# in one of these, or the combined book's own name, is refused.
+RESERVED_NAME_SUFFIXES = ("_raw", "_base", "_gains", "_wash", "_merged",
+                          "_sorted", "_filled", "_mapped", "_report",
+                          "_tt", "_manifest", "_sources")
+RESERVED_NAMES = ("sheltered",)
+
+
+def account_name_problem(name: str) -> str:
+    """A message when `name` would collide with a pipeline artifact
+    name, else ''."""
+    n = str(name)
+    low = n.lower()
+    if low in RESERVED_NAMES:
+        return (f"[accounts.{n}]: {n!r} is reserved (work/{n}_base.json "
+                f"is the combined registered-account book) — rename the "
+                f"account (and its inputs/{n}/ folder)")
+    for suf in RESERVED_NAME_SUFFIXES:
+        if low.endswith(suf):
+            return (f"[accounts.{n}]: an account name may not end in "
+                    f"{suf!r} — work/{n}_*.json would collide with the "
+                    f"pipeline's per-account {suf.lstrip('_')} artifacts "
+                    f"(one account's books overwrite or hide another's). "
+                    f"Rename the account (and its inputs/{n}/ folder), "
+                    f"e.g. {n[:-len(suf)] + suf.replace('_', '-')!r}")
+    return ""
+
 
 def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
     """One message per [accounts.*] entry that is not a table or whose
@@ -23,6 +54,10 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
     if not isinstance(accounts, dict):
         return ["[accounts] must be a table of [accounts.<name>] sections"]
     for name, acfg in accounts.items():
+        clash = account_name_problem(name)
+        if clash:
+            out.append(clash)
+            continue
         if not isinstance(acfg, dict):
             out.append(f"[accounts.{name}] must be a table")
             continue

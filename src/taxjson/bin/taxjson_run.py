@@ -1817,6 +1817,16 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   f"after a cross-currency rollover rename. "
                   f"{name}_holdings.toml was NOT refreshed this run.",
                   file=sys.stderr)
+            # The native books of an EARLIER run (before the rollover
+            # rows arrived) would otherwise keep serving `taxjson gains`
+            # without the rolled-over disposition (2026-09 audit S037-23).
+            for _stale in (cache / f"{name}_raw_gains.json",
+                           cache / f"{name}_raw_base.json",
+                           cache / f"{name}_raw_base_gains.json"):
+                if _stale.exists():
+                    _stale.unlink()
+                    print(f"  removed stale {_stale.name}",
+                          file=sys.stderr)
         else:
             raw_gains = cache / f"{name}_raw_gains.json"
             if force or needs_rebuild(raw_gains, raw_json):
@@ -5170,6 +5180,14 @@ def cmd_gains(args: argparse.Namespace) -> None:
     if account:
         accounts = [account]
         if not (cache / f"{account}{suffix}").exists():
+            if (cache / f"{account}_base.json").exists():
+                sys.exit(f"taxjson gains: no native gains for account "
+                         f"{account!r}: crypto accounts have none, and "
+                         f"an equity account's native books are skipped "
+                         f"after a cross-currency rollover rename (see "
+                         f"the run's '!! raw holdings skipped' line) — "
+                         f"rerunning will not create them; its converted "
+                         f"gains are in `taxjson sum`.")
             sys.exit(f"taxjson gains: no native gains for account "
                      f"{account!r} in {cache} (crypto has none; else run "
                      f"`taxjson run`, or check the name).")
@@ -5177,6 +5195,20 @@ def cmd_gains(args: argparse.Namespace) -> None:
         accounts = sorted(p.name[: -len(suffix)]
                           for p in cache.glob(f"*{suffix}")
                           if not p.name.startswith("."))
+        # A configured equity account with converted books but no native
+        # gains had its raw stage skipped (a cross-currency rollover
+        # rename): say so, or the view silently omits the whole account
+        # while `sum` counts it (2026-09 audit S037-23).
+        for _n, _c in sorted((_soft_config(root).get("accounts")
+                              or {}).items()):
+            if (isinstance(_c, dict) and not _c.get("crypto")
+                    and _n not in accounts
+                    and (cache / f"{_n}_base.json").exists()):
+                print(f"taxjson gains: note: account {_n!r} has no native "
+                      f"gains (the last run skipped its native books — "
+                      f"see its '!! raw holdings skipped' line); its "
+                      f"converted gains are in `taxjson sum` / "
+                      f"`taxjson winners`.", file=sys.stderr)
         if not accounts:
             sys.exit(f"taxjson gains: no native gains files in {cache} "
                      f"(run `taxjson run` first).")

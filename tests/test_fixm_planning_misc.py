@@ -335,5 +335,67 @@ class TestSumIncomeYearPin(unittest.TestCase):
         self._check_text(r.stdout)
 
 
+# --------------------------------------------- S022-00 / S041-14 names
+class TestReservedAccountNames(unittest.TestCase):
+    def test_suffix_names_refused_by_every_reader(self):
+        for name in ("cb_raw", "margin_raw", "x_base", "y_gains", "sheltered"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = _project(tmp, [("margin", "taxable"),
+                                      (name, "taxable")], {})
+                (root / "work").mkdir()
+                (root / "work" / "margin_gains.json").write_text(json.dumps(
+                    {"summary": {"year": 2024}, "transactions": [],
+                     "inventory": []}))
+                for cmd in (("run", "--no-input"), ("sum",), ("gains",)):
+                    r = _cli(root, *cmd)
+                    self.assertNotEqual(r.returncode, 0, (name, cmd))
+                    self.assertIn(name, r.stderr)
+
+    def test_ordinary_names_still_accepted(self):
+        from taxjson.lib.config_check import account_name_problem
+        for name in ("margin", "margin2", "rrsp_raw2", "tfsa-base",
+                     "margin_us", "ib_rawdata"):
+            self.assertEqual(account_name_problem(name), "", name)
+
+
+# ------------------------------------------------- S037-23 native gains
+class TestGainsNamesSkippedRawStage(unittest.TestCase):
+    TT = ("BUYSELL 2025-03-03 10:00:00 XIU.TO 100 CAD 30.00 -3000.00 0.00\n"
+          "BUYSELL 2025-04-03 10:00:00 XIU.TO -100 CAD 35.00 3500.00 0.00\n")
+
+    def test_skip_removes_stale_native_books_and_gains_says_so(self):
+        from unittest import mock
+        from taxjson.bin import taxjson_run as tr
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, [("margin", "taxable"),
+                                  ("tfsa", "sheltered")],
+                            {"margin": self.TT, "tfsa": self.TT}, year=2025)
+            r = _cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertTrue((root / "work" / "margin_raw_gains.json").exists())
+            # Second run: margin's raw merge now pools two currencies
+            # (a cross-currency rollover rename) — the raw stage skips.
+            real = tr._raw_mixed_currency_symbols
+            with mock.patch.object(
+                    tr, "_raw_mixed_currency_symbols",
+                    side_effect=lambda p: (["SSL.TO"]
+                                           if p.name == "margin_raw.json"
+                                           else real(p))), \
+                    mock.patch.object(sys, "argv",
+                                      ["taxjson", "-C", str(root), "run",
+                                       "--no-input"]):
+                try:
+                    tr.main()
+                except SystemExit as e:
+                    self.assertFalse(e.code)
+            self.assertFalse((root / "work" / "margin_raw_gains.json").exists())
+            g = _cli(root, "gains", "2025")
+            self.assertEqual(g.returncode, 0, g.stderr)
+            self.assertIn("'margin' has no native gains", g.stderr)
+            g1 = _cli(root, "gains", "2025", "margin")
+            self.assertNotEqual(g1.returncode, 0)
+            self.assertIn("rerunning will not create them", g1.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

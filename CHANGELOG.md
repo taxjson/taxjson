@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Account names that collide with work/ artifacts are refused.** A
+  name ending in `_raw`, `_base`, `_gains`, `_wash`, `_tt` (and a few
+  other artifact suffixes), or the name `sheltered`, now stops every
+  command with a rename hint: `cb_raw` silently vanished from `sum` and
+  the estimate, and `margin_raw` overwrote `margin`'s native books
+  (audit S022-00, S041-14).
+- **`taxjson gains` names an account with no native gains.** After a
+  cross-currency rollover skips an account's native books, the run
+  deletes the previous run's stale native gains and `taxjson gains` says
+  the account is missing and why, instead of omitting it or serving the
+  old rows (audit S037-23).
 - **The `.sum` TOTAL PROCEEDS / TOTAL COST are labelled.** They are the
   engine's signed figures (shorts and written options negated), not the
   Schedule 3 proceeds and ACB; the report and KNOWN_ISSUES now point to
