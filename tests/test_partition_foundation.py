@@ -231,6 +231,19 @@ class TestSettingOwnership(unittest.TestCase):
                     validate_config(cfg)
                 self.assertIn(key, str(cm.exception.code))
 
+    def test_tax_date_against_the_country_default_is_said(self):
+        from taxjson.bin.taxjson_run import validate_config
+        for c, td, warned in (("canada", "settle", False),
+                              ("canada", "trade", True),
+                              ("usa", "trade", False),
+                              ("usa", "settle", True)):
+            with self.subTest(country=c, tax_date=td):
+                w = validate_config({"settings": {
+                    "year": 2025, "country": c, "tax_date": td,
+                    "base_currency": C.home_currency(c)},
+                    "accounts": {"m": {"type": "taxable"}}})
+                self.assertEqual(any("tax_date" in m for m in w), warned, w)
+
     @rule("CA-ACB-08")
     @rule_absent("CA-ACB-08", country="usa")
     def test_foreign_roc_rule_is_canadian(self):
@@ -283,6 +296,24 @@ class TestFlagOwnership(unittest.TestCase):
             self.assertEqual(audit.returncode, 2)
             self.assertIn("--option-buyback-wash is Canada-only",
                           audit.stderr)
+
+    @rule("US-CTRY-02")
+    @rule_absent("US-CTRY-02", country="canada")
+    def test_canadian_estimate_flags_refused_in_a_us_project(self):
+        """`estimate --province XX` in a US project was silently ignored
+        (COMMANDS-10 / SPEC-09); --deductions was refused only by the
+        estimate itself."""
+        with tempfile.TemporaryDirectory() as td:
+            p = projects_both(td, files=_GAINS_FILE, canada={"province": "ON"})
+            for flag in (["--province", "BC"], ["--deductions", "1000"],
+                         ["--carrying-charges", "50"]):
+                with self.subTest(flag=flag[0]):
+                    r = cli_both(p, "estimate", "--other-income", "0", *flag)
+                    self.assertNotEqual(r["usa"].returncode, 0)
+                    self.assertIn(f"{flag[0]} is Canada-only",
+                                  r["usa"].stderr)
+                    self.assertEqual(r["canada"].returncode, 0,
+                                     r["canada"].stderr)
 
     @rule("CA-CTRY-02")
     @rule_absent("CA-CTRY-02", country="usa")
@@ -817,6 +848,67 @@ class TestEnginePartition(unittest.TestCase):
         # floors at zero, no deemed row.
         self.assertTrue(all(not t.get("deemed")
                             for t in r["usa"]["transactions"]))
+
+    @rule("US-WASH-05")
+    @rule_absent("US-WASH-05", country="canada")
+    @rule("CA-SL-07")
+    @rule_absent("CA-SL-07", country="usa")
+    def test_reshort_after_short_cover_loss(self):
+        book = [tx("BUYSELL", "2025-01-02", "JJJ.US", -100, 1000),
+                tx("BUYSELL", "2025-02-03", "JJJ.US", 100, 1200),
+                tx("BUYSELL", "2025-02-10", "JJJ.US", -100, 1200),
+                tx("BUYSELL", "2025-04-01", "JJJ.US", 100, 1100)]
+        r = gains_both(book)
+        # Canada: shorting again acquires nothing -> the -200 stands.
+        self.assertEqual(r["canada"]["summary"]["total_disallowed"], 0)
+        # US (Reg. 1.1091-1(g)): the re-short is a replacement.
+        self.assertAlmostEqual(r["usa"]["summary"]["total_disallowed"],
+                               200.0, places=2)
+
+    @rule("US-WASH-11")
+    @rule_absent("US-WASH-11", country="canada")
+    @rule("CA-SL-02")
+    def test_sheltered_rebuy_sold_before_day_30(self):
+        book = [tx("BUYSELL", "2025-01-02", "HHH.US", 100, 1000),
+                tx("BUYSELL", "2025-02-03", "HHH.US", -100, 800)]
+        ira = [tx("BUYSELL", "2025-02-05", "HHH.US", 100, 800,
+                  account="55500002"),
+               tx("BUYSELL", "2025-02-12", "HHH.US", -100, 820,
+                  account="55500002")]
+        r = gains_both(book, sheltered=ira)
+        perm = {c: round(sum(t.get("permanently_disallowed", 0.0) or 0.0
+                             for t in r[c]["transactions"]), 2)
+                for c in C.COUNTRIES}
+        # Canada: the registered rebuy is gone by day 30 -> allowed.
+        self.assertEqual(r["canada"]["summary"]["total_disallowed"], 0)
+        self.assertEqual(perm["canada"], 0)
+        # US: an IRA replacement makes the loss permanent (no held test).
+        self.assertAlmostEqual(perm["usa"], 200.0, places=2)
+
+    @rule("CA-DATE-02")
+    @rule("US-DATE-02")
+    def test_explicit_tax_date_overrides_the_country_default(self):
+        book = [tx("BUYSELL", "2025-06-02", "GGG.US", 100, 1000),
+                tx("BUYSELL", "2025-12-31", "GGG.US", -100, 1500,
+                   settle="2026-01-02")]
+        for basis, want in (("trade", "2025"), ("settle", "2026")):
+            r = gains_both(book, year=int(want), tax_date=basis)
+            for c in C.COUNTRIES:
+                with self.subTest(basis=basis, country=c):
+                    self.assertEqual(len(_gain_rows(r[c])), 1)
+                    self.assertEqual(r[c]["summary"]["tax_date_basis"],
+                                     basis)
+
+    def test_us_ladder_defaults_to_trade_dates(self):
+        """ENGINE-13: event_sort_key's default basis follows the ladder's
+        country (the US one used Canada's settle-first date)."""
+        from taxjson.lib.corporate_timeline import event_sort_key
+        a = tx("BUYSELL", "2025-12-31", "X.US", 1, 1, settle="2026-01-02")
+        b = tx("BUYSELL", "2026-01-01", "X.US", 1, 1, settle="2026-01-01")
+        us = sorted([b, a], key=lambda t: event_sort_key(t, profile="us_main"))
+        ca = sorted([a, b], key=lambda t: event_sort_key(t, profile="ca_main"))
+        self.assertEqual([t.date for t in us], ["2025-12-31", "2026-01-01"])
+        self.assertEqual([t.date for t in ca], ["2026-01-01", "2025-12-31"])
 
     @rule("CA-DATE-01")
     @rule_absent("CA-DATE-01", country="usa")

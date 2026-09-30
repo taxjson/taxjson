@@ -247,13 +247,17 @@ CONFIG_WHY: Dict[str, str] = {
     "[estimate] carrying_charges": "line 22100 of the Canadian return",
 }
 
-# Engine CLI flags (taxjson-gains, -explain, -audit, carryover) owned by
-# one country.
+# CLI flags owned by one country: the engine CLIs' (taxjson-gains,
+# -explain, -audit, -carryover: refuse_foreign_flags) and `taxjson`'s
+# estimate flags (sum/estimate/instalments: checked at dispatch).
 FLAG_COUNTRY: Dict[str, str] = {
     "--option-premium-timing": CANADA,
     "--option-grant-since": CANADA,
     "--option-buyback-wash": CANADA,
     "--per-account-basis": USA,
+    "--province": CANADA,
+    "--deductions": CANADA,
+    "--carrying-charges": CANADA,
 }
 
 FLAG_WHY: Dict[str, str] = {
@@ -262,6 +266,9 @@ FLAG_WHY: Dict[str, str] = {
     "--option-buyback-wash": "ITA s.54",
     "--per-account-basis": "US FIFO basis per account; Canada pools "
                            "identical property across accounts (s.47)",
+    "--province": "provincial tax in the Canadian estimate",
+    "--deductions": "lines 20700-23500 of the Canadian return",
+    "--carrying-charges": "line 22100 of the Canadian return",
 }
 
 # `taxjson` subcommands (or command:variant) owned by one country.
@@ -360,7 +367,7 @@ def flag_country_problems(country: str, given: Mapping[str, Any], *,
             continue
         out.append(f"{tool + ': ' if tool else ''}{flag} is "
                    f"{DISPLAY_NAME[owner]}-only ({FLAG_WHY.get(flag, '')}); "
-                   f"it does not apply with --country {c}")
+                   f"it does not apply to country {c}")
     return out
 
 
@@ -429,7 +436,17 @@ def add_country_argument(parser, *, help: str = "") -> None:
 _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
                "--option-grant-since": "option_grant_since",
                "--option-buyback-wash": "option_buyback_wash",
-               "--per-account-basis": "per_account_basis"}
+               "--per-account-basis": "per_account_basis",
+               "--province": "province",
+               "--deductions": "deductions",
+               "--carrying-charges": "carrying_charges"}
+
+
+def given_flags(args) -> Dict[str, Any]:
+    """{flag: value} of the FLAG_COUNTRY flags an argparse Namespace
+    carries (absent attributes are None)."""
+    return {flag: getattr(args, attr, None)
+            for flag, attr in _FLAG_ATTRS.items()}
 
 
 def refuse_foreign_flags(args, tool: str) -> None:
@@ -439,9 +456,8 @@ def refuse_foreign_flags(args, tool: str) -> None:
     had no effect (partition ENGINE-03). Call BEFORE any default is
     filled into those attributes."""
     import sys
-    given = {flag: getattr(args, attr, None)
-             for flag, attr in _FLAG_ATTRS.items()}
-    problems = flag_country_problems(args.country, given, tool=tool)
+    problems = flag_country_problems(args.country, given_flags(args),
+                                     tool=tool)
     if problems:
         for p in problems:
             print(p, file=sys.stderr)

@@ -161,7 +161,7 @@ def _ownership(country: str) -> List[Rule]:
         parts.append(f"{other_name}-only commands ("
                      + ", ".join(_cmd(c) for c in cmds) + ")")
     if flags:
-        parts.append("the engine flag" + ("s " if len(flags) > 1 else " ")
+        parts.append("the flag" + ("s " if len(flags) > 1 else " ")
                      + ", ".join(flags))
     cur = _C.HOME_CURRENCY[country]
     return [

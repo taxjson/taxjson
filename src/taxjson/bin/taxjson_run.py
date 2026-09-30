@@ -688,6 +688,18 @@ def validate_config(cfg: Dict[str, Any],
         _die(_problems[0] if len(_problems) == 1 else
              "taxjson.toml:\n  " + "\n  ".join(_problems))
     settings = cfg["settings"]
+    # tax_date against the country's practice: allowed (both countries
+    # own the key) but said, once per run (partition INPUTS-05).
+    from taxjson.lib.country import default_tax_date as _dtd
+    _td, _c = settings.get("tax_date"), settings["country"]
+    if _td is not None and _td != _dtd(_c):
+        warnings.append(
+            f"[settings] tax_date = \"{_td}\" in a {_c} project: "
+            + ("the IRS dates a disposition by its TRADE date (the US "
+               "default)" if _c == "usa" else
+               "CRA practice dates a disposition by its SETTLEMENT date "
+               "(the Canadian default)")
+            + " — keep it only if you mean to depart from that")
     _opt = settings.get("option_premium_timing")
     if _opt is not None and str(_opt).strip().lower() not in ("grant", "close"):
         _die(f"[settings] option_premium_timing must be \"grant\" or "
@@ -13252,18 +13264,27 @@ def _enforce_command_country(args: argparse.Namespace) -> None:
     every entry point (partition audit R3: t1135, option-boundary and
     form-export --form schedule3 ran in US projects and gave Canadian
     advice; 8949/txf in a Canada project failed only by accident)."""
-    from taxjson.lib.country import command_country, command_country_problem
+    from taxjson.lib.country import (command_country, command_country_problem,
+                                     flag_country_problems, given_flags)
     cmd = getattr(args, "cmd", "") or ""
     variant = getattr(args, "form", None) if cmd == "form-export" else None
-    if command_country(cmd, variant) is None:
+    flags = {f: v for f, v in given_flags(args).items()
+             if v not in (None, False, "")}
+    if command_country(cmd, variant) is None and not flags:
         return
     settings = _soft_settings(Path(args.dir).resolve())
     if not settings:
         _die("no taxjson.toml here — this command needs a project "
              "(its country decides whether it applies).")
-    msg = command_country_problem(cmd, _country(settings), variant)
+    country = _country(settings)
+    msg = command_country_problem(cmd, country, variant)
     if msg:
         _die(msg)
+    # `estimate --province XX` in a US project was silently ignored
+    # (partition COMMANDS-10 / SPEC-09): FLAG_COUNTRY, like the config.
+    problems = flag_country_problems(country, flags)
+    if problems:
+        _die("; ".join(problems))
 
 
 def _parses_ok(parser: argparse.ArgumentParser, seg: List[str]) -> bool:

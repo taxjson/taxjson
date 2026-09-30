@@ -128,6 +128,10 @@ def _settle_first(tx: Any) -> str:
     return tx.date_settle if getattr(tx, 'date_settle', '') else tx.date
 
 
+def _trade_date(tx: Any) -> str:
+    return tx.date
+
+
 def _ca_phase(tx: Any, sort_date: str) -> int:
     if tx.action == 'OPENING_BALANCE':
         return Phase.PRE_EXISTING
@@ -243,7 +247,11 @@ def event_sort_key(tx: Any, *, profile: str,
         return (tx.date, tx.time or '00:00:00')
     if profile == 'phantom_walk':
         return (tx.date,) + _walk_rest(tx)
-    d = (date_of or _settle_first)(tx)
+    # Default date basis per profile: Canada's ladders settle-first, the
+    # US ladder the TRADE date — a US caller that omitted date_of got
+    # Canada's settle-date ordering (partition ENGINE-13).
+    d = (date_of or (_trade_date if profile == 'us_main'
+                     else _settle_first))(tx)
     if profile == 'ca_main':
         return (d, _ca_phase(tx, d), tx.time, _ca_priority(tx))
     if profile == 'ca_balance':

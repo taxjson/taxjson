@@ -9,7 +9,6 @@ CA-ACB-03       ok              The single pool needs a full `taxjson run` (not 
 CA-ACB-05       ok              Sheltered accounts tracked but out of filing totals; affiliated holders for s.54
 CA-CORP-05      ok              Cash for fractional shares is handled; other cash in a merger is not modelled.
 CA-CRYPTO-06    imprecise       A send that arrives on another of your exchanges within 3 days is treated as you
-CA-DATE-02      unpinned        tax_date='trade' puts the trade in its trade-date year
 CA-DATE-03      ok              Settle dates come from the broker when printed
 CA-DATE-07      unpinned        Crypto settles on the trade date
 CA-DISP-02      ok              taxjson reports full (100%) gains; the 50% inclusion is applied by the filer on 
@@ -27,7 +26,6 @@ CA-RPT-07       ok              edge-cases: every trade whose year or superficia
 CA-RPT-08       ok              close-year records each closed year's sales, year-end positions and cost, and tr
 US-BASIS-02     ok              Specific-lot identification is not supported.
 US-BASIS-03     unpinned        Purchase commissions add to basis; sale commissions reduce proceeds.
-US-DATE-02      unpinned        tax_date = "settle": a trade belongs to the year it settles.
 US-OPT-04       ok              Not modelled: §1256 60/40 contracts, §1233 and §1259.
 US-RPT-02       ok              Wash sales as code W.
 US-RPT-03       ok              `--form txf` writes a TurboTax TXF file.
@@ -36,4 +34,3 @@ US-WASH-03      ok              The identical option is a replacement.
 US-WASH-07      ok              Look-alike securities are not detected.
 US-WASH-09      ok              The disallowed loss is added to the replacement lot's basis.
 US-WASH-10      ok              The replacement's holding period carries over.
-US-WASH-11      ok              A replacement bought in an IRA makes the disallowance permanent.

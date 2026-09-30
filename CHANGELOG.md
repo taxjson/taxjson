@@ -20,7 +20,10 @@
   "dividend"` (ITA s.90(2)) was even applied to a US filer's IB return of
   capital. `taxjson-gains`/`-explain`/`-audit`/`-carryover` refuse the
   Canada-only option flags with `--country usa` and
-  `--per-account-basis` with `--country canada`. `t1135`,
+  `--per-account-basis` with `--country canada`; `estimate`/`sum`
+  refuse `--province`, `--deductions` and `--carrying-charges` in a US
+  project (`--province XX` was silently ignored). A `tax_date` that
+  departs from the country's practice is accepted with a warning. `t1135`,
   `instalments`, `option-boundary` and `form-export --form schedule3`
   are refused in a US project (they gave CRA advice), and `form-export
   --form 8949`/`txf` in a Canada project with a country message.
