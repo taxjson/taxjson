@@ -61,12 +61,47 @@ def _held(rows: List[Dict[str, Any]], sym: str, until: str,
     return q
 
 
+_SPIN_BOOKED_RE = re.compile(r"Spinoff\s+(\S+?)\s*\u2192\s*(\S+)")
+_SPIN_ELECTIONS = ("rollover_s_86_1", "taxable_deemed_dividend",
+                   "tax_free_355", "taxable_distribution")
+
+
+def _current_events(root: Path, acct: str) -> Dict[str, Any]:
+    """The corporate-action events the broker extractors find in this
+    account's inputs NOW, by event id (the same events `taxjson run`
+    books). Elections saved under ids no current event has are stale."""
+    import contextlib
+    import io
+    from taxjson.bin.taxjson_corp_actions import EXTRACTORS
+    out: Dict[str, Any] = {}
+    try:
+        lines = (root / "work" / f"{acct}_sources.list").read_text(
+            encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for ln in lines:
+        kind, _, name = ln.partition("/")
+        ext = EXTRACTORS.get(kind)
+        path = root / "inputs" / acct / name
+        if ext is None or not path.exists():
+            continue
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                evs = ext(path, acct)
+        except Exception:
+            continue
+        for ev in evs:
+            out[ev.event_id] = ev
+    return out
+
+
 def spinoffs(root: Path, cfg: Dict[str, Any],
-             account: Optional[str] = None) -> List[Dict[str, Any]]:
+             account: Optional[str] = None) -> Dict[str, Any]:
     root = Path(root)
     cache = root / "work"
     base_cur = (cfg.get("settings", {}) or {}).get("base_currency", "CAD")
-    out = []
+    out: List[Dict[str, Any]] = []
+    stale: List[Dict[str, Any]] = []
     for acct, acfg in sorted((cfg.get("accounts") or {}).items()):
         if account and acct != account:
             continue
@@ -75,37 +110,53 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
         sheltered = (acfg or {}).get("type") != "taxable"
         rows = _rows(cache / f"{acct}_base.json")
         man = _manifest(root, acct)
+        events = {k: v for k, v in _current_events(root, acct).items()
+                  if v.action_type == "spinoff"}
         by_ev: Dict[str, List[Dict[str, Any]]] = {}
         for r in rows:
-            if r.get("corp_event_id"):
+            if r.get("corp_event_id") and str(
+                    r.get("description") or "").startswith("Spinoff"):
                 by_ev.setdefault(r["corp_event_id"], []).append(r)
+        live = sorted(set(events) | set(by_ev))
         for eid, rec in sorted(man.items()):
-            summary = rec.get("summary") or ""
-            if " spinoff:" not in summary and "spinoff" not in eid \
-                    and not str(rec.get("election", "")).startswith(
-                        ("rollover_s_86_1", "taxable_deemed_dividend",
-                         "tax_free_355")):
-                continue
-            m = re.search(r"spinoff:\s*(\S+)\s*→\s*([^\s(]+)", summary)
-            parent, child = (m.group(1), m.group(2)) if m else ("?", "?")
-            ratio = re.search(r"\(([\d.]+)-for-([\d.]+)", summary)
-            fm = _FMV_RE.search(summary)
-            broker_fmv = float(fm.group(1).replace(",", "")) if fm else 0.0
-            broker_cur = fm.group(2) if fm else ""
+            is_spin = (" spinoff:" in (rec.get("summary") or "")
+                       or rec.get("election") in _SPIN_ELECTIONS)
+            if is_spin and eid not in live:
+                stale.append({"account": acct, "event_id": eid,
+                              "summary": rec.get("summary") or ""})
+        for eid in live:
+            ev = events.get(eid)
+            rec = man.get(eid) or {}
+            booked = by_ev.get(eid, [])
+            parent = child = "?"
+            for r in booked:
+                m = _SPIN_BOOKED_RE.search(str(r.get("description") or ""))
+                if m:
+                    parent, child = m.group(1), m.group(2)
+                    break
+            if ev is not None:
+                if parent == "?":
+                    parent = ev.source_symbol
+                if child == "?":
+                    child = ev.target_symbol
+            ratio = (f"{ev.ratio:.6g} new per share ({ev.ratio_new:g} for "
+                     f"{ev.ratio_old:g})" if ev else "")
+            broker_fmv = float(getattr(ev, "target_fmv", 0) or 0) or \
+                float(getattr(ev, "fmv", 0) or 0) if ev else 0.0
+            broker_cur = ((getattr(ev, "target_currency", "") or
+                           getattr(ev, "currency", "")) if ev else "")
             hints = rec.get("hints") or {}
             fmv_ps = hints.get("fmv_per_share")
-            booked = by_ev.get(eid, [])
             income = sum(float(r.get("net_amount") or 0) for r in booked
                          if r.get("action") == "DIVIDEND")
             buys = [r for r in booked if r.get("action") == "BUYSELL"
                     and float(r.get("quantity") or 0) > 0]
             new_qty = sum(float(r.get("quantity") or 0) for r in buys)
             new_cost = sum(float(r.get("net_amount") or 0) for r in buys)
-            date = (booked[0].get("date") if booked else eid[:8])
-            if date and len(date) == 8 and date.isdigit():
-                date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
-            now = _held(rows, child, "9999-12-31", True) if child != "?" \
-                else 0.0
+            date = booked[0].get("date") if booked else (
+                ev.date[:10] if ev else eid[:8])
+            now = _held(rows, child, "9999-12-31", True) \
+                if child != "?" else 0.0
             election = rec.get("election") or "(none)"
             flags: List[str] = []
             why: List[str] = []
@@ -127,8 +178,9 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                                f"{acct} --set {eid}=taxable_deemed_dividend "
                                "--hint fmv_per_share=<value>`.")
                 elif not fmv_ps:
-                    why.append("booked at $0 (no tax effect in a registered "
-                               "account)")
+                    why.append("booked at $0" + (
+                        f" (the broker reported {broker_fmv:,.2f} "
+                        f"{broker_cur})" if broker_fmv else ""))
             elif election == "rollover_s_86_1":
                 why.append("s.86.1 election: no income; the parent's cost "
                            "is split between the two. File the election "
@@ -148,15 +200,14 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
             out.append({
                 "account": acct, "sheltered": sheltered, "event_id": eid,
                 "date": date, "parent": parent, "child": child,
-                "ratio": (f"{ratio.group(1)}-for-{ratio.group(2)}"
-                          if ratio else ""),
-                "election": election, "fmv_per_share": fmv_ps,
-                "broker_fmv": broker_fmv, "broker_currency": broker_cur,
-                "income": round(income, 2), "new_qty": new_qty,
-                "new_cost": round(new_cost, 2), "held_now": round(now, 6),
-                "currency": base_cur, "flags": flags, "why": why})
+                "ratio": ratio, "election": election,
+                "fmv_per_share": fmv_ps, "broker_fmv": broker_fmv,
+                "broker_currency": broker_cur, "income": round(income, 2),
+                "new_qty": new_qty, "new_cost": round(new_cost, 2),
+                "held_now": round(now, 6), "currency": base_cur,
+                "flags": flags, "why": why})
     out.sort(key=lambda x: (x["date"] or "", x["account"]))
-    return out
+    return {"spinoffs": out, "stale": stale}
 
 
 def splits(root: Path, cfg: Dict[str, Any],
@@ -234,11 +285,11 @@ def splits(root: Path, cfg: Dict[str, Any],
     return out
 
 
-def render_spinoffs(items: List[Dict[str, Any]]) -> List[str]:
+def render_spinoffs(doc: Dict[str, Any]) -> List[str]:
+    items, stale = doc["spinoffs"], doc["stale"]
     L = [f"SPIN-OFFS ({len(items)})", ""]
     if not items:
         L.append("No spin-offs in the books.")
-        return L
     for s in items:
         tag = f" [{', '.join(s['flags'])}]" if s["flags"] else ""
         L.append(f"{s['date']}  {s['account']:<8} {s['parent']} -> "
@@ -253,9 +304,20 @@ def render_spinoffs(items: List[Dict[str, Any]]) -> List[str]:
         for w in s["why"]:
             L.append(f"      - {w}")
     n = sum(1 for s in items if s["flags"])
+    if stale:
+        L.append("")
+        L.append(f"{len(stale)} saved spin-off election(s) match no event "
+                 f"in the current inputs (saved by an older version, "
+                 f"nothing booked):")
+        for st in stale:
+            L.append(f"      {st['account']}: {st['event_id']}  "
+                     f"({st['summary']})")
+            L.append(f"        remove: taxjson elect {st['account']} "
+                     f"--reset --event {st['event_id']}")
     L.append("")
-    L.append(f"{n} spin-off(s) need attention." if n else
-             "Every spin-off is booked with a value.")
+    if items:
+        L.append(f"{n} spin-off(s) need attention." if n else
+                 "Every taxable spin-off is booked with a value.")
     return L
 
 

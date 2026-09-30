@@ -6354,13 +6354,13 @@ def cmd_spinoffs(args: argparse.Namespace) -> None:
     needs attention (zero value, no election, ignored)."""
     from taxjson.lib.corp_views import render_spinoffs, spinoffs
     root = Path(args.dir).resolve()
-    items = spinoffs(root, load_config(root), args.account)
+    doc = spinoffs(root, load_config(root), args.account)
     if getattr(args, "json", False):
-        _json_out({"spinoffs": items})
+        _json_out(doc)
     else:
-        for ln in render_spinoffs(items):
+        for ln in render_spinoffs(doc):
             print(ln)
-    if any(s["flags"] and not s["sheltered"] for s in items):
+    if any(s["flags"] and not s["sheltered"] for s in doc["spinoffs"]):
         raise SystemExit(1)
 
 
