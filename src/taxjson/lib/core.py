@@ -1689,7 +1689,7 @@ class CanadaTaxRules(TaxRules):
                 # Sheltered and affiliated trades both live OUTSIDE the
                 # taxable ACB pool — sheltered because registered-account
                 # property is treated as separate for cost-basis purposes,
-                # affiliated because the spouse/related-person owns it,
+                # affiliated because the spouse / controlled corp owns it,
                 # not the user. The wash-sale walk still sees them via
                 # current_tx_list (so the 30-day "still held" balance and
                 # the substitution-property rule fire correctly), but the
@@ -2149,7 +2149,7 @@ class CanadaTaxRules(TaxRules):
 
                     if is_other_scope:
                         # Sheltered (RRSP/TFSA/LIRA/RESP) and affiliated
-                        # (spouse / related-person / controlled-corp) shares
+                        # (spouse / controlled-corp / affiliated trust) shares
                         # do NOT enter the taxable ACB pool — registered
                         # accounts are separate property per CRA, and
                         # affiliated-party trades belong on the other
@@ -2276,8 +2276,15 @@ class CanadaTaxRules(TaxRules):
                                         symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                                     fee_amt = _effective_fee_for_trace(tx)
                                     rg_trace = list(symbol_acb_traces[symbol])
-                                    gain_sh = gain / abs(qty) if abs(qty) > 1e-6 else 0.0
-                                    rg_trace.append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Proceeds: {effective_proceeds:10.4f} | Cost_Basis: {cost_basis:10.4f} | Gain: {gain:10.4f} | Gain/Sh: {gain_sh:7.4f}")
+                                    # The BOOKED figures (audit S069-10):
+                                    # grant-timed units already recognised
+                                    # their premium at the write, so the
+                                    # record carries cost minus that
+                                    # premium; the trace foots to it.
+                                    gain_sh = _rec_gain / abs(qty) if abs(qty) > 1e-6 else 0.0
+                                    _prem_note = (f" | Premium_Recognized_At_Write: {_recognized:10.4f}"
+                                                  if abs(_recognized) > 1e-9 else "")
+                                    rg_trace.append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Proceeds: {effective_proceeds:10.4f} | Cost_Basis: {_rec_cost:10.4f} | Gain: {_rec_gain:10.4f} | Gain/Sh: {gain_sh:7.4f}{_prem_note}")
                                 
                                 # Apportion the sell tx's commission/fee to this
                                 # gain by the closing qty share. Matches the

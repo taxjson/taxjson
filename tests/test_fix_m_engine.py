@@ -429,3 +429,125 @@ class TestSuperficialLossRules(unittest.TestCase):
         res, _ = _run(USATaxRules(), txs, affiliated_transactions=sp)
         self.assertAlmostEqual(res['summary']['total_gain'], -1000.0,
                                places=2)
+
+
+class TestExplainText(unittest.TestCase):
+
+    def test_permanent_denial_is_called_permanent(self):
+        # R1-159: an RRSP rebuy's denial is permanent, not an ACB bump;
+        # the window states the per-holder test, not the retired
+        # class-wide one, and never claims "earliest is chosen".
+        from taxjson.lib.trace_format import render_gain_block
+        txs = _tt("""
+            BUYSELL 2026-01-05 10:00:00 ABC.TO 100 CAD 20 2000
+            BUYSELL 2026-02-10 10:00:00 ABC.TO 10 CAD 19 190
+            BUYSELL 2026-03-02 10:00:00 ABC.TO -110 CAD 10 1100
+        """)
+        rrsp = _tt("BUYSELL 2026-03-10 10:00:00 ABC.TO 100 CAD 10 1000",
+                   account='rrsp')
+        res, _ = _run(CanadaTaxRules(), txs, sheltered_transactions=rrsp,
+                      trace=True)
+        g = [r for r in res['transactions'] if r['gain'] is not None
+             and r.get('disallowed_amount')][0]
+        text = "\n".join(render_gain_block(g))
+        self.assertIn('PERMANENTLY denied', text)
+        self.assertNotIn('forwards the disallowed loss', text)
+        self.assertNotIn('across ALL accounts must be zero', text)
+        self.assertNotIn('earliest is chosen', text)
+        self.assertIn('per holder', text)
+
+    def test_grant_timed_buyback_trace_foots_to_booked_gain(self):
+        # S069-10: write @3, buy back @4 under grant timing books -400
+        # at cost 0; the trace line must say so.
+        txs = _tt("""
+            BUYSELL 2025-02-03 10:00:00 ABC250321C00050000.TO -1 CAD 3 300
+            BUYSELL 2025-02-20 10:00:00 ABC250321C00050000.TO 1 CAD 4 400
+        """)
+        res, _ = _run(CanadaTaxRules(), txs, trace=True,
+                      option_premium_timing='grant', option_grant_since=2025)
+        rec = [r for r in res['transactions']
+               if r['date'] == '2025-02-20'][0]
+        self.assertAlmostEqual(rec['gain'], -400.0, places=2)
+        line = [l for l in rec['trace'] if '2025-02-20' in l][-1]
+        self.assertIn('Cost_Basis:     0.0000', line)
+        self.assertIn('Gain:  -400.0000', line)
+        self.assertIn('Premium_Recognized_At_Write', line)
+
+
+def _cli(module, *args):
+    import subprocess
+    import sys
+    return subprocess.run([sys.executable, '-m', module, *map(str, args)],
+                          capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL)
+
+
+class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
+    """R1-165 / S029-22: a phantom-backed (tainted) sale is shown as a
+    manual-reporting row — never as an ordinary gain with a 1970
+    holding period — in the traces file and in taxjson-explain."""
+
+    def setUp(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        self.tmp = Path(tempfile.mkdtemp())
+        rows = _tt("""
+            BUYSELL 2025-03-03 10:00:00 OLD.TO -100 CAD 10 1000
+            BUYSELL 2025-04-01 10:00:00 OLD.TO 50 CAD 9 450
+            BUYSELL 2025-05-01 10:00:00 OLD.TO -50 CAD 12 600
+            BUYSELL 2025-04-01 10:00:00 NEW.TO 10 CAD 5 50
+            BUYSELL 2025-05-01 10:00:00 NEW.TO -10 CAD 6 60
+        """)
+        self.base = self.tmp / 'margin_base.json'
+        self.base.write_text(json.dumps([t.to_dict() for t in rows]))
+        self.ph = self.tmp / 'phantoms.json'
+        self.ph.write_text(json.dumps([{'symbol': 'OLD.TO',
+                                        'account': 'margin'}]))
+
+    def test_traces_file_matches_gains_json(self):
+        import json
+        tr = self.tmp / 'margin.traces'
+        p = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
+                 '--year', '2025', '--taxable', '--full-traces', tr,
+                 '--incomplete-history', self.ph, self.base)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        doc = json.loads(p.stdout)
+        text = tr.read_text()
+        self.assertAlmostEqual(doc['summary']['total_gain'], 160.0)
+        self.assertIn('total gain          +$160.00', text)
+        self.assertIn('MANUAL REPORTING', text)
+        self.assertNotRegex(text, r'days_held=2\d{4}')
+        self.assertIsNone(doc['manual_reporting_required'][0]['days_held'])
+
+    def test_explain_marks_phantom_rows(self):
+        p = _cli('taxjson.bin.taxjson_explain', '--list',
+                 '--incomplete-history', self.ph, self.base)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        line = [l for l in p.stdout.splitlines()
+                if 'OLD.TO' in l and '2025-03-03' in l][0]
+        self.assertIn('MANUAL REPORTING', line)
+        self.assertNotIn('gain=', line)
+
+    def test_explain_no_wash_for_registered_books(self):
+        # S029-21: --no-wash reproduces the pipeline's sheltered books.
+        import json
+        rows = _tt("""
+            BUYSELL 2025-01-06 10:00:00 BBB.TO 100 CAD 20 2000
+            BUYSELL 2025-03-03 10:00:00 BBB.TO -100 CAD 10 1000
+            BUYSELL 2025-03-10 10:00:00 BBB.TO 100 CAD 10 1000
+        """, account='tfsa')
+        f = self.tmp / 'tfsa_base.json'
+        f.write_text(json.dumps([t.to_dict() for t in rows]))
+        p = _cli('taxjson.bin.taxjson_explain', '--list', '--wash-sales', f)
+        self.assertIn('WASH+1000.00', p.stdout)
+        p = _cli('taxjson.bin.taxjson_explain', '--list', '--wash-sales',
+                 '--no-wash', f)
+        self.assertNotIn('WASH+', p.stdout)
+
+    def test_affiliated_help_excludes_related_persons(self):
+        # S033-15.
+        for mod in ('taxjson.bin.taxjson_gains', 'taxjson.bin.taxjson_explain'):
+            out = ' '.join(_cli(mod, '--help').stdout.split())
+            self.assertNotIn('related person,', out)
+            self.assertIn('not affiliated', out.lower())

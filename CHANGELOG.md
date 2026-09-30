@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Traces and `taxjson-explain` tell the truth about phantom rows and
+  denials.** The traces file counted phantom-basis sales (from
+  `phantoms.json`) as ordinary gains in its header and per-symbol totals
+  and gave them a holding period counted from 1970; `taxjson-explain`
+  did the same. Both now show them as MANUAL REPORTING rows outside the
+  totals (the gains JSON's manual rows carry no `days_held`). The
+  superficial-loss explanation states the per-holder rule the engine
+  applies, says PERMANENTLY denied for a registered or affiliated
+  replacement instead of "ACB pool bumped", and no longer claims "the
+  earliest is chosen as trigger". A grant-timed buy-back's trace line
+  prints the booked cost and gain. `taxjson-explain --no-wash` explains
+  a registered account's book the way `taxjson run` computes it. The
+  `--affiliated` help no longer calls a parent or sibling affiliated.
 - **Superficial-loss rule fixes.** A cover that also opens a long (buy
   150 while short 100) now counts its own 50 new shares as substituted
   property, as two separate rows already did. In a blended pass the

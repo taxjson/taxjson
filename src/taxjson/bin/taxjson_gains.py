@@ -62,9 +62,13 @@ def _parse_args():
     parser.add_argument(
         "--affiliated",
         help=(
-            "Path to AFFILIATED-PERSONS' transactions JSON (spouse, related "
-            "person, controlled corp, etc.). Their trades feed wash-sale "
-            "detection per ITA 54 / IRC §1091 affiliated-party rules; the "
+            "Path to AFFILIATED-PERSONS' transactions JSON: your spouse or "
+            "common-law partner, a corporation you control, or a trust / "
+            "partnership affiliated with you (ITA s.251.1; IRC §1091 "
+            "spouse / controlled entity). A parent, child or sibling is "
+            "related but NOT affiliated — their buys never make your "
+            "loss superficial. Their trades feed wash-sale "
+            "detection; the "
             "deferred loss attaches to THEIR substituted property and is "
             "tracked on their own return (not yours). Pure additive — pass "
             "only when you have visibility into the affiliated person's data."
@@ -88,7 +92,7 @@ def _parse_args():
              "timing (transition from books filed under close timing).")
     parser.add_argument(
         "--option-buyback-wash", action="store_true",
-        help="Canada, grant timing: treat the loss on buying back a written "
+        help="Canada, either premium timing: treat the loss on buying back a written "
              "option as a superficial loss when identical options are acquired "
              "within 30 days and held (strict reading; default off — a "
              "closing purchase is not a disposition s.54 reaches).")
@@ -417,6 +421,21 @@ def write_traces_file(results, file_path, *, country, input_path, year, tax_date
             f.write("\n")
             f.write("\n".join(render_gain_block(g)))
             f.write("\n")
+
+        # Phantom-basis dispositions (--incomplete-history): not in the
+        # totals above; shown for the manual report (audit R1-165).
+        manual = [g for g in results.get('manual_reporting_required') or []
+                  if g.get('trace')]
+        if manual:
+            f.write("\n# " + "=" * 90 + "\n")
+            f.write(f"# MANUAL REPORTING — {len(manual)} phantom-basis "
+                    f"disposition(s), cost unknown, excluded from the "
+                    f"totals above\n")
+            for g in sorted(manual, key=lambda g: (g.get('date', ''),
+                                                   g.get('symbol', ''))):
+                f.write("\n")
+                f.write("\n".join(render_gain_block(g, manual=True)))
+                f.write("\n")
 
 
 if __name__ == "__main__":
