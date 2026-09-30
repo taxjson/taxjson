@@ -166,7 +166,7 @@ class TestIbRoc(unittest.TestCase):
                 'Dividends,Data,USD,U1,2026-07-02,'
                 'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
                 '-24.00\n')
-        txs = self._parse(body)
+        txs = self._parse(body, foreign_roc='dividend')
         self.assertFalse([t for t in txs if t['action'] == 'ADJUST'])
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertEqual(len(divs), 2)
@@ -208,15 +208,16 @@ class TestIbRoc(unittest.TestCase):
                 'Dividends,Data,USD,U1,2026-06-30,'
                 'QZRX(US0000000017) Payment in Lieu of Dividend '
                 '(Return of Capital),400.00\n')
-        for mode in (None, 'acb'):
+        for mode in ('dividend', 'acb'):
             txs = self._parse(body, foreign_roc=mode)
             pil = [t for t in txs if t['action'] == 'DIVIDEND_IN_LIEU']
             self.assertEqual(len(pil), 1, mode)
             self.assertEqual(pil[0]['type'], 'dividend_in_lieu')
             self.assertAlmostEqual(pil[0]['net_amount'], 400.00, places=2)
             self.assertIn("share borrower", pil[0]['description'])
-        # Default mode: the issuer leg is a dividend, no ADJUST at all.
-        txs = self._parse(body)
+        # s.90(2) mode (a Canada project's default): the issuer leg is a
+        # dividend, no ADJUST at all.
+        txs = self._parse(body, foreign_roc='dividend')
         self.assertFalse([t for t in txs if t['action'] == 'ADJUST'])
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertAlmostEqual(sum(t['net_amount'] for t in divs), 600.00)
@@ -242,7 +243,7 @@ class TestIbRoc(unittest.TestCase):
                 'Dividends,Data,USD,U1,2026-06-30,'
                 'QZIE(IE0000000018) Return of Capital USD 0.20 per Share,'
                 '20.00\n')
-        txs = self._parse(body)
+        txs = self._parse(body, foreign_roc='dividend')
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertEqual([t['symbol'] for t in divs], ['QZIE.US'])
         txs = self._parse(body, foreign_roc='acb')

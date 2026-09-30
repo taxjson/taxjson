@@ -33,6 +33,7 @@ from pathlib import Path
 from taxjson.lib.core import (register_brokerage, TaxTransaction,
                               load_brokerage, is_option_symbol)
 from taxjson.lib.brokerages.base import BaseBrokerage, BrokerageParseError
+from taxjson.lib.country import country_arg
 from taxjson.lib.brokerages.schema import validate_transactions
 from taxjson.lib.brokerages import ib_extractor
 from taxjson.lib.brokerages import questrade
@@ -255,14 +256,28 @@ Examples:
               "alone, as JSON — `taxjson run` renames the corporate-"
               "action rows of the same security the same way."))
     parser.add_argument(
+        "--country", type=country_arg, default=None,
+        metavar="{canada,ca,usa,us}",
+        help=(
+            "Whose rules the one country-specific parse choice follows "
+            "(IB --foreign-roc): canada -> 'dividend' (ITA s.90(2)), "
+            "usa -> 'acb' (a nondividend distribution lowers basis, "
+            "§301(c)(2)). Without it (and without --foreign-roc) a "
+            "foreign issuer's return of capital lowers the cost, and a "
+            "note says so. `taxjson run` passes the project's country."
+        ),
+    )
+    parser.add_argument(
         "--foreign-roc", dest="foreign_roc", choices=("dividend", "acb"),
-        default="dividend",
+        default=None,
         help=(
             "IB only: how a '(Return of Capital)' distribution from a "
-            "NON-Canadian issuer is booked — 'dividend' (default; ITA "
-            "s.90(2) deems a non-resident corporation's distribution a "
-            "dividend) or 'acb' (ACB reduction). Canadian-issuer ROC is "
-            "always an ACB reduction; a payment in lieu is always income."
+            "NON-Canadian issuer is booked — 'dividend' (ITA s.90(2) "
+            "deems a non-resident corporation's distribution a dividend; "
+            "Canada only) or 'acb' (a cost reduction). Default: from "
+            "--country (canada: dividend, usa: acb), else acb. "
+            "Canadian-issuer ROC is always a cost reduction; a payment in "
+            "lieu is always income."
         ),
     )
     parser.add_argument(
@@ -340,6 +355,18 @@ Examples:
             print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
             sys.exit(1)
 
+    # s.90(2) is Canadian law: never the default without a country
+    # (partition INPUTS-03), and refused for a US filer.
+    foreign_roc = args.foreign_roc
+    if args.country == "usa" and foreign_roc == "dividend":
+        print("taxjson-brokerage: error: --foreign-roc dividend is ITA "
+              "s.90(2), Canadian law; it does not apply with --country "
+              "usa (a nondividend distribution lowers basis, §301(c)(2))",
+              file=sys.stderr)
+        sys.exit(2)
+    if foreign_roc is None:
+        foreign_roc = "dividend" if args.country == "canada" else "acb"
+
     parsed_files = []
     for input_path in input_paths:
         # Fresh extractor per file so any extractor-level state (e.g.
@@ -349,7 +376,7 @@ Examples:
         if shared_context is not None:
             extractor.account_context = shared_context
         if hasattr(extractor, 'foreign_return_of_capital'):
-            extractor.foreign_return_of_capital = args.foreign_roc
+            extractor.foreign_return_of_capital = foreign_roc
         if hasattr(extractor, 'futures_settle'):
             extractor.futures_settle = args.futures_settle
         if args.account_type and hasattr(extractor, 'account_taxable'):
@@ -375,6 +402,20 @@ Examples:
                   file=sys.stderr)
             sys.exit(1)
         parsed_files.append((input_path, extractor, transactions))
+        if args.country is None and args.foreign_roc is None:
+            # The issuer's ISIN is in IB's description ("QZRX(US...)").
+            _froc = [t for t in transactions
+                     if t.get('type') == 'roc'
+                     and (m := re.search(r'\(([A-Z]{2})[A-Z0-9]{9}\d\)',
+                                         str(t.get('description') or '')))
+                     and m.group(1) != 'CA']
+            if _froc:
+                print(f"taxjson-brokerage: note: {input_path.name}: "
+                      f"{len(_froc)} return(s) of capital from a "
+                      f"non-Canadian issuer booked as a cost reduction "
+                      f"(no --country given); a Canadian filer passes "
+                      f"--country canada (ITA s.90(2): a dividend).",
+                      file=sys.stderr)
 
     # A Corporate Actions `Ca` cancellation whose original sits in
     # ANOTHER of the account's statements (IB: booked in the 2025

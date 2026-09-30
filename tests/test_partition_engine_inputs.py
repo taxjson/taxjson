@@ -288,5 +288,57 @@ class TestStockDividend(unittest.TestCase):
         self.assertAlmostEqual(rows["canada"][0]["cost"], 6750.0, places=2)
 
 
+# ------------------------------------------------------------ INPUTS-03
+class TestStandaloneBrokerageRoc(unittest.TestCase):
+    """INPUTS-03 / SPEC-35: standalone taxjson-brokerage no longer
+    applies ITA s.90(2) without a country."""
+
+    BODY = ('Statement,Header,Field Name,Field Value\n'
+            'Statement,Data,BrokerName,Interactive Brokers\n'
+            'Dividends,Header,Currency,Account,Date,Description,Amount\n'
+            'Dividends,Data,USD,U5550001,2026-06-30,'  # pii-ok
+            'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
+            '24.00\n')
+
+    def _brokerage(self, *flags):
+        import json
+        import os
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        from tax_rules.dual import SRC
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "ib.csv"
+            p.write_text(self.BODY, encoding="utf-8")
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+                 "--brokerage", "ib", *flags, str(p)],
+                capture_output=True, text=True,
+                env=dict(os.environ, PYTHONPATH=str(SRC)))
+        txs = []
+        if r.returncode == 0:
+            data = json.loads(r.stdout)
+            txs = data["transactions"] if isinstance(data, dict) else data
+        return r, [t["action"] for t in txs]
+
+    @rule("CA-ACB-08")
+    @rule_absent("CA-ACB-08", country="usa")
+    def test_country_picks_the_rule_and_none_is_not_canada(self):
+        r, acts = self._brokerage("--country", "canada")
+        self.assertEqual((r.returncode, acts), (0, ["DIVIDEND"]), r.stderr)
+        r, acts = self._brokerage("--country", "usa")
+        self.assertEqual((r.returncode, acts), (0, ["ADJUST"]), r.stderr)
+        # No country: the neutral cost reduction, with a note.
+        r, acts = self._brokerage()
+        self.assertEqual((r.returncode, acts), (0, ["ADJUST"]), r.stderr)
+        self.assertIn("--country canada", r.stderr)
+        # s.90(2) asked for with --country usa: refused.
+        r, _ = self._brokerage("--country", "usa", "--foreign-roc",
+                               "dividend")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("s.90(2)", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1696,8 +1696,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                                "--account-type",
                                                "taxable" if is_taxable
                                                else "sheltered"]
-            if _froc_acb:
-                cmd += ["--foreign-roc", "acb"]
+            # Always explicit: the parser's own default is the neutral
+            # cost reduction; s.90(2) is the Canadian project's choice
+            # (partition INPUTS-03).
+            cmd += ["--country", country, "--foreign-roc",
+                    "acb" if _froc_acb else "dividend"]
             if _fut_next:
                 cmd += ["--futures-settle", "next_day"]
             _sidecar = out.with_name(out.stem + "_transfers.json")

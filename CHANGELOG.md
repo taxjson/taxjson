@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Standalone `taxjson-brokerage` no longer applies Canadian law by
+  default.** Its `--foreign-roc` defaulted to `dividend` (ITA s.90(2)),
+  so the documented manual pipeline for a US book turned a US issuer's
+  return of capital into dividend income. It now takes `--country`
+  (canada: s.90(2) dividend; usa: a basis reduction, and `--foreign-roc
+  dividend` is refused); with neither flag the return of capital lowers
+  the cost and a note says so. `taxjson run` passes both flags, so
+  project numbers are unchanged.
 - **Stock dividends follow the country.** The IB, Questrade and RBC
   parsers booked a stock dividend as a $0 purchase in every project, so
   in a US project the new shares were a short-term zero-basis lot and a

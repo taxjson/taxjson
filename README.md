@@ -1231,8 +1231,10 @@ pipeline, pass it yourself: `taxjson-gains --incomplete-history phantoms.json �
 The commands below drive the pipeline stage by stage — handy for one-off files or scripting. For a configured project, prefer `taxjson run` above.
 
 ```bash
-# 1. Convert a broker CSV to normalized JSON
-taxjson-brokerage --brokerage ib --account margin activity.csv > margin.json
+# 1. Convert a broker CSV to normalized JSON. --country picks the one
+#    country-specific parse choice (IB foreign return of capital: ITA
+#    s.90(2) dividend in Canada, a basis reduction in the US).
+taxjson-brokerage --brokerage ib --account margin --country ca activity.csv > margin.json
 
 # 2. Merge each ACCOUNT'S broker files into one per-account JSON.
 #    Sheltered accounts must NOT be merged into the taxable input —

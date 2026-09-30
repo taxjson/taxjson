@@ -615,12 +615,14 @@ _IB_COMM_ADJ_TICKER_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .\-]*?)\s*,')
 
 class IbBrokerage(BaseBrokerage):
     # How an IB "(Return of Capital)" distribution from a NON-Canadian
-    # issuer (ISIN country != CA) is booked: "dividend" (default — ITA
-    # s.90(2) deems a non-resident corporation's pro-rata distribution a
-    # dividend) or "acb" (the earlier ACB-reduction treatment). Set by
-    # taxjson-brokerage --foreign-roc, which `taxjson run` passes from
-    # [settings] foreign_return_of_capital.
-    foreign_return_of_capital = 'dividend'
+    # issuer (ISIN country != CA) is booked: "acb" (default — the
+    # issuer's own designation, a basis reduction: the neutral fact) or
+    # "dividend" (ITA s.90(2) deems a non-resident corporation's pro-rata
+    # distribution a dividend — Canadian law, so only a Canada project
+    # asks for it). Set by taxjson-brokerage --foreign-roc / --country,
+    # which `taxjson run` passes from the project (lib/country
+    # .foreign_roc_mode; partition INPUTS-03).
+    foreign_return_of_capital = 'acb'
     # 'trade' (default) | 'next_day': settle date of futures and futures
     # options ([settings] futures_settle, passed by taxjson-brokerage).
     futures_settle = 'trade'
