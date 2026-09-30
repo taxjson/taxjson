@@ -410,6 +410,14 @@ def load_config(root: Path) -> Dict[str, Any]:
                          f"name — use letters, digits, '_', '-' or "
                          f"'.' (must start with a letter, digit or "
                          f"'_'); it becomes file and directory names.")
+                if str(_n).upper() == "COMBINED":
+                    # reports/wash_radar_COMBINED.* is the cross-account
+                    # radar: an account of that name had its own radar
+                    # replaced by it (S038-10).
+                    _die(f"[accounts.{_n}]: the name COMBINED is "
+                         f"reserved for the cross-account wash radar — "
+                         f"rename the account (and its inputs/{_n}/ "
+                         f"folder).")
         except Exception as e:
             _die(f"{path} is not valid TOML: {e}")
     _refuse_bad_account_types(cfg)
@@ -2454,7 +2462,11 @@ def stage_cross_reports(all_gains: List[Path],
         sheltered_arg = (["--sheltered", str(sheltered_base)]
                          if sheltered_base else [])
         for tb in taxable_equity_base:
-            stem = tb.stem.replace("_base", "")
+            # Strip only the trailing "_base": replace() removed EVERY
+            # "_base", so account a_base_x wrote account a_x's radar
+            # (S038-10).
+            stem = (tb.name[:-len("_base.json")]
+                    if tb.name.endswith("_base.json") else tb.stem)
             # --json-out: structured sidecar next to the .rpt; the web UI
             # reads it and computes countdowns at view time.
             run_to_file(_cmd("taxjson-wash-radar") + [
@@ -9310,6 +9322,20 @@ def _radar_taxable_bases(root: Path, cache: Path,
     if names:
         bases = [cache / f"{n}_base.json" for n in sorted(names)
                  if (cache / f"{n}_base.json").exists()]
+        # A configured taxable account without books used to vanish
+        # from the checks in silence — a sibling's recent buy then read
+        # as "SAFE — no tracked position" (S046-11).
+        _skipped = _accounts_skipped_for_no_inputs(root)
+        _missing = [n for n in sorted(names)
+                    if not (cache / f"{n}_base.json").exists()
+                    and n not in _skipped]
+        if _missing and bases:
+            print(f"{prog}: WARNING: no books for taxable account(s) "
+                  f"{', '.join(_missing)} (work/<account>_base.json "
+                  f"missing) — their trades are INVISIBLE to these "
+                  f"window checks, so a SAFE/CLEAR verdict here can be "
+                  f"wrong. Run `taxjson run` to build them.",
+                  file=sys.stderr)
     else:
         bases = [p for p in sorted(cache.glob("*_base.json"))
                  if not p.name.endswith("_raw_base.json")
@@ -10184,8 +10210,38 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             if _new and _old and _new.upper() != _old.upper():
                 _union(_old, _new, f"SPLIT-rename in {_bp.name}")
 
+    # An option root that names no share listing in the books but
+    # matches exactly ONE class share of that root on the same exchange
+    # is that class: RBC books Rogers' Montreal options under the root
+    # RCI (RCI270115C00046000.TO) while the shares are RCI.B.TO, and the
+    # call — a right to acquire those shares — fell into an empty
+    # RCI.TO class, so buy-check said SAFE (S047-01).
+    from taxjson.lib.core import is_option_symbol as _is_opt
+    _shares = {t.strip().upper() for t in radar if not _is_opt(t)}
+    for _bp in bases:
+        try:
+            for _t in _json.loads(_bp.read_text(encoding="utf-8")).get(
+                    "transactions", []) or []:
+                _sy = str(_t.get("symbol") or "").strip().upper()
+                if _sy and not _is_opt(_sy):
+                    _shares.add(_sy)
+        except (OSError, ValueError, AttributeError):
+            continue
+    _by_root: Dict[str, set] = {}
+    for _sy in _shares:
+        _m = re.fullmatch(r"(.+)\.([A-Z]{1,2})\.([A-Z]{1,3})", _sy)
+        if _m:
+            _by_root.setdefault(f"{_m.group(1)}.{_m.group(3)}",
+                                set()).add(_find(_sy))
+    _class_alias = {r: next(iter(cs)) for r, cs in _by_root.items()
+                    if len(cs) == 1 and r not in _shares
+                    and _find(r) == r}
+
     def canon(t: str) -> str:
-        return _find(_root(t))
+        r = _find(_root(t))
+        if _is_opt(t.strip().upper()) and r in _class_alias:
+            return _class_alias[r]
+        return r
 
     _acct_cfg = _soft_config(root).get("accounts") or {}
     _taxable = {a for a, c in _acct_cfg.items()
@@ -10216,6 +10272,20 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
                                  "gain": round(_g, 2),
                                  "account": _t.get("account") or _a}
     return radar, canon, last_loss
+
+
+def _fold_class_separator(symbol: str) -> str:
+    """A share-class ticker typed the broker/Yahoo way (RCI-B, 'RCI B',
+    RCI/B, RCI-B.TO) in the books' dotted spelling (RCI.B, RCI.B.TO).
+    Unfolded, the query matched nothing and buy-check answered SAFE
+    while a loss on RCI.B.TO sat inside the window (S007-02). Option
+    symbols pass through unchanged."""
+    from taxjson.lib.core import is_option_symbol
+    s = " ".join(str(symbol).split()).upper()
+    if is_option_symbol(s):
+        return s
+    m = re.fullmatch(r"([A-Z0-9]+)[-/ ]([A-Z]{1,2})((?:\.[A-Z]{1,3})?)", s)
+    return f"{m.group(1)}.{m.group(2)}{m.group(3)}" if m else s
 
 
 def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
@@ -10314,6 +10384,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     unsafe = 0
     results = []
     for want in args.symbol:
+        want = _fold_class_separator(want)
         wroot, matches, _note = _class_matches(radar, _canon, want)
         matches = _replacement_rows(want, matches, "buy")
         # Worst verdict across the class (cross-listings included).
@@ -10414,6 +10485,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     unsafe = 0
     results = []
     for want in args.symbol:
+        want = _fold_class_separator(want)
         wroot, matches, _note = _class_matches(radar, _canon, want)
         matches = _replacement_rows(want, matches, "sell")
         verdict, lines = "SAFE", ([_note] if _note else [])

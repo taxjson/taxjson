@@ -490,5 +490,149 @@ class TestSpreadsheetInSubfolderWarns(unittest.TestCase):
                         warnings)
 
 
+def _tt_project(tmp, accounts, year=None):
+    """accounts: {name: (type, [.tt lines])} — a current-year project."""
+    from datetime import date
+    year = year or date.today().year
+    root = Path(tmp)
+    cfg = (f"[settings]\nyear = {year}\ncountry = \"canada\"\n"
+           f"base_currency = \"CAD\"\nsource_currencies = []\n"
+           f"option_grant_timing_since = {year}\n")
+    for name, (atype, lines) in accounts.items():
+        cfg += f"\n[accounts.{name}]\ntype = \"{atype}\"\n"
+        (root / "inputs" / name).mkdir(parents=True)
+        (root / "inputs" / name / "books.tt").write_text(
+            "\n".join(lines) + "\n")
+    (root / "taxjson.toml").write_text(cfg)
+    return root
+
+
+def _ago(days):
+    from datetime import date, timedelta
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+class TestBuyCheckSymbolSpellings(unittest.TestCase):
+    """S007-02: RCI-B / 'RCI B' / RCI/B / RCI-B.TO answered SAFE while a
+    loss on RCI.B.TO sat inside the window. S047-01: an RCI-rooted
+    (Montreal) call is a right to acquire RCI.B.TO shares."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._td = tempfile.TemporaryDirectory()
+        cls.root = _tt_project(cls._td.name, {"margin": ("taxable", [
+            f"BUYSELL {_ago(120)} 10:00:00 RCI.B.TO 100 CAD 50.00 "
+            f"5000.00 0.00",
+            f"BUYSELL {_ago(8)} 10:00:00 RCI.B.TO -100 CAD 40.00 "
+            f"4000.00 0.00"])})
+        r = _run_cli(cls.root, "run", "--no-input")
+        assert r.returncode == 0, r.stderr
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._td.cleanup()
+
+    def test_control_dotted_spelling_is_unsafe(self):
+        r = _run_cli(self.root, "buy-check", "RCI.B.TO")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_broker_and_yahoo_spellings_are_unsafe(self):
+        for sym in ("RCI-B", "RCI B", "RCI/B", "RCI-B.TO", "rci-b"):
+            with self.subTest(sym=sym):
+                r = _run_cli(self.root, "buy-check", sym)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+    def test_montreal_root_call_is_in_the_class_share_class(self):
+        from datetime import date
+        exp = f"{(date.today().year + 1) % 100:02d}0115"
+        r = _run_cli(self.root, "buy-check", f"RCI{exp}C00046000.TO")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+
+class TestRadarNamesAccountsWithoutBooks(unittest.TestCase):
+    """S046-11: a taxable account whose base book is missing vanished
+    from sell-check / wash-radar with no word, turning a live wash
+    exposure into SAFE."""
+
+    def test_missing_sibling_book_is_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp, {
+                "margin": ("taxable", [
+                    f"BUYSELL {_ago(200)} 10:00:00 XYZ.TO 100 CAD 20.00 "
+                    f"2000.00 0.00"]),
+                "margin2": ("taxable", [
+                    f"BUYSELL {_ago(5)} 10:00:00 XYZ.TO 100 CAD 10.00 "
+                    f"1000.00 0.00"])})
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            (root / "work" / "margin2_base.json").unlink()
+            for cmd in (("sell-check", "XYZ.TO"), ("wash-radar",)):
+                with self.subTest(cmd=cmd[0]):
+                    r = _run_cli(root, *cmd)
+                    self.assertIn("margin2", r.stderr)
+
+
+class TestRadarSidecarNames(unittest.TestCase):
+    """S038-10: the radar sidecar name stripped EVERY '_base' from the
+    file stem, and an account named COMBINED collided with the cross-
+    account radar."""
+
+    def test_stem_keeps_inner_base(self):
+        from taxjson.bin import taxjson_run as R
+        outs = []
+        saved = R.run_to_file
+        R.run_to_file = lambda cmd, out, **k: outs.append(Path(out).name)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                with redirect_stdout(io.StringIO()):
+                    R.stage_cross_reports(
+                        [d / "x_gains.json"],
+                        [d / "a_base_x_base.json", d / "a_x_base.json"],
+                        None, d)
+        finally:
+            R.run_to_file = saved
+        self.assertIn("wash_radar_a_base_x.rpt", outs)
+        self.assertIn("wash_radar_a_x.rpt", outs)
+
+    def test_account_named_combined_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _CONFIG + "\n[accounts.combined]\n"
+                            "type = \"taxable\"\n")
+            r = _run_cli(root, "run", "--no-input")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("COMBINED", r.stderr)
+
+
+class TestWebRadarDefaultsToCombined(unittest.TestCase):
+    """R1-229: with two taxable accounts the web radar opened on the
+    first account's own report ('CLEAR — safe to sell') instead of the
+    cross-account one."""
+
+    def test_default_view_is_combined(self):
+        try:
+            from fastapi.testclient import TestClient
+        except ImportError:                      # [web] extra missing
+            self.skipTest("fastapi not installed")
+        from taxjson.web.app import create_app
+        from taxjson.web.context import ProjectContext
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "work").mkdir()
+            (root / "reports").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2026\ncountry = "canada"\n'
+                'base_currency = "CAD"\n[accounts.margin]\n'
+                'type = "taxable"\n[accounts.margin2]\n'
+                'type = "taxable"\n')
+            for a in ("margin", "margin2", "COMBINED"):
+                (root / "reports" / f"wash_radar_{a}.rpt").write_text("")
+            c = TestClient(create_app(ProjectContext.load(root)))
+            page = c.get("/wash-radar").text
+            self.assertIn("radar — COMBINED", page)
+            page = c.get("/wash-radar?account=margin").text
+            self.assertIn("own book only", page)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **buy-check / sell-check read broker spellings and Montreal option
+  roots.** RCI-B, "RCI B", RCI/B and RCI-B.TO are read as RCI.B(.TO) (they
+  answered SAFE beside a loss on RCI.B.TO), and an option on a root that
+  names no share listing but exactly one class share of it (RBC's
+  RCI270115C00046000.TO for RCI.B.TO shares) is in that share's class
+  (audit S007-02, S047-01).
+- **The wash tools name a taxable account with no books.** wash-radar,
+  watch, buy-check and sell-check warned about nothing when a configured
+  taxable account's base book was missing, so a sibling's recent buy read
+  as SAFE (audit S046-11).
+- **The web radar opens on the COMBINED view** when there are two or
+  more taxable accounts, and a per-account view says it sees only its own
+  book (it read "CLEAR — safe to sell at a loss" while a sibling's buy
+  made the loss superficial) (audit R1-229).
+- **Radar sidecar names follow the account name exactly**: account
+  `a_base_x` no longer overwrites account `a_x`'s radar, and an account
+  named COMBINED is refused (audit S038-10).
 - **`run --fast` sees content, not only mtimes.** Each account's input
   files and the project-root maps (ticker.map, overrides,
   distributions.map, phantoms.json, crypto_ticker.map) are fingerprinted
