@@ -233,12 +233,20 @@ def echo_parse_stats(out_path: Path) -> None:
             # book (e.g. Kraken ledger trades with no trades-export
             # fill): the tax numbers are missing them. Console, always.
             print(f"  {line}")
+        elif line.startswith(ATTENTION_PREFIX):
+            # Statement coverage / identity the numbers silently depend
+            # on (an IB statement ending before year end, no Cash Report
+            # to reconcile against). Console, always.
+            print(f"  {line}")
 
 
 # Parser warning prefix for rows that are known tax events the parser
 # could NOT book. `taxjson run` echoes these to the console and, under
 # --strict, refuses to publish (R1-104).
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
+# Parser warning prefix for input COVERAGE / identity problems (lib/
+# brokerages/ib_extractor.ATTENTION_PREFIX): echoed to the console.
+ATTENTION_PREFIX = "warning: ATTENTION:"
 
 
 def unbooked_lines(out_path: Path) -> List[str]:
@@ -765,7 +773,8 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
     account's .sum — until a value is set (2026-09 audit: it was silent
     after the prompt). Registered accounts: no tax effect, no warning."""
     import json as _json
-    from taxjson.lib.corp_actions import zero_value_spinoff_rows
+    from taxjson.lib.corp_actions import (zero_value_merger_rows,
+                                          zero_value_spinoff_rows)
     diag = cache / f"{name}_corp_spinoff_value.diag"
     lines: List[str] = []
     if is_taxable:
@@ -783,6 +792,19 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"dividend income and a $0 cost for the new shares, "
                     f"so a later sale overstates the gain by the same "
                     f"amount. Set its value: taxjson elect {name} --set "
+                    f"{eid}={r.get('corp_election')} --hint "
+                    f"fmv_per_share=<value>")
+            # A taxable merger at $0 (the "0 to defer" FMV, with or
+            # without cash-in-lieu): a fake loss on the old shares and a
+            # $0 cost for the new ones (audits S020-06, S074-00).
+            for r in zero_value_merger_rows(rows):
+                eid = r.get("corp_event_id", "?")
+                lines.append(
+                    f"warning: {name}: merger into {r.get('symbol')} on "
+                    f"{r.get('date')} (event {eid}) is booked at $0 — the "
+                    f"old shares' proceeds are only any cash-in-lieu (a "
+                    f"fake loss) and the new shares cost $0. Set its "
+                    f"value: taxjson elect {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
     if lines:
@@ -1190,6 +1212,21 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
               file=sys.stderr)
 
 
+def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
+    """How the IB parser books an issuer-designated '(Return of
+    Capital)' from a non-Canadian issuer: [settings]
+    foreign_return_of_capital when set, else "dividend" in a Canadian
+    project (ITA s.90(2)) and "acb" in a US one — for a US filer a
+    return of capital the issuer designates is a nondividend
+    distribution that reduces basis (IRC s.301(c)(2)); the Canadian
+    rule used to decide it there too (audit S013-01)."""
+    explicit = settings.get("foreign_return_of_capital")
+    if explicit:
+        return str(explicit)
+    return ("acb" if _normalize_country(settings.get("country", "canada"))
+            == "usa" else "dividend")
+
+
 def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   inputs_dir: Path, cache: Path, reports_dir: Path,
                   rates: Path, ticker_map: Optional[Path],
@@ -1273,7 +1310,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # never dirties the cache.
     src_manifest = cache / f"{name}_sources.list"
     # Parser option (IB foreign ROC): in the manifest so a toggle re-parses.
-    _froc_acb = settings.get("foreign_return_of_capital") == "acb"
+    _froc_acb = ib_foreign_roc_mode(settings) == "acb"
     _fut_next = settings.get("futures_settle") == "next_day"
     # Membership covers EVERY input kind that feeds the merge — CSVs and
     # .tt files alike. Listing only CSVs left a deleted .tt's
@@ -1660,6 +1697,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                             # i.e. the SETTLED position under CRA
                             # timing; the project's tax_date decides.
                             "--date-basis", tax_date]
+                        # Keys go through the same ticker.map renames
+                        # as the book (S025-22).
+                        + (["--ticker-map", str(ticker_map)]
+                           if ticker_map else [])
                         # Size record-date balances WITH the phantom
                         # openings the gains stage synthesizes (S000-08).
                         + (["--incomplete-history",

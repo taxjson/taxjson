@@ -200,10 +200,11 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                            "is split between the two. File the election "
                            "with the return; the spin-off must be on "
                            "CRA's list")
-                if not hints.get("allocated_acb"):
+                if not (hints.get("allocated_acb_cad")
+                        or hints.get("allocated_acb")):
                     flags.append("NO-ALLOCATION")
                     why.append("no cost allocated to the new shares "
-                               "(allocated_acb)")
+                               "(allocated_acb_cad)")
             elif election == "ignore":
                 flags.append("IGNORED")
                 why.append("ignored: nothing booked; correct only for "

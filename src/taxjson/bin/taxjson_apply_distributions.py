@@ -20,13 +20,18 @@ balance ON the record date is computed from its own book (BUYSELL /
 ASSIGN / OPENING_BALANCE / TRANSFER rows, SPLIT-scaled, rename-aware via
 symbol_new; keyed on the SETTLEMENT date by default — the holder of
 record is the settled position — or the trade date with
-`--date-basis trade`) and one ADJUST row is appended:
+`--date-basis trade`) and one ADJUST row is appended on the ticker that
+holds the shares on the record date (a key naming a pre- or post-rename
+ticker resolves along the SPLIT renames; symbols are case-insensitive;
+with `--ticker-map` the key is first renamed like the book was):
 
     net_amount = balance * per_share      (positive = ACB increase)
 
 with a deterministic id, so a rebuild regenerates rather than
 accumulates. Rows for symbols the account doesn't hold on the date are
-skipped with a NOTE. The pipeline wires this in for taxable equity
+skipped with a NOTE. Only the ACB side is booked: a reinvested
+distribution is also income of the record year (T3/T5), which the
+user reports from the slip — the NOTE says so. The pipeline wires this in for taxable equity
 accounts whenever `distributions.map` exists; run it manually as:
 
     taxjson-apply-distributions work/margin_base.json --map distributions.map
@@ -52,6 +57,9 @@ def load_map(path: Path) -> List[Tuple[str, str, float]]:
     """[(symbol, date, per_share)] — malformed lines are fatal: a typo
     here silently mis-adjusts ACB, so refuse rather than skip."""
     rows: List[Tuple[str, str, float]] = []
+    # utf-8-sig: an editor's byte-order mark used to become part of the
+    # first symbol, so that row was skipped as "no \ufeffXYZ.TO shares
+    # held" with the BOM invisible in the note (audit S000-06).
     for lineno, raw in enumerate(
             path.read_text(encoding="utf-8-sig").splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
@@ -70,7 +78,9 @@ def load_map(path: Path) -> List[Tuple[str, str, float]]:
         if len(date) != 10 or date[4] != "-" or date[7] != "-":
             sys.exit(f"{PROG}: {path}:{lineno}: bad date {date!r} "
                      f"(want YYYY-MM-DD)")
-        rows.append((sym, date, per_share))
+        # Book symbols are upper case: a lowercase key matched nothing
+        # and the row was skipped as "no shares held" (audit S025-13).
+        rows.append((sym.upper(), date, per_share))
     return rows
 
 
@@ -113,6 +123,14 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
                     and t.get("symbol") not in aliases):
                 aliases.add(t["symbol"])
                 changed = True
+    # A trade executed BEFORE a split but settling AFTER it: the engine
+    # re-denominates its quantity into post-split shares (core.py, the
+    # settle-lag re-denomination), because under settle ordering the
+    # pool splits first. Do the same here, or the pre-split sale was
+    # subtracted from the already-split balance (audit S000-07: 1500
+    # shares sized an ADJUST where the engine held 1000).
+    factor = _settle_lag_factors(transactions) \
+        if date_basis == "settle" else {}
     bal = 0.0
     rows = sorted(transactions,
                   key=lambda t: (_row_date(t, date_basis),
@@ -132,7 +150,7 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
             continue
         act = t.get("action")
         if act in ("BUYSELL", "ASSIGN", "OPENING_BALANCE", "TRANSFER"):
-            bal += float(t.get("quantity") or 0.0)
+            bal += float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0)
         elif act == "SPLIT":
             ratio = float(t.get("quantity") or 0.0)
             if not ratio:
@@ -146,6 +164,70 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
                 continue
             bal *= ratio
     return bal
+
+
+def _settle_lag_factors(transactions: List[dict]) -> dict:
+    """{id(row): factor} for BUYSELL/ASSIGN rows whose settle lag
+    straddles a plain SPLIT of their symbol: executed (date, time)
+    before the split's moment, settling after its date. The same test
+    the gains engine uses to re-denominate the executed quantity."""
+    splits = [t for t in transactions
+              if t.get("action") == "SPLIT" and t.get("date")
+              and float(t.get("quantity") or 0.0)
+              and (t.get("symbol_new") or t.get("symbol"))
+              == t.get("symbol")]
+    out: dict = {}
+    if not splits:
+        return out
+    for t in transactions:
+        d, ds = str(t.get("date") or ""), str(t.get("date_settle") or "")
+        if t.get("action") not in ("BUYSELL", "ASSIGN") or not d \
+                or not ds or d >= ds:
+            continue
+        f = 1.0
+        for sp in splits:
+            spd = str(sp.get("date_settle") or sp.get("date"))
+            if (sp.get("symbol") == t.get("symbol")
+                    and (d, str(t.get("time") or "00:00:00"))
+                    < (spd, str(sp.get("time") or "00:00:00"))
+                    and spd < ds):
+                f *= float(sp["quantity"])
+        if abs(f - 1.0) > 1e-12:
+            out[id(t)] = f
+    return out
+
+
+def resolve_live_symbol(transactions: List[dict], symbol: str,
+                        date: str) -> str:
+    """The ticker that holds `symbol`'s shares on `date`, following the
+    book's SPLIT renames (symbol -> symbol_new) in BOTH directions: a
+    key naming the pre-rename ticker after a rename resolves forward to
+    the new ticker, and the current ticker keyed before its rename
+    resolves back to the old one. The ADJUST must land on the pool live
+    on the record date; stamped on the literal key after a rename it
+    hit a dead pool and the ACB increase was lost while the console
+    reported it applied (audit S025-10)."""
+    renames = sorted(
+        (t for t in transactions
+         if t.get("action") == "SPLIT"
+         and (t.get("symbol_new") or "").strip()
+         and (t.get("symbol_new") or "").strip() != t.get("symbol")),
+        key=lambda t: (str(t.get("date") or ""), str(t.get("time") or "")))
+    cur, seen = symbol, {symbol}
+    for t in renames:                       # forward: renamed on/before
+        if str(t.get("date") or "") <= date and t.get("symbol") == cur:
+            cur = t["symbol_new"].strip()
+            if cur in seen:
+                break
+            seen.add(cur)
+    for t in reversed(renames):             # backward: renamed after
+        if str(t.get("date") or "") > date \
+                and t["symbol_new"].strip() == cur:
+            cur = t.get("symbol")
+            if cur in seen - {symbol}:
+                break
+            seen.add(cur)
+    return cur
 
 
 def _phantom_openings(txs: List[dict], phantoms) -> List[dict]:
@@ -166,22 +248,34 @@ def _phantom_openings(txs: List[dict], phantoms) -> List[dict]:
 
 def apply_distributions(doc: dict, map_rows, account: str,
                         date_basis: str = "settle",
-                        phantoms=None) -> Tuple[dict, int]:
+                        phantoms=None, renames=None) -> Tuple[dict, int]:
     """`phantoms` — the (symbol, account) set from phantoms.json. The
     record-date balance must include the phantom openings the gains
     stage synthesizes (audit S000-08: sized on the phantom-less book, a
-    phantom-backed position got half the ADJUST, or none)."""
+    phantom-backed position got half the ADJUST, or none).
+
+    `renames` — the ticker.map renames the base book went through
+    (GLOBAL + TOBASE + JOURNAL): a key naming the broker's listing is
+    mapped the same way before the lookup (audit S025-22: a key the
+    holdings report shows was skipped as "no shares held")."""
     txs = doc.get("transactions", [])
     # Regenerate, never accumulate: drop rows this tool added before.
     txs = [t for t in txs
            if not str(t.get("id") or "").startswith("DIST-")]
     sizing = txs + _phantom_openings(txs, phantoms)
     applied = 0
-    for sym, date, per_share in map_rows:
+    for key, date, per_share in map_rows:
+        sym = key
+        if renames:
+            from taxjson.bin.taxjson_ticker_map import map_symbol
+            sym = map_symbol(sym, renames)
+        sym = resolve_live_symbol(sizing, sym, date)
+        via = f" (as {sym})" if sym != key else ""
         bal = balance_on(sizing, sym, date, date_basis)
         if bal <= 1e-9:
-            print(f"NOTE: distributions.map: no {sym} shares held on "
-                  f"{date} in this book — row skipped.", file=sys.stderr)
+            print(f"NOTE: distributions.map: no {key}{via} shares held "
+                  f"on {date} in this book — row skipped.",
+                  file=sys.stderr)
             continue
         amount = round(bal * per_share, 6)
         kind = ("reinvested distribution (ACB up)" if per_share > 0
@@ -198,8 +292,15 @@ def apply_distributions(doc: dict, map_rows, account: str,
             "description": f"{kind}: {bal:g} sh x {per_share:g}/sh "
                            f"per distributions.map",
         })
-        print(f"NOTE: {sym} {date}: {kind} — {bal:g} sh x "
-              f"{per_share:g} = {amount:+.2f} ACB adjustment.",
+        # A reinvested distribution is income of the record year (T3
+        # box 21/26/49, or a T5 stock dividend): the ACB rises only
+        # because that amount is taxed. This tool books the ACB side
+        # only — say so, or the estimate silently omits it (S026-00).
+        income = (f" Report the {amount:.2f} itself as income from the "
+                  f"T3/T5 slip — it is not counted as income by taxjson "
+                  f"(estimate, divs-sum)." if per_share > 0 else "")
+        print(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
+              f"{per_share:g} = {amount:+.2f} ACB adjustment.{income}",
               file=sys.stderr)
         applied += 1
     doc["transactions"] = txs
@@ -216,6 +317,12 @@ def main(argv=None) -> int:
                          "balance on: settle (holder of record = "
                          "settled position; CRA default) or trade. "
                          "`taxjson run` passes the project's tax_date.")
+    ap.add_argument("--ticker-map", type=Path, default=None,
+                    metavar="TICKER_MAP",
+                    help="ticker.map the base book went through: map "
+                         "keys are renamed the same way (GLOBAL, TOBASE, "
+                         "JOURNAL) before the lookup (`taxjson run` "
+                         "passes it).")
     ap.add_argument("--incomplete-history", type=Path, default=None,
                     metavar="PHANTOMS_JSON",
                     help="phantoms.json: size each record-date balance "
@@ -244,8 +351,15 @@ def main(argv=None) -> int:
             cli_diag.error(PROG, f"could not read "
                                  f"{args.incomplete_history}: {e}")
             return 2
+    renames = None
+    if args.ticker_map is not None and args.ticker_map.exists():
+        from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                    merge_renames)
+        tmap, _problems, _notes = _parse_map_file(args.ticker_map)
+        renames = merge_renames(tmap, to_base=True)
     doc, applied = apply_distributions(doc, load_map(args.map), account,
-                                       args.date_basis, phantoms=phantoms)
+                                       args.date_basis, phantoms=phantoms,
+                                       renames=renames)
 
     tmp = args.base_json.with_name(args.base_json.name + ".part")
     tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",

@@ -128,9 +128,16 @@ def main(argv=None):
     linked_new = {(l.new_symbol, l.account) for l in links}
 
     # --- 1. Truncated history (positions go negative) ---
-    candidates = detect_phantoms(txs, include_options=args.include_options)
+    candidates = detect_phantoms(txs, include_options=args.include_options,
+                                 include_broker_shorts=True)
     if args.account:
         candidates = [c for c in candidates if c.account == args.account]
+    # A short the broker itself marks as a short sale (RBC "SHORT." /
+    # "COVER SHORT.") is a real short, not a missing buy: reported apart
+    # and never offered as a phantom (audit R1-8 — BK.TO's real 69.85
+    # loss vanished behind one).
+    broker_shorts = [c for c in candidates if c.broker_marked_short]
+    candidates = [c for c in candidates if not c.broker_marked_short]
     short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year)
                   if (r.candidate.symbol, r.candidate.account) not in linked_old]
 
@@ -139,6 +146,15 @@ def main(argv=None):
                     txs, args.year, include_options=args.include_options)
                  if (r.symbol, r.account) not in linked_new
                  and (not args.account or r.account == args.account)]
+
+    if broker_shorts:
+        print(f"\n## Broker-marked short sales (real shorts, NOT missing "
+              f"history): {len(broker_shorts)}")
+        for c in broker_shorts:
+            print(f"  {c.symbol} [{c.account}] went short on "
+                  f"{c.first_negative_date} (peak {c.peak_short:g}); the "
+                  f"broker marks the sales SHORT. — nothing to fix, do not "
+                  f"add a phantom for it.")
 
     if not short_rows and not zero_rows and not links:
         scope = f" (account {args.account})" if args.account else ""

@@ -56,6 +56,221 @@
   of silently taking over. Books built for another tax year are refused
   with a rebuild message instead of "dropped CSV rows".
 
+- **RBC books what it used to drop, and says what it cannot book.** A
+  stock dividend (`DIS - ... STK DIV ON N SHS`) enters at $0 cost like
+  Questrade's; an RBC Dominion Securities "Reinvest @ $p" distribution
+  row with units books the income and the purchase; a reversed DRIP
+  cancels its original; a reorganization whose legs or cash-in-lieu
+  straddle two yearly exports is paired across them; a split on a short
+  position scales it up; an option strike with a thousands separator
+  (`5,025`) is read whole; a cash-in-lieu reversal nets instead of
+  adding proceeds. Rows it cannot book (unclassified, unmatched legs,
+  a Transfers row with no quantity) are `UNBOOKED` warnings on the
+  console and fatal under `run --strict`.
+- **RBC refuses rows it would mis-book.** A trade with a blank Value
+  (read as $0 proceeds or cost), a Value that does not fit quantity x
+  price (a commission below zero or far above RBC's), a Description with
+  an unescaped quote that swallowed the next row, and a listed-ticker row
+  whose text names a contract on another underlying are errors. A stock
+  leg whose text quotes the assigned contract books as the stock; a
+  security named DELIVERY... no longer turns a transfer-in into a
+  transfer-out; FRACTYL-style names keep their cash-in-lieu of dividend
+  as income; a blank Description falls back to the Symbol Description
+  for security overrides; a rights/warrant expiry settles on its date; a
+  blank-settle assignment's option leg shares its stock leg's cycle; a
+  notional distribution warns that its income is not in the totals.
+- **Broker-marked shorts are not missing history.** A position RBC
+  marks as a short sale (`SHORT.` / `COVER SHORT.`) is no longer offered
+  as a phantom by `find-missing-history`, `--suggest-phantoms` or the
+  run's go-short hint; `find-missing-history` lists it apart.
+- **Questrade keeps a TSX listing traded in USD on `.TO`.** `DLR.U.TO`
+  and `XUS.U.TO` bought in USD became `DLR.U.US` / `XUS.U.US`: a pool
+  apart from the same units at RBC or IB, a `JOURNAL DLR.U.TO DLR.TO`
+  rule that never fired, and a Canadian ETF listed as US property on the
+  T1135. A `.TO` symbol now keeps `.TO` whatever the row currency, so the
+  API (`FNV.TO`) and web (`.FNV`) spellings of a USD dividend agree; a
+  CAD dividend or ROC on a US stock bought from the CAD side (`EXCHANGE
+  RATE`) now reaches the `.US` pool instead of a phantom `.TO` one.
+- **Questrade learns identities from all of an account's exports.** A
+  dividend, ROC, stock dividend, DRIP or cash-in-lieu row under an
+  internal code (`A020626`) whose trade sits in last year's export stayed
+  on the code, and a ROC there became a capital gain. The
+  description map now spans every export of the account; the event
+  wording (`STK DIV ON`, `STK SPLIT ON`, `REINV@C$`, `CASH IN LIEU OF`)
+  and Interactive Brokers' transfer wording no longer block the match;
+  a code nothing resolves is a warning (and a `--lint` finding) with the
+  `ticker.map` line to add, and a spinoff chain booked under an internal
+  code is flagged at the election step.
+- **Questrade flags a ticker change with no corporate-action row.** A
+  symbol that stops with shares open while another with the same
+  description opens with a sale they cover gets a warning with the
+  ready `GLOBAL old new` line (the sale's gain used to drop out).
+- **Questrade row shapes.** `BUY`/`buy` and lower-case symbols are read
+  like `Buy`; an unknown action that moves shares is an `UNBOOKED`
+  warning on the console (fatal under `run --strict`); a `BRW`
+  Norbert's-gambit journal between `DLR.TO` and `DLR.U.TO` is booked as
+  a TRANSFER pair like RBC's journal legs, carrying the stated book
+  value (skipped before, leaving the units on `DLR.TO`), which a
+  `JOURNAL DLR.U.TO DLR.TO` rule nets; a negated stock-dividend row cancels its original; a DIS or
+  stock-dividend row carrying both shares and cash is refused; a
+  CAD-settled US trade's CAD net must match the USD gross at the stated
+  rate and keeps its sign; a blank settlement date on an option is T+1;
+  a transferred option books under its OCC symbol at 1/100 of the book
+  value per share; a stock leg whose description quotes the contract
+  books as the stock; a split on a short position scales it up; a
+  warrant expiry books on the date in its description; a transfer row
+  carries its description, so `--security-overrides` reaches it; the
+  no-book-value warning names the remedy that works (a `.tt` BUYSELL).
+  A Questrade DIS chain that removes units is an `UNBOOKED` warning.
+- **An IB corporate-action cancellation reaches the other statement.** A
+  split booked in one yearly statement and cancelled (`Ca`) in the next
+  is undone when both are in the account's inputs; it used to stay
+  applied with a "reverse it by hand" warning (audit S059-04).
+- **Generic importer: one spelling per security.** `BRK-B` and `BRK/B`
+  are `BRK.B` (they were separate ACB pools, so a cross-account
+  superficial loss was missed), an OCC symbol padded to 21 characters is
+  compacted, and an option description in the symbol column is refused
+  instead of booked as a share that never expires (audit S010-04).
+- **US projects: an IB return of capital reduces basis by default.** A
+  `country = "usa"` project no longer books an issuer-designated return
+  of capital as a dividend under Canada's s.90(2) rule; it is a
+  nondividend distribution (IRC s.301(c)(2)) unless `[settings]
+  foreign_return_of_capital` says otherwise (audit S013-01).
+- **Settle dates that pair across legs and files.** An IB assignment's
+  option leg now settles with its stock leg (before the 2024 T+1 cutover
+  the option settled a day earlier, and a same-day trade could consume
+  the premium), and a Dec-31 0DTE option trade is clamped to its expiry
+  even when the expiry row sits in the next yearly export (audit S058-01,
+  S055-22).
+- **IB security identity across statements and issuers.** Income is
+  moved to the held listing of its ticker only when the ISINs match (an
+  AT&T dividend no longer lands on Telus `T.TO`), and the holding may
+  come from the account's other statements (a ROC-only statement no
+  longer books a gain on a phantom listing). Option-root aliases are
+  learned from all of the account's statements, and after a ticker
+  rename the canonical root is the contract's underlying (SQ -> XYZ). A
+  USD trade of a TSX `.U` unit is `X.U.TO`, as RBC books it. One stock
+  listed under two symbols (a ticker change) is an ATTENTION line
+  naming the `ticker.map` GLOBAL rule that joins them (audit S059-24,
+  S060-19, S060-00, S059-15, S059-11, S010-06, S059-13, S060-17).
+- **IB corporate actions nobody books are loud.** An unhandled Corporate
+  Actions row is now an UNBOOKED warning (console; fatal under `run
+  --strict`) that points at a `.tt` booking instead of a manual TRANSFER
+  row (dropped in taxable accounts). The same goes for an option or
+  futures contract adjustment (it used to become an equity SPLIT on an
+  invented symbol), a spin-off debit on a short parent, and a tender
+  whose allocation delivers another security (a share-for-share exchange
+  offer was reported as a no-op). An IB stock dividend books its shares
+  at $0 cost with a console note, like Questrade's; an Options
+  Expirations row keeps its own asset category (a futures-option expiry
+  closes the `F:` position) (audit S058-16, S058-22, S058-24, S013-06,
+  R1-56).
+- **IB statements that do not cover the year are reported.** `taxjson
+  run` now says on the console when an account's IB statements stop
+  before Dec 31 of a finished year (the 2024 statement ending Dec 27) or
+  leave a gap between two statements, and when a statement has no Cash
+  Report to reconcile against (audit R1-2, R1-195, R1-53).
+- **IB rows the parser cannot book are refused, not counted.** A Trades
+  row in an asset class without a parser branch (Bonds, Mutual Funds)
+  that moves money, and a security Transfers row with a blank Qty, stop
+  the parse naming the row. An execution-level `Trade` row is skipped
+  only when an `Order` row covers the same symbol and day (a Trade-only
+  fill of another symbol was dropped, a Trade row before its Order row
+  was doubled); levels that disagree are refused (audit S060-08, R1-55,
+  S060-10).
+- **A penny option close no longer stops `taxjson run`.** A sell whose
+  commission exceeds its gross (closing at 0.01) nets negative proceeds;
+  the schema used to refuse it on the always-strict parse, although the
+  engine books it. An assignment stock leg's money is now checked
+  against quantity x strike like any trade (audit S017-00, S017-02).
+- **Comma-grouped numbers read right.** `0,125` is refused as a decimal
+  comma everywhere (it read as 125); an option strike written `5,000.00`
+  keeps its thousands (it was cut to strike 5); an IB `Split 1 for
+  1,000` is 1-for-1000 (audit S055-08, R1-170, S058-19).
+- **UTF-16 exports are routed.** Broker detection decodes a UTF-16 BOM
+  the way the IB, Questrade and RBC parsers do (audit R1-70).
+- **Security overrides are stricter and reach every row.**
+  `ticker_extraction_overrides.txt` keys now match whole words (on IB,
+  where the description is the bare ticker, `BN` no longer rewrites
+  ABNB or BNTX), never rewrite option or futures rows, take the currency
+  case-insensitively, ignore a leading BOM, and a malformed line fails
+  the parse naming its line number instead of being skipped. The
+  override now runs before TRANSFER rows are set aside (the custody
+  sidecar gets the corrected symbol), IB TRANSFER rows carry the
+  security (`ACATS (DLR)`) so the override can match them, and an IB
+  split of an overridden security stays a split (its `symbol_new`
+  follows the rewrite) (audit R1-143, S001-00/01/02, S012-09, S027-01,
+  S059-03).
+- **Transfer sidecar is de-duplicated across overlapping exports.** A
+  re-downloaded or overlapping statement no longer doubles every custody
+  row in `taxjson transfers` or moves twice the shares in the holdings
+  evidence netting (audit S026-23, S027-00).
+- **Corporate-action elections say what the law says.** The s.85.1
+  share-for-share rollover is automatic when it applies (you opt out by
+  reporting the gain); taxjson described it backwards and printed a
+  FILING REQUIRED reminder for a form that does not exist. The option
+  text now says when s.85.1 applies (not to a Canadian company bought
+  by a foreign purchaser) and the reminder is gone for it. An s.86.1
+  spin-off now takes the allocated cost in CAD (`--hint
+  allocated_acb_cad=`, the parent's CAD ACB times the spin-off's share of
+  the combined FMV, s.86.1(3)); the old source-currency `allocated_acb`
+  still works but warns, since converting it at the spin-off date moved
+  FX drift between the pools. A misspelled hint in a hand-edited
+  `manifest.json` (`fmv`, `allocated_ACB`) now stops the run by name
+  instead of booking $0, and a taxable merger at $0 FMV warns on every
+  run even when cash-in-lieu was paid.
+- **IB mergers are never dropped half-way.** A merger whose out-leg and
+  in-leg sit in two statements (a year-end event split across yearly
+  downloads) or carry Date/Times a day apart was skipped with no warning:
+  the old shares stayed and the new ones never arrived. The legs are now
+  paired across all of the account's statements and within a week; a
+  leg with no partner stops the run as an unsupported event naming it.
+  A merger held in both the TSX and NYSE listings becomes one event per
+  listing (the second listing's shares were never converted), a merger
+  of a short position is refused instead of booked as `OLD -> OLD`, and
+  a cross-listing journal listed before its merger is folded once
+  instead of also becoming its own election.
+- **Questrade spin-offs land on the parser's symbols.** A dotted target
+  (`ABC.WS`, a class share) was left without its market suffix and a
+  Venture `.VN` listing became `ABC.VN.TO`, so the spun-off lot and its
+  later sale sat in two pools (a phantom long, a short sale, no gain).
+  The extractor now uses the parser's own suffix rule, reads a padded or
+  UTF-16 header like the parser (the whole spin-off used to vanish), picks
+  an interlisted parent by the listing held on the spin-off date (never
+  by file order; ambiguity is refused with a warning), and nets a DIS
+  chain whose rows straddle two yearly exports.
+- **RBC spin-off parents and merger sources resolve to the right pool.**
+  The parent took its market suffix from the spun-off shares' row (a TSX
+  parent became `.US`), could resolve to a covered call's option code or
+  to another company sharing its first word (`BROOKFIELD CORP` →
+  Brookfield Renewable), and an interlisted company was resolved by
+  file order. A spin-off's s.86.1 ACB reduction then landed on an empty
+  pool as a phantom gain. The parent now uses its own listing, options
+  never qualify, a fuzzy match needs both names to agree, a merger's
+  temporary code prefers the removal's currency, and an ambiguous
+  listing is refused with a warning. A spin-off debited from a short
+  parent is refused instead of booked as a long buy and a negative
+  dividend.
+- **RBC reorganizations pair on evidence.** A ratio written with a
+  thousands comma (`1 FOR 1,000`, `1 NEW = 1,000 OLD`) was read as
+  1-for-1, so the cash-in-lieu row sold almost the whole position. Two
+  option contracts adjusted the same day now pair by the closest strike
+  (they swapped ACB by file order); a removal no longer pairs with a
+  lone unrelated receipt or a half-name match; a company named "ROC ..."
+  no longer turns merger cash into a return of capital; an exchange into
+  a different company worded `XCH TO` asks for the merger election
+  instead of rolling over silently; and a merger of a short position is
+  refused loudly instead of renaming the new ticker into the temporary
+  code.
+- **`distributions.map` rows find their shares.** A map whose first line
+  carried a byte-order mark, a lowercase symbol, a key naming the
+  listing a `ticker.map` rule consolidates, or the old ticker after a
+  ticker change was skipped as "no shares held" (or booked on a dead
+  pool) and the ACB increase was lost. Keys are now matched
+  case-insensitively, through `ticker.map`, and onto the ticker live on
+  the record date; a sale executed before a split but settling after it
+  no longer inflates the record-date balance. The NOTE also says the
+  distribution is income to report from the T3/T5 slip.
 - **Filing checklist fixes.**
   - run-clean compares the inputs with what the last full run was built
     from (content, not dates): a deleted input, a corrected export copied
