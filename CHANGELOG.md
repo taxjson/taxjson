@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **`taxjson redact` fixes.** An account id on a line with a very long
+  field is now found (the report claimed every occurrence replaced
+  while it stayed); `account = "..."` / `broker_account = "..."` keys
+  (the live-holdings TOML) are ids; the City/State/Street2/Country
+  columns of an IB Flex AccountInformation section and a value in the
+  cell after `Phone:` / `SIN:` / `Payee:` / `Beneficiary:` are
+  redacted. The street pattern no longer swallows the next CSV field
+  (a dropped column). One invocation gives every account its own
+  pseudonym and never writes two inputs to the same copy (`--force`
+  silently kept only the last); a file-name id keeps the content's
+  placeholder. An unreadable input or `--out` is one line and the rest
+  of the batch is still redacted.
+
 - **Web UI: config and report errors are shown, not hidden.** `taxjson
   serve` refuses the account names `taxjson run` refuses (a
   `[accounts."../../x"]` name read a holdings file outside the project)
