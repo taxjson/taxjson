@@ -1183,6 +1183,7 @@ def run_gains(transactions, sheltered_transactions=(),
                 if abs((da - d0).days) <= 30:
                     _pt_warns.append({
                         'symbol': t.get('symbol'),
+                        'account': t.get('account'),
                         'loss_date': t.get('date'),
                         'raw_loss': raw,
                         'acquisition_date': a.date,
@@ -1194,6 +1195,22 @@ def run_gains(transactions, sheltered_transactions=(),
                     break
         if _pt_warns:
             results.setdefault('superficial_loss_warnings', []).extend(_pt_warns)
+
+    # Say it where the user reads it (audit R1-325): the warnings only
+    # lived in the gains JSON, and the per-account split dropped them.
+    # A `warning:` line reaches the .diag and the DIAGNOSTICS banner.
+    for w in results.get('superficial_loss_warnings') or []:
+        if w.get('message'):
+            print(f"warning: superficial-loss check (manual): "
+                  f"{w['message']}", file=sys.stderr)
+        else:
+            print(f"warning: superficial-loss check (manual): "
+                  f"{w.get('symbol')} phantom-basis loss of "
+                  f"{abs(float(w.get('raw_loss') or 0.0)):.2f} on "
+                  f"{w.get('loss_date')} with a buy on "
+                  f"{w.get('acquisition_date')} inside the window — if "
+                  f"you report this loss by hand, apply the "
+                  f"superficial-loss rule to that rebuy.", file=sys.stderr)
 
     # Traces are emitted in the sidecar text file (when requested) — drop
     # them from the JSON unconditionally so stdout stays clean and

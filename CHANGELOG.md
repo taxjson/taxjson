@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Phantom-basis superficial-loss warnings are shown.** A clean loss
+  within 30 days of a phantom-basis sale, and a phantom-basis loss with
+  a rebuy in its window, were written only into the gains JSON (and
+  dropped by the per-account split); they now print as `warning:` lines
+  (so they reach the DIAGNOSTICS banner) and stay in each account's
+  `_gains_wash.json`. US engine: an IRA-to-IRA move the tool nets out no
+  longer triggers "sells beyond its recorded balance".
 - **A merger two brokers book on different dates is one event.** The
   per-account merger-ratio fold grouped rows by exact date, so when IB
   booked a merger on 06-11 and RBC on 06-15 the first renamed the whole

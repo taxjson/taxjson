@@ -3830,6 +3830,19 @@ class USATaxRules(TaxRules):
             ev for ev in all_events if not non_capital(ev.action, ev.type))
 
         for ev in all_events:
+            if (ev.action == 'TRANSFER'
+                    and (ev.id in sheltered_ids or ev.id in affiliated_ids)
+                    and abs(ev.quantity or 0.0) >= epsilon):
+                # A netted own-account move (rrsp -> rrsp2) kept as a
+                # balance-only row: never an acquisition, but it moves
+                # the per-account balance the oversell check reads
+                # (audit S070-11 — the receiving IRA's sale was called
+                # "beyond its recorded balance" after the tool's own
+                # netting removed the move).
+                _ok = (ev.account, ev.symbol)
+                other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
+                                        + ev.quantity)
+                continue
             if non_capital(ev.action, ev.type):
                 continue
             sym = ev.symbol

@@ -722,3 +722,55 @@ class TestMergerFold(unittest.TestCase):
             self.assertIn('holdings-weighted ratio', err)
             self.assertFalse([r for r in res['inventory']
                               if abs(r['qty']) > 1e-6], d2)
+
+
+class TestDiagnosticsReachTheUser(unittest.TestCase):
+
+    def test_superficial_loss_warnings_printed_and_split(self):
+        # R1-325: a clean loss next to a phantom-basis sale.
+        import json
+        import tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp())
+        rows = _tt("""
+            BUYSELL 2025-05-02 10:00:00 ABC.TO -100 CAD 10 1000
+            BUYSELL 2025-05-12 10:00:00 ABC.TO 100 CAD 12 1200
+            BUYSELL 2025-05-22 10:00:00 ABC.TO -100 CAD 10 1000
+        """)
+        base = tmp / 'margin_base.json'
+        base.write_text(json.dumps([t.to_dict() for t in rows]))
+        ph = tmp / 'phantoms.json'
+        ph.write_text(json.dumps([{'symbol': 'ABC.TO', 'account': 'margin'}]))
+        r = _cli('taxjson.bin.taxjson_gains', '--country', 'canada',
+                 '--year', '2025', '--taxable', '--incomplete-history', ph,
+                 base)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('warning: superficial-loss check (manual)', r.stderr)
+        from taxjson.bin.taxjson_split_gains import split_for_account
+        doc = json.loads(r.stdout)
+        for w in doc['superficial_loss_warnings']:
+            w.setdefault('account', 'margin')
+        part = split_for_account(doc, 'margin', [t.to_dict() for t in rows])
+        self.assertTrue(part.get('superficial_loss_warnings'))
+
+    def test_us_own_account_move_keeps_ira_balance(self):
+        # S070-11: an ira -> rothira move netted by the tool itself is not
+        # "missing acquisition history".
+        main = _tt("""
+            BUYSELL 2024-02-01 10:00:00 ABC.US 10 USD 50 500
+            BUYSELL 2024-09-02 10:00:00 ABC.US -10 USD 55 550
+        """)
+        sh = _tt("BUYSELL 2024-01-10 10:00:00 XYZ.US 100 USD 10 1000",
+                 account='ira')
+        sh.append(TaxTransaction(action='TRANSFER', date='2024-03-01',
+                                 time='09:30:00', symbol='XYZ.US',
+                                 quantity=-100, currency='USD',
+                                 account='ira', type='own_account_move'))
+        sh.append(TaxTransaction(action='TRANSFER', date='2024-03-01',
+                                 time='09:30:00', symbol='XYZ.US',
+                                 quantity=100, currency='USD',
+                                 account='rothira', type='own_account_move'))
+        sh += _tt("BUYSELL 2024-05-01 10:00:00 XYZ.US -100 USD 12 1200",
+                  account='rothira')
+        res, err = _run(USATaxRules(), main, sheltered_transactions=sh)
+        self.assertNotIn('beyond its recorded balance', err)

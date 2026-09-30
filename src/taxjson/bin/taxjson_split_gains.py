@@ -117,7 +117,7 @@ def split_for_account(combined: Dict[str, Any], account: str,
         bucket["total"] += fee
     summary["total_fees_by_currency"] = fees
 
-    return {
+    out = {
         "metadata": {
             "split_from": "blended taxable pass",
             "account": account,
@@ -129,6 +129,15 @@ def split_for_account(combined: Dict[str, Any], account: str,
         "inventory": inventory,
         "summary": summary,
     }
+    # The manual superficial-loss warnings (phantom-basis neighbours)
+    # follow their loss's account (audit R1-325: the split dropped them).
+    slw = [w for w in combined.get("superficial_loss_warnings") or []
+           if (w.get("account") or account) == account
+           or any((d.get("account") or "") == account
+                  for d in w.get("tainted_dispositions") or [])]
+    if slw:
+        out["superficial_loss_warnings"] = slw
+    return out
 
 
 def main(argv=None) -> int:
