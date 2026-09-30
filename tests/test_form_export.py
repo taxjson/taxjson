@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
+from tax_rules import rule
 
 from taxjson.bin.taxjson_form_export import (
     build_8949,
@@ -77,6 +78,7 @@ class TestLoadDispositions(unittest.TestCase):
 
 
 class Test8949(unittest.TestCase):
+    @rule("US-RPT-01", "US-RPT-02")
     def test_parts_and_wash_code(self):
         rep = build_8949([
             us_entry(term="SHORT_TERM", disallowed=250.0,
@@ -178,7 +180,7 @@ class TestCli(unittest.TestCase):
 
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
-                rc = main([str(g), "--form", "8949", "--year", "2025",
+                rc = main([str(g), "--country", "usa", "--form", "8949", "--year", "2025",
                            "--csv", str(csv_path)])
             self.assertEqual(rc, 0)
             self.assertIn("PART I — SHORT-TERM", out.getvalue())
@@ -189,7 +191,7 @@ class TestCli(unittest.TestCase):
 
             out = io.StringIO()
             with redirect_stdout(out):
-                rc = main([str(g), "--form", "8949", "--json"])
+                rc = main([str(g), "--country", "usa", "--form", "8949", "--json"])
             rep = json.loads(out.getvalue())
             self.assertEqual(len(rep["part_I"]), 1)
 
@@ -198,7 +200,7 @@ class TestCli(unittest.TestCase):
             g = self._gains(td, [ca_entry()])
             out = io.StringIO()
             with redirect_stdout(out):
-                rc = main([str(g), "--form", "schedule3", "--year", "2025"])
+                rc = main([str(g), "--country", "canada", "--form", "schedule3", "--year", "2025"])
             self.assertEqual(rc, 0)
             self.assertIn("Line 13199", out.getvalue())
             self.assertIn("SHOP.TO", out.getvalue())
@@ -209,13 +211,13 @@ class TestCli(unittest.TestCase):
                                                       tainted=True)])
             err = io.StringIO()
             with redirect_stdout(io.StringIO()), redirect_stderr(err):
-                rc = main([str(g), "--form", "8949"])
+                rc = main([str(g), "--country", "usa", "--form", "8949"])
             self.assertEqual(rc, 0)
             self.assertIn("tainted", err.getvalue())
 
     def test_missing_file(self):
         with redirect_stderr(io.StringIO()):
-            self.assertEqual(main(["/nonexistent.json", "--form", "8949"]), 2)
+            self.assertEqual(main(["/nonexistent.json", "--country", "usa", "--form", "8949"]), 2)
 
 
 class TestRunWrapper(unittest.TestCase):
@@ -262,6 +264,7 @@ class TestTxf(unittest.TestCase):
         from taxjson.bin.taxjson_form_export import build_8949, build_txf
         return build_txf(build_8949(entries), box)
 
+    @rule("US-RPT-03")
     def test_record_shape_and_refnums(self):
         doc = self._txf([
             us_entry(term="SHORT_TERM", proceeds=1600.0, cost=1500.0,

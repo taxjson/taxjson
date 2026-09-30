@@ -327,7 +327,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     country = ledger['country']
     lines.append(f"CAPITAL-LOSS CARRYOVER LEDGER — {country} "
                  f"(amounts in {cur}, 100% gains/losses, allowed i.e. "
-                 f"post-superficial-loss)")
+                 f"post-{'wash-sale' if country == 'usa' else 'superficial-loss'})")
     lines.append("")
     rows = ledger['rows']
     if not rows:
@@ -388,10 +388,15 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                      f"LT {_money(ledger['final_lt_carryover'])}")
     lines.append("")
     lines.append("Notes:")
-    lines.append("  - Amounts are 100% capital gains/losses. Canada: apply "
-                 "the 50% inclusion rate on Schedule 3 / form T1A; the "
-                 "official 'net capital loss' balance CRA tracks is the "
-                 "inclusion-rate-adjusted figure.")
+    if country == 'usa':
+        lines.append("  - Amounts are 100% capital gains/losses, carried "
+                     "over short- and long-term on the Schedule D "
+                     "Capital Loss Carryover Worksheet.")
+    else:
+        lines.append("  - Amounts are 100% capital gains/losses. Apply "
+                     "the 50% inclusion rate on Schedule 3 / form T1A; "
+                     "the official 'net capital loss' balance CRA tracks "
+                     "is the inclusion-rate-adjusted figure.")
     lines.append("  - The ledger reflects what the transaction history "
                  "supports" +
                  (" plus your --claimed records." if claimed_used else

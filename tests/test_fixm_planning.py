@@ -195,8 +195,12 @@ class TestDirection(unittest.TestCase):
                _row("2026-09-12", "XYZ.US", -40, 2300.0, currency="USD")]
         with tempfile.TemporaryDirectory() as tmp:
             rows = _radar(tmp, tax, "2026-09-15", extra=["--country", "usa"])
-        self.assertEqual(_cat(rows, "XYZ.US"), "VIOLATION")
-        self.assertIn("Cover", rows["XYZ.US"]["advisory"])
+        # The US engine's verdict (partition COMMANDS-01): a washed
+        # re-short loss is WASHED — no "Cover ... to rescue" advice, as
+        # §1091 has no still-held test.
+        self.assertEqual(_cat(rows, "XYZ.US"), "WASHED")
+        self.assertIn("short was opened", rows["XYZ.US"]["advisory"])
+        self.assertNotIn("rescue", rows["XYZ.US"]["advisory"])
 
 
 class TestEdgeShapes(unittest.TestCase):

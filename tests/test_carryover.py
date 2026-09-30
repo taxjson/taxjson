@@ -22,6 +22,7 @@ from taxjson.bin.taxjson_carryover import (
 )
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.pipeline import GainsRequest, run_gains
+from tax_rules import rule
 
 
 def tx(action="BUYSELL", date="2025-01-15", symbol="XEI.TO", qty=0.0,
@@ -50,6 +51,7 @@ def ca_nets(claimed=None, history=CA_HISTORY):
 
 
 class TestCanadaLedger(unittest.TestCase):
+    @rule("CA-RPT-10")
     def test_gain_loss_gain_flow(self):
         ledger = ca_nets()
         by_year = {r["year"]: r for r in ledger["rows"]}
@@ -90,6 +92,7 @@ class TestCanadaLedger(unittest.TestCase):
         self.assertAlmostEqual(ledger["final_carryforward"], 7000.0,
                                places=2)
 
+    @rule("CA-RPT-10")
     def test_carryback_only_reaches_three_years(self):
         nets = {
             2019: {"net": 9000.0, "st": 0, "lt": 0, "dispositions": 1},
@@ -132,6 +135,7 @@ class TestUsaLedger(unittest.TestCase):
                    "dispositions": 1},
         }
 
+    @rule("US-RPT-08")
     def test_offset_and_carryover_chain(self):
         ledger = build_usa_ledger(self._nets(), {})
         by_year = {r["year"]: r for r in ledger["rows"]}
@@ -143,6 +147,7 @@ class TestUsaLedger(unittest.TestCase):
         self.assertAlmostEqual(by_year[2024]["st_carryover"], 0.0, places=2)
         self.assertAlmostEqual(ledger["final_carryforward"], 0.0, places=2)
 
+    @rule("US-RPT-08")
     def test_claimed_zero_disables_assumed_offset(self):
         ledger = build_usa_ledger(self._nets(), {2023: 0.0})
         by_year = {r["year"]: r for r in ledger["rows"]}

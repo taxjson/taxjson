@@ -769,6 +769,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "passes the crypto = true accounts here.")
     parser.add_argument("--form", required=True,
                         choices=["8949", "schedule3", "txf"])
+    from taxjson.lib.country import add_country_argument
+    add_country_argument(parser, help="Whose return the rows are for "
+                         "(required): canada (--form schedule3) | usa "
+                         "(--form 8949 / txf). The `taxjson form-export` "
+                         "wrapper passes the project's country.")
     parser.add_argument("--box", default="A", choices=["A", "B", "C"],
                         help="TXF only: 8949 checkbox pairing — A/D "
                              "(basis on the 1099-B, the default for "
@@ -795,6 +800,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "convention (8949/txf trade, Schedule 3 "
                              "settle).")
     args = parser.parse_args(argv)
+
+    # The same ownership table `taxjson` dispatch enforces: Schedule 3
+    # is Canada's, Form 8949 / TXF the US's (partition COMMANDS-04; the
+    # standalone was not gated).
+    from taxjson.lib.country import command_country_problem
+    _cp = command_country_problem("form-export", args.country,
+                                  variant=args.form)
+    if _cp:
+        print(f"taxjson-form-export: {_cp}", file=sys.stderr)
+        return 2
 
     for p in args.files + args.crypto:
         if not p.exists():
@@ -849,6 +864,16 @@ def _main(args) -> int:
             sorted(_crypto), args.year, date_key)
         entries += mark_crypto(c_entries)
         tainted += c_tainted
+    if args.form == "schedule3" and any(
+            e.get("term") in ("SHORT_TERM", "LONG_TERM") for e in entries):
+        # Short/long-term terms exist only in the US engine's output:
+        # Schedule 3 from US-computed gains (FIFO, §1091) would put US
+        # numbers on a Canadian return.
+        raise SystemExit(
+            "taxjson-form-export: these gains files carry short/long-term "
+            "terms — they were computed by the US engine; Schedule 3 needs "
+            "a country=canada gains file (re-run `taxjson run` in the "
+            "Canadian project).")
     manual = load_manual_rows(list(args.files) + list(args.crypto),
                               args.year, date_key)
     manual_proceeds = round(sum(abs(float(m.get("proceeds") or 0.0))

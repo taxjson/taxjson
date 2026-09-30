@@ -4638,10 +4638,20 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
 def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
     from taxjson.lib import crypto_sends as CS
     base = report["base_currency"]
-    print("CRYPTO SENDS — outgoing transfers that did not arrive on "
-          "another of your exchanges. A move to your own wallet is not a "
-          "sale (self); a gift or a payment is a disposition at fair "
-          "market value.")
+    _usa = _country(_soft_settings(root)) == "usa"
+    if _usa:
+        # A US donor's gift is not a disposition (the recipient takes
+        # over the basis); `gift` is refused (COMMAND_COUNTRY).
+        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
+              "another of your exchanges. A move to your own wallet is "
+              "not a sale (self); a payment is a sale at fair market "
+              "value. A gift is not a sale for a US donor: record it as "
+              "self.")
+    else:
+        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
+              "another of your exchanges. A move to your own wallet is not a "
+              "sale (self); a gift or a payment is a disposition at fair "
+              "market value.")
     fx_by_year: Dict[str, float] = {}
     for acct, adoc in report["accounts"].items():
         sends = adoc["sends"]
@@ -4725,7 +4735,8 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                   f"ignored.")
         if adoc["undecided"]:
             print(f"Decide: taxjson crypto-sends {acct} --set "
-                  f"ID=self|gift|payment [--note TEXT]   (then --write)")
+                  f"ID={'self|payment' if _usa else 'self|gift|payment'}"
+                  f" [--note TEXT]   (then --write)")
     if fx_by_year:
         print("\nStablecoin gifts/payments, currency gain (superficial "
               "losses excluded): " + "; ".join(
@@ -6916,9 +6927,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
           f"(REALIZED = STOCK + OPTION capital gain; "
           f"TOTAL = REALIZED + DIVIDEND)")
     if sheltered_included:
+        _filing = ("carryover/form-export"
+                   if _is_us
+                   else "carryover/t1135/form-export")
         print(f"NOTE: totals include sheltered account(s) "
               f"{', '.join(sheltered_included)} — not taxable events; "
-              f"carryover/t1135/form-export exclude them.")
+              f"{_filing} exclude them.")
     print()
     if grouped:
         for gname, rows in group_defs:
@@ -7678,7 +7692,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         for _n in r.get("notes") or []:
             print(_wrap_note("NOTE: " + _n, indent=""))
         print("Assumes: single filer, standard deduction, all dividends "
-              "QUALIFIED, no state tax; interest income not included.")
+              "QUALIFIED, no foreign tax credit, no state tax; interest "
+              "income not included.")
 
 
 def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
@@ -9076,9 +9091,11 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         total_perm += perm
 
     base = _base_currency(root)
+    _usa = _country(_soft_settings(root)) == "usa"
     print(f"WASH SALES — {base}, tax year {year}, basis: "
           f"{gains_basis_label(resolved)}  "
-          f"(losses denied under the superficial-loss rule)")
+          f"(losses denied under "
+          f"{'the wash-sale rule, §1091' if _usa else 'the superficial-loss rule, s.54'})")
     print()
     _print_report_table(out_lines)
     perm_note = (f" ({money(total_perm)} permanently denied)"
@@ -9090,7 +9107,9 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
               f"{base} of deferred losses (see `taxjson list` DEFERRED).")
     print("DENIED is added to the cost basis of the repurchased shares (you "
           "recover it on a later sale) — except any permanently-denied amount "
-          "from a repurchase in a registered account, which is lost for good.")
+          "from a repurchase in "
+          + ("an IRA" if _usa else "a registered account")
+          + ", which is lost for good.")
 
 
 def cmd_t1135(args: argparse.Namespace) -> None:
@@ -9362,7 +9381,7 @@ def cmd_form_export(args: argparse.Namespace) -> None:
             _g = resolve_gains_files(cache, _n).get(_n)
             if _g is not None:
                 _crypto_files += ["--crypto", str(_g)]
-    argv = files + _crypto_files + ["--form", form,
+    argv = files + _crypto_files + ["--form", form, "--country", country,
                     "--base-currency",
                     str(settings.get("base_currency", "")),
                     # R1-200: rows are picked by the date the gains
@@ -9808,6 +9827,13 @@ def cmd_handoff(args: argparse.Namespace) -> None:
                  f"then set [settings] prior_year_record to its "
                  f"filed/<year>.json (or pass --prior).")
     record = _json.loads(rp.read_text(encoding="utf-8"))
+    from taxjson.bin.taxjson_filed import lock_country_problem
+    _cp = lock_country_problem(record, settings, str(rp))
+    if _cp:
+        # The other country's closing positions and cost are not this
+        # project's opening (a different basis rule and wash rule):
+        # "keep or amend" advice on them would be wrong (COMMANDS-08).
+        sys.exit(f"taxjson handoff: {_cp}")
     if int(record.get("schema_version") or 1) < 2 \
             or "year_end" not in record:
         sys.exit(f"taxjson handoff: {rp} is a version-1 lock (totals "
@@ -9861,6 +9887,7 @@ def _check_filed_years(root: Path, cache: Path,
     _taxable_cfg = {a for a, c in _acct_cfg.items()
                     if isinstance(c, dict) and c.get("type") == "taxable"}
     unreadable = 0
+    mismatched = 0
     for year, path in snaps:
         # One lock at a time: an unreadable or hand-edited lock is
         # reported BY NAME and counted as a failure, and the other
@@ -9875,6 +9902,14 @@ def _check_filed_years(root: Path, cache: Path,
                     for v in snap.get("accounts", {}).values()):
                 raise ValueError("not a close-year lock (no per-account "
                                  "table)")
+            # A lock closed under the other country is never recomputed
+            # under this one's law (partition COMMANDS-08).
+            _cp = taxjson_filed.lock_country_problem(
+                snap, settings, f"filed/{path.name}")
+            if _cp:
+                mismatched += 1
+                print(f"  !! filed {year}: {_cp}", file=sys.stderr)
+                continue
             _snap_accts = list(snap.get("accounts", {}))
             # A locked account that is no longer a configured taxable
             # account (renamed/removed) is NOT recomputed from its
@@ -9896,7 +9931,8 @@ def _check_filed_years(root: Path, cache: Path,
             _equity = [a for a in _snap_accts if a not in _crypto]
             _lock_timing = snap.get("option_timing")
             recomputed = taxjson_filed.recompute_accounts(
-                cache, _equity, _crypto, year, settings,
+                cache, _equity, _crypto, year,
+                taxjson_filed.lock_settings(snap, settings),
                 snap.get("basis", ""), _filed_run_gains,
                 option_timing=_lock_timing)
             lines = taxjson_filed.diff_snapshot(snap, recomputed,
@@ -9940,15 +9976,17 @@ def _check_filed_years(root: Path, cache: Path,
                   f"with [settings].year = {year}).", file=sys.stderr)
         else:
             print(f"  filed {year}: OK (matches {path.name})")
-    if unreadable and strict:
-        sys.exit(f"taxjson run --strict: {unreadable} filed-year "
-                 f"lock(s) could not be checked"
+    if (unreadable or mismatched) and strict:
+        sys.exit(f"taxjson run --strict: {unreadable + mismatched} "
+                 f"filed-year lock(s) could not be checked"
+                 + (f" ({mismatched} closed under another country)"
+                    if mismatched else "")
                  + (f" and {drifting} drifted" if drifting else "")
                  + " — aborting.")
     if drifting and strict:
         sys.exit(f"taxjson run --strict: {drifting} filed year(s) "
                  f"drifted — aborting.")
-    return drifting + unreadable
+    return drifting + unreadable + mismatched
 
 
 def _fx_cash_after_run(root: Path, cache: Path,
@@ -10036,6 +10074,7 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         # form-export) but missing from the computed side.
         tax_date = _tax_date(settings)
         argv += ["--date-basis", tax_date]
+    argv += ["--country", _country(settings)]
     if args.tolerance is not None:
         argv += ["--tolerance", str(args.tolerance)]
     if args.json:
@@ -11139,6 +11178,19 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                   f"{e['symbol'] or '-'}")
 
 
+def _radar_country_is_usa(root: Path) -> bool:
+    """Wording only, AFTER _wash_class_context: the radar it ran was
+    given the project's country through the one resolver (a missing or
+    unknown country already stopped it), so this only picks the rule's
+    name for the text."""
+    from taxjson.lib.country import CountryError, canonical_country
+    try:
+        return canonical_country(_soft_settings(root).get("country")) \
+            == "usa"
+    except CountryError:
+        return False
+
+
 def _wash_class_context(root: Path, cache: Path, prog: str):
     """(radar, canon, last_loss) shared by buy-check and sell-check:
     the combined radar document flattened per ticker, a symbol-class
@@ -11417,6 +11469,10 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     cache = root / "work"
     radar, _canon, _last_loss = _wash_class_context(
         root, cache, "taxjson buy-check")
+    _usa = _radar_country_is_usa(root)
+    # The rule's name in the project's law (never "superficial" in a
+    # US project, never "wash sale" in a Canadian one).
+    _sl_adj = "a wash sale" if _usa else "superficial"
     unsafe = 0
     results = []
     for want in args.symbol:
@@ -11454,10 +11510,29 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                 lines.append(
                     f"{t}: {cat} — a loss sold within the past 30 "
                     f"days; buying now cancels it (DEFERRED if bought "
-                    f"taxable, PERMANENT if bought sheltered)."
+                    f"taxable, PERMANENT if bought "
+                    f"{'in an IRA' if _usa else 'sheltered'})."
                     + (f" Safe to buy from {_cd}." if _cd else
                        " Wait until 31 days after the LATEST in-window "
                        "loss sale (see `taxjson wash-radar`)."))
+            elif cat == "WASHED":
+                # US §1091: the loss is already disallowed (nothing a
+                # buy can make worse) unless part of an in-window loss
+                # is still allowed — then a buy before clears_at
+                # disallows that part too.
+                _cd = r.get("clears_at")
+                if _cd:
+                    verdict = "UNSAFE"
+                    clears = max(clears, _cd) if clears else _cd
+                    lines.append(f"{t}: {r.get('advisory')} Safe to buy "
+                                 f"from {_cd}.")
+                else:
+                    if verdict == "SAFE":
+                        verdict = "SAFE*"
+                    lines.append(
+                        f"{t}: {r.get('advisory')} Buying now changes "
+                        f"nothing for that loss, but it starts a new "
+                        f"30-day window for a later loss sale.")
             elif cat in ("LOCKED", "EXITABLE", "CAUTION"):
                 if verdict == "SAFE":
                     verdict = "SAFE*"
@@ -11465,7 +11540,7 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                     f"{t}: {cat} — no recent loss sale, buying is "
                     f"safe TODAY, but it extends the wash window: a "
                     f"loss sale of this name before ~31 days from "
-                    f"the buy would be superficial.")
+                    f"the buy would be {_sl_adj}.")
         matches = {t: r for t, r in matches.items()
                    if (r.get("category") or "")}
         if len(lines) == bool(_note) and matches:
@@ -11474,12 +11549,12 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
             lines.append(f"{cats}: no loss sale in the past 30 days — "
                          f"safe to buy. (Any buy starts a 30-day "
                          f"window: selling this name at a loss within "
-                         f"31 days of it would be superficial.)")
+                         f"31 days of it would be {_sl_adj}.)")
         elif not lines:
             lines.append(f"{wroot}: no wash exposure on record — safe "
                          f"to buy. (Any buy starts a 30-day window: "
                          f"selling this name at a loss within 31 days "
-                         f"of it would be superficial.)")
+                         f"of it would be {_sl_adj}.)")
         _ll = _last_loss.get(wroot)
         _lll = _last_loss_line(_ll)
         if _lll:
@@ -11520,6 +11595,7 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     cache = root / "work"
     radar, _canon, _last_loss = _wash_class_context(
         root, cache, "taxjson sell-check")
+    _usa = _radar_country_is_usa(root)
     unsafe = 0
     results = []
     for want in args.symbol:
@@ -11598,6 +11674,18 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                     if verdict not in ("UNSAFE", "PARTIAL"):
                         verdict = "ACTION"
                     lines.append(f"{t}: {adv}")
+            elif cat == "WASHED":
+                # US §1091: an earlier loss is already disallowed and no
+                # sale undoes it — there is nothing to rescue (never
+                # ACTION). Selling the replacement realizes the deferred
+                # loss that sits in its basis.
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(
+                    f"{t}: {adv} A sale now cannot restore that loss; "
+                    f"selling the replacement lot realizes the loss added "
+                    f"to its basis, but a PARTIAL loss sale with other "
+                    f"buys in the last 30 days is a wash sale again.")
             elif cat in ("EXITABLE", "CAUTION", "RISK"):
                 if verdict == "SAFE":
                     verdict = "SAFE*"
@@ -11614,13 +11702,17 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                     # loss, and a registered disposition has no tax
                     # effect at all.
                     lines.append(
-                        f"{t}: held only in sheltered account(s) — "
-                        f"nothing to sell at a loss (a registered "
+                        f"{t}: held only in "
+                        f"{'IRA(s)' if _usa else 'sheltered account(s)'}"
+                        f" — nothing to sell at a loss (a "
+                        f"{'tax-deferred' if _usa else 'registered'} "
                         f"disposition has no tax effect).")
                 else:
                     lines.append(f"{t}: CLEAR — safe to sell at a loss "
                                  f"now; do not rebuy on EITHER side "
-                                 f"(taxable or sheltered) for 30 days.")
+                                 f"(taxable or "
+                                 f"{'IRA' if _usa else 'sheltered'}) for "
+                                 f"30 days.")
         if len(lines) == bool(_note):
             lines.append(f"{wroot}: no tracked taxable position — "
                          f"nothing to sell (or run `taxjson run` to "

@@ -36,6 +36,9 @@ _STATUS = {
     "CLEAR": "SAFE", "RISK": "SAFE", "BLOCKED": "SAFE", "COOLING": "SAFE",
     "CAUTION": "SAFE*", "EXITABLE": "FULL-EXIT-ONLY", "LOCKED": "LOCKED",
     "VIOLATION": "VIOLATION",
+    # US §1091: an earlier loss is already disallowed (nothing to
+    # rescue); selling the replacement realizes it.
+    "WASHED": "SAFE*",
 }
 
 
@@ -83,7 +86,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return res.returncode or 1
     doc = json.loads(res.stdout)
 
-    print("TAXABLE-ONLY SAFE-TO-SELL AUDIT — CRA 30-day window")
+    usa = args.country == "usa"
+    print("TAXABLE-ONLY SAFE-TO-SELL AUDIT — "
+          + ("§1091 30-day window (trade dates)" if usa
+             else "CRA 30-day window"))
     print()
     headers = ["TICKER", "TAXABLE QTY", "STATUS", "REASON"]
     output_rows = []
@@ -118,11 +124,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     for row in output_rows:
         print(fmt.format(*row))
 
+    _sl = "a wash sale" if usa else "superficial"
     print("\nNOTE: statuses are the wash radar's (`taxjson wash-radar` "
           "explains each). SAFE means no replacement bought in the last "
-          "30 days would make a loss sale superficial; FULL-EXIT-ONLY "
+          f"30 days would make a loss sale {_sl}; FULL-EXIT-ONLY "
           "means only selling the whole position is clean.")
-    print("To fully avoid superficial loss, you must also NOT REPURCHASE for 30 days AFTER selling.")
+    print("To fully avoid "
+          + ("a wash sale" if usa else "superficial loss")
+          + ", you must also NOT REPURCHASE for 30 days AFTER selling.")
     return 0
 
 
