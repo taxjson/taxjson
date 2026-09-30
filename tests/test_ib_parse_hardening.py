@@ -264,9 +264,11 @@ class TestCashReportReconciliation(unittest.TestCase):
                     'Trades (Purchase),USD,-20000',
                     'Trades (Purchase),USD,-21000').replace(
                     'Commissions,USD,-1', 'Commissions,USD,-2'))
+        # The row itself is refused now, before the reconciliation
+        # (audit S060-08: without a Cash Report it was a counted skip).
         with self.assertRaises(BrokerageParseError) as cm:
             _parse(body)
-        self.assertIn('Trades (Sales) + Trades (Purchase)', str(cm.exception))
+        self.assertIn("asset category 'Bonds'", str(cm.exception))
 
 
 class TestUnknownSections(unittest.TestCase):

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **IB statements that do not cover the year are reported.** `taxjson
+  run` now says on the console when an account's IB statements stop
+  before Dec 31 of a finished year (the 2024 statement ending Dec 27) or
+  leave a gap between two statements, and when a statement has no Cash
+  Report to reconcile against (audit R1-2, R1-195, R1-53).
+- **IB rows the parser cannot book are refused, not counted.** A Trades
+  row in an asset class without a parser branch (Bonds, Mutual Funds)
+  that moves money, and a security Transfers row with a blank Qty, stop
+  the parse naming the row. An execution-level `Trade` row is skipped
+  only when an `Order` row covers the same symbol and day (a Trade-only
+  fill of another symbol was dropped, a Trade row before its Order row
+  was doubled); levels that disagree are refused (audit S060-08, R1-55,
+  S060-10).
 - **A penny option close no longer stops `taxjson run`.** A sell whose
   commission exceeds its gross (closing at 0.01) nets negative proceeds;
   the schema used to refuse it on the always-strict parse, although the

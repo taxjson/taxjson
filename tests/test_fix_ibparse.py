@@ -303,5 +303,146 @@ class TestCommaNumbers(unittest.TestCase):
         self.assertAlmostEqual(sp[0]['quantity'], 0.001)
 
 
+# ------------------------------------------------ IB coverage / completeness
+def _period(start, end):
+    return f'Statement,Data,Period,"{start} - {end}"\n'
+
+
+class TestIbStatementCoverage(unittest.TestCase):
+    """R1-2 / R1-195: an IB statement that stops before Dec 31 of a
+    finished year, or a gap between an account's statements, is
+    reported (it used to parse silently; a Dec 28-31 sale vanished)."""
+
+    BODY = TRADES_H + _trade('QZAC', '2024-06-03, 10:00:00', 100, 10,
+                             -1000, -1)
+
+    def test_statement_ending_early_is_flagged(self):
+        ctx_err = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / 'ib_2024.csv'
+            p.write_text(HEAD + _period('January 1, 2024',
+                                        'December 27, 2024') + self.BODY)
+            with contextlib.redirect_stderr(ctx_err):
+                IbBrokerage.prepare_files([p])
+        self.assertIn('warning: ATTENTION:', ctx_err.getvalue())
+        self.assertIn('2024-12-27', ctx_err.getvalue())
+
+    def test_a_later_statement_closes_the_gap(self):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / 'a.csv'
+            b = Path(td) / 'b.csv'
+            a.write_text(HEAD + _period('January 1, 2024',
+                                        'December 27, 2024') + self.BODY)
+            b.write_text(HEAD + _period('December 28, 2024',
+                                        'January 1, 2025'))
+            with contextlib.redirect_stderr(err):
+                IbBrokerage.prepare_files([a, b])
+        self.assertNotIn('2024-12-27', err.getvalue())
+
+    def test_gap_between_statements_is_flagged(self):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / 'a.csv'
+            b = Path(td) / 'b.csv'
+            a.write_text(HEAD + _period('January 1, 2023',
+                                        'June 30, 2023'))
+            b.write_text(HEAD + _period('August 1, 2023',
+                                        'December 31, 2023'))
+            with contextlib.redirect_stderr(err):
+                IbBrokerage.prepare_files([a, b])
+        self.assertIn('2023-07-01', err.getvalue())
+
+    def test_full_year_and_mid_year_opening_are_quiet(self):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / 'a.csv'
+            a.write_text(HEAD + _period('May 9, 2023', 'December 31, 2023'))
+            with contextlib.redirect_stderr(err):
+                IbBrokerage.prepare_files([a])
+        self.assertNotIn('ATTENTION', err.getvalue())
+
+    def test_run_echoes_attention_lines(self):
+        import taxjson.bin.taxjson_run as run_mod
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / 'margin_ib.json'
+            out.with_name(out.name + '.diag').write_text(
+                'note: calm\nwarning: ATTENTION: x.csv ends early\n')
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                run_mod.echo_parse_stats(out)
+        self.assertIn('ATTENTION: x.csv ends early', buf.getvalue())
+        self.assertNotIn('calm', buf.getvalue())
+
+
+class TestIbNoCashReport(unittest.TestCase):
+    """R1-53: without a Cash Report the reconciliation was skipped
+    without a word."""
+
+    def test_missing_cash_report_is_said(self):
+        _, _, err = _parse_ib(HEAD + TRADES_H + _trade(
+            'QZAC', '2025-06-03, 10:00:00', 100, 10, -1000, -1))
+        self.assertIn('warning: ATTENTION:', err)
+        self.assertIn('no Cash Report', err)
+
+
+class TestIbUnhandledAssetClass(unittest.TestCase):
+    """S060-08: a Bonds / Mutual Funds trade carrying money was only a
+    counted skip (fatal only through the Cash Report)."""
+
+    def test_money_row_in_unknown_category_is_an_error(self):
+        body = (HEAD + TRADES_H + _trade('QZBOND', '2025-03-01, 10:00:00',
+                                         1000, 1, -1000, -1, cat='Bonds'))
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse_ib(body)
+        self.assertIn("'Bonds'", str(cm.exception))
+
+
+class TestIbOrderAndTradeRows(unittest.TestCase):
+    """S060-10: every 'Trade' row after the first 'Order' row was
+    skipped, for any symbol, and a Trade row listed BEFORE its Order row
+    was booked twice."""
+
+    def test_trade_only_fill_of_another_symbol_is_booked(self):
+        body = (HEAD + TRADES_H
+                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1)
+                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000,
+                         -1, disc='Trade')
+                + _trade('QZBB', '2025-03-04, 11:00:00', 50, 20, -1000, -1,
+                         disc='Trade'))
+        _, txs, _ = _parse_ib(body)
+        self.assertEqual(sorted((t['symbol'], t['quantity']) for t in txs),
+                         [('QZAA.US', 100.0), ('QZBB.US', 50.0)])
+
+    def test_trade_row_before_its_order_row_is_not_doubled(self):
+        body = (HEAD + TRADES_H
+                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1,
+                         disc='Trade')
+                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1))
+        _, txs, _ = _parse_ib(body)
+        self.assertEqual([(t['symbol'], t['quantity']) for t in txs],
+                         [('QZAA.US', 100.0)])
+
+    def test_levels_that_disagree_are_an_error(self):
+        body = (HEAD + TRADES_H
+                + _trade('QZAA', '2025-03-03, 10:00:00', 100, 10, -1000, -1)
+                + _trade('QZAA', '2025-03-03, 10:00:00', 60, 10, -600, -1,
+                         disc='Trade'))
+        with self.assertRaises(BrokerageParseError):
+            _parse_ib(body)
+
+
+class TestIbTransferWithoutQuantity(unittest.TestCase):
+    """R1-55: a security transfer with a blank Qty was a calm non-event
+    (the position change was lost)."""
+
+    def test_blank_qty_on_a_stock_transfer_is_an_error(self):
+        body = HEAD + XFER_H + _xfer('QZDD', '2025-07-02', '', 3000,
+                                     typ='ATON', cur='CAD')
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse_ib(body)
+        self.assertIn('Qty', str(cm.exception))
+
+
 if __name__ == '__main__':
     unittest.main()

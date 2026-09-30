@@ -56,7 +56,9 @@ account = "12345678"     # Questrade account number
 type = "taxable"
 brokerage = "ibkr_flex"
 query_id = "123456"      # an Activity Flex query: format CSV, with
-                         # "include section code and line descriptor" ON
+                         # "include section code and line descriptor" ON,
+                         # and the Cash Report section included (parsed
+                         # money is reconciled against it)
 ```
 
 Then `taxjson fetch` (or `taxjson fetch run` to rebuild in the same

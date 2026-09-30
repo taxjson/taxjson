@@ -125,6 +125,13 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
 
 FUTURES_CATEGORIES = ('Futures', 'Options On Futures')
 
+# Parser warnings about statement COVERAGE or identity that the numbers
+# may silently depend on (a statement ending before year end, a missing
+# Cash Report, one security under two symbols). `taxjson run` echoes
+# lines with this prefix to the console (they used to live only in the
+# .diag / .sum DIAGNOSTICS banner).
+ATTENTION_PREFIX = "warning: ATTENTION:"
+
 
 def get_ib_settlement(date_str: str, asset_cat: str,
                       currency: str = 'USD',
@@ -240,6 +247,62 @@ def _mask_account(acct: str) -> str:
     return (a[:2] + '***') if a else '?'
 
 
+def _ib_period(raw: str):
+    """(start, end) ISO dates of a Statement 'Period' value ('January 1,
+    2024 - December 27, 2024'; a one-day period names one date), or
+    None when it does not parse."""
+    parts = [x.strip() for x in (raw or '').split(' - ')]
+    try:
+        days = [datetime.strptime(x, "%B %d, %Y").date() for x in parts]
+    except ValueError:
+        return None
+    if len(days) == 1:
+        return days[0], days[0]
+    if len(days) == 2 and days[0] <= days[1]:
+        return days[0], days[1]
+    return None
+
+
+def _warn_coverage_gaps(periods, today=None) -> None:
+    """Warn when an account's IB statements leave days of a FINISHED
+    calendar year uncovered: a gap between two statements, or a last
+    statement that stops before Dec 31 (the 2024 statement that ended
+    Dec 27 dropped a Dec 30 sale silently — audit R1-2 / R1-195). The
+    first statement may start mid-year (an account opened in May); the
+    current year is still open, so its end is not checked."""
+    from datetime import date as _date
+    if not periods:
+        return
+    today = today or _date.today()
+    spans = sorted((a, b, n) for n, a, b in periods)
+    merged = [[spans[0][0], spans[0][1], spans[0][2]]]
+    gaps = []
+    for a, b, n in spans[1:]:
+        cur = merged[-1]
+        if a <= cur[1] + timedelta(days=1):
+            if b > cur[1]:
+                cur[1], cur[2] = b, n
+        else:
+            gaps.append((cur[1] + timedelta(days=1),
+                         a - timedelta(days=1), cur[2], n))
+            merged.append([a, b, n])
+    for g0, g1, before, after in gaps:
+        print(f"{ATTENTION_PREFIX} IB statements leave {g0.isoformat()} .. "
+              f"{g1.isoformat()} uncovered (between {before} and {after}) "
+              f"— any trade or income in those days is missing from the "
+              f"books. Download the statement for that period.",
+              file=sys.stderr)
+    last_end, last_name = merged[-1][1], merged[-1][2]
+    if last_end.year < today.year and (last_end.month, last_end.day) != (12, 31):
+        print(f"{ATTENTION_PREFIX} {last_name}: the account's IB statements "
+              f"end {last_end.isoformat()}, before the end of "
+              f"{last_end.year} — any trade or income from "
+              f"{(last_end + timedelta(days=1)).isoformat()} to "
+              f"{last_end.year}-12-31 is missing from the books. Download "
+              f"the statement that covers the rest of the year.",
+              file=sys.stderr)
+
+
 def _ib_split_datetime(raw: str, where: str):
     """(date, time) from IB's `YYYY-MM-DD, HH:MM:SS`; a date in any
     other shape (Flex `20250328;093000`, `03/28/2025`) is refused —
@@ -288,7 +351,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'title': '', 'fii': {}, 'root_alias': {}, 'alias_conids': {},
         'accounts': set(), 'accounts_included': '', 'cash': {},
         'cash_currencies': set(), 'has_cash_report': False,
-        'has_order_level': False,
+        'has_order_level': False, 'order_levels': {},
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -309,6 +372,21 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
 
         if sec == 'Trades' and g('DataDiscriminator') == 'Order':
             out['has_order_level'] = True
+        if (sec == 'Trades'
+                and g('DataDiscriminator') in ('Order', 'Trade')):
+            # Quantity per (category, symbol, trade day) and detail
+            # level: an execution-level 'Trade' row is a duplicate only
+            # when an 'Order' row covers the same symbol and day.
+            _okey = (g('Asset Category'), g('Symbol'),
+                     (g('Date/Time').replace(',', ' ').split() or [''])[0])
+            try:
+                _oq = parse_strict_number(g('Quantity'), field='Quantity',
+                                          where=where)
+            except BrokerageParseError:
+                _oq = 0.0
+            _lv = out['order_levels'].setdefault(_okey, {})
+            _lv[g('DataDiscriminator')] = _lv.get(
+                g('DataDiscriminator'), 0.0) + _oq
         acct = g('Account')
         if acct and 'Total' not in acct:
             out['accounts'].add(acct)
@@ -381,6 +459,15 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 out['root_alias'][r] = canon
                 out['alias_conids'].setdefault(r, set()).add(conid)
     out['contract_conids'] = contract_conids
+    for (_cat, _sym, _day), _lv in out['order_levels'].items():
+        if ('Order' in _lv and 'Trade' in _lv
+                and abs(_lv['Order'] - _lv['Trade']) > 1e-6):
+            raise BrokerageParseError(
+                f"{where}: Trades {_cat} {_sym} on {_day}: the Order rows "
+                f"total {_lv['Order']:g} but the execution-level Trade "
+                f"rows total {_lv['Trade']:g} — the two detail levels "
+                f"disagree; refusing to pick one. Export one detail "
+                f"level (Order) only.")
     # A consolidated statement names its members in "Accounts
     # Included"; a single-account one only in "Account".
     if not out['accounts_included']:
@@ -403,6 +490,31 @@ class IbBrokerage(BaseBrokerage):
     # 'trade' (default) | 'next_day': settle date of futures and futures
     # options ([settings] futures_settle, passed by taxjson-brokerage).
     futures_settle = 'trade'
+
+    # Account-wide context (set by taxjson-brokerage from prepare_files).
+    account_context = None
+
+    @classmethod
+    def prepare_files(cls, paths) -> Dict[str, Any]:
+        """Read ALL of one account's IB statements once, before any is
+        parsed: statement periods (coverage check below) and the facts a
+        per-file parse cannot see alone. Account-level warnings print
+        here, once."""
+        ctx: Dict[str, Any] = {'periods': []}
+        for path in paths:
+            try:
+                rows = cls._read_rows(Path(path))
+            except (OSError, UnicodeError):
+                continue                 # parse_file reports it
+            for row in rows:
+                if (len(row) >= 4 and row[0] == 'Statement'
+                        and row[1] == 'Data' and row[2] == 'Period'):
+                    span = _ib_period(row[3])
+                    if span:
+                        ctx['periods'].append((Path(path).name, *span))
+                    break
+        _warn_coverage_gaps(ctx['periods'])
+        return ctx
 
     # ------------------------------------------------------------ helpers
 
@@ -645,6 +757,16 @@ class IbBrokerage(BaseBrokerage):
         or mis-signed — the parse FAILS rather than emit a book that
         disagrees with the broker."""
         if not pre['has_cash_report']:
+            # Flex queries and customized statements can leave the
+            # section out; every guard that rides on the reconciliation
+            # (a dropped, doubled or word-matched money row) is then
+            # off — said on the console, not silently (audit R1-53).
+            if any(booked.values()):
+                print(f"{ATTENTION_PREFIX} {path.name}: the statement has "
+                      f"no Cash Report — parsed money is NOT reconciled "
+                      f"against IB's own totals. Include the Cash Report "
+                      f"section in the export (Flex: add it to the query).",
+                      file=sys.stderr)
             return
         if not pre['cash_currencies']:
             print(f"note: {path.name}: the Cash Report has no per-currency "
@@ -911,10 +1033,6 @@ class IbBrokerage(BaseBrokerage):
                   f"taxable margin accounts); export a registered "
                   f"account (TFSA/RRSP) separately.", file=sys.stderr)
         header_maps = {} # section -> header_map
-        # Whether this file's Trades section carries Order-level
-        # rows (DataDiscriminator): once seen, execution-level
-        # 'Trade' rows are duplicates and are skipped.
-        _seen_order_level = False
 
         for lineno, row in enumerate(rows, 1):
             if not row:
@@ -974,10 +1092,33 @@ class IbBrokerage(BaseBrokerage):
                     elif asset_cat in ('Total', '') or 'Total' in asset_cat:
                         self.count_skip(f"{_NE}Trades subtotal row")
                     else:
-                        # Bonds, CFDs, ... — a real asset class the
-                        # parser has no branch for: loud bucket (and
-                        # the Cash Report reconciliation below fails
-                        # on the cash it moved).
+                        # Bonds, CFDs, Mutual Funds, a renamed category
+                        # — a real asset class the parser has no branch
+                        # for. A row that moves money is a disposition
+                        # or acquisition this parser would DROP: an
+                        # error, like an unknown money section (audit
+                        # S060-08 — it was a counted skip, caught only
+                        # when a Cash Report happened to be present).
+                        _raw_money = (self._cell(row, header_map,
+                                                 'Proceeds')
+                                      or self._cell(row, header_map,
+                                                    'Notional Value'))
+                        try:
+                            _moves = abs(parse_strict_number(
+                                _raw_money, field='Proceeds', where=where,
+                                allow_blank=True, blank=0.0)) > 0.005
+                        except BrokerageParseError:
+                            _moves = True
+                        if _moves:
+                            raise BrokerageParseError(
+                                f"{where}: Trades row in asset category "
+                                f"{asset_cat!r} "
+                                f"({self._cell(row, header_map, 'Symbol')}"
+                                f") moves money, and this parser has no "
+                                f"branch for that category — refusing to "
+                                f"drop it. Book it by hand in a .tt file "
+                                f"and remove the rows from the export, or "
+                                f"report the category.")
                         self.count_skip(f"Trades/{asset_cat}")
                     continue
 
@@ -996,13 +1137,24 @@ class IbBrokerage(BaseBrokerage):
                         self.count_skip(f"{_NE}Trades roll-up row "
                                         f"({_disc})")
                         continue
-                    if _disc == 'Trade' and _seen_order_level:
+                    # A Trade row is skipped only when an Order row
+                    # covers the SAME symbol and day (audit S060-10: a
+                    # file-global flag set by the first Order row
+                    # dropped every later Trade-only fill of any symbol,
+                    # and a Trade row listed before its Order row was
+                    # booked twice). The prescan refuses a file whose
+                    # two levels disagree on the quantity.
+                    if _disc == 'Trade' and 'Order' in pre[
+                            'order_levels'].get(
+                            (asset_cat, self._cell(row, header_map,
+                                                   'Symbol'),
+                             (self._cell(row, header_map, 'Date/Time')
+                              .replace(',', ' ').split() or [''])[0]),
+                            {}):
                         self.count_skip(f"{_NE}Trades execution-level "
                                         f"duplicate of an Order row")
                         continue
-                    if _disc == 'Order':
-                        _seen_order_level = True
-                    elif _disc and _disc not in ('Order', 'Trade'):
+                    if _disc and _disc not in ('Order', 'Trade'):
                         self.count_skip(f"Trades DataDiscriminator "
                                         f"{_disc}")
                         continue
@@ -2064,10 +2216,9 @@ class IbBrokerage(BaseBrokerage):
                     else:
                         self.count_skip(f"{section}/{asset_cat}")
                     continue
-                if not qty_str:
-                    self.count_nonevent(f"{section} row with no "
-                                        f"quantity")
-                    continue
+                # A security transfer without a quantity moves shares
+                # we cannot count: refused (it was a calm non-event,
+                # and the position change was lost — audit R1-55).
                 qty = parse_strict_number(qty_str, field='Qty',
                                           where=where)
                 date = _ib_require_date(

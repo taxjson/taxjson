@@ -233,12 +233,20 @@ def echo_parse_stats(out_path: Path) -> None:
             # book (e.g. Kraken ledger trades with no trades-export
             # fill): the tax numbers are missing them. Console, always.
             print(f"  {line}")
+        elif line.startswith(ATTENTION_PREFIX):
+            # Statement coverage / identity the numbers silently depend
+            # on (an IB statement ending before year end, no Cash Report
+            # to reconcile against). Console, always.
+            print(f"  {line}")
 
 
 # Parser warning prefix for rows that are known tax events the parser
 # could NOT book. `taxjson run` echoes these to the console and, under
 # --strict, refuses to publish (R1-104).
 UNBOOKED_PREFIX = "warning: UNBOOKED:"
+# Parser warning prefix for input COVERAGE / identity problems (lib/
+# brokerages/ib_extractor.ATTENTION_PREFIX): echoed to the console.
+ATTENTION_PREFIX = "warning: ATTENTION:"
 
 
 def unbooked_lines(out_path: Path) -> List[str]:
