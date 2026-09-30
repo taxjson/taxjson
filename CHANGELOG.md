@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Instalment rates for 2023 and a flag before the table.** The
+  built-in CRA overdue-tax rates now start with 2023 (Q1 8%, Q2-Q4 9%).
+  A 2023 year was charged 2024's 10% all year and the report called it
+  the published rate; a year before 2023 now says its days ASSUME the
+  earliest rate (`rate_extrapolated`).
 - **One low prior year no longer waives instalments.** With only one
   of `prior_year_net_tax` / `second_prior_net_tax` set and at or below
   $3,000, `taxjson instalments` said "No instalments required" and

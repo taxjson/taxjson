@@ -71,8 +71,14 @@ INTEREST_MIN = 25.0         # CRA charges instalment interest only above
 # 2026-09-27 against each quarter's page under
 # https://www.canada.ca/en/revenue-agency/services/tax/prescribed-interest-rates.html
 # (e.g. .../prescribed-interest-rates/2026-q4.html: "overdue taxes ...
-# will be 7%"). Add each quarter as CRA announces it.
+# will be 7%"). Add each quarter as CRA announces it. 2023: Q1 8%,
+# Q2-Q4 9% (.../prescribed-interest-rates/2023-q1.html .. 2023-q4.html:
+# "The interest rate charged on overdue taxes ... will be 8%" / "9%");
+# without them a 2023 year was charged 2024 Q1's 10% all year and the
+# report called it the published rate (audit R1-220).
 PUBLISHED_RATES: List[Tuple[str, float]] = [
+    ("2023-01-01", 0.08), ("2023-04-01", 0.09),
+    ("2023-07-01", 0.09), ("2023-10-01", 0.09),
     ("2024-01-01", 0.10), ("2024-04-01", 0.10),
     ("2024-07-01", 0.09), ("2024-10-01", 0.09),
     ("2025-01-01", 0.08), ("2025-04-01", 0.08),
@@ -81,6 +87,7 @@ PUBLISHED_RATES: List[Tuple[str, float]] = [
     ("2026-07-01", 0.07), ("2026-10-01", 0.07),
 ]
 PUBLISHED_THROUGH = "2026-12-31"   # last day the table covers
+PUBLISHED_FROM = PUBLISHED_RATES[0][0]  # first day the table covers
 
 
 def published_rates(start: date, end: date) -> List[Dict[str, Any]]:
@@ -98,6 +105,12 @@ def published_rates(start: date, end: date) -> List[Dict[str, Any]]:
             out.append({"from": eff, "rate": r})
     if not out:                 # window before the table: earliest
         out = [{"from": s_iso, "rate": PUBLISHED_RATES[0][1]}]
+    elif out[0]["from"] > s_iso:
+        # The window starts before the table: the earliest rate is
+        # carried BACK to the window start (build() flags it as
+        # extrapolated) instead of leaving the gap to rate_on's
+        # "earliest segment" fallback under the table's own date.
+        out[0] = {"from": s_iso, "rate": out[0]["rate"]}
     return out
 
 
@@ -310,8 +323,13 @@ def build(*, year: int, basis: str, current_net_tax: float,
     ip = scored[interest_basis]
     ip["interest_basis"] = interest_basis
     ip["rate_source"] = rate_source
-    ip["rate_extrapolated"] = (rate_source == "published"
-                               and end.isoformat() > PUBLISHED_THROUGH)
+    ip["rate_extrapolated_after"] = (rate_source == "published"
+                                     and end.isoformat() > PUBLISHED_THROUGH)
+    ip["rate_extrapolated_before"] = (
+        rate_source == "published"
+        and date(year, 1, 1).isoformat() < PUBLISHED_FROM)
+    ip["rate_extrapolated"] = (ip["rate_extrapolated_after"]
+                               or ip["rate_extrapolated_before"])
     ip["interest_bases_considered"] = sorted(scored)
     paid_total = sum(p["amount"] for p in payments
                      if date.fromisoformat(p["date"]) <= today)
@@ -508,7 +526,12 @@ def render(doc: Dict[str, Any], base: str) -> str:
     if doc.get("rate_source") == "published":
         rate_line += (" — CRA's published quarterly rate(s), built in "
                       "(set prescribed_rate(s) to override)")
-        if doc.get("rate_extrapolated"):
+        if doc.get("rate_extrapolated_before"):
+            rate_line += (f"; days before {PUBLISHED_FROM} are outside "
+                          f"the built-in table and ASSUME its earliest "
+                          f"rate — set prescribed_rates for them")
+        if doc.get("rate_extrapolated_after", doc.get("rate_extrapolated")
+                   and not doc.get("rate_extrapolated_before")):
             rate_line += (f"; days after {PUBLISHED_THROUGH} assume "
                           f"the last published rate")
     lines += ["", f"  INTEREST (offset method, compounded daily, "
