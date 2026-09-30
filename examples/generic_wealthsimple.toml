@@ -8,7 +8,9 @@
 # parser can be generated (taxjson-generate-parser).
 
 [columns]
-date     = "Date"
+date     = "Date"             # the TRADE date
+# settle = "Settlement Date"  # map it if your export has one; otherwise
+#                             # the standard T+1/T+2 cycle is computed
 action   = "Transaction type"
 symbol   = "Symbol"
 quantity = "Quantity"
@@ -32,3 +34,6 @@ date = "%Y-%m-%d"
 
 [defaults]
 currency = "CAD"
+
+# [options]
+# settle_on_trade_date = true  # crypto-only export: no settlement cycle

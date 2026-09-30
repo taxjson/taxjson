@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **Decimal commas are refused, not read 100x too large.** `12,50` in a
+  generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
+  every comma stripped and were booked as 1250, -4824 and 95. A comma is
+  now accepted only as a thousands separator (`1,234.56`); anything else
+  stops the import with the file and line.
+- **`.tt`: a negative sell total is refused.** `BUYSELL … -100 CAD 20
+  -2000` was booked as -2,000 proceeds (a +1,000 gain became a -3,000
+  loss). The total is the positive net proceeds; the error names the
+  file and line.
+- **Generic importer: strict mapping.** An unknown section or key
+  (`ammount`, `commission`, `[format]`, `tax_sgn`) is refused with a
+  suggestion instead of being ignored; dividend/tax/interest/fee actions
+  require a mapped `amount`, and a blank amount on such a row is refused
+  (it booked 0).
+- **Generic importer: trade rows must add up.** A buy/sell with neither a
+  price nor an amount (the fee became the whole cost), with no quantity,
+  or a stock buy at zero cost is refused; so is a quantity/amount sign
+  that contradicts the mapped action (a sell under an action mapped to
+  `buy` was booked as a buy).
+- **Generic importer keeps an explicit exchange suffix.** `DLR.U.TO`
+  bought in USD became `DLR.U.US`, a different security, so a
+  superficial loss across accounts was missed. A bare symbol still takes
+  its suffix from the row currency.
+- **Generic importer settles trades on the settlement date.** Every row
+  was booked with the trade date as its settlement date, so a Dec-31 sale
+  landed in the wrong tax year. A new optional `settle` column is used
+  when mapped; otherwise buy/sell rows get the standard holiday-aware
+  cycle (T+1/T+2/T+3 by era, options T+1) on the listing's market.
+  `[options] settle_on_trade_date = true` keeps the trade date (crypto).
+
 - **`taxjson spinoffs` and `taxjson splits`.** Every spin-off with its
   election, the value per share used and what was booked (income and the
   new shares' cost), flagging a taxable spin-off booked at $0 and showing

@@ -107,6 +107,36 @@ qty × price (× 100 for an OCC option symbol) ± fee within 1%, a fee above 5% 
 the gross needs `[options] allow_large_fees = true`, two fields may not share
 one header, and the currency must be mapped or set in `[defaults]` (no implicit
 USD) — so a mis-mapped column stops the import instead of booking wrong money.
+The import also refuses:
+
+- an unknown section or key in the mapping (`ammount`, `commission`,
+  `[format]`, `tax_sgn` …), with a did-you-mean suggestion;
+- a dividend/tax/interest/fee action when `amount` is not mapped, or a row of
+  that kind with a blank amount cell (it used to be booked as 0);
+- a buy/sell row with no quantity, with neither a price nor an amount (the fee
+  alone became the cost), or a stock buy at exactly zero cost;
+- a quantity or amount sign that contradicts the mapped action — a negative
+  quantity under a `buy` action, a positive quantity with a negative amount
+  under `sell`, or a positive-quantity sell in a file whose other sells carry
+  negative quantities (map buys and sells to separate action values);
+- a decimal-comma number (`12,50`, `1.234,56`): only a thousands comma
+  (`1,234.56`) is accepted. Re-export with a decimal point.
+
+**Symbols.** A symbol written with an exchange suffix (`.TO`, `.V`, `.CN`,
+`.NE`, `.US`, `.AX`, `.L`) keeps it — `DLR.U.TO` bought in USD stays
+`DLR.U.TO`. A bare symbol takes the suffix of the row's currency (`XEI` in CAD
+becomes `XEI.TO`, `SPY` in USD `SPY.US`).
+
+**Dates.** Map `date` to the **trade** date. If the export has a settlement
+column, map it as `settle` (with `[formats] settle` when its format differs);
+otherwise buy/sell rows settle on the standard cycle — T+1 since May 2024, T+2
+before, T+3 before September 2017, options T+1 — counted in settlement days of
+the listing's market (the Canadian calendar for `.TO`/`.V`/`.CN`/`.NE`, the US
+one for `.US`, else the row currency), skipping weekends and holidays. With
+`tax_date = "settle"` a sale on Dec 31 therefore lands in January. A settle
+date before the trade date is refused. Dividend, tax, interest and fee rows are
+dated `date`. For a crypto-only export set `[options] settle_on_trade_date =
+true` (crypto has no settlement cycle).
 
 Kraken and Coinbase timestamps are UTC; rows are dated in local time
 (America/Toronto by default, `TAXJSON_LOCAL_TZ=America/Vancouver` etc. to
@@ -1006,7 +1036,7 @@ BUYSELL  <date>  <time>  <symbol>  <qty>  <currency>  <price>  <total>  <fee>
 | `symbol` | with exchange suffix — `AGI.TO`, `XYZ.US` (match how the account labels it; options use OCC, e.g. `ALA250117C00036000.TO`) |
 | `qty` | shares — **positive = buy, negative = sell** |
 | `price` | per-share price |
-| `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount) |
+| `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount), written as a positive number. A negative sell total is refused (a cash-signed `-2000` used to be booked as negative proceeds); if the commission exceeds the proceeds, enter `0`. |
 | `fee` | commission (optional) |
 
 Example — a confirmation for "bought 100 XYZ.US @ $45.00, $5 commission":
@@ -1023,7 +1053,8 @@ taxjson find-missing-history margin     # the fixed tickers should drop off
 ```
 
 `taxjson run` merges, sorts, and de-dups the `.tt` rows into the account. Lines
-starting with `#` are comments. Validate a single file first with
+starting with `#` are comments. Numbers use a decimal point; a thousands comma
+(`1,234.56`) is fine, a decimal comma (`48,24`) is refused. Validate a single file first with
 `taxjson-convert-tt --account margin inputs/margin/margin_start.tt` (it
 prints the parsed JSON and errors loudly on a malformed line).
 
