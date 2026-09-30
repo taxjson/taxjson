@@ -899,8 +899,13 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
 
     curs: Dict[str, set] = {}
     for t in txs:
-        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
-                                   "SPLIT"):
+        # SPLIT rows are not counted: they carry no money, and a .tt
+        # SPLIT is stamped CAD whatever the listing — a USD stock's
+        # split then looked like a mixed-currency pool and the holdings
+        # refresh was skipped with a misleading "rollover rename"
+        # message (R1-126). A rename's currency mix still shows through
+        # the trades on either side of it (followed via `renames`).
+        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER"):
             continue
         c, sym = t.get("currency"), t.get("symbol")
         if c and sym:
@@ -3614,14 +3619,18 @@ def _discover_tx_accounts(cache: Path) -> List[str]:
     return sorted(names)
 
 
-def _tx_display_line(tx: dict) -> Optional[str]:
+def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     """Human-readable line for `taxjson transactions`. Money amounts (total,
     fee, dividend/tax/interest/adjust amount) are shown to 2 decimals; quantity
     and per-share price keep their significant digits (a 0.0375 dividend rate
     or a 0.25178314 crypto qty must not be rounded away). Mirrors the .tt field
     layout but is a DISPLAY formatter — distinct from tx_to_tt_line, which
     keeps full precision for round-trippable .tt output. Returns None for
-    actions with no representation."""
+    actions with no representation. `settle=True` writes the SETTLEMENT
+    date (a .tt line's single date on a settle-basis project): the
+    single-account view is round-trippable taxtext, and pasting its
+    trade-dated Dec-31 sale into next year's .tt dropped it from both
+    years (S002-03)."""
     money = fmt_money               # dollar amount → 2 decimals (shared)
 
     def sig(x):                         # qty / price → full precision
@@ -3636,6 +3645,8 @@ def _tx_display_line(tx: dict) -> Optional[str]:
 
     action = tx.get("action", "")
     date = tx.get("date", "")
+    if settle and tx.get("date_settle"):
+        date = tx["date_settle"]
     time = tx.get("time", "09:30:00")
     sym = tx.get("symbol", "")
     cur = tx.get("currency") or "CAD"
@@ -3843,13 +3854,20 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
     # all-accounts view prefixes each line with the account so the merged
     # chronological list stays legible.
     prefix = len(accounts) != 1
+    # The single-account (round-trippable) view writes each line's
+    # SETTLEMENT date on a settle-basis project — what a .tt line's one
+    # date means there (README "Importing manual cost basis").
+    _st = _soft_settings(root)
+    settle_dates = (not prefix and (_st.get("tax_date") or (
+        "trade" if _normalize_country(_st.get("country", "canada"))
+        in ("us", "usa") else "settle")) == "settle")
     skipped = 0
     out_lines = []
     buys: Dict[str, float] = {}
     sells: Dict[str, float] = {}
     divs: Dict[str, float] = {}
     for _d, _t, acct, tx in rows:
-        line = _tx_display_line(tx)
+        line = _tx_display_line(tx, settle=settle_dates)
         if line is None:
             skipped += 1
             continue
@@ -4858,9 +4876,11 @@ def cmd_fees(args: argparse.Namespace) -> None:
     for acct, tx in rows:
         if tx.get("action") == "FEE":
             # Standalone fee rows (e.g. IB monthly/market-data fees) carry
-            # the amount in net_amount, sign-preserved: negative = charged.
-            # Flip so a charge counts as a positive fee (a rebate nets out).
-            fee = -float(tx.get("net_amount") or 0.0)
+            # the amount in net_amount: POSITIVE = charged, the convention
+            # every parser (IB, Questrade, RBC, generic) and fx-cash use
+            # (a rebate is negative and nets out). The old flip showed
+            # every charge as a rebate (R1-124).
+            fee = float(tx.get("net_amount") or 0.0)
         else:
             fee = _tx_fee(tx)
         if abs(fee) < 0.005:

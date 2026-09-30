@@ -22,6 +22,41 @@
 - **Docs: Webull income.** The Webull Trading Summary carries no income;
   README and KNOWN_ISSUES say so and document the `.tt` `INTEREST` line
   for T5 interest (R1-96).
+- **`.tt` lines: canonical symbols and fewer false alarms.** A symbol is
+  upper-cased on read (`aapl.us` was its own pool and the broker's sale
+  went short with no gain), and a suffix that is not a market (`XYZ.TSX`,
+  `XYZ.CA`) is a warning naming the line. Futures totals are no longer
+  called typos (the 1/100 contract-size guess), two identical `ACQUIRED`
+  lots arriving the same day no longer collapse into one arrival leg (a
+  phantom 100 shares, or a refused `AmbiguousTransferDateError`), and a
+  hand-entered split of a USD stock no longer skips the holdings refresh
+  with a "cross-currency rollover" message.
+- **json → .tt keeps the year a sale settles in.** `taxjson-convert-tt`
+  (json to tt) and the single-account `taxjson events` view wrote the
+  trade date; a `.tt` line has one date, read as the settlement date too,
+  so a Dec-31 sale settling in January moved into the earlier year on
+  re-import. They now write the settlement date on a settle-basis project
+  (`--date-basis trade` for the converter), count the rows whose dates
+  differ, keep a Questrade-style `commission` as the fee, and warn about a
+  contract multiplier the format cannot carry.
+- **Generic importer: fewer ways to book wrong money quietly.** Symbols
+  are upper-cased (`xyz` and `XYZ` used to be two pools, the sale a
+  phantom short). An unmapped action that carries a quantity or an amount
+  (a DRIP reinvest, say) is an `UNBOOKED` warning — on the console, fatal
+  under `run --strict`, a `--lint` failure — instead of a note in the
+  report. A row with no price is still checked against its amount (a
+  swapped fee/amount mapping booked the commission as the cost), a
+  mapping with no fee column infers the commission from the net instead
+  of refusing a valid commission-inclusive export, a futures symbol needs
+  its amount (the contract size is never guessed as 1 or 100), and an
+  unescaped quote that swallows the next row stops the import naming the
+  line.
+- **Standalone fee rows have one sign: positive = charged.** The generic
+  importer's `fee` action booked a CSV's negative cash as a negative fee
+  (the opposite of IB, Questrade and RBC, so `fx-cash` read a charge as
+  cash received); `[formats] fee_sign` picks the CSV's convention. The
+  `taxjson fees` view flipped every IB/Questrade/RBC fee row into a
+  rebate and understated TOTAL FEES; it now reads them as charged.
 - **Corporate-action elections say what the law says.** The s.85.1
   share-for-share rollover is automatic when it applies (you opt out by
   reporting the gain); taxjson described it backwards and printed a

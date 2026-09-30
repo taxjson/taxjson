@@ -20,6 +20,7 @@ one shared `generic.toml` in the same folder. Example:
     date = "%m/%d/%Y"           # strptime; default %Y-%m-%d
     settle = "%m/%d/%Y"         # optional; default = formats.date
     tax_sign = "cash"           # or "withheld" (positive = withheld)
+    fee_sign = "cash"           # or "charged" (positive = charged)
 
     [actions]                   # CSV action value -> taxjson action
     "BUY"  = "buy"              # buy | sell | dividend | tax |
@@ -51,9 +52,16 @@ and refuse a decimal comma (1234,56). Trade rows settle on the mapped
 `settle` column when filled, else on the standard cycle from the
 holiday-aware lib.dates.settlement_date (T+1 since May 2024, T+2
 before, T+3 before 2017-09-05; options T+1) on the listing's market;
-income rows are dated `date`. Unmapped action values are counted and
-summarized, never silently dropped; a mapping that references columns
-the CSV doesn't have refuses loudly.
+income rows are dated `date`. Symbols are upper-cased (`xyz` and `XYZ`
+are one security). Unmapped action values are counted and summarized,
+never silently dropped — one that carries a quantity or an amount is an
+UNBOOKED warning (echoed by `taxjson run`, refused by `--strict`, a
+failure under `taxjson-brokerage --lint`); map it, or map it to `skip`.
+A `fee` row is booked positive = charged (the IB/Questrade/RBC
+convention): a cash-signed CSV (negative = charged, the default
+`[formats].fee_sign = "cash"`) is flipped; `fee_sign = "charged"` takes
+the cell as is. A mapping that references columns the CSV doesn't have
+refuses loudly.
 
 Mis-mapped columns are the importer's worst failure mode — amounts in
 the fee column once inflated a filed return by ~$41k without a word.
@@ -61,9 +69,19 @@ So every BUY/SELL row is cross-checked and the import REFUSES when:
 
 * two logical fields name the same CSV header (e.g. fee = amount);
 * |amount| is not |qty| × price × multiplier ± fee within 1% (+$0.05)
-  — the multiplier is 100 for an OCC option symbol;
+  — the multiplier is 100 for an OCC option symbol; with no `fee`
+  column mapped, the fee is INFERRED as the gap between |amount| and
+  qty × price (a commission-inclusive Net column with no commission
+  column) and a buy whose amount is below the gross is refused;
 * fee is more than 5% of the gross (qty × price × multiplier), unless
-  `[options] allow_large_fees = true`;
+  `[options] allow_large_fees = true`; a row with no price is checked
+  against |amount| instead (fee >= a buy's whole amount is refused
+  outright) — the missing price never switches the check off;
+* a futures symbol (`F:` or `/` prefix) has no `amount` — the contract
+  size is never guessed, so its fee-inclusive total must come from the
+  CSV (futures rows skip the qty × price comparison);
+* a record has more cells than the header, or a cell holding a line
+  break (an unescaped quote swallowed the next row);
 
 * the quantity is blank or zero, or neither price nor amount is given
   (the fee alone became the cost), or a stock buy costs exactly 0;
@@ -114,7 +132,7 @@ _INCOME_TARGETS = ("dividend", "tax", "interest", "fee")
 _SECTIONS = ("columns", "formats", "actions", "defaults", "options")
 _COLUMN_KEYS = ("date", "settle", "action", "symbol", "quantity", "price",
                 "amount", "fee", "currency")
-_FORMAT_KEYS = ("date", "settle", "tax_sign")
+_FORMAT_KEYS = ("date", "settle", "tax_sign", "fee_sign")
 _DEFAULT_KEYS = ("currency", "action", "symbol")
 # Common spellings difflib cannot guess.
 _KEY_ALIASES = {
@@ -135,6 +153,9 @@ _KEY_ALIASES = {
 # settlement currency (DLR.U.TO bought in USD is still DLR.U.TO).
 _KNOWN_SUFFIXES = ("TO", "V", "CN", "NE", "US", "AX", "L")
 _CA_SUFFIXES = (".TO", ".V", ".CN", ".NE")
+# Futures symbol prefixes (lib/futures.py): the contract size is not in
+# the row, so it is never guessed.
+_FUTURES_PREFIXES = ("F:", "/", "\\")
 
 
 def _did_you_mean(key: str, valid) -> str:
@@ -268,13 +289,44 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
 
 def _check_trade_row(where: str, target: str, qty: float, price: float,
                      amount: float, fee: float, mult: float,
-                     allow_large_fees: bool) -> None:
+                     allow_large_fees: bool, fee_mapped: bool = True,
+                     is_future: bool = False) -> float:
     """Refuse a BUY/SELL row whose numbers don't hang together — the
-    signature of a mis-mapped column. See the module docstring."""
-    gross = abs(qty) * abs(price) * mult
+    signature of a mis-mapped column. See the module docstring. Returns
+    the fee to book: the mapped fee, or — with no fee column mapped —
+    the commission inferred from |amount| vs qty x price (S056-23)."""
+    # A futures contract size is never guessed (S012-01): no qty x
+    # price comparison is possible, so check against the amount only.
+    gross = 0.0 if is_future else abs(qty) * abs(price) * mult
     fee = abs(fee)
     hint = ("check the [columns] mapping — is the fee, gross or amount "
             "column mapped to the wrong field?")
+    if not fee_mapped and amount and gross > 0:
+        # A commission-inclusive Net column with no commission column:
+        # the gap between the net and qty x price IS the commission.
+        # A negative gap (a buy's amount below the gross) is left for
+        # the mismatch refusal below.
+        inferred = (abs(amount) - gross if target == "buy"
+                    else gross - abs(amount))
+        if inferred > 0.005:
+            fee = round(inferred, 6)
+    if gross <= 0 and amount:
+        # No price (unmapped, blank or 0) or a future: the qty x price
+        # cross-check cannot run, but a fee against the booked total
+        # still can — a swapped fee/amount mapping books the commission
+        # as the cost (S011-03).
+        if target == "buy" and fee and fee >= abs(amount) - 0.005:
+            raise ValueError(
+                f"generic importer: {where}: fee {fee:.2f} is not less "
+                f"than the buy's whole amount {abs(amount):.2f} — {hint}")
+        if fee and fee > _MAX_FEE_SHARE * abs(amount) \
+                and not allow_large_fees:
+            raise ValueError(
+                f"generic importer: {where}: fee {fee:.2f} is "
+                f"{fee / abs(amount):.0%} of the amount {abs(amount):.2f} "
+                f"(no price to cross-check qty x price) — {hint} If the "
+                f"fee really is that large, set `[options] "
+                f"allow_large_fees = true` in the mapping.")
     if fee and gross > 0 and fee > _MAX_FEE_SHARE * gross \
             and not allow_large_fees:
         raise ValueError(
@@ -300,6 +352,7 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
                   f"fee is {fee:.2f} — `amount` must be the fee-INCLUSIVE "
                   f"net; is the GROSS column mapped as amount?",
                   file=sys.stderr)
+    return fee
 
 
 def _trade_net(fname: str, target: str, qty: float, price: float,
@@ -334,8 +387,11 @@ class GenericBrokerage(BaseBrokerage):
         a different identity, so a superficial loss across accounts was
         missed (audit R1-122). A bare symbol still takes its suffix from
         the currency (XEI in CAD -> XEI.TO)."""
-        sym = symbol_raw.strip().replace(" ", ".")
-        up = sym.upper()
+        # Upper-cased: `xyz` and `XYZ` are one security; left as typed
+        # they were two ACB pools and a sale opened a phantom short
+        # (R1-128).
+        sym = symbol_raw.strip().replace(" ", ".").upper()
+        up = sym
         # A Canadian venue (.TO/.V/.VN/.CN/.NE) is one Canadian listing,
         # spelled ROOT.TO by every broker parser (base.canonical_ca_
         # listing, audit S010-05): an explicit .V here must not split
@@ -365,6 +421,17 @@ class GenericBrokerage(BaseBrokerage):
         date_fmt = formats.get("date", "%Y-%m-%d")
         settle_fmt = formats.get("settle", date_fmt)
         tax_sign = formats.get("tax_sign", "cash")
+        fee_sign = formats.get("fee_sign", "cash")
+        if fee_sign not in ("cash", "charged"):
+            raise ValueError(
+                f"generic importer: {mapping['_path']}: [formats]."
+                f"fee_sign must be 'cash' (negative = charged, the "
+                f"default) or 'charged' (positive = charged), got "
+                f"{fee_sign!r}")
+        fee_mapped = "fee" in cols
+        # Parser-reported problems `taxjson-brokerage --lint` fails on.
+        self.lint_findings: List[str] = []
+        unbooked: List[str] = []
         if tax_sign not in ("cash", "withheld"):
             raise ValueError(
                 f"generic importer: {mapping['_path']}: [formats]."
@@ -450,12 +517,50 @@ class GenericBrokerage(BaseBrokerage):
                 if not any((v or "").strip() for v in row.values()
                            if isinstance(v, str) or v is None):
                     continue
+                # A record wider than the header, or a cell holding a
+                # line break: an unescaped quote in a text cell swallowed
+                # the following row(s) and the columns now carry another
+                # row's numbers — every cross-check can still pass
+                # (S057-08). Refuse, naming the line.
+                _extra = row.get(None)
+                _nl = [k for k, v in row.items()
+                       if k is not None and isinstance(v, str)
+                       and ("\n" in v or "\r" in v)]
+                if _extra or _nl:
+                    raise ValueError(
+                        f"generic importer: {path.name} record ending on "
+                        f"line {reader.line_num}: "
+                        + (f"{len(_extra)} cell(s) more than the header"
+                           if _extra else
+                           f"column {_nl[0]!r} holds a line break")
+                        + " — an unescaped quote in a text cell usually "
+                        "swallows the next row(s) this way. Fix the quoting "
+                        "(double an inner quote: \"\") and re-run.")
                 raw_action = (str(cell(row, "action")
                                   or defaults.get("action", ""))
                               .strip().upper())
                 target = actions.get(raw_action)
                 if target is None:
                     self.count_skip(f"action {raw_action or '?'!s}")
+                    # A row that moves shares or cash is a real event
+                    # the mapping does not book (a DRIP reinvest left
+                    # the position short): surfaced as UNBOOKED, not
+                    # just counted (R1-129).
+                    _moves = False
+                    for _f in ("quantity", "amount"):
+                        try:
+                            _v = num(row, _f, "")
+                        except ValueError:
+                            _v = 1.0        # unparseable: treat as live
+                        if _v:
+                            _moves = True
+                    if _moves:
+                        _w = (f"{path.name} line {reader.line_num}: "
+                              f"action {raw_action or '?'!r} (not in "
+                              f"[actions]) carries a quantity/amount")
+                        unbooked.append(_w)
+                        self.lint_findings.append(
+                            f"{_w} — not booked")
                     continue
                 if target == "skip":
                     self.count_skip(f"action {raw_action} (mapped skip)")
@@ -499,12 +604,14 @@ class GenericBrokerage(BaseBrokerage):
                     mult = (float(self.OPTION_MULTIPLIER)
                             if is_option_symbol(symbol_raw)
                             or is_option_symbol(symbol) else 1.0)
+                    is_future = symbol.startswith(_FUTURES_PREFIXES)
                     self._check_trade_shape(
                         where, target, raw_action, qty, price_v, amount_v,
-                        fee, mult)
+                        fee, mult, is_future)
                     trade_signs.append((where, target, qty))
-                    _check_trade_row(where, target, qty, price, amount,
-                                     fee, mult, allow_large_fees)
+                    fee = _check_trade_row(
+                        where, target, qty, price, amount, fee, mult,
+                        allow_large_fees, fee_mapped, is_future)
                     date_settle = self._settle_for(
                         row, cell, where, date, settle_fmt, symbol,
                         currency, mult > 1, settle_on_trade_date)
@@ -522,8 +629,12 @@ class GenericBrokerage(BaseBrokerage):
                         "net_amount": _trade_net(
                             path.name, target, qty, price, amount, fee,
                             mult),
-                        "gross_amount": self.theoretical_gross(
-                            qty, abs(price), is_option=(mult > 1)),
+                        "gross_amount": (
+                            # Futures: the implied qty x price x size.
+                            abs(amount) + (abs(fee) if target == "sell"
+                                           else -abs(fee))
+                            if is_future else self.theoretical_gross(
+                                qty, abs(price), is_option=(mult > 1))),
                         "fee": abs(fee),
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
@@ -565,9 +676,15 @@ class GenericBrokerage(BaseBrokerage):
                         # CSVs book withholding as negative cash (flip,
                         # like IB/RBC); statements that book it POSITIVE
                         # set [formats].tax_sign = "withheld".
+                        # FEE convention (IB/Questrade/RBC, fx-cash):
+                        # positive = charged. A cash-signed CSV (the
+                        # default) books a charge as negative cash —
+                        # flipped, like tax (R1-124).
                         "net_amount": (
                             (amount if tax_sign == "withheld"
                              else -amount) if target == "tax"
+                            else (amount if fee_sign == "charged"
+                                  else -amount) if target == "fee"
                             else amount),
                         "type": target,
                         "account": self.DEFAULT_ACCOUNT,
@@ -586,6 +703,15 @@ class GenericBrokerage(BaseBrokerage):
                     f"carry negative quantities — this row is a buy by "
                     f"the file's own sign convention. Check the "
                     f"[actions] mapping ({len(bad)} such row(s)).")
+        if unbooked:
+            shown = "; ".join(unbooked[:5])
+            more = (f" (+{len(unbooked) - 5} more)"
+                    if len(unbooked) > 5 else "")
+            print(f"warning: UNBOOKED: generic importer: {len(unbooked)} "
+                  f"row(s) with an unmapped action move shares or cash "
+                  f"and are NOT in the books: {shown}{more}. Map the "
+                  f"action in [actions] (or to \"skip\" if it really "
+                  f"is not an event).", file=sys.stderr)
         self.disambiguate_split_fills(transactions)
         self.emit_skip_summary(path.name)
         return transactions
@@ -594,7 +720,7 @@ class GenericBrokerage(BaseBrokerage):
     def _check_trade_shape(where: str, target: str, raw_action: str,
                            qty: float, price_v: Optional[float],
                            amount_v: Optional[float], fee: float,
-                           mult: float) -> None:
+                           mult: float, is_future: bool = False) -> None:
         """Refuse a buy/sell row that cannot be booked without a guess:
         no quantity, no price AND no amount (the fee alone became the
         whole cost or proceeds, audit R1-120), a zero-cost stock buy,
@@ -605,6 +731,13 @@ class GenericBrokerage(BaseBrokerage):
             raise ValueError(
                 f"generic importer: {where}: {raw_action} row (-> "
                 f"{target}) has a blank or zero quantity.")
+        if is_future and not (amount_v or 0.0):
+            raise ValueError(
+                f"generic importer: {where}: {raw_action} row is a "
+                f"futures contract with no amount — the contract size "
+                f"(multiplier) is never guessed, so qty x price cannot "
+                f"give the cost/proceeds. Map the fee-inclusive "
+                f"[columns].amount (or enter the trade in a .tt file).")
         if price_v is None and amount_v is None:
             raise ValueError(
                 f"generic importer: {where}: {raw_action} row (-> "
