@@ -815,6 +815,55 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
         diag.unlink(missing_ok=True)
 
 
+def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
+                               year: Any) -> None:
+    """An option still open in the books after its expiry date: the
+    export dropped the expiry / assignment / exercise row. For a LONG
+    contract the premium paid is a capital loss of the expiry year that
+    the books never realize (R1-37); option-boundary covers written
+    contracts only. Loud on every run and, through a `.diag` sidecar,
+    in the account's .sum. Cutoff: the earlier of the project's year end
+    and today — a contract expiring later is simply open."""
+    import json as _json
+    from datetime import date as _date
+    from taxjson.lib.core import is_option_symbol, parse_option_expiry
+    diag = cache / f"{name}_expired_options.diag"
+    cutoff = min(f"{year}-12-31", _date.today().isoformat())
+    lines: List[str] = []
+    try:
+        inv = _json.loads(gains_json.read_text(encoding="utf-8")).get(
+            "inventory") or []
+    except (OSError, ValueError, AttributeError):
+        inv = []
+    for h in inv:
+        sym = str(h.get("symbol") or "")
+        try:
+            qty = float(h.get("qty") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(qty) < 1e-9 or not is_option_symbol(sym):
+            continue
+        exp = parse_option_expiry(sym)
+        if not exp or exp >= cutoff:
+            continue
+        side = "long" if qty > 0 else "written"
+        lines.append(
+            f"warning: {name}: {sym} expired {exp} but the books still "
+            f"hold {qty:g} ({side}) — the export is missing its expiry, "
+            f"assignment or exercise row"
+            + (f"; the {abs(float(h.get('total_cost') or 0.0)):,.2f} paid "
+               f"is a loss of {exp[:4]} that is not booked"
+               if qty > 0 else "")
+            + ". Add the missing row (an expiry is a BUYSELL closing "
+              "the position at 0 on the expiry date) and re-run.")
+    if lines:
+        diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        for ln in lines:
+            print(f"  ! {ln}", file=sys.stderr)
+    else:
+        diag.unlink(missing_ok=True)
+
+
 def detect_broker(csv_path: Path) -> Optional[str]:
     """Filename hint first (covers coinbase/kraken whose CSV shapes aren't
     distinctive enough for content detection), then content detection
@@ -1790,6 +1839,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    if is_taxable:
+        _warn_expired_open_options(name, gains_json, cache, year)
 
     # 5b. Raw holdings: merge + sort + dedup, NO currency conversion and
     # NO validation; then gains with no options. The same ticker.map is

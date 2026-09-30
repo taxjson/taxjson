@@ -564,5 +564,47 @@ class TestZeroValueSpinoffInChecklist(unittest.TestCase):
         self.assertIn("fmv_per_share", r.detail)
 
 
+class TestExpiredOpenOptionWarns(unittest.TestCase):
+    """R1-37: a long option held past expiry with no expiry row is named."""
+
+    def _run(self, book):
+        import os
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        repo = Path(__file__).resolve().parent.parent
+        env = dict(os.environ, TAXJSON_OFFLINE="1", PYTHONPATH=str(repo / "src"))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "inputs" / "margin").mkdir(parents=True)
+            (root / "inputs" / "margin" / "book.tt").write_text(book)
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\nsource_currencies = []\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+                 "run", "--no-input"],
+                capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL)
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            return r.stderr, (root / "reports" / "margin.sum").read_text()
+
+    BUY = ("BUYSELL 2025-02-03 10:00:00 ZZQ251219C00015000.TO 1.00000000 CAD "
+           "2.01000000 201.00000 0.00000\n")
+
+    def test_missing_expiry_row_is_named(self):
+        err, summ = self._run(self.BUY)
+        for txt in (err, summ):
+            self.assertIn("ZZQ251219C00015000.TO expired 2025-12-19", txt)
+            self.assertIn("201.00 paid is a loss of 2025", txt)
+
+    def test_expiry_row_present_is_quiet(self):
+        err, summ = self._run(self.BUY + (
+            "BUYSELL 2025-12-19 16:00:00 ZZQ251219C00015000.TO -1.00000000 CAD "
+            "0.00000000 0.00000 0.00000\n"))
+        self.assertNotIn("expired 2025-12-19", err + summ)
+
+
 if __name__ == "__main__":
     unittest.main()

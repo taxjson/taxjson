@@ -1764,6 +1764,12 @@
   now needs attention while any taxable spin-off or merger is booked at
   $0 (`fmv_per_share=0`, the "defer" value), and `taxjson elect --set
   ... --hint fmv_per_share=0` says what it books.
+- **An option held past its expiry is named.** `taxjson run` warns (on
+  the console and in the `.sum` DIAGNOSTICS) for every option a taxable
+  account still holds after its expiry date — the export dropped the
+  expiry, assignment or exercise row. For a long contract the premium
+  paid is an unbooked loss of the expiry year; option-boundary covered
+  written contracts only.
 
 ## v0.16.0 (2026-09-25)
 
