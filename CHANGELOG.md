@@ -105,6 +105,19 @@
   its carryforward. A loss carries back only 3 years (ITA 111(1)(b)), so
   a claim left unmet past that window now stays unmatched, with a
   warning, and the carryforward is untouched.
+- **fx-cash counts assignment cash, and only cash.** An option
+  assignment's stock leg booked as `ASSIGN` (Webull) now spends or
+  receives currency like a trade; crypto-for-crypto swap legs (Kraken,
+  Coinbase Convert), staking rewards paid in a coin, and stock-for-stock
+  corporate actions no longer count as foreign cash moving (they
+  invented thousands of dollars of s.39(1.1) gain or loss).
+- **fx-cash says the figure can be wrong either way.** The report (and
+  the `sum` FOR THE RETURN line and its `--json`) now carries the
+  overdraft count and a caveat that unseen conversions and deposits can
+  move the estimate in either direction — it used to say only that it
+  "understates activity" — and the report shows the ledger's foreign
+  cash at Dec 31 to compare with the brokers' balances.
+
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

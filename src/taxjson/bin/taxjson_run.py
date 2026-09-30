@@ -5971,7 +5971,16 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 _fxl, _fxv, _, _, _ = _fx_cash_doc(root, cache)
             _fx_note = {"net_gain": round(float(_fxl["net_gain"]), 2),
                         "reportable": round(float(_fxv["reportable"]), 2),
-                        "estimate": True, "line": "15300"}
+                        "estimate": True, "line": "15300",
+                        # The ledger cannot see conversions or deposits
+                        # (R1-148): carry its own warning signs so the
+                        # figure is never quoted without them.
+                        "overdrafts": dict(_fxl.get("overdrafts") or {}),
+                        "pools_year_end": dict(
+                            _fxl.get("pools_year_end") or {}),
+                        "caveat": "explicit conversions and deposits "
+                                  "are not in the ledger; the figure "
+                                  "can be wrong in either direction"}
         except (SystemExit, Exception):             # noqa: BLE001
             _fx_note = None
     # Base currency is just a label here — soft-read, no hard config
@@ -6121,7 +6130,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"the rows above): net {money(_fx_note['net_gain'])}, "
                       f"reportable {money(_fx_note['reportable'])} after "
                       f"the $200 exemption; T4037 puts it on line 15300. "
-                      f"Review with `taxjson fx-cash`.")
+                      + (f"The ledger overdrew "
+                         + ", ".join(f"{c} {n}x" for c, n in sorted(
+                             _fx_note["overdrafts"].items()))
+                         + " (conversions/deposits it cannot see); "
+                         if _fx_note["overdrafts"] else "")
+                      + "unseen conversions make it wrong in either "
+                        "direction — review with `taxjson fx-cash` "
+                        "before using it.")
             else:
                 print("FX on foreign cash (s.39(1.1)) is not in the rows "
                       "above — T4037 puts it on line 15300; see `taxjson "
@@ -9728,6 +9744,7 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                    "overdrafts": ledger["overdrafts"],
                    "unrated": ledger["unrated"],
                    "open_pools": ledger["pools"],
+                   "pools_year_end": ledger.get("pools_year_end") or {},
                    "currency": base, "year": year})
         return
     print(FX.render_report(ledger, base, year, country, verdict))
