@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **taxjson-merge never emits a partial merge.** The legacy merge that
+  builds the crypto books, the blended base, `sheltered_base.json` and
+  the audit tie-out printed "cannot read" and exited 0 with the
+  unreadable file's rows missing — `run --fast` over a damaged cached
+  Coinbase book dropped half the crypto gains with a clean console. A
+  missing or unreadable input is now an error (exit 1, nothing on
+  stdout), as in taxjson-merge2.
 - **ticker.map means one thing everywhere.** Rule symbols are
   upper-cased on load (a lower-case rule used to rename nothing while
   `taxjson scan` called it live), a BOM and inline `# notes` are

@@ -190,5 +190,47 @@ class TestRunRefusesContradictoryMaps(unittest.TestCase):
                       r.stderr + r.stdout)
 
 
+class TestLegacyMergeRefusesPartial(unittest.TestCase):
+    """R1-260 / R1-295: taxjson-merge (crypto books, blended base,
+    sheltered_base, audit tie-out) printed 'cannot read' and exited 0
+    with the unreadable file's rows missing — `run --fast` over a
+    truncated cached Coinbase book dropped half the crypto gains."""
+
+    def _merge(self, *paths):
+        return subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_merge",
+             *map(str, paths)], capture_output=True, text=True)
+
+    def _good(self, d):
+        p = Path(d) / "a.json"
+        p.write_text(json.dumps({"transactions": [
+            {"action": "BUYSELL", "date": "2025-01-15", "symbol": "X",
+             "quantity": 1, "currency": "CAD", "net_amount": 1.0}]}))
+        return p
+
+    def test_unreadable_input_is_fatal_and_emits_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = Path(d) / "bad.json"
+            bad.write_text('{"transactions": [{"action": "BUY')
+            r = self._merge(self._good(d), bad)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("taxjson-merge: error: cannot read", r.stderr)
+        self.assertIn("partial merge", r.stderr)
+
+    def test_missing_input_is_fatal(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._merge(self._good(d), Path(d) / "ghost.json")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("not found", r.stderr)
+
+    def test_good_inputs_still_merge(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = self._merge(self._good(d))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(json.loads(r.stdout)["transactions"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
