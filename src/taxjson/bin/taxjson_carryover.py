@@ -42,6 +42,7 @@ Or through the project wrapper: `taxjson carryover`.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -57,6 +58,20 @@ _INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE')
 US_ORDINARY_OFFSET = 3000.0
 
 
+_AMOUNT_RE = re.compile(r"\$?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?|\$?\.\d+")
+
+
+def _parse_amount(text: str) -> float:
+    """A claimed amount as the T1 / notice of assessment prints it:
+    plain `1234.56`, grouped `1,234.56`, optionally with a leading `$`
+    (S027-13: those forms were dropped with a warning, overstating the
+    carryforward). A malformed grouping (`12,34`) is refused — never
+    guessed."""
+    if _AMOUNT_RE.fullmatch(text) is None:
+        return float(text)          # 'nan', '-5', '1e3' -> float()'s rules
+    return float(text.lstrip("$").replace(",", ""))
+
+
 def load_claimed(path: Optional[Path]) -> Dict[int, float]:
     claimed: Dict[int, float] = {}
     if path is None:
@@ -67,7 +82,7 @@ def load_claimed(path: Optional[Path]) -> Dict[int, float]:
             continue
         parts = stripped.split()
         try:
-            year, amount = int(parts[0]), float(parts[1])
+            year, amount = int(parts[0]), _parse_amount(parts[1])
             import math
             # not-isfinite: 'nan' passed the `< 0` check and poisoned
             # the ledger — APPLIED ballooned to the whole balance with

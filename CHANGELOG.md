@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **claimed_losses.txt takes `1,234.56` and `$1,234.56`.** An amount
+  written the way the return or notice of assessment prints it was
+  dropped with a warning, so the carryforward kept the claimed loss. A
+  malformed grouping is still refused.
 - **carryover: an old claim no longer eats a later loss.** A
   `claimed_losses.txt` amount recorded for a year the books show no loss
   for was held and taken by the next loss in ANY later year, lowering
