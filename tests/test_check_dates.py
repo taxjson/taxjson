@@ -88,6 +88,15 @@ class TestAnalyze(unittest.TestCase):
         self.assertEqual(doc["issues"], [])
         self.assertIn("Every date lands", "\n".join(render(doc)))
 
+    def test_render_lists_note_rows(self):
+        td, root, cfg = _project({("ib", "a.csv"): [
+            _r("2025-05-31", "2025-05-31", action="DIVIDEND")]})
+        with td:
+            doc = analyze(root, cfg, today=date(2026, 1, 1))
+        text = "\n".join(render(doc))
+        self.assertIn("ABC.US", text)
+        self.assertIn("Saturday", text)
+
     def test_errors(self):
         td, root, cfg = _project({("ib", "a.csv"): [
             _r("2025-06-07", "2025-06-09"),               # Saturday
@@ -114,7 +123,9 @@ class TestAnalyze(unittest.TestCase):
             _r("2025-02-28", "2025-02-28",
                sym="DELL250228C00102000.US"),             # expiry-day trade
             _r("2025-07-29", "2025-07-29", price=0.0,
-               desc="STK DIV ON 1390 SHS")]})             # event row
+               desc="STK DIV ON 1390 SHS"),               # event row
+            _r("2025-09-15", "2025-09-15", price=3.8,
+               desc="CMG REINV@C$3.82621 PAY 09/15/26")]})   # DRIP
         with td:
             doc = analyze(root, cfg, today=date(2026, 1, 1))
         self.assertEqual(self.codes(doc), ["settle-cycle"])

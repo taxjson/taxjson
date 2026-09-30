@@ -43,9 +43,11 @@ INCOME_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST", "TAX",
                   "ROC", "PIL")
 CA_SUFFIXES = (".TO", ".V", ".CN", ".NE", ".VN")
 # Corporate events a parser books as a trade (a spin-off leg, a stock
-# dividend, cash in lieu): dated the event day, no settlement cycle.
+# dividend, cash in lieu, a dividend reinvestment): dated the event or
+# payment day, no settlement cycle.
 _EVENT_RE = re.compile(r"SPIN|STK DIV|STOCK DIV|IN LIEU|REORG|MERGER|"
-                       r"TENDER|REDEMPTION|RETRACTION|CONSOLIDAT|SPLIT",
+                       r"TENDER|REDEMPTION|RETRACTION|CONSOLIDAT|SPLIT|"
+                       r"REINV|DRIP|DIVIDEND REINVEST",
                        re.IGNORECASE)
 FUTURES_OPEN = dtime(17, 0)       # Sunday evening open (Eastern, lenient)
 FUTURES_CLOSE = dtime(17, 0)      # Friday afternoon close
@@ -238,7 +240,10 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                     if td.weekday() >= 5 and not crypto:
                         add("NOTE", "income-weekend",
                             "income dated on a weekend (pay dates are "
-                            "normally business days)", acct, label, r)
+                            "normally business days)", acct, label, r,
+                            f"{td.strftime('%A')}; "
+                            f"{float(r.get('net_amount') or 0):,.2f} "
+                            f"{r.get('currency') or ''}".strip())
                     continue
                 if action not in TRADE_ACTIONS:
                     continue
@@ -285,9 +290,16 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                             if kind == "tt" else ""), acct, label, r)
                     continue
                 if not _settle_day_anywhere(sd):
+                    _mk = _market(cls, sym, cur) or "USD"
+                    _nx = settlement_date(sd.isoformat(), _mk,
+                                          cls == "option")
                     add("WARN", "settle-holiday",
                         "settles on a day neither the US nor the Canadian "
-                        "market settles", acct, label, r)
+                        "market settles", acct, label, r,
+                        f"{sd.strftime('%A')}"
+                        + (f"; a .tt date is the settlement date: a trade "
+                           f"on {sd} settles {_nx}" if kind == "tt" else
+                           f"; next settlement day {_nx}"))
                 if kind in ("tt", "corp") or cls == "other-equity":
                     continue
                 if sd == td and (abs(float(r.get("price") or 0)) < 1e-9
@@ -342,16 +354,9 @@ def render(doc: Dict[str, Any], show_all: bool = False,
             rows = [i for i in doc["issues"]
                     if i["severity"] == sev and i["code"] == code]
             L.append(f"   {code}: {n} — {rows[0]['message']}")
-            if sev == "NOTE" and not show_all:
-                by_src: Dict[str, int] = {}
-                for i in rows:
-                    k = f"{i['account']}: {i['source']}"
-                    by_src[k] = by_src.get(k, 0) + 1
-                L.append("      " + ", ".join(f"{k} {v}" for k, v
-                                             in sorted(by_src.items())))
-                continue
             for i in rows[: None if show_all else per_code]:
-                L.append(f"      {i['account']}: {i['source']:<22} "
+                src = f"{i['account']}: {i['source']}"
+                L.append(f"      {src:<30} "
                          f"{str(i['symbol']):<26} {i['action']:<8} "
                          f"{i['date']} {i['time'] or '':<8} "
                          f"settle {i['date_settle'] or '-'}"
