@@ -111,6 +111,7 @@ class WebullBrokerage(BaseBrokerage):
         transactions: List[Dict[str, Any]] = []
         data_rows = 0
         current_symbol = ""
+        current_is_under = False
         current_description = ""
         # Webull's parser only books BUY/SELL. Blank continuation rows are
         # expected and harmless, but a row with a REAL non-trade action
@@ -202,6 +203,9 @@ class WebullBrokerage(BaseBrokerage):
                     # "Webull blank-Description carry-over").
                     current_description = ""
                 current_symbol = _new_symbol
+                # `@ROOT` is how Webull names an option row's
+                # underlying; any other Symbol cell is not one.
+                current_is_under = symbol_raw.startswith('@')
             if description_raw:
                 current_description = description_raw
 
@@ -241,7 +245,7 @@ class WebullBrokerage(BaseBrokerage):
                 # The row's own Symbol column (`@ZZS`) names the
                 # underlying; the description root can differ (an
                 # adjusted contract's `ZZS1`) — audit S066-02.
-                if current_symbol:
+                if current_is_under:
                     under_sym = self.apply_currency_suffix(
                         current_symbol, currency)
             else:
@@ -350,9 +354,9 @@ class WebullBrokerage(BaseBrokerage):
     # Webull's exercise/assignment charge on the stock leg: every real
     # assignment/exercise seen carries exactly $1.00 (net = qty x strike
     # +/- 1), while ordinary stock trades carry the regular commission
-    # (~$2.91-4.13). The fee is the only evidence in the Trading Summary
-    # that separates the two.
-    _EXERCISE_FEE_MAX = 1.01
+    # (~$2.91-4.13, or $0 in a commission-free promotion). The fee is
+    # the only evidence in the Trading Summary that separates the two.
+    _EXERCISE_FEE = 1.00
 
     def _mark_assignments(self, transactions, expiries, own=None,
                           source='') -> None:
@@ -413,7 +417,8 @@ class WebullBrokerage(BaseBrokerage):
                     continue
                 if not -1 <= gap <= 7:
                     continue
-                if abs(float(t.get('fee') or 0.0)) > self._EXERCISE_FEE_MAX:
+                if abs(abs(float(t.get('fee') or 0.0))
+                       - self._EXERCISE_FEE) > 0.011:
                     rejected.append((oi, i))
                     continue
                 cands.append((gap, oi, i))

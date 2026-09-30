@@ -66,6 +66,11 @@ class TestAssignmentHeuristic(unittest.TestCase):
         self.assertIn("NOT inferred", err)
         self.assertIn("XYZ.US", err)
 
+    def test_zero_commission_trade_at_strike_stays_an_expiry(self):
+        tx, err = _parse(_LONGCALL.format(net="5,000.00"))
+        self.assertFalse([t for t in tx if t["action"] == "ASSIGN"])
+        self.assertIn("NOT inferred", err)
+
     def test_exercise_fee_signature_pairs_and_names_the_pairing(self):
         tx, err = _parse(_LONGCALL.format(net="5,001.00"))
         assign = [t for t in tx if t["action"] == "ASSIGN"]
@@ -111,6 +116,18 @@ class TestAssignmentUnderlyingFromSymbolColumn(unittest.TestCase):
         self.assertEqual(sorted(t["action"] for t in tx),
                          ["ASSIGN", "ASSIGN", "BUYSELL"])
         self.assertFalse(any("_under" in k for t in tx for k in t))
+
+
+    def test_contract_code_in_symbol_column_falls_back_to_description(self):
+        # Only `@ROOT` names the underlying; a contract code in the
+        # Symbol column must not block the pairing.
+        rows = (_PRE + _H25 +
+                'USD,05-06-2025,SELL,ZZS250620P00305000,PUT ZZS06/20/25 305,OPC,-1,8.00,,799.35\n'
+                'USD,20-06-2025,BUY,,,,1,0.00,,\n'
+                'USD,23-06-2025,BUY,ZZS,ZZS INC,SHS,100,305.00,,"(30,501.00)"\n')
+        tx, _ = _parse(rows)
+        self.assertEqual(sorted(t["action"] for t in tx),
+                         ["ASSIGN", "ASSIGN", "BUYSELL"])
 
 
 class TestAssignmentAcrossFiles(unittest.TestCase):
