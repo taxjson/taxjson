@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **One Bank of Canada 404 no longer switches a currency to Yahoo for
+  good.** Any HTTP 404 from the Valet API (a maintenance page, a proxy)
+  was cached as "series not published" with no expiry, so every later
+  run of every project on the machine converted that currency at Yahoo
+  closes, cached Bank rates included. Only the Valet API's own
+  "Series FX…CAD not found" answer marks a series now; the mark carries
+  its date and is re-checked after 7 days; cached Bank observations keep
+  their source; the note names the answer and the source used.
 - **Decimal commas are refused, not read 100x too large.** `12,50` in a
   generic CSV, `-48,24` in a `.tt` line and `0,95` in a Webull cell had
   every comma stripped and were booked as 1250, -4824 and 95. A comma is
