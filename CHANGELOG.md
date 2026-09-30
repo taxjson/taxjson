@@ -6,6 +6,39 @@
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;
   `--set ID=gift|payment` still overrides it.
+- **The wash radar sees today's trades.** `wash-radar`, `buy-check`,
+  `sell-check`, `watch` and `reports/wash_radar_*` dropped every trade
+  that had not settled yet, so right after a loss sale `buy-check` said
+  SAFE (and right after a buy `sell-check` said SAFE). A trade now
+  counts from its trade date; the windows stay settlement-based.
+- **The wash radar takes losses from the engine.** Whether a sale was a
+  loss came from the radar's own per-account pool, which missed the
+  s.47 blend across taxable accounts, the cost added back by an earlier
+  denied loss, and option cost folded in on exercise; real losses showed
+  no window and `buy-check` said SAFE. The radar now reads the engine's
+  gains files (grant-timed buy-back losses are not wash losses unless
+  `option_buyback_loss_superficial` is on).
+- **Web what-if prices options per contract.** Selling an option on the
+  holding page used qty x price, 100 times too little, and showed a ~99%
+  loss. Proceeds are now qty x premium x 100 (the page labels the field
+  as the per-share premium and the cost as per contract); a futures
+  option is refused rather than priced with a guessed multiplier.
+- **Web what-if maps cross-listed options like the pipeline.** An option
+  on a `TOBASE`/`GLOBAL`-mapped underlying (a `.US` call booked as
+  `.TO`) was looked up under its unmapped name, and the what-if
+  simulated writing a new short. It now follows the underlying's rule,
+  and a sale that would open a short is refused.
+- **`taxjson redact` removes the holder's name from Coinbase and IB
+  Flex/HTML exports.** Coinbase's `User,<name>,<id>` line, the `Name`
+  column of an IB Flex `Account` section and the Name cell of IB's .html
+  statements were kept. IB ids glued to letters (HTML element ids) were
+  collected but not replaced, while the report said "every occurrence
+  replaced"; they are replaced now, and the report checks the copy and
+  lists any id it could not replace.
+- **The wash radar applies `phantoms.json`.** Phantom-backed positions
+  showed as shorts (rebuys as short covers with invented losses) in the
+  radar, `watch`, `buy-check`, `sell-check`, harvest's ADVISORY and the
+  web UI, and real violations were missed.
 - **One split booked on two dates applies once.** IB and Questrade date
   the same split days apart (KLAC 10:1: 06-11 vs 06-15); both copies
   were applied, scaling the pool by the ratio twice. Copies of one split

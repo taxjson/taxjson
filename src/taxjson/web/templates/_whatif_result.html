@@ -3,7 +3,7 @@
 <h1>What-if sell</h1>
 {% if result.ok %}
 <p><a href="/holdings/{{ result.account }}/{{ result.symbol }}">← {{ result.symbol }}</a></p>
-<p>Sell <b>{{ result.qty }}</b> {{ result.symbol }} @ {{ result.price }} {{ result.price_currency }} on {{ result.date }}
+<p>Sell <b>{{ result.qty }}</b> {{ result.symbol }} @ {{ result.price }} {{ result.price_currency }}{% if result.multiplier and result.multiplier != 1 %} &times; {{ result.multiplier }} per contract{% endif %} on {{ result.date }}
    {% if result.price_currency != result.currency %}
    <span class="muted">(≈ {{ result.price_base }} {{ result.currency }} @ FX {{ result.fx_rate }})</span>
    {% endif %}

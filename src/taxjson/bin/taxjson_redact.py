@@ -17,8 +17,11 @@ What it changes, and nothing else:
     date-like numbers are never treated as ids, so quantities, prices
     and dates stay;
   * holder identity — IB `Account Information` Name / Alias / address
-    rows, `AccountAlias` / `AcctAlias` columns, `Name:` / `Client:` /
-    `Owner:` header lines (quoted or not), names after `Initiated by`,
+    rows (CSV, and the label/value cells of IB's .html statements),
+    `AccountAlias` / `AcctAlias` columns, a `Name` column beside an
+    account or alias column (IB Flex `Account` section), `Name:` /
+    `Client:` / `Owner:` header lines and Coinbase's `User,<name>,<id>`
+    line (quoted or not), names after `Initiated by`,
     `Payee:`, `Beneficiary:` and honorifics (`Mrs. …`), the name after
     an `Account: …,` header, name / street / city lines in a statement
     preamble (Webull), e-mail addresses, phone numbers, Canadian postal
@@ -42,7 +45,9 @@ byte for byte.
 Output goes to `<name>.redacted<ext>` beside the input (or --out DIR),
 with any id in the NAME itself replaced too; an existing copy is only
 overwritten with --force, a symlink never. The input is never modified.
-The report shows placeholders and id lengths, never the ids, and lists
+The report shows placeholders and id lengths, never the ids, checks
+that no collected id is left in the copy (any left over is counted and
+its lines listed for review), and lists
 (by line number only) the free-text lines that still hold name-like
 words or long digit runs it did not redact. `--check` writes nothing
 and exits 1 when it finds anything to redact.
@@ -80,13 +85,20 @@ _ALIAS_COLS = ("accountalias", "account alias", "acctalias", "acct alias",
                "account name", "accountname", "account nickname",
                "nickname", "client name", "holder", "account holder",
                "owner")
+# A plain `Name` column is a security name in most layouts; it is the
+# HOLDER's name when the same header also carries an account id or an
+# alias column (IB Flex `Account` section: AccountNumber, AccountAlias,
+# Name).
+_HOLDER_NAME_COLS = ("name", "full name", "holder name",
+                     "account holder name", "customer name", "user",
+                     "user name", "username")
 _IDENTITY_ROWS = ("name", "account alias", "address", "street", "city",
                   "state", "postal code", "zip", "country", "phone",
                   "email", "customer id", "client name", "holder",
                   "owner", "primary owner", "customer", "province",
                   "address 1", "address 2", "mailing address")
 _HEADER_LINE = re.compile(
-    r'^(\s*"?)((?:name|client|client name|account holder|owner|primary owner|customer)\s*[:,]\s*)',
+    r'^(\s*"?)((?:name|client|client name|account holder|owner|primary owner|customer|user)\s*"?\s*[:,]\s*)',
     re.IGNORECASE)
 # `"Account: 12345678 - Margin, Jane Sample"` (RBC): the text after the
 # first comma of an Account: header line is the holder's name.
@@ -191,6 +203,7 @@ class InputRefused(Exception):
 class Report:
     def __init__(self) -> None:
         self.accounts: Dict[str, str] = {}      # original -> placeholder
+        self.unreplaced: Dict[str, int] = {}    # original -> occurrences left
         self.identity_rows = 0
         self.emails = 0
         self.names = 0
@@ -473,18 +486,64 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
         rep.review.append((lineno, f"{' and '.join(reasons)} in {where}"))
 
 
+def _identity_cols(low: List[str]) -> List[int]:
+    """Header positions holding holder identity: alias columns always;
+    a name column only beside an account or alias column."""
+    cols = [i for i, c in enumerate(low) if c in _ALIAS_COLS]
+    if cols or any(c in _ACCOUNT_COLS for c in low):
+        cols += [i for i, c in enumerate(low) if c in _HOLDER_NAME_COLS]
+    return sorted(cols)
+
+
+# HTML statements (IB's .html reports): a label cell naming an identity
+# field, then the value cell — on the same line or the next ones.
+_HTML_IDENTITY = re.compile(
+    r"(<t[dh][^>]*>\s*(?:" + "|".join(
+        re.escape(r).replace(r"\ ", r"\s+") for r in sorted(
+            set(_IDENTITY_ROWS) - {"country", "state", "province"},
+            key=len, reverse=True)) +
+    r")\s*:?\s*</t[dh]>\s*<td[^>]*>)([^<]*)(</td>)",
+    re.IGNORECASE)
+
+
+def _redact_html_identity(text: str, rep: "Report") -> str:
+    if "<td" not in text.lower():
+        return text
+
+    def repl(m: re.Match) -> str:
+        if not m.group(2).strip():
+            return m.group(0)
+        rep.identity_rows += 1
+        return m.group(1) + "REDACTED" + m.group(3)
+    return _HTML_IDENTITY.sub(repl, text)
+
+
+def _id_pattern(orig: str) -> re.Pattern:
+    """Where an account id is replaced — the SAME boundaries it was
+    collected with. An IB id is found when it is followed by letters
+    (`tblAccountInformation_U1234567Heading`), so it is replaced
+    there too; other ids keep the strict boundary (not inside a longer
+    token or a decimal)."""
+    if _IB_ID.fullmatch(orig):
+        return re.compile(r"(?<![A-Za-z0-9])" + re.escape(orig) + r"(?![0-9])")
+    return re.compile(r"(?<![A-Za-z0-9.])" + re.escape(orig)
+                      + r"(?![A-Za-z0-9]|\.\d)")
+
+
 def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                 ) -> Tuple[str, Report]:
     rep = Report()
     compiled, bad = compile_patterns(extra_patterns or [])
     for b in bad:
         rep.notes.append(f"pattern skipped (not a valid regex): {b}")
+    text = _redact_html_identity(text, rep)
     lines = text.splitlines(keepends=True)
     for n, orig in enumerate(_collect_ids(lines), start=1):
         rep.accounts[orig] = _placeholder(orig, n)
     # Longest first so a shorter id that is a substring of a longer one
     # cannot pre-empt it.
     ordered = sorted(rep.accounts.items(), key=lambda kv: -len(kv[0]))
+    id_pats = {orig: _id_pattern(orig) for orig, _ in ordered}
     alias_cols: Dict[str, List[int]] = {}
     txid_cols: Dict[str, List[int]] = {}
     free_cols: Dict[str, List[Tuple[int, str]]] = {}
@@ -503,7 +562,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
             header_row = True
             if "description" in low[2:] and low[0] not in rep.description_columns:
                 rep.description_columns.append(low[0])
-            alias_cols[low[0]] = [i for i, c in enumerate(low) if c in _ALIAS_COLS]
+            alias_cols[low[0]] = _identity_cols(low)
             txid_cols[low[0]] = [i for i, c in enumerate(low) if c in _TXID_COLS]
             free_cols[low[0]] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                  if c in _FREE_TEXT_COLS]
@@ -513,7 +572,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                 or all(not any(ch.isdigit() for ch in c) for c in nonempty)):
             # A flat CSV's column header row.
             header_row = True
-            alias_cols["__flat__"] = [i for i, c in enumerate(low) if c in _ALIAS_COLS]
+            alias_cols["__flat__"] = _identity_cols(low)
             txid_cols["__flat__"] = [i for i, c in enumerate(low) if c in _TXID_COLS]
             free_cols["__flat__"] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                      if c in _FREE_TEXT_COLS]
@@ -539,7 +598,10 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
         m = _HEADER_LINE.match(line)
         if m and not is_ib_row:
             rest = line[m.end():]
-            if m.group(1).strip().endswith('"'):
+            if rest.startswith('"'):
+                # A quoted CSV field (`"User","Jane Sample",...`).
+                new_rest = re.sub(r'^"[^"\r\n]*"', '"REDACTED"', rest, count=1)
+            elif m.group(1).strip().endswith('"') and '"' not in m.group(2):
                 new_rest = re.sub(r'^[^"\r\n]*', "REDACTED", rest, count=1)
             else:
                 new_rest = re.sub(r'^[^,\r\n]*', "REDACTED", rest, count=1)
@@ -564,7 +626,7 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                 rep.identity_rows += 1
         for orig, ph in ordered:
             if orig in line:
-                line = re.sub(r"(?<![A-Za-z0-9.])" + re.escape(orig) + r"(?![A-Za-z0-9]|\.\d)", ph, line)
+                line = id_pats[orig].sub(ph, line)
         if _EMAIL.search(line):
             line, k = _EMAIL.subn("redacted@example.com", line)
             rep.emails += k
@@ -585,6 +647,16 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                     if i < len(new_cells):
                         _review(lineno, new_cells[i], f"column {name!r}", rep)
         out.append(line)
+    # Verify, never assume: any collected id still in the copy is
+    # counted (and its lines listed for review) so the report cannot
+    # claim a replacement it did not make.
+    for orig in rep.accounts:
+        hits = [n for n, ln in enumerate(out, start=1) if orig in ln]
+        if hits:
+            rep.unreplaced[orig] = sum(ln.count(orig) for ln in out)
+            for n in hits:
+                rep.review.append((n, "an account id the redactor "
+                                      "could not replace"))
     return "".join(out), rep
 
 
@@ -704,7 +776,14 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
     shown_src = redacted_name(src, rep.accounts).replace(".redacted", "")
     where = f" -> {dst}" if dst else " (check only)"
     print(f"{shown_src}{where}")
-    if rep.accounts:
+    if rep.accounts and rep.unreplaced:
+        left = sum(rep.unreplaced.values())
+        print(f"  account ids: {len(rep.accounts)} distinct — {left} "
+              f"occurrence(s) of {len(rep.unreplaced)} id(s) NOT replaced "
+              f"(see REVIEW below; fix by hand or with --also)")
+        for orig, ph in rep.accounts.items():
+            print(f"    {Report.masked(orig)} -> {ph}")
+    elif rep.accounts:
         print(f"  account ids: {len(rep.accounts)} distinct, every occurrence replaced")
         for orig, ph in rep.accounts.items():
             print(f"    {Report.masked(orig)} -> {ph}")

@@ -324,19 +324,42 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # built pre-TOBASE), while <account>_base.json is consolidated — a
     # cross-listed AEM.US holding lives as AEM.TO here. Map through
     # ticker.map's GLOBAL+TOBASE renames so those names are simulatable.
+    # map_symbol, not an exact dict lookup: the pipeline (merge2) moves
+    # an OPTION onto its underlying's rule too (TOBASE AEM.US AEM.TO
+    # renames AEM...C...US -> ...TO). The exact lookup left the option
+    # on a symbol the book never holds, and the engine simulated
+    # WRITING a new short (2026-09 audit).
     map_file = ctx.root / "ticker.map"
     if map_file.exists():
         try:
             from taxjson.bin.taxjson_ticker_map import (load_map_file,
+                                                        map_symbol,
                                                         merge_renames)
             renames = merge_renames(load_map_file(map_file), to_base=True)
-            symbol = renames.get(symbol, symbol)
+            symbol = map_symbol(symbol, renames)
         except Exception as exc:
             warnings.append(
                 f"ticker.map could not be applied ({exc}) — cross-listed "
                 f"symbols may not resolve to their consolidated pool.")
 
-    proceeds = abs(qty) * price
+    # Contract multiplier: the form asks for the per-share QUOTE (the
+    # price brokers show, and what the trade table lists), and the
+    # books store an equity option at qty x price x 100 (core.py's
+    # convention; every broker parser). proceeds = qty x price dropped
+    # the x100 and showed a ~99% loss on every option (2026-09 audit).
+    # A futures option's multiplier depends on the contract — refuse
+    # rather than guess.
+    from taxjson.lib.core import is_option_symbol
+    multiplier = 1
+    if is_option_symbol(symbol):
+        if symbol.upper().startswith(("F:", "/", "\\")):
+            return {"ok": False, "warnings": warnings,
+                    "reason": f"{symbol} is a futures option — its "
+                              f"contract multiplier varies by contract, "
+                              f"so the what-if cannot price it; use "
+                              f"`taxjson-explain` on a booked sale."}
+        multiplier = 100
+    proceeds = abs(qty) * price * multiplier
     # Explicit non-content id: the deterministic content hash COLLIDED
     # with a real same-day sale of identical symbol/qty/price already
     # in the book, so the aggregation below summed the real sale's
@@ -371,8 +394,14 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # The US (FIFO) engine emits ONE gain entry PER CLOSED LOT, all sharing
     # the selling tx's id — reading only the first falsely rejected any sell
     # spanning multiple lots ("only <first lot> held"). Aggregate them.
+    # Only the CLOSING of a long position is a what-if sale: a grant
+    # record (writing an option under grant timing) or a short-side
+    # entry means the sale OPENED a short, which this tool does not
+    # simulate — it then falls to the oversell guard below.
     entries = [t for t in after.get("transactions", [])
-               if t.get("id") == synth.id and t.get("qty")]
+               if t.get("id") == synth.id and t.get("qty")
+               and not t.get("grant")
+               and (t.get("direction") or "LONG") != "SHORT"]
     if not entries:
         return {"ok": False, "warnings": warnings,
                 "reason": "no disposition produced — the position "
@@ -425,6 +454,7 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         "price_base": round(price, 6),             # converted to base
         "fx_rate": round(fx_rate, 6),
         "fx_note": fx_note,
+        "multiplier": multiplier,                  # 100 per option contract
         "proceeds": round(proceeds, 2),            # base-currency
         "cost_basis": round(_sum("cost"), 2),
         "economic_gain": round(economic, 2),      # true gain/loss on the sale
