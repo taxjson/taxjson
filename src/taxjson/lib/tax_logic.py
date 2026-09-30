@@ -385,7 +385,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "before; a longer gap converts the row at a placeholder "
                  "rate and is a validation ERROR (the .sum DIAGNOSTICS, "
                  "`taxjson checklist`; `run --strict` stops), and a "
-                 "currency with no rates at all stops the run.",
+                 "currency with no rates at all stops the run. `taxjson "
+                 "fx-cash` counts a cash event with no rate in those 5 "
+                 "days as unrated (named in its report).",
                  cont=True),
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
@@ -815,7 +817,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "the latest rate of the 5 days before; a longer gap "
                  "converts the row at a placeholder rate and is a "
                  "validation ERROR (`run --strict` stops), and a currency "
-                 "with no rates at all stops the run.", cont=True),
+                 "with no rates at all stops the run. `taxjson fx-cash` "
+                 "counts a cash event with no rate in those 5 days as "
+                 "unrated (named in its report).", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "

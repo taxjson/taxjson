@@ -96,6 +96,7 @@ NOON_SERIES = {
 DEFAULT_START = "2000-01-01"
 MAX_FILL_DAYS = 7                   # longest weekend/holiday forward-fill
 TAIL_REFETCH_DAYS = 7               # re-ask BoC for the last week (late posts)
+SUSPECT_RECHECK_DAYS = 14           # re-ask an empty/truncated BoC answer
 VALET_URL = ("https://www.bankofcanada.ca/valet/observations/"
              "{series}/json?start_date={start}&end_date={end}")
 # Currencies with a Valet daily series FX<CUR>CAD (group FX_RATES_DAILY).
@@ -144,11 +145,11 @@ def load_cache():
     # OSError too: an unreadable cache degrades to a refetch.
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, 'r') as f:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
-        except (json.JSONDecodeError, OSError):
+        except (ValueError, OSError):   # JSON or UTF-8 damage (S055-04)
             pass
     return {}
 
@@ -373,8 +374,17 @@ def _not_published_fresh(blk: dict, today: str) -> bool:
     return 0 <= _days(checked, today) < NOT_PUBLISHED_RECHECK_DAYS
 
 
+def _drop_suspects(blk: dict, a: str, b: str) -> None:
+    """Forget re-check markers inside [a, b] (just asked again)."""
+    blk["suspect"] = [e for e in blk.get("suspect") or []
+                      if not (a <= str(e[0]) and str(e[1]) <= b)]
+    if not blk["suspect"]:
+        blk.pop("suspect", None)
+
+
 def refresh_boc(cache: dict, currency: str, start: str, end: str,
-                today: str, fetch=None) -> Tuple[bool, List[str]]:
+                today: str, fetch=None, notes: Optional[List[str]] = None
+                ) -> Tuple[bool, List[str]]:
     """Fill the BoC cache for [max(start, BOC_START), end]. Returns
     (published, errors): published=False when the Bank answered that it
     has no such series (the caller falls back to Yahoo for the dates
@@ -406,6 +416,25 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
         # Re-ask for the trailing week: the Bank posts by 16:30 ET, so
         # a day "covered" from another time zone may have been empty.
         ranges[-1] = (max(lo, _shift(cov[-1][1], -TAIL_REFETCH_DAYS)), end)
+    # Degraded answers still inside their re-check window are asked
+    # again (see below); older ones are accepted as the truth.
+    suspect_seen: Dict[Tuple[str, str], str] = {}
+    for ent in list(blk.get("suspect") or []):
+        try:
+            sa, sb, seen = (str(x) for x in ent)
+        except (TypeError, ValueError):
+            continue
+        if _days(seen, today) > SUSPECT_RECHECK_DAYS:
+            continue
+        suspect_seen[(sa, sb)] = seen
+        ra, rb = max(sa, lo), min(sb, end)
+        if ra <= rb and not any(x <= ra and rb <= y for x, y in ranges):
+            ranges.append((ra, rb))
+    if suspect_seen:
+        blk["suspect"] = [[a, b, v] for (a, b), v in suspect_seen.items()]
+    else:
+        blk.pop("suspect", None)
+    ranges.sort()
     yesterday = _shift(today, -1)
     errors: List[str] = []
     for a, b in ranges:
@@ -427,12 +456,41 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
             blk.pop("not_published", None)
             blk.pop("not_published_checked", None)
             had_marker = dated_marker = False
+        known_last = max(blk["obs"]) if blk["obs"] else None
         blk["obs"].update(got)
         # Never mark today (or later) covered: today's rate is posted
         # late afternoon ET, so it is re-asked on the next run.
         hi = min(b, yesterday)
-        if a <= hi:
-            _add_coverage(cache, key, a, hi)
+        if a > hi:
+            continue
+        # A 200 whose observations stop more than a weekend/holiday
+        # short of the range end (none at all, or a truncated list) may
+        # be a degraded answer rather than the truth (audit S055-03: it
+        # was recorded as coverage for good, so a later healthy Bank
+        # was never asked again and those dates kept a Yahoo close or a
+        # stale forward-fill labelled 'boc'). The range still counts as
+        # covered this run (a series that really stopped — RUB since
+        # 2022 — keeps its Yahoo fallback), but its tail is re-asked on
+        # every run for SUSPECT_RECHECK_DAYS, and a real answer fixes it.
+        # A series already quiet before this range (its newest cached
+        # observation is more than a week before `a`) has stopped: an
+        # empty answer there is expected, not suspect.
+        last = max(got) if got else _shift(a, -1)
+        stopped = (known_last is not None and not got
+                   and _days(known_last, a) > MAX_FILL_DAYS)
+        _drop_suspects(blk, a, hi)
+        if _days(last, hi) > MAX_FILL_DAYS and not stopped:
+            tail_a = max(a, _shift(last, 1))
+            seen = min([v for (x, y), v in suspect_seen.items()
+                        if x <= hi and tail_a <= y] or [today])
+            blk.setdefault("suspect", []).append([tail_a, hi, seen])
+            if notes is not None and seen == today:
+                notes.append(
+                    f"the Bank of Canada answered FX{currency}CAD "
+                    f"{tail_a}..{hi} with no observations — those dates "
+                    f"use the fallback this run and are asked again on "
+                    f"each run for {SUSPECT_RECHECK_DAYS} days.")
+        _add_coverage(cache, key, a, hi)
     return True, errors
 
 
@@ -694,7 +752,7 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
         published = from_curr in BOC_CURRENCIES
         if published:
             published, errs = refresh_boc(cache, from_curr, start, end,
-                                          today, fetch_boc_fn)
+                                          today, fetch_boc_fn, notes=notes)
             errors += errs
         if not published:
             notes.append(_not_published_note(cache, from_curr, to_curr)

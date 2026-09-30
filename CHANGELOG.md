@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Price and FX caches:** `taxjson fx-cash` no longer prices a cash
+  event at a rate older than the converter's 5-day lookback (it is
+  counted unrated and named); a cached price that is missing, zero,
+  negative, NaN or text is a cache miss instead of a 0.00 quote in
+  `harvest`; a non-UTF-8 byte in a price/FX cache degrades to a refetch;
+  `yf_ticker.map` keys are case-insensitive and a line with no target is
+  warned about; an empty or truncated Bank of Canada answer is re-asked
+  for 14 days instead of being cached as coverage for good.
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the

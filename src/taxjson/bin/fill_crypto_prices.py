@@ -22,9 +22,9 @@ def load_cache():
     # degrades to a refetch, not a traceback.
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, 'r') as f:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (ValueError, OSError):   # JSON or UTF-8 damage (S055-04)
             pass
     return {}
 
