@@ -580,12 +580,11 @@ class BaseBrokerage:
         implicit = abs(theoretical_gross - abs(net_amount))
         if implicit < min_fee:
             return 0.0
-        # A $0 net against a priced gross is not a 100% fee: the guard
-        # used to skip net == 0, so a blank Proceeds cell became a fee
-        # equal to the whole gross and the row passed every check
-        # (audit R1-91). The parser must refuse such a row; here it is
-        # never dressed up as a fee.
-        if implicit > sanity_ratio * abs(net_amount):
+        # net == 0 is exempt on purpose: a real RBC sale of 30 contracts
+        # at 0.01 nets $0 because the commission ate the whole $30 gross.
+        # A $0 net that is a MISSING cell (audit R1-91) must be refused
+        # by the parser before it gets here (Webull does).
+        if abs(net_amount) > 1e-9 and implicit > sanity_ratio * abs(net_amount):
             return 0.0
         return round(implicit, 4)
 

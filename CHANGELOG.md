@@ -62,7 +62,7 @@
   misaligned Proceeds cell on a priced BUY/SELL booked $0 (the whole
   gross became a "fee", so even `--strict` passed). Such a row, a row
   wider or narrower than its header, and a decimal comma are refused
-  with the file line; a $0 net is never turned into a full-gross fee.
+  with the file line.
 - **One spelling per Canadian listing.** Questrade's TSX-Venture, CSE
   and NEO symbols (`VVV.VN`, `CCC.CN`, `XYZ.NE`) became `VVV.V`,
   `CCC.CN.TO`, `XYZ.NE.TO`, while IB, RBC and Webull book every Canadian

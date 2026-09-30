@@ -310,11 +310,6 @@ class TestWebullProceeds(unittest.TestCase):
                       'OPC,-2,,\n'])
         self.assertEqual(txs[0]['net_amount'], 0.0)
 
-    def test_zero_net_is_never_a_full_gross_fee(self):
-        from taxjson.lib.brokerages.webull import WebullBrokerage
-        self.assertEqual(
-            WebullBrokerage().back_compute_fee(-100, 55.0, 0.0, False), 0.0)
-
 
 # ----------------------------------------------- Canadian listing identity
 class TestCanadianListingIdentity(unittest.TestCase):
