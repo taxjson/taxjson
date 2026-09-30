@@ -53,6 +53,22 @@
 - **reconcile-slips counts phantom-basis sales.** A sale reported by
   hand (phantom cost basis) was still shown as MISSING_FROM_COMPUTED;
   it now matches the slip with the "phantom basis included" note.
+- **Canada estimate keeps its sign.** Eligible dividends at a low
+  bracket can lower the tax on the other income; the estimate (and the
+  AMT total and average rate) now shows that as a negative figure — a
+  saving — instead of flooring it at 0.00 under a `WITH - BASE` trace
+  that was negative (R1-47).
+- **Unused foreign tax credit reaches the province.** Foreign tax the
+  federal tax cannot absorb is credited against provincial tax (form
+  T2036, limited to provincial tax x foreign income / net income)
+  instead of being dropped; the estimate and the current-year
+  instalment basis were overstated for foreign-dividend-heavy, low-tax
+  years (S077-16).
+- **Estimate discloses what it leaves out.** A NOTE names the headroom
+  a prior-year minimum tax carryover (T691 Part 8, line 40427) could
+  use when AMT does not bind — the carryover is not modelled
+  (KNOWN_ISSUES); the assumptions line no longer sends interest to
+  views that never show it (R1-218, S078-00).
 
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product

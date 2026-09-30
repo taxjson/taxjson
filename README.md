@@ -566,8 +566,15 @@ the earliest table also says the post-2024 AMT shown did not apply).
   Ontario's surtax and Health Premium (up to $900), and the provincial
   AMT — ON 24.63% of the federal excess plus ON surtax on it (2024+;
   2026 assumed until the form is out), BC 33.7% / 34.9% / 40.0% for
-  2024 / 2025 / 2026, AB 35%. Not modelled: QC, low-income reductions,
-  non-eligible dividends.
+  2024 / 2025 / 2026, AB 35%. Foreign tax the federal tax cannot
+  absorb goes to the provincial foreign tax credit (form T2036, limited
+  to provincial tax x foreign income / net income). The estimate is
+  signed: eligible dividends at a low bracket can show a negative
+  figure — a saving on the tax of the other income. Not modelled: QC,
+  low-income reductions, non-eligible dividends, and a prior-year
+  minimum tax carryover (T691 Part 8, line 40427, ITA s.120.2) — when
+  AMT does not bind, a NOTE names the headroom such a carryover could
+  use.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
   brackets; losses net ST first, then LT, then up to $3,000 of ordinary

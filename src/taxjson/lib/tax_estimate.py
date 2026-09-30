@@ -409,7 +409,15 @@ def _canada_tax(ordinary: float, taxable_gain: float,
     fed_dtc = grossed * CA_FED_DTC_ELIGIBLE
     fed_ftc = (ftc if ftc is not None
                else foreign_div * CA_FOREIGN_WITHHOLDING)
-    fed = max(0.0, fed_gross - fed_bpa - fed_dtc - fed_ftc)
+    fed_before_ftc = max(0.0, fed_gross - fed_bpa - fed_dtc)
+    fed = max(0.0, fed_before_ftc - fed_ftc)
+    # Foreign tax the federal tax cannot absorb is not lost: the
+    # provincial foreign tax credit (form T2036, the provincial
+    # counterpart of ITA s.126(1)) takes the foreign non-business tax
+    # paid MINUS the federal credit claimed, limited to the provincial
+    # tax otherwise payable x net foreign non-business income / net
+    # income. https://www.canada.ca/en/revenue-agency/services/forms-publications/forms/t2036.html
+    fed_ftc_unused = max(0.0, fed_ftc - fed_before_ftc)
 
     # ON428 order: basic = tax - credits (line 62); surtax on basic
     # (line 68); minus DTC (line 70), floored (line 71); the health
@@ -422,7 +430,12 @@ def _canada_tax(ordinary: float, taxable_gain: float,
     prov_dtc = grossed * prov["dtc_eligible"]
     ohp = (ontario_health_premium(ti) if prov.get("health_premium")
            else 0.0)
-    p = max(0.0, basic + surtax - prov_dtc) + ohp
+    prov_before_ftc = max(0.0, basic + surtax - prov_dtc)
+    share = (min(1.0, foreign_div / net) if net > 0 and foreign_div > 0
+             else 0.0)
+    prov_ftc = min(fed_ftc_unused, prov_before_ftc * share)
+    # The health premium is added after every credit (ON428 line 89).
+    p = prov_before_ftc - prov_ftc + ohp
 
     return {"federal": fed, "provincial": p, "total": fed + p,
             "detail": {
@@ -430,6 +443,7 @@ def _canada_tax(ordinary: float, taxable_gain: float,
                 "fed_gross": fed_gross, "fed_bpa": fed_bpa,
                 "fed_bpa_amount": fed_bpa_amount,
                 "fed_dtc": fed_dtc, "fed_ftc": fed_ftc,
+                "fed_ftc_unused": fed_ftc_unused, "prov_ftc": prov_ftc,
                 "prov_gross": prov_gross, "prov_bpa": prov_bpa,
                 "prov_basic": basic, "surtax_parts": surtax_parts,
                 "prov_surtax": surtax,
@@ -554,6 +568,24 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
                      f"({amt['provincial_factor'] * 100:.2f}%) is "
                      f"ASSUMED unchanged until the {RATE_VINTAGE} "
                      f"provincial form is published.")
+    if tw.get("prov_ftc", 0.0) > 0.005:
+        notes.append(f"Foreign tax the federal tax could not absorb "
+                     f"({m(tw['fed_ftc_unused'])}) is credited against "
+                     f"{prov_key} tax (form T2036): "
+                     f"{m(tw['prov_ftc'])}.")
+    if not amt["binding"] and amt["headroom"] > 0.005:
+        # ITA s.120.2: minimum tax paid in the 7 preceding years is
+        # creditable against regular tax above the minimum
+        # (T691 Part 8, T1 line 40427, provincial piggyback e.g. ON428
+        # line 59). https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-120.2.html
+        notes.append(f"If you paid minimum tax (AMT) in any of the 7 "
+                     f"preceding years, its carryover (T691 Part 8, "
+                     f"line 40427; ITA s.120.2) can reduce federal tax "
+                     f"by up to the "
+                     f"{m(amt['headroom'])} headroom, plus the "
+                     f"{prov_key} share — not modelled, so the estimate "
+                     f"and the instalments overstate the tax by what "
+                     f"you can apply.")
     if staking > 0.005:
         notes.append(f"Crypto staking rewards ({m(staking)}) are taxed "
                      f"as ordinary income — no withholding, no foreign "
@@ -565,9 +597,11 @@ CA_ASSUMPTIONS = (
     "Assumes: Canadian-listed dividends are all ELIGIBLE (non-eligible "
     "dividends would be taxed higher); foreign withholding creditable "
     "up to 15%; crypto staking is ordinary income; no QC abatement or "
-    "low-income reductions; interest income not included — see "
-    "divs/fees views; deductions below line 15000 only as entered "
-    "(--deductions, --carrying-charges).")
+    "low-income reductions; interest income and interest paid are "
+    "not included and no taxjson view totals them — take them from the "
+    "broker statements (the rows are listed by `taxjson events`); "
+    "deductions below line 15000 only as entered (--deductions, "
+    "--carrying-charges); no prior-year minimum tax carryover.")
 
 
 def estimate_canada(*, realized: float, eligible_div: float,
@@ -630,7 +664,12 @@ def estimate_canada(*, realized: float, eligible_div: float,
                            taxable_gain, eligible_div, foreign_div, prov,
                            ftc=ftc, net_income=net_income)
     base = _canada_tax(other_income - ded_total, 0.0, 0.0, 0.0, prov)
-    est = max(0.0, with_inv["total"] - base["total"])
+    # Signed, like the US branch: eligible dividends at a low bracket
+    # carry a negative marginal rate (the DTC exceeds the tax on the
+    # grossed-up amount), so the investment income can LOWER the tax on
+    # the other income. Flooring at 0 printed "WITH - BASE = 0.00" under
+    # a negative difference (R1-47).
+    est = with_inv["total"] - base["total"]
     inv_income = realized + eligible_div + foreign_div + pil + staking
 
     def _totals(d):

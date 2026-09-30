@@ -6562,6 +6562,14 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
               + (f"  ({r['avg_rate_pct']:.1f}% of "
                  f"{money(r['investment_income'])})"
                  if r["avg_rate_pct"] is not None else ""))
+        if r["estimated_tax"] < -0.005:
+            # Signed (R1-47): eligible dividends at a low bracket earn
+            # more credit than the tax on their grossed-up amount.
+            print(_wrap_note(
+                f"Negative = a saving: the investment income lowers the "
+                f"tax on the other income by "
+                f"{money(-r['estimated_tax'])} (the dividend tax credit "
+                f"exceeds the tax on the grossed-up dividends)."))
         if r["losses_unused"]:
             print(f"  Unused capital losses: {money(r['losses_unused'])} "
                   f"(carry forward)")
@@ -6646,6 +6654,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 + [(f"DTC {provt['dtc_eligible'] * 100:.2f}% x "
                     f"{money(r['grossed_eligible'])}",
                     -tb["prov_dtc"], -tw["prov_dtc"])]
+                + ([("FTC not used federally (T2036)",
+                     -tb.get("prov_ftc", 0.0), -tw.get("prov_ftc", 0.0))]
+                   if tw.get("prov_ftc", 0.0) > 0.005 else [])
                 + ([("Ontario Health Premium", tb["prov_ohp"],
                      tw["prov_ohp"])] if provt.get("health_premium")
                    else [])
@@ -6655,7 +6666,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 [("TOTAL", r["tax_base"]["total"],
                   r["tax_with"]["total"])], money)
             print(f"    => WITH - BASE = {money(r['estimated_tax'])} "
-                  f"estimated tax on investment income")
+                  f"estimated tax on investment income"
+                  + (" (negative: a saving)"
+                     if r["estimated_tax"] < -0.005 else ""))
         if root is not None:
             _icfg = _instalment_config(root, year)
             _idoc = _instalments_doc(root, r, year, _icfg)
