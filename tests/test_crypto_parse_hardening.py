@@ -230,6 +230,7 @@ class TestKrakenCoinFees(unittest.TestCase):
               "L6,T3,2025-06-04 16:00:00,trade,tradespot,currency,ZCAD,spot,-3000,7.5,0\n")
 
     @rule("CA-CRYPTO-04")
+    @rule("US-CRYPTO-04")
     def test_coin_fee_comes_out_of_the_coins(self):
         td, K = _kraken_dir({"kr_trades.csv": self.TRADES,
                              "kr_ledgers.csv": self.LEDGER})
@@ -361,6 +362,7 @@ class TestKrakenLegacyLedger(unittest.TestCase):
         self.assertIn("required column(s) missing: fee", str(cm.exception))
 
     @rule("CA-CRYPTO-03")
+    @rule("US-CRYPTO-03")
     def test_withdrawal_coin_fee_is_disposed(self):
         csv = (_KL_H +
                "L1,F1,2026-05-04 16:00:00,withdrawal,,currency,TAO,spot,-0.1,0.002,14\n")

@@ -1122,6 +1122,7 @@ class TestFxSources(unittest.TestCase):
             d = self.T._shift(d, 1)
         return out
 
+    @rule("CA-FX-03")
     def test_noon_rate_before_march_2017(self):
         # R1-146: BoC noon for 2007-05-01..2017-02-28, Yahoo before.
         T = self.T

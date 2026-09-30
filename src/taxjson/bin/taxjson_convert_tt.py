@@ -603,11 +603,13 @@ def _main():
     parser.add_argument(
         "--date-basis",
         choices=("settle", "trade"),
-        default="settle",
+        default=None,
         help=(
             "json->tt only: which date a .tt line (one date) carries — "
-            "the settlement date (default; Canada's settle-basis rule) or "
-            "the trade date (a trade-basis project)."
+            "the settlement date or the trade date. Default: the "
+            "project's tax_date when the input sits in a project's work/ "
+            "(Canada: settle, US: trade); outside a project it is "
+            "required when a row's trade and settle dates differ."
         ),
     )
     args = parser.parse_args()
@@ -620,11 +622,39 @@ def _main():
 
     suffix = input_path.suffix.lower()
     if suffix == '.json':
-        # JSON → tt
+        # JSON → tt. The one date a .tt line keeps is the tax-year date
+        # basis, which is the country's: never a silent Canadian settle
+        # default (partition INPUTS-14 — a US book came back with its
+        # Dec-31 sales in January).
+        date_basis = args.date_basis
+        if date_basis is None:
+            from taxjson.lib.country import CountryError
+            from taxjson.lib.phantom_holdings import tax_date_near
+            try:
+                date_basis = tax_date_near(input_path)
+            except CountryError as e:
+                print(f"taxjson-convert-tt: error: taxjson.toml: {e}",
+                      file=sys.stderr)
+                sys.exit(2)
+        if date_basis is None:
+            data = json.loads(input_path.read_text(encoding='utf-8'))
+            rows = (data.get('transactions', data)
+                    if isinstance(data, dict) else data)
+            if any(isinstance(t, dict) and t.get('date_settle')
+                   and t.get('date') and t['date_settle'] != t['date']
+                   for t in rows or []):
+                print("taxjson-convert-tt: error: rows have a trade date "
+                      "and a different settlement date, and a .tt line "
+                      "keeps one: pass --date-basis settle (Canada, CRA) "
+                      "or --date-basis trade (US, IRS) — no taxjson.toml "
+                      "beside the input to read tax_date from.",
+                      file=sys.stderr)
+                sys.exit(2)
+            date_basis = 'settle'       # every row has one date: moot
         out_fh = open(args.output, 'w', encoding='utf-8') if args.output else sys.stdout
         try:
             for line in json_to_tt_lines(input_path,
-                                         date_basis=args.date_basis):
+                                         date_basis=date_basis):
                 out_fh.write(line + "\n")
         finally:
             if args.output:

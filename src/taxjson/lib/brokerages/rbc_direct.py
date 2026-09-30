@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
@@ -1635,11 +1636,12 @@ class RbcBrokerage(BaseBrokerage):
 
     def _build_stock_dividend(self, r):
         """A stock dividend paid in shares ("DIS - <name> STK DIV ON N
-        SHS"): the delivered shares enter at $0 cost, the convention the
-        Questrade parser uses (KNOWN_ISSUES 'stock dividends enter the
-        book at $0 cost'). It was an UNCLASSIFIED row left out of the
-        book (or, under Dividends, a refusal) and the next full sale
-        went short (audit S015-06)."""
+        SHS"): a NEUTRAL stock-dividend event (a $0 BUYSELL typed
+        stock_dividend, as the Questrade and IB parsers emit it); the
+        gains engine applies the country's rule (partition INPUTS-01).
+        It was an UNCLASSIFIED row left out of the book (or, under
+        Dividends, a refusal) and the next full sale went short (audit
+        S015-06)."""
         if abs(r.value) > 0.005 or r.qty < 0:
             raise _err(Path(self._fname), r.line,
                        f"a stock-dividend row with "
@@ -1648,9 +1650,9 @@ class RbcBrokerage(BaseBrokerage):
                        f"book it in a .tt file")
         symbol = self._equity_symbol(self._resolve_temp(r), r.currency, r)
         self._note(f"line {r.line}: stock dividend of {r.qty:g} {symbol} "
-                   f"entered at $0 cost — in a taxable account add the "
-                   f"declared amount (the T5 / distributions.map) for the "
-                   f"correct ACB.")
+                   f"booked as a stock-dividend event — the gains run "
+                   f"applies your country's rule to its cost (`taxjson "
+                   f"tax-logic`).")
         return {
             'action': 'BUYSELL',
             'date': r.date, 'time': self._time(r),
@@ -1658,6 +1660,7 @@ class RbcBrokerage(BaseBrokerage):
             'symbol': symbol, 'quantity': r.qty, 'currency': r.currency,
             'price': 0.0, 'fee': 0.0, 'net_amount': 0.0, 'gross_amount': 0.0,
             'account': self.DEFAULT_ACCOUNT, 'description': r.desc,
+            'type': STOCK_DIVIDEND,
         }
 
     def _build_reinvest_in_kind(self, r) -> List[Dict[str, Any]]:

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
+from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          _parse_div_qty_rate,
                                          canonical_ca_listing,
@@ -559,12 +560,10 @@ class QuestradeBrokerage(BaseBrokerage):
                 # row previously fell into the dividend branch, whose
                 # zero-cash guard silently DISCARDED it — the position
                 # then went phantom-short by the delivered count at the
-                # next full sale. The shares enter at zero cost: the
-                # taxable amount of a stock dividend is the fund's
-                # declared amount, which the CSV doesn't carry — moot
-                # in registered accounts; taxable accounts surface it
-                # via the zero-basis walk, and distributions.map can
-                # supply the declared per-share amount as an ADJUST.
+                # next full sale. Emitted as a NEUTRAL stock-dividend
+                # event (a $0 BUYSELL typed stock_dividend): the gains
+                # engine applies the country's rule (partition
+                # INPUTS-01); the declared amount is not in the CSV.
                 qty = self._num(row, 'Quantity', lineno)
                 net_sd = parse_strict_number(
                     row.get('Net Amount'), field='Net Amount',
@@ -594,10 +593,10 @@ class QuestradeBrokerage(BaseBrokerage):
                     reversals.append((sd_key, lineno, desc))
                     continue
                 print(f"NOTE: {sym_raw}: stock dividend of {qty:g} "
-                      f"share(s) on {date} entered at $0 cost — in "
-                      f"a taxable account, add the fund's declared "
-                      f"amount via distributions.map for the "
-                      f"correct ACB.", file=sys.stderr)
+                      f"share(s) on {date} booked as a stock-dividend "
+                      f"event — the gains run applies your country's "
+                      f"rule to its cost (`taxjson tax-logic`).",
+                      file=sys.stderr)
                 sd_tx = {
                     'action': 'BUYSELL',
                     'date': date, 'time': '09:30:00',
@@ -608,6 +607,7 @@ class QuestradeBrokerage(BaseBrokerage):
                     'gross_amount': 0.0,
                     'account': self.DEFAULT_ACCOUNT,
                     'description': desc,
+                    'type': STOCK_DIVIDEND,
                 }
                 transactions.append(sd_tx)
                 rev_originals.setdefault(sd_key, []).append([sd_tx])

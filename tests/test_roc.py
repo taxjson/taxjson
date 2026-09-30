@@ -166,7 +166,7 @@ class TestIbRoc(unittest.TestCase):
                 'Dividends,Data,USD,U1,2026-07-02,'
                 'QZRX(US0000000017) Return of Capital USD 0.12 per Share,'
                 '-24.00\n')
-        txs = self._parse(body)
+        txs = self._parse(body, foreign_roc='dividend')
         self.assertFalse([t for t in txs if t['action'] == 'ADJUST'])
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertEqual(len(divs), 2)
@@ -193,6 +193,8 @@ class TestIbRoc(unittest.TestCase):
         self.assertAlmostEqual(adjusts[0]['net_amount'], -24.00, places=2)
         self.assertFalse([t for t in txs if t['action'] == 'DIVIDEND'])
 
+    @rule("US-INC-01")
+    @rule("CA-INC-03")
     def test_strc_style_split_posting_pil_is_income(self):
         # Real-data shape (synthetic amounts): a distribution split
         # between "Cash Dividend ... (Return of Capital)" and "Payment in
@@ -208,15 +210,16 @@ class TestIbRoc(unittest.TestCase):
                 'Dividends,Data,USD,U1,2026-06-30,'
                 'QZRX(US0000000017) Payment in Lieu of Dividend '
                 '(Return of Capital),400.00\n')
-        for mode in (None, 'acb'):
+        for mode in ('dividend', 'acb'):
             txs = self._parse(body, foreign_roc=mode)
             pil = [t for t in txs if t['action'] == 'DIVIDEND_IN_LIEU']
             self.assertEqual(len(pil), 1, mode)
             self.assertEqual(pil[0]['type'], 'dividend_in_lieu')
             self.assertAlmostEqual(pil[0]['net_amount'], 400.00, places=2)
             self.assertIn("share borrower", pil[0]['description'])
-        # Default mode: the issuer leg is a dividend, no ADJUST at all.
-        txs = self._parse(body)
+        # s.90(2) mode (a Canada project's default): the issuer leg is a
+        # dividend, no ADJUST at all.
+        txs = self._parse(body, foreign_roc='dividend')
         self.assertFalse([t for t in txs if t['action'] == 'ADJUST'])
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertAlmostEqual(sum(t['net_amount'] for t in divs), 600.00)
@@ -242,7 +245,7 @@ class TestIbRoc(unittest.TestCase):
                 'Dividends,Data,USD,U1,2026-06-30,'
                 'QZIE(IE0000000018) Return of Capital USD 0.20 per Share,'
                 '20.00\n')
-        txs = self._parse(body)
+        txs = self._parse(body, foreign_roc='dividend')
         divs = [t for t in txs if t['action'] == 'DIVIDEND']
         self.assertEqual([t['symbol'] for t in divs], ['QZIE.US'])
         txs = self._parse(body, foreign_roc='acb')
@@ -358,6 +361,7 @@ class TestUsEngineRocAdjust(unittest.TestCase):
             res = USATaxRules().compute_gains(txs)
         return res, err.getvalue()
 
+    @rule("US-ROC-01")
     def test_roc_reduces_basis_before_sale(self):
         res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
@@ -401,18 +405,37 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         self.assertEqual(len(inv), 1)
         self.assertAlmostEqual(inv[0]['total_cost'], 5700.0, places=2)
 
-    def test_negative_lot_basis_flags_301c3(self):
-        _, err = self._run([
+    @rule("US-ROC-02")
+    def test_excess_over_basis_is_a_gain_in_the_distribution_year(self):
+        # §301(c)(3): 1,200 on a 1,000 basis -> 200 capital gain on the
+        # distribution date (short-term: held < 1 year), basis zero, so
+        # the later sale's gain is its whole proceeds.
+        res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',
                      quantity=100, currency='USD', price=10.0,
                      net_amount=1000.0),
             self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
                      quantity=0, currency='USD', net_amount=-1200.0,
                      type='roc'),
+            self._tx(action='BUYSELL', date='2026-03-02', symbol='PRFD.US',
+                     quantity=-100, currency='USD', price=3.0,
+                     net_amount=300.0),
         ])
-        self.assertIn("NEGATIVE", err)
         self.assertIn("301(c)(3)", err)
+        deemed = [g for g in res['transactions'] if g.get('deemed')]
+        self.assertEqual([(g['date'], round(g['gain'], 2), g['term'],
+                           g['acquired_date']) for g in deemed],
+                         [('2025-06-30', 200.0, 'SHORT_TERM', '2025-01-10')])
+        sale = [g for g in res['transactions'] if g.get('qty')]
+        self.assertAlmostEqual(sale[0]['cost'], 0.0, places=2)
+        self.assertAlmostEqual(sale[0]['gain'], 300.0, places=2)
+        # Form 8949 names it for what it is (no shares were sold).
+        from taxjson.bin.taxjson_form_export import build_8949
+        text = repr(build_8949(deemed))
+        self.assertIn("nondividend distribution in excess of basis", text)
+        self.assertIn("200.0", text)
 
+    @rule("US-ROC-03")
     def test_roc_after_full_exit_warns_and_skips(self):
         res, err = self._run([
             self._tx(action='BUYSELL', date='2025-01-10', symbol='PRFD.US',

@@ -29,11 +29,32 @@ from taxjson.lib.corporate_timeline import (SplitTimeline, event_sort_key,
                                              normalize_symbol_new)
 
 
-# Canadian registered-account labels. Short positions are prohibited by
-# CRA in these accounts, so a negative balance is almost certainly phantom.
+# Registered-account labels, the fallback for an account whose type the
+# caller does not know (standalone tools outside a project). Short
+# positions are prohibited in these accounts, so a negative balance is
+# almost certainly phantom. Canadian plans match as substrings (as
+# before); US plans need a non-letter on each side ('ROTH_IRA', 'IRA-2',
+# not 'MIRAGE'). Canada-only labels used to be the whole list, so an
+# IRA was never recognised (partition ENGINE-14).
 REGISTERED_ACCOUNT_PATTERNS = (
     'LIRA', 'RRSP', 'RRIF', 'TFSA', 'RESP', 'LIF', 'FHSA', 'LRIF', 'PRPP', 'RDSP',
 )
+US_REGISTERED_ACCOUNT_PATTERNS = (
+    'IRA', 'ROTH', '401K', '403B', '457B', 'HSA', 'SEP', '529',
+)
+
+
+def _registered_label(upper: str, country: Optional[str]) -> bool:
+    import re as _re
+    from taxjson.lib.country import canonical_country
+    c = canonical_country(country) if country else None
+    if c in (None, 'canada') and any(p in upper
+                                     for p in REGISTERED_ACCOUNT_PATTERNS):
+        return True
+    if c in (None, 'usa'):
+        return any(_re.search(rf'(?<![A-Z]){p}(?![A-Z])', upper)
+                   for p in US_REGISTERED_ACCOUNT_PATTERNS)
+    return False
 
 
 # OCC option-symbol detection uses the canonical engine-side definition
@@ -45,19 +66,20 @@ REGISTERED_ACCOUNT_PATTERNS = (
 from taxjson.lib.core import is_option_symbol  # noqa: F401 — re-exported
 
 
-def is_registered_account(account: str, registered_accounts=None) -> bool:
+def is_registered_account(account: str, registered_accounts=None,
+                          country: Optional[str] = None) -> bool:
     """Registered (sheltered) status. When the caller knows the configured
     accounts, pass `registered_accounts` — {account: True for type =
     "sheltered", False for taxable}: a KNOWN account's type is the
     answer, never its label (audit S076-08 — a taxable 'sunlife' matched
     'LIF', a sheltered 'retireA' matched nothing). An account it does not
-    list (or no mapping) falls back to the label heuristic."""
+    list (or no mapping) falls back to the label heuristic: that
+    country's plan names, or both countries' when it is not known."""
     if not account:
         return False
     if registered_accounts is not None and account in registered_accounts:
         return bool(registered_accounts[account])
-    upper = account.upper()
-    return any(p in upper for p in REGISTERED_ACCOUNT_PATTERNS)
+    return _registered_label(account.upper(), country)
 
 
 def _project_doc_near(path) -> Dict[str, Any]:
@@ -146,6 +168,7 @@ def detect_phantoms(
     include_options: bool = False,
     include_broker_shorts: bool = False,
     registered_accounts=None,
+    country: Optional[str] = None,
 ) -> List[PhantomCandidate]:
     """Walk transactions per (symbol, account, currency) and return one
     PhantomCandidate per pair whose running position ever went negative.
@@ -263,7 +286,8 @@ def detect_phantoms(
             peak_short=s['peak_short'],
             end_position=s['running'],
             disposition_count=s['disposition_count'],
-            registered=is_registered_account(account, registered_accounts),
+            registered=is_registered_account(account, registered_accounts,
+                                             country),
             broker_marked_short=marked,
         ))
     out.sort(key=lambda c: (c.symbol, c.account))
@@ -666,16 +690,38 @@ def load_phantoms(path: Path) -> Set[Tuple[str, str]]:
     return out
 
 
+# The replacement rule a manual warning names, and the date its ±30-day
+# window runs on: the SAME basis the country's engine uses (partition
+# ENGINE-04/05, INPUTS-11) — Canada's s.54 window on settlement dates,
+# the US §1091 window on trade dates.
+LOSS_RULE = {"canada": ("the superficial-loss rule (ITA s.54)", "settle"),
+             "usa": ("the wash-sale rule (§1091)", "trade")}
+LOSS_CHECK_LABEL = {"canada": "superficial-loss check (manual)",
+                    "usa": "wash-sale check (manual)"}
+
+
+def loss_window_date(row: Dict[str, Any], country: str) -> str:
+    """The date a row's ±30-day loss window is measured on for
+    `country` (settle date in Canada, trade date in the US)."""
+    from taxjson.lib.country import canonical_country
+    basis = LOSS_RULE[canonical_country(country)][1]
+    if basis == "settle":
+        return str(row.get('date_settle') or row.get('date') or '')
+    return str(row.get('date') or '')
+
+
 def detect_superficial_loss_warnings(
     clean_losses: List[Dict[str, Any]],
     all_tainted: List[Dict[str, Any]],
     *,
+    country: str,
     window_days: int = 30,
 ) -> List[Dict[str, Any]]:
     """Find clean losses with tainted dispositions on the same symbol
-    within ±window_days. The tainted leg has unknown ACB so the
-    superficial-loss adjustment (CRA ITA 54, IRS §1091) can't be
-    computed automatically. Each warning identifies the affected
+    within ±window_days, measured on the country's own window dates
+    (``loss_window_date``). The tainted leg has unknown cost so the
+    country's replacement rule (ITA s.54 in Canada, §1091 in the US)
+    can't be applied automatically. Each warning identifies the affected
     clean loss and the tainted disposition(s) within the window so
     the user can resolve it manually.
 
@@ -685,6 +731,7 @@ def detect_superficial_loss_warnings(
     affect a Jan 5 in-year loss the next year, and vice versa.
     """
     from datetime import datetime as _dt
+    from taxjson.lib.country import canonical_country
     out: List[Dict[str, Any]] = []
     if not clean_losses or not all_tainted:
         return out
@@ -699,16 +746,15 @@ def detect_superficial_loss_warnings(
         if not candidates:
             continue
         try:
-            # Settle-basis (matches the engine's CRA window).
-            loss_dt = _dt.strptime(
-                loss.get('date_settle') or loss.get('date', ''), '%Y-%m-%d')
+            loss_dt = _dt.strptime(loss_window_date(loss, country),
+                                   '%Y-%m-%d')
         except ValueError:
             continue
         nearby: List[Dict[str, Any]] = []
         for t in candidates:
             try:
-                t_dt = _dt.strptime(
-                    t.get('date_settle') or t.get('date', ''), '%Y-%m-%d')
+                t_dt = _dt.strptime(loss_window_date(t, country),
+                                    '%Y-%m-%d')
             except ValueError:
                 continue
             if abs((t_dt - loss_dt).days) <= window_days:
@@ -729,7 +775,10 @@ def detect_superficial_loss_warnings(
                 'message': (
                     f"Clean loss of {abs(loss.get('gain', 0.0)):.2f} on {loss.get('symbol')} "
                     f"({loss.get('date')}) has {len(nearby)} tainted disposition(s) within "
-                    f"±{window_days} days. The superficial-loss rule may apply; verify manually."
+                    f"±{window_days} days ({LOSS_RULE[canonical_country(country)][1]} "
+                    f"dates). {LOSS_RULE[canonical_country(country)][0][0].upper()}"
+                    f"{LOSS_RULE[canonical_country(country)][0][1:]} may apply; "
+                    f"verify manually."
                 ),
             })
     return out

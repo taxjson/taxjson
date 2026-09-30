@@ -685,16 +685,24 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         rep = cs.build_report(ctx.root, ctx.cfg, None, None, with_pool=False)
     except ValueError as e:
         return Result("crypto-sends", "attention", str(e))
-    undecided, stale, total = [], [], 0
+    undecided, stale, total, refused = [], [], 0, []
     for n, a in rep["accounts"].items():
         total += len(a["sends"])
         if a["undecided"]:
             undecided.append(f"{n}: {a['undecided']}")
+        refused += [e["id"] for e in cs.refused_entries(a)]
         want = {e["id"] for e in a["sends"]
-                if e["decision"] in cs.DISPOSING and not e["stable"]}
+                if e["decision"] in cs.DISPOSING and not e["stable"]
+                and not e.get("refused")}
         have = cs.tt_ids(Path(a["tt_file"])) or set()
         if want != have:
             stale.append(n)
+    if refused:
+        return Result("crypto-sends", "attention",
+                      f"saved as `gift`, which a US project refuses (not "
+                      f"booked): {', '.join(refused)} — record each as "
+                      f"self or payment (`taxjson crypto-sends ACCOUNT "
+                      f"--set ID=self`)")
     if undecided:
         return Result("crypto-sends", "attention",
                       f"undecided send(s) — {', '.join(undecided)}; "

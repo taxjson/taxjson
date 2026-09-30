@@ -204,6 +204,7 @@ def get_ib_settlement(date_str: str, asset_cat: str,
     days = settlement_lag_days(date_str, currency, is_option=not is_equity)
     return add_settlement_days(date_str, days, currency).isoformat()
 
+from taxjson.lib.core import STOCK_DIVIDEND
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
@@ -614,12 +615,14 @@ _IB_COMM_ADJ_TICKER_RE = re.compile(r'\(\s*([A-Z0-9][A-Z0-9 .\-]*?)\s*,')
 
 class IbBrokerage(BaseBrokerage):
     # How an IB "(Return of Capital)" distribution from a NON-Canadian
-    # issuer (ISIN country != CA) is booked: "dividend" (default — ITA
-    # s.90(2) deems a non-resident corporation's pro-rata distribution a
-    # dividend) or "acb" (the earlier ACB-reduction treatment). Set by
-    # taxjson-brokerage --foreign-roc, which `taxjson run` passes from
-    # [settings] foreign_return_of_capital.
-    foreign_return_of_capital = 'dividend'
+    # issuer (ISIN country != CA) is booked: "acb" (default — the
+    # issuer's own designation, a basis reduction: the neutral fact) or
+    # "dividend" (ITA s.90(2) deems a non-resident corporation's pro-rata
+    # distribution a dividend — Canadian law, so only a Canada project
+    # asks for it). Set by taxjson-brokerage --foreign-roc / --country,
+    # which `taxjson run` passes from the project (lib/country
+    # .foreign_roc_mode; partition INPUTS-03).
+    foreign_return_of_capital = 'acb'
     # 'trade' (default) | 'next_day': settle date of futures and futures
     # options ([settings] futures_settle, passed by taxjson-brokerage).
     futures_settle = 'trade'
@@ -2418,9 +2421,10 @@ class IbBrokerage(BaseBrokerage):
 
                 # A stock dividend: new shares delivered in kind. They
                 # used to be dropped (a phantom short at the next full
-                # sale — audit S058-24). Booked the way the Questrade
-                # parser books one: at $0 cost, with IB's Value shown so
-                # a taxable account can add the declared amount.
+                # sale — audit S058-24). Emitted as a NEUTRAL stock-
+                # dividend event (a $0 BUYSELL typed stock_dividend, IB's
+                # Value in the note): the gains engine applies the
+                # country's rule (partition INPUTS-01).
                 _sd = _IB_STOCK_DIV_RE.match(description)
                 if _sd and not handled:
                     if qty > 0:
@@ -2432,14 +2436,15 @@ class IbBrokerage(BaseBrokerage):
                             'price': 0.0, 'fee': 0.0, 'net_amount': 0.0,
                             'gross_amount': 0.0, 'multiplier': 1.0,
                             'account': 'IB', 'description': description,
+                            'type': STOCK_DIVIDEND,
                         }
                         transactions.append(_stx)
                         _msg = (f"{_sym}: stock dividend of {qty:g} "
-                                f"share(s) on {date} booked at $0 cost (IB "
-                                f"Value {val:,.2f} {currency}) — in a "
-                                f"taxable account, add the dividend amount "
-                                f"(distributions.map or a .tt ADJUST) for "
-                                f"the correct ACB and income.")
+                                f"share(s) on {date} (IB Value {val:,.2f} "
+                                f"{currency}) booked as a stock-dividend "
+                                f"event — the gains run applies your "
+                                f"country's rule to its cost (`taxjson "
+                                f"tax-logic`).")
                         stock_dividends.append(_msg)
                         _eff.update(kind='stockdiv', txs=[_stx], msg=_msg)
                         self.note_row_consumed()

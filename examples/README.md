@@ -27,10 +27,12 @@ BROKER=questrade        # ib | rbc_direct | webull | kraken | coinbase | questra
 COUNTRY=ca              # ca | us
 
 # 1. Parse to normalized JSON
-taxjson-brokerage --brokerage $BROKER --account demo \
+taxjson-brokerage --brokerage $BROKER --account demo --country $COUNTRY \
     examples/${BROKER}_demo.csv > /tmp/${BROKER}.json
 
 # 2. Merge + dedupe + validate (--dedup/--validate are opt-in flags)
+#    (with --to/--rates to convert currency, also pass --country $COUNTRY:
+#    futures follow the country's lot rule)
 taxjson-merge2 --dedup --validate /tmp/${BROKER}.json > /tmp/${BROKER}_merged.json
 
 # 3. Compute gains for the tax year

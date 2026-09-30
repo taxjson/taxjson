@@ -444,6 +444,14 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
         _die(problems[0] if len(problems) == 1 else
              "taxjson.toml:\n  " + "\n  ".join(problems))
     settings = cfg["settings"]
+    # The zone crypto UTC stamps are dated in (the parsers and
+    # crypto-sends read TAXJSON_LOCAL_TZ): the project's setting wins
+    # over the environment, so every command and stage of this project
+    # dates a crypto row the same way (partition INPUTS-09).
+    _tz = settings.get("local_timezone")
+    if _tz:
+        import os as _os
+        _os.environ["TAXJSON_LOCAL_TZ"] = _tz
     srcs = settings.get("source_currencies")
     if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
         settings["source_currencies"] = [c.strip().upper() for c in srcs]
@@ -1380,13 +1388,17 @@ def _is_us(cfg: Dict[str, Any]) -> bool:
 
 
 def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
-                     ) -> Tuple[str, List[Tuple[str, str]]]:
+                     ) -> Tuple[str, List[Dict[str, Any]]]:
     """(Re)write inputs/<acct>/crypto_sends.tt from the report. Returns
     (write status, duplicate hand-written lines). Raises ValueError when
-    a gift/payment cannot be priced (nothing is written then)."""
+    a gift/payment cannot be priced (nothing is written then), and
+    crypto_sends.RefusedDecision AFTER writing the file without them
+    when a saved decision is one the country refuses (a US gift:
+    partition SPEC-01/INPUTS-04)."""
     from taxjson.lib import crypto_sends as CS
     adoc = report["accounts"][acct]
     entries, unpriced = CS.tt_entries(adoc)
+    refused = CS.refused_entries(adoc)
     if unpriced:
         raise ValueError(
             "no fair value for " + ", ".join(e["id"] for e in unpriced)
@@ -1396,15 +1408,34 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
               f"crypto-sends {acct} --set ID=gift|payment --price P`. "
               f"crypto_sends.tt was not changed.")
     status = CS.write_tt(Path(adoc["tt_file"]),
-                         CS.render_tt(acct, entries))
+                         CS.render_tt(acct, entries, report["country"]))
+    if refused:
+        raise CS.RefusedDecision(
+            f"inputs/{acct}/{CS.MANIFEST_NAME}: "
+            + "; ".join(e["refused"] for e in refused)
+            + f" (inputs/{acct}/{CS.TT_NAME} {status} without it)")
     return status, CS.duplicate_lines(root / "inputs" / acct, entries)
 
 
-def _dup_warning(acct: str, dups: List[Tuple[str, str]]) -> List[str]:
-    return [f"inputs/{acct}/{f} already sells what {sid} sells (same date, "
-            f"coin and quantity) — with crypto_sends.tt that disposition "
-            f"is counted twice; delete the hand-written line (the "
-            f"generated file now carries it)." for f, sid in dups]
+def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
+    """One line per hand-written .tt line that books a send the
+    generated crypto_sends.tt also books — both file names, the send
+    and its timestamp. Nothing is deleted: the owner picks the line."""
+    from taxjson.lib import crypto_sends as CS
+    out = []
+    for d in dups:
+        when = (d["timestamp"] if d["same_time"]
+                else f"{d['timestamp'][:10]} (the hand-written line has "
+                     f"another time)")
+        out.append(
+            f"{d['file']} line {d['line']} and inputs/{acct}/{CS.TT_NAME} "
+            f"both sell {CS.fmt_qty(d['quantity'])} {d['symbol']} on "
+            f"{when} (send {d['id']}) — that disposition is counted "
+            f"twice. Delete the hand-written line (crypto_sends.tt is "
+            f"generated from sends.json), or, to keep it, record the send "
+            f"as `self`: `taxjson crypto-sends {acct} --set "
+            f"{d['id']}=self`.")
+    return out
 
 
 def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
@@ -1451,6 +1482,10 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
             print(f"  crypto-sends: inputs/{name}/{CS.TT_NAME} {status}")
         for w in _dup_warning(name, dups):
             print(f"taxjson: WARNING: {w}", file=sys.stderr)
+    except CS.RefusedDecision as e:
+        # A saved decision the country refuses (a US gift): not booked,
+        # and the run stops until sends.json says what it was.
+        sys.exit(f"taxjson run: {name}: crypto sends: {e}")
     except ValueError as e:
         print(f"taxjson: WARNING: {name}: crypto sends: {e}",
               file=sys.stderr)
@@ -1646,7 +1681,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         + [f"tt/{p.name}" for p in input_files(acct_dir, ".tt")]
         + _map_entries
         + (["setting/foreign_return_of_capital=acb"] if _froc_acb else [])
-        + (["setting/futures_settle=next_day"] if _fut_next else []))) + "\n"
+        + (["setting/futures_settle=next_day"] if _fut_next else [])
+        # The crypto parsers date UTC stamps in this zone: a change
+        # re-parses.
+        + ([f"setting/local_timezone={settings['local_timezone']}"]
+           if is_crypto and settings.get("local_timezone") else []))) + "\n"
     if (not src_manifest.exists()
             or src_manifest.read_text(encoding="utf-8") != src_txt):
         src_manifest.write_text(src_txt, encoding="utf-8")
@@ -1696,8 +1735,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                                "--account-type",
                                                "taxable" if is_taxable
                                                else "sheltered"]
-            if _froc_acb:
-                cmd += ["--foreign-roc", "acb"]
+            # Always explicit: the parser's own default is the neutral
+            # cost reduction; s.90(2) is the Canadian project's choice
+            # (partition INPUTS-03).
+            cmd += ["--country", country, "--foreign-roc",
+                    "acb" if _froc_acb else "dividend"]
             if _fut_next:
                 cmd += ["--futures-settle", "next_day"]
             _sidecar = out.with_name(out.stem + "_transfers.json")
@@ -1967,6 +2009,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             print(f"  convert-currency → {base_currency}")
             run_to_file(_cmd("taxjson-convert-currency") + [
                 str(filled), "--to", base_currency, "--rates", str(rates),
+                "--country", country,
             ], base_json)
         # The crypto path has no merge2 stage, so it never validates its
         # output. Run taxjson-validate explicitly and persist the report
@@ -2002,6 +2045,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         cmd = _cmd("taxjson-merge2") + [
             "--sort", "--dedup", "--require-inputs",
             "--to", base_currency, "--rates", str(rates), "--validate",
+            "--country", country,
         ]
         if ticker_map:
             cmd += ["--map", str(ticker_map)]
@@ -2038,9 +2082,13 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                             str(_stage), "--map", str(dist_map),
                             "--account", name,
                             # Record-date balance = holder of record,
-                            # i.e. the SETTLED position under CRA
-                            # timing; the project's tax_date decides.
-                            "--date-basis", tax_date]
+                            # i.e. the SETTLED position in BOTH
+                            # countries: a market fact, not the tax-
+                            # year date basis (a US project's trade
+                            # tax_date credited a buy traded on the
+                            # record date — partition INPUTS-10).
+                            "--date-basis", "settle",
+                            "--country", country]
                         # Keys go through the same ticker.map renames
                         # as the book (S025-22).
                         + (["--ticker-map", str(ticker_map)]
@@ -2202,6 +2250,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 # it to the .diag surfaces any missing-rate fallback in the .sum.
                 run_to_file(_cmd("taxjson-convert-currency") + [
                     str(raw_json), "--to", base_currency, "--rates", str(rates),
+                    "--country", country,
                 ], raw_base_json)
             raw_base_gains = cache / f"{name}_raw_base_gains.json"
             if force or needs_rebuild(raw_base_gains, raw_base_json):
@@ -3375,11 +3424,12 @@ _TEMPLATE_CONFIG = """\
 [settings]
 year              = {year}
 country           = "{country}"{country_pad}# canada | ca | usa | us
-{province_line}base_currency     = "{base_currency}"{base_pad}# report currency; foreign income converted at BoC/IRS rates
+{province_line}base_currency     = "{base_currency}"{base_pad}# report currency (the country's); CAD: Bank of Canada rates, USD: Yahoo
 source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besides base_currency (FX rates fetched)
 tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
 # futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
 #                                     #   (daily variation margin); next_day = the clearing premium date
+# local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone (IANA name)
 # prior_year_record = "../{prev_year}/filed/{prev_year}.json"
 #                                     # last year's close-year record, checked by `taxjson handoff`
 
@@ -4710,9 +4760,12 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                 print(f"  {lead}: {e['tt']}")
             if e["note"]:
                 print(f"  note: {e['note']}")
+            if e.get("refused"):
+                print(f"  REFUSED: {e['refused']}")
         entries, unpriced = CS.tt_entries(adoc)
         tt = Path(adoc["tt_file"])
-        want = CS.render_tt(acct, entries) if not unpriced else None
+        want = (CS.render_tt(acct, entries, report["country"])
+                if not unpriced else None)
         have = tt.read_text(encoding="utf-8") if tt.is_file() else None
         print()
         if unpriced:
@@ -11139,7 +11192,7 @@ def _fx_cash_doc(root: Path, cache: Path):
         sys.exit(f"taxjson fx-cash: no native transaction files in "
                  f"{cache} (run `taxjson run` first).")
     fx = load_fx_history(cache / "to_base.csv", base)
-    ledger = FX.build_ledger(txs, base, fx, int(year))
+    ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
     verdict = FX.apply_jurisdiction(ledger["net_gain"], country)
     return ledger, verdict, base, int(year), country
 

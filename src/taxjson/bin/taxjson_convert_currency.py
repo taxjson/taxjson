@@ -14,7 +14,9 @@ import re
 import sys
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
-from typing import Dict
+from typing import Dict, Optional
+
+from taxjson.lib.country import country_arg
 from datetime import datetime, timedelta
 
 from taxjson.lib.core import (
@@ -276,18 +278,29 @@ def convert_transaction(
     return converted
 
 def process_transactions(
-    transactions: list, target_curr: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal
+    transactions: list, target_curr: str, history: Dict[str, Dict[str, Decimal]], default_rate: Decimal,
+    country: Optional[str] = None,
 ) -> list:
-    """Convert every row. For a CAD target (the Canadian books) plain
-    futures fills are first put on the SETTLEMENT basis in their native
-    currency (lib/futures.settle_futures): an opening carries 0, a close
-    carries the realized native P/L, so each close's P/L is converted at
-    that closing leg's own rate and no notional is ever translated
-    (R1-0/R1-52/R1-204). Raises ValueError on a futures row that cannot
-    be put on that basis."""
-    if norm_currency(target_curr) == "CAD":
-        from taxjson.lib.futures import settle_futures
-        transactions, _stats = settle_futures(list(transactions))
+    """Convert every row. Plain futures fills are first put on the
+    SETTLEMENT basis in their native currency (lib/futures.settle_futures):
+    an opening carries 0, a close carries the realized native P/L, so
+    each close's P/L is converted at that closing leg's own rate and no
+    notional is ever translated (R1-0/R1-52/R1-204). That holds in both
+    countries; `country` (the project's) picks the lot rule a partial
+    close uses — average cost in Canada, FIFO in the US — and is
+    required when the book has plain futures (it used to be keyed on a
+    CAD target: partition ENGINE-02). Raises ValueError on a futures row
+    that cannot be put on that basis, or on futures with no country."""
+    from taxjson.lib.futures import (has_plain_futures, method_for,
+                                     settle_futures)
+    if has_plain_futures(transactions):
+        if not country:
+            raise ValueError(
+                "the book has futures contracts: pass --country (canada "
+                "or usa) — the settled P/L of a partial close follows the "
+                "country's lot rule (average cost / FIFO)")
+        transactions, _stats = settle_futures(list(transactions),
+                                              method_for(country))
     return [convert_transaction(tx, target_curr, history, default_rate) for tx in transactions]
 
 
@@ -444,6 +457,12 @@ def main():
     parser.add_argument("--to", required=True, help="Target currency code (e.g. CAD, USD)")
     parser.add_argument("--rates", help="File with historical exchange rates")
     parser.add_argument(
+        "--country", type=country_arg, default=None,
+        metavar="{canada,ca,usa,us}",
+        help="The project's country: required when the book has futures "
+             "contracts (their settled P/L follows the country's lot "
+             "rule: average cost in Canada, FIFO in the US)")
+    parser.add_argument(
         "--default-rate", type=float, default=None,
         help="Fallback rate when the rates file is missing a date "
              "(default: 1.35). Passing it explicitly also allows a "
@@ -493,7 +512,8 @@ def main():
 
     try:
         converted_transactions = process_transactions(
-            transactions, target_curr, history, default_rate)
+            transactions, target_curr, history, default_rate,
+            country=args.country)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)

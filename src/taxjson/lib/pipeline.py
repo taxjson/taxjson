@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from taxjson.lib.core import TaxTransaction, get_tax_rules
+from taxjson.lib.core import TaxTransaction, get_tax_rules, is_stock_dividend
 from taxjson.lib.numeric import round_floats
 from taxjson.lib.phantom_holdings import (
     detect_phantoms,
@@ -960,6 +960,20 @@ def run_gains(transactions, sheltered_transactions=(),
             phantom_hint=req.phantom_hint)
 
     rules = get_tax_rules(req.country)
+    if req.country == 'canada':
+        # The parsers book a stock dividend as a neutral $0 event; the
+        # Canadian cost is its declared amount, which the export does
+        # not carry (tax-logic CA-STKDIV-01). The US engine words its
+        # own rule (§305(a)/§307) when it spreads the basis.
+        for _t in transactions:
+            if is_stock_dividend(_t) and float(_t.quantity or 0) > 0:
+                print(f"NOTE: {_t.symbol}: stock dividend of "
+                      f"{float(_t.quantity):g} share(s) on {_t.date} "
+                      f"entered at $0 cost — in Canada it is a dividend "
+                      f"at its declared amount, which is also the new "
+                      f"shares' cost: add it (distributions.map or a .tt "
+                      f"ADJUST) for the correct ACB and income.",
+                      file=sys.stderr)
     _extra = {}
     if req.per_account_basis and req.country == 'usa':
         _extra['per_account_basis'] = True
@@ -1165,9 +1179,15 @@ def run_gains(transactions, sheltered_transactions=(),
     # affected by the superficial-loss rule. We can't compute the
     # adjustment because the tainted leg has unknown ACB — surface it
     # for manual resolution.
-    if req.incomplete_history and all_tainted_across_years:
+    # Measured on the country's own window dates and named by its rule
+    # (settle dates and s.54 in Canada, trade dates and §1091 in the
+    # US), and skipped where the rule does not apply at all (US crypto:
+    # detect_wash off) — partition ENGINE-04/05, INPUTS-11.
+    _loss_rule = req.effective_detect_wash()
+    if req.incomplete_history and all_tainted_across_years and _loss_rule:
         clean_losses = [t for t in clean_txs if t.get('gain', 0.0) < -0.001]
-        sl_warnings = detect_superficial_loss_warnings(clean_losses, all_tainted_across_years)
+        sl_warnings = detect_superficial_loss_warnings(
+            clean_losses, all_tainted_across_years, country=req.country)
         if sl_warnings:
             results['superficial_loss_warnings'] = sl_warnings
 
@@ -1176,15 +1196,18 @@ def run_gains(transactions, sheltered_transactions=(),
     # but when most of the shares were REAL and an acquisition sits inside
     # the ±30-day window, the user manually reporting that loss must apply
     # CRA's superficial-loss rule BY HAND — previously there was zero signal.
-    if tainted_txs:
+    if tainted_txs and _loss_rule:
         from datetime import datetime as _dt
+        from taxjson.lib.phantom_holdings import LOSS_RULE, loss_window_date
+        _rule_name, _basis = LOSS_RULE[req.country]
         _pt_warns = []
         for t in tainted_txs:
             raw = float(t.get('raw_gain') or 0.0)
             if raw >= -0.001:
                 continue
             try:
-                d0 = _dt.strptime(t.get('date') or '', '%Y-%m-%d')
+                d0 = _dt.strptime(loss_window_date(t, req.country),
+                                  '%Y-%m-%d')
             except ValueError:
                 continue
             for a in transactions:
@@ -1193,7 +1216,9 @@ def run_gains(transactions, sheltered_transactions=(),
                         or a.quantity <= 0):
                     continue
                 try:
-                    da = _dt.strptime(a.date, '%Y-%m-%d')
+                    da = _dt.strptime(loss_window_date(
+                        {'date': a.date, 'date_settle': a.date_settle},
+                        req.country), '%Y-%m-%d')
                 except ValueError:
                     continue
                 if abs((da - d0).days) <= 30:
@@ -1204,9 +1229,9 @@ def run_gains(transactions, sheltered_transactions=(),
                         'raw_loss': raw,
                         'acquisition_date': a.date,
                         'note': ('tainted (phantom-pool) loss with an '
-                                 'in-window acquisition — if you claim this '
-                                 'loss manually, apply the superficial-loss '
-                                 'rule to the rebuy'),
+                                 f'in-window acquisition ({_basis} dates) — '
+                                 'if you claim this loss manually, apply '
+                                 f'{_rule_name} to the rebuy'),
                     })
                     break
         if _pt_warns:
@@ -1215,18 +1240,20 @@ def run_gains(transactions, sheltered_transactions=(),
     # Say it where the user reads it (audit R1-325): the warnings only
     # lived in the gains JSON, and the per-account split dropped them.
     # A `warning:` line reaches the .diag and the DIAGNOSTICS banner.
+    from taxjson.lib.phantom_holdings import LOSS_CHECK_LABEL, LOSS_RULE
     for w in results.get('superficial_loss_warnings') or []:
         if w.get('message'):
-            print(f"warning: superficial-loss check (manual): "
+            print(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
                   f"{w['message']}", file=sys.stderr)
         else:
-            print(f"warning: superficial-loss check (manual): "
+            print(f"warning: {LOSS_CHECK_LABEL[req.country]}: "
                   f"{w.get('symbol')} phantom-basis loss of "
                   f"{abs(float(w.get('raw_loss') or 0.0)):.2f} on "
                   f"{w.get('loss_date')} with a buy on "
                   f"{w.get('acquisition_date')} inside the window — if "
-                  f"you report this loss by hand, apply the "
-                  f"superficial-loss rule to that rebuy.", file=sys.stderr)
+                  f"you report this loss by hand, apply "
+                  f"{LOSS_RULE[req.country][0]} to that rebuy.",
+                  file=sys.stderr)
 
     # Traces are emitted in the sidecar text file (when requested) — drop
     # them from the JSON unconditionally so stdout stays clean and

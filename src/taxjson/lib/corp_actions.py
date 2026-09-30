@@ -3016,24 +3016,24 @@ def _canada_spinoff_deemed_dividend(event: CorporateAction, option: str, hints: 
 
 
 def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
-                                  *, description_base: str) -> List[dict]:
+                                  *, description_base: str,
+                                  allocated_acb: Optional[float] = None,
+                                  alloc_cur: Optional[str] = None
+                                  ) -> List[dict]:
     """Country-neutral basis-allocated spinoff: part of the parent's cost
-    basis moves to the spun-off position (via the `allocated_acb` hint);
-    no current-year tax. Canada wraps this as the s. 86.1 rollover; the
-    US as the §355 tax-free spinoff (basis allocation per §358(b)).
+    basis moves to the spun-off position; no current-year tax. Canada
+    wraps this as the s. 86.1 rollover; the US as the §355 tax-free
+    spinoff (basis allocation per §358(b)).
 
-    `allocated_acb_cad` (Canada, s.86.1(3)) is the parent's CAD cost
-    amount times the spin-off's share of the combined FMV: booked in CAD,
-    so the pools get exactly that figure. The legacy `allocated_acb` is
-    in the event's currency and converts at the spin-off date's rate —
-    which moves the FX drift since purchase between the pools (audits
-    S019-09, S072-15)."""
-    alloc_cur = event.currency
-    if 'allocated_acb_cad' in (hints or {}):
-        allocated_acb = float(hints.get('allocated_acb_cad') or 0.0)
-        alloc_cur = 'CAD'
-    else:
-        allocated_acb = float(hints.get('allocated_acb') or 0.0)
+    The amount is the `allocated_acb` hint, in the event's currency,
+    unless the country's wrapper passes `allocated_acb` / `alloc_cur`
+    itself: Canada's s.86.1(3) `allocated_acb_cad` (booked in CAD) is
+    read ONLY by the Canada wrapper — the shared emitter never sees a
+    Canadian hint, so the US §355 rule cannot book one (partition
+    ENGINE-08)."""
+    if allocated_acb is None:
+        allocated_acb = float((hints or {}).get('allocated_acb') or 0.0)
+    alloc_cur = alloc_cur or event.currency
     # Snap fractional residue to broker-style cash-in-lieu. Unlike the
     # taxable / deemed-dividend paths — where the target is acquired at
     # FRESH FMV, so the dropped fraction is genuine zero-gain cash — a
@@ -3091,12 +3091,21 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
               f"`--hint allocated_acb_cad=<CAD amount>` (parent ACB in "
               f"CAD x the spin-off's share of the combined FMV).",
               file=sys.stderr)
+    # s.86.1(3): the parent's CAD cost amount x the spin-off's share of
+    # the combined FMV, booked in CAD so the pools get exactly that
+    # figure. The legacy `allocated_acb` is in the event's currency and
+    # converts at the spin-off date's rate — which moves the FX drift
+    # since purchase between the pools (audits S019-09, S072-15).
+    cad = 'allocated_acb_cad' in (hints or {})
     return _emit_allocated_basis_spinoff(
         event, hints,
         description_base=(
             f"Spinoff {event.source_symbol}→{event.target_symbol} "
             f"(s. 86.1 rollover elected; ACB allocated from parent)"
         ),
+        allocated_acb=(float(hints.get('allocated_acb_cad') or 0.0)
+                       if cad else None),
+        alloc_cur='CAD' if cad else None,
     )
 
 

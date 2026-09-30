@@ -63,6 +63,7 @@ class TestHolidayLists(unittest.TestCase):
         self.assertIn(date(2022, 1, 3), mc.tsx_holidays(2022))
 
     @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_us_bank_holidays_trade_but_do_not_settle(self):
         for d in ('2025-10-13', '2025-11-11'):    # Columbus, Veterans
             self.assertTrue(mc.is_trading_day(d, 'USD'), d)
@@ -104,6 +105,7 @@ class TestSettlementDates(unittest.TestCase):
                              (trade, cur))
 
     @rule("CA-DATE-04")
+    @rule("US-DATE-04")
     def test_settlement_eras(self):
         self.assertEqual(settlement_lag_days('2017-09-01', 'USD'), 3)
         self.assertEqual(settlement_lag_days('2017-09-05', 'USD'), 2)
@@ -143,6 +145,7 @@ class TestIbSettlement(unittest.TestCase):
                          '2025-12-29')
 
     @rule("CA-DATE-09")
+    @rule("US-DATE-09")
     def test_futures_default_trade_date(self):
         for cat in ('Futures', 'Options On Futures'):
             self.assertEqual(get_ib_settlement('2025-12-31', cat, 'USD'),
@@ -152,6 +155,7 @@ class TestIbSettlement(unittest.TestCase):
                              '2026-01-02')
 
     @rule("CA-DATE-10")
+    @rule("US-DATE-12")
     def test_parser_uses_the_setting(self):
         body = (IB_TRADES_HDR
                 + _ib_trade('Futures', 'QZFH6', '2025-12-31, 10:00:00',

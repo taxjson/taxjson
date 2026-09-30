@@ -2,6 +2,117 @@
 
 ## Unreleased
 
+- **crypto-sends: a Kraken PYUSD or GUSD send is a coin send.** The
+  Kraken parser books those two as coins, but crypto-sends treated them
+  as US-dollar cash on every exchange, so a gift or payment of them got
+  no sale line and the coins stayed in the book. tax-logic CA-CRYPTO-08
+  now also says a stablecoin currency loss flagged superficial is
+  excluded in full (the conservative reading).
+- **US: stablecoins are property.** In a US project USDC, USDT, DAI (and
+  PYUSD/GUSD on Coinbase) were folded into US-dollar cash — Canada's
+  stated approximation — so a stablecoin payment never reached Form 8949
+  and a de-peg loss vanished. `taxjson run` now parses a US project's
+  Kraken and Coinbase files with stablecoins as coins: buying one is a
+  purchase, selling or spending one a sale, a swap / reward / fee in one
+  is valued at its 1.00 USD par, and `crypto-sends` writes a stablecoin
+  payment as a sale line. Canada keeps the cash treatment (with a de-peg
+  warning). tax-logic CA-CRYPTO-02 / US-CRYPTO-02.
+- **tax-logic states what US projects run.** The US section gains the
+  rules its input stages and engine already applied: settlement cycles
+  and holidays, the generic importer's settle column, crypto and expiry
+  dating, `futures_settle`, the FX gap handling, identity and ticker.map,
+  the transfer stop, the corporate-action elections (`taxable_exchange`,
+  `reorg_368`, `reorg_368_boot`, `taxable_distribution_301`,
+  `tax_free_355`), payments in lieu, staking income, dividends booked
+  gross with withholding as its own row, and the crypto parser rules
+  (coin-for-coin trades, fees in coin, the 3-day pairing, stablecoins as
+  US-dollar cash — an approximation). Two Canadian statements were wrong
+  and are corrected: the FX source (Bank of Canada noon rate before March
+  2017 from May 2007; Yahoo only before that) and the rate-gap rule (a
+  longer gap is a validation ERROR that `run --strict` stops on, not an
+  automatic stop). A stablecoin traded more than 2% off 1.00 USD on
+  Coinbase or a Kraken USD pair now prints a warning with the de-peg
+  amount the approximation leaves out.
+- **Crypto local time is a project setting.** `[settings] local_timezone`
+  (an IANA zone, both countries) names the zone Kraken and Coinbase UTC
+  stamps are dated in; it was only the `TAXJSON_LOCAL_TZ` environment
+  variable, with America/Toronto for everyone, so a trade after midnight
+  Eastern on Dec 31 could land in the wrong tax year for someone in
+  another zone. The default is unchanged; tax-logic states the zone in
+  force. A change re-parses the crypto account.
+- **`taxjson-convert-tt` writes the project's tax_date.** Converting a
+  book to .tt defaulted to the settlement date (the Canadian rule) with
+  no country, so a US book's Dec-31 sale came back as a January one. It
+  now reads the project's tax_date when the file sits in a project, and
+  outside one asks for `--date-basis` when a row's two dates differ.
+- **distributions.map sizes on the holder of record in both countries.**
+  The record-date balance followed the project's tax-year date basis, so
+  a US project (trade dates) credited a buy traded on the record date.
+  It is now always the settled position (unchanged for Canada's default).
+  The income note names Form 1099-DIV in a US project (it said T3/T5).
+- **US: a return of capital beyond basis is booked (§301(c)(3)).** It
+  was a warning only, and the excess came back as extra gain when the
+  shares were sold — right total, wrong year. Now the part beyond each
+  lot's basis is a capital gain on the distribution date (short- or
+  long-term by that lot's holding period) and the basis stays at zero;
+  Form 8949 describes the row as a nondividend distribution in excess of
+  basis. A return of capital received with no shares held is still a
+  warning (report it by hand). tax-logic US-ROC-01/02/03.
+- **Shared helpers no longer carry one country's law.** The warrant /
+  right replacement warning said "the loss may be superficial" in US runs
+  (now "may be a wash sale"); the §355 tax-free spin-off could book
+  Canada's s.86.1(3) `allocated_acb_cad` hint in CAD if called directly
+  (only the Canadian election reads it now); the registered-account
+  fallback for unconfigured accounts knew only Canadian plan names (IRA,
+  Roth, 401(k), HSA ... are recognised; by country when it is known).
+- **Manual loss checks next to phantom-basis sales follow the country.**
+  With `phantoms.json`, the "check by hand" warnings measured the window
+  on settle dates in every project (the US rule runs on trade dates) and
+  the partial-taint one on trade dates (Canada's runs on settle dates),
+  and both said "superficial-loss" in US projects, US crypto included.
+  Now: settle dates and ITA s.54 in Canada, trade dates and "wash-sale
+  check (§1091)" in the US, and none where wash detection is off (US
+  crypto). Warnings only; no numbers change.
+- **A crypto `gift` saved in sends.json is refused in a US project when
+  the .tt is written, not only at `--set`.** A decision carried over
+  from a Canada project, copied or hand-edited was written to
+  crypto_sends.tt as a sale at fair value under the Canadian rule and
+  landed on Form 8949. Now it is never written; `crypto-sends --write`
+  and `taxjson run` stop naming the send, the listing marks it REFUSED
+  and the checklist flags it. The generated file's header cites only the
+  project country's rule.
+- **A crypto send booked twice is easier to spot.** The warning when a
+  hand-written .tt already sells what crypto_sends.tt sells now names
+  both files (with the line number), the coin, quantity and timestamp,
+  and says how to keep either line; it searches every account's inputs.
+  Nothing is deleted.
+- **Standalone `taxjson-brokerage` no longer applies Canadian law by
+  default.** Its `--foreign-roc` defaulted to `dividend` (ITA s.90(2)),
+  so the documented manual pipeline for a US book turned a US issuer's
+  return of capital into dividend income. It now takes `--country`
+  (canada: s.90(2) dividend; usa: a basis reduction, and `--foreign-roc
+  dividend` is refused); with neither flag the return of capital lowers
+  the cost and a note says so. `taxjson run` passes both flags, so
+  project numbers are unchanged.
+- **Stock dividends follow the country.** The IB, Questrade and RBC
+  parsers booked a stock dividend as a $0 purchase in every project, so
+  in a US project the new shares were a short-term zero-basis lot and a
+  wash-sale replacement. The parsers now emit a neutral stock-dividend
+  event; the US engine applies §305(a)/§307 (the basis is spread over old
+  and new shares, the purchase date carries over, no wash sale), and the
+  Canada engine keeps the $0 acquisition (an s.54 acquisition) with the
+  "add the declared amount" note, now printed by the gains run instead
+  of the parser. Canadian numbers are unchanged. tax-logic CA-STKDIV-01,
+  US-STKDIV-01/02.
+- **Futures follow the country, not the base currency.** The settled-P/L
+  booking of futures (no notional, each close's P/L at its own rate) ran
+  only for a CAD target, so a US project kept FX on the notional of a
+  non-USD contract, and the US engine booked a settlement row with its
+  sign inverted (a short closed at +5,000 was -5,000). Both countries now
+  use the settlement basis, chosen by the project's country
+  (`taxjson-convert-currency` / `taxjson-merge2 --country`, required when
+  a book has futures); a partial close takes average cost in Canada and
+  FIFO in the US. Canadian numbers are unchanged. tax-logic US-FUT-01/02.
 - **The wash radar and the checks built on it apply the US rule in a US
   project.** `wash-radar`, `sell-check`, `buy-check`, `harvest`, `watch`
   and the web radar applied Canada's s.54 test to US books: windows on

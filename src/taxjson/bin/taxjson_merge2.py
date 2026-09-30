@@ -41,6 +41,7 @@ from taxjson.bin.taxjson_ticker_map import (
     load_map_file, apply_mapping, apply_drops, merge_renames,
     guard_option_listing_collisions,
 )
+from taxjson.lib.country import country_arg
 from taxjson.bin.taxjson_convert_currency import (
     abort_if_currency_uncovered, emit_fallback_summary,
     emit_source_summary, fallback_validation_issues, load_rate_sources,
@@ -317,6 +318,13 @@ def main():
         help="Historical exchange-rates file consumed by --to.",
     )
     parser.add_argument(
+        '--country', type=country_arg, default=None,
+        metavar='{canada,ca,usa,us}',
+        help="The project's country: required with --to when the book "
+             "has futures contracts (their settled P/L follows the "
+             "country's lot rule: average cost in Canada, FIFO in the US).",
+    )
+    parser.add_argument(
         '--default-rate', type=float, default=None,
         help="Fallback rate when the rates file is missing a date "
              "(default: 1.35). Passing it explicitly also allows a "
@@ -434,7 +442,7 @@ def main():
         default_rate = Decimal(str(resolve_default_rate(args.default_rate)))
         try:
             txs = convert_transactions(txs, target_currency, history,
-                                       default_rate)
+                                       default_rate, country=args.country)
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1

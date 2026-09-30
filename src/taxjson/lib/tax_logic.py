@@ -78,6 +78,7 @@ VARIANT_AXES: Dict[str, Dict[str, Tuple[Any, ...]]] = {
     },
     _C.USA: {
         "tax_date": ("trade", "settle"),
+        "futures_settle": ("trade", "next_day"),
     },
 }
 
@@ -108,6 +109,9 @@ PARTITION_RULES = frozenset({
     "CA-OPT-01",       # s.49(1) grant timing
     "CA-RPT-01",       # T1135
     "CA-FX-07",        # fx-cash s.39(1.1) $200 exemption
+    "CA-FX-04",        # futures P/L on average cost
+    "CA-STKDIV-01",    # stock dividend: $0 acquisition (counts for s.54)
+    "CA-ACB-12",       # manual phantom-loss check on settle dates
     "CA-CRYPTO-02",    # stablecoins as US-dollar cash
     "CA-DATE-01",      # settle-date tax year by default
     "CA-DATE-04",      # computed T+1 settlement default
@@ -126,6 +130,11 @@ PARTITION_RULES = frozenset({
     "US-DATE-01",      # trade-date tax year by default
     "US-CTRY-02",      # Canada-only settings/commands/flags refused
     "US-CTRY-03",      # base currency USD
+    "US-FUT-01",       # futures P/L FIFO
+    "US-CRYPTO-02",    # stablecoins are property (CA: US-dollar cash)
+    "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
+    "US-BASIS-04",     # manual phantom-loss check on trade dates
+    "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
     # Planning tools (partition COMMANDS-01/02/05)
     "CA-PLAN-01",      # radar: settle dates, still-held rescue
     "CA-PLAN-02",      # radar: a long call is a replacement
@@ -184,6 +193,12 @@ def _ownership(country: str) -> List[Rule]:
     ]
 
 
+def _local_tz(s: Dict[str, Any]) -> str:
+    """The zone crypto rows are dated in, as the parsers read it."""
+    from taxjson.lib.brokerages._crypto_common import DEFAULT_LOCAL_TZ
+    return str(s.get("local_timezone") or DEFAULT_LOCAL_TZ)
+
+
 def _canada(s: Dict[str, Any]) -> List[RuleSection]:
     c = _C.CANADA
     basis = _C.resolve_tax_date(c, s.get("tax_date"))
@@ -194,6 +209,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
     fut = _C.futures_settle_mode(s)
     froc = _C.foreign_roc_mode(dict(s, country=c))
     buyback = kw["option_buyback_loss_superficial"]
+    tz = _local_tz(s)
 
     if basis == "settle":
         year_rule = Rule(
@@ -246,8 +262,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Settle dates come from the broker when printed."),
             Rule("CA-DATE-04",
                  "Otherwise: T+1 (from 2024-05-27 in CAD, 2024-05-28 in "
-                 "USD), T+2 from 2017-09-05, T+3 before; options T+1.",
-                 cont=True),
+                 "USD), T+2 from 2017-09-05, T+3 before; other markets "
+                 "T+2 (UK, EU and Swiss T+1 from 2027-10-11); options T+1, "
+                 "but an exercise or assignment takes its stock leg's "
+                 "date.", cont=True),
             Rule("CA-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
@@ -293,24 +311,39 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "By law (s.104(13)) it belongs to the year it becomes "
                  "payable: one payable in December and paid in January is "
                  "not moved back yet, so take its year from the T3 slip."),
-            Rule("CA-DATE-12", "Crypto is dated in local time."),
+            Rule("CA-DATE-12",
+                 f"Crypto is dated in local time: {tz} ([settings] "
+                 f"local_timezone; outside a project TAXJSON_LOCAL_TZ). "
+                 f"Changing it re-dates the rows and re-keys crypto "
+                 f"sends.", keys=("local_timezone",)),
+            Rule("CA-DATE-13",
+                 "A .tt line has one date, used as both its trade and its "
+                 "settle date; `taxjson-convert-tt` writes a book's rows "
+                 "with the project's tax_date."),
         ]),
         ("Currency", [
             Rule("CA-FX-01",
                  "Every amount is converted to CAD at the Bank of Canada "
-                 "daily rate for its date (the settle date for trades);",
+                 "rate for its date (the settle date for trades);",
                  keys=("base_currency",)),
-            Rule("CA-FX-02",
-                 "a day with no rate uses a recent previous day, and a "
-                 "longer gap stops the run.", cont=True),
             Rule("CA-FX-03",
-                 "Yahoo is used only before 2017 or for a currency the "
-                 "Bank does not publish.", cont=True),
+                 "the daily average from 2017-03-01, the noon rate before "
+                 "(from 2007-05-01); Yahoo only before May 2007, for a "
+                 "currency the Bank does not publish, or a series it "
+                 "stopped.", cont=True),
+            Rule("CA-FX-02",
+                 "A day with no rate uses the latest rate of the 5 days "
+                 "before; a longer gap converts the row at a placeholder "
+                 "rate and is a validation ERROR (the .sum DIAGNOSTICS, "
+                 "`taxjson checklist`; `run --strict` stops), and a "
+                 "currency with no rates at all stops the run.",
+                 cont=True),
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
                  "is paid to open one, so its notional is never converted. "
-                 "Each close's P/L (commissions included, average cost) is "
-                 "converted at that closing leg's rate;"),
+                 "Each close's P/L (commissions included, average cost of "
+                 "the open contracts) is converted at that closing leg's "
+                 "rate;"),
             Rule("CA-FX-05",
                  "Schedule 3 shows a gain as proceeds and a loss as ACB.",
                  cont=True),
@@ -342,6 +375,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "RESP...) are tracked but kept out of the filing totals. "
                  "For the superficial-loss rule they count as affiliated "
                  "holders."),
+            Rule("CA-STKDIV-01",
+                 "A stock dividend's new shares enter the pool at $0 cost. "
+                 "Its declared amount (a dividend, and by law also the new "
+                 "shares' cost) is not in the broker's export: add it "
+                 "(distributions.map or a .tt ADJUST). The new shares are "
+                 "an acquisition for the superficial-loss rule."),
+            Rule("CA-DIST-01",
+                 "distributions.map: a non-cash distribution (a reinvested "
+                 "capital-gains distribution, a late return-of-capital "
+                 "factor) becomes an ACB adjustment sized on the shares "
+                 "held on its record date — the settled position. Its "
+                 "income is on the T3/T5 slip; taxjson does not count "
+                 "it."),
             Rule("CA-ACB-06", "Return of capital lowers the ACB."),
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
@@ -364,6 +410,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "sales that draw on them are listed for manual reporting "
                  "and left out of the totals, with no superficial-loss "
                  "test, until the position is fully sold.", cont=True),
+            Rule("CA-ACB-12",
+                 "A loss within 30 days (settle dates) of such a sale, or "
+                 "such a sale at a loss with a purchase in that window, is "
+                 "flagged for a manual superficial-loss check.",
+                 cont=True),
         ]),
         ("Dispositions (Schedule 3)", [
             Rule("CA-DISP-01", "Gain = proceeds - ACB - outlays."),
@@ -402,6 +453,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Shares never replace an option; an option is replaced "
                  "only by the identical contract; a put never replaces "
                  "the shares.", cont=True),
+            Rule("CA-SL-14",
+                 "A warrant or right bought in the window is flagged for a "
+                 "manual superficial-loss check only (the shares it "
+                 "converts into are not in the books).", cont=True),
             Rule("CA-SL-07",
                  "Only purchases count: writing an option or shorting "
                  "again never replaces, including after a loss on covering "
@@ -481,6 +536,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-INC-04",
                  "Crypto staking rewards are income at fair value when "
                  "received; that value is the coins' cost."),
+            Rule("CA-INC-05",
+                 "Dividends are booked gross; withholding tax is its own "
+                 "TAX row."),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",
@@ -490,7 +548,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
                  "Coinbase) are treated as US-dollar cash, an "
-                 "approximation."),
+                 "approximation (their own gain or loss, a de-peg, is not "
+                 "computed; a fill more than 2% off 1.00 USD is warned "
+                 "about)."),
             Rule("CA-CRYPTO-03",
                  "A Kraken withdrawal fee paid in a coin is a sale of that "
                  "coin."),
@@ -502,7 +562,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "gift or a payment in crypto is a sale at fair value."),
             Rule("CA-CRYPTO-06",
                  "A send that arrives on another of your exchanges within "
-                 "3 days is treated as your own move;", cont=True),
+                 "3 days, with 90% to 100% of the coins sent (the rest "
+                 "being the network fee), is treated as your own move;",
+                 cont=True),
             Rule("CA-CRYPTO-07",
                  "for every other send, `taxjson crypto-sends` records "
                  "whether it was your own wallet, a gift or a payment, and "
@@ -515,9 +577,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "sale (stablecoins are cash in the books). It is a "
                  "currency disposition: the value at the send date's Bank "
                  "of Canada rate minus the average cost of the US-dollar "
-                 "and stablecoin pool. A loss is superficial when US "
-                 "dollars or stablecoins were acquired within 30 days and "
-                 "are still held."),
+                 "and stablecoin pool. A loss is treated as superficial "
+                 "— the whole loss excluded, a conservative reading of "
+                 "the pro-rata rule — when US dollars or stablecoins were "
+                 "acquired within 30 days and are still held. (PYUSD and "
+                 "GUSD are cash on Coinbase only; on Kraken they are "
+                 "coins.)"),
         ]),
         ("Reports", [
             Rule("CA-RPT-01",
@@ -590,6 +655,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
 def _usa(s: Dict[str, Any]) -> List[RuleSection]:
     c = _C.USA
     basis = _C.resolve_tax_date(c, s.get("tax_date"))
+    fut = _C.futures_settle_mode(s)
     return [
         ("Tax year and dates", [
             (Rule("US-DATE-01",
@@ -600,6 +666,33 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   "A trade belongs to the year it SETTLES (tax_date = "
                   "\"settle\"; the IRS uses the trade date).",
                   keys=("tax_date",))),
+            Rule("US-DATE-04",
+                 "Settle dates come from the broker when printed. "
+                 "Otherwise: T+1 (from 2024-05-28 in USD, 2024-05-27 in "
+                 "CAD), T+2 from 2017-09-05, T+3 before; other markets T+2 "
+                 "(UK, EU and Swiss T+1 from 2027-10-11); options T+1, but "
+                 "an exercise or assignment takes its stock leg's date."),
+            Rule("US-DATE-05",
+                 "Days skip weekends and settlement holidays (US: NYSE and "
+                 "Federal Reserve holidays; Canada: TSX holidays, "
+                 "Remembrance Day, Truth and Reconciliation).", cont=True),
+            Rule("US-DATE-06",
+                 "The generic importer uses a mapped settle column, else "
+                 "this cycle (settle_on_trade_date = true keeps the trade "
+                 "date).", cont=True),
+            Rule("US-DATE-07", "Crypto settles on the trade date;",
+                 cont=True),
+            Rule("US-DATE-08", "an option expiry is dated its expiry day.",
+                 cont=True),
+            (Rule("US-DATE-09",
+                  "Futures and futures options settle on the TRADE date "
+                  "(futures_settle = \"trade\": variation margin settles "
+                  "the P/L daily).", keys=("futures_settle",))
+             if fut == "trade" else
+             Rule("US-DATE-12",
+                  "Futures and futures options settle on the next "
+                  "settlement day (futures_settle = \"next_day\").",
+                  keys=("futures_settle",))),
             Rule("US-DATE-03",
                  "Interest and other income belong to the year they are "
                  "paid."),
@@ -609,6 +702,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-INC-DATE-ROC",
                  "A return of capital (nondividend distribution) lowers "
                  "basis on the date it is paid."),
+            Rule("US-DATE-10",
+                 "A .tt line has one date, used as both its trade and its "
+                 "settle date; `taxjson-convert-tt` writes a book's rows "
+                 "with the project's tax_date."),
+            Rule("US-DATE-11",
+                 f"Crypto is dated in local time: {_local_tz(s)} "
+                 f"([settings] local_timezone; outside a project "
+                 f"TAXJSON_LOCAL_TZ). Changing it re-dates the rows and "
+                 f"re-keys crypto sends.", keys=("local_timezone",)),
             Rule("US-INC-DATE-RIC",
                  "Not applied yet: a mutual-fund or REIT dividend declared "
                  "in October-December and paid in January belongs to the "
@@ -620,8 +722,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  keys=("base_currency",)),
             Rule("US-FX-02",
                  "Other currencies are converted at the Yahoo Finance "
-                 "daily rate for the settle date; a day with no rate uses "
-                 "a recent previous day.", cont=True),
+                 "daily rate for the settle date. A day with no rate uses "
+                 "the latest rate of the 5 days before; a longer gap "
+                 "converts the row at a placeholder rate and is a "
+                 "validation ERROR (`run --strict` stops), and a currency "
+                 "with no rates at all stops the run.", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
@@ -647,6 +752,47 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-HOLD-03", "A stand-alone short sale is short-term.",
                  cont=True),
+            Rule("US-BASIS-06",
+                 "Identical property is the same symbol with its listing "
+                 "suffix (.US, .TO); two listings are one security only "
+                 "when ticker.map joins them."),
+            Rule("US-BASIS-05",
+                 "A transfer into a taxable account stops the run until "
+                 "the original purchase is declared (.tt ACQUIRED line)."),
+            Rule("US-DIST-01",
+                 "distributions.map: a non-cash distribution (a reinvested "
+                 "capital-gain distribution, a late return-of-capital "
+                 "factor) becomes a basis adjustment sized on the shares "
+                 "held on its record date — the settled position. Its "
+                 "income is on Form 1099-DIV; taxjson does not count it."),
+            Rule("US-ROC-01",
+                 "A return of capital (nondividend distribution, "
+                 "§301(c)(2)) lowers the basis of the shares held, pro rata "
+                 "over the open lots, for every issuer."),
+            Rule("US-ROC-02",
+                 "The part beyond a lot's basis is a capital gain in the "
+                 "year received (§301(c)(3)), short- or long-term by that "
+                 "lot's holding period; the basis stays at zero.",
+                 cont=True),
+            Rule("US-ROC-03",
+                 "Received with no shares held, it is not applied: taxjson "
+                 "warns, and you report it by hand.", cont=True),
+            Rule("US-BASIS-04",
+                 "Shares with missing buy history go in phantoms.json: "
+                 "sales that draw on them are listed for manual reporting "
+                 "and left out of the totals. A loss within 30 days "
+                 "(trade dates) of such a sale, or such a sale at a loss "
+                 "with a purchase in that window, is flagged for a manual "
+                 "wash-sale check (not for crypto accounts)."),
+            Rule("US-STKDIV-01",
+                 "A stock dividend is not income (§305(a)): the basis of "
+                 "the shares held is spread over the old and new shares "
+                 "(§307), the new shares keep the old shares' purchase "
+                 "dates (§1223(5)), and they are not a purchase for the "
+                 "wash-sale rule."),
+            Rule("US-STKDIV-02",
+                 "A taxable stock dividend (§305(b), e.g. one with a cash "
+                 "option) is not detected: enter it by hand.", cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",
@@ -678,8 +824,77 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
                  "engine)."),
+            Rule("US-WASH-14",
+                 "A warrant or right bought in the window is flagged for a "
+                 "manual wash-sale check only.", cont=True),
             Rule("US-WASH-13",
-                 "Crypto is not subject to the wash-sale rule."),
+                 "Accounts marked crypto are not subject to the wash-sale "
+                 "rule."),
+        ]),
+        ("Corporate actions (elections in the account manifest)", [
+            Rule("US-CORP-01",
+                 "Splits and consolidations scale the quantity; the basis "
+                 "and purchase dates are unchanged."),
+            Rule("US-CORP-02", "Name changes carry the lots automatically.",
+                 cont=True),
+            Rule("US-CORP-03",
+                 "Mergers: taxable_exchange (§1001: old shares sold at "
+                 "FMV; new shares cost FMV),"),
+            Rule("US-CORP-04",
+                 "reorg_368 (all-stock §368(a) reorganization: basis "
+                 "carries over, §358, and the holding period tacks, "
+                 "§1223(1)),", cont=True),
+            Rule("US-CORP-05",
+                 "or reorg_368_boot (§356: gain recognised up to the cash "
+                 "received, a loss never; new basis = old basis - cash + "
+                 "gain; the holding period restarts in this model).",
+                 cont=True),
+            Rule("US-CORP-06",
+                 "Spin-offs: taxable_distribution_301 (a §301 "
+                 "distribution: income at FMV, which is also the new "
+                 "shares' cost)"),
+            Rule("US-CORP-07",
+                 "or tax_free_355 (§355: the basis moved to the spin-off "
+                 "is the dollar amount you give, per the company's Form "
+                 "8937; §358(b)).", cont=True),
+            Rule("US-CORP-08",
+                 "ignore skips broker noise only; on a real event it "
+                 "leaves the books wrong."),
+        ]),
+        ("Income", [
+            Rule("US-INC-01",
+                 "Payments in lieu of dividends are ordinary income (their "
+                 "own entry, never a basis reduction)."),
+            Rule("US-INC-02",
+                 "Crypto staking rewards are ordinary income at fair value "
+                 "when received; that value is the coins' cost."),
+            Rule("US-INC-03",
+                 "Dividends are booked gross; withholding tax is its own "
+                 "TAX row (a foreign tax credit is not computed)."),
+        ]),
+        ("Crypto", [
+            Rule("US-CRYPTO-01",
+                 "Each coin is its own property. A coin-for-coin trade is "
+                 "a sale of one and a purchase of the other at fair "
+                 "value."),
+            Rule("US-CRYPTO-02",
+                 "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
+                 "Coinbase) are property like any coin: buying one is a "
+                 "purchase, selling or spending one is a sale (a de-peg "
+                 "is a gain or loss), and a payment in one is written as "
+                 "a sale. A swap against a stablecoin, a reward or a fee "
+                 "in one is valued at its 1.00 USD par; a sale for "
+                 "dollars at the fill's price."),
+            Rule("US-CRYPTO-03",
+                 "A Kraken withdrawal fee paid in a coin is a sale of that "
+                 "coin."),
+            Rule("US-CRYPTO-04",
+                 "A trade fee taken in a coin reduces the coins bought or "
+                 "adds to the coins sold.", cont=True),
+            Rule("US-CRYPTO-05",
+                 "A send that arrives on another of your exchanges within "
+                 "3 days, with 90% to 100% of the coins sent, is treated as "
+                 "your own move."),
         ]),
         ("Crypto sends", [
             Rule("US-SEND-01",
@@ -688,7 +903,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "to crypto_sends.tt."),
             Rule("US-SEND-02",
                  "A gift is not a sale for the donor, so `gift` is refused "
-                 "in a US project: record it as `self`.", cont=True),
+                 "in a US project: record it as `self`. A gift already "
+                 "saved in sends.json (carried over, copied or edited) is "
+                 "never written as a sale: `crypto-sends --write` and "
+                 "`taxjson run` stop until it is reclassified.",
+                 cont=True),
         ]),
         ("Options", [
             Rule("US-OPT-01",
@@ -700,6 +919,19 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-OPT-04",
                  "Not modelled: §1256 60/40 contracts, §1233 and §1259."),
+        ]),
+        ("Futures", [
+            Rule("US-FUT-01",
+                 "A futures contract is booked on its settled P/L: nothing "
+                 "is paid to open one, so its notional is never converted "
+                 "or reported. A close's P/L (commissions included) is "
+                 "taken first in, first out from the open contracts, and "
+                 "a non-USD contract's P/L is converted at the closing "
+                 "leg's rate."),
+            Rule("US-FUT-02",
+                 "Not modelled: §1256 year-end marking to market and the "
+                 "60/40 split; report them on Form 6781 by hand.",
+                 cont=True),
         ]),
         ("Reports", [
             Rule("US-RPT-01",

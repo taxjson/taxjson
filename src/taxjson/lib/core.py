@@ -403,7 +403,13 @@ def detect_right_replacement_matches(loss_entries, events, *, date_of,
     return out
 
 
-def _emit_option_replacement_stderr(warnings) -> None:
+# What a denied loss is called, by the engine that prints the warning
+# (partition ENGINE-09: the shared helper said "superficial" in US runs).
+_LOSS_TERM = {'canada': 'the loss may be superficial',
+              'usa': 'the loss may be a wash sale'}
+
+
+def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
     for w in warnings:
         held = ''
         if w['held_at_window_end'] is not None:
@@ -413,8 +419,8 @@ def _emit_option_replacement_stderr(warnings) -> None:
                     'apply)')
         verdict = ("this loss would be denied"
                    if w['rule'] != 'right_vs_share_loss' else
-                   "a warrant/right is a right to acquire the shares, so "
-                   "the loss may be superficial — review it by hand")
+                   f"a warrant/right is a right to acquire the shares, so "
+                   f"{_LOSS_TERM[country]} — review it by hand")
         print(
             f"warning: option-replacement (warn-only, numbers unchanged): "
             f"{w['loss_symbol']} loss {w['loss_amount']:+,.2f} on "
@@ -1243,6 +1249,24 @@ def _fold_per_account_rename_ratios(taxable: List[TaxTransaction],
         out.append([replace.get((li, i), t) for i, t in enumerate(lst)
                     if (li, i) not in drop])
     return out[0], out[1], out[2]
+
+
+# A stock dividend (new shares delivered in kind), as the parsers emit
+# it: a BUYSELL of the new shares at $0 with this `type`. A NEUTRAL fact
+# — the parsers do not decide its tax treatment; each engine does
+# (partition INPUTS-01). Canada: an acquisition at $0 cost (the declared
+# amount is income and cost, added by the user; tax-logic CA-STKDIV-01),
+# which counts for s.54. US: not a purchase — the new shares join the
+# lots held, spreading their basis (§307) with the purchase dates
+# carried over (§1223(5)); not a §1091 replacement (US-STKDIV-01).
+STOCK_DIVIDEND = 'stock_dividend'
+
+
+def is_stock_dividend(tx) -> bool:
+    """A parser's stock-dividend row (a $0 BUYSELL of new shares)."""
+    t = tx.get('type') if isinstance(tx, dict) else getattr(tx, 'type', '')
+    a = tx.get('action') if isinstance(tx, dict) else getattr(tx, 'action', '')
+    return (t or '') == STOCK_DIVIDEND and a == 'BUYSELL'
 
 
 class TaxRules:
@@ -3435,8 +3459,9 @@ class CanadaTaxRules(TaxRules):
             # field presence without per-engine branching. Canada-specific
             # fields use None / 0.0 / [] for "concept doesn't apply here":
             #   - term: Canadian tax has no ST/LT distinction.
-            #   - permanently_disallowed: ITA 54 is always deferred via ACB
-            #     bump, never permanent.
+            #   - permanently_disallowed: the share of the denial whose
+            #     replacement sits in a sheltered account (lost for good,
+            #     CA-SL-09); the rest is deferred via the ACB bump.
             #   - wash_replacements: US-specific shape (basis_bump per rep);
             #     Canada uses wash_trigger + wash_window instead.
             tx_id_full = g['id' if 'id' in g else 'tx_id']
@@ -3534,7 +3559,8 @@ class CanadaTaxRules(TaxRules):
         for tx in transactions:
             # PIL goes to a dedicated entry below so sum-gains can show it
             # in its own column. Keep it out of the eligible-dividend total
-            # so T5/Schedule B reporting stays accurate.
+            # so the T5 / T3 dividend lines stay accurate (a payment in
+            # lieu is other income, CA-INC-03).
             if tx.action == 'DIVIDEND_IN_LIEU' or tx.type == 'dividend_in_lieu':
                 pil_amount = tx.gross_amount if tx.gross_amount else tx.net_amount
                 pil_entry = {
@@ -3618,7 +3644,8 @@ class CanadaTaxRules(TaxRules):
                 all_txs, date_of=get_sort_date,
                 canonical=alias_of,
                 statute_label="ITA s.54 ('a right to acquire')")
-        _emit_option_replacement_stderr(option_replacement_warnings)
+        _emit_option_replacement_stderr(option_replacement_warnings,
+                                        country='canada')
 
         # Conservation post-conditions (see the helpers' docstrings).
         _pool_qty: Dict[str, float] = {}
@@ -3939,6 +3966,24 @@ class USATaxRules(TaxRules):
                 continue
 
             prev = net_qty_state.get(_nkey(ev.account, sym), 0.0)
+
+            if is_stock_dividend(ev) and ev.quantity > 0:
+                # A nontaxable stock dividend (§305(a)) is not an
+                # acquisition "by purchase": it never replaces a loss
+                # (§1091), it only grows the position (partition
+                # INPUTS-01). With nothing held it is booked as a $0
+                # purchase by the main pass (and warned), so it stays a
+                # replacement there.
+                _held = (other_qty_state.get((ev.account, sym), 0.0)
+                         if is_other_scope else prev)
+                if _held > epsilon:
+                    if not is_other_scope:
+                        net_qty_state[_nkey(ev.account, sym)] = \
+                            prev + ev.quantity
+                    else:
+                        other_qty_state[(ev.account, sym)] = \
+                            _held + ev.quantity
+                    continue
 
             if ev.quantity > 0:
                 # Taxable buys close any taxable shorts first; leftover
@@ -4351,9 +4396,12 @@ class USATaxRules(TaxRules):
             # delta in net_amount, no share movement. US treatment (IRC
             # §301(c)(2), Pub 550): a nondividend distribution reduces
             # stock basis — apportioned per share across the open long
-            # lots. Excess over basis is capital gain in the distribution
-            # year (§301(c)(3)), which — like Canada's s.40(3) — is
-            # flagged for manual reporting, not silently computed.
+            # lots. The excess of a lot's share over its basis is capital
+            # gain in the distribution year (§301(c)(3)): booked as a
+            # deemed row per lot (term from that lot's holding period)
+            # and the lot's basis stays at zero (tax-logic US-ROC-02;
+            # it used to be a warning only, and the excess came back as
+            # extra gain at the sale — right total, wrong year).
             # Before this branch, ADJUST rows fell through to the
             # qty-epsilon skip below and were silently dropped, leaving
             # lot basis unreduced and understating gains at sale.
@@ -4372,7 +4420,7 @@ class USATaxRules(TaxRules):
                     continue
                 delta = D(tx.net_amount)
                 applied = Decimal(0)
-                went_negative = False
+                excess_total = Decimal(0)
                 for i, lot in enumerate(lots):
                     if i == len(lots) - 1:
                         # Last lot absorbs the division remainder so the
@@ -4383,17 +4431,56 @@ class USATaxRules(TaxRules):
                     lot['cost_basis'] += share
                     applied += share
                     if lot['cost_basis'] < D('-0.005'):
-                        went_negative = True
-                if went_negative:
+                        # §301(c)(3): the part beyond this lot's basis is
+                        # gain now; the basis stays at zero.
+                        excess = -lot['cost_basis']
+                        lot['cost_basis'] = Decimal(0)
+                        excess_total += excess
+                        _acq = lot.get('effective_acq_date', lot['date'])
+                        try:
+                            _held = (datetime.strptime(tx.date, '%Y-%m-%d')
+                                     - datetime.strptime(_acq, '%Y-%m-%d')
+                                     ).days
+                        except ValueError:
+                            _held = 0
+                        _x = float(excess)
+                        realized_gains.append({
+                            'date': tx.date,
+                            'date_settle': tx.date_settle or tx.date,
+                            'symbol': symbol, 'qty': 0.0,
+                            'cost': 0.0, 'proceeds': _x,
+                            'gain': _x, 'raw_gain': _x,
+                            'disallowed_amount': 0.0,
+                            'permanently_disallowed': 0.0,
+                            'replacement_lot_ids': [],
+                            'days_held': max(0, _held),
+                            'acquired_date': lot['date'],
+                            'account': tx.account,
+                            'currency': tx.currency,
+                            'commission': 0.0, 'fee': 0.0,
+                            'is_wash_sale': False,
+                            'is_option': is_option_symbol(symbol),
+                            'id': tx.id, 'trace': [],
+                            'direction': 'LONG',
+                            'term': ('LONG_TERM'
+                                     if held_more_than_one_year(_acq,
+                                                                tx.date)
+                                     else 'SHORT_TERM'),
+                            'wash_trigger': None, 'wash_window': None,
+                            'wash_replacements': None,
+                            'tainted': bool(lot.get('tainted')),
+                            'deemed': True,
+                            'note': ('DEEMED GAIN — nondividend '
+                                     'distribution in excess of basis '
+                                     '(§301(c)(3)); basis reset to zero'),
+                        })
+                if excess_total > D('0.005'):
                     print(
-                        f"warning: {symbol} lot basis went NEGATIVE after "
-                        f"ADJUST on {tx.date} — under IRC §301(c)(3) the "
-                        f"excess of a nondividend distribution over basis "
-                        f"is capital gain in that year, which this engine "
-                        f"does NOT compute. Verify the ROC amounts and "
-                        f"report the deemed gain manually.",
-                        file=sys.stderr,
-                    )
+                        f"NOTE: {symbol}: nondividend distribution on "
+                        f"{tx.date} exceeded the basis by "
+                        f"{float(excess_total):.2f} — booked as capital "
+                        f"gain in that year (§301(c)(3)); the basis is "
+                        f"zero.", file=sys.stderr)
                 if trace:
                     symbol_traces[symbol].append(
                         f"# {tx.date} ADJUST   {tx.net_amount:10.4f} | "
@@ -4404,6 +4491,40 @@ class USATaxRules(TaxRules):
             if abs(tx.quantity) < epsilon:
                 continue
 
+            # ----- Stock dividend (§305(a), §307, §1223(5)) -------------
+            # The new shares join the lots held: each lot's quantity
+            # grows pro rata, its basis and purchase date stay — the
+            # basis is spread over old and new shares and the holding
+            # period tacks. No purchase, no new lot (partition
+            # INPUTS-01; tax-logic US-STKDIV-01). With no long lots the
+            # row is a data gap: booked as the $0 purchase it looks
+            # like, with a warning.
+            if is_stock_dividend(tx) and tx.quantity > 0:
+                _lots = inventory_long.get(ikey, [])
+                _held = sum(l['qty'] for l in _lots)
+                if _held > epsilon and not inventory_short.get(ikey):
+                    _ratio = (_held + tx.quantity) / _held
+                    for _lot in _lots:
+                        _lot['qty'] = _lot['qty'] * _ratio
+                    print(f"note: {symbol}: stock dividend of "
+                          f"{tx.quantity:g} share(s) on {tx.date} — "
+                          f"nontaxable (§305(a)): the basis of the "
+                          f"{_held:g} share(s) held is spread over old "
+                          f"and new (§307) and their purchase dates carry "
+                          f"over; if it was taxable (§305(b), e.g. a cash "
+                          f"option), enter it by hand.", file=sys.stderr)
+                    if trace:
+                        symbol_traces[symbol].append(
+                            f"# {tx.date} STOCK DIVIDEND +{tx.quantity:g} "
+                            f"sh | spread over {len(_lots)} lot(s), "
+                            f"{_held:.4f} sh held")
+                    continue
+                print(f"warning: {symbol}: stock dividend of "
+                      f"{tx.quantity:g} share(s) on {tx.date} with no "
+                      f"shares held — booked as a $0 purchase; add the "
+                      f"missing purchase history so it can share their "
+                      f"basis (§307).", file=sys.stderr)
+
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);
             # a SELL's proceeds stay SIGNED — negative only when the
@@ -4412,6 +4533,16 @@ class USATaxRules(TaxRules):
             # engine's _trade_money).
             tx_net = (abs(tx.net_amount) if tx.quantity > 0
                       else float(tx.net_amount))
+            if (tx.type or '') == 'futures_settlement':
+                # A futures fill on the settlement basis (lib/futures.py):
+                # net_amount is the realized P/L, SIGNED (+ received,
+                # - paid), 0 on an opening. A sell's proceeds are it; a
+                # buy (a short's cover) costs its negation, so a short
+                # closed at a profit realizes exactly the P/L — abs()
+                # booked a +5,000 cover as a 5,000 cost (partition
+                # ENGINE-02; the Canada engine's _trade_money twin).
+                tx_net = (float(tx.net_amount) if tx.quantity < 0
+                          else -float(tx.net_amount))
             # Commission and fee are split separately on each gain entry
             # (see make_gain_entry below) — apportioned by chunk_qty share.
 
@@ -5229,7 +5360,8 @@ class USATaxRules(TaxRules):
             date_of=lambda t: t.date,
             canonical=split_timeline.canonical,
             statute_label="IRS §1091 ('contract or option to acquire')")
-        _emit_option_replacement_stderr(option_replacement_warnings)
+        _emit_option_replacement_stderr(option_replacement_warnings,
+                                        country='usa')
 
         # Conservation post-condition (see _verify_share_conservation).
         _inv_qty: Dict[str, float] = {}

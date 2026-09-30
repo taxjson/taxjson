@@ -239,6 +239,10 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         if direction == "SHORT":
             sold = e.get("date") or ""
         desc = f"{_qty_str(abs(float(e.get('qty') or 0)))} {e.get('symbol')}"
+        if e.get("deemed"):
+            # §301(c)(3): no shares were sold (US-ROC-02).
+            desc = (f"{e.get('symbol')} nondividend distribution in excess "
+                    f"of basis (§301(c)(3))")
         if e.get("is_option"):
             desc += " (option)"
         if direction == "SHORT":

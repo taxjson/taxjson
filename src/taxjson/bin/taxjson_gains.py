@@ -220,6 +220,7 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
         all_for_detection,
         include_options=args.include_options_in_suggestions,
         registered_accounts=types,
+        country=args.country,
     )
     # Year-scope unless --all-history, with the SAME rule as the
     # find-missing-history report (phantom_holdings.

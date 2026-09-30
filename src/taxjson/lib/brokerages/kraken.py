@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import BaseBrokerage
-from taxjson.lib.brokerages._crypto_common import strict_money, utc_to_local
+from taxjson.lib.brokerages._crypto_common import (strict_money, utc_to_local,
+                                                   warn_depeg)
 
 
 _FIAT_ASSETS = ('USD', 'CAD', 'EUR', 'GBP', 'USDC', 'USDT', 'DAI')
@@ -206,6 +207,23 @@ def _fee_ccy(row: Dict[str, Any], asset_name: str) -> str:
 
 class KrakenBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Kraken"
+    # USD stablecoins (USDC/USDT/DAI): US-dollar CASH (True — the
+    # default, Canada's stated approximation, tax-logic CA-CRYPTO-02) or
+    # PROPERTY like any coin (False — a US project: the IRS treats them
+    # as digital assets, US-CRYPTO-02). taxjson-brokerage sets it from
+    # --country; the parser itself makes no country choice.
+    stablecoins_as_cash = True
+
+    def _norm(self, asset: str) -> str:
+        """The asset as this book names it: stablecoins folded to USD
+        only in cash mode."""
+        return _normalize_asset(asset, fold_stable=self.stablecoins_as_cash)
+
+    @property
+    def _fiat(self):
+        """Currencies (not property) in this book."""
+        return (_FIAT_ASSETS if self.stablecoins_as_cash
+                else _FIAT_CURRENCIES)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         with open(path, 'r', encoding='utf-8-sig') as f:
@@ -321,7 +339,7 @@ class KrakenBrokerage(BaseBrokerage):
         ctx = f"trade {row.get('txid')!r} ({pair}, {row.get('time')!r})"
         by_asset: Dict[str, list] = {}
         for lg in legs:
-            a = _normalize_asset(lg.get('asset') or '')
+            a = self._norm(lg.get('asset') or '')
             if a == 'KFEE':
                 # Legacy fee credits (promotional, no tax value): the
                 # fee was paid in credits, not in either leg.
@@ -345,7 +363,7 @@ class KrakenBrokerage(BaseBrokerage):
         for lg, a, fee in ((bl, base, b_fee), (ql, quote, q_fee)):
             fc = _fee_ccy(lg, _normalize_asset(lg.get('asset') or '',
                                                fold_stable=False))
-            if fee and _normalize_asset(fc) != a:
+            if fee and self._norm(fc) != a:
                 raise ValueError(
                     f"Kraken {ctx}: ledger fee on the {a} leg is in "
                     f"{fc} (feecurrency) — a trade fee charged in a third "
@@ -435,8 +453,33 @@ class KrakenBrokerage(BaseBrokerage):
                 vol = self._num(row, 'vol', ctx, required=True)
 
                 base, quote = _split_pair(pair, time_raw)
-                base = _normalize_asset(base)
-                quote = _normalize_asset(quote)
+                # A stablecoin quoted against USD (USDC/USD) away from
+                # the peg: the books fold it to USD cash, so say what
+                # that drops (partition INPUTS-12).
+                _rb = _normalize_asset(base, fold_stable=False)
+                _rq = _normalize_asset(quote, fold_stable=False)
+                if not self.stablecoins_as_cash:
+                    pass            # property: the fill books the price
+                elif _rb in _STABLECOINS and _rq == 'USD':
+                    warn_depeg(_rb, price, abs(vol),
+                               dt.strftime('%Y-%m-%d'),
+                               f"Kraken trades {path.name}")
+                elif _rq in _STABLECOINS and _rb == 'USD' and price:
+                    warn_depeg(_rq, 1.0 / price, abs(cost),
+                               dt.strftime('%Y-%m-%d'),
+                               f"Kraken trades {path.name}")
+                base = self._norm(base)
+                quote = self._norm(quote)
+                if (not self.stablecoins_as_cash
+                        and base in _FIAT_CURRENCIES
+                        and quote in _STABLECOINS):
+                    raise ValueError(
+                        f"Kraken trades {path.name}: pair {pair!r} "
+                        f"prices dollars in a stablecoin — with "
+                        f"stablecoins as property (a US project) that is "
+                        f"a sale or purchase of {quote} this parser does "
+                        f"not book in that orientation; enter it via a "
+                        f".tt file and remove the row.")
                 try:
                     _margin = float(str(row.get('margin') or 0)
                                     .replace(',', '') or 0)
@@ -489,7 +532,7 @@ class KrakenBrokerage(BaseBrokerage):
                 fee_note = (f" (Kraken fee {base_fee:.10g} {base} taken "
                             f"in coin, per ledger)" if base_fee else '')
 
-                if quote not in _FIAT_ASSETS:
+                if quote not in self._fiat:
                     # Crypto-to-crypto fill: two USD-denominated legs,
                     # the mirror of the ledgers path's
                     # _build_instant_trade (CRA s. 40(1) / IRS Notice
@@ -536,6 +579,18 @@ class KrakenBrokerage(BaseBrokerage):
                         'description': f'Trade {pair} '
                                        f'(counter leg of crypto-to-crypto)',
                     }
+                    if quote in _STABLECOINS:
+                        # A stablecoin quote (property mode): the fill
+                        # itself values the exchange — the stablecoin
+                        # moved at 1.00 USD a coin (what it is
+                        # redeemable for), so both legs carry that
+                        # value instead of two daily closes.
+                        _usd = abs(quote_leg['quantity'])
+                        for _leg in (base_leg, quote_leg):
+                            _q = abs(_leg['quantity'])
+                            _leg['price'] = round(_usd / _q, 8) if _q else 0.0
+                            _leg['net_amount'] = round(_usd, 8)
+                            _leg['gross_amount'] = round(_usd, 8)
                     if _txid:
                         base_leg['id'] = f'{_txid}-base'
                         quote_leg['id'] = f'{_txid}-quote'
@@ -666,7 +721,7 @@ class KrakenBrokerage(BaseBrokerage):
                 ctx = f"ledger {path.name} txid={txid!r}"
                 amount = self._num(row, 'amount', ctx, required=True)
                 fee = self._num(row, 'fee', ctx)
-                asset = _normalize_asset(asset_raw)
+                asset = self._norm(asset_raw)
                 asset_name = _normalize_asset(asset_raw, fold_stable=False)
                 fee_ccy = _fee_ccy(row, asset_name)
 
@@ -757,7 +812,7 @@ class KrakenBrokerage(BaseBrokerage):
                     transactions.append(tx)
                     self.note_row_consumed()
                     if (fee and fee_ccy == asset_name
-                            and asset not in _FIAT_ASSETS):
+                            and asset not in self._fiat):
                         # A network/withdrawal fee Kraken took IN THE
                         # COIN (0.002 TAO on a 0.1 TAO withdrawal): the
                         # fee coins left your ownership — a disposition
@@ -780,11 +835,17 @@ class KrakenBrokerage(BaseBrokerage):
                                             f"in {asset_name} (disposed "
                                             f"at FMV)"),
                         }
+                        if asset in _STABLECOINS:
+                            # Property mode: a stablecoin fee is valued
+                            # at 1.00 USD a coin.
+                            fee_tx['price'] = 1.0
+                            fee_tx['net_amount'] = abs(fee)
+                            fee_tx['gross_amount'] = abs(fee)
                         if txid:
                             fee_tx['id'] = f'{txid}-fee'
                         transactions.append(fee_tx)
                 elif type_raw in ('spend', 'receive') and refid:
-                    if fee and _normalize_asset(fee_ccy) != asset:
+                    if fee and self._norm(fee_ccy) != asset:
                         raise ValueError(
                             f"Kraken {ctx}: instant-trade {type_raw} "
                             f"leg in {asset_name} with its fee in "
@@ -982,7 +1043,7 @@ class KrakenBrokerage(BaseBrokerage):
                 asset_name, date, time, net_qty, txid,
                 usd_value=net_usd, gross_qty=gross_qty, fee_qty=fee_qty)
         # Fee charged in a different currency.
-        if _normalize_asset(fee_ccy) == 'USD' and fee_usd is None:
+        if self._norm(fee_ccy) == 'USD' and fee_usd is None:
             fee_usd = fee_qty
         if usd_value is None or fee_usd is None:
             raise ValueError(
@@ -1037,6 +1098,15 @@ class KrakenBrokerage(BaseBrokerage):
             # dedup keeps both.
             div['id'] = f'{txid}-div'
             buy['id'] = f'{txid}-buy'
+        if asset in _STABLECOINS and not self.stablecoins_as_cash:
+            # Property mode (a US project): income at 1.00 USD a coin,
+            # and the coins are acquired at that value.
+            inc = qty if income_usd is None else income_usd
+            for leg in (div, buy):
+                leg['price'] = round(inc / qty, 8) if qty else 1.0
+                leg['net_amount'] = inc
+                leg['gross_amount'] = inc
+            return [div, buy]
         if asset in _STABLECOINS or asset in _FIAT_CURRENCIES:
             # Worth 1.0/unit by definition: income = qty, priced here.
             # NO acquisition leg: the trade books fold USDC/USDT/DAI to
@@ -1171,13 +1241,13 @@ class KrakenBrokerage(BaseBrokerage):
         # instead of dropping it, which left phantom units in the book.
         # Fiat-leg fees stay money (see fiat_fee below).
         def _coins(leg, received):
-            if leg['asset'] in _FIAT_ASSETS:
+            if leg['asset'] in self._fiat:
                 return leg['amount']
             return (leg['amount'] - leg['fee'] if received
                     else leg['amount'] + leg['fee'])
 
         if spend['asset'] == recv['asset'] and \
-                spend['asset'] not in _FIAT_ASSETS:
+                spend['asset'] not in self._fiat:
             # ETH -> ETH2.S (both fold to ETH, the same property): a
             # relabel, not a disposition (S061-11).
             if spend['fee'] or recv['fee']:
@@ -1203,11 +1273,11 @@ class KrakenBrokerage(BaseBrokerage):
                 f"KNOWN_ISSUES)")
             return []
 
-        if spend['asset'] in _FIAT_ASSETS:
+        if spend['asset'] in self._fiat:
             is_buy = True
             quote_asset, quote_amt = spend['asset'], spend['amount']
             base_asset, base_amt = recv['asset'], _coins(recv, True)
-        elif recv['asset'] in _FIAT_ASSETS:
+        elif recv['asset'] in self._fiat:
             is_buy = False
             quote_asset, quote_amt = recv['asset'], recv['amount']
             base_asset, base_amt = spend['asset'], _coins(spend, False)
@@ -1261,6 +1331,13 @@ class KrakenBrokerage(BaseBrokerage):
             # from its own coin's daily close gave the two sides of one
             # exchange two different values: a phantom gain or loss.
             usd = recv['usd'] if recv['usd'] else spend['usd']
+            if not usd:
+                # Property mode: a stablecoin leg values the swap at
+                # 1.00 USD a coin.
+                for _l, _rcv in ((spend, False), (recv, True)):
+                    if _l['asset'] in _STABLECOINS:
+                        usd = _coins(_l, _rcv)
+                        break
             if usd:
                 for leg in (sell_leg, buy_leg):
                     q = abs(leg['quantity'])

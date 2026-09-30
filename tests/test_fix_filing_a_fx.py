@@ -160,7 +160,8 @@ class TestFuturesNotional(unittest.TestCase):
                    account="IB"),
                fut("2025-02-10", 1.0, 60002.0, 60.0),
                fut("2025-03-10", -1.0, 60998.0, 61.0)]
-        doc = build_ledger(txs, "CAD", {}, 2025, rate_of=r)
+        doc = build_ledger(txs, "CAD", {}, 2025, rate_of=r,
+                           country="canada")
         self.assertEqual(doc["overdrafts"], {})
         usd = doc["per_currency"]["USD"]
         self.assertLess(usd["disposed"], 100.0)

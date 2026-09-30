@@ -100,6 +100,7 @@ class TestHandleTransfersSheltered(unittest.TestCase):
 
 class TestHandleTransfersTaxable(unittest.TestCase):
     @rule("CA-ACB-10")
+    @rule("US-BASIS-05")
     def test_taxable_with_transfer_exits(self):
         txs = [
             _tx('TRANSFER', '2024-01-15', 'AAPL.US', 100, net=15000.0, account='Margin'),

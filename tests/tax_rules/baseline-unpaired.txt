@@ -2,6 +2,4 @@
 # no @rule_absent test yet — the same synthetic book under the other
 # country, asserting the rule does NOT apply there. Delete a line when
 # its pair is written; ids must be in seed-ids.txt.
-CA-CRYPTO-02    USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on Coinbase) are treated as US-dolla
 CA-DATE-04      Computed cycle: T+1 from 2024-05-27 CAD / 2024-05-28 USD, T+2 from 2017-09-05, T+3 before;
-US-SEND-02      A gift is refused in a US project.
