@@ -167,6 +167,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `taxjson estimate` / `lib/tax_estimate.py`.
 - **Current behavior:** a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign (15% FTC assumed). A Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson scan` flags the cross-listing case. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
 
+### Estimate has no input for a minimum tax carryover
+- **Where:** `taxjson estimate` / `taxjson instalments` (`lib/tax_estimate.py`).
+- **Current behavior:** minimum tax (AMT) paid in the 7 preceding years is creditable against regular tax above the minimum (ITA s.120.2; T691 Part 8, T1 line 40427, and the provincial piggyback such as ON428 line 59). The estimate cannot take that carryover, so in a year where regular tax exceeds the minimum it overstates tax — and the current-year instalment basis, which uses total tax, overstates by the full credit. When AMT does not bind, the estimate prints a NOTE with the headroom a carryover could use.
+- **Workaround:** subtract the carryover you can apply (from your T691 / notice of assessment) by hand.
+
 ### Interest expense and carrying charges are not surfaced
 - **Where:** IB `INTEREST` rows keep their sign; `sum-income` nets debit against credit interest.
 - **Current behavior:** margin interest paid (deductible under s.20(1)(c), line 22100; only 50% for the 2024+ AMT) disappears into the income total instead of being reported as a deduction. The estimate does not read interest from the books; enter the year's carrying charges yourself (`taxjson estimate --carrying-charges`, or `[estimate] carrying_charges`), which it deducts in full from regular income and at 50% in the AMT base.
