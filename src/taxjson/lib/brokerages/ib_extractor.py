@@ -1423,7 +1423,16 @@ class IbBrokerage(BaseBrokerage):
                     gross = parse_strict_number(row[gross_idx],
                                                 field='Gross Amount')
                 except (ValueError, IndexError) as e:
-                    print(f"warning: skipping malformed IB {section} row ({e}): {row}",
+                    # Name the row by its symbol and date only: the full
+                    # row carries the IB account id.
+                    _sym_i = header_map.get('Symbol')
+                    _dt_i = header_map.get('Ex Date', header_map.get('Date'))
+                    _sym = (row[_sym_i] if _sym_i is not None
+                            and _sym_i < len(row) else '?')
+                    _dt = (row[_dt_i] if _dt_i is not None
+                           and _dt_i < len(row) else '?')
+                    print(f"warning: skipping malformed IB {section} row "
+                          f"({e}): symbol {_sym}, date {_dt}",
                           file=sys.stderr)
                     self.count_skip(f"malformed {section} row")
                     continue
