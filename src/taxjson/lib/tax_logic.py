@@ -60,8 +60,10 @@ def _canada(s: Dict[str, Any]) -> List[Section]:
             "2017-09-05, T+3 before; options T+1. Days skip weekends and "
             "settlement holidays (US: NYSE and Federal Reserve holidays; "
             "Canada: TSX holidays, Remembrance Day, Truth and "
-            "Reconciliation). The generic importer and crypto settle on "
-            "the trade date; an option expiry is dated its expiry day.",
+            "Reconciliation). The generic importer uses a mapped settle "
+            "column, else this cycle (settle_on_trade_date = true keeps "
+            "the trade date). Crypto settles on the trade date; an "
+            "option expiry is dated its expiry day.",
             ("Futures and futures options settle on the TRADE date "
              "(futures_settle = \"trade\": variation margin settles the "
              "P/L daily)." if fut == "trade" else

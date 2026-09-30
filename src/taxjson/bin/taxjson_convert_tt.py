@@ -82,6 +82,15 @@ def _check_time(tok: str, line: str, source: str) -> None:
             f"{line.strip()!r}")
 
 
+def _tt_num(tok: str) -> float:
+    """A .tt numeric token. A comma is only a thousands separator
+    (`1,234.56`); a decimal comma (`48,24`, `1.234,56`) used to have its
+    comma stripped and be read 100x too large (audit R1-118) -- it now
+    raises, as do `nan`/`inf` and other non-numbers."""
+    from taxjson.lib.brokerages.base import parse_strict_number
+    return parse_strict_number(tok, field='number')
+
+
 def _unknown_action(action: str, line: str, source: str) -> ValueError:
     valid = _VALID_ACTIONS + _SUGAR_ACTIONS
     guess = difflib.get_close_matches(action.upper(), valid, n=1,
@@ -138,15 +147,15 @@ def parse_tt_line(line: str, account_name: str = 'default',
             tx['symbol'] = parts[3]
             if action == 'SPLIT':
                 tx['symbol_new'] = parts[4]
-                tx['quantity'] = float(parts[5].replace(',', ''))
+                tx['quantity'] = _tt_num(parts[5])
                 tx['currency'] = 'CAD'
                 tx['price'] = 0.0
                 tx['net_amount'] = 0.0
             else:
-                tx['quantity'] = float(parts[4].replace(',', ''))
+                tx['quantity'] = _tt_num(parts[4])
                 tx['currency'] = parts[5]
-                tx['price'] = float(parts[6].replace(',', ''))
-                tx['net_amount'] = float(parts[7].replace(',', ''))
+                tx['price'] = _tt_num(parts[6])
+                tx['net_amount'] = _tt_num(parts[7])
                 if action == 'TRANSFER':
                     # Past the 8 core fields a TRANSFER may carry a
                     # legacy fee-style number and/or the DECLARED token
@@ -154,9 +163,9 @@ def parse_tt_line(line: str, account_name: str = 'default',
                     for _tok in parts[8:]:
                         if _tok == 'DECLARED':
                             continue
-                        float(_tok.replace(',', ''))
+                        _tt_num(_tok)
                 if action != 'TRANSFER':
-                    tx['fee'] = float(parts[8].replace(',', '')) if len(parts) > 8 else 0.0
+                    tx['fee'] = _tt_num(parts[8]) if len(parts) > 8 else 0.0
                 elif 'DECLARED' in parts[8:]:
                     # A real TOKEN only: inline comments are stripped
                     # before tokenising, so `# DECLARED` in a remark no
@@ -207,27 +216,27 @@ def parse_tt_line(line: str, account_name: str = 'default',
 
         elif action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'):
             tx['symbol'] = parts[3]
-            tx['quantity'] = float(parts[4].replace(',', ''))
+            tx['quantity'] = _tt_num(parts[4])
             tx['currency'] = parts[5]
-            val = float(parts[7].replace(',', ''))
+            val = _tt_num(parts[7])
             tx['gross_amount'] = val
             # Optional 9th column: the withholding-NETTED amount (the
             # emitter writes it when net != gross so a round-trip
             # doesn't inflate income to the gross figure).
-            tx['net_amount'] = (float(parts[8].replace(',', ''))
+            tx['net_amount'] = (_tt_num(parts[8])
                                 if len(parts) > 8 else val)
             tx['type'] = action.lower()
 
         elif action == 'INTEREST' or action == 'FEE':
             tx['currency'] = parts[3]
-            tx['net_amount'] = float(parts[4].replace(',', ''))
+            tx['net_amount'] = _tt_num(parts[4])
             tx['type'] = action.lower()
             tx['symbol'] = 'CASH'
 
         elif action == 'ADJUST' or action == 'DISALLOW':
             tx['symbol'] = parts[3]
             tx['currency'] = parts[4]
-            tx['net_amount'] = float(parts[5].replace(',', ''))
+            tx['net_amount'] = _tt_num(parts[5])
     except (ValueError, IndexError) as e:
         raise ValueError(
             f"{_where(source)}taxjson-convert-tt: malformed .tt line "
@@ -236,6 +245,23 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"the row before re-running — silent skip would lose a "
             f"transaction the engine downstream needs."
         ) from e
+
+    # A SELL total is the POSITIVE net proceeds (qty x price - fee;
+    # direction lives in the qty sign). A negative one was booked as
+    # negative proceeds -- a +1,000 gain became a -3,000 loss with no
+    # word, because the net >= 0 schema rule never runs on .tt rows
+    # (audit R1-117). It is ambiguous (a cash-signed proceeds figure, or
+    # a commission larger than the proceeds), so refuse it. A negative
+    # BUY total cannot mean anything but the cash sign (qty x price +
+    # fee is never negative) and stays read as its magnitude.
+    if (action in ('BUYSELL', 'ASSIGN') and tx.get('quantity', 0) < 0
+            and tx.get('net_amount', 0) < 0):
+        raise ValueError(
+            f"{_where(source)}{action} sell total {parts[7]} is negative "
+            f"— a .tt total is the POSITIVE net proceeds (qty x price - "
+            f"commission); the sell direction lives in the negative qty. "
+            f"If you typed the cash sign, drop the '-'; if the commission "
+            f"exceeds the proceeds, enter 0. Line: {line.strip()!r}")
 
     tx['id'] = compute_tt_id(tx)
     return tx
@@ -299,7 +325,8 @@ def tx_to_tt_line(tx: dict):
         # SIGNED total/fee: abs() re-inflated sign-preserved reversal
         # rows (and fee rebates) on a json→tt→json cycle — the exact
         # corruption the parser-level sign fixes removed. Direction
-        # still comes from qty; a negative total is a reversal.
+        # still comes from qty. A trade total is never negative (schema:
+        # net_amount >= 0); parse_tt_line refuses a negative SELL total.
         return f"{action} {date} {time} {symbol} {qty:.8f} {currency} {price:.8f} {net:.5f} {fee:.5f}"
 
     if action == 'TRANSFER':
@@ -368,8 +395,9 @@ def expand_acquired(line: str):
             f"<total> ARRIVED <arrival-date>`, got: {line.strip()!r}")
     _, tdate, ttime, sym, qty, cur, price, total = parts[:8]
     arrival = parts[9]
+    qty_val = _tt_num(qty)              # a decimal comma raises here
     qty = qty.replace(',', '')
-    if float(qty) <= 0:
+    if qty_val <= 0:
         raise ValueError(
             f"taxjson-convert-tt: ACQUIRED quantity must be positive "
             f"(it declares shares you HOLD): {line.strip()!r}")
