@@ -21,10 +21,12 @@ Three bases, all of which CRA accepts (ITA 156):
                   reminder amounts on time is always interest-free,
                   whatever the year turns out to be.
 
-Interest (ITA 161(2)) uses the OFFSET method: charge interest accrues
-daily on any shortfall, credit interest accrues daily on early or
-excess payments, and the two net out. Credit interest can only reduce
-a charge, never produce a refund.
+Interest (ITA 161(2)) follows CRA's published A - B method: A is
+interest on each required instalment from its due date to the
+balance-due date, B is interest on each payment from the later of the
+payment date and January 1 to the same date, both compounded daily;
+the net (C = A - B) is charged. Credit interest can only reduce a
+charge, never produce a refund.
 
 CRA resets the prescribed rate QUARTERLY and applies the rate in
 effect on each individual day — a balance spanning a quarter boundary
@@ -69,8 +71,14 @@ INTEREST_MIN = 25.0         # CRA charges instalment interest only above
 # 2026-09-27 against each quarter's page under
 # https://www.canada.ca/en/revenue-agency/services/tax/prescribed-interest-rates.html
 # (e.g. .../prescribed-interest-rates/2026-q4.html: "overdue taxes ...
-# will be 7%"). Add each quarter as CRA announces it.
+# will be 7%"). Add each quarter as CRA announces it. 2023: Q1 8%,
+# Q2-Q4 9% (.../prescribed-interest-rates/2023-q1.html .. 2023-q4.html:
+# "The interest rate charged on overdue taxes ... will be 8%" / "9%");
+# without them a 2023 year was charged 2024 Q1's 10% all year and the
+# report called it the published rate (audit R1-220).
 PUBLISHED_RATES: List[Tuple[str, float]] = [
+    ("2023-01-01", 0.08), ("2023-04-01", 0.09),
+    ("2023-07-01", 0.09), ("2023-10-01", 0.09),
     ("2024-01-01", 0.10), ("2024-04-01", 0.10),
     ("2024-07-01", 0.09), ("2024-10-01", 0.09),
     ("2025-01-01", 0.08), ("2025-04-01", 0.08),
@@ -79,6 +87,7 @@ PUBLISHED_RATES: List[Tuple[str, float]] = [
     ("2026-07-01", 0.07), ("2026-10-01", 0.07),
 ]
 PUBLISHED_THROUGH = "2026-12-31"   # last day the table covers
+PUBLISHED_FROM = PUBLISHED_RATES[0][0]  # first day the table covers
 
 
 def published_rates(start: date, end: date) -> List[Dict[str, Any]]:
@@ -96,6 +105,12 @@ def published_rates(start: date, end: date) -> List[Dict[str, Any]]:
             out.append({"from": eff, "rate": r})
     if not out:                 # window before the table: earliest
         out = [{"from": s_iso, "rate": PUBLISHED_RATES[0][1]}]
+    elif out[0]["from"] > s_iso:
+        # The window starts before the table: the earliest rate is
+        # carried BACK to the window start (build() flags it as
+        # extrapolated) instead of leaving the gap to rate_on's
+        # "earliest segment" fallback under the table's own date.
+        out[0] = {"from": s_iso, "rate": out[0]["rate"]}
     return out
 
 
@@ -176,45 +191,47 @@ def _accrue(required: List[Dict[str, Any]],
             payments: List[Dict[str, Any]],
             rates: List[Tuple[Optional[str], float]],
             end: date) -> Tuple[float, float]:
-    """(charge, credit) interest by the offset method: walk one day at a
-    time from the first due date to `end`, accruing daily-compounded
-    interest on whichever side the running balance sits, at the rate
-    in force THAT day."""
+    """(A, B) — CRA's instalment-interest method, compounded daily at
+    the rate in force each day (interest-penalty-charges page cited in
+    the module docstring):
+
+      A = interest on each required instalment from the day it was due
+          to the balance-due date (`end`);
+      B = interest on each payment from the LATER of the payment date
+          and January 1 of the tax year, to the same date;
+      net = A - B (charged only if over $25; credit never refunds).
+
+    The earlier walk kept separate charge and credit totals, each
+    compounding only while the running balance sat on its side, so the
+    accrued charge interest FROZE the day the balance was caught up —
+    unpaid interest keeps compounding until paid (ITA s.248(11)).
+    That understated interest by 2.6-24% whenever instalments were
+    caught up before the balance-due date (audit R1-42)."""
     if not required:
         return 0.0, 0.0
-    start = date.fromisoformat(required[0]["date"])
-    if payments:
-        # CRA's contra interest runs from the DATE OF PAYMENT, so a
-        # prepayment made before the first due date must start the
-        # walk — anchoring on the first due date silently discarded
-        # its credit. But never before January 1 of the tax year: CRA
-        # computes credit "from the date the payment was made or
-        # January 1 (whichever date is later)" (interest-penalty-
-        # charges page cited in the module docstring).
-        start = min(start,
-                    min(date.fromisoformat(p["date"])
-                        for p in payments))
-        start = max(start, date(date.fromisoformat(
-            required[0]["date"]).year, 1, 1))
-    if end < start:
+    jan1 = date(date.fromisoformat(required[0]["date"]).year, 1, 1)
+    if end < jan1:
         return 0.0, 0.0
-    charge = credit = 0.0
-    d = start
-    while d <= end:
-        daily = rate_on(d, rates) / 365.0
-        due_to_date = sum(r["amount"] for r in required
-                          if date.fromisoformat(r["date"]) <= d)
-        paid_to_date = sum(p["amount"] for p in payments
-                           if date.fromisoformat(p["date"]) <= d)
-        balance = due_to_date - paid_to_date
-        # Compound on the accrued interest as well as the principal —
-        # CRA compounds daily.
-        if balance > 0:
-            charge += (balance + charge) * daily
-        elif balance < 0:
-            credit += (-balance + credit) * daily
-        d += timedelta(days=1)
-    return charge, credit
+    # growth[i] = prod over days jan1+i .. end of (1 + rate/365) - 1:
+    # what one dollar outstanding from that day earns by `end`.
+    days = (end - jan1).days + 1
+    growth = [0.0] * days
+    factor = 1.0
+    for i in range(days - 1, -1, -1):
+        factor *= 1 + rate_on(jan1 + timedelta(days=i), rates) / 365.0
+        growth[i] = factor - 1.0
+
+    def _interest(amount: float, on: date) -> float:
+        on = max(on, jan1)          # credit never before January 1
+        if on > end:
+            return 0.0
+        return amount * growth[(on - jan1).days]
+
+    a = sum(_interest(r["amount"], date.fromisoformat(r["date"]))
+            for r in required)
+    b = sum(_interest(p["amount"], date.fromisoformat(p["date"]))
+            for p in payments)
+    return a, b
 
 
 def interest_and_penalty(*, required: List[Dict[str, Any]],
@@ -272,6 +289,44 @@ def candidate_schedules(*, year: int, current_net_tax: float,
     return out
 
 
+LEAST_PER_DATE = "least_per_date"
+
+
+def least_cumulative_schedule(cands: Dict[str, List[Dict[str, Any]]]
+                              ) -> Tuple[str, List[Dict[str, Any]]]:
+    """The deemed instalment schedule of ITA 161(4.01): on EACH due date
+    the individual is deemed liable for the amount computed by
+    "whichever of the methods ... gives rise to the least total amount
+    of such parts or instalments required to be paid by the individual
+    by that day" (https://laws-lois.justice.gc.ca/eng/acts/I-3.3/
+    section-161.html). That is a per-date minimum of the CUMULATIVE
+    requirement, not one whole-year method: pricing each method alone
+    and taking the cheapest over-stated interest whenever the cheapest
+    method changes between dates (audit S034-16).
+
+    Returns (name, schedule): `name` is the candidate the minimum
+    equals on every date (current_year first, then prior_year, then
+    cra_reminder), else LEAST_PER_DATE."""
+    order = [n for n in BASES if n in cands]
+    cums = {n: [] for n in order}
+    for n in order:
+        run = 0.0
+        for r in cands[n]:
+            run += r["amount"]
+            cums[n].append(run)
+    dates = [r["date"] for r in cands[order[0]]]
+    least = [min(cums[n][i] for n in order) for i in range(len(dates))]
+    for n in order:
+        if all(abs(cums[n][i] - least[i]) < 0.005
+               for i in range(len(dates))):
+            return n, cands[n]
+    sched, prev = [], 0.0
+    for d, cum in zip(dates, least):
+        sched.append({"date": d, "amount": round(cum - prev, 2)})
+        prev = cum
+    return LEAST_PER_DATE, sched
+
+
 def build(*, year: int, basis: str, current_net_tax: float,
           payments: List[Dict[str, Any]], annual_rate=None,
           prior_net_tax: Optional[float] = None,
@@ -293,22 +348,29 @@ def build(*, year: int, basis: str, current_net_tax: float,
     if annual_rate is None:
         annual_rate = published_rates(date(year, 1, 1), end)
         rate_source = "published"
-    # Interest is assessed on the CHEAPEST basis the figures support,
-    # not necessarily the one being followed for payments.
+    # Interest is assessed on the LEAST cumulative requirement by each
+    # due date across the methods the figures support (ITA 161(4.01)),
+    # not necessarily the basis being followed for payments. The same
+    # deemed schedule prices the s.163.1 no-payment base (161(4.01)
+    # applies "for the purposes of subsection (2) and section 163.1").
     cands = candidate_schedules(
         year=year, current_net_tax=current_net_tax,
         prior_net_tax=prior_net_tax,
         second_prior_net_tax=second_prior_net_tax)
-    scored = {name: interest_and_penalty(
-        required=sched, payments=payments, annual_rate=annual_rate,
-        end=end) for name, sched in cands.items()}
-    interest_basis = min(scored, key=lambda k: scored[k]["net_interest"])
-    ip = scored[interest_basis]
+    interest_basis, governing = least_cumulative_schedule(cands)
+    ip = interest_and_penalty(required=governing, payments=payments,
+                              annual_rate=annual_rate, end=end)
     ip["interest_basis"] = interest_basis
+    ip["governing_schedule"] = governing
     ip["rate_source"] = rate_source
-    ip["rate_extrapolated"] = (rate_source == "published"
-                               and end.isoformat() > PUBLISHED_THROUGH)
-    ip["interest_bases_considered"] = sorted(scored)
+    ip["rate_extrapolated_after"] = (rate_source == "published"
+                                     and end.isoformat() > PUBLISHED_THROUGH)
+    ip["rate_extrapolated_before"] = (
+        rate_source == "published"
+        and date(year, 1, 1).isoformat() < PUBLISHED_FROM)
+    ip["rate_extrapolated"] = (ip["rate_extrapolated_after"]
+                               or ip["rate_extrapolated_before"])
+    ip["interest_bases_considered"] = sorted(cands)
     paid_total = sum(p["amount"] for p in payments
                      if date.fromisoformat(p["date"]) <= today)
     req_total = sum(r["amount"] for r in required)
@@ -350,17 +412,21 @@ def build(*, year: int, basis: str, current_net_tax: float,
     remaining_total = max(0.0, req_total - max(paid_total, due_total))
     # CRA's requirement test has TWO limbs: net tax owing over the
     # threshold in the current year AND in either of the two
-    # preceding years. Knowing only the current year, the second limb
-    # is unknown and we assume it is met (the common case for someone
-    # asking); when the prior figures ARE supplied and both sit at or
-    # below the threshold, no instalments are required at all.
+    # preceding years (s.156.1(1)). One known year over the threshold
+    # meets the limb; it FAILS only when BOTH years are known and both
+    # sit at or below it. Anything else is unknown and assumed met (the
+    # common case for someone asking) — one low year with the other
+    # unset read as "not met" and printed the unset year as 0.00
+    # (audit R1-214).
     priors = [p for p in (prior_net_tax, second_prior_net_tax)
               if p is not None]
-    prior_test = ("unknown" if not priors else
-                  ("met" if any(p > THRESHOLD for p in priors)
-                   else "not_met"))
-    governing_total = round(
-        sum(r["amount"] for r in cands[interest_basis]), 2)
+    if any(p > THRESHOLD for p in priors):
+        prior_test = "met"
+    elif len(priors) == 2:
+        prior_test = "not_met"
+    else:
+        prior_test = "unknown"
+    governing_total = round(sum(r["amount"] for r in governing), 2)
     return {
         "year": year, "basis": basis,
         "payments": list(payments),
@@ -402,6 +468,10 @@ def render(doc: Dict[str, Any], base: str) -> str:
         return textwrap.fill(t, width=78, initial_indent="  ",
                              subsequent_indent="  ")
 
+    def _prior_text(v):
+        # Never print an unset year as a figure.
+        return "not set" if v is None else fmt_money(v)
+
     _BASIS_LABEL = {
         "current_year": "current-year option (1/4 of this year's "
                         "estimated net tax owing)",
@@ -429,9 +499,8 @@ def render(doc: Dict[str, Any], base: str) -> str:
                 f"either of the two preceding years. This year is "
                 f"{fmt_money(doc['current_net_tax'])}, but the "
                 f"configured prior years are "
-                f"{fmt_money(doc.get('prior_year_net_tax') or 0.0)} "
-                f"and "
-                f"{fmt_money(doc.get('second_prior_net_tax') or 0.0)} "
+                f"{_prior_text(doc.get('prior_year_net_tax'))} and "
+                f"{_prior_text(doc.get('second_prior_net_tax'))} "
                 f"— both at or below the threshold."))
             lines.append("")
             lines.append(wrap(
@@ -496,7 +565,12 @@ def render(doc: Dict[str, Any], base: str) -> str:
     if doc.get("rate_source") == "published":
         rate_line += (" — CRA's published quarterly rate(s), built in "
                       "(set prescribed_rate(s) to override)")
-        if doc.get("rate_extrapolated"):
+        if doc.get("rate_extrapolated_before"):
+            rate_line += (f"; days before {PUBLISHED_FROM} are outside "
+                          f"the built-in table and ASSUME its earliest "
+                          f"rate — set prescribed_rates for them")
+        if doc.get("rate_extrapolated_after", doc.get("rate_extrapolated")
+                   and not doc.get("rate_extrapolated_before")):
             rate_line += (f"; days after {PUBLISHED_THROUGH} assume "
                           f"the last published rate")
     lines += ["", f"  INTEREST (offset method, compounded daily, "
@@ -513,6 +587,13 @@ def render(doc: Dict[str, Any], base: str) -> str:
             f"that is a placeholder rather than your real prior-year "
             f"figure, replace it — otherwise this report understates "
             f"what CRA would charge."))
+    elif gov == LEAST_PER_DATE:
+        per = ", ".join(fmt_money(r["amount"])
+                        for r in doc.get("governing_schedule") or [])
+        lines.append(_wrap_line(
+            f"Interest is assessed on the least total required BY EACH "
+            f"due date across the methods your figures support (ITA "
+            f"161(4.01)) — here no single method: {per}."))
     elif gov and gov != doc["basis"]:
         lines.append(_wrap_line(
             f"Interest is assessed on the {gov.replace('_', '-')} "

@@ -405,7 +405,31 @@ def load_config(root: Path) -> Dict[str, Any]:
         except Exception as e:
             _die(f"{path} is not valid TOML: {e}")
     _refuse_bad_account_types(cfg)
+    _normalize_settings(cfg)
     return cfg
+
+
+def _normalize_settings(cfg: Dict[str, Any]) -> None:
+    """Canonical `country` (canada|usa) and a checked `tax_date` for
+    EVERY config reader, not only `run`'s validate_config: check-filed,
+    audit and close-year passed the raw strings to the gains engine,
+    whose argparse refused "Canada"/"CA"/"Settle" — the filed-year
+    drift guard went silently off and the checklist called the crash
+    drift (S031-21, S031-24)."""
+    settings = cfg.get("settings")
+    if not isinstance(settings, dict):
+        return
+    country = settings.get("country")
+    if country is not None:
+        canon = _normalize_country(str(country))
+        if canon not in _COUNTRY_CANON.values():
+            _die(f"[settings] country must be canada|ca|usa|us, "
+                 f"got {country!r}")
+        settings["country"] = canon
+    tax_date = settings.get("tax_date")
+    if tax_date is not None and tax_date not in ("settle", "trade"):
+        _die(f"[settings] tax_date must be settle|trade, "
+             f"got {tax_date!r}")
 
 
 def _refuse_bad_account_types(cfg: Dict[str, Any]) -> None:
@@ -2767,6 +2791,17 @@ def cmd_run(args: argparse.Namespace) -> None:
     except Exception as _e:              # advisory guard, never a crash
         print(f"taxjson: warning: filed-year check failed: {_e}",
               file=sys.stderr)
+
+    if not args.account:
+        # What these reports were built from (content hashes), so the
+        # checklist's run-clean step sees a deleted input or a
+        # corrected export copied with an old mtime (S067-07).
+        try:
+            from taxjson.lib.checklist import record_input_fingerprint
+            record_input_fingerprint(root, cfg)
+        except Exception as _e:          # advisory, never a crash
+            print(f"taxjson: warning: could not record the input "
+                  f"fingerprint: {_e}", file=sys.stderr)
 
     try:
         _fx_cash_after_run(root, cache, reports_dir)
@@ -5954,7 +5989,16 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 _fxl, _fxv, _, _, _ = _fx_cash_doc(root, cache)
             _fx_note = {"net_gain": round(float(_fxl["net_gain"]), 2),
                         "reportable": round(float(_fxv["reportable"]), 2),
-                        "estimate": True, "line": "15300"}
+                        "estimate": True, "line": "15300",
+                        # The ledger cannot see conversions or deposits
+                        # (R1-148): carry its own warning signs so the
+                        # figure is never quoted without them.
+                        "overdrafts": dict(_fxl.get("overdrafts") or {}),
+                        "pools_year_end": dict(
+                            _fxl.get("pools_year_end") or {}),
+                        "caveat": "explicit conversions and deposits "
+                                  "are not in the ledger; the figure "
+                                  "can be wrong in either direction"}
         except (SystemExit, Exception):             # noqa: BLE001
             _fx_note = None
     # Base currency is just a label here — soft-read, no hard config
@@ -6104,7 +6148,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"the rows above): net {money(_fx_note['net_gain'])}, "
                       f"reportable {money(_fx_note['reportable'])} after "
                       f"the $200 exemption; T4037 puts it on line 15300. "
-                      f"Review with `taxjson fx-cash`.")
+                      + (f"The ledger overdrew "
+                         + ", ".join(f"{c} {n}x" for c, n in sorted(
+                             _fx_note["overdrafts"].items()))
+                         + " (conversions/deposits it cannot see); "
+                         if _fx_note["overdrafts"] else "")
+                      + "unseen conversions make it wrong in either "
+                        "direction — review with `taxjson fx-cash` "
+                        "before using it.")
             else:
                 print("FX on foreign cash (s.39(1.1)) is not in the rows "
                       "above — T4037 puts it on line 15300; see `taxjson "
@@ -6545,6 +6596,14 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
               + (f"  ({r['avg_rate_pct']:.1f}% of "
                  f"{money(r['investment_income'])})"
                  if r["avg_rate_pct"] is not None else ""))
+        if r["estimated_tax"] < -0.005:
+            # Signed (R1-47): eligible dividends at a low bracket earn
+            # more credit than the tax on their grossed-up amount.
+            print(_wrap_note(
+                f"Negative = a saving: the investment income lowers the "
+                f"tax on the other income by "
+                f"{money(-r['estimated_tax'])} (the dividend tax credit "
+                f"exceeds the tax on the grossed-up dividends)."))
         if r["losses_unused"]:
             print(f"  Unused capital losses: {money(r['losses_unused'])} "
                   f"(carry forward)")
@@ -6629,6 +6688,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 + [(f"DTC {provt['dtc_eligible'] * 100:.2f}% x "
                     f"{money(r['grossed_eligible'])}",
                     -tb["prov_dtc"], -tw["prov_dtc"])]
+                + ([("FTC not used federally (T2036)",
+                     -tb.get("prov_ftc", 0.0), -tw.get("prov_ftc", 0.0))]
+                   if tw.get("prov_ftc", 0.0) > 0.005 else [])
                 + ([("Ontario Health Premium", tb["prov_ohp"],
                      tw["prov_ohp"])] if provt.get("health_premium")
                    else [])
@@ -6638,7 +6700,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 [("TOTAL", r["tax_base"]["total"],
                   r["tax_with"]["total"])], money)
             print(f"    => WITH - BASE = {money(r['estimated_tax'])} "
-                  f"estimated tax on investment income")
+                  f"estimated tax on investment income"
+                  + (" (negative: a saving)"
+                     if r["estimated_tax"] < -0.005 else ""))
         if root is not None:
             _icfg = _instalment_config(root, year)
             _idoc = _instalments_doc(root, r, year, _icfg)
@@ -7196,6 +7260,8 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             except KeyError:
                 sys.exit(f"taxjson checklist: unknown step {step!r} "
                          f"(ids: {', '.join(ids)})")
+            except cl.StateFileError as e:
+                sys.exit(f"taxjson checklist: {e}")
             verb = {"done": "marked done", "skipped": "marked skipped",
                     None: "mark removed"}[mark]
             if not changed:
@@ -7238,11 +7304,17 @@ def cmd_checklist(args: argparse.Namespace) -> None:
             sys.exit("taxjson checklist --walk needs a terminal (use "
                      "`taxjson checklist` for the report, --done/--skip to "
                      "record steps).")
-        _checklist_walk(ctx, cl, only, quick=args.quick)
+        try:
+            _checklist_walk(ctx, cl, only, quick=args.quick)
+        except cl.StateFileError as e:
+            sys.exit(f"taxjson checklist: {e}")
         return
 
-    results = cl.evaluate(ctx, only=only, quick=args.quick,
-                          progress=cl.stderr_progress)
+    try:
+        results = cl.evaluate(ctx, only=only, quick=args.quick,
+                              progress=cl.stderr_progress)
+    except cl.StateFileError as e:
+        sys.exit(f"taxjson checklist: {e}")
     if args.json:
         print(_json.dumps(cl.to_json(results, year, country), indent=2))
     else:
@@ -7915,6 +7987,7 @@ def _soft_config(root: Path) -> Dict[str, Any]:
         # Soft about a MISSING or unreadable config, never about an
         # account the filing commands would silently drop (R1-268).
         _refuse_bad_account_types(cfg)
+        _normalize_settings(cfg)
         return cfg
     return {}
 
@@ -8166,6 +8239,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
         "--country", _normalize_country(str(settings.get("country", "canada"))),
         "--base-currency", str(settings.get("base_currency", "CAD")),
     ] + option_timing_flags(settings)       # same timing as the returns
+    if settings.get("year") is not None:
+        # Rows before the project year are flagged as possibly partial.
+        argv += ["--project-year", str(int(settings["year"]))]
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
@@ -8620,24 +8696,76 @@ def _check_filed_years(root: Path, cache: Path,
                   "crypto books would be blended into the combined "
                   "equity recompute and may report false drift.",
                   file=sys.stderr)
+    _taxable_cfg = {a for a, c in _acct_cfg.items()
+                    if isinstance(c, dict) and c.get("type") == "taxable"}
+    unreadable = 0
     for year, path in snaps:
-        snap = _json.loads(path.read_text(encoding="utf-8"))
-        _snap_accts = list(snap.get("accounts", {}))
-        # Taxable accounts the BOOKS have but the lock does not (added
-        # or renamed after close-year) are recomputed too — in the same
-        # blend — so diff_snapshot can report them instead of saying OK.
-        _snap_accts += sorted(
-            a for a, c in _acct_cfg.items()
-            if isinstance(c, dict) and c.get("type") == "taxable"
-            and a not in _snap_accts
-            and (cache / f"{a}_base.json").exists())
-        _crypto = [a for a in _snap_accts
-                   if (_acct_cfg.get(a) or {}).get("crypto")]
-        _equity = [a for a in _snap_accts if a not in _crypto]
-        recomputed = taxjson_filed.recompute_accounts(
-            cache, _equity, _crypto, year, settings,
-            snap.get("basis", ""), _filed_run_gains)
-        lines = taxjson_filed.diff_snapshot(snap, recomputed)
+        # One lock at a time: an unreadable or hand-edited lock is
+        # reported BY NAME and counted as a failure, and the other
+        # locks are still checked. A KeyError/JSONDecodeError here used
+        # to escape the loop, skip --strict's exit and every later lock
+        # (R1-189).
+        try:
+            snap = _json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(snap, dict) or not isinstance(
+                    snap.get("accounts", {}), dict) or not all(
+                    isinstance(v, dict)
+                    for v in snap.get("accounts", {}).values()):
+                raise ValueError("not a close-year lock (no per-account "
+                                 "table)")
+            _snap_accts = list(snap.get("accounts", {}))
+            # A locked account that is no longer a configured taxable
+            # account (renamed/removed) is NOT recomputed from its
+            # orphan work/<label>_base.json — that blended stale books
+            # into the check and said OK (S002-06).
+            _gone = ({a for a in _snap_accts if a not in _taxable_cfg}
+                     if _acct_cfg else set())
+            _snap_accts = [a for a in _snap_accts if a not in _gone]
+            # Taxable accounts the BOOKS have but the lock does not
+            # (added or renamed after close-year) are recomputed too —
+            # in the same blend — so diff_snapshot can report them
+            # instead of saying OK.
+            _snap_accts += sorted(
+                a for a in _taxable_cfg
+                if a not in _snap_accts
+                and (cache / f"{a}_base.json").exists())
+            _crypto = [a for a in _snap_accts
+                       if (_acct_cfg.get(a) or {}).get("crypto")]
+            _equity = [a for a in _snap_accts if a not in _crypto]
+            _lock_timing = snap.get("option_timing")
+            recomputed = taxjson_filed.recompute_accounts(
+                cache, _equity, _crypto, year, settings,
+                snap.get("basis", ""), _filed_run_gains,
+                option_timing=_lock_timing)
+            lines = taxjson_filed.diff_snapshot(snap, recomputed,
+                                                unconfigured=_gone)
+        except SystemExit:
+            raise
+        except Exception as e:          # this lock only
+            unreadable += 1
+            print(f"  !! filed {year}: {path.name} could not be checked: "
+                  f"{type(e).__name__}: {e} — fix or restore the lock "
+                  f"(it is the record of the filed return)",
+                  file=sys.stderr)
+            continue
+        if isinstance(_lock_timing, dict):
+            from taxjson.lib.pipeline import option_timing_from_settings
+            _cur = option_timing_from_settings(settings) or {}
+            if _cur and (
+                    _cur.get("option_premium_timing")
+                    != _lock_timing.get("option_premium_timing")
+                    or _cur.get("option_grant_since")
+                    != _lock_timing.get("option_grant_since")):
+                print(f"  note: filed {year} recomputed with the option "
+                      f"timing its lock records "
+                      f"({_lock_timing.get('option_premium_timing')}, "
+                      f"since {_lock_timing.get('option_grant_since')}); "
+                      f"this project uses "
+                      f"{_cur.get('option_premium_timing')}, since "
+                      f"{_cur.get('option_grant_since')} — set "
+                      f"option_grant_timing_since to match or contracts "
+                      f"written around {year} are taxed in the wrong "
+                      f"year or twice")
         if lines:
             drifting += 1
             print(f"  !! filed {year} DRIFTED vs {path.name}:",
@@ -8650,10 +8778,15 @@ def _check_filed_years(root: Path, cache: Path,
                   f"with [settings].year = {year}).", file=sys.stderr)
         else:
             print(f"  filed {year}: OK (matches {path.name})")
+    if unreadable and strict:
+        sys.exit(f"taxjson run --strict: {unreadable} filed-year "
+                 f"lock(s) could not be checked"
+                 + (f" and {drifting} drifted" if drifting else "")
+                 + " — aborting.")
     if drifting and strict:
         sys.exit(f"taxjson run --strict: {drifting} filed year(s) "
                  f"drifted — aborting.")
-    return drifting
+    return drifting + unreadable
 
 
 def _fx_cash_after_run(root: Path, cache: Path,
@@ -8706,7 +8839,9 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
     settings = load_config(root).get("settings", {})
     year = settings.get("year")
 
-    argv = [args.slip_csv] + _taxable_gains_argv(
+    _slips = (args.slip_csv if isinstance(args.slip_csv, list)
+              else [args.slip_csv])
+    argv = list(_slips) + _taxable_gains_argv(
         root, cache, exclude_crypto=True, prog="taxjson reconcile-slips")
     if year is not None:
         argv += ["--year", str(year)]
@@ -9627,6 +9762,7 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
                    "overdrafts": ledger["overdrafts"],
                    "unrated": ledger["unrated"],
                    "open_pools": ledger["pools"],
+                   "pools_year_end": ledger.get("pools_year_end") or {},
                    "currency": base, "year": year})
         return
     print(FX.render_report(ledger, base, year, country, verdict))
@@ -11427,9 +11563,11 @@ def main() -> None:
         "reconcile-slips",
         help="Diff broker T5008 / 1099-B slip CSVs against computed "
              "dispositions (exit 1 on any mismatch)")
-    p_rec.add_argument("slip_csv", help="Slip CSV — headers matched "
-                       "loosely (symbol/ticker, quantity/box 16, "
-                       "proceeds/box 21, cost/box 20)")
+    p_rec.add_argument("slip_csv", nargs="+",
+                       help="Slip CSV(s) — headers matched loosely "
+                       "(symbol/ticker, quantity/box 16, proceeds/box 21, "
+                       "cost/box 20); several (one per broker) are "
+                       "reconciled together")
     p_rec.add_argument("--tolerance", type=float, default=None,
                        help="Absolute per-symbol tolerance (default 1.00)")
     p_rec.add_argument("--json", action="store_true",

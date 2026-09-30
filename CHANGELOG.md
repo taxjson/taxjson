@@ -68,6 +68,150 @@
   the record date; a sale executed before a split but settling after it
   no longer inflates the record-date balance. The NOTE also says the
   distribution is income to report from the T3/T5 slip.
+- **Filing checklist fixes.**
+  - run-clean compares the inputs with what the last full run was built
+    from (content, not dates): a deleted input, a corrected export copied
+    with its old date, or a new `distributions.map` / `phantoms.json` /
+    `ticker_extraction_overrides.txt` now says "inputs changed". It also
+    flags an account with inputs but no report (a run that died on it, or
+    a `run --account` of another account).
+  - wash-reviewed counts a December loss that settles in January in the
+    settle year, like every other denial total.
+  - t5008 reconciles all slip files together (one per broker is normal;
+    each file alone could never reconcile), finds `.CSV` files, reads
+    only `inputs/slips/`, and names a non-CSV file there as not
+    reconciled. `taxjson reconcile-slips` takes several slip files.
+  - form-export's gain check allows for per-row rounding on a big book
+    (a 6-cent residual over 831 rows was a false attention).
+  - A done mark no longer hides a detector that crashed or had nothing
+    to check. An unreadable `checklist.json` is reported by name and never
+    overwritten. Changing `year` no longer brings last year's marks back
+    at the next mark.
+  - The fees step no longer sends trade commissions to line 22100 or
+    calls data subscriptions deductible: line 22100 is the margin
+    interest from the statements. The carryover step says what to record
+    (Canada: the 100% loss; US: the Schedule D line 21 deduction).
+
+- **check-filed recomputes a locked year the way it was filed.** The
+  drift check used the current project's written-option timing, so a
+  2026 project without `option_grant_timing_since` recomputed the 2025
+  lock on close timing and advised amending a correct return. It now
+  uses the timing the lock recorded and notes when the project differs.
+- **One bad lock no longer switches off the drift guard.** A lock that
+  cannot be read (bad JSON, a hand-edited file missing a count) made
+  `run --strict` exit 0 and skip every other lock, and made
+  `check-filed` crash with a traceback. Each lock is now checked on its
+  own; a bad one is named and fails `--strict`.
+- **A renamed account is reported, not recomputed from its old book.**
+  A locked account that is no longer a taxable account in
+  `taxjson.toml` was recomputed from its orphan `work/<name>_base.json`
+  and the check said OK.
+- **The lock records dividends and payments in lieu separately.** A
+  dividend reclassified as a payment in lieu (different return line, no
+  gross-up) now shows as drift; locks written before this keep
+  comparing the combined income only.
+- **`country` and `tax_date` are checked for every command.** "Canada",
+  "CA" or " canada" are read as `canada` everywhere (check-filed and the
+  web what-if crashed on them, switching the drift guard off); an
+  invalid `tax_date` stops every command with a clear message instead
+  of an engine usage error. The checklist no longer reports a failed
+  check-filed as drift.
+- **reconcile-slips counts phantom-basis sales.** A sale reported by
+  hand (phantom cost basis) was still shown as MISSING_FROM_COMPUTED;
+  it now matches the slip with the "phantom basis included" note.
+- **Canada estimate keeps its sign.** Eligible dividends at a low
+  bracket can lower the tax on the other income; the estimate (and the
+  AMT total and average rate) now shows that as a negative figure — a
+  saving — instead of flooring it at 0.00 under a `WITH - BASE` trace
+  that was negative (R1-47).
+- **Unused foreign tax credit reaches the province.** Foreign tax the
+  federal tax cannot absorb is credited against provincial tax (form
+  T2036, limited to provincial tax x foreign income / net income)
+  instead of being dropped; the estimate and the current-year
+  instalment basis were overstated for foreign-dividend-heavy, low-tax
+  years (S077-16).
+- **Estimate discloses what it leaves out.** A NOTE names the headroom
+  a prior-year minimum tax carryover (T691 Part 8, line 40427) could
+  use when AMT does not bind — the carryover is not modelled
+  (KNOWN_ISSUES); the assumptions line no longer sends interest to
+  views that never show it (R1-218, S078-00).
+- **option-boundary: an open write expiring later this year is open.**
+  A written option whose expiry is after today is an ordinary open row
+  (premium recognised in the write year), not "expired … the broker
+  export is missing it"; the checklist no longer turns `[!]` for it.
+- **option-boundary follows renames and keeps the sign.** A ratio-1
+  rename SPLIT of an option carries the written lot to the new symbol,
+  so its buy-back is matched; a write whose commission exceeds the
+  premium shows a negative premium, as the engine books it.
+- **option-boundary: cash-settled index options are not folded.** An
+  assignment whose underlying never trades as stock in the account
+  (XSP, SPX) is reported as a cash settlement — premium in the write
+  year, settlement loss in the close year, no T1-ADJ — instead of
+  advising the removal of a premium the engine keeps.
+- **option-boundary reads a lock's close timing.** When `filed/<year>.json`
+  records close timing but this project puts that year's writes on grant
+  timing, an expiry, buy-back or still-open write is ATTENTION (the
+  premium is in no return: set `option_grant_timing_since` to the next
+  year, or T1-ADJ to add it), and an assignment says no amendment is
+  needed instead of "remove the premium … filed with it".
+
+- **carryover says what its numbers leave out.** The ledger now notes
+  that slip capital gains (lines 17400/17600; US Schedule D line 13) and
+  the line-15300 FX gain on foreign cash are not in NET GAIN(LOSS), flags
+  rows before the project year as rebuilt from this project's books and
+  possibly partial, and `--claimed` / README state the units to record
+  (Canada: the 100% loss, line 25300 x2 at 50%; US: Schedule D line 21).
+- **claimed_losses.txt takes `1,234.56` and `$1,234.56`.** An amount
+  written the way the return or notice of assessment prints it was
+  dropped with a warning, so the carryforward kept the claimed loss. A
+  malformed grouping is still refused.
+- **carryover: an old claim no longer eats a later loss.** A
+  `claimed_losses.txt` amount recorded for a year the books show no loss
+  for was held and taken by the next loss in ANY later year, lowering
+  its carryforward. A loss carries back only 3 years (ITA 111(1)(b)), so
+  a claim left unmet past that window now stays unmatched, with a
+  warning, and the carryforward is untouched.
+- **fx-cash counts assignment cash, and only cash.** An option
+  assignment's stock leg booked as `ASSIGN` (Webull) now spends or
+  receives currency like a trade; crypto-for-crypto swap legs (Kraken,
+  Coinbase Convert), staking rewards paid in a coin, and stock-for-stock
+  corporate actions no longer count as foreign cash moving (they
+  invented thousands of dollars of s.39(1.1) gain or loss).
+- **fx-cash says the figure can be wrong either way.** The report (and
+  the `sum` FOR THE RETURN line and its `--json`) now carries the
+  overdraft count and a caveat that unseen conversions and deposits can
+  move the estimate in either direction — it used to say only that it
+  "understates activity" — and the report shows the ledger's foreign
+  cash at Dec 31 to compare with the brokers' balances.
+
+- **Instalment interest on the least amount due by each date.** ITA
+  161(4.01) deems the requirement on each due date to be the least
+  cumulative amount any method (current-year, prior-year, CRA reminder)
+  calls for by that day. `taxjson instalments` priced each method as a
+  whole year and took the cheapest, which overstated interest and the
+  s.163.1 penalty whenever the cheapest method changed between dates.
+  The report now shows the mixed schedule when no single method
+  governs.
+- **Instalment rates for 2023 and a flag before the table.** The
+  built-in CRA overdue-tax rates now start with 2023 (Q1 8%, Q2-Q4 9%).
+  A 2023 year was charged 2024's 10% all year and the report called it
+  the published rate; a year before 2023 now says its days ASSUME the
+  earliest rate (`rate_extrapolated`).
+- **One low prior year no longer waives instalments.** With only one
+  of `prior_year_net_tax` / `second_prior_net_tax` set and at or below
+  $3,000, `taxjson instalments` said "No instalments required" and
+  printed the unset year as 0.00. Both preceding years must be at or
+  below $3,000 (ITA s.156.1(1)); with one unknown the test is now
+  unknown (instalments assumed required) and an unset year prints as
+  "not set".
+- **Instalment interest keeps compounding after you catch up.**
+  `taxjson instalments` now computes interest the way CRA publishes it:
+  interest on each required instalment from its due date, minus
+  interest on each payment from its date (or January 1), both to the
+  balance-due date and compounded daily. The old running balance
+  stopped compounding the accrued charge once payments caught up,
+  which understated interest by a few percent and could drop a charge
+  under the $25 threshold.
 - **Kraken Hybrid Earn moves are yours.** `crypto-sends` classifies a
   Kraken `hybridearnwithdrawal` (the coins move to Kraken's Earn product
   and keep earning rewards) as `self` automatically instead of asking;

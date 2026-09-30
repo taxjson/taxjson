@@ -33,7 +33,10 @@ class ProjectContext:
 
     @property
     def country(self) -> str:
-        return str(self.settings.get("country", "canada"))
+        # Canonical spelling: " canada" / "CA" raised "Unsupported
+        # country" in the what-if view (S031-24).
+        c = str(self.settings.get("country", "canada")).strip().lower()
+        return {"ca": "canada", "us": "usa"}.get(c, c)
 
     @property
     def base_currency(self) -> str:
