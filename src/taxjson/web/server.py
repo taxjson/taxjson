@@ -46,6 +46,11 @@ def serve(root=".", host: str = "127.0.0.1", port: int = 8765) -> int:
         print(f"taxjson serve: {Path(root).resolve() / 'taxjson.toml'} "
               f"is not valid TOML: {e}", file=sys.stderr)
         return 1
+    except (OSError, ValueError) as e:
+        # A directory / unreadable taxjson.toml, non-UTF-8 text, or a
+        # config the CLI refuses: one line, not a traceback (S040-03).
+        print(f"taxjson serve: {e}", file=sys.stderr)
+        return 1
     # The bound host must also be an accepted Host header (create_app's
     # TrustedHostMiddleware refuses everything else). Binding a
     # wildcard address is the explicit "expose on the network" opt-in

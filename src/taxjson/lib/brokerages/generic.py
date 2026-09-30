@@ -193,7 +193,9 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
             "generic importer: TOML support unavailable — install "
             "`tomli` (Python < 3.11).")
     try:
-        mapping = tomllib.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: a mapping saved with a BOM failed as "Invalid
+        # statement (at line 1, column 1)" (S038-04).
+        mapping = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"generic importer: {path.name}: bad TOML: {e}")
     for sec, val in mapping.items():

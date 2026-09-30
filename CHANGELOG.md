@@ -2255,6 +2255,22 @@
   expiry, assignment or exercise row. For a long contract the premium
   paid is an unbooked loss of the expiry year; option-boundary covered
   written contracts only.
+- **Every command checks the option-timing and `fx_cash_gains`
+  settings.** `fx_cash_gains = "false"` (quoted) turned the FX-on-cash
+  report on; a typo'd `option_premium_timing` or a quoted / boolean
+  `option_grant_timing_since` was refused only by `run` — option-boundary
+  read it as close timing and close-year wrote it into the lock. All
+  are now refused by every config reader.
+- **taxjson.toml with a UTF-8 BOM is read** (also a generic-importer
+  mapping); a taxjson.toml that is a directory or unreadable, `work/` or
+  `reports/` that is a file, and `init` onto an existing file now give a
+  one-line error instead of a traceback (`run` refuses before any stage).
+- **Tolerance and threshold flags must be finite and non-negative**
+  (`sanity --tolerance`, `reconcile-slips --tolerance`, `taxjson-t1135
+  --threshold/--detailed-threshold` (> 0), `watch --threshold`).
+  `watch --threshold 0` now means "any move" (it read as 100), and an
+  unreadable or other-version `.watch_state.json` is warned about before
+  the new baseline is recorded.
 
 ## v0.16.0 (2026-09-25)
 

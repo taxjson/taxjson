@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note
+from taxjson.lib.numeric import nonneg_float_arg as _nonneg_float_arg
 from taxjson.lib.pipeline import (income_dating_flags,
                                   option_timing_flags, tt_json_path)
 from taxjson.lib.report_model import (align_columns, fmt_money,
@@ -395,35 +396,53 @@ def load_config(root: Path) -> Dict[str, Any]:
     path = root / "taxjson.toml"
     if not path.exists():
         _die(f"no taxjson.toml in {root}. Run `taxjson init` first.")
-    with path.open("rb") as f:
-        try:
-            cfg = tomllib.load(f)
-            # Account names build filesystem paths (inputs/<name>,
-            # work/<name>_*) and sub-tool argv (--account <name>): a
-            # "../x" name wrote artifacts OUTSIDE the project and a
-            # "-x" name was parsed as a flag (2026-09 security audit).
-            # Checked HERE, not in validate_config, because every
-            # command (not just `run`) derives paths from the names.
-            for _n in (cfg.get("accounts") or {}):
-                if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*",
-                                    str(_n)):
-                    _die(f"[accounts.{_n!r}] is not a valid account "
-                         f"name — use letters, digits, '_', '-' or "
-                         f"'.' (must start with a letter, digit or "
-                         f"'_'); it becomes file and directory names.")
-                if str(_n).upper() == "COMBINED":
-                    # reports/wash_radar_COMBINED.* is the cross-account
-                    # radar: an account of that name had its own radar
-                    # replaced by it (S038-10).
-                    _die(f"[accounts.{_n}]: the name COMBINED is "
-                         f"reserved for the cross-account wash radar — "
-                         f"rename the account (and its inputs/{_n}/ "
-                         f"folder).")
-        except Exception as e:
-            _die(f"{path} is not valid TOML: {e}")
+    text = _read_config_text(path)
+    try:
+        cfg = tomllib.loads(text)
+        # Account names build filesystem paths (inputs/<name>,
+        # work/<name>_*) and sub-tool argv (--account <name>): a
+        # "../x" name wrote artifacts OUTSIDE the project and a
+        # "-x" name was parsed as a flag (2026-09 security audit).
+        # Checked HERE, not in validate_config, because every
+        # command (not just `run`) derives paths from the names.
+        for _n in (cfg.get("accounts") or {}):
+            if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*",
+                                str(_n)):
+                _die(f"[accounts.{_n!r}] is not a valid account "
+                     f"name — use letters, digits, '_', '-' or "
+                     f"'.' (must start with a letter, digit or "
+                     f"'_'); it becomes file and directory names.")
+            if str(_n).upper() == "COMBINED":
+                # reports/wash_radar_COMBINED.* is the cross-account
+                # radar: an account of that name had its own radar
+                # replaced by it (S038-10).
+                _die(f"[accounts.{_n}]: the name COMBINED is "
+                     f"reserved for the cross-account wash radar — "
+                     f"rename the account (and its inputs/{_n}/ "
+                     f"folder).")
+    except Exception as e:
+        _die(f"{path} is not valid TOML: {e}")
     _refuse_bad_account_types(cfg)
     _normalize_settings(cfg)
     return cfg
+
+
+def _read_config_text(path: Path) -> str:
+    """taxjson.toml's text for tomllib. A directory or unreadable file
+    tracebacked from every command (S040-03); a leading UTF-8 BOM (what
+    Notepad saves) failed as "Invalid statement (at line 1, column 1)"
+    with no hint (S038-04) — it is dropped, as TOML allows no BOM."""
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        _die(f"cannot read {path}: {e.strerror or e}")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        _die(f"{path} is not valid TOML: it is not UTF-8 text ({e}) — "
+             f"save it as UTF-8.")
 
 
 def _normalize_settings(cfg: Dict[str, Any]) -> None:
@@ -2893,6 +2912,21 @@ def cmd_run(args: argparse.Namespace) -> None:
     inputs_dir = root / "inputs"
     cache = root / "work"
     reports_dir = root / "reports"
+    # work/ or reports/ that is a FILE, or a project directory that
+    # cannot be written, tracebacked — reports/ only after every stage
+    # had rewritten work/, leaving the two out of step (S038-17).
+    for _d in (cache, reports_dir):
+        try:
+            _d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError as e:
+            _die(f"cannot use {_d}: "
+                 + ("it exists and is not a directory"
+                    if isinstance(e, FileExistsError) or _d.is_file()
+                    else (e.strerror or str(e)))
+                 + " — nothing was run.")
+        import os as _os_mod
+        if not _os_mod.access(_d, _os_mod.W_OK | _os_mod.X_OK):
+            _die(f"cannot write to {_d} — nothing was run.")
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -9109,7 +9143,7 @@ def _soft_config(root: Path) -> Dict[str, Any]:
     cfg_path = root / "taxjson.toml"
     if cfg_path.exists() and tomllib is not None:
         try:
-            cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8")) or {}
+            cfg = tomllib.loads(_read_config_text(cfg_path)) or {}
         except Exception as e:
             # Soft about a MISSING config only. An existing file that
             # does not parse is a user error to fix, not a reason to
@@ -10490,6 +10524,13 @@ def _radar_engine_args(bases: List[Path],
     return out
 
 
+def _watch_threshold(args: argparse.Namespace) -> float:
+    """--threshold for the harvest dimension; an explicit 0 means "any
+    move" (`or 100.0` turned it into 100, R1-242)."""
+    v = getattr(args, "threshold", None)
+    return 100.0 if v is None else float(v)
+
+
 def cmd_watch(args: argparse.Namespace) -> None:
     """`taxjson watch`: report only what CHANGED since the last watch
     run — new/changed/cleared radar advisories, moved clear dates, and
@@ -10578,8 +10619,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
     changes = _watch.diff_radar(state.get("radar") or {}, cur_radar)
     if harvest_now is not None:
         hch = _watch.diff_harvest(state.get("harvest_now"), harvest_now,
-                                  float(getattr(args, "threshold",
-                                                100.0) or 100.0))
+                                  _watch_threshold(args))
         if hch:
             changes.append(hch)
         saved_harvest = harvest_now
@@ -12383,7 +12423,15 @@ def cmd_init(args: argparse.Namespace) -> None:
     # The positional `path` (if given) overrides the global -C/--dir flag.
     target = getattr(args, "path", None) or args.dir
     root = Path(target).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # An existing FILE, a path under a file, or an unwritable
+        # parent tracebacked (R1-263).
+        _die(f"cannot create the project directory {root}: "
+             + ("a file of that name exists"
+                if isinstance(e, FileExistsError) or root.is_file()
+                else (e.strerror or str(e))))
     cfg = root / "taxjson.toml"
     if cfg.exists() and not args.force:
         _die(f"{cfg} already exists (use --force to overwrite)")
@@ -13014,7 +13062,7 @@ def main() -> None:
                             "pairings come from taxjson.toml: each "
                             "account's `holdings = [...]` (paths of its "
                             "broker positions files)")
-    p_san.add_argument("--tolerance", type=float, default=1e-4,
+    p_san.add_argument("--tolerance", type=_nonneg_float_arg, default=1e-4,
                        help="Quantity tolerance (default: 0.0001)")
     p_san.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
@@ -13048,7 +13096,7 @@ def main() -> None:
                          help="Also watch the harvestable-now loss "
                               "total (runs `taxjson harvest --json`; "
                               "needs a price source)")
-    p_watch.add_argument("--threshold", type=float, default=100.0,
+    p_watch.add_argument("--threshold", type=_nonneg_float_arg, default=100.0,
                          metavar="AMT",
                          help="Report the harvest total only when it "
                               "moves by more than AMT in base currency "
@@ -13308,7 +13356,7 @@ def main() -> None:
                        "(symbol/ticker, quantity/box 16, proceeds/box 21, "
                        "cost/box 20); several (one per broker) are "
                        "reconciled together")
-    p_rec.add_argument("--tolerance", type=float, default=None,
+    p_rec.add_argument("--tolerance", type=_nonneg_float_arg, default=None,
                        help="Absolute per-symbol tolerance (default 1.00)")
     p_rec.add_argument("--json", action="store_true",
                        help="Emit the reconciliation as JSON instead of "

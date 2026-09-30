@@ -100,10 +100,29 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
     out: List[str] = []
     settings = cfg.get("settings") or {}
     if isinstance(settings, dict):
-        v = settings.get("option_buyback_loss_superficial")
-        if v is not None and not isinstance(v, bool):
-            out.append(f"[settings] option_buyback_loss_superficial must "
-                       f"be true or false, unquoted (got {v!r})")
+        # fx_cash_gains = "false" switched the FX-on-cash report ON and
+        # its banner said "= true" (R1-152, R1-261).
+        for key in ("option_buyback_loss_superficial", "fx_cash_gains"):
+            v = settings.get(key)
+            if v is not None and not isinstance(v, bool):
+                out.append(f"[settings] {key} must be true or false, "
+                           f"unquoted (got {v!r})")
+        # Only `run` checked these: option-boundary read a typo'd
+        # "grants" as close timing and advised enabling grant timing,
+        # close-year wrote the typo into the filed-year lock, and a
+        # since of `true` read as year 1 (R1-183).
+        opt = settings.get("option_premium_timing")
+        if opt is not None and (not isinstance(opt, str)
+                                or opt.strip().lower()
+                                not in ("grant", "close")):
+            out.append(f"[settings] option_premium_timing must be "
+                       f"\"grant\" or \"close\" (got {opt!r})")
+        since = settings.get("option_grant_timing_since")
+        if since is not None and not (isinstance(since, int)
+                                      and not isinstance(since, bool)
+                                      and 1990 <= since <= 2100):
+            out.append(f"[settings] option_grant_timing_since must be a "
+                       f"tax year such as 2025, unquoted (got {since!r})")
     return out
 
 
