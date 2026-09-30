@@ -345,23 +345,11 @@ def _num_text(s: str, where: str = '') -> float:
     return float(s.replace(',', ''))
 
 
-def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB') -> List[CorporateAction]:
-    """Extract merger events from an IB Activity Statement CSV.
-
-    `account` is stamped onto every emitted CorporateAction so downstream
-    tools key the right pool (Margin / RRSP / TFSA / LIRA). Defaults to
-    'IB' to keep the historical behaviour for callers that pre-date the
-    multi-account refactor.
-
-    Handles two flavours of noise that show up in real statements:
-
-    * `Code=Ca` rows are IB cancellations — we drop them so they don't
-      double-count.
-    * Cross-listing journals (a CAD-side merger entry immediately followed
-      by a 1-for-1 CAD→US "Merged(Acquisition) WITH ..." that's really
-      just IB moving the position from the .TO sub-account to the .US one)
-      get collapsed into the original SSL→RGLD.US event.
-    """
+def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
+    """The Corporate Actions rows of one IB statement, sorted into merger
+    rows, spin-off rows (and their `Ca` cancellations) and merger-shaped
+    rows nothing understands. Every row carries the statement's account
+    (`stmt`) so rows read from another statement keep their own."""
     rows: List[Dict[str, str]] = []
     # Spin-off rows and their `Ca` cancellations, matched below (a
     # cancelled spin-off must not be offered for election).
@@ -370,7 +358,7 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB') -> List[Corp
     # Merger-shaped rows neither regex understands (see _IB_ANY_MERGER_RE).
     odd_rows: List[Dict[str, Any]] = []
     statement_account = ''
-    with csv_path.open('r', encoding='utf-8') as f:
+    with Path(csv_path).open('r', encoding='utf-8') as f:
         reader = csv.reader(f)
         header_map: Dict[str, int] = {}
         info_header: Dict[str, int] = {}
@@ -441,10 +429,85 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB') -> List[Corp
                 odd_rows.append(rec)
                 continue
             rows.append(rec)
+    for r in rows + spin_rows + spin_cancels + odd_rows:
+        r['stmt'] = statement_account
+    return {'rows': rows, 'spin_rows': spin_rows,
+            'spin_cancels': spin_cancels, 'odd_rows': odd_rows,
+            'statement_account': statement_account}
+
+
+def _ib_dt_days(a: str, b: str) -> int:
+    return _rbc_days(a[:10], b[:10])
+
+
+def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
+                               context_files: Optional[List[Path]] = None,
+                               ) -> List[CorporateAction]:
+    """Extract merger events from an IB Activity Statement CSV.
+
+    `account` is stamped onto every emitted CorporateAction so downstream
+    tools key the right pool (Margin / RRSP / TFSA / LIRA). Defaults to
+    'IB' to keep the historical behaviour for callers that pre-date the
+    multi-account refactor.
+
+    `context_files` — every statement of the account (this one
+    included). A merger whose out-leg and in-leg sit in two statements
+    (a year-end event split across the yearly downloads) is paired
+    across them; it used to be dropped from both with no warning (audit
+    S020-00). An event is emitted by each statement holding one of its
+    legs; `combine_broker_copies` keeps it once.
+
+    Handles two flavours of noise that show up in real statements:
+
+    * `Code=Ca` rows are IB cancellations — we drop them so they don't
+      double-count.
+    * Cross-listing journals (a CAD-side merger entry immediately followed
+      by a 1-for-1 CAD→US "Merged(Acquisition) WITH ..." that's really
+      just IB moving the position from the .TO sub-account to the .US one)
+      get collapsed into the original SSL→RGLD.US event.
+    """
+    own = _read_ib_corporate_actions(csv_path)
+    spin_rows, spin_cancels = own['spin_rows'], own['spin_cancels']
+    odd_rows = own['odd_rows']
+    statement_account = own['statement_account']
+
+    # Merger rows of EVERY statement of the account; a row the
+    # statements repeat (overlapping downloads) counts once — the most
+    # copies any one statement holds.
+    def _ident(r) -> tuple:
+        return (r['stmt'], r['account'], r['currency'], r['date_time'],
+                r['description'], r['quantity'], r['value'])
+    own_ids = {_ident(r) for r in own['rows']}
+    union: Dict[tuple, Tuple[Dict[str, Any], int]] = {}
+    sources = [own['rows']]
+    for other in context_files or []:
+        if Path(other).resolve() == Path(csv_path).resolve():
+            continue
+        try:
+            sources.append(_read_ib_corporate_actions(Path(other))['rows'])
+        except (OSError, csv.Error, UnicodeError, ValueError):
+            continue
+    for src_rows in sources:
+        counts: Dict[tuple, int] = defaultdict(int)
+        firsts: Dict[tuple, Dict[str, Any]] = {}
+        for r in src_rows:
+            i = _ident(r)
+            counts[i] += 1
+            firsts.setdefault(i, r)
+        for i, n in counts.items():
+            if i not in union or union[i][1] < n:
+                union[i] = (firsts[i], n)
+    rows = []
+    for i, (r, n) in union.items():
+        for _ in range(n):
+            rows.append(dict(r, own=i in own_ids))
 
     def _acct(recs) -> str:
         per_row = sorted({r.get('account') or '' for r in recs} - {''})
-        return ','.join(per_row) if per_row else statement_account
+        if per_row:
+            return ','.join(per_row)
+        stmts = sorted({r.get('stmt') or '' for r in recs} - {''})
+        return ','.join(stmts) if stmts else statement_account
 
     # Group rows that describe the same merger. IB emits two rows per
     # event but uses inconsistent target tickers in each leg's parenthetical
@@ -494,75 +557,127 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB') -> List[Corp
         key = (r['date_time'], src_isin, with_isin)
         bucket = grouped.setdefault(key, {
             'date_time': r['date_time'],
-            'descriptions': [],
-            # OUT-leg currency = disposition currency (drives source suffix);
-            # IN-leg currency = acquisition currency (drives target suffix).
-            # We track both because cross-listing chains can land them in
-            # different currencies (CAD out, USD in for the final-leg link).
-            'currency': r['currency'],
-            'tgt_currency': r['currency'],
             'src_sym': src_sym, 'src_isin': src_isin,
             'with_isin': with_isin,
-            # Resolved when we see the in-leg (positive qty) — the in-leg's
-            # parenthetical names the real acquirer; the out-leg's names
-            # the source again, which we don't want as the target.
-            'tgt_sym': None, 'tgt_isin': None,
             'ratio_new': float(ratio_new), 'ratio_old': float(ratio_old),
-            'qty_out': 0.0, 'qty_in': 0.0,
-            'val_out': 0.0, 'val_in': 0.0, 'recs': [],
+            'legs': [],
         })
-        bucket['descriptions'].append(r['description'])
-        bucket['recs'].append(r)
-        qty = _f(r['quantity'])
-        val = _f(r['value'])
-        if qty < 0:
-            bucket['qty_out'] += qty
-            bucket['val_out'] += val
-            # The out-leg's currency is the disposition currency.
-            bucket['currency'] = r['currency']
-        else:
-            bucket['qty_in'] += qty
-            bucket['val_in'] += val
-            # The in-leg names the real target.
-            bucket['tgt_sym'] = tgt_sym
-            bucket['tgt_isin'] = tgt_isin
-            bucket['tgt_currency'] = r['currency']
+        bucket['legs'].append({
+            'rec': r, 'qty': _f(r['quantity']), 'val': _f(r['value']),
+            'sym': tgt_sym, 'isin': tgt_isin, 'currency': r['currency'],
+        })
+
+    def _side(b) -> str:
+        outs = any(l['qty'] < 0 for l in b['legs'])
+        ins = any(l['qty'] > 0 for l in b['legs'])
+        return 'full' if outs and ins else ('out' if outs else 'in')
+
+    # Legs of one merger stamped on different Date/Times (or reported in
+    # two statements a day apart) formed two half-events that were both
+    # skipped silently (audit S072-23): an out-only half pairs with the
+    # nearest in-only half of the same source and counterparty within a
+    # week.
+    buckets = list(grouped.values())
+    for b in [b for b in buckets if _side(b) == 'out']:
+        cands = [c for c in buckets
+                 if c is not b and not c.get('merged') and _side(c) == 'in'
+                 and (c['src_isin'], c['with_isin'])
+                 == (b['src_isin'], b['with_isin'])
+                 and _ib_dt_days(c['date_time'], b['date_time']) <= 7]
+        if not cands:
+            continue
+        c = min(cands, key=lambda c: (_ib_dt_days(c['date_time'],
+                                                  b['date_time']),
+                                      c['date_time']))
+        c['merged'] = True
+        b['legs'].extend(c['legs'])
+        b['date_time'] = min(b['date_time'], c['date_time'])
+    buckets = [b for b in buckets if not b.get('merged')]
 
     events: List[CorporateAction] = []
-    for bucket in grouped.values():
-        if bucket['qty_out'] == 0 or bucket['qty_in'] == 0:
-            # Half-an-event — IB sometimes splits across statements. Skip;
-            # we can't safely emit without both sides.
+    blocked: List[Tuple[str, List[Dict[str, Any]]]] = []
+    for bucket in buckets:
+        recs = [l['rec'] for l in bucket['legs']]
+        if not any(r.get('own') for r in recs):
+            continue                # another statement's event
+        side = _side(bucket)
+        if side != 'full':
+            print(f"warning: IB merger leg(s) "
+                  f"{bucket['legs'][0]['rec']['description'][:100]!r} on "
+                  f"{bucket['date_time'][:10]} have no matching "
+                  f"{'in' if side == 'out' else 'out'}-leg in any statement "
+                  f"of this account — the merger cannot be booked. Add the "
+                  f"statement holding the other leg (IB sometimes reports "
+                  f"it in the next period), or book the exchange by hand "
+                  f"and mark the event `ignore`.", file=sys.stderr)
+            blocked.append(('half', recs))
             continue
-        if not bucket['tgt_isin']:
-            # No in-leg was processed (shouldn't happen given the qty_in
-            # check above, but defensive).
+        src_isin, with_isin = bucket['src_isin'], bucket['with_isin']
+        # A merger of a SHORT position inverts the legs: the positive leg
+        # names the source (the short being removed), the negative one
+        # the acquirer. Read as long it became OLDC -> OLDC with phantom
+        # positions on both tickers (audit S072-24). Refused loudly.
+        if src_isin != with_isin and any(
+                (l['qty'] > 0 and l['isin'] == src_isin)
+                or (l['qty'] < 0 and l['isin'] == with_isin)
+                for l in bucket['legs']):
+            print(f"warning: IB merger "
+                  f"{bucket['legs'][0]['rec']['description'][:100]!r} on "
+                  f"{bucket['date_time'][:10]} is a merger of a SHORT "
+                  f"position — taxjson cannot book it. Record the cover of "
+                  f"the old short and the new short by hand in a .tt file, "
+                  f"then mark the event `ignore`.", file=sys.stderr)
+            blocked.append(('short', recs))
             continue
-        src_suffix = _CURRENCY_SUFFIX.get(bucket['currency'], bucket['currency'])
-        src_symbol = _apply_suffix(bucket['src_sym'], src_suffix)
-        tgt_suffix = _CURRENCY_SUFFIX.get(bucket['tgt_currency'], bucket['tgt_currency'])
-        tgt_symbol = _apply_suffix(bucket['tgt_sym'], tgt_suffix)
-        date_part, _, time_part = bucket['date_time'].partition(',')
-        date = date_part.strip()
-        time = (time_part.strip() or '20:25:00')
-        ev = CorporateAction(
-            date=date, time=time,
-            action_type='merger',
-            source_symbol=src_symbol, source_isin=bucket['src_isin'],
-            target_symbol=tgt_symbol, target_isin=bucket['tgt_isin'],
-            ratio_new=bucket['ratio_new'], ratio_old=bucket['ratio_old'],
-            qty_disposed=abs(bucket['qty_out']),
-            qty_received=abs(bucket['qty_in']),
-            fmv=abs(bucket['val_out']),
-            target_fmv=abs(bucket['val_in']),
-            currency=bucket['currency'],
-            target_currency=bucket['tgt_currency'],
-            account=account,
-            raw_descriptions=bucket['descriptions'],
-            fractional_delivery=True,      # IB delivers real fractions
-            broker_account=_acct(bucket['recs']),
-        )
-        events.append(ev)
+        # The same merger held in TWO listings of the source (TSX and
+        # NYSE lines of one issuer): IB reports each listing's legs in
+        # its own currency. Summed into one event, the other listing's
+        # shares were never converted (audit S020-07) — one event per
+        # listing. A cross-listing journal (CAD out, USD in) is one
+        # listing and stays one event.
+        out_curs = sorted({l['currency'] for l in bucket['legs']
+                           if l['qty'] < 0})
+        in_curs = {l['currency'] for l in bucket['legs'] if l['qty'] > 0}
+        if len(out_curs) > 1 and in_curs <= set(out_curs):
+            parts = [(cur, [l for l in bucket['legs']
+                            if l['currency'] == cur]) for cur in out_curs]
+        else:
+            parts = [('', bucket['legs'])]
+        for listing_cur, legs in parts:
+            outs = [l for l in legs if l['qty'] < 0]
+            ins = [l for l in legs if l['qty'] > 0]
+            if not outs or not ins:
+                blocked.append(('half', [l['rec'] for l in legs]))
+                continue
+            cur = outs[-1]['currency']
+            tgt = ins[-1]
+            src_symbol = _apply_suffix(
+                bucket['src_sym'], _CURRENCY_SUFFIX.get(cur, cur))
+            tgt_symbol = _apply_suffix(
+                tgt['sym'], _CURRENCY_SUFFIX.get(tgt['currency'],
+                                                 tgt['currency']))
+            date_part, _, time_part = bucket['date_time'].partition(',')
+            events.append(CorporateAction(
+                date=date_part.strip(),
+                time=(time_part.strip() or '20:25:00'),
+                action_type='merger',
+                source_symbol=src_symbol,
+                # One id per listing when a merger is split by listing.
+                source_isin=(f"{src_isin}@{listing_cur}" if listing_cur
+                             else src_isin),
+                target_symbol=tgt_symbol, target_isin=tgt['isin'],
+                ratio_new=bucket['ratio_new'], ratio_old=bucket['ratio_old'],
+                qty_disposed=abs(sum(l['qty'] for l in outs)),
+                qty_received=abs(sum(l['qty'] for l in ins)),
+                fmv=abs(sum(l['val'] for l in outs)),
+                target_fmv=abs(sum(l['val'] for l in ins)),
+                currency=cur,
+                target_currency=tgt['currency'],
+                account=account,
+                raw_descriptions=[l['rec']['description'] for l in legs],
+                fractional_delivery=True,      # IB delivers real fractions
+                broker_account=_acct([l['rec'] for l in legs]),
+            ))
 
     # Split-ups: decompose into events the rules already know. The
     # continuing entity (in-leg whose ticker matches the source, else
@@ -571,8 +686,19 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB') -> List[Corp
     # continuing entity. That mirrors the tax shape (Canada: s. 85.1(5)
     # question on the exchange, s. 86.1 question on the distribution).
     for mb in multi_grouped.values():
+        if not any(r.get('own') for r in mb['recs']):
+            continue                    # another statement's event
         if mb['qty_out'] >= 0 or not mb['in_legs']:
-            continue                    # need both sides to emit safely
+            # Need both sides to emit safely — and say so: a silent skip
+            # left the old shares alive and the successors unbooked.
+            print(f"warning: IB split-up {mb['descriptions'][0][:100]!r} "
+                  f"on {mb['date_time'][:10]} has no matching "
+                  f"{'out' if mb['qty_out'] >= 0 else 'in'}-leg in any "
+                  f"statement of this account — it cannot be booked. Add "
+                  f"the statement holding the other leg(s), or book it by "
+                  f"hand and mark the event `ignore`.", file=sys.stderr)
+            blocked.append(('half', mb['recs']))
+            continue
         legs = mb['in_legs']
         cont = next((l for l in legs if l['sym'] == mb['src_sym']), None)
         if cont is None:
@@ -635,7 +761,16 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB') -> List[Corp
     events.extend(_ib_spinoff_events(spin_rows, spin_cancels, account,
                                      _acct))
     events.extend(_ib_unsupported_events(odd_rows, account, _acct))
+    # Half / short mergers: a blocking `unsupported` event (the run stops
+    # until the user books it by hand and marks it `ignore`) — never a
+    # silent skip that leaves the old shares alive.
+    events.extend(_ib_unsupported_events(
+        [r for _why, recs in blocked for r in recs], account, _acct,
+        quiet=True))
     return _collapse_cross_listing_chains(events)
+
+
+parse_ib_corporate_actions.accepts_context = True
 
 
 def _ib_ext(currency: str) -> str:
@@ -695,7 +830,7 @@ def _ib_spinoff_events(spin_rows, spin_cancels, account, acct_of
     return events
 
 
-def _ib_unsupported_events(odd_rows, account, acct_of
+def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
                            ) -> List[CorporateAction]:
     """Merger-shaped IB rows nothing can book (a stock + cash offer, an
     unfamiliar layout). They used to vanish into a .sum NOTE with the
@@ -723,11 +858,13 @@ def _ib_unsupported_events(odd_rows, account, acct_of
             if mt:
                 tgt = f"{_ib_ticker(mt.group(1))}.{_ib_ext(ins[0]['currency'])}"
         date_part, _, time_part = date_time.partition(',')
-        print(f"warning: IB corporate action taxjson cannot book: "
-              f"{head['description'][:120]!r} on {date_part.strip()} — "
-              f"neither the old shares' disposal nor the new position is "
-              f"booked. Record the exchange by hand in a .tt file, then "
-              f"mark the event `ignore`.", file=sys.stderr)
+        if not quiet:
+            print(f"warning: IB corporate action taxjson cannot book: "
+                  f"{head['description'][:120]!r} on {date_part.strip()} "
+                  f"— neither the old shares' disposal nor the new "
+                  f"position is booked. Record the exchange by hand in a "
+                  f".tt file, then mark the event `ignore`.",
+                  file=sys.stderr)
         events.append(CorporateAction(
             date=date_part.strip(), time=(time_part.strip() or '20:25:00'),
             action_type='unsupported',
@@ -815,9 +952,18 @@ def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[Corpor
     for ev in events:
         by_src_sym.setdefault(ev.source_symbol, []).append(ev)
 
-    out: List[CorporateAction] = []
+    # Walk chain ROOTS first (events whose source is no other event's
+    # target), then the rest; output keeps the input order. Walking in
+    # row order let a journal hop listed before its merger (IB groups
+    # Corporate Actions by currency) be emitted standalone AND folded
+    # into the merger (audit S074-03).
+    targets = {ev.target_symbol for ev in events}
+    walk = sorted(range(len(events)),
+                  key=lambda i: (events[i].source_symbol in targets, i))
+    placed: Dict[int, CorporateAction] = {}
     consumed: set = set()
-    for ev in events:
+    for idx in walk:
+        ev = events[idx]
         if ev.event_id in consumed:
             continue
         # Walk every applicable 1-for-1 hop downstream of ev's target.
@@ -852,7 +998,7 @@ def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[Corpor
             current = chain
 
         if current is ev:
-            out.append(ev)
+            placed[idx] = ev
         else:
             collapsed = CorporateAction(
                 date=ev.date, time=ev.time,
@@ -893,9 +1039,11 @@ def _collapse_cross_listing_chains(events: List[CorporateAction]) -> List[Corpor
                 account=ev.account,
                 raw_descriptions=descriptions,
             )
-            out.append(collapsed)
+            placed[idx] = collapsed
 
-    return out
+    return [placed[i] for i in sorted(placed)
+            if placed[i].event_id not in consumed
+            or placed[i] is not events[i]]
 
 
 # --- Questrade extractor ---------------------------------------------------

@@ -576,5 +576,120 @@ class TestQuestradeSpinoffSymbols(unittest.TestCase):
         self.assertNotIn('SKIPPED', err)
 
 
+# ==================================================================== IB
+_IB_HEAD = ('Statement,Header,Field Name,Field Value\n'
+            'Statement,Data,BrokerName,Interactive Brokers\n'
+            'Account Information,Header,Field Name,Field Value\n'
+            'Account Information,Data,Account,U5550001\n'  # pii-ok
+            'Account Information,Data,Base Currency,CAD\n')
+_IB_CA = ('Corporate Actions,Header,Asset Category,Currency,Report Date,'
+          'Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,'
+          'Code\n')
+_MRG = ('SSX(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
+        '({t}, {n}, {i})')
+
+
+def _ib_ca(desc, qty, value, when='2025-10-22, 20:25:00', cur='CAD',
+           report=None):
+    return (f'Corporate Actions,Data,Stocks,{cur},{report or when[:10]},'
+            f'"{when}","{desc}",{qty},0,{value},0,\n')
+
+
+_OUT = _MRG.format(t='SSX', n='SSX GOLD LTD', i='CA0000000001')
+_IN = _MRG.format(t='RGX', n='RGX GOLD INC', i='US0000000002')
+
+
+def _ib_events(tmp, *bodies):
+    from taxjson.bin.taxjson_corp_actions import extract_events
+    from taxjson.lib.corp_actions import (combine_broker_copies,
+                                          parse_ib_corporate_actions)
+    paths = []
+    for i, b in enumerate(bodies):
+        p = Path(tmp) / f"ib_{i}.csv"
+        p.write_text(_IB_HEAD + _IB_CA + ''.join(b))
+        paths.append(p)
+    evs, err = _quiet(extract_events, parse_ib_corporate_actions, paths,
+                      'margin')
+    return combine_broker_copies(evs, stream=io.StringIO()), err
+
+
+class TestIbMergers(unittest.TestCase):
+    def test_s020_00_legs_in_two_statements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            one, _ = _ib_events(tmp, [_ib_ca(_OUT, -1600, -25920),
+                                      _ib_ca(_IN, 100, 25840, cur='USD')])
+        with tempfile.TemporaryDirectory() as tmp:
+            split, err = _ib_events(
+                tmp, [_ib_ca(_OUT, -1600, -25920)],
+                [_ib_ca(_IN, 100, 25840, cur='USD',
+                        report='2026-01-02')])
+        self.assertEqual(len(one), 1)
+        self.assertEqual([(e.event_id, e.qty_disposed, e.qty_received)
+                          for e in split],
+                         [(one[0].event_id, 1600.0, 100.0)], err)
+
+    def test_s072_23_legs_stamped_a_day_apart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, [
+                _ib_ca(_OUT, -1600, -25920),
+                _ib_ca(_IN, 100, 25840, cur='USD',
+                       when='2025-10-23, 20:25:00')])
+        self.assertEqual([(e.action_type, e.source_symbol,
+                           e.qty_disposed, e.qty_received) for e in evs],
+                         [('merger', 'SSX.TO', 1600.0, 100.0)], err)
+
+    def test_half_event_blocks_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, [_ib_ca(_OUT, -1600, -25920)])
+        self.assertEqual([e.action_type for e in evs], ['unsupported'])
+        self.assertIn('no matching', err)
+
+    def test_s020_07_two_listings_two_events(self):
+        rows = [
+            _ib_ca(_MRG.format(t='RGX.CAD', n='RGX GOLD INC',
+                               i='US0000000002'), 100, 25840),
+            _ib_ca(_OUT, -1600, -25920),
+            _ib_ca(_MRG.format(t='RGX', n='RGX GOLD INC', i='US0000000002'),
+                   50, 9275, cur='USD'),
+            _ib_ca(_OUT, -800, -9300, cur='USD'),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, rows)
+        got = sorted((e.source_symbol, e.target_symbol, e.qty_disposed,
+                      e.qty_received) for e in evs)
+        self.assertEqual(got, [('SSX.TO', 'RGX.CAD.TO', 1600.0, 100.0),
+                               ('SSX.US', 'RGX.US', 800.0, 50.0)], err)
+        self.assertEqual(len({e.event_id for e in evs}), 2)
+
+    def test_s072_24_short_merger_refused(self):
+        d = ('OLDC(CA0000000301) Merged(Acquisition) WITH CA0000000302 '
+             '1 for 1 ({t}, {n}, {i})')
+        rows = [_ib_ca(d.format(t='OLDC', n='OLDC CORP', i='CA0000000301'),
+                       100, 2000),
+                _ib_ca(d.format(t='NEWC', n='NEWC CORP', i='CA0000000302'),
+                       -100, -2000)]
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, rows)
+        self.assertEqual([e.action_type for e in evs], ['unsupported'])
+        self.assertIn('SHORT', err)
+
+    def test_s074_03_hop_listed_first_collapses_once(self):
+        hop = ('RGX.CAD(US0000000002) Merged(Acquisition) WITH US0000000002 '
+               '1 for 1 ({t}, RGX GOLD INC, US0000000002)')
+        merger = [_ib_ca(_MRG.format(t='RGX.CAD', n='RGX GOLD INC',
+                                     i='US0000000002'), 100, 25840),
+                  _ib_ca(_OUT, -1600, -25920)]
+        journal = [_ib_ca(hop.format(t='RGX.CAD'), -100, -25840,
+                          when='2025-10-28, 20:25:00'),
+                   _ib_ca(hop.format(t='RGX'), 100, 18500, cur='USD',
+                          when='2025-10-28, 20:25:00')]
+        for rows in (merger + journal, journal + merger,
+                     list(reversed(merger + journal))):
+            with tempfile.TemporaryDirectory() as tmp:
+                evs, err = _ib_events(tmp, rows)
+            self.assertEqual([(e.source_symbol, e.target_symbol)
+                              for e in evs], [('SSX.TO', 'RGX.US')], err)
+
+
 if __name__ == "__main__":
     unittest.main()

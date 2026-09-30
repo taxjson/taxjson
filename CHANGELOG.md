@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **IB mergers are never dropped half-way.** A merger whose out-leg and
+  in-leg sit in two statements (a year-end event split across yearly
+  downloads) or carry Date/Times a day apart was skipped with no warning:
+  the old shares stayed and the new ones never arrived. The legs are now
+  paired across all of the account's statements and within a week; a
+  leg with no partner stops the run as an unsupported event naming it.
+  A merger held in both the TSX and NYSE listings becomes one event per
+  listing (the second listing's shares were never converted), a merger
+  of a short position is refused instead of booked as `OLD -> OLD`, and
+  a cross-listing journal listed before its merger is folded once
+  instead of also becoming its own election.
 - **Questrade spin-offs land on the parser's symbols.** A dotted target
   (`ABC.WS`, a class share) was left without its market suffix and a
   Venture `.VN` listing became `ABC.VN.TO`, so the spun-off lot and its
