@@ -917,8 +917,10 @@ FILE` writes importable rows, `--json` the raw report.
   included, is converted at that closing leg's rate and shown the way the
   broker's T5008 shows it — a gain as proceeds with ACB 0, a loss as ACB
   with proceeds 0, no separate outlays.
-  Sell-side commissions are re-split into the outlays column (gain
-  unchanged), and every row foots — proceeds − ACB − outlays = the allowed
+  Sell-side commissions on long sales are re-split into the outlays
+  column (gain unchanged); a written option's premium (and a short sale's
+  proceeds) is shown NET of the opening commission with no outlay — same
+  gain, slightly lower proceeds than a broker slip. Every row foots — proceeds − ACB − outlays = the allowed
   gain: a superficial loss denied on the row shows as an ACB reduced by the
   denial, noted per row (the denied amount goes onto the replacement
   property's ACB; a registered-account denial is noted as permanent).
