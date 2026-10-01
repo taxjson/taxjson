@@ -18,7 +18,7 @@ from pathlib import Path
 from taxjson.lib.brokerages.rbc_direct import (
     RbcBrokerage, RbcFormatError, read_rbc_rows, rbc_number)
 from taxjson.lib.corp_actions import (
-    is_rbc_cil_row, parse_rbc_corporate_actions, pair_rbc_reorganizations)
+    parse_rbc_corporate_actions, pair_rbc_reorganizations)
 
 REPO = Path(__file__).resolve().parent.parent
 HDR = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price",'
@@ -298,9 +298,17 @@ class TestNamesAreNotIncome(unittest.TestCase):
         self.assertIn('never moves shares', str(cm.exception))
 
     def test_cash_in_lieu_of_dividend_is_income_not_cil(self):
-        self.assertFalse(is_rbc_cil_row("Dividends", "XYZ CASH IN LIEU OF DIVIDEND"))
-        self.assertTrue(is_rbc_cil_row("Dividends",
-                                       "XYZ CASH IN LIEU OF FRAC SHARES"))
+        from taxjson.lib.brokerages.rbc_direct import (classify_rbc_row,
+                                                       read_rbc_rows)
+        for desc, want in (("XYZ CASH IN LIEU OF DIVIDEND", "dividend"),
+                           ("XYZ CASH IN LIEU OF FRAC SHARES", "cil")):
+            with tempfile.TemporaryDirectory() as tmp:
+                p = Path(tmp) / "rbc.csv"
+                p.write_text(HDR + row("March 15, 2024", "Dividends",
+                                       "XYZ", "XYZ CORP", "", "", "5.00",
+                                       "CAD", desc))
+                (r,) = read_rbc_rows(p).rows
+            self.assertEqual(classify_rbc_row(r), want, desc)
         txs, _, _ = parse(row("March 15, 2024", "Dividends", "XYZ", "XYZ CORP", "",
                               "", "5.00", "CAD", "XYZ CORP CASH IN LIEU OF DIVIDEND"))
         self.assertEqual([t['action'] for t in txs], ['DIVIDEND'])

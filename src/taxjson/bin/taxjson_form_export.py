@@ -85,8 +85,11 @@ def load_json(path: Path) -> Any:
     # file (R1-277), a bare array is a transaction list and any other
     # non-object is refused instead of an AttributeError traceback
     # (audit S079-11). InputFileError is a ValueError.
-    from taxjson.lib.json_input import read_json_doc
-    return read_json_doc(path)
+    from taxjson.lib.json_input import read_json_doc, require_gains_doc
+    # A document with no 'transactions' list, or a pre-gains stage file
+    # (work/<acct>_base.json), rendered a $0 Schedule 3 at exit 0
+    # (S033-01).
+    return require_gains_doc(read_json_doc(path), path)
 
 
 def load_manual_rows(paths: List[Path], year: Optional[int],
@@ -246,15 +249,22 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             desc += " (option)"
         if direction == "SHORT":
             desc += " (short sale)"
+        # Every row FOOTS: (h) = (d) - (e) + (g) on the rounded cells,
+        # (d) and (e) as the 1099-B reports them. Rounding the four
+        # independently left rows (and the part totals, and the TXF
+        # that carries only d/e/g) off by cents (S032-16); the engine
+        # drift check above still compares the unrounded gain.
+        _d, _e = round(proceeds, 2) + 0.0, round(cost, 2) + 0.0
+        _g = round(adj, 2) if code else 0.0
         parts[part].append({
             "description": desc,
             "date_acquired": acquired,
             "date_sold": sold,
-            "proceeds": round(proceeds, 2),
-            "cost": round(cost, 2),
+            "proceeds": _d,
+            "cost": _e,
             "code": code,
-            "adjustment": round(adj, 2) if code else 0.0,
-            "gain": round(gain, 2),
+            "adjustment": _g,
+            "gain": round(_d - _e + _g, 2) + 0.0,
             "account": e.get("account") or "",
         })
     if drift_warned:
@@ -334,7 +344,7 @@ def build_txf(rep_8949: Dict[str, Any], box: str) -> str:
 # ---------------------------------------------------------------- schedule 3
 
 # Schedule 3 routes each disposition by PROPERTY TYPE (2025 form, Part 3;
-# T4037 "Capital Gains" chapter 4):
+# T4037 "Capital Gains", Chapter 2 "Completing Schedule 3", lines 4/6/7):
 #   line 4  publicly traded shares, mutual fund units, ...   13199 / 13200
 #   line 6  bonds, debentures, promissory notes and other     15199 / 15300
 #           similar properties — T4037: "Other properties
@@ -433,7 +443,8 @@ def build_schedule3(entries: List[Dict[str, Any]],
             "symbol": symbol, "units": 0.0, "acq_year": None,
             "proceeds": 0.0, "outlays": 0.0, "gain": 0.0,
             "denied": 0.0, "perm_denied": 0.0, "short": False,
-            "classes": set(), "n": 0,
+            "classes": set(), "n": 0, "grant_units": 0.0,
+            "short_close_units": 0.0,
         })
         rec["classes"].add(pclass)
         rec["n"] += 1
@@ -462,14 +473,31 @@ def build_schedule3(entries: List[Dict[str, Any]],
             # brought in, ACB = what covering cost — so the fields swap
             # as they un-negate (the ACB itself is derived below).
             rec["short"] = True
-            rec["proceeds"] += abs(cost)
+            _sold = -cost           # what the short sale brought in (net)
+            if _sold >= 0:
+                rec["proceeds"] += _sold
+            else:
+                # A write for a net DEBIT (commission above the premium):
+                # abs() turned the debit into proceeds and invented an ACB
+                # of twice it (S032-19). Nothing was received: the debit
+                # is an outlay, the ACB (the cover) is what it cost.
+                rec["outlays"] += -_sold
         else:
             # taxjson proceeds are net of sell-side costs; Schedule 3 wants
             # them split back out. gain = (net + outlays) - acb - outlays
             # stays identical.
             rec["proceeds"] += proceeds + outlays
             rec["outlays"] += outlays
-        rec["units"] += qty
+        # Grant timing books a written option twice — the WRITE and its
+        # buy-back — while the contracts were disposed of once: count
+        # them once (S003-04, S033-02; as reconcile-slips, R1-18). A
+        # write still open (or closed next year) counts at the write.
+        if e.get("grant"):
+            rec["grant_units"] += qty
+        else:
+            if direction == "SHORT":
+                rec["short_close_units"] += qty
+            rec["units"] += qty
         rec["gain"] += gain
         rec["denied"] += float(e.get("disallowed_amount") or 0.0)
         rec["perm_denied"] += float(e.get("permanently_disallowed") or 0.0)
@@ -483,6 +511,7 @@ def build_schedule3(entries: List[Dict[str, Any]],
     for (lkey, symbol) in sorted(recs, key=lambda k: (
             _LINE_ORDER.index(k[0]), k[1])):
         r = recs[(lkey, symbol)]
+        r["units"] += max(0.0, r["grant_units"] - r["short_close_units"])
         spec = schedule3_line(lkey, year)
         notes = []
         _perm = r["perm_denied"]
@@ -495,9 +524,15 @@ def build_schedule3(entries: List[Dict[str, Any]],
             # A registered-account acquisition denies for GOOD — there
             # is no ACB anywhere to bump; the old single note told
             # users to add it to a future rebuy's ACB (2026-09 audit).
+            # An affiliated person's purchase is permanent for THIS
+            # return too, but that person adds it to their own ACB
+            # (s.53(1)(f)) — the note no longer says nobody does
+            # (S033-03).
             notes.append(f"superficial loss {_perm:,.2f} PERMANENTLY "
-                         f"denied (registered-account acquisition — "
-                         f"no ACB addition)")
+                         f"denied (replacement in a registered account "
+                         f"or bought by an affiliated person — no ACB "
+                         f"addition on this return; an affiliated "
+                         f"person adds it to their own ACB)")
         if "futures" in r["classes"]:
             notes.append("futures / option on futures — reported with "
                          "the other properties (options, T4037)"
@@ -505,7 +540,8 @@ def build_schedule3(entries: List[Dict[str, Any]],
                             "loss as ACB), not the notional"
                             if is_plain_future(symbol) else ""))
         if r["short"]:
-            notes.append("includes short position(s) — |amounts| shown")
+            notes.append("includes short position(s) — PROCEEDS is the "
+                         "short sale or write, ACB the cover")
         # `+ 0.0` turns a rounded -0.0 into 0.0 (no "-0.00" cells).
         proceeds = round(r["proceeds"], 2) + 0.0
         outlays = round(r["outlays"], 2) + 0.0
@@ -518,7 +554,9 @@ def build_schedule3(entries: List[Dict[str, Any]],
             "proceeds_line": spec["proceeds_code"],
             "gain_line": spec["gain_code"],
             "property": pclass,
-            "units": round(r["units"], 4),
+            # Full precision (a crypto unit count is not money): 4 dp
+            # showed a 0.00003 BTC sale as 0 units (S032-21).
+            "units": round(r["units"], 8),
             "acq_year": r["acq_year"] or "",
             "proceeds": proceeds,
             # The footing ACB: proceeds − outlays − allowed gain. For a
@@ -676,7 +714,8 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
         lines.append("")
     for ln in by_line:
         lines.append(f"{ln['title'].upper()} — {ln['label']}")
-        table = [(f"{r['units']:,.4f}".rstrip("0").rstrip("."), r["symbol"],
+        table = [(f"{r['units']:,.8f}".rstrip("0").rstrip(".") or "0",
+                  r["symbol"],
                   str(r["acq_year"]), f"{r['proceeds']:,.2f}",
                   f"{r['acb']:,.2f}", f"{r['outlays']:,.2f}",
                   f"{r['gain']:,.2f}", r["notes"])
@@ -693,10 +732,12 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
     lines.append("  - Each disposition is on the line for its property "
                  "type: shares and fund units on 13199/13200; options, "
                  "futures and other properties on 15199/15300 (T4037); "
+                 # The same routing the rows use (S032-23): a second,
+                 # separate year test could contradict them.
                  + ("crypto-assets on 15200/15301."
-                    if (year or 2025) >= 2025 else
-                    "crypto-assets with the other properties "
-                    "(15199/15300) for this year."))
+                    if schedule3_line("crypto", year)["key"] == "crypto"
+                    else "crypto-assets with the other properties "
+                         "(15199/15300) for this year."))
     lines.append("  - GAIN(LOSS) is the ALLOWED amount. Every row foots: "
                  "PROCEEDS − ACB − OUTLAYS = GAIN(LOSS); where a "
                  "superficial loss was denied the ACB shown is reduced "
@@ -721,6 +762,22 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
 
 
 def write_csv(rep: Dict[str, Any], path: Path) -> None:
+    """Write through `<path>.part` and replace, as the TXF --out does: a
+    failed write left a truncated CSV in place of the good one
+    (S032-24)."""
+    tmp = path.with_name(path.name + ".part")
+    try:
+        _write_csv(rep, tmp)
+        tmp.replace(path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _write_csv(rep: Dict[str, Any], path: Path) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         if rep["form"] == "8949":
@@ -854,6 +911,33 @@ def _files_date_basis(paths: List[Path]) -> Optional[str]:
     return seen.pop() if seen else None
 
 
+def _home_ccy(args) -> str:
+    from taxjson.lib.country import home_currency
+    return home_currency(args.country) if args.country else (
+        "USD" if args.form in ("8949", "txf") else "CAD")
+
+
+def _check_currency(paths: List[Path], base: str) -> None:
+    """Refuse gains rows in another currency than the export's: the
+    native work/<acct>_raw_gains.json sits beside the converted file
+    and summed USD, CAD and GBP under a CAD label (S032-13)."""
+    base = (base or "").upper()
+    for p in paths:
+        other: Dict[str, int] = {}
+        for e in load_json(p).get("transactions") or []:
+            c = str(e.get("currency") or "").upper()
+            if c and c != base and e.get("action") not in _INCOME_ACTIONS:
+                other[c] = other.get(c, 0) + 1
+        if other:
+            got = ", ".join(f"{n} {c}" for c, n in sorted(other.items()))
+            print(f"taxjson-form-export: {p}: dispositions in another "
+                  f"currency than {base} ({got} row(s)) — pass the "
+                  f"converted <account>_gains(_wash).json, not the native "
+                  f"*_raw_gains.json (`taxjson form-export` does)",
+                  file=sys.stderr)
+            raise SystemExit(2)
+
+
 def _main(args) -> int:
     # Rows are picked by the date the gains files were scoped on: an
     # explicit tax_date different from the country default dropped a
@@ -866,6 +950,8 @@ def _main(args) -> int:
     else:
         date_key = "date" if args.form in ("8949", "txf") else "date_settle"
     _crypto = {p.resolve() for p in args.crypto}
+    _check_currency(list(args.files) + list(args.crypto),
+                    args.base_currency or _home_ccy(args))
     entries, tainted = load_dispositions(
         [p for p in args.files if p.resolve() not in _crypto],
         args.year, date_key)

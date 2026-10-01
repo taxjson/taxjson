@@ -1051,7 +1051,9 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
     account's .sum — until a value is set (2026-09 audit: it was silent
     after the prompt). Registered accounts: no tax effect, no warning."""
     import json as _json
-    from taxjson.lib.corp_actions import (zero_value_merger_rows,
+    from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT,
+                                          zero_basis_rollover_rows,
+                                          zero_value_merger_rows,
                                           zero_value_spinoff_rows)
     diag = cache / f"{name}_corp_spinoff_value.diag"
     lines: List[str] = []
@@ -1085,6 +1087,19 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"value: taxjson elect {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
+            # An s.86.1 / §355 rollover allocated $0: the parent keeps
+            # its whole cost, the spin-off's sale books the gain
+            # (audits S073-21, S074-04).
+            for r in zero_basis_rollover_rows(rows):
+                eid = r.get("corp_event_id", "?")
+                el = r.get("corp_election")
+                lines.append(
+                    f"warning: {name}: spin-off {r.get('symbol')} on "
+                    f"{r.get('date')} (event {eid}, {el}) is booked with "
+                    f"$0 allocated cost — the parent keeps all of it and "
+                    f"the spin-off's sale books the gain. Set it: taxjson "
+                    f"elect {name} --set {eid}={el} --hint "
+                    f"{ALLOCATED_BASIS_HINT[el]}=<amount>")
     if lines:
         diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
         for ln in lines:
@@ -1977,8 +1992,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # the corp stage was missed).
             # rates dep: a cross-currency exchange's legs are valued
             # at the event-date rate (one fair value for both legs).
+            # ticker_map dep: a temporary code the map now renames is
+            # no longer warned about (S072-03).
             if force or needs_rebuild(out, *csvs, manifest_path,
-                                      src_manifest, rates):
+                                      src_manifest, rates,
+                                      *([ticker_map] if ticker_map
+                                        else [])):
                 print(f"  corp-actions {broker}")
                 cmd = _cmd("taxjson-corp-actions") + [
                     "--account-name", name,
@@ -1987,7 +2006,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--manifest", str(manifest_path),
                     "--rates", str(rates),
                     "--base-currency", base_currency,
-                ]
+                ] + (["--ticker-map", str(ticker_map)] if ticker_map
+                     else [])
                 # Interactive by default: corp-actions prompts for the tax
                 # election (taxable vs rollover) on stderr and reads the
                 # answer from stdin. Without a TTY (or with --no-input) it
@@ -3869,15 +3889,24 @@ def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
     return _resolve_manifest(acct_dir, cache, name, create=False)
 
 
-def _print_elections(name: str, manifest_path: Path) -> int:
-    from taxjson.lib.corp_actions import Manifest
+def _print_elections(name: str, manifest_path: Path,
+                     country: Optional[str] = None) -> int:
+    from taxjson.lib.corp_actions import Manifest, election_keys
     man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
     if not man.records:
         print(f"  {name}: no elections recorded.")
         return 0
+    known = election_keys(country) if country else None
     print(f"  {name}  ({manifest_path}):")
     for eid, r in sorted(man.records.items()):
-        print(f"    [{eid}] {r.election or '(none)'}")
+        # A hand-typed key no rule knows: `taxjson run` refuses it, so
+        # say so here too (audit S072-16 — it was listed as if valid).
+        bad = (f"   <- UNKNOWN election for {country}: `taxjson run` "
+               f"refuses it; fix with `taxjson elect {name} --redo "
+               f"--event {eid}`"
+               if known is not None and r.election
+               and r.election not in known else "")
+        print(f"    [{eid}] {r.election or '(none)'}{bad}")
         if r.summary:
             print(f"        {r.summary}")
         if r.hints:
@@ -4017,7 +4046,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
             return
         print("Corporate-action elections:")
         for name in accounts:
-            _print_elections(name, _manifest_path_for(inputs_dir / name, cache, name))
+            _print_elections(name, _manifest_path_for(inputs_dir / name,
+                                                      cache, name), country)
         print("\nRedo one: `taxjson elect <account> --redo` "
               "(add --event <id> for just one event).")
         return
@@ -4193,11 +4223,21 @@ def cmd_elect(args: argparse.Namespace) -> None:
                   f"{election} at $0 — no income and a $0 cost for the "
                   f"new shares. Every `taxjson run` and the checklist "
                   f"flag it until a value is set.", file=sys.stderr)
+        from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT
+        _ak = ALLOCATED_BASIS_HINT.get(election)
+        if _ak and _ak in hints and abs(hints[_ak]) < 0.005:
+            # The missing hint is refused; an explicit 0 was saved with
+            # no word (audits S073-21, S074-04).
+            print(f"taxjson elect: warning: {_ak}=0 moves NO cost to the "
+                  f"spun-off shares — they book at $0 and the parent "
+                  f"keeps all of it. Enter the allocated amount; every "
+                  f"`taxjson run` and the checklist flag it until then.",
+                  file=sys.stderr)
         return
 
     if not (args.redo or args.reset):
         print("Corporate-action elections:")
-        _print_elections(name, manifest_path)
+        _print_elections(name, manifest_path, country)
         print(f"\nRedo all: `taxjson elect {name} --redo`  |  "
               f"one: add `--event <id>`  |  just clear: `--reset`")
         return
@@ -7433,6 +7473,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
     filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
                     for k in _fkeys}
+    # The RETURN row sums the per-row cents, as filed; the gains files,
+    # wash-sales and audit total the unrounded engine values — a few
+    # cents apart on a large year (R1-166). Shown, not hidden.
+    _engine_gain = round(sum(float(e.get("gain") or 0.0)
+                             for e in _filing_ents), 2)
+    _round_gap = (round(filing_total.get("gain", 0.0) - _engine_gain, 2)
+                  if filing_line_rows else 0.0)
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
     # (T4037) but lives outside the engine's dispositions; show the
     # estimate beside the block when the ledger builds, else a pointer.
@@ -7519,6 +7566,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                        ("parts_8949" if _is_us else "lines"):
                            filing_line_rows,
                        "fx_cash": _fx_note,
+                       "engine_gain_unrounded": _engine_gain,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "run_state_problems": _run_state,
@@ -7600,6 +7648,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   "allowed gain; the disallowed loss moves to the "
                   "replacement shares' basis. Per-sale rows: `taxjson "
                   "form-export`.")
+            if abs(_round_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total gain is "
+                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
+                      f"RETURN row).")
         else:
             print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
@@ -7621,13 +7674,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
                            ["<", ">", ">", ">", ">", ">"], _body, _foot):
                 print(_ln)
             print("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed gain. "
-                  "Short sales are shown as |amounts| and sell-side "
-                  "commissions as outlays, as on the form. Where a "
+                  "A short sale shows what it brought in as PROCEEDS and "
+                  "the cover as ACB, and sell-side commissions are "
+                  "outlays, as on the form. Where a "
                   "superficial loss was DENIED the ACB is REDUCED by it, "
                   "so the gain stays the allowed one; the denied amount "
                   "is added to the ACB of the replacement property "
                   "instead. Per-security rows: `taxjson form-export`; "
                   "per account: `taxjson sum --json`.")
+            if abs(_round_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total gain is "
+                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
+                      f"RETURN row).")
             if _fx_note is not None:
                 print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
                       f"the rows above): net {money(_fx_note['net_gain'])}, "
@@ -10792,7 +10851,9 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         argv += ["--date-basis", tax_date]
     argv += ["--country", _country(settings)]
     if args.tolerance is not None:
-        argv += ["--tolerance", str(args.tolerance)]
+        # One token: '--tolerance -1' read the value as an option
+        # (S036-00).
+        argv.append(f"--tolerance={args.tolerance!r}")
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_reconcile_slips.main(argv))
@@ -12793,24 +12854,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
                "date).")
 
     if getattr(args, "json", False):
-        if len(json_docs) == 1:
-            doc = json_docs[0]
-        else:
-            doc = {"base_currency": base_currency, "country": country,
-                   "events": [e for d in json_docs
-                              for e in d.get("events") or []],
-                   "total_gain": round(sum(d.get("total_gain") or 0.0
-                                           for d in json_docs), 2),
-                   "total_disallowed": round(
-                       sum(d.get("total_disallowed") or 0.0
-                           for d in json_docs), 2),
-                   # Each invocation's reasons: the merged document said
-                   # failed=true without saying why (R1-288).
-                   "reconciliation_failures": [
-                       f for d in json_docs
-                       for f in d.get("reconciliation_failures") or []],
-                   "failed": any(d.get("failed") for d in json_docs)}
-        _json_out(doc)
+        _json_out(_merge_audit_json(json_docs, base_currency, country))
     if _uncovered and not _acct:
         print(f"taxjson audit: WARNING: not audited — no books for "
               f"{', '.join(sorted(set(_uncovered)))}; their dispositions "
@@ -12819,6 +12863,29 @@ def cmd_audit(args: argparse.Namespace) -> None:
         rc = max(rc, 1)
     if rc:
         raise SystemExit(rc)
+
+
+def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
+                      country: str) -> Dict[str, Any]:
+    """One `taxjson audit --json` document from the per-book
+    taxjson-audit runs: events concatenated, totals summed over EVERY
+    book (S026-11 pins it), reconciliation failures kept (they were
+    dropped when two books were merged)."""
+    if len(docs) == 1:
+        return docs[0]
+    from taxjson.bin.taxjson_audit import TOTALS_NOTE
+    return {"base_currency": base_currency, "country": country,
+            "events": [e for d in docs for e in d.get("events") or []],
+            "total_gain": round(sum(float(d.get("total_gain") or 0.0)
+                                    for d in docs), 2),
+            "total_disallowed": round(
+                sum(float(d.get("total_disallowed") or 0.0)
+                    for d in docs), 2),
+            "totals_note": TOTALS_NOTE,
+            "reconciliation_failures": [
+                f for d in docs
+                for f in d.get("reconciliation_failures") or []],
+            "failed": any(d.get("failed") for d in docs)}
 
 
 def cmd_find_missing_history(args: argparse.Namespace) -> None:
@@ -13982,7 +14049,8 @@ def main() -> None:
                        "cost/box 20); several (one per broker) are "
                        "reconciled together")
     p_rec.add_argument("--tolerance", type=_nonneg_float_arg, default=None,
-                       help="Absolute per-symbol tolerance (default 1.00)")
+                       help="Absolute per-symbol tolerance, a number >= 0 "
+                            "(default 1.00)")
     p_rec.add_argument("--json", action="store_true",
                        help="Emit the reconciliation as JSON instead of "
                             "text")
@@ -14142,6 +14210,7 @@ def main() -> None:
                       f"run the commands separately if that was the "
                       f"intent.", file=sys.stderr)
     global _CURRENT_CMD
+    from taxjson.lib.corp_actions import ManifestError
     for seg in segments:
         args = p.parse_args(seg)
         _CURRENT_CMD = next((t for t in seg if t in commands), "")
@@ -14160,6 +14229,10 @@ def main() -> None:
             # next command run.
             if e.code not in (None, 0):
                 raise
+        except ManifestError as e:
+            # A hand-edited elections manifest that does not load: one
+            # line naming the file, never a traceback (audit S072-05).
+            sys.exit(f"taxjson {args.cmd}: error: {e}")
         except subprocess.CalledProcessError as e:
             # A pipeline stage failed. The child's own stderr already
             # explained WHY (run_to_file echoes it) — re-raising the

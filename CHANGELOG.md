@@ -54,6 +54,122 @@
   posting date. `taxjson-fill-crypto` never caches today's still-open
   candle.
 
+- **Corporate-action legs never share a second.** An event stamped
+  23:59:59 (or with no time) put both legs of a taxable exchange on one
+  second, so a same-symbol exchange could pool the new shares before
+  selling the old; event times now leave room for the one-second leg
+  bump (S074-02).
+
+- **A spin-off rollover allocated $0 is loud.** An s.86.1 (Canada) or
+  §355 (US) election with `allocated_acb_cad` / `allocated_acb` = 0 booked
+  the spun-off shares at $0 with the parent keeping its whole cost and no
+  word; `elect --set`, the corp-actions stage, every `taxjson run` and
+  the checklist now flag it (S073-21, S074-04). A US §356 boot merger
+  with no value for the new shares warns that the recognized gain and
+  basis are understated (S073-22).
+- **US mergers and spin-offs: non-recognition is not optional.** The
+  option text no longer offers `taxable_exchange` for a qualifying
+  §368(a) reorganization "you aren't claiming", and the end-of-run
+  FILING REQUIRED reminder no longer fires for `reorg_368`,
+  `reorg_368_boot` or `tax_free_355`: only a significant holder (5% of a
+  public company, 1% of a private one, or a $1M basis) attaches the
+  Reg. §1.368-3 / §1.355-5 statement (S073-00).
+
+- **taxjson-corp-actions reads IB Corporate Actions columns by name.** A
+  header missing a column, or Data rows before any Header, is refused;
+  the fixed-position fallback read Report Date as the event date in IB's
+  consolidated layout or dropped the merger (S072-22). Questrade's
+  `ON 1,500 SHS` reads as 1500 (the ratio showed 150-for-1) (S073-02).
+
+- **RBC: another company's cash in lieu is no longer folded into a
+  reorganization.** A CIL row joins an event only by the same ticker or
+  the company's full name; half the name in common (ALPHA GOLD vs ALPHA
+  RESOURCES) moved the cash into the wrong sale and hid its "NOT booked"
+  warning (S072-01).
+- **RBC spin-off under a temporary code:** the warning names the symbol
+  as booked (`C135859.TO`) with the exact `GLOBAL` line, and stops once
+  ticker.map renames it (`taxjson run` passes the map to the corp-actions
+  stage) (S072-03).
+
+- **A broken elections manifest is a one-line error everywhere.**
+  `taxjson elect` (and every other command) on a manifest that is not
+  UTF-8, not JSON, or not the documented shape (a bare-string record, a
+  list of hints) printed a traceback; `taxjson elect <account>` now marks
+  an election key no rule knows as UNKNOWN (S072-05, S072-16).
+
+- **distributions.map is read strictly.** A per-share amount must be a
+  plain decimal (`nan`, `inf`, `1e309` and `1_0` were accepted) and the
+  date a real `YYYY-MM-DD`; a `0` is a placeholder that is no longer
+  reported as an applied return of capital; a symbol and date entered
+  twice are both applied with a warning and each ADJUST gets its own
+  id; `taxjson-apply-distributions --account` refuses a label no row of
+  the book carries (S025-12/14/16/19/23).
+
+- **Schedule 3 / Form 8949 export:** under grant timing a written option
+  and its buy-back count their contracts once in the units column (5
+  contracts showed 10); crypto unit counts keep full precision (a
+  0.00003 BTC sale showed 0 units); a write for a net debit shows no
+  proceeds and the debit as an outlay (it showed the debit as proceeds
+  and an invented ACB of twice it); a permanently denied superficial loss
+  is worded for an affiliated person's purchase too; the 2025 crypto-line
+  note follows the line routing itself. Form 8949 rows foot — (h) = (d)
+  − (e) + (g) on the rounded cells — so part totals, the printed 8949 and
+  the TXF agree to the cent. The stand-alone `taxjson-form-export`
+  refuses gains rows in another currency (the native `*_raw_gains.json`
+  summed USD and CAD under a CAD label), and `--csv` no longer leaves a
+  truncated file after a failed write. `taxjson sum` FOR THE RETURN says
+  when its cent-rounded rows differ from the gains files' unrounded
+  total.
+- **Stand-alone report tools refuse a non-gains file:** form-export,
+  sum-gains, ccd-gains, leaps-gains and t1135 refuse a JSON with no
+  `transactions` list or a pre-gains stage file (it rendered a $0
+  Schedule 3 / GRAND TOTAL 0.00 at exit 0); `taxjson-gains` (stdin) and
+  `taxjson-merge` refuse a document without the list.
+- **`taxjson audit`:** a grant-timing write is headed WRITE with its
+  premium as proceeds (it read "COVER ... (short)" with proceeds 0.00 and
+  a negative cost); a short's proceeds and cost are shown as filed (the
+  short sale and the cover, not the engine's negated legs); an option's
+  per-share note is "N contracts × 100 sh @ price" (it divided by the
+  contract count); a denial that is partly deferred and partly permanent
+  names both amounts and destinations (the deferred part read as lost);
+  a cross-zero option fill's long close and its grant write are two
+  events (they were summed into one meaningless SELL); a US sale over
+  long- and short-term lots is MIXED with the per-term gains; a `--check`
+  file named twice is read once (every tie-out failed); a saved
+  disposition with no id fails the reconciliation (it was skipped). The
+  totals say they are unrounded engine sums (Schedule 3 rows round to the
+  cent first), and the multi-book `--json` keeps the reconciliation
+  failures.
+- **T1135:** before Dec 31 a "below the threshold" verdict says "so far
+  (books through DATE)" and the checklist keeps the step open (it read
+  "no T1135 required this year" with a green [x] in September); the
+  year-end column is headed with the books' last date while the year is
+  open. Books in another currency than `--base-currency` (a native
+  `_raw.json`, a USD-base book) are refused instead of tested against
+  CAD 100,000 as if they were CAD; a non-CAD `--base-currency` warns.
+  `--threshold` / `--detailed-threshold` must be finite numbers >= 0.
+  `t1135.map` symbols match case-insensitively, and a COUNTRY word that
+  is not an ISO-3 code or CA/EXCLUDE (EXCLUDED, CDN) is ignored with a
+  did-you-mean warning instead of becoming a "country". Crypto rows
+  under 1e-6 units add their cost (as the engine books them). A long
+  option still held after its expiry is named. The report says the
+  test covers the brokerage books only (foreign bank accounts and other
+  property outside them must be added by hand), attributes the $250,000
+  Part A/B line to the T1135 instructions, and `--help` carries the
+  caveats.
+- **reconcile-slips:** a slip whose currency column (T5008 Box 13) names
+  another currency than the books is refused with a message naming Box
+  13 (a USD Webull T5008 gave one MISMATCH per symbol, every amount off
+  by the FX rate); an unreadable cost cell (`50000,00`, `nan`, `1 500.00
+  CAD`) fails the check like an unreadable proceeds or quantity cell
+  (the cost note vanished or came from a partial sum); a directory or a
+  CSV with bytes cp1252 cannot decode is one error line, not a
+  traceback; `--tolerance` must be a finite number >= 0 (nan or a
+  negative turned every symbol into "off by +0.00", and the `taxjson`
+  wrapper forwarded `-inf` as a separate token); `--help` lists the
+  accepted column spellings; a tainted count reads "1", not "1.0". The
+  checklist's T5/T3 step says the slip check is by hand and lists the
+  known reasons divs-sum differs from the slips.
 - **US estimate (experimental): NIIT and the loss carryforward.** The
   up-to-$3,000 capital loss deduction now reduces net investment income
   (Form 8960 line 5a; NIIT was up to $114 too high), and the

@@ -300,11 +300,20 @@ class TestToolInputContract(_Tmp):
         book = self.write("bare.json", [
             _row("2025-01-06", "ENB.TO", 10, -500.0),
             _row("2025-03-03", "ENB.TO", -10, 600.0, commission=9.99)])
+        # The gains-report tools read gains rows: a bare array of them is
+        # accepted, while a stage book (rows without a gain) is refused
+        # since S033-01 (it summed to 0.00 at exit 0).
+        gains = self.write("bare_gains.json", [
+            {"date": "2025-03-03", "date_settle": "2025-03-04",
+             "symbol": "ENB.TO", "qty": -10, "proceeds": 590.01,
+             "cost": 500.0, "gain": 90.01, "direction": "LONG",
+             "commission": 9.99, "fee": 0.0, "currency": "CAD",
+             "account": "margin"}])
         for mod, args in (("taxjson_lint_crosslistings",
                            ["--taxable", book]),
-                          ("taxjson_sum_gains", [book]),
-                          ("taxjson_ccd_gains", [book]),
-                          ("taxjson_leaps_gains", [book])):
+                          ("taxjson_sum_gains", [gains]),
+                          ("taxjson_ccd_gains", [gains]),
+                          ("taxjson_leaps_gains", [gains])):
             with self.subTest(mod=mod):
                 r = _tool(mod, *args)
                 self.assertEqual(r.returncode, 0, r.stderr)
