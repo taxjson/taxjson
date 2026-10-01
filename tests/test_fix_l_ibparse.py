@@ -491,5 +491,178 @@ class TestIbCurrencyTaggedSymbol(unittest.TestCase):
         self.assertNotIn('currency/venue tag', err)
 
 
+# --------------------------------------------- statement hardening (IB)
+CASH_H = 'Cash Report,Header,Currency Summary,Currency,Total,\n'
+FEES_H = 'Fees,Header,Subtitle,Currency,Date,Description,Amount\n'
+
+
+class TestIbSubtotalByCurrencyCell(unittest.TestCase):
+    """S058-03: 'Total' in a Description is not a subtotal."""
+
+    def test_total_return_fund_dividend_is_booked(self):
+        _, txs, _ = _parse_ib(HEAD + _DIV_H + _div(
+            'QZF', 'US0000000QF1', '2025-06-02', 14, rate=0.14).replace(
+            'per Share', 'per Share (Total Return Fund)'))
+        self.assertEqual([t['net_amount'] for t in txs
+                          if t['action'] == 'DIVIDEND'], [14.0])
+
+    def test_totalview_market_data_fee_is_booked(self):
+        _, txs, _ = _parse_ib(HEAD + FEES_H
+                              + 'Fees,Data,Other Fees,USD,2025-03-03,'
+                                'Nasdaq TotalView for Mar 2025,-10\n'
+                              + 'Fees,Data,Total,,,,-10\n')
+        self.assertEqual([t['net_amount'] for t in txs], [10.0])
+
+
+class TestIbUnreadableStatementCells(unittest.TestCase):
+    """S059-14."""
+
+    def test_unreadable_cash_report_total_is_named(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        text = (HEAD + TRADES_H
+                + _trade('QZM', '2025-03-03, 10:00:00', 100, 200, -20000)
+                + CASH_H
+                + 'Cash Report,Data,Trades (Purchase),USD,-20 000.00,\n')
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse_ib(text)
+        self.assertIn("Trades (Purchase) USD '-20 000.00'", str(cm.exception))
+
+    def test_unread_line_that_is_not_reconciled_is_harmless(self):
+        text = (HEAD + TRADES_H
+                + _trade('QZM', '2025-03-03, 10:00:00', 100, 200, -20000)
+                + CASH_H
+                + 'Cash Report,Data,Trades (Purchase),USD,-20000,\n'
+                + 'Cash Report,Data,Starting Cash,USD,1 000,\n')
+        _, txs, _ = _parse_ib(text)
+        self.assertEqual(len(txs), 1)
+
+    def test_unreadable_option_multiplier_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        from test_fix_ibparse import FII_H
+        text = (HEAD + TRADES_H
+                + _trade('QZM 16JAN26 100 C', '2025-03-03, 10:00:00', 1, 2,
+                         -200, cat='Equity and Index Options')
+                + FII_H + 'Financial Instrument Information,Data,Equity '
+                          'and Index Options,QZM 16JAN26 100 C,QZM 16JAN26 '
+                          '100 C,990000077,,QZM,CBOE,1OO,2026-01-16,,C,100,\n')
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse_ib(text)
+        self.assertIn("Multiplier '1OO'", str(cm.exception))
+
+
+class TestIbUnknownRowType(unittest.TestCase):
+    """S060-07: rows typed 'data' (lower case) were skipped unseen."""
+
+    def test_no_data_rows_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        text = _trades(_trade('QZM', '2025-03-03, 10:00:00', 1, 10, -10)
+                       ).replace(',Data,', ',data,')
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse_ib(text)
+        self.assertIn("no 'Data' rows", str(cm.exception))
+
+    def test_some_unknown_rows_are_counted_and_said(self):
+        text = _trades(_trade('QZM', '2025-03-03, 10:00:00', 1, 10, -10),
+                       _trade('QZN', '2025-03-03, 10:00:00', 1, 10, -10
+                              ).replace(',Data,', ',data,'))
+        p, txs, err = _parse_ib(text)
+        self.assertEqual(len(txs), 1)
+        self.assertIn('rows of a type IB does not write', err)
+        self.assertEqual(p._rows_seen,
+                         p._rows_consumed + sum(p._skip_counts.values()))
+
+
+class TestIbFuturesNotional(unittest.TestCase):
+    """G7-3: futures rows have no Cash Report backing; cent tolerance."""
+
+    def _fut(self, proceeds):
+        from test_fix_ibparse import FII_H
+        return (HEAD + TRADES_H
+                + _trade('CLZ5', '2025-10-01, 10:00:00', -1, 57.40237,
+                         proceeds, cat='Futures', code='C')
+                + FII_H + 'Financial Instrument Information,Data,Futures,'
+                          'CLZ5,CL DEC25,990000088,,CL,NYMEX,1000,2025-11-19,'
+                          '202512,,,\n')
+
+    def test_exact_futures_row_is_booked(self):
+        _, txs, _ = _parse_ib(self._fut(57402.37))
+        self.assertEqual(len(txs), 1)
+
+    def test_a_dollar_off_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaises(BrokerageParseError):
+            _parse_ib(self._fut(57403.37))
+
+
+class TestIbLowerCaseCurrency(unittest.TestCase):
+    """S055-17 (IB): 'usd' is USD, not a suffix of its own."""
+
+    def test_lower_case_currency_is_normalized(self):
+        _, txs, err = _parse_ib(_trades(_trade(
+            'QZM', '2025-03-03, 10:00:00', 1, 10, -10, cur='usd')))
+        self.assertEqual((txs[0]['symbol'], txs[0]['currency']),
+                         ('QZM.US', 'USD'))
+        self.assertNotIn('no exchange-suffix mapping', err)
+
+
+class TestIbSecurityNameForTheLint(unittest.TestCase):
+    """S057-24: the lint saw only 'META' on IB rows."""
+
+    def test_cdr_name_reaches_the_lint(self):
+        from test_fix_ibparse import FII_H
+        from taxjson.bin.taxjson_lint_crosslistings import analyze
+        text = (HEAD + TRADES_H
+                + _trade('QZMT', '2025-03-03, 10:00:00', 10, 30, -300,
+                         cur='CAD')
+                + _trade('QZMT', '2025-03-03, 10:00:00', 1, 600, -600)
+                + FII_H
+                + 'Financial Instrument Information,Data,Stocks,QZMT,'
+                  'QZMT PLATFORMS INC-CDR,990000091,CA0000000MT1,,AEQLIT,1,'
+                  ',,COMMON,,\n')
+        _, txs, _ = _parse_ib(text)
+        self.assertEqual(txs[0]['description'], 'QZMT')   # overrides key
+        self.assertEqual(txs[0]['security_name'], 'QZMT PLATFORMS INC-CDR')
+        (f,) = analyze(txs, [], set(), set())
+        self.assertEqual(f['severity'], 'OK')
+
+
+class TestIbCommissionRefundFolds(unittest.TestCase):
+    """R1-58: a refunded commission lowers the trade's cost/outlay."""
+    ADJ_H = ('Commission Adjustments,Header,Currency,Date,Description,'
+             'Amount,Code\n')
+
+    @rule("CA-ACB-COMMREFUND")
+    @rule("US-BASIS-COMMREFUND")
+    def test_refunds_change_the_gain(self):
+        text = (HEAD + TRADES_H
+                + _trade('QZK', '2025-02-03, 10:00:00', 100, 10, -1000,
+                         comm=-5)
+                + _trade('QZK', '2025-05-01, 10:00:00', -100, 11, 1100,
+                         comm=-5, code='C')
+                + self.ADJ_H
+                + 'Commission Adjustments,Data,USD,2025-02-10,'
+                  '"Refund (QZK, 100, 2025-02-03)",4,\n'
+                + 'Commission Adjustments,Data,USD,2025-05-08,'
+                  '"Refund (QZK, -100, 2025-05-01)",2,\n')
+        _, txs, err = _parse_ib(text)
+        self.assertEqual([t['action'] for t in txs], ['BUYSELL', 'BUYSELL'])
+        self.assertEqual([t['net_amount'] for t in txs], [1001.0, 1097.0])
+        self.assertIn('2 commission adjustment(s) folded', err)
+        r = gains_both(_book(txs), year=2025)
+        for c in C.COUNTRIES:
+            with self.subTest(country=c):
+                # 1097 - 1001 (was 1095 - 1005 = 90).
+                self.assertAlmostEqual(r[c]['summary']['total_gain'], 96.0)
+
+    def test_unmatched_refund_stays_a_fee_row(self):
+        _, txs, err = _parse_ib(HEAD + self.ADJ_H
+                                + 'Commission Adjustments,Data,USD,'
+                                  '2026-01-10,"Refund (QZK, 100, 2025-12-29)",'
+                                  '1.25,\n')
+        self.assertEqual([(t['action'], t['net_amount']) for t in txs],
+                         [('FEE', -1.25)])
+        self.assertIn('kept as a FEE row', err)
+
+
 if __name__ == '__main__':
     unittest.main()

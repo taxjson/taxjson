@@ -371,7 +371,9 @@ Comm/Fee, which already includes them (the Cash Report shows
 Commissions + Transaction Fees = the Comm/Fee sum) — the fold this
 item first shipped charged them twice and was removed in the 2026-09
 parse hardening; `Commission Adjustments` refunds
-are negative FEE rows; tender / voluntary-offer journals are netted
+are folded into the trade they name (a lower cost for a purchase,
+higher proceeds for a sale; tax-logic CA-ACB-COMMREFUND), or kept as a
+negative FEE row when that trade is not in the same statement; tender / voluntary-offer journals are netted
 (zero-proceeds round trip = recognized no-op, cash settlement = a
 booked sale with a NOTE; an allocation that delivers ANOTHER security
 is an UNBOOKED warning — book the exchange by hand). Kraken `transfer/transferpeertopeer` is

@@ -92,6 +92,12 @@ class TaxTransaction:
     # CA-DATE-SESSION / US-DATE-SESSION). Evidence only: NOT part of compute_id,
     # left out of to_dict() when empty.
     broker_time: str = ''
+    # The security's name from the broker's instrument list, when the
+    # row's description is only the ticker (IB: "META PLATFORMS INC-CDR"
+    # beside description "META") — read by the cross-listing lint to tell
+    # a CDR or another company from an interlisting (audit S057-24).
+    # Evidence only: NOT part of compute_id, omitted when empty.
+    security_name: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -133,7 +139,7 @@ class TaxTransaction:
 
     def to_dict(self):
         d = asdict(self)
-        for k in INCOME_FACT_FIELDS + ('broker_time',):
+        for k in INCOME_FACT_FIELDS + ('broker_time', 'security_name'):
             if not d.get(k):
                 d.pop(k, None)
         return d
@@ -556,7 +562,8 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'date_settle', 'account', 'type', 'description',
                  'symbol_new', 'corp_event_id', 'corp_election', 'id',
                  'record_date', 'ex_date', 'income_label',
-                 'dealer_country', 'issuer_country', 'broker_time'):
+                 'dealer_country', 'issuer_country', 'broker_time',
+                 'security_name'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]

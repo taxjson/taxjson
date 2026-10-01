@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **IB: a commission refund lowers the trade's cost.** A Commission
+  Adjustments row naming its trade ("Refund (KWEB, 400, 2026-05-13)")
+  is folded into that trade — a refunded purchase commission comes off
+  the ACB, a refunded sale commission off the outlays — instead of a
+  stand-alone FEE row the gains never saw; one whose trade is not in the
+  statement stays a FEE row and is said. tax-logic CA-ACB-COMMREFUND /
+  US-BASIS-COMMREFUND.
+- **IB statement hardening.** A dividend or fee whose description says
+  "Total" (a "Total Return" fund, Nasdaq TotalView) is no longer
+  skipped as a subtotal; an unreadable Cash Report total on a reconciled
+  line, or an unreadable option/futures multiplier, is refused by name;
+  rows of a type IB does not write are counted and said (and a file
+  with no Data rows is refused); futures rows must match qty x price x
+  multiplier to the cent (no Cash Report line backs them); a lower-case
+  currency cell is upper-cased; IB rows carry the instrument's name
+  (`security_name`), so the cross-listing lint recognizes an IB-held
+  CDR.
 - **The foreign return-of-capital citation is ITA s.90(1), not
   s.90(2).** s.90(2) is the foreign-affiliate rule; a portfolio
   holder's foreign dividend is included by s.90(1), and a real

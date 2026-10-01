@@ -421,6 +421,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-02",
                  "Purchase commissions add to the ACB; sale commissions "
                  "are outlays.", cont=True),
+            Rule("CA-ACB-COMMREFUND",
+                 "A commission refunded later (an IB Commission "
+                 "Adjustments row naming the trade) is netted against that "
+                 "trade's commission: a lower ACB for a purchase, a "
+                 "smaller outlay for a sale.", cont=True),
             Rule("CA-ACB-03",
                  "The single pool needs a full `taxjson run` (not "
                  "`--account`, and no elections pending).", cont=True),
@@ -854,6 +859,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-BASIS-03",
                  "Purchase commissions add to basis; sale commissions "
                  "reduce proceeds.", cont=True),
+            Rule("US-BASIS-COMMREFUND",
+                 "A commission refunded later (an IB Commission "
+                 "Adjustments row naming the trade) is netted against that "
+                 "trade's commission: a lower basis for a purchase, higher "
+                 "proceeds for a sale.", cont=True),
             Rule("US-HOLD-01",
                  "Long-term when held more than one year, otherwise "
                  "short-term"),
