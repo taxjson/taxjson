@@ -74,27 +74,52 @@ def _parse_amount(text: str) -> float:
     return float(text.lstrip("$").replace(",", ""))
 
 
-def load_claimed(path: Optional[Path]) -> Dict[int, float]:
+# A claim's YEAR must be a plausible return year — the range
+# `taxjson init` / [settings] year accept. A typo ('2205', '0') became a
+# phantom ledger row that silently consumed the claim (S027-23).
+CLAIM_MIN_YEAR = 1900
+
+
+def _claim_max_year() -> int:
+    from datetime import date as _date
+    return _date.today().year + 1
+
+
+def load_claimed(path: Optional[Path],
+                 ignored: Optional[List[str]] = None) -> Dict[int, float]:
+    """`YEAR AMOUNT` lines -> {year: amount}. A line that cannot be read
+    is warned about and skipped; when `ignored` is given each skipped
+    line is appended to it (`path:lineno: text`) so the caller can
+    report the ledger as incomplete (S001-04: the checklist said
+    'present' over a file whose only line was dropped). A UTF-8 BOM
+    (Notepad) is not part of the first line (S027-18)."""
     claimed: Dict[int, float] = {}
     if path is None:
         return claimed
-    for lineno, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+    import math
+    hi = _claim_max_year()
+    for lineno, line in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
         stripped = line.split('#', 1)[0].strip()
         if not stripped:
             continue
         parts = stripped.split()
+        why = "expected `YEAR AMOUNT` (amount >= 0)"
         try:
             year, amount = int(parts[0]), _parse_amount(parts[1])
-            import math
             # not-isfinite: 'nan' passed the `< 0` check and poisoned
             # the ledger — APPLIED ballooned to the whole balance with
             # zero diagnostics (REVIEW #38).
             if len(parts) != 2 or amount < 0 or not math.isfinite(amount):
                 raise ValueError
+            if not CLAIM_MIN_YEAR <= year <= hi:
+                why = (f"YEAR {year} is not a plausible tax year "
+                       f"({CLAIM_MIN_YEAR}..{hi})")
+                raise ValueError
         except (ValueError, IndexError):
-            print(f"warning: {path.name}:{lineno}: expected `YEAR AMOUNT` "
-                  f"(amount >= 0), got {stripped!r} — line ignored",
-                  file=sys.stderr)
+            print(f"warning: {path.name}:{lineno}: {why}, got "
+                  f"{stripped!r} — line ignored", file=sys.stderr)
+            if ignored is not None:
+                ignored.append(f"{path.name}:{lineno}: {stripped}")
             continue
         claimed[year] = claimed.get(year, 0.0) + amount
     return claimed
@@ -154,11 +179,21 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
     # claims against that year and by earlier loss-years' suggestions so
     # two loss years never point at the same dollar of gain).
     cb_capacity = {y: max(0.0, nets[y]['net']) for y in sorted(nets)}
+    # The return files a loss as the SUM OF PER-ROW-ROUNDED Schedule 3
+    # amounts; this ledger sums unrounded gains. A claim equal to the
+    # filed loss can differ from the ledger's by up to half a cent per
+    # row — a fixed 0.005 slack left a phantom cents carryforward or
+    # warned that a correct claim exceeds the losses (S027-10, S028-00).
+    # The slack therefore grows with the dispositions behind the
+    # balance (an upper bound on its Schedule 3 rows).
+    slack = 0.0
     for y in years:
         net = nets.get(y, _ZERO)['net']
         loss = max(0.0, -net)
         if loss:
             balance += loss
+            slack += 0.005 * max(1, int(nets.get(y, _ZERO)['dispositions']
+                                        or 0))
         if claimed.get(y):
             pending_by_year[y] = pending_by_year.get(y, 0.0) + claimed[y]
         # A claim recorded against year C can only be met by a loss
@@ -184,6 +219,15 @@ def build_canada_ledger(nets: Dict[int, Dict[str, float]],
             pending_by_year[_cy] -= take
             if _cy in cb_capacity:
                 cb_capacity[_cy] = max(0.0, cb_capacity[_cy] - take)
+            if 0.0 < pending_by_year[_cy] <= slack:
+                # The claim is the filed (per-row-rounded) loss and the
+                # unrounded ledger came out a few cents short of it.
+                pending_by_year[_cy] = 0.0
+        if applied > 0.0 and 0.0 < balance <= slack:
+            # ...or a few cents over it: the filed claim used it all.
+            balance = 0.0
+        if balance <= 0.005:
+            slack = 0.0
         pending_by_year = {k: v for k, v in pending_by_year.items()
                            if v > 0.005}
 
@@ -414,6 +458,14 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                      "line (0 is valid).")
     if ledger.get('scope_note'):
         lines.append("  - " + ledger['scope_note'])
+    if ledger.get('claimed_ignored'):
+        lines.append(f"  - warning: {len(ledger['claimed_ignored'])} "
+                     f"claimed line(s) could not be read and are NOT "
+                     f"applied, so the carryforward shown is overstated "
+                     f"by them: "
+                     + "; ".join(ledger['claimed_ignored'][:3])
+                     + (" ..." if len(ledger['claimed_ignored']) > 3
+                        else ""))
     prior = [r['year'] for r in rows if r.get('prior_year')]
     if prior:
         py = ledger.get('project_year')
@@ -515,17 +567,38 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
+    # The ledger is labelled in --base-currency and its balance feeds
+    # T1A / line 25300: a native USD book (a raw broker file) printed a
+    # 5,000 USD loss as a 5,000.00 CAD carryforward (S028-02).
+    base_cur = str(args.base_currency or "").strip().upper()
+
+    def _load_base(p: Path):
+        txs = load_transactions(p)
+        bad = sorted({str(t.currency).strip().upper() for t in txs
+                      if str(t.currency or "").strip()
+                      and str(t.currency).strip().upper() != base_cur})
+        if bad:
+            raise ValueError(
+                f"{p} holds rows in {', '.join(bad)} but --base-currency "
+                f"is {base_cur} — pass the base-currency books "
+                f"(work/<account>_base.json, or `taxjson carryover` in "
+                f"the project)")
+        return txs
+
     transactions = []
-    for p in args.files:
-        transactions.extend(load_transactions(p))
+    try:
+        for p in args.files:
+            transactions.extend(_load_base(p))
+        crypto_loaded = [_load_base(cp) for cp in args.crypto]
+    except ValueError as exc:
+        print(f"taxjson-carryover: {exc}", file=sys.stderr)
+        return 2
     sheltered = []
     for p in args.sheltered:
         sheltered.extend(load_transactions(p))
 
     country = args.country
-    crypto_txs = []
-    for cp in args.crypto:
-        crypto_txs.extend(load_transactions(cp))
+    crypto_txs = [t for txs in crypto_loaded for t in txs]
     if country == 'canada' and crypto_txs:
         # Symbol-global ACB pools: crypto symbols don't collide with
         # equity ones, so one blended run is equivalent to the
@@ -566,7 +639,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             dst = nets.setdefault(yr, {})
             for k, v in vals.items():
                 dst[k] = dst.get(k, 0.0) + v
-    claimed = load_claimed(args.claimed)
+    claimed_ignored: List[str] = []
+    try:
+        claimed = load_claimed(args.claimed, ignored=claimed_ignored)
+    except (OSError, UnicodeDecodeError) as exc:
+        # A directory or an unreadable file: one line, not a traceback
+        # (S027-19).
+        print(f"taxjson-carryover: cannot read claimed file "
+              f"{args.claimed}: {exc}", file=sys.stderr)
+        return 2
 
     if country == 'canada':
         ledger = build_canada_ledger(nets, claimed)
@@ -578,6 +659,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     first_tx_year = min(tx_years) if tx_years else None
     ledger['first_transaction_year'] = first_tx_year
     ledger['scope_note'] = SCOPE_NOTE[country]
+    if claimed_ignored:
+        ledger['claimed_ignored'] = claimed_ignored
     if args.project_year is not None:
         # R1-279: a year before the project's is rebuilt from THIS
         # project's books — opening *_start.tt lots plus whatever

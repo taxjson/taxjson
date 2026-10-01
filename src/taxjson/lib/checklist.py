@@ -1221,6 +1221,20 @@ def d_carryover(ctx: Ctx) -> Result:
     claimed = (ctx.root / "claimed_losses.txt").is_file()
     if code != 0 and not out:
         return Result("carryover", "blocked", _last_line(err) or f"exit {code}")
+    try:
+        doc = json.loads(out) if out.strip() else {}
+    except ValueError:
+        doc = {}
+    ignored = (doc.get("claimed_ignored") or []) if isinstance(doc, dict) \
+        else []
+    if ignored:
+        # A claimed line the ledger could not read is not applied: the
+        # carryforward is overstated by it (S001-04).
+        return Result("carryover", "attention",
+                      f"{len(ignored)} claimed_losses.txt line(s) ignored "
+                      f"(not applied): {ignored[0]}"
+                      + (" ..." if len(ignored) > 1 else "")
+                      + " — fix the line (`YEAR AMOUNT`)")
     if is_us(ctx.settings.get("country")):
         what = ("record each year's Schedule D line 21 deduction against "
                 "ordinary income (not the line 6 / 14 carryover)")

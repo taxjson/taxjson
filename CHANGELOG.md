@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **carryover: claimed_losses.txt and rounding.** A BOM is read, a
+  claimed year outside 1900..next year is refused by name instead of
+  becoming a phantom ledger row, a directory is a one-line error, and
+  every ignored line is listed in the report and JSON and turns the
+  checklist's carryover step to attention. A claim equal to the filed
+  (per-row-rounded) Schedule 3 loss no longer leaves a cents
+  carryforward or an "exceeds the losses" warning. A book whose rows
+  are not in `--base-currency` is refused (audit S001-04, S027-10,
+  S027-18, S027-19, S027-23, S028-00, S028-02).
+- **Filed-year lock.** close-year also locks the amounts the export
+  puts on each return line (Schedule 3 codes / Form 8949 part totals),
+  so check-filed reports a move between lines or an outlay folded into
+  a price; the lock's `proceeds` is documented as the engine's net
+  proceeds; totals are rounded once over the accounts; filed/ being a
+  file, a read-only project or a gains file that is not a JSON object
+  is a one-line error; every OK names what the lock does not cover
+  (interest, withholding, FX on cash) (audit R1-205, R1-281, S031-19,
+  S031-20, S032-11).
 - **checklist: no verdict from part of the books.** wash-reviewed is
   blocked when a taxable gains file is unreadable, missing for an
   account with inputs, or built for another year, and attention when
