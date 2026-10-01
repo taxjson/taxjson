@@ -599,7 +599,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             transactions.extend(_load_base(p))
         crypto_loaded = [_load_base(cp) for cp in args.crypto]
     except ValueError as exc:
-        print(f"taxjson-carryover: {exc}", file=sys.stderr)
+        print(f"taxjson-carryover: error: {exc}", file=sys.stderr)
         return 2
     sheltered = []
     for p in args.sheltered:
