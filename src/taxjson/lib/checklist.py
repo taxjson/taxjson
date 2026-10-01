@@ -92,7 +92,8 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "The audit walks each sale from the broker row to the reported gain."),
     ("wash-reviewed", 2, "Every superficial-loss denial reviewed",
      "taxjson wash-sales",
-     "A permanently denied loss (registered-account repurchase) is money gone; make sure each is real."),
+     "A permanently denied loss (registered-account or affiliated-person repurchase) is gone from "
+     "your return; make sure each is real (an affiliated person adds it to their own ACB)."),
     ("option-boundary", 2, "Year-straddling written options need no prior-year amendment",
      "taxjson option-boundary",
      "Under ITA s.49 an assignment in a later year moves the premium; a filed year may need a T1-ADJ."),
@@ -103,10 +104,14 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
     ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the dividend and ROC totals",
-     "taxjson divs-sum, taxjson roc-sum",
+     "taxjson divs-sum, taxjson roc-sum (compare by hand)",
      "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
      "corporations report on a T5, where box 18 capital-gains dividends go on line 17400 "
-     "(taxjson books them as dividends)."),
+     "(taxjson books them as dividends). reconcile-slips reads only T5008 disposition "
+     "slips, so this check is by hand; other known differences: payments in lieu "
+     "(divs-sum's PIL column — T5 box 24 may include them), trust distributions an IB "
+     "row dates by pay date (the T3 uses the record year), and T3 boxes the books carry "
+     "as dividends (capital gains box 21, return of capital box 42)."),
     ("foreign-tax", 3, "Foreign tax withheld taken from the slips (line 40500 / T2209)",
      "T5 box 15/16, T3 box 33/34",
      "The credit is limited to what the slips show, not what the broker rows imply."),
@@ -675,10 +680,12 @@ def d_missing_history(ctx: Ctx) -> Result:
             in_affects = True
             continue
         if (not ln.strip() or ln.startswith(("##", "NOT relevant",
-                                              "To fix", "SHELTERED"))):
+                                              "To fix", "SHELTERED",
+                                              "COVERED"))):
             # A blank line ends the section; registered-account rows have
             # no reportable gain: never counted as affecting the year
-            # (audit S035-08).
+            # (audit S035-08); pairs phantoms.json covers are not work
+            # to do (R1-339).
             in_affects = False
             continue
         if not in_affects or ln[:1].isspace() or ln.startswith("-") \
@@ -716,8 +723,9 @@ def d_elections(ctx: Ctx) -> Result:
     if zero:
         return Result("elections", "attention",
                       f"{zero} spin-off/merger(s) booked at $0 — set "
-                      f"fmv_per_share with `taxjson elect` (see the .sum "
-                      f"DIAGNOSTICS)")
+                      f"fmv_per_share (or the allocated cost of an "
+                      f"s.86.1 / §355 rollover) with `taxjson elect` (see "
+                      f"the .sum DIAGNOSTICS)")
     if "No pending elections" in out or (code == 0 and not out.strip()):
         return Result("elections", "done", "none pending")
     if code != 0 and not out:
@@ -909,7 +917,8 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"the cross-account pass) — run `taxjson run`")
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
-                      f"{perm:,.2f} permanently denied (registered-account repurchase) "
+                      f"{perm:,.2f} permanently denied (registered-account or "
+                      f"affiliated-person repurchase) "
                       f"— confirm each with `taxjson wash-sales`")
     if denied > 0.005:
         return Result("wash-reviewed", "done",
@@ -1216,6 +1225,12 @@ def d_t1135(ctx: Ctx) -> Result:
         return Result("t1135", "manual",
                       "cost of foreign property exceeded the threshold — file "
                       "the T1135 (`taxjson t1135` for the tables)")
+    if rep.get("year_complete") is False or ctx.today <= date(ctx.year, 12, 31):
+        # ITA 233.3 counts cost at any time up to Dec 31: below the
+        # threshold mid-year is not a verdict (S051-22, S052-15).
+        return Result("t1135", "todo",
+                      f"below the CAD 100,000 threshold so far (books through "
+                      f"{rep.get('as_of') or '?'}) — re-check after Dec 31")
     return Result("t1135", "done", "below the CAD 100,000 threshold")
 
 

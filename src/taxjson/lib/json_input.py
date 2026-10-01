@@ -71,6 +71,33 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
     return doc
 
 
+def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:
+    """``doc`` when it is a gains-stage document: a ``transactions``
+    list whose rows carry ``gain`` (any income-only or empty list is
+    fine). A document with no ``transactions`` key ('Transactions', a
+    report JSON) or a pre-gains stage file (rows with ``quantity`` and
+    no ``gain`` — work/<acct>_base.json) is refused: the report tools
+    read either as zero dispositions and printed a $0 Schedule 3 /
+    GRAND TOTAL 0.00 at exit 0 (audit S033-01)."""
+    if not isinstance(doc, dict) or "transactions" not in doc:
+        keys = ", ".join(sorted(map(str, doc))) if isinstance(doc, dict) \
+            else type(doc).__name__
+        raise InputFileError(f'{path}: no "transactions" list (keys: '
+                             f"{keys or 'none'}) — not a taxjson gains "
+                             f"file")
+    rows = doc.get("transactions") or []
+    if not isinstance(rows, list):
+        raise InputFileError(f'{path}: "transactions" must be a list')
+    dict_rows = [r for r in rows if isinstance(r, dict)]
+    if dict_rows and not any("gain" in r for r in dict_rows) \
+            and any("quantity" in r for r in dict_rows):
+        raise InputFileError(
+            f"{path}: a pipeline stage file (its rows have no 'gain') — "
+            f"pass the <account>_gains.json (or _gains_wash.json) the "
+            f"gains stage writes")
+    return doc
+
+
 def load_json_doc_or_exit(prog: str, path, *, exit_code: int = 2,
                           **kw) -> Dict[str, Any]:
     """:func:`read_json_doc`, or print ``<prog>: error: ...`` and exit."""

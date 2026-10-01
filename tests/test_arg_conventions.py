@@ -252,7 +252,10 @@ class TestOptionalPeriod(unittest.TestCase):
 
 class TestSumJson(unittest.TestCase):
     def test_sum_gains_json_parseable(self):
-        r = _run_mod("taxjson_sum_gains", "--json", stdin_text="{}")
+        # An empty gains document: a JSON with no 'transactions' list is
+        # refused since S033-01 (it summed to GRAND TOTAL 0.00).
+        r = _run_mod("taxjson_sum_gains", "--json",
+                     stdin_text='{"transactions": []}')
         self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads(r.stdout)
         self.assertIsInstance(doc, dict)

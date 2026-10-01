@@ -57,8 +57,21 @@ def _load_txs(paths: List[str]) -> List[Dict[str, Any]]:
         # '(Clean.)' at exit 0, even under --strict (audit S035-13,
         # S028-09); a bare-array book is accepted (S079-11).
         doc = load_json_doc_or_exit("taxjson-lint-crosslistings", p)
-        for t in rows_or_exit("taxjson-lint-crosslistings", doc, p,
-                              "transactions"):
+        rows = rows_or_exit("taxjson-lint-crosslistings", doc, p,
+                            "transactions")
+        # The canonical row funnel, as wash-radar uses: a non-numeric
+        # quantity is one line naming the file and row, not a
+        # traceback (audit S053-01).
+        from taxjson.lib.core import coerce_transaction_row
+        for n, t in enumerate(rows):
+            try:
+                coerce_transaction_row(
+                    {k: v for k, v in t.items()
+                     if not str(k).startswith('_')}, n, str(p))
+            except ValueError as e:
+                print(f"taxjson-lint-crosslistings: error: {e}",
+                      file=sys.stderr)
+                sys.exit(2)
             out.append(dict(t, _src=i) if isinstance(t, dict) else t)
     return out
 

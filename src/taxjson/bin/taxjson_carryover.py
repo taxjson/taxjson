@@ -51,7 +51,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import guard_main, read_text_utf8
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
@@ -100,7 +100,7 @@ def load_claimed(path: Optional[Path],
         return claimed
     import math
     hi = _claim_max_year()
-    for lineno, line in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
+    for lineno, line in enumerate(read_text_utf8(path).splitlines(), 1):
         stripped = line.split('#', 1)[0].strip()
         if not stripped:
             continue

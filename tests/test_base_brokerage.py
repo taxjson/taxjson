@@ -144,7 +144,7 @@ class TestCleanNumber(unittest.TestCase):
         """RE-PREMISED (2026-09 parse hardening): accounting parentheses
         are a NEGATIVE amount. The old magnitude reading flipped the
         sign of every parenthesized cell whose parser did not abs() it;
-        Webull (the one real user of parens, "(1,352.97)" on buys) now
+        Webull (the one real user of parens, "(1,234.56)" on buys) now
         takes abs() itself, so its output is unchanged."""
         self.assertEqual(BaseBrokerage.clean_number('(1,000.50)'), -1000.50)
         self.assertEqual(BaseBrokerage.clean_number('\u22125'), -5.0)

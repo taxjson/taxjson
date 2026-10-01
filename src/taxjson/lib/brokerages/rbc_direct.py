@@ -495,7 +495,8 @@ def read_rbc_rows(path: Path) -> RbcExport:
             # ASN option leg and the stock leg at the strike ("...
             # ASSIGNMENT OF OPTION AS OF ..."). They share one time, so the
             # engine's same-timestamp ladder (option leg first) folds the
-            # premium into the stock leg (s.49(3)); the stock leg sorting
+            # premium into the stock leg (s.49(3) for a call, s.49(3.1)
+            # for a put); the stock leg sorting
             # first (it is listed below the ASN row) lost the fold.
             grp = [r for r in day_rows
                    if r.cls == 'assignment' or (

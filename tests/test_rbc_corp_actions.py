@@ -15,9 +15,9 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+from taxjson.lib.brokerages.rbc_direct import classify_rbc_row, read_rbc_rows
 from taxjson.lib.corp_actions import (
-    parse_rbc_corporate_actions, is_rbc_merger_row, is_rbc_cil_row,
-    resolve_event,
+    parse_rbc_corporate_actions, resolve_event,
 )
 
 _HEADER = ('"Date","Activity","Symbol","Symbol Description","Quantity","Price",'
@@ -54,6 +54,20 @@ def _write(content):
     return Path(f.name)
 
 
+def _classify(activity, desc, symbol="XYZ", qty=""):
+    """The LIVE classifier (rbc_direct.classify_rbc_row) on one row —
+    the old is_rbc_merger_row / is_rbc_cil_row phrase tests were dead
+    code the parser never ran (audits S073-17, S073-18)."""
+    p = _write(_HEADER + (
+        f'"2025-07-24 00:00:00","{activity}","{symbol}","XYZ CORP",'
+        f'"{qty}","","2025-07-24 00:00:00","123","0","USD","{desc}"\n'))
+    try:
+        (r,) = read_rbc_rows(p).rows
+    finally:
+        os.remove(p)
+    return classify_rbc_row(r)
+
+
 class TestRbcExtractor(unittest.TestCase):
     def test_pairs_merger_into_one_event(self):
         p = _write(_HEADER + _MERGER + _SALE)
@@ -82,19 +96,27 @@ class TestRbcExtractor(unittest.TestCase):
         self.assertEqual(a.event_id, b.event_id)
 
 
-class TestIsMergerRow(unittest.TestCase):
-    def test_matches_merger_rows(self):
-        self.assertTrue(is_rbc_merger_row(
-            "Reorganization", "MGR - HESS CORPORATION MERGER TO CHEVRON 1.025 NEW = 1 OLD"))
-        self.assertTrue(is_rbc_merger_row(
-            "Reorganization", "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER"))
+class TestMergerRowClass(unittest.TestCase):
+    def test_merger_legs_are_reorg_rows(self):
+        # Both legs are paired by pair_rbc_reorganizations (which decides
+        # what is a merger: TestRbcExtractor); the classifier files them
+        # as reorganization legs by their MGR code.
+        self.assertEqual(_classify(
+            "Reorganization",
+            "MGR - HESS CORPORATION MERGER TO CHEVRON 1.025 NEW = 1 OLD",
+            "H015283", "-15"), "reorg")
+        self.assertEqual(_classify(
+            "Reorganization",
+            "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER",
+            "CVX", "15"), "reorg")
 
-    def test_ignores_option_reorg_rows(self):
+    def test_option_reorg_rows_are_not_reorgs(self):
         # Option expiry / assignment are also 'Reorganization' but not mergers.
-        self.assertFalse(is_rbc_merger_row(
-            "Reorganization", "EXP - CALL .BNS OPTION EXPIRATION - EXPIRED"))
-        self.assertFalse(is_rbc_merger_row(
-            "Other", "ASN - CALL COIN ASSIGNMENT OF OPTION"))
+        self.assertEqual(_classify(
+            "Reorganization", "EXP - CALL .BNS OPTION EXPIRATION - EXPIRED"),
+            "expiry")
+        self.assertEqual(_classify(
+            "Other", "ASN - CALL COIN ASSIGNMENT OF OPTION"), "assignment")
 
 
 class TestParserSkipsMergerRows(unittest.TestCase):
@@ -149,16 +171,23 @@ class TestCashInLieu(unittest.TestCase):
         self.assertAlmostEqual(ev.cash_in_lieu, 56.36)   # 55.82 + 0.54
         self.assertEqual(ev.cash_in_lieu_currency, "USD")
 
-    def test_is_cil_row_matches_and_excludes_merger(self):
-        self.assertTrue(is_rbc_cil_row(
-            "Reorganization", "CIL - CHEVRON CORPORATION CASH IN LIEU OF FRAC SHARES"))
-        self.assertTrue(is_rbc_cil_row(
-            "Reorganization", "CIL - CHEVRON CORPORATION ADDITIONAL CIL PAYMENT"))
+    def test_cil_rows_match_and_merger_rows_do_not(self):
+        self.assertEqual(_classify(
+            "Reorganization",
+            "CIL - CHEVRON CORPORATION CASH IN LIEU OF FRAC SHARES"), "cil")
+        self.assertEqual(_classify(
+            "Reorganization",
+            "CIL - CHEVRON CORPORATION ADDITIONAL CIL PAYMENT"), "cil")
         # Merger removal/receipt rows are NOT cash-in-lieu.
-        self.assertFalse(is_rbc_cil_row(
-            "Reorganization", "MGR - HESS CORPORATION MERGER TO CHEVRON 1.025 NEW = 1 OLD"))
-        self.assertFalse(is_rbc_cil_row(
-            "Reorganization", "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER"))
+        self.assertEqual(_classify(
+            "Reorganization",
+            "MGR - HESS CORPORATION MERGER TO CHEVRON 1.025 NEW = 1 OLD",
+            "H015283", "-15"), "reorg")
+        # A code-less "ADDITIONAL CIL PAYMENT" is not guessed: unknown,
+        # which the parser reports as UNCLASSIFIED.
+        self.assertEqual(_classify(
+            "Reorganization", "CHEVRON CORPORATION ADDITIONAL CIL PAYMENT"),
+            "unknown")
 
     def test_parser_skips_cil_rows(self):
         # The CIL 'Reorganization' rows must not become 0-quantity trades.

@@ -321,10 +321,12 @@ class TestCryptoSendsBecomeEvidence(unittest.TestCase):
         rows, book, err = self._parse(
             "kraken", "kr_ledgers.csv", self.KR_LEDGER)
         by_sym = {(t["symbol"], t["description"]): t for t in rows}
-        w = by_sym[("USDC", "withdrawal")]
+        # The fee is in coins: named in the description, never in the
+        # money `fee` field of a row stamped USD (S061-17).
+        w = by_sym[("USDC", "withdrawal (fee 1 USDC)")]
         self.assertEqual(w["quantity"], -50.0)
         self.assertEqual(w["date"], "2026-06-17")
-        self.assertEqual(w["fee"], 1.0)
+        self.assertEqual(w["fee"], 0.0)
         d = by_sym[("BTC", "deposit")]
         self.assertEqual(d["quantity"], 0.5)
         # hybridearnwithdrawal has no counter-leg in any earn wallet (a

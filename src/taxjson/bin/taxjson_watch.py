@@ -157,7 +157,9 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
     if prev_now is None:
         return None
     delta = cur_now - prev_now
-    if abs(delta) <= threshold:
+    # Cents: with --threshold 0 ("any move") float noise below a cent
+    # must not read as a change.
+    if abs(round(delta, 2)) <= threshold:
         return None
     return {"kind": "harvest_now", "was": round(prev_now, 2),
             "now": round(cur_now, 2),
@@ -166,17 +168,31 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
 
 
 def load_state(path: Path) -> Optional[Dict[str, Any]]:
+    """The saved baseline, or None (the caller then records a new one).
+    A state file that EXISTS but cannot be used re-baselined silently,
+    losing the changes pending since the last run, and valid JSON that
+    is not an object crashed (R1-242) — both now warn on stderr."""
+    if not path.exists():
+        return None
+    why = ""
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as e:
+        doc, why = None, f"unreadable ({e})"
     # Valid JSON of the wrong shape (a list) is no baseline either — it
-    # crashed `taxjson watch` with an AttributeError (S068-11).
-    if not isinstance(doc, dict) \
-            or doc.get("schema_version") != STATE_VERSION:
+    # crashed `taxjson watch` with an AttributeError (S068-11, R1-242).
+    if doc is not None and not isinstance(doc, dict):
+        doc, why = None, "not a JSON object"
+    if doc is not None and doc.get("schema_version") != STATE_VERSION:
         # Older/newer state: treat as no baseline rather than diffing
         # across incompatible shapes.
-        return None
+        why = (f"schema_version {doc.get('schema_version')!r}, this "
+               f"version reads {STATE_VERSION}")
+        doc = None
+    if doc is None:
+        print(f"taxjson watch: warning: state file {path.name} is {why} "
+              f"— recording a NEW baseline; changes since the previous "
+              f"run are not reported this time.", file=sys.stderr)
     return doc
 
 

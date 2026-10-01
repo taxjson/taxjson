@@ -10,15 +10,18 @@ Usage:
     taxjson-convert-tt input.json              # → tt to stdout
     taxjson-convert-tt input.json out.tt       # → tt to file
 
-Direction is inferred from the input file extension. The legacy `.tt`
-format is a single space-separated line per transaction; see the legacy
-Perl scripts (cb_trades.pl, kr_ledgers.pl) for the exact field order.
+Direction is inferred from the input file extension. The `.tt` format
+is a single space-separated line per transaction; the field order of
+each action is in parse_tt_line / tx_to_tt_line below (and the README's
+`.tt` field table, under "find-missing-history").
 """
 
 import argparse
 import difflib
 import hashlib
+import io
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -161,7 +164,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 tx['net_amount'] = 0.0
             else:
                 tx['quantity'] = _tt_num(parts[4])
-                tx['currency'] = parts[5]
+                tx['currency'] = parts[5].upper()
                 tx['price'] = _tt_num(parts[6])
                 tx['net_amount'] = _tt_num(parts[7])
                 if action == 'TRANSFER':
@@ -210,6 +213,12 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 _fee = tx.get('fee', 0.0)
                 _expected = (abs(_q) * tx['price'] * _mult
                              + (_fee if _q > 0 else -_fee))
+                if _q < 0:
+                    # A sale whose commission exceeds its gross is
+                    # entered as 0 (a negative total is refused below),
+                    # so 0 is its correct total — comparing against the
+                    # negative figure warned on exactly that (S029-01).
+                    _expected = max(_expected, 0.0)
                 _total = abs(tx['net_amount'])
                 if (tx['price'] > 0 and abs(_q) > 0
                         and not tx['symbol'].startswith(_FUTURES_PREFIXES)
@@ -229,7 +238,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
         elif action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'):
             tx['symbol'] = parts[3].upper()
             tx['quantity'] = _tt_num(parts[4])
-            tx['currency'] = parts[5]
+            tx['currency'] = parts[5].upper()
             val = _tt_num(parts[7])
             tx['gross_amount'] = val
             # Optional 9th column: the withholding-NETTED amount (the
@@ -240,14 +249,14 @@ def parse_tt_line(line: str, account_name: str = 'default',
             tx['type'] = action.lower()
 
         elif action == 'INTEREST' or action == 'FEE':
-            tx['currency'] = parts[3]
+            tx['currency'] = parts[3].upper()
             tx['net_amount'] = _tt_num(parts[4])
             tx['type'] = action.lower()
             tx['symbol'] = 'CASH'
 
         elif action == 'ADJUST' or action == 'DISALLOW':
             tx['symbol'] = parts[3].upper()
-            tx['currency'] = parts[4]
+            tx['currency'] = parts[4].upper()
             tx['net_amount'] = _tt_num(parts[5])
     except (ValueError, IndexError) as e:
         raise ValueError(
@@ -334,11 +343,12 @@ def compute_tt_id(tx: dict) -> str:
 
 
 def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
-    """Emit a single `.tt` line for one transaction, matching the legacy
-    Perl scripts' field order. Returns None for transactions whose action
+    """Emit a single `.tt` line for one transaction, in the field order
+    parse_tt_line reads. Returns None for transactions whose action
     has no `.tt` representation (e.g. OPENING_BALANCE) so the caller can
-    skip them. Numeric fields use %.8f for qty/price, %.5f for totals/fees
-    (the convention from cb_trades.pl / kr_ledgers.pl).
+    skip them. Numeric fields use %.8f for qty/price, %.5f for totals/fees.
+    A row with no currency is refused: writing CAD relabelled it
+    silently (R1-133).
 
     A .tt line has ONE date, which the reader uses as both the trade and
     the settlement date. `date_basis='settle'` (the default — Canada
@@ -356,7 +366,12 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
     time = tx.get('time', '09:30:00')
     symbol = tx.get('symbol', '')
     qty = float(tx.get('quantity') or 0.0)
-    currency = tx.get('currency') or 'CAD'
+    currency = str(tx.get('currency') or '').strip().upper()
+    if not currency and action != 'SPLIT':
+        raise ValueError(
+            f"{action} {tx.get('date', '')} {tx.get('symbol', '')}: the "
+            f"row has no currency — a .tt line needs one; refusing to "
+            f"write CAD over an unknown currency. Fix the input row.")
     price = float(tx.get('price') or 0.0)
     net = float(tx.get('net_amount') or 0.0)
     # Dividend/tax tt rows quote the gross (pre-withholding) amount, so
@@ -373,8 +388,8 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # SIGNED total/fee: abs() re-inflated sign-preserved reversal
         # rows (and fee rebates) on a json→tt→json cycle — the exact
         # corruption the parser-level sign fixes removed. Direction
-        # still comes from qty. A trade total is never negative (schema:
-        # net_amount >= 0); parse_tt_line refuses a negative SELL total.
+        # still comes from qty. parse_tt_line refuses a negative SELL
+        # total (R1-117): a commission above the gross is written 0.
         return f"{action} {date} {time} {symbol} {qty:.8f} {currency} {price:.8f} {net:.5f} {fee:.5f}"
 
     if action == 'TRANSFER':
@@ -462,7 +477,10 @@ def expand_acquired(line: str):
 
 def tt_to_json(input_path: Path, account_name: str) -> dict:
     transactions = []
-    with input_path.open('r', encoding='utf-8') as f:
+    # utf-8-sig: an editor's byte-order mark used to reach the first
+    # action as '\ufeffBUYSELL' ("unknown .tt action", R1-133).
+    from taxjson.lib.cli_diag import read_text_utf8
+    with io.StringIO(read_text_utf8(input_path)) as f:
         for lineno, line in enumerate(f, 1):
             source = f"{input_path.name}:{lineno}"
             try:
@@ -571,6 +589,18 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
         )
 
 
+def _write_atomic(path: Path, text: str) -> None:
+    """Write `text` to `path` through a temp file in the same folder:
+    the old contents stay until the new ones are complete."""
+    tmp = path.with_name(path.name + ".part")
+    try:
+        tmp.write_text(text, encoding='utf-8')
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 @guard_main("taxjson-convert-tt")
 def main():
     try:
@@ -654,20 +684,21 @@ def _main():
                       file=sys.stderr)
                 sys.exit(2)
             date_basis = 'settle'       # every row has one date: moot
-        out_fh = open(args.output, 'w', encoding='utf-8') if args.output else sys.stdout
-        try:
-            for line in json_to_tt_lines(input_path,
-                                         date_basis=date_basis):
-                out_fh.write(line + "\n")
-        finally:
-            if args.output:
-                out_fh.close()
+        # Every line first, then one write: a row that fails half-way
+        # used to leave a partial file — and truncate whatever the
+        # output held before (R1-133).
+        text = "".join(line + "\n" for line in json_to_tt_lines(
+            input_path, date_basis=date_basis))
+        if args.output:
+            _write_atomic(Path(args.output), text)
+        else:
+            sys.stdout.write(text)
     else:
         # tt → JSON  (default, also handles unknown extensions)
         result = tt_to_json(input_path, args.account_name)
         if args.output:
-            with open(args.output, 'w', encoding='utf-8') as f:
-                json.dump(result, f, indent=2, sort_keys=True)
+            _write_atomic(Path(args.output),
+                          json.dumps(result, indent=2, sort_keys=True))
         else:
             json.dump(result, sys.stdout, indent=2, sort_keys=True)
 

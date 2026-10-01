@@ -61,6 +61,13 @@ def load_stdin_transactions(stream=None) -> List[TaxTransaction]:
     if not content.strip():
         return []
     raw = json.loads(content)
+    if not isinstance(raw, dict) or not isinstance(raw.get("transactions"),
+                                                   list):
+        # A {"Transactions": ...} document (or any JSON without the
+        # list) computed zero gains at exit 0 (audit S033-01).
+        raise ValueError(
+            "stdin: no 'transactions' list — expected a taxjson stage "
+            "document ({\"transactions\": [...]})")
     tx_dicts = raw.get("transactions", [])
     # Row handling is shared with load_transactions so the stdin path
     # gets the same FUZZ #K hard guards and never silently drops a
@@ -455,7 +462,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                         f"{_q:g}  CAD  0.0  0.0  DECLARED\n"
                         f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
                         f"-{_q:g}  CAD  0.0  0.0  DECLARED\n"
-                        f"— declared legs let the cluster net. If any "
+                        f"  — declared legs let the cluster net. If any "
                         f"leg was a genuine in-kind contribution or "
                         f"withdrawal, record THAT leg as a BUYSELL "
                         f"dated the true event day instead.",

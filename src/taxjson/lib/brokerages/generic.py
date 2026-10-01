@@ -69,7 +69,8 @@ So every BUY/SELL row is cross-checked and the import REFUSES when:
 
 * two logical fields name the same CSV header (e.g. fee = amount);
 * |amount| is not |qty| × price × multiplier ± fee within 1% (+$0.05)
-  — the multiplier is 100 for an OCC option symbol; with no `fee`
+  (an explicit 0 in the amount cell is checked too: only a blank
+  cell derives the amount) — the multiplier is 100 for an OCC option symbol; with no `fee`
   column mapped, the fee is INFERRED as the gap between |amount| and
   qty × price (a commission-inclusive Net column with no commission
   column) and a buy whose amount is below the gross is refused;
@@ -193,7 +194,9 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
             "generic importer: TOML support unavailable — install "
             "`tomli` (Python < 3.11).")
     try:
-        mapping = tomllib.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig: a mapping saved with a BOM failed as "Invalid
+        # statement (at line 1, column 1)" (S038-04).
+        mapping = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"generic importer: {path.name}: bad TOML: {e}")
     for sec, val in mapping.items():
@@ -291,7 +294,8 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
 def _check_trade_row(where: str, target: str, qty: float, price: float,
                      amount: float, fee: float, mult: float,
                      allow_large_fees: bool, fee_mapped: bool = True,
-                     is_future: bool = False) -> float:
+                     is_future: bool = False,
+                     amount_given: bool = False) -> float:
     """Refuse a BUY/SELL row whose numbers don't hang together — the
     signature of a mis-mapped column. See the module docstring. Returns
     the fee to book: the mapped fee, or — with no fee column mapped —
@@ -302,6 +306,23 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
     fee = abs(fee)
     hint = ("check the [columns] mapping — is the fee, gross or amount "
             "column mapped to the wrong field?")
+    if amount_given and not amount and gross > 0:
+        # An explicit 0 in the amount cell is not "no amount" (S057-05):
+        # deriving qty x price over it booked a cost or proceeds the
+        # row says was never paid, and skipped the cross-check below —
+        # for every row of a file whose `amount` is mapped to a column
+        # that is always 0. Only a sale whose commission ate the whole
+        # gross really nets 0.
+        expected = gross + fee if target == "buy" else gross - fee
+        if expected > max(_ABS_TOL, _REL_TOL * max(gross, 1.0)):
+            raise ValueError(
+                f"generic importer: {where}: the amount cell is 0 but "
+                f"qty x price{' x 100' if mult > 1 else ''} "
+                f"{'+' if target == 'buy' else '-'} fee = {expected:.2f} "
+                f"— a row with no cash (free or journal shares) is not a "
+                f"{target}: map its action to skip and enter the real "
+                f"cost or proceeds in a .tt file; or is `amount` mapped "
+                f"to a column that is always 0? {hint}")
     if not fee_mapped and amount and gross > 0:
         # A commission-inclusive Net column with no commission column:
         # the gap between the net and qty x price IS the commission.
@@ -324,7 +345,8 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
                 and not allow_large_fees:
             raise ValueError(
                 f"generic importer: {where}: fee {fee:.2f} is "
-                f"{fee / abs(amount):.0%} of the amount {abs(amount):.2f} "
+                f"{fee / abs(amount):.2%} of the amount {abs(amount):.2f} "
+                f"(limit {_MAX_FEE_SHARE:.0%}) "
                 f"(no price to cross-check qty x price) — {hint} If the "
                 f"fee really is that large, set `[options] "
                 f"allow_large_fees = true` in the mapping.")
@@ -332,7 +354,8 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
             and not allow_large_fees:
         raise ValueError(
             f"generic importer: {where}: fee {fee:.2f} is "
-            f"{fee / gross:.0%} of the gross {gross:.2f} "
+            f"{fee / gross:.2%} of the gross {gross:.2f} "
+            f"(limit {_MAX_FEE_SHARE:.0%}) "
             f"(qty {abs(qty):g} x price {abs(price):g}"
             f"{' x 100' if mult > 1 else ''}) — {hint} If the fee really "
             f"is that large (tiny odd-lot trades), set "
@@ -362,7 +385,7 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
 
 def _trade_net(fname: str, target: str, qty: float, price: float,
                amount: float, fee: float, mult: float = 1.0,
-               is_future: bool = False) -> float:
+               is_future: bool = False, amount_given: bool = False) -> float:
     """Fee-inclusive trade total: the amount column when present, else
     derived. A SELL whose commission exceeds its gross (a penny option
     close, a worthless-position cleanup) nets NEGATIVE: the engine
@@ -371,7 +394,7 @@ def _trade_net(fname: str, target: str, qty: float, price: float,
     commission never reached the loss — or, with an amount column,
     refused as a mis-mapping (S057-02)."""
     gross = 0.0 if is_future else abs(qty) * abs(price) * mult
-    if amount:
+    if amount or amount_given:
         if target == "sell" and gross > 0 and abs(fee) > gross:
             return -abs(amount)
         return abs(amount)
@@ -640,7 +663,8 @@ class GenericBrokerage(BaseBrokerage):
                     trade_signs.append((where, target, qty))
                     fee = _check_trade_row(
                         where, target, qty, price, amount, fee, mult,
-                        allow_large_fees, fee_mapped, is_future)
+                        allow_large_fees, fee_mapped, is_future,
+                        amount_given=amount_v is not None)
                     date_settle = self._settle_for(
                         row, cell, where, date, settle_fmt, symbol,
                         currency, mult > 1, settle_on_trade_date)
@@ -657,7 +681,8 @@ class GenericBrokerage(BaseBrokerage):
                         # magnitude); else derive from qty*price±fee.
                         "net_amount": _trade_net(
                             path.name, target, qty, price, amount, fee,
-                            mult, is_future),
+                            mult, is_future,
+                            amount_given=amount_v is not None),
                         "gross_amount": (
                             # Futures: the implied qty x price x size.
                             abs(amount) + (abs(fee) if target == "sell"

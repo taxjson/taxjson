@@ -72,3 +72,31 @@ def round_floats(obj: Any, places: int = 4, _key: str = None) -> Any:
     if isinstance(obj, list):
         return [round_floats(x, places, _key=_key) for x in obj]
     return obj
+
+
+def nonneg_float_arg(text: str) -> float:
+    """argparse type for a tolerance / threshold flag: a finite number
+    >= 0. `type=float` took "nan", "-1" and "inf": every match became a
+    MISMATCH (nan / negative) or a real gap was certified OK (inf), and
+    a negative T1135 threshold read "FILING REQUIRED" (R1-333,
+    S037-14, R1-242)."""
+    import argparse
+    import math
+    try:
+        v = float(text)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}")
+    if not math.isfinite(v) or v < 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number >= 0, got {text!r}")
+    return v
+
+
+def positive_float_arg(text: str) -> float:
+    """argparse type for a threshold that must be finite and > 0."""
+    import argparse
+    v = nonneg_float_arg(text)
+    if v <= 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite number > 0, got {text!r}")
+    return v
