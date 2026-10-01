@@ -89,6 +89,38 @@
   `/api/whatif` for an unknown account and a holding page for a symbol
   the account does not hold are 404s; the what-if and holding pages
   accept a symbol in any case.
+- **Report labels say what they add up.** The `.sum` non-option line is
+  `TOTAL REALIZED NON-OPTION GAIN` (shares, units, futures and crypto —
+  it was "STOCK" and read as Schedule 3 line 4), its bottom line is
+  `GRAND TOTAL (GAIN+DIV+PIL)`, and `TOTAL DIVIDENDS / STAKING` names a
+  crypto account's staking rewards; `taxjson sum` heads the column
+  NON-OPT; `fees-sum` says non-option and $/UNIT; `divs-sum` totals
+  crypto staking rewards apart (other income, no T5/T3).
+- `ccd-sum` CLOSES/QTY no longer count a grant-timing write as a close.
+- `taxjson-ccd-gains` / `taxjson-leaps-gains` (reports/ccd.rpt,
+  leaps.rpt): per-contract COST/QTY, PROC/QTY, GAIN/QTY columns (they
+  were always 0.0000), no -0.00, totals per currency on mixed-currency
+  input, and a break-even legacy row is no longer in both reports.
+- Stand-alone tools (fees-sum, lint-crosslistings, sum-gains, sum-income,
+  ccd/leaps-gains, diff, explain, ticker-map, carryover, form-export,
+  split-gains, apply-distributions, reconcile-slips) refuse an
+  unreadable, non-UTF-8 or wrong-shape input in one line with a non-zero
+  exit — no traceback, and no report built from the files that happened
+  to load (fees-sum dropped a broker's fees at exit 0; lint-crosslistings
+  printed "(Clean.)"). A bare-array transaction book is accepted.
+- `taxjson-sum-income` refuses income rows with no amount instead of
+  booking them as $0; its help names the real input (a base book).
+- `taxjson-sum-gains FILE` keeps wash_solver_iterations like stdin does.
+- `taxjson-diff`: a pure re-ordering of same-key rows is no change, a
+  sub-micro crypto quantity change is seen, output order is stable, and
+  an explicit `--by` field no record carries is refused.
+  `taxjson-extractors` parses its arguments.
+- `taxjson-missing-history`: an `--account` no row carries is refused
+  (it printed the all-clear); registered-account rows are listed under
+  SHELTERED (no reportable gain) and the checklist no longer counts them
+  as affecting the year.
+- work/<acct>_report.json: the wash total reads `disallowed_amount`, so
+  a US project's total_disallowed is no longer always 0.
 
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)

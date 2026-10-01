@@ -91,3 +91,23 @@ def rows_or_exit(prog: str, doc: Dict[str, Any], path, key: str,
                              "objects")
         sys.exit(exit_code)
     return rows
+
+
+def load_transactions_or_exit(prog: str, path, *, exit_code: int = 2):
+    """``core.load_transactions(path)``, or a one-line
+    ``<prog>: error: <file>: ...`` and exit — its refusals (a missing
+    file, bad JSON, a row the coercion funnel rejects) were tracebacks
+    in the tools that called it bare (audit S051-11, S049-22)."""
+    from taxjson.lib.core import load_transactions
+    p = Path(path)
+    try:
+        return load_transactions(p)
+    except OSError as e:
+        msg = f"{p}: cannot read ({e.strerror or e})"
+    except UnicodeDecodeError as e:
+        msg = f"{p}: not UTF-8 text ({e.reason} at byte {e.start})"
+    except (ValueError, TypeError, AttributeError) as e:
+        text = str(e)
+        msg = text if str(p) in text else f"{p}: {text}"
+    cli_diag.error(prog, msg)
+    sys.exit(exit_code)

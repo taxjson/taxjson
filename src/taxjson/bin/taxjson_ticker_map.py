@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 from datetime import datetime
 
-from taxjson.lib.core import TaxTransaction, load_transactions
+from taxjson.lib.core import TaxTransaction
 from taxjson.lib.ticker_map import map_ticker
 
 # A ticker-map line is `KEYWORD from [to]`. One file, four rule types:
@@ -393,7 +393,9 @@ def main():
     if args.map_flag and not args.map_file:
         args.map_file = args.map_flag
 
-    transactions = load_transactions(Path(args.input))
+    from taxjson.lib.json_input import load_transactions_or_exit
+    transactions = load_transactions_or_exit("taxjson-ticker-map",
+                                             args.input)
 
     if not args.map_file:
         # Summary Mode

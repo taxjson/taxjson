@@ -541,7 +541,7 @@ numbers match each `reports/<account>.sum`. `--json` carries a per-account
 ```
 $ taxjson sum
 TAXABLE ACCOUNTS
-ACCOUNT    STOCK        OPTION       REALIZED     DIVIDEND    PIL        FEES       TOTAL
+ACCOUNT    NON-OPT      OPTION       REALIZED     DIVIDEND    PIL        FEES       TOTAL
 ------------------------------------------------------------------------------------------
 margin     24,310.55    -1,204.10    23,106.45    1,842.30    0.00       318.60     24,948.75
 ...
@@ -555,7 +555,9 @@ ALL ACCOUNTS
 TOTAL      31,905.20    -2,617.35    29,287.85    2,611.05    0.00       447.15     31,898.90
 ```
 
-`TOTAL` = REALIZED + DIVIDEND.
+`TOTAL` = REALIZED + DIVIDEND. NON-OPT is every non-option disposition
+(shares, units, futures and crypto); the Schedule 3 / Form 8949 line
+split is the FOR THE RETURN block and `taxjson form-export`.
 
 **Tax estimate** — **`taxjson estimate`** (the front door; also
 `taxjson sum --other-income ...` to see it under the account table)
