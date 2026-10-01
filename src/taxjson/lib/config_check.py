@@ -135,7 +135,7 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
         since = settings.get("option_grant_timing_since")
         if since is not None and not (isinstance(since, int)
                                       and not isinstance(since, bool)
-                                      and 1990 <= since <= 2100):
+                                      and 1900 <= since <= 2100):
             out.append(f"[settings] option_grant_timing_since must be a "
                        f"tax year such as 2025, unquoted (got {since!r})")
     return out

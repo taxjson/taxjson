@@ -16,7 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_fix_l_runcore_a import (_CONFIG, _MARGIN_CSV, _QT_HEADER,  # noqa: E402
-                                  REPO_ROOT, _project, _run_cli)
+                                  REPO_ROOT, _project, _run_cli,
+                                  _with_setting)
 
 
 def _run_cli_env(root, *args, env=None, seed=None):
@@ -661,6 +662,110 @@ class TestViews(unittest.TestCase):
                            stdin=subprocess.DEVNULL)
         self.assertIn("USD 79,081.35 1.4428 +653.70 DLR.U.TO", r.stdout,
                       r.stderr)
+
+
+
+class TestYearsAndLocks(unittest.TestCase):
+    """S044-06 / S044-07 (no year), S044-08 (unreadable lock), S045-23
+    (year not ended), S045-24 (empty year), S046-02 (timing stamp),
+    S047-14 (--year range), S047-20 (init year vs since range)."""
+
+    def test_option_boundary_needs_a_year(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp)
+            (root / "taxjson.toml").write_text(
+                _CONFIG.replace("year = 2025\n", "")
+                .replace("option_grant_timing_since = 2025\n", ""))
+            r = _run_cli(root, "option-boundary")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("[settings] year is required", r.stderr)
+            self.assertNotIn("None", r.stderr)
+            self.assertNotIn("tax year 0", r.stdout)
+
+    def test_unreadable_lock_warns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp)
+            (root / "filed").mkdir()
+            (root / "filed" / "2024.json").write_text('{"year": 2024, "op')
+            r = _run_cli(root, "option-boundary")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("cannot read filed/2024.json", r.stderr)
+
+    def test_close_year_refuses_an_open_year(self):
+        from datetime import date
+        y = date.today().year
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp, tt=(
+                f"BUYSELL {y}-01-10 09:30:00 XEI.TO 100 CAD 10.0 -1000.0 0\n"
+                f"BUYSELL {y}-01-20 09:30:00 XEI.TO -100 CAD 11.0 1100.0 0\n"),
+                config=_CONFIG.replace("2025", str(y)))
+            r = _run_cli(root, "close-year")
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn("has not ended", r.stderr)
+            self.assertFalse((root / "filed" / f"{y}.json").exists())
+
+    def test_close_year_refuses_an_empty_year(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp, config=_CONFIG.replace(
+                "year = 2025", "year = 2015").replace(
+                "option_grant_timing_since = 2025",
+                "option_grant_timing_since = 2015"))
+            r = _run_cli(root, "close-year")
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn("no disposition and no income in 2015", r.stderr)
+            self.assertFalse((root / "filed" / "2015.json").exists())
+
+    def test_close_year_refuses_a_timing_edited_after_the_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp)
+            (root / "taxjson.toml").write_text(_with_setting(
+                'option_premium_timing = "close"'))
+            # Without --force the run-state guard already stops it
+            # (taxjson.toml changed since the run); --force waives that
+            # one, never this.
+            r = _run_cli(root, "close-year", "--force")
+            self.assertNotEqual(r.returncode, 0, r.stdout)
+            self.assertIn("another option timing", r.stderr)
+            self.assertFalse((root / "filed" / "2025.json").exists())
+            (root / "taxjson.toml").write_text(_CONFIG)
+            r = _run_cli(root, "close-year", "--force")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            lock = json.loads((root / "filed" / "2025.json").read_text())
+            self.assertEqual(lock["option_timing"]["option_premium_timing"],
+                             "grant")
+
+    def test_year_flags_are_plausible_years(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp)
+            for cmd in (("audit", "--summary", "--year", "2204"),
+                        ("audit", "--year", "0"),
+                        ("find-missing-history", "--year", "-5"),
+                        ("close-year", "--year", "0")):
+                with self.subTest(cmd=cmd):
+                    r = _run_cli(root, *cmd)
+                    self.assertEqual(r.returncode, 2, r.stdout)
+                    self.assertIn("plausible tax year", r.stderr)
+            for mod in ("taxjson_fees", "taxjson_missing_history",
+                        "taxjson_reconcile_slips", "taxjson_sum_income"):
+                with self.subTest(mod=mod):
+                    r = subprocess.run(
+                        [sys.executable, "-m", f"taxjson.bin.{mod}",
+                         "--year", "2204", "x.json"],
+                        cwd=REPO_ROOT, capture_output=True, text=True,
+                        stdin=subprocess.DEVNULL)
+                    self.assertEqual(r.returncode, 2)
+                    self.assertIn("plausible tax year", r.stderr)
+
+    def test_old_init_year_passes_validation(self):
+        from taxjson.bin.taxjson_run import validate_config
+        from taxjson.lib.config_check import bool_setting_problems
+        cfg = {"settings": {"year": 1989, "country": "canada",
+                            "base_currency": "CAD",
+                            "option_grant_timing_since": 1989},
+               "accounts": {"m": {"type": "taxable"}}}
+        validate_config(cfg)                    # no SystemExit
+        self.assertFalse([p for p in bool_setting_problems(cfg)
+                          if "option_grant_timing_since" in p])
 
 
 if __name__ == "__main__":

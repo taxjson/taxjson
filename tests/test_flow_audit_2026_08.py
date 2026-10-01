@@ -399,8 +399,11 @@ class TestCombinedSidecarStaleness(unittest.TestCase):
             work = root / "work"
             os.rename(work / "margin_gains.json",
                       work / "margin_gains_wash.json")
+            # force=True: the project year (2026) has not ended, and
+            # close-year now refuses that without --force (S045-23); the
+            # staleness guard under test is a hard stop either way.
             out, _ = _run_cmd(cmd_close_year, root, year=None,
-                              force=False)
+                              force=True)
         self.assertIn("closed", out)
 
 

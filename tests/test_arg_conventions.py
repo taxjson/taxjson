@@ -75,7 +75,8 @@ class TestRemovedAliasesStayRemoved(unittest.TestCase):
         r = _run_mod("taxjson_fees", "--cache", "/nonexistent",
                      "--year", "banana")
         self.assertEqual(r.returncode, 2)
-        self.assertIn("invalid int value", r.stderr)
+        # The shared plausible-year type (S047-14).
+        self.assertIn("is not a year", r.stderr)
 
 
 class TestExtendShapes(unittest.TestCase):

@@ -36,6 +36,7 @@ import json
 import sys
 from pathlib import Path
 
+from taxjson.lib.cli_diag import tax_year
 from taxjson.lib.core import load_transactions
 from taxjson.lib.phantom_holdings import (
     detect_phantoms, assess_tax_year_relevance, detect_zero_basis_acquisitions,
@@ -118,7 +119,7 @@ def main(argv=None):
     ap.add_argument("files", nargs="+", metavar="FILE",
                     help="per-account base JSON (full history), e.g. "
                          "work/<account>_base.json")
-    ap.add_argument("--year", type=int, metavar="YYYY",
+    ap.add_argument("--year", type=tax_year, metavar="YYYY",
                     help="tax year to assess relevance against; omit to list "
                          "every short position with no year scope")
     ap.add_argument("--account", metavar="NAME",

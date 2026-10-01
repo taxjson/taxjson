@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **close-year and option-boundary guard the lock.** close-year refuses
+  (without `--force`) a tax year that has not ended and a year with no
+  disposition and no income (a typo'd `[settings] year`), and always
+  refuses books built with another option timing than taxjson.toml now
+  says (the lock stamped the edited setting next to grant-timed
+  totals). option-boundary requires `[settings] year` (it printed "tax
+  year 0" and suggested `option_grant_timing_since = None`) and warns
+  when a `filed/<year>.json` cannot be read instead of silently giving
+  the opposite T1-ADJ advice (audit S045-23, S045-24, S046-02, S044-07,
+  S044-06, S044-08).
+- **Every `--year` is a plausible tax year** (1900..next year): `audit`,
+  `close-year`, `find-missing-history`, `taxjson-fees`,
+  `taxjson-missing-history`, `taxjson-reconcile-slips`,
+  `taxjson-sum-income` (`audit --year 2204` printed an all-checkmark
+  reconciliation of nothing; `--year 0` meant all years).
+  `option_grant_timing_since` accepts 1900.. like `init --year` (audit
+  S047-14, S047-20).
+
 - **Query views say what they show.** `shares` is labelled as of the
   books' latest date (it said "tax year 2025" over 2026 positions; JSON
   `as_of`) and leaves futures out; `list` COST/SH is per share for an

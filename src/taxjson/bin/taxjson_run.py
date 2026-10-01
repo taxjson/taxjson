@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note
+from taxjson.lib.cli_diag import tax_year as _tax_year_arg
 from taxjson.lib.numeric import nonneg_float_arg as _nonneg_float_arg
 from taxjson.lib.pipeline import (income_dating_flags,
                                   option_timing_flags, tt_json_path)
@@ -819,9 +820,12 @@ def validate_config(cfg: Dict[str, Any],
         _die(f"[settings] option_premium_timing must be \"grant\" or "
              f"\"close\" (got {_opt!r}).")
     _since = settings.get("option_grant_timing_since")
+    # 1900 like [settings] year and `init --year`, which writes
+    # since = year: init --year 1989 produced a config the next run
+    # refused (S047-20).
     if _since is not None and not (isinstance(_since, int)
                                    and not isinstance(_since, bool)
-                                   and 1990 <= _since <= 2100):
+                                   and 1900 <= _since <= 2100):
         _die(f"[settings] option_grant_timing_since must be a tax year "
              f"(got {_since!r}).")
     _bb = settings.get("option_buyback_loss_superficial")
@@ -8696,6 +8700,11 @@ def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
     if settings.get("option_grant_timing_since") not in (None, ""):
         return None
     yr = settings.get("year")
+    if not isinstance(yr, int) or isinstance(yr, bool):
+        # No year: the missing year is the real error (run and
+        # option-boundary say so); never suggest "since = None"
+        # (S044-06).
+        return None
     return (f"[settings] option_grant_timing_since is not set, so grant "
             f"timing (ITA s.49(1)) starts at the project year ({yr}) — a "
             f"default that MOVES when you bump `year`: next year's project "
@@ -8836,7 +8845,11 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     cache = root / "work"
     cfg = load_config(root)
     settings = cfg.get("settings", {})
-    year = int(settings.get("year") or 0)
+    if not isinstance(settings.get("year"), int):
+        # It went on with year 0 and printed "tax year 0" (S044-07).
+        _die("[settings] year is required in taxjson.toml (the review "
+             "is per tax year).")
+    year = int(settings["year"])
     kw = option_timing_from_settings(settings)
     timing = kw.get("option_premium_timing", "close") if kw else "close"
     since = kw.get("option_grant_since") if kw else None
@@ -8854,7 +8867,16 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
         try:
             _ot = (json.loads(f.read_text(encoding="utf-8")) or {}).get(
                 "option_timing")
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError) as e:
+            # The lock's recorded timing drives the advice below: an
+            # unreadable lock silently read as "no timing recorded" and
+            # the advice flipped to ATTENTION / since = <locked year>
+            # (S044-08).
+            print(f"taxjson option-boundary: warning: cannot read "
+                  f"filed/{f.name} ({e}) — its recorded option timing "
+                  f"is unknown, so the advice for {fy} below assumes "
+                  f"none was recorded; `taxjson check-filed` checks the "
+                  f"lock.", file=sys.stderr)
             _ot = None
         if isinstance(_ot, dict):
             filed_timing[fy] = _ot
@@ -10625,12 +10647,14 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  f"`taxjson run` first. Nothing was written.")
     accounts = {}
     raw_aggs = {}
+    _ot_docs: Dict[str, Dict[str, Any]] = {}
     import json as _json
     for acct, pth in sorted(files.items()):
         _crypto = bool((cfg.get("accounts", {}).get(acct) or {})
                        .get("crypto"))
         try:
             doc = _read_work_doc(Path(pth))
+            _ot_docs[acct] = doc
             accounts[acct] = taxjson_filed.aggregates_from_gains(
                 doc, crypto=_crypto, year=int(year))
             raw_aggs[acct] = taxjson_filed.aggregates_from_gains(
@@ -10641,9 +10665,49 @@ def cmd_close_year(args: argparse.Namespace) -> None:
             sys.exit(f"taxjson close-year: could not read {pth}: {e} — "
                      f"re-run `taxjson run` to rebuild it. Nothing was "
                      f"written.")
+    # A year with no disposition and no income in any taxable book is
+    # almost always a typo'd [settings] year (2015, 2204): the lock
+    # then guarded an all-zero "filed" year as OK (S045-24).
+    if (not any(int(a.get("dispositions") or 0) for a in accounts.values())
+            and not any(abs(float(a.get("income") or 0.0)) >= 0.005
+                        for a in accounts.values())):
+        if not args.force:
+            sys.exit(f"taxjson close-year: the taxable books hold no "
+                     f"disposition and no income in {year} — check "
+                     f"[settings] year (pass --force to lock an empty "
+                     f"year). Nothing was written.")
+        print(f"taxjson close-year: WARNING: locking {year} with no "
+              f"disposition and no income (--force).", file=sys.stderr)
     basis = gains_basis_label(files)
     from taxjson.lib.pipeline import option_timing_from_settings
     from taxjson.lib import handoff as _handoff
+    # The lock's option timing describes its totals: it was stamped from
+    # the CURRENT taxjson.toml, so a timing edited after the run locked
+    # grant-timed totals as close timing and option-boundary advised a
+    # T1-ADJ for a premium the lock already held (S046-02).
+    _want_ot = option_timing_from_settings(settings) or {}
+    _ot_bad = []
+    for _a, _doc in sorted(_ot_docs.items()):
+        _sm = _doc.get("summary") or {}
+        if "option_premium_timing" not in _sm or not _want_ot:
+            continue
+        _got = (str(_sm.get("option_premium_timing") or "close"),
+                _sm.get("option_grant_since"))
+        _exp = (_want_ot.get("option_premium_timing"),
+                _want_ot.get("option_grant_since"))
+        if _got[0] != _exp[0] or (_exp[0] == "grant"
+                                  and _got[1] != _exp[1]):
+            _ot_bad.append(f"{_a}: built with {_got[0]} timing"
+                           + (f" since {_got[1]}" if _got[0] == "grant"
+                              else ""))
+    if _ot_bad:
+        sys.exit(f"taxjson close-year: the gains files were built with "
+                 f"another option timing than taxjson.toml now says "
+                 f"({'; '.join(_ot_bad)}; settings: "
+                 f"{_exp[0]}"
+                 + (f" since {_exp[1]}" if _exp[0] == "grant" else "")
+                 + ") — run `taxjson run`, then close. Nothing was "
+                   "written.")
     filed_csv = (Path(args.filed_dispositions).expanduser()
                  if getattr(args, "filed_dispositions", None) else None)
     if filed_csv is not None and not filed_csv.exists():
@@ -10653,6 +10717,20 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  f" already exists — the lock protects a filed year. "
                  f"Re-run with --force to replace it (only if you "
                  f"re-filed/amended).")
+    # The lock records a FILED return: a year that has not ended cannot
+    # have been filed — the lock then drifted on every later run and
+    # the checklist said "Return filed and the year locked" (S045-23).
+    from datetime import date as _date_cy
+    if _date_cy.today() <= _date_cy(int(year), 12, 31):
+        if not args.force:
+            sys.exit(f"taxjson close-year: tax year {year} has not ended "
+                     f"(today is {_date_cy.today().isoformat()}) — the "
+                     f"lock records the FILED return; close the year "
+                     f"after you file (or pass --force to snapshot it "
+                     f"anyway). Nothing was written.")
+        print(f"taxjson close-year: WARNING: tax year {year} has not "
+              f"ended — locking a partial year (--force); later trades "
+              f"in {year} will show as drift.", file=sys.stderr)
     print(f"  recording year-end positions and the {year} dispositions "
           f"for the {int(year) + 1} hand-off ...")
     try:
@@ -14032,7 +14110,9 @@ def main() -> None:
     p_audit.add_argument("--account", help="Filter: account name "
                                            "(display only — the "
                                            "computation stays blended)")
-    p_audit.add_argument("--year", type=int,
+    # One plausible-year check for every --year (S047-14): 2204 or -5
+    # audited nothing and printed an all-checkmark reconciliation.
+    p_audit.add_argument("--year", type=_tax_year_arg,
                          help="Tax year (default: taxjson.toml)")
     p_audit.add_argument("--all-years", action="store_true",
                          help="Audit every year on the books")
@@ -14170,7 +14250,7 @@ def main() -> None:
         help="Snapshot the current tax year's filing aggregates to "
              "filed/<year>.json — the filed-year lock that "
              "check-filed (and every full run) guards")
-    p_close.add_argument("--year", type=int, default=None,
+    p_close.add_argument("--year", type=_tax_year_arg, default=None,
                          help="Must match [settings].year (guard)")
     p_close.add_argument("--force", action="store_true",
                          help="Replace an existing lock (re-filed/"
@@ -14207,7 +14287,7 @@ def main() -> None:
         help="Find positions with missing cost basis (truncated buy history "
              "or $0-basis corp actions) that distort a year's gain")
     p_fmh.add_argument("account", nargs="?", help="Account (default: all)")
-    p_fmh.add_argument("--year", type=int,
+    p_fmh.add_argument("--year", type=_tax_year_arg,
                        help="Tax year to scope relevance (default: config year)")
     p_fmh.add_argument("--include-options", action="store_true",
                        help="Also check option positions")
