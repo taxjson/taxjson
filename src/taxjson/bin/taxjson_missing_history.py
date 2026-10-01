@@ -32,6 +32,7 @@ To actually fix an AFFECTS row, generate a phantom-opening file and re-run:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -127,6 +128,10 @@ def main(argv=None):
                     help="an account the caller could not supply a book "
                          "for (repeatable): reported as NOT checked, so "
                          "the run never ends in an all-clear")
+    ap.add_argument("--phantoms", metavar="FILE",
+                    help="the project's phantoms.json: pairs it covers "
+                         "(the run applies them) are listed apart, not "
+                         "as work still to do")
     ap.add_argument("--include-options", action="store_true",
                     help="also include OCC option symbols (a negative option "
                          "position is normal sell-to-open, so skipped by default)")
@@ -237,6 +242,24 @@ def main(argv=None):
         return 0
 
     yr = args.year
+    # phantoms.json pairs already covered (R1-339: the report kept
+    # asking for the --suggest-phantoms step the user had done, and the
+    # checklist step never cleared).
+    _ph: set = set()
+    if args.phantoms:
+        try:
+            for e in json.loads(Path(args.phantoms).read_text(
+                    encoding="utf-8")) or []:
+                if isinstance(e, dict):
+                    _ph.add((str(e.get("symbol") or "").upper(),
+                             str(e.get("account") or "").lower()))
+        except (OSError, ValueError) as e:
+            print(f"taxjson-missing-history: warning: could not read "
+                  f"{args.phantoms}: {e}", file=sys.stderr)
+
+    def _covered(r) -> bool:
+        c = r.candidate
+        return (str(c.symbol).upper(), str(c.account).lower()) in _ph
 
     # === Section 0: reconstructed mergers ===
     if links:
@@ -259,15 +282,25 @@ def main(argv=None):
               f"{len(short_rows)} pair(s)")
         if yr:
             affects = [r for r in short_rows if r.affects_year
-                       and not r.candidate.registered]
+                       and not r.candidate.registered and not _covered(r)]
+            covered = [r for r in short_rows if r.affects_year
+                       and not r.candidate.registered and _covered(r)]
             sheltered = [r for r in short_rows if r.affects_year
                          and r.candidate.registered]
             ignorable = [r for r in short_rows if not r.affects_year]
-            print(f"   {len(affects)} affect tax year {yr}; "
-                  f"{len(sheltered)} are in registered accounts; "
-                  f"{len(ignorable)} do not.")
+            print(f"   {len(affects) + len(covered)} affect tax year {yr}"
+                  + (f" ({len(covered)} covered by phantoms.json)"
+                     if covered else "")
+                  + f"; {len(sheltered)} are in registered accounts; "
+                    f"{len(ignorable)} do not.")
             _print_section(f"AFFECTS {yr} - missing basis distorts this year's "
                            "gain; fix before filing:", affects, show_year_cols=True)
+            # Pairs phantoms.json already covers (the run applies them)
+            # are not work still to do (R1-339).
+            _print_section(f"COVERED by phantoms.json - the run applies these "
+                           f"openings; nothing more to do unless `taxjson "
+                           f"sum` lists the sale under manual reporting:",
+                           covered, show_year_cols=True)
             # A registered account has no reportable gain: listing its
             # rows under "distorts this year's gain" (and counting them
             # in the checklist) told the user to fabricate basis there
@@ -309,7 +342,8 @@ def main(argv=None):
                 f"NOT relevant to {yr} - sold in other years; safe to ignore:",
                 irr)
 
-    if (yr and (any(r.affects_year for r in short_rows)
+    if (yr and (any(r.affects_year and not _covered(r)
+                    for r in short_rows)
                 or any(r.affects_year for r in zero_rows))):
         # (registered rows included: their phantoms still feed the
         # cross-account loss walk)

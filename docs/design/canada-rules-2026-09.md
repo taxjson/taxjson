@@ -12,7 +12,7 @@ cost: the premium is a capital gain in the year the option is written
 (s.49(1)). A later closing purchase is a capital loss in the year it is
 made (IT-479R para 29 for calls, para 32 for puts). If the option is exercised or assigned, s.49(1)
 is deemed never to have applied: the premium is folded into the share
-leg (s.49(2)–(3)) and the grant year is amended (s.49(4)). Expiry adds
+leg (s.49(3) for a call, s.49(3.1) for a put) and the grant year is amended (s.49(4)). Expiry adds
 nothing — the grant-year gain stands.
 
 **Today.** A written option is a short pool of its OCC symbol; nothing

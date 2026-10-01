@@ -416,13 +416,13 @@ Files the pipeline reads and writes (all map files are optional):
 | Command | Purpose |
 | --- | --- |
 | `taxjson run` | Run the full pipeline, rebuilding every stage (the recommended everyday command — results always reflect current inputs, config and code). |
-| `taxjson run --fast` | Incremental run: cached stages whose inputs, `taxjson.toml` and installed code are all unchanged are skipped. Input files and the project-root map files are compared by content (size + SHA-256), so a corrected export copied over with an older mtime (`cp -p`, `rsync -a`, unzip) still rebuilds; the rest of the cache is mtime-based. The cache invalidates itself on any of those changing; `--fast` trades that safety net's edge cases for speed. |
+| `taxjson run --fast` | Incremental run: cached stages whose inputs, `taxjson.toml` and installed code are all unchanged are skipped. Input files and the project-root map files are compared by content (size + SHA-256), so a corrected export copied over with an older mtime (`cp -p`, `rsync -a`, unzip) still rebuilds; taxjson's own code is compared by content too (a change since the last complete run rebuilds everything); the rest of the cache is mtime-based. The cache invalidates itself on any of those changing; `--fast` trades that safety net's edge cases for speed. |
 | `taxjson run --account NAME` | Re-run a single account. ⚠️ Skips cross-account wash-sale and cross-listing detection — those need a full run. |
 | `taxjson sanity ACCOUNT\|FILE.toml\|ACCOUNT=FILE ...` | Cross-check open positions against externally produced holdings `.toml` files (portoml-style `[[holding]]`), per symbol (`--tolerance`, `--json`; exit 1 on any discrepancy). Bare items form one aggregate group (combined positions vs combined holdings — quick, but blind to a position sitting in the wrong account). `ACCOUNT[+ACCOUNT]=FILE[+FILE]` pairs specific accounts with specific files and is checked as its own group — many-to-many because a taxjson account can span several broker accounts (`margin=ibkr.toml+webull.toml`, or repeat `margin=…`) and one broker export can cover several accounts (`rrsp+lira=flex.toml`). Both forms mix freely. With no arguments the pairings come from `taxjson.toml` — each account's `holdings = [...]` — and `taxjson run` finishes with the same check as a warning. Option rows whose root the file spells differently (`RCI…` vs taxjson's `RCI.B…`) are matched through the row's `underlying` field. |
 | `taxjson run --strict` | Promote per-account validation ERRORs (oversold positions, malformed rows) and an input file that parsed to 0 transactions to fatal instead of publishing reports with a DIAGNOSTICS banner. Recommended for CI/cron. |
 | `taxjson run sum` (chaining) | Subcommands chain in one invocation, each with its own flags: `taxjson run close-year check-filed`. Note a chained `--json` command's stdout follows the earlier commands' progress output — pipe consumers should run the JSON command standalone. A failing command stops the chain and its exit code propagates. Option values that collide with command names are handled (`--account sum`); for the rare ambiguous positional, separate with `--`. |
 | `taxjson close-year [--filed-dispositions CSV]` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. It also records what the next year needs for `taxjson handoff`: every sale, the positions and cost at Dec 31 (superficial-loss deferrals included), and the trades that settle in January. When the return was prepared with another tool, `--filed-dispositions` stores the sales it actually reported (CSV: `symbol,date,qty,proceeds,cost,gain`, optional `account`). |
-| `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks; exit 1 on drift. A taxable account the books have but the lock does not (with activity in that year), or a locked account the books no longer have, is drift too; a locked account that is no longer a taxable account in `taxjson.toml` is reported, never recomputed from its old `work/` book. Each year is recomputed with the written-option timing its lock recorded. Dividends and payments in lieu are compared separately. An unreadable lock is named and counts as a failure. A lock closed under the other country (every lock records its `country`) is refused by name and never recomputed under this project's law; a lock is recomputed on the date basis it recorded. Every full run also auto-checks (`taxjson run --strict` aborts on drift or an unreadable lock). |
+| `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks; exit 1 on drift. A taxable account the books have but the lock does not (with activity in that year), or a locked account the books no longer have, is drift too; a locked account that is no longer a taxable account in `taxjson.toml` is reported, never recomputed from its old `work/` book. Each year is recomputed with the written-option timing its lock recorded. Dividends and payments in lieu are compared separately, and so are the amounts the export puts on each return line (Schedule 3 line codes, Form 8949 part totals), so a change that moves an amount between lines is drift even when the gain is unchanged; interest, foreign tax withheld and the FX gain on foreign cash are not locked (every OK says so). An unreadable lock is named and counts as a failure. A lock closed under the other country (every lock records its `country`) is refused by name and never recomputed under this project's law; a lock is recomputed on the date basis it recorded. Every full run also auto-checks (`taxjson run --strict` aborts on drift or an unreadable lock). |
 | `taxjson events` / `divs` / `dil` / `trades` / `gains` / `fees` / `roc` / `leaps` | Per-transaction views over a look-back window — see below. |
 | `taxjson transfers [ACCOUNT]` | Custody-transfer **evidence** view: depot flips, listing journals, broker migrations, and crypto withdrawals/sends (a send that arrived on another of your exchanges is a self-custody move; the rest are gift/payment candidates — see `taxjson crypto-sends`) — the TRANSFER rows the books deliberately exclude (basis comes from buy/sell history). Reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`) plus in-book TRANSFERs from `transfers = true` accounts, with the broker's transfer type (InterDepot / Internal / ATON). `--json` for machines. |
 | `taxjson crypto-sends [ACCOUNT] [--json]` | Every crypto withdrawal/send that did **not** arrive on another of your exchanges (a send is paired with an arrival of the same coin on another exchange within 3 days, losing at most 10% to the network fee), with your decision — `self` (your own wallet: no tax event), `gift` or `payment` (a disposition at fair market value; a gift under ITA s.69(1)(b)) — or PENDING. For each: the fair value per coin and in CAD with its source (the exchange's spot price when the row carries one — Coinbase; otherwise the Yahoo daily close `fill-crypto` uses, at the send date, times the Bank of Canada rate), and the ready line `BUYSELL <date> <local time> <COIN> -<qty> CAD <price> <proceeds> 0`. A Kraken network fee taken in the coin is already booked by the parser and is not in the quantity; a matched send that arrived short (a Coinbase Send carries its network fee inside the quantity) is listed with the shortfall, which is not booked. Stablecoins (USDC/USDT/DAI; PYUSD/GUSD on Coinbase) are US-dollar cash in the books, so a gift/payment of one gets no sale line: the command shows the **currency gain** instead — value at the send-date Bank of Canada rate minus the average CAD cost of the USD-cash/stablecoin pool rebuilt from the ledgers — flagged when likely superficial (USD/stablecoins acquired within 30 days and still held), with the year's total. `--set ID=self\|gift\|payment [--note TEXT] [--price P]` records a decision (repeatable; `--price` when the price lookup fails), `--write` regenerates `inputs/<acct>/crypto_sends.tt` (idempotent; it warns when another `.tt` already sells the same coin, date and quantity). `taxjson run` asks at a terminal (self / gift / payment / skip) after the crypto parse and refreshes the file; headless it prints one note. Ids carry exchange, local date/time, coin and quantity — never a txid or address; refs are masked (`LG***`). A `checklist` step. |
@@ -457,7 +457,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson form-export` | Filing-shaped output: IRS Form 8949 / CRA Schedule 3 (default follows the country), or a TurboTax-importable TXF via `--form txf [--box A|B|C] --out gains.txf`. |
 | `taxjson reconcile-slips SLIP.csv [SLIP.csv ...]` | Diff broker T5008 / 1099-B slips against computed dispositions before filing (exit 1 on mismatch); several slip files (one per broker) are reconciled together. |
 | `taxjson help [COMMAND]` | Show top-level help, or help for one subcommand. |
-| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain. See "Importing manual cost basis". |
+| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain; pairs the project's `phantoms.json` already covers are listed apart (COVERED), not as work to do. See "Importing manual cost basis". |
 | `taxjson elect` | Review, redo, or non-interactively set (`--set ID=ELECTION`) a corporate-action tax election. |
 | `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). |
 | `taxjson harvest [SYMBOL ...]` | Unrealized gain/(loss) per open position at current prices — "if I sold this today, is it a loss?" Losses first, wash-radar advisory on each loss, `LT_IN` days-to-long-term for US projects. |
@@ -614,15 +614,23 @@ the earliest table also says the post-2024 AMT shown did not apply).
   to provincial tax x foreign income / net income). The estimate is
   signed: eligible dividends at a low bracket can show a negative
   figure — a saving on the tax of the other income. Not modelled: QC,
-  low-income reductions, non-eligible dividends, and a prior-year
+  low-income reductions, non-eligible dividends, a prior-year
   minimum tax carryover (T691 Part 8, line 40427, ITA s.120.2) — when
   AMT does not bind, a NOTE names the headroom such a carryover could
-  use.
+  use — non-refundable credits other than the basic personal amount
+  (CPP/EI, Canada employment, age, pension, donations ...), the OAS
+  recovery tax (s.180.2) and AMT adjustments outside the books (the
+  s.110(1)(d) stock-option deduction, donated securities): see
+  KNOWN_ISSUES.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
   brackets; losses net ST first, then LT, then up to $3,000 of ordinary
-  income (a net-loss year shows a negative estimate — a saving); NIIT
-  3.8% above $200k MAGI; no state tax.
+  income (a net-loss year shows a negative estimate — a saving), and
+  that deduction also reduces net investment income; the carryforward
+  shown counts as used only what taxable income absorbs (Capital Loss
+  Carryover Worksheet line 4); NIIT 3.8% above $200k MAGI; no foreign
+  tax credit (the withholding in the books is not credited) and no
+  state tax.
 
 Add `--verbose` (`-v`) for the **CALCULATION TRACE** — every bracket
 slice, credit and surtax tier, side by side for the base and
@@ -641,7 +649,14 @@ per-currency totals split TAXABLE / SHELTERED when a registered account
 contributes — the TAXABLE line is the figure to compare with the T5/T3 slips.
 Each row counts in its tax year (see "Income dating"), so a Canadian ETF's
 December-record distribution paid in January is in the December year, as on
-the T3. `winners` prints the same taxable/sheltered split under its ranking.
+the T3. A crypto account's DIVIDEND rows are staking rewards (ordinary
+income): `divs-sum` names them on an "of which crypto staking" line, and
+`sum` / the views / the crypto `.sum` label them as staking.
+`winners` prints the same taxable/sheltered split under its ranking, and
+`dil-sum` / `roc-sum` / `trades-sum` separate registered accounts the same
+way (the T3 box 42 figure is `roc-sum`'s TAXABLE line; T5008 proceeds are
+`trades-sum`'s taxable "sold" figure). Every summary TOTAL is the sum of
+its printed (cent-rounded) rows.
 
 **Income dating** (`taxjson tax-logic` states each rule with its id):
 
@@ -680,7 +695,9 @@ the T3. `winners` prints the same taxable/sheltered split under its ranking.
   planning numbers and the slip tie-outs agree with them.
 
 **`taxjson trades-sum [PERIOD] [ACCOUNT]`** — per ticker: buy/sell counts, value
-bought/sold, and fees, with per-currency totals.
+bought/sold, and fees, with per-currency totals (all accounts; when a
+registered account contributes, the taxable accounts' "sold" figure is
+printed under them).
 
 **`taxjson fees-sum [PERIOD] [ACCOUNT]`** — trading-fee report by **brokerage**
 (commission/fee totals with per-trade averages, $/share, %notional), converted
@@ -967,8 +984,14 @@ supports; record what you actually claimed on filed returns in a
 — auto-detected, or pass `--claimed FILE`) and it's folded into the running
 balance. **Units:** Canada — the 100% capital loss applied that year, i.e.
 the line 25300 amount divided by the inclusion rate (x2 at 50%); US — the
-Schedule D line 21 deduction against ordinary income (not the line 6/14
-carryover coming in). `1,234.56` and `$1,234.56` are accepted. A claim
+Schedule D line 21 deduction against ordinary income as far as taxable
+income absorbed it (line 4 of the next year's Capital Loss Carryover
+Worksheet — 0 in a year with negative taxable income; not the line 6/14
+carryover coming in). `1,234.56` and `$1,234.56` are accepted, and so is a
+UTF-8 BOM; a line that cannot be read (or whose year is not a plausible
+tax year) is named, left out, and makes the checklist's carryover step
+need attention. A claim equal to the filed (per-row-rounded) Schedule 3
+loss consumes the ledger's unrounded loss exactly. A claim
 recorded for a year the books show no loss for waits for a later loss, but
 only one of the next 3 years (the T1A carryback reach, ITA 111(1)(b));
 past that it is reported as unmatched. If the history's first year has
@@ -985,9 +1008,11 @@ output.
 
 Under ITA s.49(1) writing an option is a disposition: the premium is a
 capital gain **in the year the option is written**. A later buy-back is a
-capital loss in its own year (IT-479R para 24); expiry adds nothing; an
+capital loss in its own year (IT-479R para 29 for calls, para 32 for
+puts); expiry adds nothing; an
 exercise or assignment folds the premium into the share leg instead and
-the grant year is amended (s.49(2)–(4)). Contracts written and closed in
+the grant year is amended (s.49(3) for a call, s.49(3.1) for a put;
+s.49(4)). Contracts written and closed in
 the same year give the same total either way — only year-straddling
 contracts differ. Canada projects use this timing by default; `"close"`
 nets at the closing transaction (the US §1234 convention, which the US
@@ -1120,9 +1145,11 @@ Lints the whole project for placement mistakes the pipeline can see:
   every unmapped US-listed dividend payer — candidates to verify, not
   verdicts (same root can be a different issuer).
 
-Registered-plan kinds are inferred from account names (`tfsa`, `rrsp`, …);
-override per account with `plan = "tfsa"` in `taxjson.toml` when a name
-doesn't say. Exit 1 when findings exist, 0 on a clean scan — cron-friendly.
+Registered-plan kinds are inferred from a plan word that is a whole token
+of the account name (`tfsa`, `rrsp2`, `my-tfsa`; not `admiral`); override
+per account with `plan = "tfsa"` in `taxjson.toml` when a name doesn't say
+(an unknown `plan` value is warned about and ignored). An option counts as
+a sighting of its underlying's listing for MAP-GAP / US-LISTING. Exit 1 when findings exist, 0 on a clean scan — cron-friendly.
 
 ### Tax-loss harvesting (`taxjson harvest`)
 

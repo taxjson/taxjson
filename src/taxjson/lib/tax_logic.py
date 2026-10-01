@@ -575,7 +575,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
         ("Options (s.49)", prem + [
             Rule("CA-OPT-06",
                  "Exercise or assignment: the premium folds into the "
-                 "shares' cost or proceeds (s.49(3), (4))."),
+                 "shares' cost or proceeds (s.49(3) for a call, s.49(3.1) "
+                 "for a put; the grant year is amended under s.49(4))."),
             Rule("CA-OPT-07",
                  "If the premium's year was already filed, `taxjson "
                  "option-boundary` flags the T1-ADJ.", cont=True),
@@ -1097,6 +1098,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "short-term, and a net capital loss as offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
+            Rule("US-EST-NIIT-LOSS",
+                 "That up-to-$3,000 capital loss deduction also reduces "
+                 "net investment income for NIIT (Form 8960 line 5a).",
+                 cont=True),
+            Rule("US-EST-CARRY-TI",
+                 "The carryforward it shows counts as used only the part "
+                 "of the $3,000 that taxable income absorbs (Capital Loss "
+                 "Carryover Worksheet line 4).", cont=True),
             Rule("US-RPT-08",
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "

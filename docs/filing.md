@@ -78,8 +78,10 @@ the open steps one at a time; `--quick` skips the slow detectors.
       together) exits clean. The CRA matches Schedule 3 proceeds against
       these; this is the step that prevents a review letter.
 - [ ] **T5 / T3 / NR4 slips** against the TAXABLE line of `taxjson divs-sum` and
-      `taxjson roc-sum`. Trust units and split-share corps report on a
-      T3, often weeks after the T5s.
+      `taxjson roc-sum`. Trust units report on a T3, often weeks after
+      the T5s; split-share and mutual-fund corporations report on a T5,
+      and its box 18 capital-gains dividends go on line 17400 (taxjson
+      books them as ordinary dividends — see KNOWN_ISSUES).
 - [ ] **Foreign tax withheld** from the slips (not the broker rows) for
       the foreign tax credit, line 40500 / Form T2209.
 

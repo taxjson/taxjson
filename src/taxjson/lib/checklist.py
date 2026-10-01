@@ -77,7 +77,10 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "The only acceptable differences are trades after the last export."),
     ("missing-history", 2, "No position with missing cost basis affects the year",
      "taxjson find-missing-history",
-     "A sale drawing on missing basis is booked at $0 cost — the gain is overstated by the missing amount."),
+     "Missing basis distorts the year either way: a sale with no earlier buy in the data "
+     "(truncated history) is booked as a short and left out of the year, understating the "
+     "proceeds and gain; shares acquired at $0 cost (an undeclared corporate action) "
+     "overstate the gain by the missing basis."),
     ("elections", 2, "No unresolved merger or spin-off election",
      "taxjson elect --pending",
      "A deferred election leaves the account out of the run."),
@@ -101,7 +104,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
     ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the dividend and ROC totals",
      "taxjson divs-sum, taxjson roc-sum",
-     "Trust units and split-share corps report on a T3, often weeks after the T5s."),
+     "Trust units report on a T3, often weeks after the T5s; split-share and mutual-fund "
+     "corporations report on a T5, where box 18 capital-gains dividends go on line 17400 "
+     "(taxjson books them as dividends)."),
     ("foreign-tax", 3, "Foreign tax withheld taken from the slips (line 40500 / T2209)",
      "T5 box 15/16, T3 box 33/34",
      "The credit is limited to what the slips show, not what the broker rows imply."),
@@ -151,7 +156,15 @@ US_STEPS: Dict[str, Any] = {
                      "Paying with crypto is a sale at fair value; a gift is not a sale for the donor."),
     "wash-reviewed": ("Every wash-sale disallowance reviewed", "taxjson wash-sales",
                       "A wash sale triggered by an IRA purchase is permanently disallowed."),
-    "option-boundary": "US: written-option premiums are netted at the close (§1234) — no s.49 boundary",
+    # No s.49 year boundary in a US project (§1234 nets at the close),
+    # but a contract past its expiry with no close row keeps its premium
+    # or cost out of the return — the check stays (S066-15).
+    "option-boundary": ("No option left open past its expiry",
+                        "taxjson list (option positions)",
+                        "Under §1234 an expired written option's premium is a "
+                        "short-term gain, and an expired long option's cost a "
+                        "loss, in the expiry year; a missing expiry, exercise "
+                        "or assignment row leaves either out of the return."),
     "t5008": ("1099-B slips reconcile to the computed dispositions",
               "taxjson reconcile-slips inputs/slips/*.csv",
               "The IRS matches Form 8949 / Schedule D to the 1099-Bs — this step prevents a CP2000."),
@@ -294,16 +307,29 @@ def _data_files(folder: Path) -> List[Path]:
                   and p.suffix.lower() in (".csv", ".tt"))
 
 
-def _base_docs(ctx: Ctx, names: List[str]) -> Dict[str, Dict[str, Any]]:
+def _base_docs_checked(ctx: Ctx, names: List[str]
+                       ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+    """(readable base books by account, the work/ files that exist but
+    cannot be read). A detector must not compute a count or a date from
+    the readable SUBSET and call it the project's (S066-19, S067-04:
+    a truncated margin_base.json made roc-entered count 0 ADJUST rows
+    and inputs-frozen date the books by the other accounts)."""
     out: Dict[str, Dict[str, Any]] = {}
+    bad: List[str] = []
     for n in names:
         f = ctx.cache / f"{n}_base.json"
-        if f.is_file():
-            try:
-                out[n] = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-    return out
+        if not f.is_file():
+            continue
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            bad.append(f"work/{f.name}")
+            continue
+        if not isinstance(doc, dict):
+            bad.append(f"work/{f.name}")
+            continue
+        out[n] = doc
+    return out, bad
 
 
 def _git(root: Path, *args: str) -> Tuple[int, str]:
@@ -352,7 +378,12 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
     if missing:
         return Result("inputs-frozen", "todo",
                       f"no activity files in inputs/{', inputs/'.join(missing)}")
-    docs = _base_docs(ctx, _accounts_of(ctx, "taxable") + _accounts_of(ctx, "crypto"))
+    docs, bad = _base_docs_checked(
+        ctx, _accounts_of(ctx, "taxable") + _accounts_of(ctx, "crypto"))
+    if bad:
+        return Result("inputs-frozen", "blocked",
+                      f"cannot read {', '.join(bad)} — its latest activity "
+                      f"is unknown; re-run `taxjson run`")
     if not docs:
         return Result("inputs-frozen", "blocked", "no work/*_base.json — run `taxjson run`")
     latest = ""
@@ -397,7 +428,11 @@ def d_crypto_inputs(ctx: Ctx) -> Result:
 
 
 def d_roc_entered(ctx: Ctx) -> Result:
-    docs = _base_docs(ctx, _accounts_of(ctx, "taxable"))
+    docs, bad = _base_docs_checked(ctx, _accounts_of(ctx, "taxable"))
+    if bad:
+        return Result("roc-entered", "blocked",
+                      f"cannot read {', '.join(bad)} — its ADJUST rows "
+                      f"cannot be counted; re-run `taxjson run`")
     adjust = sum(1 for d in docs.values()
                  for t in (d.get("transactions") or [])
                  if t.get("action") == "ADJUST"
@@ -431,10 +466,13 @@ def d_run_clean(ctx: Ctx) -> Result:
         return Result("run-clean", "blocked", "no reports — run `taxjson run`")
     per_account: Dict[str, int] = {}
     empty_parse: List[str] = []
+    unreadable: List[str] = []
     for s in sums:
         try:
             head = s.read_text(encoding="utf-8", errors="replace")[:20000]
         except OSError:
+            # Its validation count is unknown, not zero (S067-04).
+            unreadable.append(f"reports/{s.name}")
             continue
         m = re.search(r"validation: (\d+) error", head)
         if m:
@@ -455,6 +493,9 @@ def d_run_clean(ctx: Ctx) -> Result:
             if p.is_file() and p.stat().st_size > 2]
     oldest_report = min(s.stat().st_mtime for s in sums)
     problems = []
+    if unreadable:
+        problems.append(f"cannot read {', '.join(unreadable)} — its "
+                        f"validation errors are unknown")
     if errors:
         problems.append(f"{errors} validation error(s) in reports/*.sum")
     if pend:
@@ -623,18 +664,31 @@ def d_missing_history(ctx: Ctx) -> Result:
         return Result("missing-history", "blocked", _last_line(err) or _last_line(out) or f"exit {code}")
     syms: List[str] = []
     in_affects = False
+    # Every table row printed under an AFFECTS heading counts — a strict
+    # symbol/currency pattern dropped 'BRK/B', a '?' currency, 'USDT'
+    # and lower-case coins, and the step said "nothing affects the
+    # year" (S067-10). A section ends at the blank line before the next
+    # heading; the header, the rules and indented detail lines are not
+    # rows.
     for ln in out.splitlines():
         if ln.startswith("AFFECTS"):
             in_affects = True
             continue
-        if (ln.startswith("NOT relevant") or ln.startswith("To fix")
-                or ln.startswith("SHELTERED") or ln.startswith("##")):
-            # Registered-account rows have no reportable gain: never
-            # counted as affecting the year (audit S035-08).
+        if (not ln.strip() or ln.startswith(("##", "NOT relevant",
+                                              "To fix", "SHELTERED",
+                                              "COVERED"))):
+            # A blank line ends the section; registered-account rows have
+            # no reportable gain: never counted as affecting the year
+            # (audit S035-08); pairs phantoms.json covers are not work
+            # to do (R1-339).
             in_affects = False
-        m = re.match(r"^([A-Z0-9.\-]+)\s+(\S+)\s+[A-Z]{3}\s", ln)
-        if in_affects and m:
-            syms.append(f"{m.group(1)} ({m.group(2)})")
+            continue
+        if not in_affects or ln[:1].isspace() or ln.startswith("-") \
+                or ln.startswith("Symbol "):
+            continue
+        parts = ln.split()
+        if len(parts) >= 2:
+            syms.append(f"{parts[0]} ({parts[1]})")
     if syms:
         shown = ", ".join(syms[:4]) + (" ..." if len(syms) > 4 else "")
         return Result("missing-history", "attention",
@@ -719,7 +773,52 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                   else "every send arrived on another exchange")
 
 
+def _books_state(ctx: Ctx) -> Optional[Result]:
+    """blocked/attention for the steps that compare the taxable books
+    (audit, form-export) when work/ was built for another tax year or a
+    wash-adjusted file is older than its inputs — otherwise their
+    mismatch text blames phantoms or an export bug (S068-16) or they
+    say done over stale numbers (S067-12). None when the books are fine
+    or cannot be judged (the command's own error is then reported)."""
+    from taxjson.lib.report_model import resolve_gains_files, stale_wash_inputs
+    taxable = {n for n, a in ctx.accounts.items()
+               if a.get("type") == "taxable"}
+    try:
+        files = {a: p for a, p in resolve_gains_files(ctx.cache).items()
+                 if a in taxable}
+    except Exception:
+        return None
+    other, stale = [], []
+    for a, pth in sorted(files.items()):
+        try:
+            doc = json.loads(Path(pth).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        summ = doc.get("summary") if isinstance(doc, dict) else None
+        yr = summ.get("year") if isinstance(summ, dict) else None
+        if yr is not None and str(yr) != str(ctx.year):
+            other.append(f"{a}: {yr}")
+        if Path(pth).name.endswith("_gains_wash.json") \
+                and stale_wash_inputs(Path(pth)):
+            stale.append(a)
+    if other:
+        return Result("", "blocked",
+                      f"work/ was built for another tax year "
+                      f"({', '.join(other)}; [settings] year is {ctx.year}) "
+                      f"— rebuild with `taxjson run`")
+    if stale:
+        return Result("", "attention",
+                      f"the wash-adjusted books of {', '.join(stale)} are "
+                      f"older than their inputs (a `run --account` skipped "
+                      f"the cross-account pass) — run `taxjson run`")
+    return None
+
+
 def d_audit(ctx: Ctx) -> Result:
+    st = _books_state(ctx)
+    if st is not None:
+        st.id = "audit"
+        return st
     code, out, err = ctx.sub("audit")
     if not out:
         return Result("audit", "blocked", _last_line(err) or f"exit {code}")
@@ -746,18 +845,39 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
     trade_basis = (str(ctx.settings.get("tax_date") or "").lower() == "trade"
                    or (not ctx.settings.get("tax_date")
                        and is_us(ctx.settings.get("country"))))
+    from taxjson.lib.report_model import stale_wash_inputs
     denied = perm = 0.0
     seen = False
+    # Every taxable book must be read, current and built for this year —
+    # a total over the readable subset marked the step done while a
+    # denial went unreviewed (R1-338 unreadable, S067-11 missing, S067-12
+    # stale wash pass, S068-16 work/ built for another year).
+    unreadable: List[str] = []
+    missing: List[str] = []
+    stale: List[str] = []
+    other_year: List[str] = []
     for n in names:
         f = ctx.cache / f"{n}_gains_wash.json"
         if not f.is_file():
             f = ctx.cache / f"{n}_gains.json"
         if not f.is_file():
+            if _data_files(ctx.root / "inputs" / n):
+                missing.append(n)
             continue
         try:
             doc = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            unreadable.append(f"work/{f.name}")
             continue
+        if not isinstance(doc, dict):
+            unreadable.append(f"work/{f.name}")
+            continue
+        if f.name.endswith("_gains_wash.json") and stale_wash_inputs(f):
+            stale.append(n)
+        _yr = (doc.get("summary") or {}).get("year") \
+            if isinstance(doc.get("summary"), dict) else None
+        if _yr is not None and str(_yr) != str(ctx.year):
+            other_year.append(f"{n}: {_yr}")
         seen = True
         # Same year basis as every other denial total (the gains file
         # is already year-scoped on it): a loss traded Dec 31 that
@@ -771,8 +891,24 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                 continue
             denied += float(t.get("disallowed_amount") or 0)
             perm += float(t.get("permanently_disallowed") or 0)
+    blockers = []
+    if unreadable:
+        blockers.append(f"cannot read {', '.join(unreadable)}")
+    if missing:
+        blockers.append(f"no gains file for {', '.join(missing)}")
+    if other_year:
+        blockers.append(f"work/ built for another year ({', '.join(other_year)}"
+                        f"; [settings] year is {ctx.year})")
+    if blockers:
+        return Result("wash-reviewed", "blocked",
+                      "; ".join(blockers) + " — re-run `taxjson run`")
     if not seen:
         return Result("wash-reviewed", "blocked", "no gains files — run `taxjson run`")
+    if stale:
+        return Result("wash-reviewed", "attention",
+                      f"the wash-adjusted books of {', '.join(stale)} are "
+                      f"older than their inputs (a `run --account` skipped "
+                      f"the cross-account pass) — run `taxjson run`")
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
                       f"{perm:,.2f} permanently denied (registered-account repurchase) "
@@ -783,10 +919,57 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
     return Result("wash-reviewed", "done", "no superficial losses")
 
 
+def _us_expired_options(ctx: Ctx) -> Result:
+    """US projects (S066-15): option-boundary is a Canadian (s.49)
+    command, but the missing-expiry-row check applies to both long and
+    written contracts — run it on the taxable base books directly."""
+    from taxjson.lib.core import TaxTransaction
+    from taxjson.lib.option_boundary import expired_open
+    names = _accounts_of(ctx, "taxable")
+    docs, bad = _base_docs_checked(ctx, names)
+    if bad:
+        return Result("option-boundary", "blocked",
+                      f"unreadable: {', '.join(bad)} — re-run `taxjson run`")
+    if not docs:
+        return Result("option-boundary", "blocked",
+                      "no work/*_base.json — run `taxjson run`")
+    found = []
+    fields = TaxTransaction.__dataclass_fields__
+    for name, d in sorted(docs.items()):
+        txs = []
+        for r in (d.get("transactions") or []):
+            if not isinstance(r, dict):
+                continue
+            try:
+                txs.append(TaxTransaction(**{k: v for k, v in r.items()
+                                             if k in fields}))
+            except TypeError:
+                continue
+        found += [dict(x, account=x["account"] or name) for x in
+                  expired_open(txs, ctx.year, today=ctx.today,
+                               tax_date=_tax_date_of(ctx))]
+    if found:
+        shown = ", ".join(f"{x['symbol']} {x['quantity']:g} ({x['account']}, "
+                          f"expired {x['expiry']})" for x in found[:3])
+        return Result("option-boundary", "attention",
+                      f"{len(found)} option position(s) still open past "
+                      f"expiry: {shown}{' ...' if len(found) > 3 else ''} — "
+                      f"import the expiry, exercise or assignment row")
+    return Result("option-boundary", "done",
+                  "no option position open past its expiry")
+
+
+def _tax_date_of(ctx: Ctx) -> str:
+    from taxjson.lib.country import settings_tax_date
+    return settings_tax_date(ctx.settings)
+
+
 def d_option_boundary(ctx: Ctx) -> Result:
     if not _accounts_of(ctx, "taxable"):
         return Result("option-boundary", "n/a",
                       "no non-crypto taxable account — no written options")
+    if is_us(ctx.settings.get("country")):
+        return _us_expired_options(ctx)
     code, out, err = ctx.sub("option-boundary", "--json")
     try:
         doc = json.loads(out) if code == 0 else None
@@ -951,6 +1134,10 @@ def d_form_export(ctx: Ctx) -> Result:
     """The export must equal what the engine computed: form-export's totals
     against `taxjson sum`'s FOR THE RETURN block (same dispositions), and
     that block's gain against the taxable accounts' realized gain."""
+    st = _books_state(ctx)
+    if st is not None:
+        st.id = "form-export"
+        return st
     code, out, err = ctx.sub("form-export", "--json")
     if code != 0:
         return Result("form-export", "blocked", _last_line(err) or f"exit {code}")
@@ -991,8 +1178,16 @@ def d_form_export(ctx: Ctx) -> Result:
     # attention); a missing or doubled row is still far outside it.
     import math
     n_acct = max(1, len(taxable))
-    tol = max(0.05, 0.015 * math.sqrt(n + n_acct))
-    if abs(t["gain"] - realized) > tol:
+    raw = rep.get("gain_unrounded")
+    if isinstance(raw, (int, float)) and label == "Schedule 3":
+        # Unrounded rows vs the .sum's per-account rounding: at most half
+        # a cent per account apart (R1-210).
+        cmp_gain = float(raw)
+        tol = 0.005 * n_acct + 0.01
+    else:
+        cmp_gain = t["gain"]
+        tol = max(0.05, 0.015 * math.sqrt(n + n_acct))
+    if abs(cmp_gain - realized) > tol:
         problems.append(f"{label} gain {t['gain']:,.2f} vs realized {realized:,.2f} "
                         f"in the taxable accounts' .sum")
     # Phantom-basis dispositions are not in the rows (their cost is
@@ -1031,9 +1226,25 @@ def d_carryover(ctx: Ctx) -> Result:
     claimed = (ctx.root / "claimed_losses.txt").is_file()
     if code != 0 and not out:
         return Result("carryover", "blocked", _last_line(err) or f"exit {code}")
+    try:
+        doc = json.loads(out) if out.strip() else {}
+    except ValueError:
+        doc = {}
+    ignored = (doc.get("claimed_ignored") or []) if isinstance(doc, dict) \
+        else []
+    if ignored:
+        # A claimed line the ledger could not read is not applied: the
+        # carryforward is overstated by it (S001-04).
+        return Result("carryover", "attention",
+                      f"{len(ignored)} claimed_losses.txt line(s) ignored "
+                      f"(not applied): {ignored[0]}"
+                      + (" ..." if len(ignored) > 1 else "")
+                      + " — fix the line (`YEAR AMOUNT`)")
     if is_us(ctx.settings.get("country")):
         what = ("record each year's Schedule D line 21 deduction against "
-                "ordinary income (not the line 6 / 14 carryover)")
+                "ordinary income as far as taxable income absorbed it "
+                "(Capital Loss Carryover Worksheet line 4), not the "
+                "line 6 / 14 carryover")
     else:
         what = ("record the 100% loss applied each year (line 25300 "
                 "divided by the inclusion rate: x2 at 50%)")
