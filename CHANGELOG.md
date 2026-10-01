@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sanity: no silent gaps, no ids.** A holdings row with a quantity
+  but no symbol, or with a missing/blank quantity, is refused (it was
+  dropped and the check said OK); accounts with open positions but no
+  `holdings` file print `UNCHECKED: ...` and the checklist's sanity
+  step is attention instead of done; an unreadable taxjson.toml is
+  named as such (it said no account declares `holdings`); the missing-
+  file note and `--json` `file_account` mask broker ids (audit S044-18,
+  S044-19, S049-08, S044-03, S044-16).
+
 - **A corrupt work/ file is a one-line error everywhere.** A truncated,
   non-UTF-8 or wrong-shape (`[1,2,3]`, `{"transactions": 5}`) gains,
   base, raw or report file printed a traceback from about 17 read

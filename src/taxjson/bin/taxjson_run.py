@@ -8448,9 +8448,11 @@ def _sanity_items_from_config(accounts_cfg: Dict[str, Any],
                 pp = root / pp
             (paths if pp.is_file() else missing).append(str(pp))
         if missing:
+            # Masked like the file listing: holdings files are often
+            # named after the broker account (S044-03).
             notes.append(f"account {name}: holdings file(s) missing — "
                          f"not checked: "
-                         f"{', '.join(Path(m).name for m in missing)}")
+                         f"{', '.join(_mask_ids_in_path(Path(m).name) for m in missing)}")
             continue
         if paths:
             files_of[name] = paths
@@ -9143,9 +9145,8 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 group["accounts"].append(acct)
             elif owner == gname:
                 # Summing a duplicate DOUBLED its positions and every
-                # one showed as a 2x QTY_MISMATCH (real data: a repeated
-                # rrsp2 made FNV 80-vs-40) — while the header printed
-                # the deduplicated list. Count once, say so.
+                # one showed as a 2x QTY_MISMATCH — while the header
+                # printed the deduplicated list. Count once, say so.
                 print(f"taxjson sanity: note: account {acct!r} given "
                       f"more than once — counted once.",
                       file=sys.stderr)
@@ -9172,10 +9173,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         # No arguments: pairings come from taxjson.toml — each
         # account's `holdings = [...]`. Explicit arguments override
         # the config for that run.
-        try:
-            _accts_cfg = load_config(root).get("accounts") or {}
-        except SystemExit:
-            _accts_cfg = {}
+        # Not swallowed: an unreadable taxjson.toml said "no account
+        # declares `holdings`" and invited adding keys already there
+        # (S049-08) — load_config names the TOML error instead.
+        _accts_cfg = load_config(root).get("accounts") or {}
         config_groups, config_notes = _sanity_items_from_config(_accts_cfg,
                                                                 root)
         if not config_groups:
@@ -9304,14 +9305,31 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 if (str(h.get("asset_type") or "")).lower() == "cash":
                     continue
                 sym = str(h.get("symbol") or "").strip()
+                _qraw = h.get("quantity")
+                if _qraw is None or (isinstance(_qraw, str)
+                                     and not _qraw.strip()):
+                    # A missing or blank quantity read as 0 and the row
+                    # vanished: sanity said OK and the checklist ticked
+                    # the step (S044-18).
+                    sys.exit(f"taxjson sanity: {path.name}: "
+                             f"{sym or '?'}: a [[holding]] row has no "
+                             f"quantity — fix the file (an unreadable "
+                             f"row is never skipped).")
                 try:
-                    q = float(h.get("quantity") or 0.0)
+                    q = float(_qraw)
                 except (TypeError, ValueError):
                     sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "
                              f"quantity {h.get('quantity')!r} is not a number")
                 if q != q or q in (float("inf"), float("-inf")):
                     sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "
                              f"quantity is not finite")
+                if not sym and abs(q) > 1e-12:
+                    _cus = str(h.get("cusip") or h.get("isin")
+                               or "").strip()
+                    sys.exit(f"taxjson sanity: {path.name}: a [[holding]] "
+                             f"row has quantity {q:g} but no symbol"
+                             + (f" ({_cus})" if _cus else "")
+                             + " — it cannot be compared; fix the file.")
                 if not sym or abs(q) <= 1e-12:
                     continue
                 if (str(h.get("asset_type") or "").lower() == "crypto"
@@ -9375,7 +9393,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
         _json_out({
             "basis": basis,
             "accounts": accounts,
-            "files": [{"file": str(p2), "file_account": lbl}
+            # The [meta] account label is the broker id portoml writes:
+            # masked like the text listing (S044-16).
+            "files": [{"file": str(p2),
+                       "file_account": _mask_ids_in_path(lbl)}
                       for p2, lbl in zip(files, file_labels)],
             "groups": [{"accounts": sorted(g["accounts"]),
                         "paired": g["paired"],
@@ -9391,9 +9412,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
             "notes": config_notes,
             "clean": not all_rows,
             # False when an account's CONFIGURED holdings file could
-            # not be read: its positions were never compared (2026-09
-            # audit R1-324), so "clean" covers the other groups only.
-            "complete": not config_notes,
+            # not be read (R1-324), or — in the config form — an
+            # account with open positions has no holdings file at all
+            # (S044-19): its positions were never compared, so "clean"
+            # covers the other groups only.
+            "complete": not config_notes and not (uncovered
+                                                  and not items),
         })
         raise SystemExit(0 if not all_rows else 1)
 
@@ -9440,6 +9464,14 @@ def cmd_sanity(args: argparse.Namespace) -> None:
               f"({len(tax[a])} position(s) unchecked)")
     if not multi or uncovered:
         print()
+    if uncovered and not items:
+        # The checklist's sanity step reads this line: "done" while
+        # whole accounts were never tied was a false certificate
+        # (S044-19).
+        print(f"UNCHECKED: account(s) "
+              f"{', '.join(f'{a} ({len(tax[a])} position(s))' for a in uncovered)}"
+              f" have open positions but no `holdings` file in "
+              f"taxjson.toml — not compared with the broker.")
     if config_notes:
         # A configured holdings file that could not be read drops its
         # whole account from the compare: never let that read as a

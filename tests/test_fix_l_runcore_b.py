@@ -401,5 +401,97 @@ class TestCorruptWorkFiles(unittest.TestCase):
                     shutil.rmtree(root)
 
 
+
+_TWO_ACCT_CFG = _CONFIG + '\n[accounts.tfsa]\ntype = "sheltered"\n'
+
+
+def _held_project(tmp, holdings_line=""):
+    """margin holds 100 XEI.TO, tfsa holds 10 XIC.TO."""
+    cfg = _TWO_ACCT_CFG.replace('[accounts.margin]\ntype = "taxable"\n',
+                                '[accounts.margin]\ntype = "taxable"\n'
+                                + holdings_line)
+    root = _tt_project(tmp, tt="BUYSELL 2025-01-10 09:30:00 XEI.TO 100 "
+                       "CAD 10.0 -1000.0 0.0\n", config=cfg, run=False)
+    (root / "inputs" / "tfsa").mkdir()
+    (root / "inputs" / "tfsa" / "rows.tt").write_text(
+        "BUYSELL 2025-01-10 09:30:00 XIC.TO 10 CAD 10.0 -100.0 0.0\n")
+    r = _run_cli(root, "run", "--no-input")
+    assert r.returncode == 0, r.stderr
+    (root / "hold").mkdir(exist_ok=True)
+    return root
+
+
+class TestSanity(unittest.TestCase):
+    """S044-03 / S044-16 (ids masked), S044-18 (blank rows refused),
+    S044-19 (unchecked accounts), S049-08 (TOML error named)."""
+
+    def test_missing_file_note_masks_the_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _held_project(
+                tmp, 'holdings = ["hold/55500001_holdings.toml"]\n')  # pii-ok
+            r = _run_cli(root, "sanity")
+            self.assertIn("55***_holdings.toml", r.stderr)
+            self.assertNotIn("55500001", r.stderr + r.stdout)  # pii-ok
+
+    def test_meta_account_is_masked_in_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _held_project(tmp, 'holdings = ["hold/exact.toml"]\n')
+            (root / "hold" / "exact.toml").write_text(
+                '[meta]\naccount = "U5550001"\n\n'  # pii-ok
+                '[[holding]]\nsymbol = "XEI.TO"\nquantity = 100\n')
+            r = _run_cli(root, "sanity", "--json")
+            self.assertNotIn("U5550001", r.stdout)  # pii-ok
+            j = json.loads(r.stdout)
+            self.assertEqual(j["files"][0]["file_account"], "U5***")
+
+    def test_blank_rows_are_refused(self):
+        rows = ('[[holding]]\nsymbol = ""\ncusip = "000000AA0"\n'
+                'quantity = 50\n',
+                '[[holding]]\nsymbol = "XYZ.US"\nquantity = ""\n',
+                '[[holding]]\nsymbol = "XYZ.US"\nqty = 200\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _held_project(tmp, 'holdings = ["hold/h.toml"]\n')
+            for extra in rows:
+                with self.subTest(extra=extra):
+                    (root / "hold" / "h.toml").write_text(
+                        '[[holding]]\nsymbol = "XEI.TO"\nquantity = 100\n\n'
+                        + extra)
+                    r = _run_cli(root, "sanity")
+                    self.assertNotEqual(r.returncode, 0, r.stdout)
+                    self.assertIn("h.toml", r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+
+    def test_unchecked_account_is_not_done(self):
+        from datetime import date
+        from taxjson.lib import checklist as cl
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _held_project(tmp, 'holdings = ["hold/h.toml"]\n')
+            (root / "hold" / "h.toml").write_text(
+                '[[holding]]\nsymbol = "XEI.TO"\nquantity = 100\n')
+            r = _run_cli(root, "sanity")
+            self.assertIn("UNCHECKED: account(s) tfsa (1 position(s))",
+                          r.stdout)
+            j = json.loads(_run_cli(root, "sanity", "--json").stdout)
+            self.assertFalse(j["complete"])
+            self.assertEqual(j["uncovered_accounts"], ["tfsa"])
+            from taxjson.bin.taxjson_run import load_config
+            ctx = cl.Ctx(root, load_config(root), 2025, date.today(),
+                         cl.default_run_sub(root))
+            res = cl.d_sanity(ctx)
+            self.assertEqual(res.status, "attention")
+            self.assertIn("tfsa", res.detail)
+
+    def test_unreadable_config_is_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _held_project(tmp, 'holdings = ["hold/h.toml"]\n')
+            cfg = (root / "taxjson.toml").read_text()
+            (root / "taxjson.toml").write_text(
+                cfg.replace("year = 2025", "year = 2025 x"))
+            r = _run_cli(root, "sanity")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("not valid TOML", r.stderr)
+            self.assertNotIn("declares `holdings", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

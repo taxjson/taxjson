@@ -651,6 +651,12 @@ def d_sanity(ctx: Ctx) -> Result:
         # never compared: exit 0 covers the other groups only (2026-09
         # audit R1-324).
         return Result("sanity", "attention", incomplete[0])
+    unchecked = [ln for ln in out.splitlines()
+                 if ln.startswith("UNCHECKED")]
+    if code == 0 and unchecked:
+        # An account with positions and no holdings file at all was
+        # never tied either (S044-19).
+        return Result("sanity", "attention", unchecked[0])
     if code == 0:
         return Result("sanity", "done", "positions tie to the holdings files")
     return Result("sanity", "attention", _last_line(out) or _last_line(err) or f"exit {code}")
