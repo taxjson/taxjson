@@ -35,6 +35,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from taxjson.lib.report_model import fmt_money, parse_report_json
+from taxjson.lib.cli_diag import guard_main
+from taxjson.bin.taxjson_convert_currency import positive_rate
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.core import convert_currency
@@ -358,6 +360,7 @@ def render_json(buckets, grand, info, *, to_curr, by_account, year,
     return json.dumps(doc, indent=2)
 
 
+@guard_main("taxjson-fees-sum")
 def main():
     p = argparse.ArgumentParser(
         description="Report trading fees by brokerage, with comparison stats.")
@@ -377,7 +380,7 @@ def main():
                         "Requires --rates.")
     p.add_argument("--rates", metavar="FILE",
                    help="Historical FX rates file (e.g. work/to_base.csv).")
-    p.add_argument("--default-rate", type=float, default=1.35,
+    p.add_argument("--default-rate", type=positive_rate, default=1.35,
                    help="FX fallback when a date/currency is missing "
                         "(default 1.35); usage is reported, not silent.")
     p.add_argument("--by-account", action="store_true",

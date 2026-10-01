@@ -24,6 +24,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main
+
 _VALID_ACTIONS = (
     'BUYSELL', 'TRANSFER', 'SPLIT', 'ASSIGN', 'ADJUST', 'DISALLOW',
     'DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE',
@@ -569,6 +571,7 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
         )
 
 
+@guard_main("taxjson-convert-tt")
 def main():
     try:
         _main()

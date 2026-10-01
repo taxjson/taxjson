@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Stand-alone tools: an unreadable input is one line, exit 2.** A
+  missing path, a directory, a non-UTF-8 file or bad JSON gave a
+  traceback (exit 1) in gains, explain, audit, convert-currency,
+  fill-crypto, merge2 --map, safe-to-sell, sort, sum-gains, sum-income,
+  ticker-map, wash-radar and others; every `taxjson-*` tool now prints
+  `<tool>: error: no such file: ...` / `cannot read ...` and exits 2
+  (S070-23, S079-10). A JSON error names the file.
+- **explain / audit / carryover: engine refusals are one line.** A
+  RENAME-split straddling a settlement, a currency mismatch, a SPLIT
+  ratio of 0 or a malformed `phantoms.json` printed a traceback; they
+  now print the same one-line `error:` as `taxjson-gains` and exit 2,
+  and the phantoms.json message names the file and line (S029-20,
+  S071-06, S076-01).
+- **`--year` is checked in taxjson-gains, form-export, t1135, explain
+  and audit.** `--year 0` meant "all history" (form-export folded every
+  year into one Schedule 3) and a 2-digit year silently matched
+  nothing; the flag now takes 1900..next year, like `taxjson init`
+  (S033-16).
+- **`--default-rate` must be a positive number.** convert-currency,
+  merge2, fees-sum and audit took -1.35 (every converted amount
+  sign-flipped), 0, nan, inf and `1_35` (= 135) with exit 0; they are
+  refused at the command line. A rates-file rate written `1_35` is a
+  malformed line, not 135 (S028-15, S028-17).
+- **taxjson-explain `--symbol` is case-insensitive** like `taxjson
+  audit`, and its `--help` example no longer says `--wash-sales`
+  "includes" the wash traces — it filters to wash-sale gains (S029-19,
+  S029-24).
+
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the

@@ -33,6 +33,7 @@ import json
 import re
 import sys
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from typing import Any, Dict, List
 
@@ -149,6 +150,7 @@ def venue_splits(taxable_txs, sheltered_txs):
     return out
 
 
+@guard_main("taxjson-lint-crosslistings")
 def main():
     p = argparse.ArgumentParser(
         description="Flag cross-listed securities the wash radar may not "

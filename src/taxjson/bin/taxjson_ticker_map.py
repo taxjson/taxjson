@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 from datetime import datetime
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import TaxTransaction, load_transactions
 from taxjson.lib.ticker_map import map_ticker
 
@@ -377,6 +378,7 @@ def apply_mapping(tx: TaxTransaction, mapping: Dict[str, str]) -> TaxTransaction
             tx.symbol_new = mapped_new
     return tx
 
+@guard_main("taxjson-ticker-map")
 def main():
     parser = argparse.ArgumentParser(description="Map tickers in a tax.json file")
     parser.add_argument("input", help="Input JSON file with transactions")

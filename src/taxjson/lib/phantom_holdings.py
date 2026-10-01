@@ -671,7 +671,13 @@ def load_phantoms(path: Path) -> Set[Tuple[str, str]]:
     """Load phantoms.json. Returns a set of (symbol, account) pairs.
     Underscore-prefixed metadata fields are ignored."""
     with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as e:
+            # Name the file: it is hand-edited, and the bare decoder
+            # message gave no hint which input was bad (audit S076-01).
+            raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc,
+                                       e.pos) from None
     if not isinstance(data, list):
         raise ValueError(f"{path}: expected a JSON array of phantom entries")
     out: Set[Tuple[str, str]] = set()
