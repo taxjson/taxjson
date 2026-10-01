@@ -328,8 +328,8 @@ class TestIbQuestradeExtractorsLow(unittest.TestCase):
             'Realized P/L', 'Code']
 
     def _rows(self):
-        return [f'Corporate Actions,Data,Stocks,{cur},U5550001,2026-01-05,'
-                f'"2025-12-31, 20:25:00","{d}",{q},0,{v},0,\n'  # pii-ok
+        return [f'Corporate Actions,Data,Stocks,{cur},U5550001,2026-01-05,'  # pii-ok
+                f'"2025-12-31, 20:25:00","{d}",{q},0,{v},0,\n'
                 for d, q, v, cur in ((_IB_OUT, -1600, -25920, 'CAD'),
                                      (_IB_IN, 100, 25840, 'USD'))]
 
