@@ -65,6 +65,31 @@
   .AX) are in neither currency-split watchlist; a future is `asset_type
   = "future"` and a futures option gets no guessed `contract_multiplier
   = 100` (its report cost is per contract).
+- **`taxjson redact` fixes.** An account id on a line with a very long
+  field is now found (the report claimed every occurrence replaced
+  while it stayed); `account = "..."` / `broker_account = "..."` keys
+  (the live-holdings TOML) are ids; the City/State/Street2/Country
+  columns of an IB Flex AccountInformation section and a value in the
+  cell after `Phone:` / `SIN:` / `Payee:` / `Beneficiary:` are
+  redacted. The street pattern no longer swallows the next CSV field
+  (a dropped column). One invocation gives every account its own
+  pseudonym and never writes two inputs to the same copy (`--force`
+  silently kept only the last); a file-name id keeps the content's
+  placeholder. An unreadable input or `--out` is one line and the rest
+  of the batch is still redacted.
+
+- **Web UI: config and report errors are shown, not hidden.** `taxjson
+  serve` refuses the account names `taxjson run` refuses (a
+  `[accounts."../../x"]` name read a holdings file outside the project)
+  and prints one line — no traceback — for a non-UTF-8 or refused
+  taxjson.toml. `/healthz` reports a taxjson.toml edit that no longer
+  loads (`ok: false`, `config_error`). A corrupt or wrong-shape
+  `wash_radar_<acct>.json` or `<acct>_holdings.toml` is an error banner
+  instead of a silent fall-back to the stale .rpt or an HTTP 500.
+  `/api/whatif` for an unknown account and a holding page for a symbol
+  the account does not hold are 404s; the what-if and holding pages
+  accept a symbol in any case.
+
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the
