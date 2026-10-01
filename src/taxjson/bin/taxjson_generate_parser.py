@@ -79,7 +79,10 @@ sign via self.signed_quantity.
 - Implement `parse_file(self, path: Path) -> List[Dict[str, Any]]`.
 - Prefer self.* helpers (apply_currency_suffix, signed_quantity,
   clean_number, back_compute_fee, theoretical_gross, parse_date,
-  settlement_date_t1, parse_option_from_description, format_occ_symbol).
+  equity_settlement_date for EQUITY settle dates (era-aware T+2/T+1),
+  settlement_date_t1 for OPTIONS only, parse_option_from_description,
+  format_occ_symbol). Crypto settles on the trade date: date_settle =
+  date, no helper.
 - Include the imports the file needs (csv, re, Path, etc.).
 - DO NOT include the BaseBrokerage source — import it.
 - DO NOT include any prose, markdown, or explanation around the code.

@@ -79,8 +79,11 @@ def _net_by_symbol(txs):
         s = t.get("symbol", "")
         if not (s.endswith(".TO") or s.endswith(".US")) or _is_option(s):
             continue
-        if t.get("description") and s not in desc:
-            desc[s] = t["description"]
+        # The broker's security name when the description is only the
+        # ticker (IB rows: audit S057-24).
+        name = t.get("security_name") or t.get("description")
+        if name and s not in desc:
+            desc[s] = name
         if t.get("action") in ("BUYSELL", "ASSIGN"):
             net[s] = net.get(s, 0.0) + float(t.get("quantity") or 0)
     return net, desc

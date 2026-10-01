@@ -367,7 +367,9 @@ class QuestradeBrokerage(BaseBrokerage):
             raise BrokerageParseError(
                 f"{self._where(lineno)}: blank Currency — the suffix and "
                 f"the FX rate both depend on it; refusing to assume USD")
-        return cur
+        # A currency code is case-blind: 'usd' became the suffix .usd,
+        # a pool apart from XYZ.US (audit S055-17).
+        return cur.upper()
 
     def _is_taxable(self) -> Optional[bool]:
         if self.account_taxable is not None:

@@ -1610,7 +1610,7 @@ def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
     """How the IB parser books an issuer-designated '(Return of
     Capital)' from a non-Canadian issuer: lib/country.foreign_roc_mode
     (the one resolver `run` and tax-logic share). Canada: [settings]
-    foreign_return_of_capital, default "dividend" (ITA s.90(2)). USA:
+    foreign_return_of_capital, default "dividend" (ITA s.90(1)). USA:
     always "acb" (IRC s.301(c)(2); the key is Canada-only and refused
     in a US project — audit S013-01, partition INPUTS-02)."""
     from taxjson.lib.country import CountryError, foreign_roc_mode
@@ -1855,7 +1855,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                                "taxable" if is_taxable
                                                else "sheltered"]
             # Always explicit: the parser's own default is the neutral
-            # cost reduction; s.90(2) is the Canadian project's choice
+            # cost reduction; s.90(1) is the Canadian project's choice
             # (partition INPUTS-03).
             cmd += ["--country", country, "--foreign-roc",
                     "acb" if _froc_acb else "dividend"]
@@ -4745,6 +4745,10 @@ def cmd_transactions(args: argparse.Namespace) -> None:      # `events` view
     _run_tx_view(args, actions=None, label="events")
 
 
+_BOOK_VALUE_DESC_RE = re.compile(
+    r"\bBOOK\s+VALUE:?\s*\$?\s*(\d+(?:,\d+)*(?:\.\d+)?)", re.IGNORECASE)
+
+
 def cmd_transfers_view(args: argparse.Namespace) -> None:
     """`taxjson transfers`: the custody-evidence view. TRANSFER rows
     are deliberately NOT tax events — a taxable book's basis comes from
@@ -4811,12 +4815,22 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                   else doc) or []:
             if t.get("action") != "TRANSFER":
                 continue
+            # The book row lost the parser's book_value evidence (not a
+            # transaction field); RBC's description still carries it
+            # ("... BOOK VALUE 16506.95") — shown as the sidecar row is
+            # (audit S027-06).
+            _value = float(t.get("net_amount") or 0)
+            if not _value:
+                _bv = _BOOK_VALUE_DESC_RE.search(t.get("description") or "")
+                if _bv:
+                    from taxjson.lib.brokerages.base import desc_number
+                    _value = desc_number(_bv.group(1), strict=False) or 0.0
             rows.append({"date": t.get("date") or "",
                          "account": t.get("account") or name,
                          "symbol": t.get("symbol") or "",
                          "quantity": float(t.get("quantity") or 0),
                          "type": t.get("description") or "",
-                         "value": float(t.get("net_amount") or 0),
+                         "value": _value,
                          "fee": _fee(t),
                          "currency": t.get("currency") or "",
                          "where": "book"})

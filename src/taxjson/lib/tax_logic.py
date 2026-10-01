@@ -105,7 +105,7 @@ PARTITION_RULES = frozenset({
     "CA-SL-05",        # a long call replaces the shares (enforced)
     "CA-ACB-01",       # s.47 average cost across accounts
     "CA-ACB-07",       # s.40(3) deemed gain on ROC beyond ACB
-    "CA-ACB-08",       # s.90(2) foreign ROC as a dividend (IB)
+    "CA-ACB-08",       # s.90(1) foreign ROC as a dividend (IB)
     "CA-OPT-01",       # s.49(1) grant timing
     "CA-RPT-01",       # T1135
     "CA-FX-07",        # fx-cash s.39(1.1) $200 exemption
@@ -309,6 +309,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                   "Futures and futures options settle on the next "
                   "settlement day (futures_settle = \"next_day\").",
                   keys=("futures_settle",))),
+            Rule("CA-DATE-SESSION",
+                 "A trade is dated by its exchange's trade date, not the "
+                 "broker's clock: IB stamps US Eastern time, so a US stock "
+                 "or ETF filled in the overnight session (20:00 ET or "
+                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "trading day and settles from it (a Dec 30 20:30 fill "
+                 "trades Dec 31 and settles in January), and an ASX fill "
+                 "is dated in Sydney time. The overnight fill sorts before "
+                 "that day's other trades; the broker's stamp is kept "
+                 "(broker_time)."),
             Rule("CA-DATE-14",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
@@ -414,6 +424,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-02",
                  "Purchase commissions add to the ACB; sale commissions "
                  "are outlays.", cont=True),
+            Rule("CA-ACB-COMMREFUND",
+                 "A commission refunded later (an IB Commission "
+                 "Adjustments row naming the trade) is netted against that "
+                 "trade's commission: a lower ACB for a purchase, a "
+                 "smaller outlay for a sale.", cont=True),
             Rule("CA-ACB-03",
                  "The single pool needs a full `taxjson run` (not "
                  "`--account`, and no elections pending).", cont=True),
@@ -457,7 +472,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "capital gain and the ACB is nil (s.40(3)).", cont=True),
             (Rule("CA-ACB-08",
                   "For IB only, a foreign issuer's return of capital (by "
-                  "ISIN) is a dividend (s.90(2); foreign_return_of_capital "
+                  "ISIN) is a dividend (s.90(1); foreign_return_of_capital "
                   "= \"dividend\"). Other brokers always lower the ACB.",
                   keys=("foreign_return_of_capital",))
              if froc == "dividend" else
@@ -773,6 +788,16 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   "Futures and futures options settle on the next "
                   "settlement day (futures_settle = \"next_day\").",
                   keys=("futures_settle",))),
+            Rule("US-DATE-SESSION",
+                 "A trade is dated by its exchange's trade date, not the "
+                 "broker's clock: IB stamps US Eastern time, so a US stock "
+                 "or ETF filled in the overnight session (20:00 ET or "
+                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "trading day and settles from it (a Dec 30 20:30 fill "
+                 "trades Dec 31 and settles in January), and an ASX fill "
+                 "is dated in Sydney time. The overnight fill sorts before "
+                 "that day's other trades; the broker's stamp is kept "
+                 "(broker_time)."),
             Rule("US-DATE-13",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
@@ -849,6 +874,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-BASIS-03",
                  "Purchase commissions add to basis; sale commissions "
                  "reduce proceeds.", cont=True),
+            Rule("US-BASIS-COMMREFUND",
+                 "A commission refunded later (an IB Commission "
+                 "Adjustments row naming the trade) is netted against that "
+                 "trade's commission: a lower basis for a purchase, higher "
+                 "proceeds for a sale.", cont=True),
             Rule("US-HOLD-01",
                  "Long-term when held more than one year, otherwise "
                  "short-term"),
