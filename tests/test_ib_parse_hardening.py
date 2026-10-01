@@ -58,23 +58,23 @@ def _trade(sym, when, qty, price, proceeds, comm, code='O',
 class TestCommissionRebateSign(unittest.TestCase):
     """Positive Comm/Fee is a REBATE (option exchange/ORF credits). The
     old abs() booked it as a charge: 2x the rebate wrong on every such
-    row (245.95 USD over 65 rows in the real 2025 margin statement)."""
+    row (seen on real statements)."""
 
     def test_sell_with_rebate_nets_more_cash_and_a_negative_fee(self):
         _, txs, _ = _parse(HEAD + TRADES_H + _trade(
-            'ANET 15AUG25 120 C', '2025-07-14, 10:43:52', -2, 2.9, 580,
-            0.58712, cat='Equity and Index Options'))
+            'QZA 15AUG25 120 C', '2025-07-15, 11:02:17', -3, 2.4, 720,
+            0.6125, cat='Equity and Index Options'))
         t = txs[0]
-        self.assertAlmostEqual(t['fee'], -0.58712)
-        self.assertAlmostEqual(t['net_amount'], 580.58712,
+        self.assertAlmostEqual(t['fee'], -0.6125)
+        self.assertAlmostEqual(t['net_amount'], 720.6125,
                                msg="cash received = Proceeds + Comm/Fee")
 
     def test_buy_with_rebate_costs_less(self):
         _, txs, _ = _parse(HEAD + TRADES_H + _trade(
-            'ACM 18DEC26 70 C', '2026-05-22, 15:28:26', 2, 10.65, -2130,
-            0.7035, cat='Equity and Index Options'))
-        self.assertAlmostEqual(txs[0]['fee'], -0.7035)
-        self.assertAlmostEqual(txs[0]['net_amount'], 2129.2965,
+            'QZM 18DEC26 70 C', '2026-05-26, 13:41:09', 3, 9.80, -2940,
+            0.8125, cat='Equity and Index Options'))
+        self.assertAlmostEqual(txs[0]['fee'], -0.8125)
+        self.assertAlmostEqual(txs[0]['net_amount'], 2939.1875,
                                msg="cost = -(Proceeds + Comm/Fee) == Basis")
 
     def test_ordinary_charge_unchanged(self):
@@ -167,8 +167,8 @@ class TestPerRowMoneyCheck(unittest.TestCase):
         fii = (FII_H + 'Financial Instrument Information,Data,Futures,'
                'QZCLZ5,QZCL DEC25,999000011,QZCL,NYMEX,"1,000",'
                '2025-11-20,2025-12,,,\n')
-        body = (HEAD + FUT_H + _trade('QZCLZ5', '2025-10-19, 18:13:50', 1,
-                                      57.4, -57400, -2.37, cat='Futures')
+        body = (HEAD + FUT_H + _trade('QZCLZ5', '2025-10-21, 10:04:33', 1,
+                                      61.2, -61200, -2.25, cat='Futures')
                 + fii)
         _, txs, _ = _parse(body)
         t = txs[0]
@@ -176,8 +176,8 @@ class TestPerRowMoneyCheck(unittest.TestCase):
         self.assertEqual(t['symbol'], 'F:QZCLZ5.US')
         # Without the instrument list the contract size is not guessed.
         with self.assertRaises(BrokerageParseError) as cm:
-            _parse(HEAD + FUT_H + _trade('QZCLZ5', '2025-10-19, 18:13:50',
-                                         1, 57.4, -57400, -2.37,
+            _parse(HEAD + FUT_H + _trade('QZCLZ5', '2025-10-21, 10:04:33',
+                                         1, 61.2, -61200, -2.25,
                                          cat='Futures'))
         self.assertIn('multiplier', str(cm.exception))
 
@@ -186,7 +186,7 @@ class TestPerRowMoneyCheck(unittest.TestCase):
                'QZMETK6,QZMET MAY26,999000012,QZMET,CME,0.1,2026-05-29,'
                '2026-05,,,\n')
         _, txs, _ = _parse(HEAD + FUT_H + _trade(
-            'QZMETK6', '2026-05-14, 21:19:06', 1, 2400, -240, -1.5,
+            'QZMETK6', '2026-05-12, 15:48:20', 1, 2310, -231, -1.25,
             cat='Futures') + fii)
         self.assertEqual(txs[0]['multiplier'], 0.1)
 
@@ -198,7 +198,7 @@ class TestFuturesOptionExpiry(unittest.TestCase):
 
     def test_monthly_fop_uses_the_real_expiry(self):
         _, txs, _ = _parse(HEAD + TRADES_H + _trade(
-            'QZCL JAN26 52 P', '2025-11-12, 14:40:26', 1, 0.39, -390, -2.37,
+            'QZCL JAN26 52 P', '2025-11-10, 11:26:51', 1, 0.44, -440, -2.25,
             cat='Options On Futures') + FII_H + self.FOP)
         self.assertEqual(txs[0]['symbol'], 'F:QZCL251216P00052000.US',
                          "expiry 2025-12-16 from the instrument list, not "
@@ -207,28 +207,28 @@ class TestFuturesOptionExpiry(unittest.TestCase):
 
 
 class TestTransactionFeesAreABreakdown(unittest.TestCase):
-    def test_awe_fee_is_the_comm_fee_column_only(self):
+    def test_lse_fee_is_the_comm_fee_column_only(self):
         body = (HEAD + TRADES_H + _trade(
-            'AWE', '2025-03-28, 09:06:18', '"10,000"', 0.988, -9880, -54.34,
+            'QZW', '2025-03-26, 10:12:44', '"8,000"', 1.12, -8960, -49.28,
             code='O;P', cur='GBP')
             + 'Transaction Fees,Header,Asset Category,Currency,Account,'
               'Date/Time,Symbol,Description,Quantity,Trade Price,Amount,'
               'Code\n'
               'Transaction Fees,Data,Stocks,GBP,U5550001,'  # pii-ok
-              '"2025-03-28, 09:06:18",AWE,UK Stamp Tax,"8,900",0.988,'
-              '-43.966,\n'
+              '"2025-03-26, 10:12:44",QZW,UK Stamp Tax,"7,000",1.12,'
+              '-39.20,\n'
               'Transaction Fees,Data,Stocks,GBP,U5550001,'  # pii-ok
-              '"2025-03-28, 09:06:18",AWE,UK Stamp Tax,"1,100",0.988,'
-              '-5.434,\n'
+              '"2025-03-26, 10:12:44",QZW,UK Stamp Tax,"1,000",1.12,'
+              '-5.60,\n'
             + CASH_H
-            + 'Cash Report,Data,Commissions,GBP,-4.94,\n'
-              'Cash Report,Data,Transaction Fees,GBP,-49.40,\n'
-              'Cash Report,Data,Trades (Purchase),GBP,-9880,\n')
+            + 'Cash Report,Data,Commissions,GBP,-4.48,\n'
+              'Cash Report,Data,Transaction Fees,GBP,-44.80,\n'
+              'Cash Report,Data,Trades (Purchase),GBP,-8960,\n')
         _, txs, _ = _parse(body)
         self.assertEqual(len(txs), 1)
-        self.assertAlmostEqual(txs[0]['fee'], 54.34, places=6,
-                               msg="was 103.74: the levy folded twice")
-        self.assertAlmostEqual(txs[0]['net_amount'], 9934.34, places=6)
+        self.assertAlmostEqual(txs[0]['fee'], 49.28, places=6,
+                               msg="was 94.08: the levy folded twice")
+        self.assertAlmostEqual(txs[0]['net_amount'], 9009.28, places=6)
 
 
 class TestCashReportReconciliation(unittest.TestCase):
@@ -380,7 +380,7 @@ class TestCorporateActionCancellation(unittest.TestCase):
 
 class TestOptionRootAlias(unittest.TestCase):
     """After a corporate action IB renames an adjusted option's root
-    (DFDV -> DFDV1): the opening sale is `QZD 21NOV25 12.5 P`, the
+    (XYZ -> XYZ1): the opening sale is `QZD 21NOV25 12.5 P`, the
     assignment `QZD1 21NOV25 12.5 P`, and the instrument list shows one
     conid under both roots. One canonical symbol lets the assignment
     fold the premium."""
@@ -395,15 +395,15 @@ class TestOptionRootAlias(unittest.TestCase):
 
     def test_both_legs_share_one_symbol_and_the_premium_folds(self):
         body = (HEAD + TRADES_H
-                + _trade('QZD 21NOV25 12.5 P', '2025-09-22, 15:59:28', -10,
-                         1.41, 1410, -7.06, cat='Equity and Index Options')
-                + _trade('QZD 21NOV25 15 P', '2025-10-07, 14:32:07', -5,
-                         2.35, 1175, -3, cat='Equity and Index Options')
-                + _trade('QZD1 21NOV25 12.5 P', '2025-11-21, 16:20:00', 10,
+                + _trade('QZD 21NOV25 12.5 P', '2025-09-24, 11:08:51', -8,
+                         1.30, 1040, -5.65, cat='Equity and Index Options')
+                + _trade('QZD 21NOV25 15 P', '2025-10-09, 10:55:13', -4,
+                         2.10, 840, -2.80, cat='Equity and Index Options')
+                + _trade('QZD1 21NOV25 12.5 P', '2025-11-21, 16:20:00', 8,
                          0, 0, 0, code='A;C', cat='Equity and Index Options')
-                + _trade('QZD1 21NOV25 15 P', '2025-11-21, 16:20:00', 5,
+                + _trade('QZD1 21NOV25 15 P', '2025-11-21, 16:20:00', 4,
                          0, 0, 0, code='A;C', cat='Equity and Index Options')
-                + _trade('QZD', '2025-11-21, 16:20:00', 1000, 12.5, -12500,
+                + _trade('QZD', '2025-11-21, 16:20:00', 800, 12.5, -10000,
                          0, code='A;O')
                 + FII_H + self.FII)
         _, txs, err = _parse(body)

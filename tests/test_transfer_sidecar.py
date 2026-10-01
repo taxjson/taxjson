@@ -24,9 +24,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # A minimal IBKR flex CSV: one trade + one InterDepot transfer row.
 IB_CSV = """\
 Trades,Header,DataDiscriminator,Asset Category,Currency,Account,Symbol,Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code
-Trades,Data,Order,Stocks,USD,U1,OR,"2026-03-20, 15:05:52",300,32.68,32.87,-9804,-1.5,9805.5,0,57,O
+Trades,Data,Order,Stocks,USD,U1,OR,"2026-03-18, 11:22:07",300,31.40,31.52,-9420,-1,9421,0,36,O
 Transfers,Header,Asset Category,Currency,Account,Symbol,Date,Type,Direction,Xfer Company,Xfer Account,Qty,Xfer Price,Market Value,Realized P/L,Cash Amount,Code
-Transfers,Data,Stocks,CAD,U1,OR,2026-07-02,InterDepot,In,--,U1,300,--,"13,473.00",0.00,0.00,
+Transfers,Data,Stocks,CAD,U1,OR,2026-07-02,InterDepot,In,--,U1,300,--,"12,951.00",0.00,0.00,
 """
 
 
@@ -102,7 +102,7 @@ class TestDerivedPricesAreReprClean(unittest.TestCase):
     def test_ib_transfer_price_clean(self):
         csv = IB_CSV.replace(
             'Transfers,Data,Stocks,CAD,U1,OR,2026-07-02,InterDepot,In,'
-            '--,U1,300,--,"13,473.00",0.00,0.00,',
+            '--,U1,300,--,"12,951.00",0.00,0.00,',
             'Transfers,Data,Stocks,CAD,U1,OR,2026-07-02,InterDepot,In,'
             '--,U1,420,--,"10,840.20",0.00,0.00,')
         with tempfile.TemporaryDirectory() as td:
@@ -135,7 +135,7 @@ class TestTransfersView(unittest.TestCase):
             {"transactions": [
                 {"action": "TRANSFER", "date": "2026-07-02",
                  "symbol": "OR.TO", "quantity": 300.0,
-                 "currency": "CAD", "net_amount": 13473.0,
+                 "currency": "CAD", "net_amount": 12951.0,
                  "account": "margin", "description": "InterDepot"}],
              "metadata": {"kind": "transfer_sidecar",
                           "account": "margin", "brokerage": "ib"}}))
@@ -199,9 +199,9 @@ class TestEvidencedDepotFlips(unittest.TestCase):
         return TM({}, {"OR.US": "OR.TO"}, {}, set(), set())
 
     def _agg(self):
-        return {"OR.US": {"qty": 300.0, "total_cost": 9805.5,
+        return {"OR.US": {"qty": 300.0, "total_cost": 9421.0,
                           "currency": "USD",
-                          "cost_by_currency": {"USD": 9805.5},
+                          "cost_by_currency": {"USD": 9421.0},
                           "position_start_date": "2026-03-20"},
                 "OR.TO": {"qty": 1700.0, "total_cost": 73626.0,
                           "currency": "CAD",
@@ -238,7 +238,7 @@ class TestEvidencedDepotFlips(unittest.TestCase):
         d = agg["OR.TO"]
         self.assertAlmostEqual(d["qty"], 2000.0)
         self.assertTrue(d["mixed_currency"])
-        self.assertAlmostEqual(d["cost_by_currency"]["USD"], 9805.5)
+        self.assertAlmostEqual(d["cost_by_currency"]["USD"], 9421.0)
         self.assertAlmostEqual(d["cost_by_currency"]["CAD"], 73626.0)
         self.assertEqual(d["position_start_date"], "2026-03-20")
 
@@ -289,8 +289,8 @@ class TestCryptoSendsBecomeEvidence(unittest.TestCase):
         'txid,refid,time,type,subtype,aclass,asset,wallet,amount,fee,balance\n'
         'L1,R1,2026-06-17 14:51:23,withdrawal,,currency,USDC,spot,'
         '-50.0,1.0,0.0\n'
-        'L2,R2,2026-05-10 04:37:05,hybridearnwithdrawal,,currency,'
-        'USDC,earn,-852.387604,0,0.0\n'
+        'L2,R2,2026-05-12 09:14:41,hybridearnwithdrawal,,currency,'
+        'USDC,earn,-640.125000,0,0.0\n'
         'L3,R3,2026-07-01 10:00:00,deposit,,currency,BTC,spot,'
         '0.5,0,0.5\n')
 
@@ -299,7 +299,7 @@ class TestCryptoSendsBecomeEvidence(unittest.TestCase):
         "Price Currency,Price at Transaction,Subtotal,"
         "Total (inclusive of Fees and/or Spread),"
         "Fees and/or Spread,Notes\n"
-        "x1,2026-05-04 22:50:14 UTC,Send,TAO,0.102,USD,400.00,,,,"
+        "x1,2026-05-06 13:07:29 UTC,Send,TAO,0.102,USD,400.00,,,,"
         "Sent 0.102 TAO to wallet\n")
 
     def _parse(self, brokerage, name, content):
@@ -408,9 +408,9 @@ class TestEvidenceFoldInteractions(unittest.TestCase):
         from taxjson.bin.taxjson_export import (_apply_transfer_evidence,
                                                 _replay_moves_on_base)
         tmap = self._tmap(tobase={"OR.US": "OR.TO"})
-        agg = {"OR.US": {"qty": 300.0, "total_cost": 9805.5,
+        agg = {"OR.US": {"qty": 300.0, "total_cost": 9421.0,
                          "currency": "USD",
-                         "cost_by_currency": {"USD": 9805.5},
+                         "cost_by_currency": {"USD": 9421.0},
                          "position_start_date": "2026-03-20"},
                "OR.TO": {"qty": 1700.0, "total_cost": 73626.0,
                          "currency": "CAD",
