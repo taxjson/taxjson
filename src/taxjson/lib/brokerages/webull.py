@@ -242,22 +242,16 @@ class WebullBrokerage(BaseBrokerage):
                     f"blank Proceeds cell — a priced trade must carry its "
                     f"cash; refusing to book it at $0.")
             # Webull prints a buy's proceeds in accounting parentheses
-            # ("(1,234.56)"), read as NEGATIVE: cash out. The trade
-            # convention wants a buy's cost as a magnitude (direction
-            # lives in the quantity sign). A SALE keeps its sign: a
-            # debit there is a close whose commission exceeded the
-            # gross (a $0.00 option close with a fee) — negative
-            # proceeds, which abs() used to book as cash RECEIVED
-            # (audit R1-100). A buy that brings cash IN has no reading.
+            # ("(1,234.56)"), read as NEGATIVE: cash out. A buy's cost is
+            # booked as a magnitude (direction lives in the quantity
+            # sign; an unparenthesised buy amount reads the same). A
+            # SALE keeps its sign: a debit there is a close whose
+            # commission exceeded the gross (a $0.00 option close with
+            # a fee) — negative proceeds, which abs() used to book as
+            # cash RECEIVED (audit R1-100).
             _signed = parse_strict_number(
                 proceeds_raw, field='Proceeds', where=where,
                 allow_blank=True, blank=0.0)
-            if action_raw == 'BUY' and _signed > 1e-9:
-                raise BrokerageParseError(
-                    f"{where}: BUY {qty_raw} @ {price_raw} has a positive "
-                    f"(credit) Proceeds {proceeds_raw!r} — a purchase "
-                    f"pays cash out, shown in parentheses; refusing to "
-                    f"guess its sign.")
             net_amount = abs(_signed) if action_raw == 'BUY' else _signed
             qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'SELL'))
 

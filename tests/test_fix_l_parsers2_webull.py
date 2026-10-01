@@ -59,10 +59,9 @@ class TestSaleDebitKeepsItsSign(unittest.TestCase):
         self.assertEqual(sale["net_amount"], 0.0)
         self.assertEqual(sale["time"], "16:00:00")
 
-    def test_buy_with_a_credit_is_refused(self):
-        with self.assertRaises(BrokerageParseError) as cm:
-            _parse('USD,10-03-2025,BUY,ABC,ABC CORP,SHS,10,5.00,,51.00\n')
-        self.assertIn("positive", str(cm.exception))
+    def test_unparenthesised_buy_amount_is_its_cost(self):
+        tx, _ = _parse('USD,10-03-2025,BUY,ABC,ABC CORP,SHS,10,5.00,,51.00\n')
+        self.assertAlmostEqual(tx[0]["net_amount"], 51.00)
 
 
 class TestTypeCodeDecides(unittest.TestCase):

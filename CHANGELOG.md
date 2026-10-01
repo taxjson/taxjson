@@ -4,7 +4,7 @@
 
 - **Webull: a sale's debit keeps its sign.** A close at $0.00 whose
   commission was charged ("(1.50)" in Proceeds) books -1.50 proceeds,
-  not +1.50 received; a BUY with a credit Proceeds is refused. The row's
+  not +1.50 received. The row's
   Type Code decides option vs shares (an OPC row with an unreadable
   description, or an SHS row whose description reads as a contract, is
   refused). The skip warning names only the skipped action codes;
