@@ -739,21 +739,43 @@ def _effective_fee_for_trace(tx) -> float:
     explicit = float(tx.commission) + float(tx.fee)
     if abs(explicit) > 1e-6:
         return explicit
-    qty = abs(float(tx.quantity))
+    q = float(tx.quantity)
+    qty = abs(q)
     price = float(tx.price)
-    net = abs(float(tx.net_amount))
-    if qty < 1e-9 or price < 1e-9 or net < 1e-9:
+    net = float(tx.net_amount)
+    if qty < 1e-9 or price < 1e-9:
         return 0.0
     is_option = is_option_symbol(tx.symbol or '')
     multiplier = 100 if is_option else 1
     theoretical = qty * price * multiplier
-    derived = abs(theoretical - net)
-    # Sanity guard: a > 25% discrepancy is almost always a units mismatch
-    # (e.g. price is a per-contract quote vs net is per-share), not a fee.
-    # Better to show 0 than a fictitious large number.
-    if derived > 0.25 * net:
+    # The SIGNED residual (audit S070-24 / S071-00): a buy pays gross +
+    # fee, a sale receives gross - fee (a cheap option's fee can exceed
+    # its proceeds, so the net is negative). abs() turned a sub-cent
+    # rounding residual into a positive "fee" on a zero-commission
+    # broker and mis-sized a negative-net sale's fee.
+    derived = (net - theoretical) if q > 0 else (theoretical - net)
+    if abs(derived) < 0.01:
+        return 0.0                     # price-rounding noise, not a fee
+    # Units-mismatch guard (a per-contract quote against a per-share
+    # net): only a residual both large and most of the trade's value.
+    # The old 25%-of-net test hid real commissions on cheap options
+    # (11.95 on a 32.00 buy showed as 0).
+    if abs(derived) > max(50.0, 0.5 * theoretical):
         return 0.0
     return derived
+
+
+def _per_share(amount, qty, symbol) -> float:
+    """`amount` per SHARE for a trace column labelled per share: an
+    option's quantity is in contracts of OPTION_CONTRACT_SHARES shares,
+    so its per-contract figure sat next to a per-share price (audit
+    S069-08: 'ACB/Sh: 500.65' beside '@ 5.00'). 0.0 for an empty
+    position."""
+    q = float(qty)
+    if abs(q) <= 1e-6:
+        return 0.0
+    mult = OPTION_CONTRACT_SHARES if is_option_symbol(symbol or '') else 1.0
+    return float(amount) / (q * mult)
 
 
 def _disambiguate_duplicate_ids(*books) -> None:
@@ -2228,7 +2250,7 @@ class CanadaTaxRules(TaxRules):
                         if symbol not in symbol_acb_traces:
                             symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                         pool_cost_f = float(pool['total_cost'])
-                        acb_sh = pool_cost_f / pool['qty'] if abs(pool['qty']) > 1e-6 else 0.0
+                        acb_sh = _per_share(pool_cost_f, pool['qty'], symbol)
                         symbol_acb_traces[symbol].append(f"# {tx.date} ADJUST   {_shown_adj:10.4f} | Fee: 0.0000 | Cost_Added: {_shown_adj:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
                 elif action == 'SPLIT':
                     if not is_other_scope:
@@ -2438,7 +2460,7 @@ class CanadaTaxRules(TaxRules):
                                     symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                                 fee_amt = _effective_fee_for_trace(tx)
                                 pool_cost_f = float(pool['total_cost'])
-                                acb_sh = pool_cost_f / pool['qty'] if abs(pool['qty']) > 1e-6 else 0.0
+                                acb_sh = _per_share(pool_cost_f, pool['qty'], symbol)
                                 symbol_acb_traces[symbol].append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Cost_Added: {effective_cost:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
                         else:
                             # SELL (or Short covering) — divide in exact arithmetic.
@@ -2527,7 +2549,7 @@ class CanadaTaxRules(TaxRules):
                                     # their premium at the write, so the
                                     # record carries cost minus that
                                     # premium; the trace foots to it.
-                                    gain_sh = _rec_gain / abs(qty) if abs(qty) > 1e-6 else 0.0
+                                    gain_sh = _per_share(_rec_gain, abs(qty), symbol)
                                     _prem_note = (f" | Premium_Recognized_At_Write: {_recognized:10.4f}"
                                                   if abs(_recognized) > 1e-9 else "")
                                     rg_trace.append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Proceeds: {effective_proceeds:10.4f} | Cost_Basis: {_rec_cost:10.4f} | Gain: {_rec_gain:10.4f} | Gain/Sh: {gain_sh:7.4f}{_prem_note}")
@@ -2620,7 +2642,7 @@ class CanadaTaxRules(TaxRules):
                                     symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                                 fee_amt = _effective_fee_for_trace(tx)
                                 pool_cost_f = float(pool['total_cost'])
-                                pool_acb_sh = pool_cost_f / pool['qty'] if abs(pool['qty']) > 1e-6 else 0.0
+                                pool_acb_sh = _per_share(pool_cost_f, pool['qty'], symbol)
                                 symbol_acb_traces[symbol].append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Cost_Rmvd: {cost_basis:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {pool_acb_sh:7.4f}")
 
                             # Handle leftover if it crosses zero — this is a fresh
@@ -2661,14 +2683,14 @@ class CanadaTaxRules(TaxRules):
                                     symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                                     fee_amt_leftover = _effective_fee_for_trace(tx) * leftover_ratio
                                     pool_cost_f = float(pool['total_cost'])
-                                    acb_sh = pool_cost_f / pool['qty'] if abs(pool['qty']) > 1e-6 else 0.0
+                                    acb_sh = _per_share(pool_cost_f, pool['qty'], symbol)
                                     symbol_acb_traces[symbol].append(f"# {tx.date} {tx.action} {pool['qty']:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt_leftover:6.4f} | Cost_Added: {eff_cost_leftover:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
 
                 if trace:
-                    fee_sh = (tx.commission + tx.fee) / abs(tx.quantity) if abs(tx.quantity) > 1e-6 else 0.0
+                    fee_sh = _per_share(tx.commission + tx.fee, abs(tx.quantity), symbol)
                     price_fee = tx.price + (fee_sh if tx.quantity > 0 else -fee_sh)
                     pool_cost_f = float(pool['total_cost'])
-                    acb_sh = abs(pool_cost_f / pool['qty']) if abs(pool['qty']) > 1e-6 else 0.0
+                    acb_sh = abs(_per_share(pool_cost_f, pool['qty'], symbol))
                     realized_pl_str = f"{realized_pl:10.2f}" if realized_pl is not None else " " * 10
                     disallowed_amt_str = f"{disallowed_amt:10.2f}" if disallowed_amt != 0 else " " * 10
                     trace_line = f"# {account:<26} | {note:<12} | {tx.date} {tx.time} | {symbol:<26} | {action:<8} | {qty:10.4f} | {tx.price:10.4f} | {fee_sh:10.4f} | {price_fee:10.4f} | {tx.net_amount:10.2f} | {adjustment_shown:10.2f} | {pool['qty']:11.4f} | {pool_cost_f:10.2f} | {acb_sh:10.4f} | {realized_pl_str} | {disallowed_amt_str} | {trigger_info}"
@@ -3373,6 +3395,15 @@ class CanadaTaxRules(TaxRules):
                             role = 'loss_sale'
                         elif t.id in loss_to_triggers_multi.get(tx.id, []):
                             role = 'trigger'
+                        elif (t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER')
+                              and t.quantity > 0
+                              and loss['direction'] == 'LONG'
+                              and _opening_qty(t, 'LONG') <= 1e-6):
+                            # A buy that only closes a short (a written
+                            # call bought back) acquires nothing: never
+                            # a trigger (audit S069-24 — it read
+                            # "eligible").
+                            role = 'cover'
                         elif t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER') and t.quantity > 0:
                             role = 'candidate'
                         elif t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER') and t.quantity < 0:
@@ -3382,6 +3413,7 @@ class CanadaTaxRules(TaxRules):
                         win_txs.append({
                             'tx_id': t.id,
                             'date': t.date,
+                            'symbol': t.symbol,
                             'days_from_loss': days_from,
                             'account': t.account,
                             'action': t.action,
@@ -3470,7 +3502,9 @@ class CanadaTaxRules(TaxRules):
                             entry['pool_qty_after'] = snap['pool_qty']
                             entry['pool_acb_after'] = snap['pool_acb']
                             if abs(snap['pool_qty']) > 1e-6:
-                                entry['acb_per_share_after'] = snap['pool_acb'] / snap['pool_qty']
+                                entry['acb_per_share_after'] = _per_share(
+                                    snap['pool_acb'], snap['pool_qty'],
+                                    entry.get('symbol') or '')
                             else:
                                 entry['acb_per_share_after'] = 0.0
                 final_wash_sales = []

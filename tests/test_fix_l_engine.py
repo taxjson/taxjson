@@ -689,5 +689,85 @@ class TestSplitGainsPerAccount(unittest.TestCase):
                 self.assertIn("could not read --base", r.stderr)
 
 
+def _ca(book, **kw):
+    from taxjson.lib.core import CanadaTaxRules
+    with contextlib.redirect_stderr(io.StringIO()):
+        return CanadaTaxRules().compute_gains(book, trace=True, **kw)
+
+
+def _cx(date, sym, qty, net, price=None, account="margin", **kw):
+    from taxjson.lib.core import TaxTransaction
+    if price is None:
+        price = abs(net / qty) if qty else 0.0
+    return TaxTransaction(action="BUYSELL", date=date, time="10:00:00",
+                          date_settle=date, symbol=sym, quantity=qty,
+                          price=price, net_amount=net, currency="CAD",
+                          account=account, **kw)
+
+
+class TestTraceColumns(unittest.TestCase):
+    """S069-08 (per-share columns divide by contracts x 100), S070-24 /
+    S071-00 (the trace's derived fee is the signed residual, with no
+    25%-of-net guard), S078-06 (full vs partial uses a relative test),
+    S069-24 (a buy-to-close is not an eligible candidate)."""
+
+    OPT = "XYZ260320C00050000.TO"
+
+    def test_option_per_share_columns(self):
+        r = _ca([_cx("2026-01-05", self.OPT, 2, 1001.30, price=5.0,
+                     commission=1.30),
+                 _cx("2026-02-02", self.OPT, -1, 398.70, price=4.0,
+                     commission=1.30)])
+        trace = "\n".join(r["transactions"][0]["trace"])
+        self.assertIn("ACB/Sh:  5.0065", trace)
+        self.assertIn("Gain/Sh: -1.0195", trace)
+
+    def test_trace_fee(self):
+        from taxjson.lib.core import _effective_fee_for_trace as fee
+        O = "SOUN240419C00007000.US"
+        self.assertAlmostEqual(fee(_cx("2024-04-08", O, 4, 43.95,
+                                       price=0.08)), 11.95, 4)
+        self.assertAlmostEqual(fee(_cx("2024-04-08", O, -2, 6.01,
+                                       price=0.04)), 1.99, 4)
+        self.assertAlmostEqual(fee(_cx("2024-04-08", O, -10, -12.45,
+                                       price=0.01)), 22.45, 4)
+        # Sub-cent rounding on a zero-commission sale is not a fee.
+        self.assertEqual(fee(_cx("2025-06-16", "CQQQ.US", -350, 15141.53,
+                                 price=43.2615)), 0.0)
+        self.assertAlmostEqual(fee(_cx("2025-06-16", "ABC.US", 500, 5204.95,
+                                       price=10.41)), -0.05, 4)
+        # A units mismatch (per-contract quote, per-share net) still
+        # shows 0, not a fictitious fee.
+        self.assertEqual(fee(_cx("2025-06-16", O, 1, 520.0, price=520.0)),
+                         0.0)
+
+    def test_partial_label_for_crypto_sized_units(self):
+        from taxjson.lib.trace_format import _render_wash_window
+        ww = {"window_start": "2025-01-01", "window_end": "2025-02-28",
+              "loss_date": "2025-01-31",
+              "loss_qty": 0.0015, "disallowed_qty": 0.0006,
+              "bal_at_end": 0.0006, "loss_direction": "LONG",
+              "transactions": []}
+        text = "\n".join(_render_wash_window({"wash_window": ww}))
+        self.assertIn("partial disallowance — 0.0006 of 0.0015", text)
+        ww["disallowed_qty"] = 0.0015
+        text = "\n".join(_render_wash_window({"wash_window": ww}))
+        self.assertIn("full disallowance", text)
+
+    def test_buy_to_close_role(self):
+        call = "ABC250620C00030000.TO"
+        r = _ca([_cx("2025-01-06", call, 1, 500.0),
+                 _cx("2025-03-03", call, -1, 200.0),
+                 _cx("2025-03-05", call, 1, 210.0)],
+                sheltered_transactions=[
+                    _cx("2025-02-01", call, -1, 100.0, account="tfsa"),
+                    _cx("2025-03-10", call, 1, 90.0, account="tfsa")])
+        recs = [g for g in r["transactions"] if g.get("wash_window")]
+        self.assertTrue(recs)
+        roles = {(t["date"], t["account"]): t["role"]
+                 for t in recs[0]["wash_window"]["transactions"]}
+        self.assertEqual(roles[("2025-03-10", "tfsa")], "cover")
+
+
 if __name__ == "__main__":
     unittest.main()

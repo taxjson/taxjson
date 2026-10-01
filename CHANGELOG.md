@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **ACB traces (`*.traces`, `audit`, `explain`):** an option's ACB/Sh,
+  Gain/Sh and wash-window acb/sh are per share (they were per contract
+  next to a per-share price); a fee the trace derives from the net is
+  the signed residual (a cheap option's real commission no longer shows
+  as 0, and sub-cent price rounding is no longer shown as a fee); a
+  buy that only closes a short is labelled "closes a short — acquires
+  nothing" instead of an eligible candidate; a crypto partial denial is
+  no longer labelled "full".
 - **Hand-made JSON books:** a time written `9:30:00` or `09:30` is read
   as `09:30:00` (it used to sort after its own superficial-loss
   adjustment, moving part of a denial into the next year, or crash); a
