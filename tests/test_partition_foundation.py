@@ -344,10 +344,15 @@ class TestCommandOwnership(unittest.TestCase):
             {"action": "BUYSELL", "date": "2025-02-03",
              "date_settle": "2025-02-04", "time": "10:00:00",
              "symbol": "XYZ.US", "quantity": 1000, "price": 150.0,
-             "net_amount": 150000.0, "currency": "USD",
+             # A converted base book is in the base currency
+             # (taxjson-t1135 refuses native-currency rows, S051-15).
+             "net_amount": 150000.0, "currency": "CAD",
              "account": "55500001"}]}   # pii-ok
-        return projects_both(td, files=dict(
-            _GAINS_FILE, **{"work/margin_base.json": json.dumps(base)}))
+        gains = dict(_GAINS, transactions=[
+            dict(t, currency="CAD") for t in _GAINS["transactions"]])
+        return projects_both(td, files={
+            "work/margin_gains.json": json.dumps(gains),
+            "work/margin_base.json": json.dumps(base)})
 
     @rule("US-CTRY-02")
     @rule_absent("US-CTRY-02", country="canada")
