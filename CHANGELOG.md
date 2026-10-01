@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **T1135:** before Dec 31 a "below the threshold" verdict says "so far
+  (books through DATE)" and the checklist keeps the step open (it read
+  "no T1135 required this year" with a green [x] in September); the
+  year-end column is headed with the books' last date while the year is
+  open. Books in another currency than `--base-currency` (a native
+  `_raw.json`, a USD-base book) are refused instead of tested against
+  CAD 100,000 as if they were CAD; a non-CAD `--base-currency` warns.
+  `--threshold` / `--detailed-threshold` must be finite numbers >= 0.
+  `t1135.map` symbols match case-insensitively, and a COUNTRY word that
+  is not an ISO-3 code or CA/EXCLUDE (EXCLUDED, CDN) is ignored with a
+  did-you-mean warning instead of becoming a "country". Crypto rows
+  under 1e-6 units add their cost (as the engine books them). A long
+  option still held after its expiry is named. The report says the
+  test covers the brokerage books only (foreign bank accounts and other
+  property outside them must be added by hand), attributes the $250,000
+  Part A/B line to the T1135 instructions, and `--help` carries the
+  caveats.
 - **reconcile-slips:** a slip whose currency column (T5008 Box 13) names
   another currency than the books is refused with a message naming Box
   13 (a USD Webull T5008 gave one MISMATCH per symbol, every amount off

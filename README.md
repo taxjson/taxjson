@@ -833,7 +833,15 @@ helper, for Canadian filers holding foreign securities. Answers the filing
 question first: it replays the full history of every **taxable** account in base
 currency and reports the **maximum total cost of specified foreign property at
 any time in the year** — the ITA 233.3 test ($100,000 threshold; $250,000 for
-the detailed method). If a filing is required, it prints per-property and
+the detailed method, from the form's instructions). The test sees these
+brokerage books only: foreign property held outside them (a foreign bank
+account or cash, certificates, foreign real estate) counts toward the same
+threshold and must be added by hand. Before Dec 31 the figures run to the
+last date in the books, a "below the threshold" verdict says "so far" (the
+checklist keeps the step open), and the year-end column is headed with that
+date. A long option still held after its expiry date is named (its cost is
+still counted). The books must be in the base currency (the converted
+`_base.json` files; native-currency rows are refused). If a filing is required, it prints per-property and
 per-country tables (maximum cost in year, cost at Dec 31, income, gain/loss)
 from the same books the rest of the pipeline reports on, with the project's
 `phantoms.json` openings applied exactly as the gains stage applies them.
@@ -866,9 +874,11 @@ AAPL.US | USA     |      98,000.00 |      49,000.00 | 132.00 |  12,000.00 |
 Domicile is classified by market suffix (`.US` → USA, `.L` → GBR, `.AX` → AUS;
 `.TO`/`.V`/`.CN`/`.NE` → Canadian, i.e. not foreign property). Since domicile —
 not listing exchange — is what T1135 cares about, interlisted names can need a
-`t1135.map` override in the project root (a BOM is fine; an override follows
-the symbol through a ticker change, and one that matches nothing in the books
-is warned about):
+`t1135.map` override in the project root (a BOM is fine; symbols are matched
+case-insensitively; an override follows the symbol through a ticker change,
+and one that matches nothing in the books is warned about; a COUNTRY that is
+neither an ISO 3166 alpha-3 code nor CA/CAN/CANADA/EXCLUDE is ignored with a
+did-you-mean warning):
 
 ```
 # t1135.map — SYMBOL COUNTRY (ISO-3 code, or CA/EXCLUDE for "not foreign")
@@ -876,8 +886,9 @@ ENB.US   CA      # Canadian corp held on NYSE — not specified foreign property
 GLXY.TO  USA     # foreign corp listed on TSX — still specified foreign property
 ```
 
-Symbols with no market suffix (typically exchange-held crypto) are flagged
-country `??` for manual review. Amounts are **cost** (ACB-style) — correct for
+Symbols with no market suffix (typically exchange-held crypto) are bucketed
+as country `CRYPTO` and counted toward the threshold (check where they are
+held and map them); an unknown market suffix is flagged `??` for review. Amounts are **cost** (ACB-style) — correct for
 the threshold test and the "maximum cost amount" columns; the category-7
 detailed method's month-end **fair market value** boxes need your broker's
 statements, which this tool does not fetch. Not tax advice.

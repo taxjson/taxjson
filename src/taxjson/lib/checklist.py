@@ -1028,6 +1028,12 @@ def d_t1135(ctx: Ctx) -> Result:
         return Result("t1135", "manual",
                       "cost of foreign property exceeded the threshold — file "
                       "the T1135 (`taxjson t1135` for the tables)")
+    if rep.get("year_complete") is False or ctx.today <= date(ctx.year, 12, 31):
+        # ITA 233.3 counts cost at any time up to Dec 31: below the
+        # threshold mid-year is not a verdict (S051-22, S052-15).
+        return Result("t1135", "todo",
+                      f"below the CAD 100,000 threshold so far (books through "
+                      f"{rep.get('as_of') or '?'}) — re-check after Dec 31")
     return Result("t1135", "done", "below the CAD 100,000 threshold")
 
 
