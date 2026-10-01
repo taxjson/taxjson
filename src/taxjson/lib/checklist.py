@@ -915,14 +915,20 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"the wash-adjusted books of {', '.join(stale)} are "
                       f"older than their inputs (a `run --account` skipped "
                       f"the cross-account pass) — run `taxjson run`")
+    # US projects in §1091's words, never CRA's (S049-14).
+    _us = is_us(ctx.settings.get("country"))
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
-                      f"{perm:,.2f} permanently denied (registered-account repurchase) "
+                      f"{perm:,.2f} permanently denied "
+                      f"({'IRA' if _us else 'registered-account'} repurchase) "
                       f"— confirm each with `taxjson wash-sales`")
     if denied > 0.005:
         return Result("wash-reviewed", "done",
-                      f"{denied:,.2f} denied, all recoverable (added to ACB)")
-    return Result("wash-reviewed", "done", "no superficial losses")
+                      f"{denied:,.2f} denied, all recoverable "
+                      + ("(added to the replacement's basis)" if _us
+                         else "(added to ACB)"))
+    return Result("wash-reviewed", "done",
+                  "no wash sales" if _us else "no superficial losses")
 
 
 def _us_expired_options(ctx: Ctx) -> Result:

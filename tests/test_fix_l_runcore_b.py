@@ -493,5 +493,175 @@ class TestSanity(unittest.TestCase):
             self.assertNotIn("declares `holdings", r.stderr)
 
 
+
+def _gains_project(tmp, inventory=(), transactions=(), config=_CONFIG,
+                   base_rows=()):
+    """A project whose work/ holds a hand-written gains file (and base
+    book): the views read nothing else."""
+    root = Path(tmp) / "g"
+    (root / "work").mkdir(parents=True)
+    (root / "taxjson.toml").write_text(config)
+    (root / "work" / "margin_gains.json").write_text(json.dumps({
+        "summary": {"year": 2025}, "transactions": list(transactions),
+        "inventory": list(inventory)}))
+    (root / "work" / "margin_base.json").write_text(json.dumps(
+        {"transactions": list(base_rows)}))
+    return root
+
+
+_US_CFG = """\
+[settings]
+year = 2025
+country = "usa"
+base_currency = "USD"
+source_currencies = []
+
+[accounts.margin]
+type = "taxable"
+"""
+
+
+class TestViews(unittest.TestCase):
+    """S044-04 / S044-05 (shares), S045-03 / S049-14 (list), S048-10
+    (short legs), S045-09 (missing books), S045-13 (permanent total),
+    S048-22 (account token), S048-24 (slip line), S046-21 (units)."""
+
+    def test_shares_leaves_futures_out_and_says_as_of(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _gains_project(tmp, inventory=[
+                {"symbol": "F:MBTM6.US", "qty": 1, "total_cost": 38128.27},
+                {"symbol": "XYZ.TO", "qty": 10, "total_cost": 100.0}],
+                base_rows=[{"date": "2026-02-02", "action": "BUYSELL",
+                            "symbol": "XYZ.TO"}])
+            r = _run_cli(root, "shares")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("F:MBTM6", r.stdout)
+            self.assertIn("XYZ.TO", r.stdout)
+            self.assertIn("as of the latest data in the books (2026-02-02)",
+                          r.stdout)
+            self.assertNotIn("tax year 2025", r.stdout)
+            j = json.loads(_run_cli(root, "shares", "--json").stdout)
+            self.assertEqual(j["as_of"], "2026-02-02")
+            self.assertEqual([x["symbol"] for x in j["rows"]], ["XYZ.TO"])
+
+    def test_list_option_cost_is_per_share(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _gains_project(tmp, inventory=[
+                {"symbol": "ABC270115C00050000.TO", "qty": 1,
+                 "total_cost": 500.65},
+                {"symbol": "XYZ.TO", "qty": 100, "total_cost": 500.65}])
+            j = json.loads(_run_cli(root, "list", "--json").stdout)
+            cps = {x["symbol"]: x["cost_per_share"] for x in j["rows"]}
+            self.assertEqual(cps["ABC270115C00050000.TO"], 5.0065)
+            self.assertEqual(cps["XYZ.TO"], 5.0065)
+
+    def test_us_wording(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _gains_project(tmp, config=_US_CFG, inventory=[
+                {"symbol": "XYZ.US", "qty": 10, "total_cost": 1200.0,
+                 "deferred_wash": 200.0}])
+            r = _run_cli(root, "list")
+            self.assertIn("§1091", r.stdout)
+            self.assertNotIn("superficial", r.stdout)
+
+    def test_short_legs_read_the_real_world_way(self):
+        from taxjson.bin.taxjson_run import (_gain_display_line,
+                                             _real_world_legs)
+        t = {"date": "2025-07-01", "symbol": "ABC270115C00050000.TO",
+             "qty": 1, "currency": "CAD", "direction": "SHORT",
+             "cost": -650.0, "proceeds": -160.0, "gain": 490.0}
+        self.assertEqual(_real_world_legs(t), (650.0, 160.0))
+        line = _gain_display_line(t)
+        self.assertIn("650.00 160.00 490.00", line)
+        self.assertNotIn("-", line.split("CAD", 1)[1])
+        self.assertEqual(_real_world_legs({"cost": 100.0,
+                                           "proceeds": 150.0}),
+                         (150.0, 100.0))
+
+    def test_missing_books_are_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _held_project(tmp)
+            for f in (root / "work").glob("tfsa_*"):
+                f.unlink()
+            for cmd in (("wash-sales",), ("divs-sum",), ("winners",)):
+                with self.subTest(cmd=cmd):
+                    r = _run_cli(root, *cmd)
+                    self.assertIn("no ", r.stderr)
+                    self.assertIn("tfsa", r.stderr)
+
+    def test_permanent_total_is_pinned(self):
+        cfg = _CONFIG + '\n[accounts.tfsa]\ntype = "sheltered"\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp, tt=(
+                "BUYSELL 2025-03-03 09:30:00 XEI.TO 100 CAD 10.0 -1000.0 0\n"
+                "BUYSELL 2025-03-10 09:30:00 XEI.TO -100 CAD 8.0 800.0 0\n"
+                "BUYSELL 2025-03-12 09:30:00 XEI.TO 70 CAD 8.0 -560.0 0\n"),
+                config=cfg, run=False)
+            (root / "inputs" / "tfsa").mkdir()
+            (root / "inputs" / "tfsa" / "rows.tt").write_text(
+                "BUYSELL 2025-03-12 09:30:00 XEI.TO 30 CAD 8.0 -240.0 0\n")
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            j = json.loads(_run_cli(root, "wash-sales", "--json").stdout)
+            self.assertEqual(j["totals"]["denied"], 200.0)
+            self.assertEqual(j["totals"]["permanently_denied"], 60.0)
+            t = _run_cli(root, "wash-sales").stdout
+            self.assertIn("200.00 CAD of losses denied (60.00 "
+                          "permanently denied)", t)
+
+    def test_account_token_is_not_a_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp)
+            for cmd in ("winners", "ccd-sum"):
+                r = _run_cli(root, cmd, "margin")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn("may exceed", r.stderr)
+            r = _run_cli(root, "winners", "all")
+            self.assertIn("may exceed", r.stderr)
+
+    def test_slip_line_leaves_staking_out(self):
+        cfg = _CONFIG + '\n[accounts.kr]\ntype = "taxable"\ncrypto = true\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "d"
+            (root / "work").mkdir(parents=True)
+            (root / "taxjson.toml").write_text(cfg)
+            (root / "work" / "margin_raw.json").write_text(json.dumps(
+                {"transactions": [{"action": "DIVIDEND", "date":
+                                   "2025-05-01", "symbol": "AAA.TO",
+                                   "currency": "CAD",
+                                   "gross_amount": 30.0,
+                                   "net_amount": 30.0}]}))
+            (root / "work" / "kr_filled.json").write_text(json.dumps(
+                {"transactions": [{"action": "DIVIDEND", "date":
+                                   "2025-05-03", "symbol": "ETH",
+                                   "currency": "CAD",
+                                   "gross_amount": 7.0,
+                                   "net_amount": 7.0}]}))
+            r = _run_cli(root, "divs-sum")
+            self.assertIn("TAXABLE (compare with T5/T3 slips; crypto "
+                          "staking excluded): 30.00 CAD", r.stdout)
+            j = json.loads(_run_cli(root, "divs-sum", "--json").stdout)
+            self.assertEqual(j["totals_slips"], {"CAD": 30.0})
+            self.assertEqual(j["totals"], {"CAD": 37.0})
+
+    def test_fx_cash_units_to_the_cent(self):
+        code = (
+            "import sys\n"
+            "import taxjson.bin.taxjson_run as R\n"
+            "import taxjson.bin.taxjson_fx_cash as FX\n"
+            "FX.render_report = lambda *a, **k: 'REPORT'\n"
+            "R._fx_cash_doc = lambda root, cache: ({'events': [{"
+            "'date': '2025-03-03', 'account': 'margin', 'currency': 'USD',"
+            " 'units': 79081.35, 'rate': 1.4428, 'gain': 653.7,"
+            " 'symbol': 'DLR.U.TO'}]}, {}, 'CAD', 2025, 'canada')\n"
+            "sys.argv = ['taxjson', 'fx-cash', '--events']\n"
+            "R.main()\n")
+        r = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
+                           capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL)
+        self.assertIn("USD 79,081.35 1.4428 +653.70 DLR.U.TO", r.stdout,
+                      r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

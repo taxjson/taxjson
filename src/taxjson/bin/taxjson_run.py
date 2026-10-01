@@ -5166,7 +5166,7 @@ def _leaps_scope_guard(root: Path, account: Optional[str], args) -> None:
     from taxjson.lib.report_model import resolve_gains_files
     _warn_gains_artifact_scope(
         resolve_gains_files(root / "work", account or None),
-        getattr(args, "period", None), root)
+        _period_token(args), root)
 
 
 def _leaps_contracts(root: Path, account: Optional[str],
@@ -5532,8 +5532,10 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     cache = root / "work"
     keep, scope, account = _view_window(args, root)
     resolved = resolve_gains_files(cache, account or None)
-    _warn_gains_artifact_scope(resolved,
-                               getattr(args, "period", None), root)
+    _warn_gains_artifact_scope(resolved, _period_token(args), root)
+    if resolved and not account:
+        _warn_accounts_without_books(root, resolved, "ccd-sum",
+                                     "gains file")
     if not resolved:
         if account:
             sys.exit(f"taxjson ccd-sum: no gains for account {account!r} "
@@ -5679,8 +5681,10 @@ def cmd_winners(args: argparse.Namespace) -> None:
     cache = root / "work"
     keep, scope, account = _view_window(args, root)
     resolved = resolve_gains_files(cache, account or None)
-    _warn_gains_artifact_scope(resolved,
-                               getattr(args, "period", None), root)
+    _warn_gains_artifact_scope(resolved, _period_token(args), root)
+    if resolved and not account:
+        _warn_accounts_without_books(root, resolved, "winners",
+                                     "gains file")
     if not resolved:
         sys.exit(f"taxjson winners: no gains files in {cache} "
                  f"(run `taxjson run` first).")
@@ -5818,6 +5822,17 @@ def _is_period(s: Optional[str]) -> bool:
             or re.fullmatch(r"\d+\s*[dwmy]", s) is not None)
 
 
+def _period_token(args: argparse.Namespace) -> Optional[str]:
+    """The PERIOD positional as _view_window resolves it: None when the
+    lone positional was read as an account (`winners margin`) — passing
+    the raw token warned that the window 'margin' may exceed the
+    artifacts' year (S048-22)."""
+    period, account = args.period, args.account
+    if period and account is None and not _is_period(period):
+        return None
+    return period
+
+
 def _view_window(args: argparse.Namespace, root: Path):
     """Resolve the shared optional `(period, account)` positionals of the
     query commands (events/divs/roc/leaps/trades/gains and the -sum
@@ -5861,6 +5876,24 @@ def _view_income_rules(root: Path):
         _die(str(e))
 
 
+def _warn_accounts_without_books(root: Path, have, label: str,
+                                 what: str) -> None:
+    """Warn naming each configured account that has inputs but no `what`
+    in work/ (its stage failed): the all-accounts views discover
+    accounts from work/, so such an account was simply absent — "No
+    wash sales", "No dividends" — with rc 0 (S045-09)."""
+    have = set(have)
+    skipped = _accounts_skipped_for_no_inputs(root)
+    missing = sorted(n for n in (_soft_config(root).get("accounts") or {})
+                     if n not in have and n not in skipped
+                     and _has_inputs(root, n))
+    if missing:
+        print(f"taxjson {label}: warning: no {what} for account(s) "
+              f"{', '.join(missing)} (the last `taxjson run` did not "
+              f"build it — did it fail?) — their rows are NOT in this "
+              f"report.", file=sys.stderr)
+
+
 def _collect_period_txs(args: argparse.Namespace, label: str, actions,
                         date_of=None, settle_trades: bool = False):
     """Read native per-account transactions over a window, for the period-aware
@@ -5889,6 +5922,8 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions,
         if not accounts:
             sys.exit(f"taxjson {label}: no transaction files in {cache} "
                      f"(run `taxjson run` first).")
+        _warn_accounts_without_books(root, accounts, label,
+                                     "transaction file")
 
     rows, bad = [], 0
     # settle_trades: a "tax year N" window over a settle-basis project
@@ -6090,6 +6125,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
                                      .get("accounts") or {}).items())
                      if (a or {}).get("crypto") is True}
     staking: Dict[str, float] = {}
+    staking_taxable: Dict[str, float] = {}
     staking_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
@@ -6102,6 +6138,8 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
         if acct in _crypto_accts:
             staking[cur] = staking.get(cur, 0.0) + amt
             staking_accts.add(acct)
+            if groups.get(acct) == "taxable":
+                staking_taxable[cur] = staking_taxable.get(cur, 0.0) + amt
         g = groups.get(acct)
         if g:
             by_group[g][cur] = by_group[g].get(cur, 0.0) + amt
@@ -6109,6 +6147,11 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
                 shel_accts.add(acct)
     _warn_bad_dates(bad)
     totals = _foot_by_currency((cur, amt) for (_s, cur), amt in agg.items())
+    # The figure the T5/T3 slips add up to: taxable accounts' dividends
+    # WITHOUT crypto staking (other income, never on a slip) — the
+    # "compare with slips" line counted staking in (S048-24).
+    slips = {c: v - staking_taxable.get(c, 0.0)
+             for c, v in by_group["taxable"].items()}
     if getattr(args, "json", False):
         _json_out({"rows": [{"symbol": sym, "currency": cur,
                              "dividend": round(amt, 2)}
@@ -6118,6 +6161,8 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
                                       in by_group["taxable"].items()},
                    "totals_sheltered": {c: round(v, 2) for c, v
                                         in by_group["sheltered"].items()},
+                   "totals_slips": {c: round(v, 2) for c, v
+                                    in slips.items()},
                    "sheltered_included": sorted(shel_accts),
                    "crypto_staking": {c: round(v, 2) for c, v
                                       in staking.items()},
@@ -6143,14 +6188,17 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     def _tot(d):
         return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
     print()
-    if shel_accts:
+    if shel_accts or staking_taxable:
         # Registered accounts get no T5/T3 and their dividends are not
         # income: the slip tie-out figure is the TAXABLE line (audit
-        # S041-04).
-        print(f"TAXABLE (compare with T5/T3 slips): "
-              f"{_tot(by_group['taxable']) or '0.00'}")
-        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — not "
-              f"taxable income, no slips): {_tot(by_group['sheltered'])}")
+        # S041-04), without crypto staking (S048-24).
+        print(f"TAXABLE (compare with T5/T3 slips"
+              + ("; crypto staking excluded" if staking_taxable else "")
+              + f"): {_tot(slips) or '0.00'}")
+        if shel_accts:
+            print(f"SHELTERED ({', '.join(sorted(shel_accts))} — not "
+                  f"taxable income, no slips): "
+                  f"{_tot(by_group['sheltered'])}")
         print(f"TOTAL DIVIDEND (all accounts): {_tot(totals)}")
     else:
         print(f"TOTAL DIVIDEND: {_tot(totals)}")
@@ -6456,9 +6504,24 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
                            or "0.00") + ")")
 
 
+def _real_world_legs(t: dict) -> Tuple[float, float]:
+    """(proceeds, cost) as a person reads them: a SHORT row carries the
+    engine's signed legs (cost = -premium/-short proceeds, proceeds =
+    -buy-back/-cover), so its columns read negative and swapped. The
+    views show what ccd-sum, winners and form-export show — proceeds
+    = what the short brought in, cost = what closing it cost (S048-10,
+    S040-14)."""
+    proceeds = float(t.get("proceeds") or 0.0)
+    cost = float(t.get("cost") or 0.0)
+    if t.get("direction") == "SHORT":
+        return -cost + 0.0, -proceeds + 0.0
+    return proceeds, cost
+
+
 def _gain_display_line(g: dict) -> str:
     """A realized-gain (disposition) row for `taxjson gains`: money columns
-    (proceeds/cost/gain) to 2 decimals, quantity keeps significant digits."""
+    (proceeds/cost/gain) to 2 decimals, quantity keeps significant digits.
+    A short row's legs are shown the real-world way (_real_world_legs)."""
     money = fmt_money               # shared report-layer formatter
 
     def sig(x):
@@ -6466,10 +6529,11 @@ def _gain_display_line(g: dict) -> str:
         return "0" if s in ("", "-", "-0") else s
 
     days = g.get("days_held")
+    _p, _c = _real_world_legs(g)
     return " ".join([
         g.get("date", ""), g.get("symbol", ""), sig(g.get("qty")),
-        g.get("currency") or "?", money(g.get("proceeds")),
-        money(g.get("cost")), money(g.get("gain")),
+        g.get("currency") or "?", money(_p),
+        money(_c), money(g.get("gain")),
         "" if days is None else str(days),
     ])
 
@@ -8498,6 +8562,7 @@ def cmd_shares(args: argparse.Namespace) -> None:
     from taxjson.lib.report_model import (fmt_qty as qfmt,
                                           gains_basis_label,
                                           resolve_gains_files)
+    from taxjson.lib.ticker_map import is_future_ticker
     root = Path(args.dir).resolve()
     cache = root / "work"
     files = resolve_gains_files(cache)
@@ -8531,6 +8596,11 @@ def cmd_shares(args: argparse.Namespace) -> None:
                 continue
             if not getattr(args, "options", False) and is_option_symbol(sym):
                 continue
+            if is_future_ticker(sym) and not is_option_symbol(sym):
+                # A futures contract is not a share: it was listed as
+                # "1 share" with its notional as book cost (S044-04).
+                # (Futures options follow --options.)
+                continue
             e = by_sym.setdefault(sym, {"qty": 0.0, "cost": 0.0,
                                         "accounts": {}})
             e["qty"] += qty
@@ -8543,8 +8613,13 @@ def cmd_shares(args: argparse.Namespace) -> None:
     else:
         rows.sort(key=lambda r: r[0])
     base = _base_currency(root)
+    # The inventory is END OF DATA, not the tax year's Dec 31: the
+    # header said "tax year 2025" over 2026 positions (S044-05, the
+    # sibling of list's R1-282).
+    horizon = _books_horizon(cache, list(files))
     if getattr(args, "json", False):
-        _json_out({"basis": basis, "year": year, "currency": base,
+        _json_out({"basis": basis, "year": year, "as_of": horizon,
+                   "currency": base,
                    "scope": want or "all",
                    "options_included": bool(getattr(args, "options",
                                                     False)),
@@ -8556,8 +8631,10 @@ def cmd_shares(args: argparse.Namespace) -> None:
         return
     scope = f" ({want} accounts)" if want else ""
     print(f"SHARES HELD — combined across{scope} "
-          f"{', '.join(sorted(files))}; tax year {year}, basis: {basis}  "
-          f"(after ticker.map; option contracts "
+          f"{', '.join(sorted(files))}; as of the latest data in the "
+          f"books" + (f" ({horizon})" if horizon else "")
+          + f", basis: {basis}  "
+          f"(after ticker.map; futures excluded; option contracts "
           f"{'included' if getattr(args, 'options', False) else 'excluded'})")
     print()
     if not rows:
@@ -9643,6 +9720,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
     money = fmt_money               # shared report-layer formatter
     from taxjson.lib.report_model import fmt_qty as qfmt
+    from taxjson.lib.core import is_option_symbol as _is_opt_sym
+    from taxjson.lib.ticker_map import is_future_ticker as _is_future_sym
 
     header = ["ACCOUNT", "SYMBOL", "QTY", "COST", "COST/SH",
               "DEFERRED", "SINCE"]
@@ -9669,8 +9748,14 @@ def cmd_positions(args: argparse.Namespace) -> None:
             cost = float(h.get("total_cost", 0) or 0)
             # Signed division on purpose: shorts carry qty < 0 and
             # total_cost < 0 (proceeds credited), so COST/SH comes out
-            # positive — same convention as the holdings export.
-            cps = cost / qty if qty else 0.0
+            # positive — same convention as the holdings export. An
+            # equity option is 100 shares a contract: per SHARE, like
+            # harvest and the holdings report (it was per contract,
+            # 100x theirs — S045-03).
+            _sym = str(h.get("symbol") or "")
+            _mult = (100.0 if _is_opt_sym(_sym)
+                     and not _is_future_sym(_sym) else 1.0)
+            cps = cost / (qty * _mult) if qty else 0.0
             deferred = float(h.get("deferred_wash", 0) or 0)
             out_lines.append(" ".join([
                 acct, str(h.get("symbol") or "?"), qfmt(qty), money(cost),
@@ -9725,10 +9810,14 @@ def cmd_positions(args: argparse.Namespace) -> None:
     _print_report_table(out_lines)
     print(f"\n{n_pos} position(s), total book cost {money(total_cost)} {base}")
     if total_deferred > 0.005:
+        _us_l = _country(_soft_settings(root)) == "usa"
         print(f"DEFERRED: {money(total_deferred)} {base} of the book "
-              f"cost is denied superficial losses parked in these "
-              f"positions (recovered when sold without a rebuy in the "
-              f"window).")
+              f"cost is "
+              + ("losses disallowed under the wash-sale rule (§1091), "
+                 "added to these positions' basis"
+                 if _us_l else
+                 "denied superficial losses parked in these positions")
+              + " (recovered when sold without a rebuy in the window).")
 
 
 def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
@@ -9818,6 +9907,9 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
                      f"or check the name).")
         sys.exit(f"taxjson wash-sales: no gains files in {cache} "
                  f"(run `taxjson run` first).")
+    if not args.account:
+        _warn_accounts_without_books(root, resolved, "wash-sales",
+                                     "gains file")
     files = list(resolved.items())
 
     money = fmt_money               # shared report-layer formatter
@@ -9872,10 +9964,11 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         denied = float(t.get("disallowed_amount") or 0)
         perm = float(t.get("permanently_disallowed") or 0)
         allowed = econ + denied                     # loss you can claim now
+        _p, _c = _real_world_legs(t)                # S048-10
         out_lines.append(" ".join([
             acct, date or "-", str(t.get("symbol") or "?"),
-            qfmt(float(t.get("qty") or 0)), money(float(t.get("proceeds") or 0)),
-            money(float(t.get("cost") or 0)), money(econ), money(denied),
+            qfmt(float(t.get("qty") or 0)), money(_p),
+            money(_c), money(econ), money(denied),
             money(allowed)]))
         total_denied += denied
         total_perm += perm
@@ -12016,7 +12109,7 @@ def cmd_fx_cash(args: argparse.Namespace) -> None:
         print("\nDATE ACCOUNT CUR UNITS RATE GAIN SYMBOL")
         for e in ledger["events"]:
             print(f"{e['date']} {e['account']} {e['currency']} "
-                  f"{e['units']:g} {e['rate']:g} {e['gain']:+,.2f} "
+                  f"{e['units']:,.2f} {e['rate']:g} {e['gain']:+,.2f} "
                   f"{e['symbol'] or '-'}")
 
 

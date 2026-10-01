@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Query views say what they show.** `shares` is labelled as of the
+  books' latest date (it said "tax year 2025" over 2026 positions; JSON
+  `as_of`) and leaves futures out; `list` COST/SH is per share for an
+  equity option (it was per contract, 100x harvest's); `gains` and
+  `wash-sales` show a short row's proceeds/cost the real-world way, as
+  winners, ccd-sum and form-export do; `winners margin` / `ccd-sum
+  margin` no longer warn that the window 'margin' may exceed the year;
+  `divs-sum`'s compare-with-slips line leaves crypto staking out (JSON
+  `totals_slips`); `fx-cash --events` prints units to the cent;
+  `wash-sales`, `divs-sum` (and the other period views), `winners` and
+  `ccd-sum` warn naming a configured account with inputs but no books;
+  US projects get §1091 wording in `list` and the checklist (audit
+  S044-05, S044-04, S045-03, S048-10, S048-22, S048-24, S046-21,
+  S045-09, S049-14; pin S045-13).
+
 - **sanity: no silent gaps, no ids.** A holdings row with a quantity
   but no symbol, or with a missing/blank quantity, is refused (it was
   dropped and the check said OK); accounts with open positions but no
