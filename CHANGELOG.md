@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **fx-cash: a sale whose commission exceeds its proceeds pays
+  currency** (it was counted as received, leaving phantom currency in
+  the pool) (audit S033-09).
 - **instalments.** When instalments are not required (s.156.1(1))
   the JSON carries no shortfall, interest or penalty (it said
   required_at_all=false next to them); the four quarters add up to the

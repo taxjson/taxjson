@@ -101,8 +101,11 @@ def _flows(tx: Dict[str, Any]) -> Optional[float]:
             # hands — counting it disposed of phantom USD (R1-204).
             return net
         # Buys consume cash, sells raise it; base books store net
-        # magnitudes with the direction on quantity.
-        return -abs(net) if qty > 0 else abs(net)
+        # magnitudes with the direction on quantity. A sale keeps its
+        # sign: one whose commission exceeds its proceeds (net -0.25)
+        # PAYS 0.25 (S033-09: abs() put phantom currency in the pool).
+        # A buy never raises cash.
+        return -abs(net) if qty > 0 else net
     if action in _INFLOW:
         # GROSS in, withholding out (the TAX row below). Every parser
         # books withholding as its own TAX row — RBC's "(Implied Tax)"
