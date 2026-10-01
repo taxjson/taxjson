@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Renaming an account keeps its corporate-action elections.** An
+  election's event id no longer includes the taxjson account name (the
+  elections manifest is already stored per account). A manifest written
+  by the old scheme is rekeyed on the next run, and so is one whose
+  account was renamed first: the single saved election with the event's
+  date and symbols is carried over, with a note. Before, every election
+  went back to pending (exit 3) after a rename (audit R1-301).
+
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent

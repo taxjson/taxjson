@@ -468,6 +468,8 @@ def main():
     # orphans) decisions the user already made.
     if manifest.migrate_legacy(events):
         manifest.save(manifest_path)
+    for _note in manifest.migration_notes:
+        print(f"note: {_note}.", file=sys.stderr)
 
     # Auto-defaults first: event types with exactly one sane treatment
     # (name changes) are elected without prompting — the manifest record
