@@ -213,5 +213,86 @@ class TestBocDegradedAnswer(unittest.TestCase):
         self.assertNotIn("suspect", cache["_boc"]["USDCAD"])
 
 
+class TestDiagnosticsNotRepeated(unittest.TestCase):
+    """R1-181 (third part): the gains and blend stages both persist the
+    engine's stderr, so each engine line appeared twice in _wash.sum."""
+
+    def test_same_block_once(self):
+        from taxjson.bin.taxjson_run import collect_diagnostics
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            text = ("warning: option-replacement ... XYZ.US [x]\n"
+                    "  continuation\n"
+                    "NOTE: 1 pair(s) go short\n")
+            (cache / "acct_blend.diag").write_text(text)
+            (cache / "acct_gains.json.diag").write_text(
+                text + "warning: only in gains\n")
+            kept = collect_diagnostics(cache, "acct").splitlines()
+        self.assertEqual(kept.count("warning: option-replacement ... "
+                                    "XYZ.US [x]"), 1)
+        self.assertEqual(kept.count("  continuation"), 1)
+        self.assertEqual(kept.count("NOTE: 1 pair(s) go short"), 1)
+        self.assertIn("warning: only in gains", kept)
+
+
+class TestGrantWriteLoss(unittest.TestCase):
+    """S069-01: under grant timing a write whose fee exceeds its premium
+    fed the superficial-loss solver unconditionally, and the denial
+    reached wash_sales/summary but never the grant record (invariant
+    broken). S069-00: the same path ignored the tainted gate."""
+
+    S = "ABC261218C00090000.TO"
+
+    def _run(self, timing, flag, phantom=False):
+        from taxjson.lib.core import TaxTransaction, get_tax_rules
+        S = self.S
+        tx = [TaxTransaction(action="BUYSELL", date="2026-03-02",
+                             time="10:00:00", symbol=S, quantity=-50,
+                             currency="CAD", price=0.01, commission=60.0,
+                             net_amount=-10.0, account="margin"),
+              TaxTransaction(action="BUYSELL", date="2026-03-20",
+                             time="10:00:00", symbol=S, quantity=50,
+                             currency="CAD", price=0.0, net_amount=0.0,
+                             account="margin")]
+        if phantom:
+            tx.insert(0, TaxTransaction(
+                action="OPENING_BALANCE", date="2026-01-02", time="00:00:00",
+                symbol=S, quantity=-1, currency="CAD", account="margin"))
+        sh = [TaxTransaction(action="BUYSELL", date="2026-03-04",
+                             time="10:00:00", symbol=S, quantity=50,
+                             currency="CAD", price=0.01, net_amount=51.0,
+                             account="rrsp")]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            r = get_tax_rules("canada").compute_gains(
+                tx, sheltered_transactions=sh, option_premium_timing=timing,
+                option_grant_since=2025,
+                option_buyback_loss_superficial=flag)
+        self.assertNotIn("invariant broken", err.getvalue())
+        return r
+
+    @rule("CA-SL-11")
+    def test_flag_off_both_timings_allow(self):
+        for timing in ("grant", "close"):
+            r = self._run(timing, False)
+            self.assertAlmostEqual(r["summary"]["total_gain"], -10.0, 2)
+            self.assertEqual(r["wash_sales"], [])
+
+    @rule("CA-SL-12")
+    def test_flag_on_both_timings_deny_and_record_agrees(self):
+        for timing in ("grant", "close"):
+            r = self._run(timing, True)
+            recs = r["transactions"]
+            self.assertEqual(len(recs), 1, timing)
+            self.assertAlmostEqual(recs[0]["disallowed_amount"], 10.0, 2)
+            self.assertAlmostEqual(r["summary"]["total_gain"], 0.0, 2)
+            self.assertAlmostEqual(r["summary"]["total_disallowed"], 10.0, 2)
+
+    def test_tainted_write_loss_never_feeds_solver(self):
+        r = self._run("grant", True, phantom=True)
+        self.assertEqual(r["wash_sales"], [])
+        self.assertFalse(r["summary"].get("total_disallowed"))
+
+
 if __name__ == "__main__":
     unittest.main()

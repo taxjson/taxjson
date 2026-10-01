@@ -1752,7 +1752,24 @@ class CanadaTaxRules(TaxRules):
             }
             iteration_realized_gains.append(rec_d)
             lot['rec_ref'] = rec_d
-            if _g < -0.001:
+            # A write whose commission exceeds its premium is a loss on
+            # the grant. It is the same written-option loss close timing
+            # books at the buy-back or expiry, so it takes the same rule
+            # (audit S069-01): fed to the superficial-loss solver only
+            # when the project opts in (option_buyback_loss_superficial,
+            # CA-SL-11/12), and then the solver's denial is APPLIED to
+            # the grant record (it used to reach wash_sales and the
+            # summary but not the record). A tainted (phantom) pool's
+            # loss never feeds the solver (audit S069-00; the close
+            # path's gate).
+            if (_g < -0.001 and option_buyback_loss_superficial
+                    and not pool.get('tainted', False)):
+                _dis = next((v for v in final_virtual_txs
+                             if v.action == 'DISALLOW' and v.id == tx.id),
+                            None)
+                if _dis is not None:
+                    rec_d['disallowed'] = _dis.net_amount
+                    rec_d['taxable_gain'] = _g + _dis.net_amount
                 loss_d = {'tx': tx, 'loss_amount': abs(_g),
                           'qty': units, 'direction': 'SHORT'}
                 iteration_losses.append(loss_d)

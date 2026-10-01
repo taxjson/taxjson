@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Canada, grant timing: a write whose commission exceeds its premium**
+  follows the same rule as a buy-back loss: exempt from the
+  superficial-loss rule unless `option_buyback_loss_superficial = true`,
+  and when it is denied the grant record now carries the denial (the
+  summary and wash-sales used to show a denial the record did not, with
+  an "invariant broken" warning). A phantom (tainted) pool's write loss
+  never feeds the rule. tax-logic CA-SL-11/12.
+- The account `_wash.sum` DIAGNOSTICS no longer repeats each engine line
+  (the gains and blend stages both kept a copy).
 - **Price and FX caches:** `taxjson fx-cash` no longer prices a cash
   event at a rate older than the converter's 5-day lookback (it is
   counted unrated and named); a cached price that is missing, zero,
