@@ -866,5 +866,30 @@ class TestFuturesFeeBucket(unittest.TestCase):
         self.assertAlmostEqual(m["per_share"], 0.495, 4)
 
 
+class TestMutationTargetsByName(unittest.TestCase):
+    """S025-02: the harness's hand-entered line ranges went stale. The
+    module is only imported here (its main() is guarded); nothing is
+    mutated."""
+
+    def test_targets_cover_the_named_functions(self):
+        import ast
+        import importlib.util
+        root = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "_mut_audit", root / "scripts" / "mutation_audit.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertEqual(len(mod.TARGETS), len(mod.TARGET_FUNCS))
+        for (rel, qual), (path, lo, hi) in zip(mod.TARGET_FUNCS,
+                                               mod.TARGETS):
+            lines = Path(path).read_text().splitlines()
+            self.assertIn(f"def {qual.split('.')[-1]}(", lines[lo - 1])
+            self.assertGreater(hi, lo)
+        quals = [q for _r, q in mod.TARGET_FUNCS]
+        self.assertIn("USATaxRules.compute_gains", quals)
+        with self.assertRaises(SystemExit):
+            mod.resolve_targets([("src/taxjson/lib/core.py", "Nope.x")])
+
+
 if __name__ == "__main__":
     unittest.main()
