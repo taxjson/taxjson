@@ -100,8 +100,13 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "taxjson reconcile-slips inputs/slips/*.csv",
      "The CRA matches Schedule 3 proceeds to the T5008s — this step prevents the review letter."),
     ("t5-t3", 3, "T5 / T3 / NR4 slips agree with the dividend and ROC totals",
-     "taxjson divs-sum, taxjson roc-sum",
-     "Trust units and split-share corps report on a T3, often weeks after the T5s."),
+     "taxjson divs-sum, taxjson roc-sum (compare by hand)",
+     "Trust units and split-share corps report on a T3, often weeks after the T5s. "
+     "reconcile-slips reads only T5008 disposition slips, so this check is by hand; "
+     "known differences: payments in lieu (divs-sum's PIL column — T5 box 24 may "
+     "include them), trust distributions an IB row dates by pay date (the T3 uses "
+     "the record year), and T3 boxes the books carry as dividends (capital gains "
+     "box 21, return of capital box 42)."),
     ("foreign-tax", 3, "Foreign tax withheld taken from the slips (line 40500 / T2209)",
      "T5 box 15/16, T3 box 33/34",
      "The credit is limited to what the slips show, not what the broker rows imply."),

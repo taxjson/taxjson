@@ -10263,7 +10263,9 @@ def cmd_reconcile_slips(args: argparse.Namespace) -> None:
         argv += ["--date-basis", tax_date]
     argv += ["--country", _country(settings)]
     if args.tolerance is not None:
-        argv += ["--tolerance", str(args.tolerance)]
+        # One token: '--tolerance -1' read the value as an option
+        # (S036-00).
+        argv.append(f"--tolerance={args.tolerance!r}")
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_reconcile_slips.main(argv))
@@ -13380,8 +13382,10 @@ def main() -> None:
                        "(symbol/ticker, quantity/box 16, proceeds/box 21, "
                        "cost/box 20); several (one per broker) are "
                        "reconciled together")
-    p_rec.add_argument("--tolerance", type=float, default=None,
-                       help="Absolute per-symbol tolerance (default 1.00)")
+    from taxjson.lib.cli_diag import nonneg_amount as _nonneg_amount
+    p_rec.add_argument("--tolerance", type=_nonneg_amount, default=None,
+                       help="Absolute per-symbol tolerance, a number >= 0 "
+                            "(default 1.00)")
     p_rec.add_argument("--json", action="store_true",
                        help="Emit the reconciliation as JSON instead of "
                             "text")

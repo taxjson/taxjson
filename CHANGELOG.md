@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **reconcile-slips:** a slip whose currency column (T5008 Box 13) names
+  another currency than the books is refused with a message naming Box
+  13 (a USD Webull T5008 gave one MISMATCH per symbol, every amount off
+  by the FX rate); an unreadable cost cell (`50000,00`, `nan`, `1 500.00
+  CAD`) fails the check like an unreadable proceeds or quantity cell
+  (the cost note vanished or came from a partial sum); a directory or a
+  CSV with bytes cp1252 cannot decode is one error line, not a
+  traceback; `--tolerance` must be a finite number >= 0 (nan or a
+  negative turned every symbol into "off by +0.00", and the `taxjson`
+  wrapper forwarded `-inf` as a separate token); `--help` lists the
+  accepted column spellings; a tainted count reads "1", not "1.0". The
+  checklist's T5/T3 step says the slip check is by hand and lists the
+  known reasons divs-sum differs from the slips.
 - **Canada: crypto rows under a millionth of a unit are booked.**
   Staking rewards below 1e-6 units were dropped by the ACB pool (their
   income was taxed with no matching cost, and the holdings fell short of
