@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Docs: IB trust distributions and affiliated persons.** tax-logic
+  CA-INC-DATE-TRUST, README and KNOWN_ISSUES say why an IB row keeps
+  its pay date in a Canada project (IB prints no record date and calls
+  a trust's distribution a dividend; the accrual ex date is not used),
+  and CA-SL-04 and README document declaring a spouse's or controlled
+  corporation's account `sheltered` so its purchases deny your loss
+  (audit S057-23, S004-08).
+
 - **Schedule 3: a written option's premium is shown gross.** Under grant
   timing, form-export and `sum`'s FOR THE RETURN block show a written
   option's premium GROSS as proceeds with its write commission as an

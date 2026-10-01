@@ -225,5 +225,59 @@ class TestScheduleThreeWrittenPremiumGross(unittest.TestCase):
         self.assertAlmostEqual(rec["proceeds_gross"], 817.32)
 
 
+class TestIBTrustDistributionKeepsPayDate(unittest.TestCase):
+    """S057-23 (documentation; owner decision 2026-10-01): an IB row on a
+    Canadian trust has an accrual EX date but no record date and no
+    'distribution' label, so a Canada project keeps its pay date."""
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_ib_style_row_with_december_ex_date_stays_in_pay_year(self):
+        book = [tx("BUYSELL", "2024-06-03", "ZZT.TO", 3000, 30000,
+                   currency="CAD"),
+                tx("DIVIDEND", "2025-01-08", "ZZT.TO", 0, 513.0,
+                   gross_amount=513.0, type="dividend", currency="CAD",
+                   ex_date="2024-12-31", issuer_country="CA",
+                   description="ZZT(CA0000000000) Cash Dividend CAD 0.171 "
+                               "per Share (Ordinary Dividend)")]
+        got = [y for y in (2024, 2025)
+               if any(t.get("action") == "DIVIDEND" for t in
+                      gains_one(C.CANADA, book, year=y)["transactions"])]
+        self.assertEqual(got, [2025])
+
+    def test_tax_logic_says_why(self):
+        from taxjson.lib import tax_logic as TL
+        text = TL.catalog("canada")["CA-INC-DATE-TRUST"].text
+        self.assertIn("IB prints no record date", text)
+        self.assertIn("trust cannot be told from", text)
+
+
+class TestAffiliatedWorkaroundDocumented(unittest.TestCase):
+    """S004-08 (documentation; owner decision 2026-10-01): an affiliated
+    person's account declared `sheltered` denies the loss for good."""
+
+    @rule("CA-SL-04")
+    def test_spouse_account_as_sheltered_denies_permanently(self):
+        from taxjson.lib import tax_logic as TL
+        self.assertIn('type = "sheltered"',
+                      TL.catalog("canada")["CA-SL-04"].text)
+        book = [tx("BUYSELL", "2025-01-02", "ZZE.TO", 100, 3000,
+                   currency="CAD"),
+                tx("BUYSELL", "2025-03-03", "ZZE.TO", -100, 1000,
+                   currency="CAD")]
+        spouse = [tx("BUYSELL", "2025-03-13", "ZZE.TO", 100, 1000,
+                     currency="CAD", account="spouse")]
+        import contextlib
+        import copy
+        import io
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        with contextlib.redirect_stderr(io.StringIO()):
+            res = run_gains(copy.deepcopy(book), copy.deepcopy(spouse), [],
+                            req=GainsRequest(country=C.CANADA, taxable=True,
+                                             year=2025))
+        self.assertAlmostEqual(res["summary"]["total_disallowed"], 2000.0)
+        (sale,) = [t for t in res["transactions"] if t.get("qty")]
+        self.assertAlmostEqual(sale["permanently_disallowed"], 2000.0)
+
+
 if __name__ == "__main__":
     unittest.main()

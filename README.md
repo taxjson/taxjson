@@ -678,7 +678,11 @@ its printed (cent-rounded) rows.
   ENS, FFN, FTN, LBS, LFE, PDV, SBC, XMF, YCM) also say "Distribution" but
   are corporations: dated when paid, like any symbol you list in
   `[settings] corporate_distributions`. A foreign fund, and a row with no
-  record date (IB), keeps its pay date.
+  record date, keeps its pay date. That includes every IB row: IB prints
+  only the pay date and calls a trust's distribution a dividend, so a
+  trust cannot be told from a corporation (the ex date of IB's accruals is
+  not used); a December-record trust distribution IB pays in January
+  stays in the pay year — compare with the T3.
 - Canada: a **Canadian trust's return of capital** (T3 box 42) lowers the
   ACB when it becomes payable (s.53(2)(h)): on its printed record date, so
   a sale between the record date and a January pay date is on the reduced
@@ -778,6 +782,15 @@ ADVISORY column read the same radar. Every verdict covers **this project's
 accounts only** and says so: a purchase by your spouse or common-law partner or a
 corporation you control (Canada: affiliated persons, s.251.1; US: IRS Pub. 550)
 also denies a loss (tax-logic CA-PLAN-04 / US-PLAN-04).
+
+**An affiliated person's trades** (spouse or common-law partner, a
+corporation you control) are not an account type of `taxjson run`: the
+engine applies them only when it is given them (`taxjson-gains
+--affiliated`). In a project, declare that person's account as
+`type = "sheltered"`: their purchases then deny your loss, for good (the
+ACB addition belongs to the affiliated holder, s.53(1)(f)), but the account
+also shows in the SHELTERED tables and the radar as if it were your
+registered plan — read it as theirs (KNOWN_ISSUES; tax-logic CA-SL-04).
 
 In a **US project** the radar applies §1091, not s.54 (tax-logic US-PLAN-01):
 windows run on **trade** dates, and each recent loss's verdict is the **US
