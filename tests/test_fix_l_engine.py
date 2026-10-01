@@ -428,5 +428,48 @@ class TestCanadaCallRuleWindowEdges(unittest.TestCase):
         self.assertFalse(sold.get("total_disallowed"))
 
 
+class TestIdenticalRowsKeepTheirOwnDenial(unittest.TestCase):
+    """R1-169 (US) / S069-21 (Canada): two byte-identical rows shared one
+    content-hash id, so only one took its denial / basis bump."""
+
+    def _tx(self, date, qty, net):
+        from taxjson.lib.core import TaxTransaction
+        return TaxTransaction(action="BUYSELL", date=date, time="10:00:00",
+                              date_settle=date, symbol="XYZ.US",
+                              quantity=qty, price=abs(net / qty),
+                              net_amount=net, currency="USD",
+                              account="margin")
+
+    @rule("CA-SL-08")
+    def test_canada_two_identical_loss_sells(self):
+        from taxjson.lib.core import CanadaTaxRules
+        book = [self._tx("2024-03-01", 10, 120.0),
+                self._tx("2024-03-06", -3, 30.0),
+                self._tx("2024-03-06", -3, 30.0),
+                self._tx("2024-03-19", 20, 240.0)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            r = CanadaTaxRules().compute_gains(book)
+        self.assertAlmostEqual(r["summary"]["total_disallowed"], 12.0, 2)
+        inv = {i["symbol"]: i for i in r["inventory"]}
+        self.assertAlmostEqual(inv["XYZ.US"]["total_cost"], 300.0, 2)
+        self.assertIn("repeat an earlier row exactly", err.getvalue())
+
+    @rule("US-WASH-09")
+    def test_us_two_identical_replacement_buys(self):
+        from taxjson.lib.core import USATaxRules
+        book = [self._tx("2024-03-05", 50, 1000.0),
+                self._tx("2024-04-09", -50, 500.0),
+                self._tx("2024-05-01", 10, 80.0),
+                self._tx("2024-05-01", 10, 80.0),
+                self._tx("2024-09-01", -20, 200.0)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = USATaxRules().compute_gains(book)
+        sells = [g for g in r["transactions"] if g.get("date") == "2024-09-01"]
+        self.assertEqual(sorted(round(g["cost"], 2) for g in sells),
+                         [180.0, 180.0])
+        self.assertAlmostEqual(r["summary"]["total_gain"], -460.0, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

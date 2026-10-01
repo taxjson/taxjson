@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Two byte-identical rows each keep their own superficial-loss /
+  wash-sale result** (hand-made JSON passed to `taxjson-gains`): they
+  shared one id, so only one took its denial or basis bump. The engine
+  now books them as separate trades and says so in a NOTE.
 - **US: the call-as-replacement warning is sized.** Only the opening
   part of a call purchase counts (a buy that closes a written call is
   not an acquisition), each contract stands for 100 shares and is used

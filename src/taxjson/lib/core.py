@@ -741,6 +741,37 @@ def _effective_fee_for_trace(tx) -> float:
     return derived
 
 
+def _disambiguate_duplicate_ids(*books) -> None:
+    """Give a row whose content (and so whose id) repeats an earlier
+    row's a distinct id, in place, with one NOTE. The engines link a
+    loss to its denial, and a replacement lot to its basis bump, by
+    tx.id: two byte-identical rows shared one id, so only the first
+    took its denial or bump and the rest vanished (audit R1-169, US;
+    S069-21, Canada). `taxjson run` never gets here with duplicates
+    (parsers tag repeated fills "[fill #N]" and merge2 --dedup drops
+    same-id rows); hand-made JSON passed to taxjson-gains can."""
+    seen: Dict[str, int] = {}
+    renamed = 0
+    for book in books:
+        for t in book or []:
+            n = seen.get(t.id, 0)
+            seen[t.id] = n + 1
+            if n:
+                new_id = f"{t.id}~{n + 1}"
+                while new_id in seen:
+                    n += 1
+                    new_id = f"{t.id}~{n + 1}"
+                seen[new_id] = 1
+                t.id = new_id
+                renamed += 1
+    if renamed:
+        print(f"NOTE: {renamed} row(s) repeat an earlier row exactly "
+              f"(same date, time, symbol, quantity, price and amount); "
+              f"each is booked as a separate trade. If they are "
+              f"duplicates, drop them (taxjson-merge2 --dedup).",
+              file=sys.stderr)
+
+
 def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
     """End-of-run drainage check for staged option-assignment premium.
 
@@ -1372,6 +1403,8 @@ class CanadaTaxRules(TaxRules):
         candidate-replacement trades.
         """
         _check_engine_allowed("canada")  # test-only guard (lib/country)
+        _disambiguate_duplicate_ids(transactions, sheltered_transactions,
+                                    affiliated_transactions)
         # One corporate split = one application: collapse per-account SPLIT
         # duplicates across all three lists (shared `seen`) before any
         # symbol-global pool or window walk sees them.
@@ -3871,6 +3904,8 @@ class USATaxRules(TaxRules):
 
     def compute_gains(self, transactions: List[TaxTransaction], sheltered_transactions: List[TaxTransaction] = None, affiliated_transactions: List[TaxTransaction] = None, cross_asset: bool = False, trace: bool = False, detect_wash_sales: bool = True, per_account_basis: bool = False) -> Dict[str, Any]:
         _check_engine_allowed("usa")  # test-only guard (lib/country)
+        _disambiguate_duplicate_ids(transactions, sheltered_transactions,
+                                    affiliated_transactions)
         # §1091 contemplates a narrower "related party" rule than CRA's
         # affiliated-persons test, but the mechanics are the same: an
         # affiliated person's BUY/SELL is treated as a replacement for
