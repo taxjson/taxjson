@@ -524,7 +524,10 @@ class TestAccountingAndSpinoffs(unittest.TestCase):
                       "100", "-12009.95", "USD", "GENCO UNSOLICITED DA"))
         txs, err, _ = parse(body)
         self.assertEqual(of(txs, symbol='GVX.US'), [])
-        self.assertIn('s.86.1', err)
+        # The note names the stage that asks for the election; the
+        # election itself is per country (audit S064-20).
+        self.assertIn('taxjson-corp-actions', err)
+        self.assertNotIn('s.86.1', err)
         p = _write(HDR + body)
         try:
             (ev,) = parse_rbc_corporate_actions(p, 'margin')

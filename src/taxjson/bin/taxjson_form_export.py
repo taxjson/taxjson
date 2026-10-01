@@ -69,9 +69,9 @@ import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import is_option_symbol
 from taxjson.lib.futures import is_plain_future
-from taxjson.lib.report_model import load_report_json
 from typing import Any, Dict, List, Optional, Tuple
 
 _INCOME_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU")
@@ -81,13 +81,12 @@ _EPS = 0.005
 # Thin alias so existing importers (tests, taxjson_reconcile_slips)
 # keep working; the implementation is the shared report-layer loader.
 def load_json(path: Path) -> Any:
-    try:
-        return load_report_json(path)
-    except json.JSONDecodeError as e:
-        # Name the file: "Expecting property name" alone did not say
-        # which gains file was truncated (R1-277).
-        raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc, e.pos) \
-            from None
+    # The shared input contract (lib/json_input): the message names the
+    # file (R1-277), a bare array is a transaction list and any other
+    # non-object is refused instead of an AttributeError traceback
+    # (audit S079-11). InputFileError is a ValueError.
+    from taxjson.lib.json_input import read_json_doc
+    return read_json_doc(path)
 
 
 def load_manual_rows(paths: List[Path], year: Optional[int],
@@ -763,6 +762,7 @@ def write_csv(rep: Dict[str, Any], path: Path) -> None:
                             "hand"])
 
 
+@guard_main("taxjson-form-export")
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Render taxjson gains into IRS Form 8949 or CRA "
@@ -792,7 +792,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--out", type=Path, default=None,
                         help="TXF only: write the .txf here instead of "
                              "stdout")
-    parser.add_argument("--year", type=int, default=None,
+    parser.add_argument("--year", type=tax_year, default=None,
                         help="Defensive year filter (pipeline gains files "
                              "are already year-scoped)")
     parser.add_argument("--base-currency", default="",

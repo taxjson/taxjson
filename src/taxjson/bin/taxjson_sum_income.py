@@ -2,7 +2,9 @@
 """
 taxjson_sum_income.py
 
-Summarize income from taxjson_income.py output.
+Summarize income (dividends, payments in lieu, withholding tax, interest)
+from a transaction book: the merged / base JSON (`work/<acct>_base.json`)
+that taxjson-merge2 and `taxjson run` write.
 
 Usage:
     python -m taxjson.bin.taxjson_sum_income [--sort-by FIELD] [file1.json file2.json ...]
@@ -15,18 +17,32 @@ If no files provided, reads from stdin.
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import country_arg, refuse_foreign_flags
 from taxjson.lib.income_dating import IncomeRules, parse_ric_entries
+from taxjson.lib import cli_diag
+from taxjson.lib.json_input import InputFileError, read_json_doc
 from taxjson.lib.report_model import load_report_json
+
+PROG = "taxjson-sum-income"
+_AMOUNT_KEYS = ('gross_amount', 'net_amount', 'amount')
 from taxjson.lib.ticker_map import get_underlying, is_option_ticker
 
 
 def load_income_data(file_path: Path = None) -> List[Dict[str, Any]]:
-    """Load income data from a file or stdin."""
-    raw = load_report_json(file_path)
+    """Load income data from a file or stdin. Raises InputFileError
+    (a ValueError) naming the file when it cannot be used."""
+    if file_path is not None:
+        raw = read_json_doc(file_path)
+    else:
+        try:
+            raw = load_report_json(None)
+        except ValueError as e:
+            raise InputFileError(f"<stdin>: not valid JSON ({e})") from None
 
     # taxjson_income outputs a dict with transactions list
     if isinstance(raw, dict) and "transactions" in raw:
@@ -60,7 +76,11 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
     payment in lieu is kept in its own column."""
     ticker_stats: Dict[str, Dict] = {}
     interest_totals: Dict[str, float] = {}
-    
+    # Income rows with no amount at all (every amount key missing or
+    # null) — booked as $0 without a word before (audit S051-14). The
+    # CLI refuses them; library callers see the count.
+    missing_amount: List[Dict[str, Any]] = []
+
     for tx in transactions:
         # `tx['date']` is sometimes explicitly None (came in as JSON
         # null) — `tx.get('date', '')` returns None in that case and
@@ -89,6 +109,10 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
             amount_raw = tx.get('net_amount') or tx.get('gross_amount') or tx.get('amount')
 
         amount = float(amount_raw or 0)
+        if (action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST')
+                and all(tx.get(k) is None for k in _AMOUNT_KEYS)):
+            missing_amount.append({k: tx.get(k) for k in
+                                   ('date', 'symbol', 'action', 'account')})
 
         base_ticker = get_base_ticker(symbol)
 
@@ -147,7 +171,8 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
     return {
         'ticker_stats': ticker_stats,
         'interest_totals': interest_totals,
-        'total_year': target_year or 'all'
+        'total_year': target_year or 'all',
+        'missing_amount': missing_amount,
     }
 
 
@@ -266,9 +291,12 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker') -> str:
     return "\n".join(lines)
 
 
+@guard_main("taxjson-sum-income")
 def main():
     parser = argparse.ArgumentParser(
-        description="Summarize income from taxjson_income.py output."
+        description="Summarize income from a transaction book (the "
+                    "merged / base JSON taxjson-merge2 and `taxjson run` "
+                    "write)."
     )
     parser.add_argument(
         "--year", "-y",
@@ -289,7 +317,8 @@ def main():
     parser.add_argument(
         "files",
         nargs="*",
-        help="Input JSON files from taxjson_income.py"
+        help="Transaction JSON files (merged / base books; "
+             "default: stdin)"
     )
     
     parser.add_argument(
@@ -326,14 +355,31 @@ def main():
     
     file_paths = [Path(f) for f in args.files]
     
-    if not file_paths:
-        transactions = load_income_data(None)
-        report_data = summarize_income(transactions, args.year, rules)
-    else:
-        all_txs = []
-        for fp in file_paths:
+    all_txs = []
+    try:
+        for fp in (file_paths or [None]):
             all_txs.extend(load_income_data(fp))
-        report_data = summarize_income(all_txs, args.year, rules)
+    except InputFileError as e:
+        cli_diag.error(PROG, str(e))
+        sys.exit(2)
+    for i, tx in enumerate(all_txs):
+        # Wrong-shape rows were a TypeError traceback (S051-11).
+        if not isinstance(tx, dict) or not isinstance(
+                tx.get('date') if isinstance(tx, dict) else None,
+                (str, type(None))):
+            cli_diag.error(PROG, f"row {i}: expected an object with a "
+                                 f"string 'date', got {tx!r:.80}")
+            sys.exit(2)
+    report_data = summarize_income(all_txs, args.year, rules)
+    if report_data['missing_amount']:
+        bad = report_data['missing_amount']
+        first = bad[0]
+        cli_diag.error(PROG, f"{len(bad)} income row(s) carry no amount "
+                             f"(gross_amount/net_amount/amount all missing "
+                             f"or null), e.g. {first.get('action')} "
+                             f"{first.get('symbol')} {first.get('date')} — "
+                             f"they would be booked as $0; fix the book")
+        sys.exit(2)
 
     if args.json:
         print(json.dumps(report_data, indent=2, sort_keys=True))

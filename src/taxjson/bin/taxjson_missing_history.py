@@ -99,6 +99,17 @@ def _print_zero_section(title, rows):
             print(f"    └ {r.description}")
 
 
+def _sheltered_title(yr, country) -> str:
+    """Heading of the registered-account sections. It never starts with
+    'AFFECTS', so the checklist does not count these rows as affecting
+    the year's gain. The loss rule is named by the project's country."""
+    rule = {"canada": "superficial-loss", "usa": "wash-sale"}.get(
+        country or "", "cross-account loss")
+    return (f"SHELTERED {yr} - registered-account positions: no reportable "
+            f"gain there; the missing history matters only to the "
+            f"{rule} walk:")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -125,6 +136,15 @@ def main(argv=None):
     if not txs:
         print("No transactions loaded.", file=sys.stderr)
         return 1
+    if args.account:
+        # An --account no row carries (a typo, the wrong case) filtered
+        # every finding away and printed the all-clear (audit S035-07).
+        present = sorted({t.account for t in txs if t.account})
+        if args.account not in present:
+            print(f"taxjson-missing-history: error: no row carries "
+                  f"account {args.account!r} (accounts in the books: "
+                  f"{', '.join(present) or 'none'})", file=sys.stderr)
+            return 2
     # Anything not read is anything not checked: an all-clear (exit 0)
     # after a load error read as "nothing affects the year" in the
     # checklist (2026-09 audit R1-336, S047-18).
@@ -161,6 +181,14 @@ def main(argv=None):
     except CountryError as e:
         print(f"taxjson-missing-history: taxjson.toml: {e}", file=sys.stderr)
         return 2
+    # The project's country names the registered-account rule in the
+    # SHELTERED sections (superficial loss vs wash sale); None outside a
+    # project (tax_date_near above already refused a bad country).
+    from taxjson.lib.phantom_holdings import _project_doc_near
+    from taxjson.lib.country import settings_country
+    country = (settings_country(_project_doc_near(args.files[0])
+                                .get('settings') or {})
+               if basis is not None else None)
     if basis is None:
         basis = "settle"
         print("taxjson-missing-history: note: no taxjson.toml beside the "
@@ -230,11 +258,23 @@ def main(argv=None):
         print(f"\n## Truncated history - positions go short (missing a buy): "
               f"{len(short_rows)} pair(s)")
         if yr:
-            affects = [r for r in short_rows if r.affects_year]
+            affects = [r for r in short_rows if r.affects_year
+                       and not r.candidate.registered]
+            sheltered = [r for r in short_rows if r.affects_year
+                         and r.candidate.registered]
             ignorable = [r for r in short_rows if not r.affects_year]
-            print(f"   {len(affects)} affect tax year {yr}; {len(ignorable)} do not.")
+            print(f"   {len(affects)} affect tax year {yr}; "
+                  f"{len(sheltered)} are in registered accounts; "
+                  f"{len(ignorable)} do not.")
             _print_section(f"AFFECTS {yr} - missing basis distorts this year's "
                            "gain; fix before filing:", affects, show_year_cols=True)
+            # A registered account has no reportable gain: listing its
+            # rows under "distorts this year's gain" (and counting them
+            # in the checklist) told the user to fabricate basis there
+            # (audit S035-08). Their history still matters to the
+            # cross-account loss rule, so they are listed apart.
+            _print_section(_sheltered_title(yr, country), sheltered,
+                           show_year_cols=True)
             _print_section(f"NOT relevant to {yr} - short only from other-year "
                            "sales (or since drained); safe to ignore:",
                            ignorable, show_year_cols=True)
@@ -246,14 +286,24 @@ def main(argv=None):
     if zero_rows:
         print(f"\n## $0-cost corp-action shares that were later sold "
               f"(inflated gain): {len(zero_rows)} pair(s)")
-        rel = [r for r in zero_rows if r.affects_year] if yr else zero_rows
+        from taxjson.lib.phantom_holdings import is_registered_account
+
+        def _reg(r):
+            return is_registered_account(r.account, types or None, country)
+        rel = ([r for r in zero_rows if r.affects_year and not _reg(r)]
+               if yr else zero_rows)
+        shel = ([r for r in zero_rows if r.affects_year and _reg(r)]
+                if yr else [])
         irr = [r for r in zero_rows if not r.affects_year] if yr else []
         if yr:
-            print(f"   {len(rel)} affect tax year {yr}; {len(irr)} do not.")
+            print(f"   {len(rel)} affect tax year {yr}; {len(shel)} are in "
+                  f"registered accounts; {len(irr)} do not.")
         _print_zero_section(
             (f"AFFECTS {yr} - sold this year against a $0 basis; the gain is "
              "overstated by the missing basis:") if yr
             else "Acquired at $0 cost and sold (all history):", rel)
+        if shel:
+            _print_zero_section(_sheltered_title(yr, country), shel)
         if irr:
             _print_zero_section(
                 f"NOT relevant to {yr} - sold in other years; safe to ignore:",
@@ -261,9 +311,14 @@ def main(argv=None):
 
     if (yr and (any(r.affects_year for r in short_rows)
                 or any(r.affects_year for r in zero_rows))):
-        print(f"\nTo fix truncated history: taxjson-gains --year {yr} "
-              "--suggest-phantoms phantoms.json <base.json>, review/prune, then "
-              "re-run with --incomplete-history phantoms.json.\nTo fix a $0-cost "
+        # (registered rows included: their phantoms still feed the
+        # cross-account loss walk)
+        print(f"\nTo fix truncated history: `taxjson find-missing-history "
+              "--gen-phantoms phantoms.json` in the project, review/prune "
+              "it, then `taxjson run` (it picks phantoms.json up). "
+              f"Standalone: taxjson-gains --year {yr} --suggest-phantoms "
+              "phantoms.json <base.json>, then --incomplete-history "
+              "phantoms.json.\nTo fix a $0-cost "
               "corp action: declare it (merger/spinoff basis) so the received "
               "shares carry the correct ACB.")
     return _incomplete(0)

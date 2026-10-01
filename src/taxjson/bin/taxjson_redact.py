@@ -10,14 +10,17 @@ What it changes, and nothing else:
     `"Account: 12345678 - Margin"` headers, Fidelity/Schwab-style
     `Z12345678` / `1234-5678` values in an account column, alphanumeric
     ids (`Account Number: 5MV07654`), any `account|acct|a/c … <id>` or
-    `transfer from|to [acct] <id>` phrase — each distinct id becomes a
+    `transfer from|to [acct] <id>` phrase, `account = "<id>"` /
+    `broker_account = "<id>"` / `"account_id": "<id>"` keys — each distinct id becomes a
     stable placeholder of the SAME shape (`U99900001`, `99900001`,
     `9990-0002`) and every occurrence in the file, descriptions
     included, is replaced. Ids shorter than five characters and
     date-like numbers are never treated as ids, so quantities, prices
     and dates stay;
   * holder identity — IB `Account Information` Name / Alias / address
-    rows (CSV, and the label/value cells of IB's .html statements),
+    rows (CSV, and the label/value cells of IB's .html statements) and
+    the name/address columns of a columnar or flat AccountInformation
+    section,
     `AccountAlias` / `AcctAlias` columns, a `Name` column beside an
     account or alias column (IB Flex `Account` section), `Name:` /
     `Client:` / `Owner:` header lines and Coinbase's `User,<name>,<id>`
@@ -77,6 +80,18 @@ _ACCOUNT_PHRASE = re.compile(
     r"|(?:\btransfer(?:red)?\s+(?:from|to)\s+(?:(?:account|acct|a/c)\.?\s*)?(?:#\s*)?))"
     r"([A-Za-z0-9][A-Za-z0-9-]{4,16}[A-Za-z0-9])(?![A-Za-z0-9]|\.\d)",
     re.IGNORECASE)
+# A config / JSON key naming an account: `broker_account = "..."` (the
+# live-holdings TOML fetch/verify write), `account = "..."`,
+# `"account_id": "..."`. `\baccount` cannot match inside
+# broker_account and '=' was not a separator, so the number survived
+# with 'account ids: none found' (S036-23). The value must still pass
+# _is_id (5+ digits), so `account = "margin"` is left alone.
+_KEY_NAME = r'(?:[A-Za-z]+_)*(?:account|acct)(?:_?(?:id|number|num|no))?'
+_ACCOUNT_KEY = re.compile(
+    r'(?:(?<![A-Za-z0-9_"])' + _KEY_NAME + r'[ \t]*='          # TOML key
+    r'|"' + _KEY_NAME + r'"[ \t]*:)'                          # JSON key
+    r'[ \t]*"?([A-Za-z0-9][A-Za-z0-9-]{3,16}[A-Za-z0-9])"?'
+    r'(?![A-Za-z0-9]|\.\d)', re.IGNORECASE)
 _COL_ID = re.compile(r"^[A-Z0-9][A-Z0-9-]{3,}[A-Z0-9]$")     # 5+ chars, mostly digits
 _DATE8 = re.compile(r"^(19|20)\d{6}$")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -144,7 +159,11 @@ _IDENTITY_LABELS = ("name", "nom", "full name", "nom complet", "client",
                     "address", "adresse", "mailing address", "street",
                     "rue", "city", "ville", "postal code", "code postal",
                     "zip", "phone", "téléphone", "telephone", "email",
-                    "e-mail", "courriel")
+                    "e-mail", "courriel", "tel", "mobile", "cell", "fax",
+                    "sin", "s.i.n.", "nas", "ssn", "tin", "tax id",
+                    "social insurance number",
+                    "numéro d'assurance sociale", "payee", "beneficiary",
+                    "bénéficiaire", "remitter", "ordering customer")
 
 
 def _label_kind(cell: str) -> Optional[str]:
@@ -219,24 +238,32 @@ _STREET_SUFFIX = (r"street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|court|c
                   r"|crescent|cres|lane|ln|way|place|terrace|terr|parkway|pkwy"
                   r"|highway|hwy|circle|cir|square|sq|trail|trl|sideroad|rue"
                   r"|chemin|route|rte|grove|gardens|gdns|heights|hts|mews")
+# A unit prefix / suffix joins the street only through a hyphen or a
+# comma FOLLOWED BY A SPACE ("<n> <Name> St, Unit <u>"): a bare comma is a
+# CSV delimiter, and matching across it swallowed the next field and
+# shifted every later column (S036-15).
 _STREET = re.compile(
-    r"(?<![\w.-])(?:(?:unit|apt|suite|ste)\.?\s*#?\s*\w+\s*[,-]?\s*)?"
+    r"(?<![\w.-])(?:(?:unit|apt|suite|ste)\.?[ \t]*#?[ \t]*\w+"
+    r"(?:[ \t]*-[ \t]*|[ \t]*,[ \t]+|[ \t]+))?"
     r"\d{1,6}[A-Za-z]?(?:-\d{1,6})?\s+(?:(?-i:[A-Z][A-Za-z'’.-]*)\s+){1,4}"
     r"(?:" + _STREET_SUFFIX + r")\b\.?"
     r"(?:\s+(?:N|S|E|W|NE|NW|SE|SW|North|South|East|West)\b\.?)?"
-    r"(?:\s*,?\s*(?:unit|apt|suite|ste|#)\.?\s*#?\s*\w+)?", re.IGNORECASE)
+    r"(?:(?:[ \t]*,[ \t]+|[ \t]+)(?:unit|apt|suite|ste|#)\.?[ \t]*#?[ \t]*\w+"
+    r"|[ \t]*#[ \t]*\w+)?", re.IGNORECASE)
 # French order (Québec): number, the generic word first and lower-case,
 # then the capitalised name — "1234 rue Saint-Denis", "55 boulevard de
 # la Concorde", "10, chemin du Lac".
 _STREET_FR = re.compile(
-    r"(?<![\w.-])(?:(?:app|apt|bureau|unit|suite)\.?\s*#?\s*\w+\s*[,-]\s*)?"
+    r"(?<![\w.-])(?:(?:app|apt|bureau|unit|suite)\.?[ \t]*#?[ \t]*\w+"
+    r"(?:[ \t]*-[ \t]*|[ \t]*,[ \t]+))?"
     r"\d{1,6}[A-Za-z]?(?:-\d{1,6})?\s*,?\s+"
     r"(?:rue|avenue|av|boulevard|boul|bd|chemin|ch|route|rte|rang|place"
     r"|mont[ée]e|c[ôo]te|all[ée]e|impasse|promenade|croissant|terrasse"
     r"|carr[ée]|autoroute|ruelle|quai|square)\.?\s+"
     r"(?:(?:de\s+la|de\s+l['’]|de|du|des|la|le|les|l['’]|d['’])\s*)?"
     rf"(?-i:[{_UP}][\w'’.-]*)(?:[ -](?-i:[{_UP}][\w'’.-]*)){{0,3}}"
-    r"(?:\s*,?\s*(?:app|apt|bureau|unit|suite|#)\.?\s*#?\s*\w+)?",
+    r"(?:(?:[ \t]*,[ \t]+|[ \t]+)(?:app|apt|bureau|unit|suite|#)\.?[ \t]*#?"
+    r"[ \t]*\w+)?",
     re.IGNORECASE)
 _PO_BOX = re.compile(r"\b(?:P\.?\s*O\.?\s*Box|Postal Box)\s*#?\s*\d+", re.IGNORECASE)
 _SIN_SEP = re.compile(r"(?<![\d-])\d{3}([ -])\d{3}\1\d{3}(?![\d-])")
@@ -321,6 +348,10 @@ class Report:
         # Compiled denylist / --also patterns, also applied to the
         # output FILE NAME (check-pii scans names too).
         self.name_patterns: List[re.Pattern] = []
+        # original -> placeholder for every id of the whole invocation
+        # (content and file names), so two files never share a
+        # pseudonym (S036-18). Per-file when redact_text runs alone.
+        self.known_ids: Dict[str, str] = {}
 
     def found_anything(self) -> bool:
         return bool(self.accounts or self.identity_rows or self.emails
@@ -392,11 +423,27 @@ def _luhn_ok(digits: str) -> bool:
 
 
 def _split(line: str) -> Optional[List[str]]:
+    """The CSV cells of one line. A line the csv module refuses (a field
+    over csv.field_size_limit()) used to return None, so its account
+    column was never read and the id stayed in the copy while the
+    report said every occurrence was replaced (R1-352): the limit is
+    raised to the line's length, and anything else csv refuses is split
+    on its unquoted commas."""
     try:
         rows = list(csv.reader(io.StringIO(line)))
     except csv.Error:
-        return None
+        if len(line) >= csv.field_size_limit():
+            csv.field_size_limit(len(line) + 1)
+            return _split(line)
+        rows = [[_unquote(line[s:e]) for s, e in _field_spans(line)]]
     return rows[0] if rows else []
+
+
+def _unquote(field: str) -> str:
+    f = field.strip()
+    if len(f) >= 2 and f[0] == f[-1] == '"':
+        return f[1:-1].replace('""', '"')
+    return field
 
 
 def _is_date(v: str) -> bool:
@@ -438,6 +485,8 @@ def _collect_ids(lines: List[str]) -> List[str]:
             add(m.group(0))
         for m in _ACCOUNT_PHRASE.finditer(line):
             add(m.group(2), _is_phrase_id)
+        for m in _ACCOUNT_KEY.finditer(line):
+            add(m.group(1))
         cells = _split(line.rstrip("\r\n"))
         if not cells:
             continue
@@ -648,12 +697,33 @@ def _review(lineno: int, text: str, where: str, rep: Report) -> None:
         rep.review.append((lineno, f"{' and '.join(reasons)} in {where}"))
 
 
+_ADDRESS_COLS = ("street", "street1", "street2", "street 1", "street 2",
+                 "address", "address1", "address2", "address 1",
+                 "address 2", "address line 1", "address line 2",
+                 "addressline1", "addressline2", "city", "state",
+                 "province", "country", "postalcode", "postal code",
+                 "zip", "zipcode", "zip code", "county")
+# Columns that make a header an address block (country/state alone do
+# not: a trades file can carry an issuer country).
+_ADDRESS_ANCHORS = ("street", "street1", "street 1", "address", "address1",
+                    "address 1", "address line 1", "addressline1", "city",
+                    "postalcode", "postal code", "zip", "zipcode",
+                    "zip code")
+
+
 def _identity_cols(low: List[str]) -> List[int]:
     """Header positions holding holder identity: alias columns always;
-    a name column only beside an account or alias column."""
+    a name column only beside an account or alias column; the address
+    columns (Street2, City, State, Country ...) of a header that names
+    an account and carries an address block — IB Flex
+    AccountInformation, columnar or flat. Only the Field Name/Field
+    Value layout was covered, so city, province and unit survived
+    (S037-03)."""
     cols = [i for i, c in enumerate(low) if _is_person_col(c)]
     if cols or any(_is_account_col(c) for c in low):
         cols += [i for i, c in enumerate(low) if c in _HOLDER_NAME_COLS]
+        if any(c in _ADDRESS_ANCHORS for c in low):
+            cols += [i for i, c in enumerate(low) if c in _ADDRESS_COLS]
     return sorted(set(cols))
 
 
@@ -692,17 +762,27 @@ def _id_pattern(orig: str) -> re.Pattern:
                       + r"(?![A-Za-z0-9]|\.\d)")
 
 
-def redact_text(text: str, extra_patterns: Optional[List[str]] = None
+def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
+                known_ids: Optional[Dict[str, str]] = None
                 ) -> Tuple[str, Report]:
+    """Redact one export. `known_ids` (original -> placeholder) is
+    shared by every file of one invocation: an id seen in an earlier
+    file keeps its placeholder, and a new one gets the next number —
+    two accounts' files used to both become U9990001 (S036-18)."""
     rep = Report()
+    if known_ids is not None:
+        rep.known_ids = known_ids
     compiled, bad = compile_patterns(extra_patterns or [])
     rep.name_patterns = compiled
     for b in bad:
         rep.notes.append(f"pattern skipped (not a valid regex): {b}")
     text = _redact_html_identity(text, rep)
     lines = text.splitlines(keepends=True)
-    for n, orig in enumerate(_collect_ids(lines), start=1):
-        rep.accounts[orig] = _placeholder(orig, n)
+    for orig in _collect_ids(lines):
+        if orig not in rep.known_ids:
+            rep.known_ids[orig] = _placeholder(orig,
+                                               len(rep.known_ids) + 1)
+        rep.accounts[orig] = rep.known_ids[orig]
     # Longest first so a shorter id that is a substring of a longer one
     # cannot pre-empt it.
     ordered = sorted(rep.accounts.items(), key=lambda kv: -len(kv[0]))
@@ -767,7 +847,12 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None
                 if c.strip() and _label_kind(c) == "identity":
                     j = next((k for k in range(i + 1, len(cells))
                               if cells[k].strip()), None)
-                    if j is not None and not _is_id(cells[j]):
+                    # The value is blanked unless it is a collected
+                    # account id (replaced by its placeholder below). An
+                    # id-SHAPED phone or SIN after 'Phone:' / 'SIN:' was
+                    # skipped as if it were one (S037-08).
+                    if (j is not None
+                            and cells[j].strip() not in rep.accounts):
                         line = _replace_field(line, cells, j, "REDACTED")
                         cells = _split(line.rstrip("\r\n")) or []
                         rep.identity_rows += 1
@@ -960,26 +1045,43 @@ def load_denylist(path: Optional[str] = None) -> List[str]:
 
 
 def redacted_name(src: Path, accounts: Dict[str, str],
-                  patterns: Optional[List[re.Pattern]] = None) -> str:
+                  patterns: Optional[List[re.Pattern]] = None,
+                  known_ids: Optional[Dict[str, str]] = None) -> str:
+    """The copy's file name: the content's ids get the content's
+    placeholders, and an id that appears only in the name (IB names
+    downloads after the account) gets the next one. The name-only ids
+    are found on the ORIGINAL stem and every id is substituted in one
+    pass — scanning after the substitution re-numbered the digits of
+    the placeholder itself (U99900001 -> U99900002, R1-352)."""
     stem = src.stem
     for pat in patterns or []:
         stem = pat.sub("REDACTED", stem)
-    for orig, ph in sorted(accounts.items(), key=lambda kv: -len(kv[0])):
-        stem = stem.replace(orig, ph)
-    # Ids that appear only in the name (IB names downloads after the account).
-    n = len(accounts)
-    for m in list(_IB_ID.finditer(stem)) + list(re.finditer(r"(?<!\d)\d{8,}(?!\d)", stem)):
+    table = known_ids if known_ids is not None else dict(accounts)
+    subs: Dict[str, str] = dict(accounts)
+    for m in (list(_IB_ID.finditer(stem))
+              + list(re.finditer(r"(?<!\d)\d{8,}(?!\d)", stem))):
         tok = m.group(0)
-        if _DATE8.fullmatch(tok) or tok in accounts.values():
+        if _DATE8.fullmatch(tok) or any(tok in o for o in subs):
             continue
-        n += 1
-        stem = stem.replace(tok, _placeholder(tok, n))
+        if tok not in table:
+            table[tok] = _placeholder(tok, len(table) + 1)
+        subs[tok] = table[tok]
+    if subs:
+        alt = re.compile("|".join(re.escape(o) for o in sorted(
+            subs, key=len, reverse=True)))
+        stem = alt.sub(lambda m: subs[m.group(0)], stem)
     return f"{stem}.redacted{src.suffix}"
 
 
 def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
-                check_only: bool, force: bool = False
+                check_only: bool, force: bool = False,
+                known_ids: Optional[Dict[str, str]] = None,
+                written: Optional[set] = None
                 ) -> Tuple[Optional[Path], Report]:
+    """`known_ids` and `written` are shared by the files of one
+    invocation: one pseudonym table, and no output path written twice
+    — `--force` let a second account's copy (or a second
+    `activity.csv`) silently replace the first (S036-18)."""
     raw = src.read_bytes()
     why = sniff_binary(raw, src.name)
     if why:
@@ -988,7 +1090,7 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"Export CSV from the broker (or convert with "
             f"`taxjson-xlsx-to-csv`) and redact the CSV.")
     text, enc, bom = decode_export(raw)
-    new, rep = redact_text(text, extra)
+    new, rep = redact_text(text, extra, known_ids)
     # A denylisted string in the file NAME counts as a finding too.
     rep.patterns += sum(len(p.findall(src.stem)) for p in rep.name_patterns)
     rep.encoding = enc
@@ -1001,7 +1103,13 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
     if dst_dir.exists() and not dst_dir.is_dir():
         raise SystemExit(f"taxjson redact: --out {dst_dir} is not a directory")
     dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / redacted_name(src, rep.accounts, rep.name_patterns)
+    dst = dst_dir / redacted_name(src, rep.accounts, rep.name_patterns,
+                                  rep.known_ids)
+    if written is not None and dst.resolve() in written:
+        raise InputRefused(
+            f"{src}: its redacted copy {dst} was already written by this "
+            f"run from another input — nothing written. Redact the two "
+            f"files into different --out folders (or rename one).")
     if dst.resolve() == src.resolve():
         raise SystemExit(f"taxjson redact: refusing to overwrite {src}")
     if dst.is_symlink():
@@ -1012,6 +1120,8 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
         if bom:
             fh.write("﻿")
         fh.write(new)
+    if written is not None:
+        written.add(dst.resolve())
     return dst, rep
 
 
@@ -1019,8 +1129,8 @@ _REVIEW_SHOWN = 25
 
 
 def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
-    shown_src = redacted_name(src, rep.accounts,
-                              rep.name_patterns).replace(".redacted", "")
+    shown_src = redacted_name(src, rep.accounts, rep.name_patterns,
+                              rep.known_ids).replace(".redacted", "")
     where = f" -> {dst}" if dst else " (check only)"
     print(f"{shown_src}{where}")
     if rep.accounts and rep.unreplaced:
@@ -1104,6 +1214,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     extra = list(args.also) + deny
     rc = 0
+    known_ids: Dict[str, str] = {}
+    written: set = set()
     for f in args.files:
         src = Path(f)
         if not src.is_file():
@@ -1112,9 +1224,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"taxjson redact: {f}: already a redacted copy — skipped", file=sys.stderr); continue
         try:
             dst, rep = redact_file(src, Path(args.out) if args.out else None,
-                                   extra, args.check, args.force)
+                                   extra, args.check, args.force,
+                                   known_ids, written)
         except InputRefused as e:
             print(f"taxjson redact: {e}", file=sys.stderr)
+            rc = 1
+            continue
+        except OSError as e:
+            # An unreadable input or an unwritable --out: one line, and
+            # the rest of the batch is still redacted (S036-24, S037-01).
+            what = e.filename or f
+            print(f"taxjson redact: {f}: {e.strerror or e} ({what}) — "
+                  f"nothing written for it", file=sys.stderr)
             rc = 1
             continue
         print_report(src, dst, rep)

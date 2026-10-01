@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib import cli_diag
 from taxjson.lib.country import country_arg
 
@@ -322,6 +323,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
     return doc, applied
 
 
+@guard_main("taxjson-apply-distributions")
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("base_json", type=Path)
@@ -353,10 +355,13 @@ def main(argv=None) -> int:
     if not args.map.exists():
         cli_diag.error(PROG, f"no such map file: {args.map}")
         return 2
+    from taxjson.lib.json_input import InputFileError, read_json_doc
     try:
-        doc = json.loads(args.base_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        cli_diag.error(PROG, f"could not read {args.base_json}: {e}")
+        # A bare-array book is accepted, as load_transactions does
+        # (audit S079-11).
+        doc = read_json_doc(args.base_json)
+    except InputFileError as e:
+        cli_diag.error(PROG, f"could not read {e}")
         return 2
 
     account = args.account or next(

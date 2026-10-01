@@ -30,11 +30,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
                                             split_seen)
+from taxjson.lib.price_chain import is_crypto_symbol
 from taxjson.lib.ticker_map import is_option_ticker
+from taxjson.lib.wash_scope import scope_note
 
 # UTC-noon epoch helpers: shared home in lib/dates (the DST rationale
 # lives there). Names re-exported for external callers.
@@ -224,6 +227,7 @@ def _qfmt(x: float) -> str:
     return "0" if s in ("", "-", "-0") else s
 
 
+@guard_main("taxjson-wash-radar")
 def main():
     parser = argparse.ArgumentParser(description="Tax-Efficient Holding Advisor")
     # nargs='+' + extend: both `--taxable a b` (historical) and repeated
@@ -317,57 +321,47 @@ def main():
 
     window_sec = 30 * 86400
 
-    all_tx_data: List[Dict[str, Any]] = []
+    # Every book goes through the canonical row funnel (core.
+    # coerce_transaction_row, as load_transactions does): a row the
+    # engine would refuse — a non-numeric quantity, a missing date, a
+    # trade with no quantity/net_amount — stops the radar with one line
+    # naming the file and row. It used to crash with a TypeError
+    # traceback, or skip the row silently (-v only) and give advice
+    # computed without it (audit S049-22, S053-16); a bare-array book,
+    # which the loader accepts, crashed with AttributeError (S079-11).
+    from taxjson.lib.core import coerce_transaction_row, require_trade_fields
+    from taxjson.lib.json_input import load_json_doc_or_exit, rows_or_exit
+    _prog = "taxjson-wash-radar"
+    transactions = []
 
     def load_files(files, group_type):
         for f in files:
             path = Path(f)
-            with open(path, 'r', encoding='utf-8') as fh:
-                data = json.load(fh)
-                txs = data.get("transactions", [])
-                for tx in txs:
-                    # Enrich with source info
-                    tx['_group'] = group_type
-                    tx['_file'] = str(path)
-                    all_tx_data.append(tx)
+            doc = load_json_doc_or_exit(_prog, path)
+            rows = rows_or_exit(_prog, doc, path, "transactions")
+            try:
+                objs = [coerce_transaction_row(
+                    {k: v for k, v in t.items() if not str(k).startswith('_')},
+                    i, str(path)) for i, t in enumerate(rows)]
+                require_trade_fields(objs)
+            except ValueError as e:
+                sys.stderr.write(f"{_prog}: error: {e}\n")
+                sys.exit(2)
+            for tx_obj in objs:
+                tx_obj._group = group_type
+                tx_obj._file = str(path)
+                # The engine's own window basis: SETTLEMENT dates for
+                # Canada (the CRA window, settle end-to-end), TRADE dates
+                # for the US (§1091). The wrong basis disagreed with the
+                # engine by 1-2 business days at the ±30d edges (a
+                # 31-trade-day gap that is 29 settle-days).
+                _d = _tax_day(tx_obj)
+                tx_obj._epoch = date_to_epoch(_d)
+                tx_obj._epoch_full = date_time_to_epoch(_d, tx_obj.time)
+                transactions.append(tx_obj)
 
     load_files(args.taxable, 'TAXABLE')
     load_files(args.sheltered, 'SHELTERED')
-
-    # Convert to objects and sort
-    transactions = []
-    import inspect
-    sig = inspect.signature(TaxTransaction)
-    valid_keys = sig.parameters.keys()
-
-    for t in all_tx_data:
-        # Create a clean dict for TaxTransaction
-        d = {k: v for k, v in t.items() if not k.startswith('_')}
-        
-        # Handle aliases
-        if 'qty' in d and 'quantity' not in d:
-            d['quantity'] = d.pop('qty')
-        
-        # Filter to only include valid TaxTransaction fields
-        d = {k: v for k, v in d.items() if k in valid_keys}
-        
-        try:
-            tx_obj = TaxTransaction(**d)
-            # Restore metadata
-            tx_obj._group = t['_group']
-            tx_obj._file = t['_file']
-            # The engine's own window basis: SETTLEMENT dates for
-            # Canada (the CRA window, settle end-to-end), TRADE dates
-            # for the US (§1091). The wrong basis disagreed with the
-            # engine by 1-2 business days at the ±30d edges (a
-            # 31-trade-day gap that is 29 settle-days).
-            _d = _tax_day(tx_obj)
-            tx_obj._epoch = date_to_epoch(_d)
-            tx_obj._epoch_full = date_time_to_epoch(_d, tx_obj.time)
-            transactions.append(tx_obj)
-        except TypeError as e:
-            if args.verbose:
-                print(f"Warning: Skipping invalid transaction in {t.get('_file')}: {e}", file=sys.stderr)
 
     # Custody-move TRANSFER noise (broker moves, cancel/rebook
     # restatements, registered-to-registered moves) must be invisible
@@ -525,6 +519,13 @@ def main():
 
     def _record_loss(cls, tx, loss):
         loss.setdefault('tx_obj', id(tx))
+        # A crypto asset settles on its trade date (every crypto row has
+        # date_settle == date), so a rescue sale may trade up to the
+        # settle bound itself, weekends included — the equity T+1
+        # walk-back printed a deadline up to 3 days early (R1-240).
+        loss.setdefault('same_day_settle', bool(
+            is_crypto_symbol(tx.symbol or '')
+            and (not tx.date_settle or tx.date_settle == tx.date)))
         recent_losses.setdefault(cls, []).append(loss)
 
     def _engine_record(cls, tx):
@@ -556,6 +557,18 @@ def main():
             })
         return True
 
+    def _money(tx) -> float:
+        """The trade's money in pool terms — the Canada engine's
+        _trade_money: a BUY's cost as a magnitude (books spell it either
+        sign), a SELL's proceeds SIGNED. A sale whose commission exceeds
+        its gross really has negative proceeds; abs() turned that loss
+        into a gain and the radar missed a superficial loss the engine
+        denies (audit S053-24, S054-06)."""
+        _n = float(tx.net_amount or 0.0)
+        if (tx.type or '') == 'futures_settlement':
+            return _n if float(tx.quantity or 0.0) < 0 else -_n
+        return _n if float(tx.quantity or 0.0) < 0 else abs(_n)
+
     for tx in transactions:
         if not _booked(tx):
             continue
@@ -586,7 +599,22 @@ def main():
         key = (ticker, group, acct)
 
         if tx.action == 'ADJUST':
-            account_pool_acb[key] = account_pool_acb.get(key, 0.0) + tx.net_amount
+            _adj = float(tx.net_amount or 0.0)
+            _q = account_pool_qty.get(key, 0.0)
+            _wash = str(tx.id or '').startswith('WASH_')
+            if _q < -1e-6 and not _wash:
+                # The engine's rule (core.py, R1-157): a SHORT pool's
+                # "cost" holds the short sale's proceeds, and a return of
+                # capital while short is paid BY the short seller — it
+                # lowers the short's gain. Added with the long sign it
+                # turned a covering loss into a gain (audit S053-22).
+                _adj = -_adj
+            elif abs(_q) <= 1e-6 and not _wash and _adj < -0.005:
+                # A return of capital on an EMPTY pool is a gain in its
+                # year (s.40(3), ACB nil) and never touches the next
+                # position's cost — as in the engine.
+                _adj = 0.0
+            account_pool_acb[key] = account_pool_acb.get(key, 0.0) + _adj
             continue
 
         if tx.action == 'SPLIT':
@@ -650,7 +678,7 @@ def main():
                 account_pool_acb[key] += (
                     account_pool_acb[key] / abs(current_inv)) * abs_qty
             else:
-                account_pool_acb[key] += abs(tx.net_amount)
+                account_pool_acb[key] += _money(tx)
 
             if tx.action in ('TRANSFER', 'OPENING_BALANCE'):
                 # Moving/synthesizing your own shares acquires nothing:
@@ -697,7 +725,7 @@ def main():
                 # FULL proceeds against only the closed shares' cost —
                 # a real loss computed as a gain, silently downgrading
                 # BLOCKED to CLEAR (2026-09 audit).
-                proceeds = abs(tx.net_amount) * (closing_qty / abs_qty
+                proceeds = _money(tx) * (closing_qty / abs_qty
                                                  if abs_qty > 1e-9
                                                  else 1.0)
                 gain = (proceeds - cost_of_shares_closed) if current_inv > 0 else (cost_of_shares_closed - proceeds)
@@ -724,7 +752,7 @@ def main():
             leftover_qty = abs_qty - closing_qty
             if leftover_qty > 1e-6:
                 # Reset ACB for the cross-over or remaining
-                account_pool_acb[key] = (leftover_qty / abs_qty) * abs(tx.net_amount)
+                account_pool_acb[key] = (leftover_qty / abs_qty) * _money(tx)
                 # The leftover OPENS a fresh position on the flip side —
                 # record it like any opening, or the new short/long is
                 # invisible to the trigger walk (2026-09 audit).
@@ -777,6 +805,11 @@ def main():
         tax_q = 0.0
         shl_q = 0.0
         cls = alias_of(ticker)
+        # "Held" for the advisories: 0.01 units hides equity dust (a
+        # DRIP residue), but a crypto lot of 0.0009 BTC is ~$120 and the
+        # engine's still-held test counts it (1e-6) — it was shown with
+        # no advisory at all (audit S049-20, S030-00's class).
+        _eps = 1e-6 if is_crypto_symbol(ticker) else 0.01
 
         # ALL losses still inside their own 30-day windows — not just the
         # latest one. A newer small loss must not hide an older loss whose
@@ -911,7 +944,7 @@ def main():
         # loss with a position left is BLOCKED (don't add), else COOLING.
         held_any = (sum(abs(qty) for (t, grp, acct), qty
                         in account_pool_qty.items()
-                        if alias_of(t) == cls and abs(qty) > 0.01)
+                        if alias_of(t) == cls and abs(qty) > _eps)
                     + sum(calls_held.values()))
 
         adv = ""
@@ -922,6 +955,7 @@ def main():
         rescue_j = None          # VIOLATION only: who must sell what
         denied_j = None          # VIOLATION only: units denied as things stand
         at_risk_j = None         # LOCKED only: taxable units a loss sale today
+        loss_j = None            # BLOCKED/COOLING: (in-window loss, units sold)
         #                          would lose to a registered holder
 
         if in_window_losses:
@@ -994,9 +1028,11 @@ def main():
                 worst = min((v[0] for v in violations),
                             key=lambda l: l['epoch'])
                 settle_d = epoch_to_date(worst['epoch'] + 30 * 86400)
-                safe_d = last_trade_date_settling_by(
-                    settle_d, worst.get('currency') or 'USD',
-                    bool(worst.get('is_option')))
+                _same_day = bool(worst.get('same_day_settle'))
+                safe_d = (settle_d if _same_day
+                          else last_trade_date_settling_by(
+                              settle_d, worst.get('currency') or 'USD',
+                              bool(worst.get('is_option'))))
                 days_left = int((date_to_epoch(safe_d) - today_epoch)
                                 / 86400)
                 clear_in = f"{safe_d} ({days_left}d)"
@@ -1013,6 +1049,7 @@ def main():
                                                           'LONG') == 'SHORT')
                         else "Sell")
                 unit_word = ("contract(s)" if is_option_ticker(ticker)
+                             else "units" if is_crypto_symbol(ticker)
                              else "shares")
                 share_units = sum(b['held'] for b in rescue.values())
                 parts = [f"{_who(h, b['account'])} {_qfmt(b['held'])}"
@@ -1042,9 +1079,12 @@ def main():
                                     else (c['account'] or k[0][1])),
                         "symbol": k[1], "qty": c['held'], "call": True}
                        for k, c in sorted(rescue_calls.items())])
+                _when = (f"by {safe_d} (it settles the same day)"
+                         if _same_day else
+                         f"by {safe_d} (last TRADE date — the sale must "
+                         f"SETTLE by {settle_d})")
                 adv = (f"VIOLATION: {verb} {_what} "
-                       f"by {safe_d} (last TRADE date — the sale must "
-                       f"SETTLE by {settle_d}) to rescue the loss"
+                       f"{_when} to rescue the loss"
                        f" ({_qfmt(denied_j)} units denied as things "
                        f"stand)"
                        + ("; the part a registered account backs is "
@@ -1061,11 +1101,23 @@ def main():
                 clear_in = f"{safe_d} ({days_left}d)"
                 clears_at = safe_d
                 loss_amt = sum(l['loss'] for l in in_window_losses)
-                if held_any > 0.01:
+                loss_units = sum(float(l.get('qty') or 0.0)
+                                 for l in in_window_losses)
+                loss_j = (round(loss_amt, 6), round(loss_units, 6))
+                # A rebuy denies only the rebought units' share of the
+                # loss (min(bought, sold, still held) / sold), never the
+                # whole loss by itself — a 1-share DRIP after a 100-share
+                # loss sale costs 1% of it (audit S054-07).
+                _per = (f" — ${loss_amt / loss_units:.4f} of it for each "
+                        f"unit bought back" if loss_units > 1e-9 else "")
+                if held_any > _eps:
                     # Still holding, but no replacement bought in the
                     # window is held: the loss is allowed so far —
                     # buying MORE before the window closes would disallow.
-                    adv = f"BLOCKED: Recent loss of ${loss_amt:.4f} on {last['date']}. Re-entry before {safe_d} will disallow the loss."
+                    adv = (f"BLOCKED: Recent loss of ${loss_amt:.4f} on "
+                           f"{last['date']}. Re-entry before {safe_d} "
+                           f"disallows the loss on as many units as you "
+                           f"buy{_per}.")
                 else:
                     # Fully exited at a loss: safe, just don't re-enter
                     # until the window closes.
@@ -1088,7 +1140,7 @@ def main():
         _sl_adj = "a wash sale" if us_mode else "superficial"
         _reg = "IRA(s)" if us_mode else "SHELTERED account(s)"
 
-        if not adv and abs(tax_q) > 0.01:
+        if not adv and abs(tax_q) > _eps:
             # Forward view: a loss sale of the taxable position TODAY.
             # Its window reaches back 30 days; each holder's backing is
             # what it bought in that span and still holds.
@@ -1128,7 +1180,7 @@ def main():
                     f"{epoch_to_date(gone_last['epoch'])} but holds none "
                     f"of it now — that leg re-arms only if an affiliated "
                     f"account re-buys within 30 days AFTER your sale.")
-            pre_window_shl = (abs(cls_shl_q) > 0.01 and not shl_back)
+            pre_window_shl = (abs(cls_shl_q) > _eps and not shl_back)
             if at_risk > 1e-6:
                 is_relevant = True
                 latest = max([b['last'] for b in shl_back.values()]
@@ -1209,11 +1261,17 @@ def main():
                                 / 86400)
                 clear_in = f"{safe_d} ({days_left}d)"
                 clears_at = safe_d
-                adv = (f"CAUTION: a loss sale is NOT superficial IF "
-                       f"you exit your FULL taxable position. "
-                       f"{shl_caveat}")
+                # No holder owns property acquired in the window (the
+                # taxable pool bought none; the registered buyer sold
+                # out), so a loss sale of ANY size today stands — the
+                # per-holder test, as the engine applies it. The old
+                # "IF you exit your FULL taxable position" implied a
+                # partial harvest would be superficial (audit S054-18).
+                adv = (f"CAUTION: a loss sale today is NOT superficial, "
+                       f"whole or partial — no account holds shares "
+                       f"bought in the last 30 days. {shl_caveat}")
 
-        if not adv and abs(tax_q) > 0.01 and abs(cls_shl_q) > 0.01:
+        if not adv and abs(tax_q) > _eps and abs(cls_shl_q) > _eps:
             # No acquisition on EITHER side within the past 30 days:
             # s.40(2)(g) needs an acquisition INSIDE the ±30-day
             # window, not mere ownership — so a loss sale TODAY is
@@ -1224,21 +1282,23 @@ def main():
             is_relevant = True
             if us_mode:
                 adv = ("RISK: Sellable at a loss NOW (no buys in the last "
-                       "30 days) — but an IRA still holds, so any IRA "
+                       "30 days) — but an IRA still holds, so an IRA "
                        "buy (dividend reinvestment included) within 30 "
                        "days AFTER the sale disallows the loss "
-                       "PERMANENTLY (Rev. Rul. 2008-5). Pause IRA "
-                       "buys/reinvestment for 30 days.")
+                       "PERMANENTLY on as many shares as it buys (Rev. "
+                       "Rul. 2008-5). Pause IRA buys/reinvestment for 30 "
+                       "days.")
             else:
                 adv = ("RISK: Sellable at a loss NOW (no buys in the last "
                        "30 days) — but sheltered accounts still hold, so "
-                       "any affiliated buy (including a DRIP) within 30 "
-                       "days AFTER the sale denies the loss PERMANENTLY. "
-                       "Pause DRIPs/sheltered adds for 30 days, or sell "
-                       "the sheltered shares too.")
+                       "an affiliated buy (including a DRIP) within 30 "
+                       "days AFTER the sale denies the loss PERMANENTLY "
+                       "on as many shares as it buys (a small DRIP denies "
+                       "a small part). Pause DRIPs/sheltered adds for 30 "
+                       "days, or sell the sheltered shares too.")
 
         if not adv:
-            if abs(tax_q) > 0.01 or abs(shl_q) > 0.01:
+            if abs(tax_q) > _eps or abs(shl_q) > _eps:
                 is_relevant = True
                 adv = "CLEAR: No recent buys. Safe to sell at a loss (do not repurchase for 30 days)."
             # (Fully-exited recent losses are routed to COOLING in the loss
@@ -1262,6 +1322,11 @@ def main():
                 # LOCKED only: taxable units whose loss a sale TODAY
                 # would lose to a registered holder's in-window buy.
                 "at_risk_qty": at_risk_j,
+                # BLOCKED / COOLING only: the in-window loss and the
+                # units sold at it — a rebuy denies loss/units per unit
+                # bought back (buy-check states it).
+                "recent_loss": (loss_j[0] if loss_j else None),
+                "recent_loss_qty": (loss_j[1] if loss_j else None),
                 "clears_in_at_generation": clear_in,
                 "advisory": adv,
                 "category": _advisory_category(adv),
@@ -1335,6 +1400,7 @@ def main():
             "as_of_date": today_dt.strftime("%Y-%m-%d"),
             "account": args.account,
             "include_all": bool(args.all),
+            "scope_note": scope_note(args.country),
             "sections": sections_j,
         }
         if args.json_out:
@@ -1352,6 +1418,9 @@ def main():
         print()
     else:
         _print_ca_definitions()
+    # Every SAFE/CLEAR here is "as far as this project's accounts show"
+    # (CA-PLAN-04 / US-PLAN-04, audit S054-22).
+    print(f"  {scope_note(args.country)}")
 
     if args.json:
         # Discard the buffered text report and emit only the payload.
@@ -1367,7 +1436,8 @@ _US_DEFINITIONS = (
     "added to the replacement's basis (lost for good when the replacement "
     "is in an IRA).",
     "BLOCKED: You sold at a loss in the last 30 days and still hold some. "
-    "Buying again before the printed date disallows the loss.",
+    "Buying again before the printed date disallows the loss on as many "
+    "shares as you buy.",
     "LOCKED: An IRA bought in the last 30 days. A taxable loss sale is a "
     "wash sale for up to that many shares, permanently — even if the IRA "
     "has sold them since (Rev. Rul. 2008-5).",
@@ -1378,7 +1448,7 @@ _US_DEFINITIONS = (
     "(trade date) before buying back.",
     "RISK: Sellable at a loss NOW — but an IRA still holds, so an IRA buy "
     "(dividend reinvestment too) within 30 days AFTER the sale disallows "
-    "the loss permanently.",
+    "the loss permanently on as many shares as it buys.",
     "CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 "
     "days).",
     "A long call on the shares bought in a loss's window is noted, not "
@@ -1387,11 +1457,11 @@ _US_DEFINITIONS = (
 
 
 def _print_ca_definitions():
-    print("  VIOLATION: You sold at a loss and a holder that BOUGHT the same security inside the ±30-day window still holds it (your taxable accounts, or a registered account). That holder sells ALL of it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (the printed date already allows for the T+1 lag and any settlement holiday inside it). Shares a registered account held before the window never make a loss superficial.")
-    print("  BLOCKED: You sold at a loss in the last 30 days. Buying now cancels that loss.")
-    print("  LOCKED: A registered account bought in the last 30 days and still holds those shares. A taxable loss sale is superficial for up to that many shares (the rest of the loss stands) — permanently denied unless that account sells them within 30 days after your sale.\n  EXITABLE: You bought in the last 30 days in a taxable account. Selling the FULL position at a loss is fine; a partial loss sale is superficial (basis defers into the rest).\n  CAUTION: A registered account bought recently but has since sold what it bought. A full-exit loss sale stands unless an affiliated account re-buys within 30 days after.")
+    print("  VIOLATION: You sold at a loss and a holder that BOUGHT the same security inside the ±30-day window still holds it (your taxable accounts, or a registered account). That holder sells ALL of it by the printed TRADE date to rescue the loss — the rescue sale must SETTLE within 30 days of the loss's settlement (the printed date already allows for the settlement lag and any settlement holiday inside it; a crypto asset settles on its trade date). Shares a registered account held before the window never make a loss superficial.")
+    print("  BLOCKED: You sold at a loss in the last 30 days. Buying back now cancels the loss on as many shares as you buy (the per-unit amount is printed).")
+    print("  LOCKED: A registered account bought in the last 30 days and still holds those shares. A taxable loss sale is superficial for up to that many shares (the rest of the loss stands) — permanently denied unless that account sells them within 30 days after your sale.\n  EXITABLE: You bought in the last 30 days in a taxable account. Selling the FULL position at a loss is fine; a partial loss sale is superficial (basis defers into the rest).\n  CAUTION: A registered account bought recently but has since sold what it bought. A loss sale (whole or partial) stands unless an affiliated account re-buys within 30 days after.")
     print("  COOLING: You recently sold out at a loss. Wait 30 days from the sale before buying back.")
-    print("  RISK: Sellable at a loss NOW — but a sheltered account still holds, so an affiliated buy (e.g. a DRIP) within 30 days AFTER the sale denies the loss permanently. Pause sheltered adds for 30 days.")
+    print("  RISK: Sellable at a loss NOW — but a sheltered account still holds, so an affiliated buy (e.g. a DRIP) within 30 days AFTER the sale denies the loss permanently on as many shares as it buys. Pause sheltered adds for 30 days.")
     print("  CLEAR: No recent buys. Safe to sell at a loss (don't buy back for 30 days).")
     print()
 

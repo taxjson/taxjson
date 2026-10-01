@@ -51,8 +51,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
-from taxjson.lib.core import load_transactions
 from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
                                   run_gains)
@@ -489,6 +489,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     return "\n".join(lines)
 
 
+@guard_main("taxjson-carryover", value_errors=True)
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Multi-year capital-loss carryforward/carryback ledger "
@@ -573,13 +574,14 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
+    from taxjson.lib.json_input import load_transactions_or_exit as _ltx
     # The ledger is labelled in --base-currency and its balance feeds
     # T1A / line 25300: a native USD book (a raw broker file) printed a
     # 5,000 USD loss as a 5,000.00 CAD carryforward (S028-02).
     base_cur = str(args.base_currency or "").strip().upper()
 
     def _load_base(p: Path):
-        txs = load_transactions(p)
+        txs = _ltx("taxjson-carryover", p)
         bad = sorted({str(t.currency).strip().upper() for t in txs
                       if str(t.currency or "").strip()
                       and str(t.currency).strip().upper() != base_cur})
@@ -601,7 +603,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     sheltered = []
     for p in args.sheltered:
-        sheltered.extend(load_transactions(p))
+        sheltered.extend(_ltx("taxjson-carryover", p))
 
     country = args.country
     crypto_txs = [t for txs in crypto_loaded for t in txs]

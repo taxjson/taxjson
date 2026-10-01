@@ -95,15 +95,19 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
         "or affiliated account on its own)"
     )
     out.append(f"#     all-account qty at T+30 = {bal:+.4f}   (context only)")
-    if abs(disallowed_qty - loss_qty) < 0.001:
+    # Relative test (audit S078-06): an absolute 0.001-unit tolerance
+    # called 0.0006 of 0.0015 BTC a "full" disallowance.
+    def _q(x: float) -> str:
+        return f"{x:.4f}" if abs(x) >= 0.01 or x == 0 else f"{x:.8g}"
+    if abs(disallowed_qty - loss_qty) <= 1e-6 * max(abs(loss_qty), 1e-9):
         out.append(
-            f"#   Result: full disallowance — {disallowed_qty:.4f} of "
-            f"{loss_qty:.4f} units backed by substituted property"
+            f"#   Result: full disallowance — {_q(disallowed_qty)} of "
+            f"{_q(loss_qty)} units backed by substituted property"
         )
     else:
         out.append(
-            f"#   Result: partial disallowance — {disallowed_qty:.4f} of "
-            f"{loss_qty:.4f} units backed by substituted property "
+            f"#   Result: partial disallowance — {_q(disallowed_qty)} of "
+            f"{_q(loss_qty)} units backed by substituted property "
             f"(acquired in the window and still held at T+30)"
         )
 
@@ -140,6 +144,8 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
         elif role == 'candidate':
             tag = ("candidate (eligible; not needed — allocation takes "
                    "buys after the sale first, then earlier buys latest first)")
+        elif role == 'cover':
+            tag = "closes a short — acquires nothing (not a trigger)"
         elif role == 'other_sell':
             tag = "other sell in window (may produce its own loss)"
         elif role == 'other_buy':

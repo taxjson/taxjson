@@ -50,6 +50,11 @@ _QTY_FIELDS = frozenset({
     'pool_qty', 'pool_qty_after',
     'running_bal', 'bal_at_end',
     'days_held', 'days_from_loss', 'hold_days',
+    # Share/coin counts the gains JSON also carries (audit R1-317:
+    # wash_trigger.trigger_qty printed 6.76e-06 AVAX as 0.0; S074-22:
+    # phantom_application_log opening_qty).
+    'trigger_qty', 'opening_qty', 'option_qty', 'covered_shares',
+    'open_qty', 'remaining_qty',
 })
 
 

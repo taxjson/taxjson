@@ -952,7 +952,9 @@ class TestPhantomWalks(unittest.TestCase):
         txs = _tt("BUYSELL 2025-03-03 10:00:00 XYZ.TO -100 CAD 20 2000")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            _, log = synthesize_openings(txs, ph)
+            # warn=True: the pipeline reports the project-level result
+            # once (report_phantom_log); a direct caller can ask here.
+            _, log = synthesize_openings(txs, ph, warn=True)
         by = {e['symbol']: e for e in log}
         self.assertTrue(by['XYZ.TO']['inserted'])
         self.assertIn('no rows', by['NOPE.TO']['note'])
