@@ -891,5 +891,56 @@ class TestMutationTargetsByName(unittest.TestCase):
             mod.resolve_targets([("src/taxjson/lib/core.py", "Nope.x")])
 
 
+class TestCryptoDustRows(unittest.TestCase):
+    """R1-24 / R1-245: the Canada pool walk dropped every row under 1e-6
+    units (staking rewards lost their units and cost; a sub-micro sale
+    was never booked). S070-09: the US engine's 1e-8 skip is now named."""
+
+    def _book(self, cur="CAD"):
+        from taxjson.lib.core import TaxTransaction
+        mk = lambda d, q, net, t="10:00:00": TaxTransaction(  # noqa: E731
+            action="BUYSELL", date=d, time=t, date_settle=d, symbol="BTC",
+            quantity=q, price=abs(net / q), net_amount=net, currency=cur,
+            account="crypto")
+        book = [mk("2025-01-02", 1.0, 100000.0)]
+        for i in range(20):
+            book.append(mk(f"2025-02-{i + 1:02d}", 9e-07, 0.09))
+        book.append(mk("2025-03-03", -5e-07, 0.08))
+        return book
+
+    @rule("CA-ACB-01")
+    def test_canada_books_dust(self):
+        from taxjson.lib.core import CanadaTaxRules
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = CanadaTaxRules().compute_gains(self._book())
+        inv = {i["symbol"]: i for i in r["inventory"]}
+        self.assertAlmostEqual(inv["BTC"]["qty"], 1.0000175, 12)
+        sales = [g for g in r["transactions"] if g.get("date") == "2025-03-03"]
+        self.assertEqual(len(sales), 1)
+        self.assertAlmostEqual(sales[0]["proceeds"], 0.08, 6)
+        # Pool cost 100001.80 over 1.000018 units; 5e-7 units leave.
+        self.assertAlmostEqual(inv["BTC"]["total_cost"],
+                               100001.8 * (1.0000175 / 1.000018), 2)
+
+    @rule("US-BASIS-01")
+    def test_us_names_skipped_dust(self):
+        from taxjson.lib.core import TaxTransaction, USATaxRules
+        book = [TaxTransaction(action="BUYSELL", date="2025-01-02",
+                               time="10:00:00", date_settle="2025-01-02",
+                               symbol="ETH", quantity=1.0, price=4000.0,
+                               net_amount=4000.0, currency="USD",
+                               account="crypto"),
+                TaxTransaction(action="BUYSELL", date="2025-02-02",
+                               time="10:00:00", date_settle="2025-02-02",
+                               symbol="ETH", quantity=9e-09, price=4000.0,
+                               net_amount=3.6e-05, currency="USD",
+                               account="crypto")]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            USATaxRules().compute_gains(book)
+        self.assertIn("smaller than 1e-08 units are not booked", err.getvalue())
+        self.assertIn("ETH (1 row(s)", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

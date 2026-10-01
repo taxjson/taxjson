@@ -228,7 +228,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### `days_held` uses trade dates
 - **Where:** `lib/core.py` closing branch.
-- **Current behavior:** the days-held figure in traces counts from trade dates while every other Canadian date is settlement-basis. Cosmetic — Canada has no holding-period rule.
+- **Current behavior:** the days-held figure counts from trade dates while every other Canadian date is settlement-basis. Canada has no holding-period rule, but the figure also gives the year of acquisition `form-export` prints on Schedule 3 (disposition date minus days held), so a lot bought on a late-December trade date that settled in January shows the earlier year.
 
 ### Non-eligible dividends are estimated as eligible
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
@@ -246,6 +246,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ### Currency⇒exchange suffix map is duplicated in ~6 places
 - **Where:** `base.py`, `corp_actions.py`, `ib_extractor.py` (×3), `ticker_map.py` — each hardcodes `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
 - **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. An explicit `.TO` in a Questrade or generic export is kept whatever the row currency (`DLR.U.TO` bought in USD), so the known USD-on-TSX case no longer depends on the map. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
+
+### Sub-micro quantity tolerances (crypto dust)
+- **Where:** `lib/core.py` — the Canada pool walk empties a pool whose quantity falls below 1e-6 units after a sale (its remaining cost stays in the pool and goes to the next purchase); the US engine books no row or lot below 1e-8 units.
+- **Current behavior:** a residue of less than a millionth of a coin left after a sale disappears from the holdings (its cost, a few cents at most, moves onto the next purchase); a US row under 1e-8 units is left out and named in a warning. Rows of any size are now booked by the Canada engine (staking rewards under 1e-6 units used to be dropped).
+- **Why deferred:** both tolerances also absorb float noise in every share count; a relative tolerance needs its own audit across both engines. Effect: cents.
 
 ## Test coverage gaps (tracked; lower priority)
 

@@ -2410,7 +2410,12 @@ class CanadaTaxRules(TaxRules):
                             symbol_acb_traces[symbol] = [f"# --- ACB CALCULATION TRACE: {symbol} ---"]
                         symbol_acb_traces[symbol].append(f"# {tx.date} OPENING_BALANCE {qty:10.4f} | Phantom — pool TAINTED until drain to zero")
                 else:
-                    if abs(qty) < 1e-6: continue
+                    # Only an exact zero is skipped (audit R1-24 /
+                    # R1-245): the 1e-6 share epsilon dropped every
+                    # sub-micro crypto row — staking rewards whose
+                    # income was booked lost their units and cost, and
+                    # the pool fell short of the wash walk's balance.
+                    if qty == 0: continue
                     is_opening = (pool['qty'] > 1e-6 and qty > 0) or \
                                  (pool['qty'] < -1e-6 and qty < 0) or \
                                  (abs(pool['qty']) <= 1e-6)
@@ -4017,6 +4022,9 @@ class USATaxRules(TaxRules):
         # the id, not the time): the rename merge orders same-date lots
         # by it.
         _lot_time = {t.id: (t.time or '') for t in all_events}
+        # Rows below the lot epsilon (1e-8 units) are not booked; they
+        # are named once instead of vanishing silently (audit S070-09).
+        _us_dust: List[TaxTransaction] = []
 
         # === PRE-PASS: classify each event and build replacement indexes. ===
         # The "opening portion" of each transaction is what's eligible to be
@@ -4678,6 +4686,8 @@ class USATaxRules(TaxRules):
                 continue
 
             if abs(tx.quantity) < epsilon:
+                if tx.quantity and tx.action in ('BUYSELL', 'ASSIGN'):
+                    _us_dust.append(tx)
                 continue
 
             # ----- Stock dividend (§305(a), §307, §1223(5)) -------------
@@ -5523,6 +5533,16 @@ class USATaxRules(TaxRules):
                 file=sys.stderr,
             )
         _warn_undrained_adjustments(pending_option_adjustments.undrained(), "usa")
+        if _us_dust:
+            _by: Dict[str, List[float]] = {}
+            for _t in _us_dust:
+                _by.setdefault(_t.symbol, []).append(_t.quantity)
+            print("warning: rows smaller than 1e-08 units are not booked "
+                  "by the US engine: " + ", ".join(
+                      f"{s_} ({len(q)} row(s), net {sum(q):+.3g})"
+                      for s_, q in sorted(_by.items()))
+                  + " — their units and money are left out of the lots "
+                  "and Form 8949.", file=sys.stderr)
 
         # Warn-only call-as-replacement scan (the experimental US engine
         # does not enforce it; always on — cross_asset is retired).

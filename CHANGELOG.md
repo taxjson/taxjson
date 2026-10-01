@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Canada: crypto rows under a millionth of a unit are booked.**
+  Staking rewards below 1e-6 units were dropped by the ACB pool (their
+  income was taxed with no matching cost, and the holdings fell short of
+  the exchange balance); a sub-micro sale was never reported. Owner-size
+  effect: cents of ACB. The US engine still skips rows under 1e-8 units
+  but now names them (KNOWN_ISSUES).
 - **Fee statistics:** plain futures fees are their own bucket in the
   gains summary, the .sum fee stats and `fees-sum` (they were counted as
   stock fees, and futures contracts as shares in $/share). README and
