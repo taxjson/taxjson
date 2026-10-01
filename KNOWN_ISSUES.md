@@ -22,14 +22,14 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **When the lookup fails (2026-09 audit R1-105):** a Yahoo error, outage or rate limit, or an HTTP 200 with a null/empty close, leaves the row at price 0. That is never silent any more: fill-crypto warns (per lookup, plus an `UNPRICED` summary), and the crypto path runs `taxjson-validate --require-prices`, so each unpriced row is a validation ERROR on the console and fatal under `taxjson run --strict`. Re-run online (a failed price is never cached).
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
-- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — `isin_map = {... 'IE': 'L' ...}` in the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead — corrected 2026-09 round-five audit).
+- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — the module-level `_ISIN_EXT` map (`'IE': 'L'`), read through `_isin_ext()` by the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead).
 - **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
 - **Why deferred:** the user holds no IE-domiciled ETFs, so the bug doesn't fire on their data. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
 - **Workaround:** users who hold IE-domiciled ETFs should add a `ticker.map` GLOBAL rule rewriting the parsed `.L` symbol to the correct market suffix.
 
 ### IB cash-in-lieu row wording is unverified
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — `_IB_CIL_RE` in the Corporate Actions branch.
-- **Current behavior:** a Corporate Actions row whose description contains the phrase `cash in lieu` (any case, anywhere after the leading `TICKER(ISIN)` token) with a negative Quantity is booked as a sale of that fractional quantity for the row's Proceeds (Value when Proceeds is absent), and the fraction is folded into the matching split's leg-derived ratio so the pool ends on whole shares. The regex was written against a synthesized row (`TINY(US…) Cash in Lieu of Fractional Shares (TINY, TINY CORP, US…)`, quantity `-0.3333`, proceeds `3.10`) — no real IB statement with such a row was available.
+- **Current behavior:** a Corporate Actions row whose description contains the phrase `cash in lieu` (any case, anywhere after the leading `TICKER(ISIN)` token) with a negative Quantity is booked as a sale of that fractional quantity for the row's Proceeds (a blank Proceeds is refused; a 0 is booked as 0 with a warning — IB's Value is a market value, never cash), and the fraction is folded into the leg-derived ratio of the same symbol's split nearest its date, within a week (in either row order), so the pool ends on whole shares; a fraction no split claims is said in a note. The regex was written against a synthesized row (`TINY(US…) Cash in Lieu of Fractional Shares (TINY, TINY CORP, US…)`, quantity `-0.3333`, proceeds `3.10`) — no real IB statement with such a row was available.
 - **Risk:** if IB words the row differently (no `cash in lieu` phrase, or the fraction/cash in other columns), the row falls into the unhandled corporate-actions tally (warned at end of parse) and the fractional dust stays in the pool — the pre-fix behavior, not a silent mis-booking.
 - **Evidence needed:** a real IB Activity Statement CSV containing a reverse split (or merger) with its cash-in-lieu row; attach it to graduate this item.
 
@@ -130,7 +130,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Settlement cycles outside North America are keyed on currency, with weekends-only calendars
 - **Where:** `src/taxjson/lib/dates.py` (`_T1_CUTOVER`), `src/taxjson/lib/market_calendar.py`.
-- **Current behavior:** the settlement lag follows the trade currency: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other currency (the ASX's AUD, HKD, JPY, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. IB stamps ASX fills in US Eastern time, which is already the next day in Sydney; the trade date is taken as stamped.
+- **Current behavior:** the settlement lag follows the trade currency: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other currency (the ASX's AUD, HKD, JPY, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. IB stamps ASX fills in US Eastern time; the parser dates them in Sydney time (tax-logic CA-DATE-SESSION), but only the ASX has a venue time zone — another non-North-American market is dated as IB stamps it.
 - **Why deferred:** per-market holiday calendars and venue time zones for markets the books rarely touch.
 
 ---
@@ -235,6 +235,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Split-share corporations, some REIT/LP distributions and small-business dividends are non-eligible (15% gross-up, smaller credit) and are overstated in the estimate; T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
 - **Why deferred:** brokers' activity exports do not carry the T5 box; the split is only known from the slip.
 - **Workaround:** the estimate is disclosed as an estimate; use the T5/T3 slips for the return. (`taxjson reconcile-slips` reads only T5008 / 1099-B disposition slips; it does not check dividend slips.)
+- **Capital-gains dividends (T5 box 18).** A split-share or mutual-fund corporation's capital-gains dividend is a 50%-inclusion capital gain, not a dividend; IB ("(Ordinary Dividend)"), RBC and Questrade label it as an ordinary dividend, so it is estimated with the eligible gross-up and credit (the estimate is overstated by a few percent of those amounts). Only the slip (or IBKR's own dividends report, "T5: Capital Gains") says which payments are box 18; the filed return takes line 17400 from the slip. No ACB is affected.
 
 ### reconcile-slips cannot read per-type-code T5008s or scope a slip to one broker
 - **Where:** `src/taxjson/bin/taxjson_reconcile_slips.py`.
@@ -244,7 +245,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ## Latent assumptions (audit-flagged, not firing on current data)
 
 ### Currency⇒exchange suffix map is duplicated in ~6 places
-- **Where:** `base.py`, `corp_actions.py`, `ib_extractor.py` (×3), `ticker_map.py` — each hardcodes `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
+- **Where:** `base.py` (`BaseBrokerage.CURRENCY_EXT_MAP`), `corp_actions.py` (`_CURRENCY_SUFFIX`), `ib_extractor.py` (`_IB_CURRENCY_EXT`, plus the ISIN-country map `_ISIN_EXT`) and a partial copy in `webull.py` (`CURRENCY_EXT_MAP`) each hardcode `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `bin/taxjson_t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
 - **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. An explicit `.TO` in a Questrade or generic export is kept whatever the row currency (`DLR.U.TO` bought in USD), so the known USD-on-TSX case no longer depends on the map. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
 
 ### Sub-micro quantity tolerances (crypto dust)
@@ -321,7 +322,7 @@ reported manually" instead of counting them as missing.
 - **Current behaviour:** conservative — an RESP purchase inside the window that is still held at its end denies the loss (permanently, as for any registered account). A filer who takes the other position has to adjust by hand; the 2026-09 audit found one such case on real books.
 
 ### Foreign return of capital is only reclassified for IBKR (Canada projects)
-- **Where:** in a Canada project, `lib/brokerages/ib_extractor.py` treats a "(Return of Capital)" distribution from a non-Canadian ISIN as a dividend (ITA s.90(2)) and a payment in lieu as income; a US project (and `taxjson-brokerage` without `--country canada`) keeps every return of capital as a basis reduction. Questrade and RBC exports carry no ISIN, and a `.US` listing does not prove a foreign issuer, so their ROC rows stay ACB reductions — check US-issuer ROC on those brokers by hand.
+- **Where:** in a Canada project, `lib/brokerages/ib_extractor.py` treats a "(Return of Capital)" distribution from a non-Canadian ISIN as a dividend (ITA s.90(1)) and a payment in lieu as income; a US project (and `taxjson-brokerage` without `--country canada`) keeps every return of capital as a basis reduction. Questrade and RBC exports carry no ISIN, and a `.US` listing does not prove a foreign issuer, so their ROC rows stay ACB reductions — check US-issuer ROC on those brokers by hand.
 
 ### A merger's per-account empirical ratios are blended
 - **Where:** `lib/core.py` folds one merger's rename SPLITs with different per-account ratios into a single holdings-weighted ratio (2026-09). Totals and the shared ACB pool are right; each account's wash-walk balance can be a fraction of a share off.
@@ -368,7 +369,9 @@ Comm/Fee, which already includes them (the Cash Report shows
 Commissions + Transaction Fees = the Comm/Fee sum) — the fold this
 item first shipped charged them twice and was removed in the 2026-09
 parse hardening; `Commission Adjustments` refunds
-are negative FEE rows; tender / voluntary-offer journals are netted
+are folded into the trade they name (a lower cost for a purchase,
+higher proceeds for a sale; tax-logic CA-ACB-COMMREFUND), or kept as a
+negative FEE row when that trade is not in the same statement; tender / voluntary-offer journals are netted
 (zero-proceeds round trip = recognized no-op, cash settlement = a
 booked sale with a NOTE; an allocation that delivers ANOTHER security
 is an UNBOOKED warning — book the exchange by hand). Kraken `transfer/transferpeertopeer` is

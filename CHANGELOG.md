@@ -2,6 +2,83 @@
 
 ## Unreleased
 
+- **Broker detection and `taxjson-brokerage`.** An IB file is routed by
+  its section,Header shape (a Trades-first Flex download, a statement
+  without the BrokerName row or with a Title row first), and `taxjson
+  fetch` accepts exactly what detection routes; an RBC header after a
+  partial preamble or a blank line is found. A file in a legacy encoding
+  (cp1252) gets one line naming the remedy, as do RBC, Kraken and
+  Coinbase refusals (they were tracebacks); an unknown `--brokerage` is
+  a usage error (exit 2). An alias (`--brokerage qt`) is recorded under
+  the canonical id, so fees.rpt shows one row per broker. An account id
+  in an input file's NAME (IB's default `U1234567_....csv`) is masked
+  in every parse line, so it no longer reaches reports/. `taxjson
+  transfers` shows an in-book RBC transfer's BOOK VALUE.
+- **Shared broker helpers.** The back-computed fee (Webull, RBC) is
+  signed by the trade's direction — rounding noise is no longer turned
+  into a charge — and a flat commission on a cheap option fill is kept
+  (it was zeroed above 25% of net); fees.rpt only. "NOT A RETURN OF
+  CAPITAL", "RETURN OF CAPITAL GAINS" and a fund named "... RET OF
+  CAPITAL ETF" are dividends, not ACB reductions. Strict number cells
+  refuse non-ASCII digits and overflow; a lower-case currency is the
+  same currency (Questrade, the shared suffix helper); a decimal comma
+  inside description text ("ON 12,5 SHS", "BOOK VALUE $1234,56",
+  "$1,250.00 PER SHARE") is never read 10-100x off (the field stays
+  unknown, or the grouped number is read whole). Webull's settle-to-
+  trade walk-back is right on the T+1 cutover days themselves.
+- **IB: a commission refund lowers the trade's cost.** A Commission
+  Adjustments row naming its trade ("Refund (KWEB, 400, 2026-05-13)")
+  is folded into that trade — a refunded purchase commission comes off
+  the ACB, a refunded sale commission off the outlays — instead of a
+  stand-alone FEE row the gains never saw; one whose trade is not in the
+  statement stays a FEE row and is said. tax-logic CA-ACB-COMMREFUND /
+  US-BASIS-COMMREFUND.
+- **IB statement hardening.** A dividend or fee whose description says
+  "Total" (a "Total Return" fund, Nasdaq TotalView) is no longer
+  skipped as a subtotal; an unreadable Cash Report total on a reconciled
+  line, or an unreadable option/futures multiplier, is refused by name;
+  rows of a type IB does not write are counted and said (and a file
+  with no Data rows is refused); futures rows must match qty x price x
+  multiplier to the cent (no Cash Report line backs them); a lower-case
+  currency cell is upper-cased; IB rows carry the instrument's name
+  (`security_name`), so the cross-listing lint recognizes an IB-held
+  CDR.
+- **The foreign return-of-capital citation is ITA s.90(1), not
+  s.90(2).** s.90(2) is the foreign-affiliate rule; a portfolio
+  holder's foreign dividend is included by s.90(1), and a real
+  reduction of paid-up capital lowers the ACB (s.53(2)(b)(ii)). The IB
+  row note, `taxjson-brokerage --help`, tax-logic CA-ACB-08 and the docs
+  say so; nothing is computed differently.
+- **IB corporate actions.** A cash-in-lieu row with Proceeds 0 books no
+  cash (it used to book IB's market Value as proceeds) and warns; a
+  fraction folds into the split of its symbol nearest its date within a
+  week, in either row order (an unrelated earlier fraction no longer
+  skews a later split). A two-leg split on a SHORT position gets the
+  text ratio, not its reciprocal (102-for-100 was 0.98). A tender parked
+  in one statement and resolved in the account's next one is a quiet
+  no-op instead of two warnings, and the cash-tender NOTE no longer
+  points at a corp-actions election that cannot exist. A cancelled
+  untranslated row no longer stays in the skip count. A symbol with a
+  currency tag (RGLD.CAD) is warned about in every section — it is a
+  pool of its own.
+- **IB: payment-in-lieu share counts and the open-accrual warning.** A
+  PIL's share count/rate comes from the accrual of the listing that
+  paid it (the posting's currency first, a pay date within a week, the
+  Po row's rate — no longer the first accrual row seen); an accrual in
+  another currency than the cash gives its share count instead of a
+  wrong rate. The "accrued but not yet booked" warning pairs each
+  posted dividend with ONE accrual (exact pay date first), so another
+  week's dividend no longer hides an unpaid one, and a posting in the
+  account's other IB statement (the next year's) now counts.
+- **IB: overnight-session and ASX fills are dated by the exchange's
+  trade date.** IB stamps US Eastern clock time: a US stock or ETF
+  filled in the overnight session (20:00 ET onward, Sunday to Thursday
+  nights) now trades on the NEXT trading day and settles T+1 from it —
+  a Dec 30 20:30 sale trades Dec 31 and settles in January, and a
+  Christmas-night fill settles Dec 29 instead of Dec 26. An ASX fill,
+  stamped in the ET evening, is dated in Sydney time. The overnight row
+  sorts before that day's regular session; the broker's stamp is kept
+  as `broker_time`. tax-logic CA-DATE-SESSION / US-DATE-SESSION.
 - **Canada: crypto rows under a millionth of a unit are booked.**
   Staking rewards below 1e-6 units were dropped by the ACB pool (their
   income was taxed with no matching cost, and the holdings fell short of
