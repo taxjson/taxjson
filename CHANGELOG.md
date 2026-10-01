@@ -2634,6 +2634,81 @@
   expiry, assignment or exercise row. For a long contract the premium
   paid is an unbooked loss of the expiry year; option-boundary covered
   written contracts only.
+- **Every command checks the option-timing and `fx_cash_gains`
+  settings.** `fx_cash_gains = "false"` (quoted) turned the FX-on-cash
+  report on; a typo'd `option_premium_timing` or a quoted / boolean
+  `option_grant_timing_since` was refused only by `run` — option-boundary
+  read it as close timing and close-year wrote it into the lock. All
+  are now refused by every config reader.
+- **taxjson.toml with a UTF-8 BOM is read** (also a generic-importer
+  mapping); a taxjson.toml that is a directory or unreadable, `work/` or
+  `reports/` that is a file, and `init` onto an existing file now give a
+  one-line error instead of a traceback (`run` refuses before any stage).
+- **Tolerance and threshold flags must be finite and non-negative**
+  (`sanity --tolerance`, `reconcile-slips --tolerance`, `taxjson-t1135
+  --threshold/--detailed-threshold` (> 0), `watch --threshold`).
+  `watch --threshold 0` now means "any move" (it read as 100), and an
+  unreadable or other-version `.watch_state.json` is warned about before
+  the new baseline is recorded.
+- **The .sum DIAGNOSTICS banners are fresh and whole.** `<acct>.sum`
+  (the pre-blend baseline) no longer repeats the previous run's
+  cross-account notes (they are in `<acct>_wash.sum`); a note about a
+  problem already fixed no longer survives in either banner after an
+  account leaves the blended or crypto wash pass; the transfer-cluster
+  attestation note keeps its closing sentence; notes whose events all
+  fall after the tax year (and its 30-day window) are listed last under
+  their own heading instead of asking for action in this year's report;
+  the per-file parse counts are echoed for file names with spaces and
+  for TRANSFER-only files; the crypto validation line names the file,
+  not its absolute path (which carried the OS user name).
+- **Views say what they leave out.** `estimate` keeps the 15% foreign-tax
+  fallback for an account whose base book cannot be read (and warns);
+  `estimate --verbose` prints the 2025 rate as 14.5% and names the FTC's
+  source; `carryover` no longer warns about an account the last run
+  skipped for having no inputs; `gains` names the crypto account it does
+  not show; `wash-sales --explain` traces the tax year's wash sales only;
+  a currency-less row prints `?`, not `CAD`; the merged `audit --json`
+  keeps every `reconciliation_failures` reason; the all-accounts views
+  read an account whose only native book is `_sorted.json`; a non-UTF-8
+  work file is a one-line error, not a traceback; `transfers` refuses an
+  unknown account, shows each row's FEE and warns when a base book cannot
+  be read; `leaps` / `leaps-sum` count LEAPS closes routed to manual
+  reporting instead of reporting none.
+- **`run --fast` notices a code change by content**: a taxjson upgrade
+  whose files kept older mtimes (`cp -p`, `rsync -a`, `tar x`) or that
+  deleted a module rebuilt nothing; the last complete run's code
+  fingerprint is now kept in `work/` and a mismatch rebuilds everything.
+- **A `.tt` file whose name ends in a pipeline suffix is refused**
+  (`msft_gains.tt` created a phantom account in `sum` and counted its fees
+  twice); rename it, e.g. `msft-gains.tt`.
+- **Report views label and total what they show.** Payments in lieu
+  have their own footer total in `events` / `dil` (not TOTAL DIVIDEND);
+  a crypto account's DIVIDEND rows are labelled staking rewards (ordinary
+  income) in `sum`, the `events` / `divs` footers and the crypto
+  `.sum`; `dil-sum`, `roc-sum` and `trades-sum` split out
+  registered accounts (no income, no T3, not T5008 proceeds); summary
+  TOTALs equal the sum of their printed rows; `winners` shows a short or
+  written option's PROCEEDS/COST the way `ccd-sum` and form-export do;
+  a grant-timing WRITE record no longer counts as a close in `ccd-sum`,
+  `winners` or the `.sum` trade statistics; `reports/ccd.rpt` prints the
+  premium and the buy-back as positive PREMIUM / BUYBACK columns.
+- **scan, sanity, fetch.** `scan` matches a plan word only as a whole
+  token of the account name (`admiral` is no IRA), warns about an unknown
+  `plan`, and counts an option as a sighting of its underlying's listing
+  (MAP-GAP / US-LISTING); `sanity` pairs a crypto snapshot's
+  venue-suffixed symbols (`LINK.KR`) with the bare coin and masks account
+  ids in the holdings file names it prints; a failed Questrade refresh
+  says which token was used (the cached chain wins over
+  `$QUESTRADE_REFRESH_TOKEN`) and how to start a new chain.
+- **More views say what they mean.** `find-missing-history` lists pairs
+  `phantoms.json` already covers apart (the checklist step clears);
+  `fees.rpt` / `fees-sum` leave out ticker.map DELETE'd rows and their
+  unconverted JSON no longer adds currencies into one total; a LEAPS
+  renamed by a SPLIT keeps its LEAPS entry; `instalments` names the inputs
+  it assumed to be 0 (other income, withholding); `trades`, `trades-sum`
+  and `events` take a trade by its settlement date in a tax-year window on
+  a settle-basis project, as Schedule 3 does; per-underlying reports file
+  an `RCI…` option under the `RCI.B.TO` shares it is written on.
 
 ## v0.16.0 (2026-09-25)
 

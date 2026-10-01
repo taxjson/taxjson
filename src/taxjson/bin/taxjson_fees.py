@@ -116,7 +116,8 @@ def add_stat(s: Dict[str, Any], fee: float, qty: float,
         s["fee_stocks"] += fee
 
 
-def aggregate(files, *, year, since, to_curr, history, default_rate, by_account):
+def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
+              deleted=frozenset()):
     """Walk the parsed files, dedup by id, accumulate per-key buckets.
     Each bucket = {'base': stats, 'cur': {CUR: stats}}."""
     buckets: Dict[str, Dict[str, Any]] = {}
@@ -151,6 +152,11 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account)
 
         for tx in data.get("transactions", []):
             if tx.get("action") not in TRADE_ACTIONS:
+                continue
+            # ticker.map DELETE rows never reach the books (merge2 drops
+            # them, by the broker's raw symbol): their fees are not fees
+            # the books paid either (S038-11).
+            if str(tx.get("symbol") or "").upper() in deleted:
                 continue
             fee = float(tx.get("commission") or 0) + float(tx.get("fee") or 0)
             if fee == 0:
@@ -352,7 +358,13 @@ def render_json(buckets, grand, info, *, to_curr, by_account, year,
                     "fee_stocks": 0.0, "shares": 0.0,
                     "fee_options": 0.0, "contracts": 0.0}
             return {**metrics(zero), "by_currency": {}}
-        d = {**metrics(bucket["base"]),
+        base_m = metrics(bucket["base"])
+        if to_curr is None and len(bucket["cur"]) > 1:
+            # Not converted: the "base" bucket adds USD to CAD. The text
+            # report refuses that total; the JSON summed the units into
+            # total/mean/%notional (S031-05). by_currency only.
+            base_m = {k: None for k in base_m}
+        d = {**base_m,
              "by_currency": {cur: metrics(s) for cur, s in bucket["cur"].items()}}
         return d
     doc = {
@@ -395,6 +407,9 @@ def main():
     p.add_argument("--default-rate", type=positive_rate, default=1.35,
                    help="FX fallback when a date/currency is missing "
                         "(default 1.35); usage is reported, not silent.")
+    p.add_argument("--ticker-map", metavar="FILE",
+                   help="The project's ticker.map: rows of a DELETE'd "
+                        "symbol are left out, as the books leave them out.")
     p.add_argument("--by-account", action="store_true",
                    help="Break down by account/brokerage instead of brokerage.")
     p.add_argument("--json", action="store_true",
@@ -422,10 +437,15 @@ def main():
     # aggregate() and the renderers match dates by string prefix; --year is
     # int-typed at the CLI (A1 convention) but flows through as a string.
     year = str(args.year) if args.year is not None else None
+    deleted = frozenset()
+    if args.ticker_map:
+        from taxjson.bin.taxjson_ticker_map import load_map_file
+        deleted = frozenset(str(x).upper() for x in
+                            load_map_file(Path(args.ticker_map)).delete)
     buckets, grand, info = aggregate(
         files, year=year, since=args.since, to_curr=args.to_curr,
         history=history, default_rate=args.default_rate,
-        by_account=args.by_account)
+        by_account=args.by_account, deleted=deleted)
     scope = f"since {args.since}" if args.since else None
 
     if not buckets:

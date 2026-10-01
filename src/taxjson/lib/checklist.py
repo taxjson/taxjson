@@ -675,10 +675,12 @@ def d_missing_history(ctx: Ctx) -> Result:
             in_affects = True
             continue
         if (not ln.strip() or ln.startswith(("##", "NOT relevant",
-                                              "To fix", "SHELTERED"))):
+                                              "To fix", "SHELTERED",
+                                              "COVERED"))):
             # A blank line ends the section; registered-account rows have
             # no reportable gain: never counted as affecting the year
-            # (audit S035-08).
+            # (audit S035-08); pairs phantoms.json covers are not work
+            # to do (R1-339).
             in_affects = False
             continue
         if not in_affects or ln[:1].isspace() or ln.startswith("-") \

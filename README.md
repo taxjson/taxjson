@@ -416,7 +416,7 @@ Files the pipeline reads and writes (all map files are optional):
 | Command | Purpose |
 | --- | --- |
 | `taxjson run` | Run the full pipeline, rebuilding every stage (the recommended everyday command — results always reflect current inputs, config and code). |
-| `taxjson run --fast` | Incremental run: cached stages whose inputs, `taxjson.toml` and installed code are all unchanged are skipped. Input files and the project-root map files are compared by content (size + SHA-256), so a corrected export copied over with an older mtime (`cp -p`, `rsync -a`, unzip) still rebuilds; the rest of the cache is mtime-based. The cache invalidates itself on any of those changing; `--fast` trades that safety net's edge cases for speed. |
+| `taxjson run --fast` | Incremental run: cached stages whose inputs, `taxjson.toml` and installed code are all unchanged are skipped. Input files and the project-root map files are compared by content (size + SHA-256), so a corrected export copied over with an older mtime (`cp -p`, `rsync -a`, unzip) still rebuilds; taxjson's own code is compared by content too (a change since the last complete run rebuilds everything); the rest of the cache is mtime-based. The cache invalidates itself on any of those changing; `--fast` trades that safety net's edge cases for speed. |
 | `taxjson run --account NAME` | Re-run a single account. ⚠️ Skips cross-account wash-sale and cross-listing detection — those need a full run. |
 | `taxjson sanity ACCOUNT\|FILE.toml\|ACCOUNT=FILE ...` | Cross-check open positions against externally produced holdings `.toml` files (portoml-style `[[holding]]`), per symbol (`--tolerance`, `--json`; exit 1 on any discrepancy). Bare items form one aggregate group (combined positions vs combined holdings — quick, but blind to a position sitting in the wrong account). `ACCOUNT[+ACCOUNT]=FILE[+FILE]` pairs specific accounts with specific files and is checked as its own group — many-to-many because a taxjson account can span several broker accounts (`margin=ibkr.toml+webull.toml`, or repeat `margin=…`) and one broker export can cover several accounts (`rrsp+lira=flex.toml`). Both forms mix freely. With no arguments the pairings come from `taxjson.toml` — each account's `holdings = [...]` — and `taxjson run` finishes with the same check as a warning. Option rows whose root the file spells differently (`RCI…` vs taxjson's `RCI.B…`) are matched through the row's `underlying` field. |
 | `taxjson run --strict` | Promote per-account validation ERRORs (oversold positions, malformed rows) and an input file that parsed to 0 transactions to fatal instead of publishing reports with a DIAGNOSTICS banner. Recommended for CI/cron. |
@@ -457,7 +457,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson form-export` | Filing-shaped output: IRS Form 8949 / CRA Schedule 3 (default follows the country), or a TurboTax-importable TXF via `--form txf [--box A|B|C] --out gains.txf`. |
 | `taxjson reconcile-slips SLIP.csv [SLIP.csv ...]` | Diff broker T5008 / 1099-B slips against computed dispositions before filing (exit 1 on mismatch); several slip files (one per broker) are reconciled together. |
 | `taxjson help [COMMAND]` | Show top-level help, or help for one subcommand. |
-| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain. See "Importing manual cost basis". |
+| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain; pairs the project's `phantoms.json` already covers are listed apart (COVERED), not as work to do. See "Importing manual cost basis". |
 | `taxjson elect` | Review, redo, or non-interactively set (`--set ID=ELECTION`) a corporate-action tax election. |
 | `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). |
 | `taxjson harvest [SYMBOL ...]` | Unrealized gain/(loss) per open position at current prices — "if I sold this today, is it a loss?" Losses first, wash-radar advisory on each loss, `LT_IN` days-to-long-term for US projects. |
@@ -649,7 +649,14 @@ per-currency totals split TAXABLE / SHELTERED when a registered account
 contributes — the TAXABLE line is the figure to compare with the T5/T3 slips.
 Each row counts in its tax year (see "Income dating"), so a Canadian ETF's
 December-record distribution paid in January is in the December year, as on
-the T3. `winners` prints the same taxable/sheltered split under its ranking.
+the T3. A crypto account's DIVIDEND rows are staking rewards (ordinary
+income): `divs-sum` names them on an "of which crypto staking" line, and
+`sum` / the views / the crypto `.sum` label them as staking.
+`winners` prints the same taxable/sheltered split under its ranking, and
+`dil-sum` / `roc-sum` / `trades-sum` separate registered accounts the same
+way (the T3 box 42 figure is `roc-sum`'s TAXABLE line; T5008 proceeds are
+`trades-sum`'s taxable "sold" figure). Every summary TOTAL is the sum of
+its printed (cent-rounded) rows.
 
 **Income dating** (`taxjson tax-logic` states each rule with its id):
 
@@ -688,7 +695,9 @@ the T3. `winners` prints the same taxable/sheltered split under its ranking.
   planning numbers and the slip tie-outs agree with them.
 
 **`taxjson trades-sum [PERIOD] [ACCOUNT]`** — per ticker: buy/sell counts, value
-bought/sold, and fees, with per-currency totals.
+bought/sold, and fees, with per-currency totals (all accounts; when a
+registered account contributes, the taxable accounts' "sold" figure is
+printed under them).
 
 **`taxjson fees-sum [PERIOD] [ACCOUNT]`** — trading-fee report by **brokerage**
 (commission/fee totals with per-trade averages, $/share, %notional), converted
@@ -1136,9 +1145,11 @@ Lints the whole project for placement mistakes the pipeline can see:
   every unmapped US-listed dividend payer — candidates to verify, not
   verdicts (same root can be a different issuer).
 
-Registered-plan kinds are inferred from account names (`tfsa`, `rrsp`, …);
-override per account with `plan = "tfsa"` in `taxjson.toml` when a name
-doesn't say. Exit 1 when findings exist, 0 on a clean scan — cron-friendly.
+Registered-plan kinds are inferred from a plan word that is a whole token
+of the account name (`tfsa`, `rrsp2`, `my-tfsa`; not `admiral`); override
+per account with `plan = "tfsa"` in `taxjson.toml` when a name doesn't say
+(an unknown `plan` value is warned about and ignored). An option counts as
+a sighting of its underlying's listing for MAP-GAP / US-LISTING. Exit 1 when findings exist, 0 on a clean scan — cron-friendly.
 
 ### Tax-loss harvesting (`taxjson harvest`)
 

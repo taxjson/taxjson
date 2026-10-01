@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import note
+from taxjson.lib.numeric import nonneg_float_arg as _nonneg_float_arg
 from taxjson.lib.pipeline import (income_dating_flags,
                                   option_timing_flags, tt_json_path)
 from taxjson.lib.report_model import (align_columns, fmt_money,
@@ -135,7 +136,7 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
 # stage_account to echo the counts into the wrapper's console output
 # so a keen eye can spot a 0-object parse of a non-empty file before
 # downstream stages silently propagate the empty data.
-_PARSE_COUNT_RE = re.compile(r'^\s+\S+: \d+ tax objects$')
+_PARSE_COUNT_RE = re.compile(r'^\s+.+: \d+ tax objects\b')
 # taxjson-brokerage's zero-row warning (captured in the parse .diag).
 _ZERO_TX_RE = re.compile(r'^warning: (.+?) parsed to 0 transactions\b')
 
@@ -268,11 +269,28 @@ _DIAG_MARKER_RE = re.compile(
     re.IGNORECASE)
 
 
-def collect_diagnostics(cache: Path, account: str) -> str:
+# Sidecars written by the cross-account passes AFTER <acct>.sum: the
+# blended pass's per-account mirror and the single-account crypto wash
+# pass's stderr. They belong to <acct>_wash.sum only — read into the
+# baseline <acct>.sum they were one run stale (R1-259).
+_POST_PASS_DIAG_SUFFIXES = ("_blend.diag", "_cryptoblend.diag",
+                            "_gains_wash.json.diag")
+_DIAG_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+
+def collect_diagnostics(cache: Path, account: str, *,
+                        post_pass: bool = True) -> str:
     """Concatenate persisted stderr diagnostics across an account's
     pipeline stages, keeping ok/warning/note/error lines — bare or
     prog-prefixed (`taxjson-fill-crypto: warning: …`) — plus their
-    indented continuation lines."""
+    indented continuation lines. post_pass=False leaves out the
+    cross-account passes' sidecars (_POST_PASS_DIAG_SUFFIXES).
+
+    The engine runs over the whole history, so a year's banner used to
+    ask for action on events of a LATER year (declare 2026 transfer
+    legs in the 2025 report, S038-05). A note whose dates all fall
+    after the tax year's 30-day superficial-loss tail is listed last,
+    under its own heading."""
     out: List[str] = []
     # Sibling-prefix guard (mirrors cmd_fees_sum): the glob for account
     # 'margin' also matches 'margin_us_*.diag', so account margin's
@@ -281,38 +299,67 @@ def collect_diagnostics(cache: Path, account: str) -> str:
     # the config is one level up; on any load problem fall back to the
     # unfiltered glob (a false extra line beats a crash here).
     siblings: List[str] = []
+    year: Optional[int] = None
     try:
-        accounts_cfg = (load_config(cache.parent).get("accounts") or {})
+        _cfg = load_config(cache.parent)
+        accounts_cfg = (_cfg.get("accounts") or {})
         siblings = [a for a in accounts_cfg
                     if a != account and a.startswith(f"{account}_")]
+        _y = (_cfg.get("settings") or {}).get("year")
+        year = _y if isinstance(_y, int) else None
     except (Exception, SystemExit):
         pass
+    blocks: List[List[str]] = []
+    for diag in sorted(cache.glob(f"{account}_*.diag")):
+        if any(diag.name.startswith(f"{s}_") for s in siblings):
+            continue
+        if not post_pass and diag.name.endswith(_POST_PASS_DIAG_SUFFIXES):
+            continue
+        kept_prev = False
+        for line in diag.read_text(errors="replace").splitlines():
+            is_marker = bool(_DIAG_MARKER_RE.match(line.strip()))
+            is_cont = kept_prev and line[:1].isspace() and bool(line.strip())
+            if is_marker:
+                blocks.append([line.rstrip()])
+                kept_prev = True
+            elif is_cont:
+                blocks[-1].append(line.rstrip())
+            else:
+                kept_prev = False
     # The gains stage and the blend stage both persist the engine's
     # stderr, so every engine line reached a _wash.sum twice (audit
     # R1-181): a block (marker line + continuations) already kept is
     # not repeated.
     seen: set = set()
-    for diag in sorted(cache.glob(f"{account}_*.diag")):
-        if any(diag.name.startswith(f"{s}_") for s in siblings):
+    _uniq: List[List[str]] = []
+    for b in blocks:
+        key = "\n".join(b)
+        if key in seen:
             continue
-        blocks: List[List[str]] = []
-        for line in diag.read_text(errors="replace").splitlines():
-            is_marker = bool(_DIAG_MARKER_RE.match(line.strip()))
-            is_cont = bool(blocks) and blocks[-1] is not None and \
-                line[:1].isspace() and bool(line.strip())
-            if is_marker:
-                blocks.append([line.rstrip()])
-            elif is_cont:
-                blocks[-1].append(line.rstrip())
-            elif blocks and blocks[-1] is not None:
-                blocks.append(None)
+        seen.add(key)
+        _uniq.append(b)
+    blocks = _uniq
+    later: List[List[str]] = []
+    if year is not None:
+        # Past the year's end AND its 30-day window (a January rebuy
+        # still denies a December loss).
+        cutoff = f"{year + 1}-01-30"
+        now: List[List[str]] = []
         for b in blocks:
-            if b is None:
-                continue
-            key = "\n".join(b)
-            if key in seen:
-                continue
-            seen.add(key)
+            dates = ["-".join(m) for ln in b
+                     for m in _DIAG_DATE_RE.findall(ln)]
+            # Errors stay where they are, whatever their dates.
+            is_err = re.search(r"\b(?:error|validation):", b[0], re.I)
+            (later if dates and not is_err and min(dates) > cutoff
+             else now).append(b)
+        blocks = now
+    for b in blocks:
+        out.extend(b)
+    if later:
+        out.append(f"-- notes about events after {year} (they do not "
+                   f"affect the {year} figures; act on them in that "
+                   f"year's project):")
+        for b in later:
             out.extend(b)
     return "\n".join(out)
 
@@ -370,6 +417,29 @@ def _package_mtime() -> float:
     return latest
 
 
+def _package_fingerprint() -> str:
+    """A CONTENT fingerprint of the installed taxjson package's .py
+    sources (relative path + bytes). The mtime key above misses a code
+    change whose files keep an older mtime (cp -p, rsync -a, tar x,
+    touch -r) and a deleted module, so `run --fast` served output from
+    the old code (S039-03); `run` compares this with the stamp the last
+    complete run left in work/ and rebuilds everything on a mismatch."""
+    import taxjson
+    pkg_root = Path(taxjson.__file__).parent
+    h = hashlib.sha256()
+    for p in sorted(pkg_root.rglob("*.py")):
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        h.update(p.relative_to(pkg_root).as_posix().encode() + b"\0")
+        h.update(hashlib.sha256(data).digest())
+    return h.hexdigest()
+
+
+_CODE_STAMP = ".code_fingerprint"
+
+
 def needs_rebuild(out: Path, *inputs: Path) -> bool:
     """Mtime-based rebuild check — consulted only by `run --fast` (the
     default run passes force=True everywhere). Cached output is stale
@@ -410,35 +480,53 @@ def load_config(root: Path) -> Dict[str, Any]:
     path = root / "taxjson.toml"
     if not path.exists():
         _die(f"no taxjson.toml in {root}. Run `taxjson init` first.")
-    with path.open("rb") as f:
-        try:
-            cfg = tomllib.load(f)
-            # Account names build filesystem paths (inputs/<name>,
-            # work/<name>_*) and sub-tool argv (--account <name>): a
-            # "../x" name wrote artifacts OUTSIDE the project and a
-            # "-x" name was parsed as a flag (2026-09 security audit).
-            # Checked HERE, not in validate_config, because every
-            # command (not just `run`) derives paths from the names.
-            for _n in (cfg.get("accounts") or {}):
-                if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*",
-                                    str(_n)):
-                    _die(f"[accounts.{_n!r}] is not a valid account "
-                         f"name — use letters, digits, '_', '-' or "
-                         f"'.' (must start with a letter, digit or "
-                         f"'_'); it becomes file and directory names.")
-                if str(_n).upper() == "COMBINED":
-                    # reports/wash_radar_COMBINED.* is the cross-account
-                    # radar: an account of that name had its own radar
-                    # replaced by it (S038-10).
-                    _die(f"[accounts.{_n}]: the name COMBINED is "
-                         f"reserved for the cross-account wash radar — "
-                         f"rename the account (and its inputs/{_n}/ "
-                         f"folder).")
-        except Exception as e:
-            _die(f"{path} is not valid TOML: {e}")
+    text = _read_config_text(path)
+    try:
+        cfg = tomllib.loads(text)
+        # Account names build filesystem paths (inputs/<name>,
+        # work/<name>_*) and sub-tool argv (--account <name>): a
+        # "../x" name wrote artifacts OUTSIDE the project and a
+        # "-x" name was parsed as a flag (2026-09 security audit).
+        # Checked HERE, not in validate_config, because every
+        # command (not just `run`) derives paths from the names.
+        for _n in (cfg.get("accounts") or {}):
+            if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*",
+                                str(_n)):
+                _die(f"[accounts.{_n!r}] is not a valid account "
+                     f"name — use letters, digits, '_', '-' or "
+                     f"'.' (must start with a letter, digit or "
+                     f"'_'); it becomes file and directory names.")
+            if str(_n).upper() == "COMBINED":
+                # reports/wash_radar_COMBINED.* is the cross-account
+                # radar: an account of that name had its own radar
+                # replaced by it (S038-10).
+                _die(f"[accounts.{_n}]: the name COMBINED is "
+                     f"reserved for the cross-account wash radar — "
+                     f"rename the account (and its inputs/{_n}/ "
+                     f"folder).")
+    except Exception as e:
+        _die(f"{path} is not valid TOML: {e}")
     _refuse_bad_account_types(cfg)
     _normalize_settings(cfg)
     return cfg
+
+
+def _read_config_text(path: Path) -> str:
+    """taxjson.toml's text for tomllib. A directory or unreadable file
+    tracebacked from every command (S040-03); a leading UTF-8 BOM (what
+    Notepad saves) failed as "Invalid statement (at line 1, column 1)"
+    with no hint (S038-04) — it is dropped, as TOML allows no BOM."""
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        _die(f"cannot read {path}: {e.strerror or e}")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        _die(f"{path} is not valid TOML: it is not UTF-8 text ({e}) — "
+             f"save it as UTF-8.")
 
 
 def _normalize_settings(cfg: Dict[str, Any]) -> None:
@@ -784,6 +872,13 @@ def validate_config(cfg: Dict[str, Any],
             if flag in acfg and not isinstance(acfg[flag], bool):
                 _die(f"[accounts.{name}] {flag} must be "
                          f"true/false, got {acfg[flag]!r}")
+        _plan = acfg.get("plan")
+        if _plan is not None and str(_plan).strip().lower() \
+                not in _PLAN_KINDS:
+            warnings.append(
+                f"[accounts.{name}] plan {_plan!r} is not a known plan "
+                f"kind ({' | '.join(_PLAN_KINDS)}) and is ignored"
+                f"{_suggest(str(_plan).strip().lower(), _PLAN_KINDS)}")
         brok = acfg.get("brokerage")
         if brok is not None and str(brok) not in ("questrade",
                                                   "ibkr_flex"):
@@ -1917,7 +2012,20 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # silently dropping every CSV trade) and with pipeline
     # intermediates like <acct>_base.json (R1-116).
     tt_jsons: List[Path] = []
+    from taxjson.lib.config_check import RESERVED_NAME_SUFFIXES
     for tt in input_files(acct_dir, ".tt"):
+        _stem = tt.stem.lower()
+        _clash = next((x for x in RESERVED_NAME_SUFFIXES
+                       if _stem.endswith(x)), None)
+        if _clash:
+            # work/<acct>_tt_msft_gains.json read as the gains book of a
+            # phantom account "<acct>_tt_msft" in `sum`, its fees counted
+            # twice (S037-15): the artifact roles come from file names.
+            _die(f"inputs/{name}/{tt.name}: a .tt file name may not end "
+                 f"in {_clash!r} — its converted JSON would read as a "
+                 f"pipeline artifact (a phantom account in the reports). "
+                 f"Rename it, e.g. "
+                 f"{tt.stem[:-len(_clash)] + _clash.replace('_', '-')}.tt")
         out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt, src_manifest):
             print(f"  convert-tt {tt.name}")
@@ -2043,9 +2151,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         from taxjson.lib.dispatch import run_cmd as _run_cmd
         # --require-prices: a row fill-crypto could not price is an
         # ERROR here (R1-105), not a silent $0 income/cost.
+        # Run from work/ on the bare file name: the report is copied into
+        # reports/<name>.sum, and an absolute path put the user's home
+        # directory (their OS user name) in every crypto report (S037-18).
         vres = _run_cmd(_cmd("taxjson-validate") + ["--require-prices",
-                                                    str(base_json)],
-                        capture_output=True)
+                                                    base_json.name],
+                        capture_output=True, cwd=str(base_json.parent))
         report = (vres.stdout or "") + (vres.stderr or "")
         if report.strip():
             validate_diag.write_text(report, encoding="utf-8")
@@ -2216,7 +2327,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # Emitted as a TOML holdings handoff. Skipped for crypto.
     if not is_crypto:
         raw_json = cache / f"{name}_raw.json"
-        raw_deps = list(sources) + ([ticker_map] if ticker_map else [])
+        # src_manifest: deleting a .tt from a .tt-only account (no CSV
+        # group left to cascade the change) kept its positions in the
+        # raw holdings under --fast (S037-22) — the same dep merge2 has.
+        raw_deps = (list(sources) + [src_manifest]
+                    + ([ticker_map] if ticker_map else []))
         if force or needs_rebuild(raw_json, *raw_deps):
             print(f"  raw merge (sort, dedup"
                   f"{', ticker.map' if ticker_map else ''})")
@@ -2341,8 +2456,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     sum_tmp = sum_path.with_name(sum_path.name + ".part")
     try:
         with sum_tmp.open("wb") as out:
-            out.write(_diagnostics_banner(cache, name))
-            out.write(run_capture(_cmd("taxjson-sum-gains") + [str(gains_json)]))
+            # The pre-blend baseline: the cross-account passes' notes
+            # (written after this file) go in <name>_wash.sum.
+            out.write(_diagnostics_banner(cache, name, post_pass=False))
+            out.write(run_capture(_cmd("taxjson-sum-gains")
+                                  + (["--staking"] if is_crypto else [])
+                                  + [str(gains_json)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(year), "--country", country,
             ] + income_dating_flags(settings) + [str(base_json)]))
@@ -2387,10 +2506,11 @@ def _json_dumps_report(payload) -> str:
     return _json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
-def _diagnostics_banner(cache: Path, account: str) -> bytes:
+def _diagnostics_banner(cache: Path, account: str, *,
+                        post_pass: bool = True) -> bytes:
     """A DIAGNOSTICS section for the top of a .sum file, or empty bytes
     when the account's pipeline stages produced no warnings/notes."""
-    diag = collect_diagnostics(cache, account)
+    diag = collect_diagnostics(cache, account, post_pass=post_pass)
     if not diag:
         return b""
     rule = "=" * 70
@@ -2440,7 +2560,11 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
     try:
         with wash_tmp.open("wb") as out:
             out.write(_diagnostics_banner(cache, name))
-            out.write(run_capture(_cmd("taxjson-sum-gains") + [str(wash_gains)]))
+            _is_c = bool(((_soft_config(cache.parent).get("accounts")
+                           or {}).get(name) or {}).get("crypto"))
+            out.write(run_capture(_cmd("taxjson-sum-gains")
+                                  + (["--staking"] if _is_c else [])
+                                  + [str(wash_gains)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(settings["year"]),
                 "--country", _normalize_country(settings["country"]),
@@ -2544,6 +2668,10 @@ def stage_blended_wash_pass(names: List[str],
             _mirror.unlink(missing_ok=True)
     for name in names:
         wash_gains = cache / f"{name}_gains_wash.json"
+        # The split writes no .diag: a single-account wash pass's old
+        # one would otherwise stay in this account's banner (S038-20).
+        wash_gains.with_name(wash_gains.name + ".diag").unlink(
+            missing_ok=True)
         run_to_file(_cmd("taxjson-split-gains") + [
             str(combined_wash), "--account", name,
             "--base", str(cache / f"{name}_base.json"),
@@ -2759,11 +2887,13 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
     # capture_diag=True: taxjson-fees emits FX default-rate fallback and
     # skipped-file warnings on stderr; persist them to the .diag so a silently
     # wrong rate can't slip through (the report body carries them too).
+    _tm = cache.parent / "ticker.map"
     run_to_file(_cmd("taxjson-fees") + [
         "--cache", str(cache),
         "--year", str(settings["year"]),
         "--to", settings["base_currency"], "--rates", str(rates),
-    ], reports_dir / "fees.rpt")
+    ] + (["--ticker-map", str(_tm)] if _tm.exists() else []),
+        reports_dir / "fees.rpt")
     print(f"  → {reports_dir}/fees.rpt")
 
 
@@ -2908,6 +3038,38 @@ def cmd_run(args: argparse.Namespace) -> None:
     inputs_dir = root / "inputs"
     cache = root / "work"
     reports_dir = root / "reports"
+    # work/ or reports/ that is a FILE, or a project directory that
+    # cannot be written, tracebacked — reports/ only after every stage
+    # had rewritten work/, leaving the two out of step (S038-17).
+    for _d in (cache, reports_dir):
+        try:
+            _d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError as e:
+            _die(f"cannot use {_d}: "
+                 + ("it exists and is not a directory"
+                    if isinstance(e, FileExistsError) or _d.is_file()
+                    else (e.strerror or str(e)))
+                 + " — nothing was run.")
+        import os as _os_mod
+        if not _os_mod.access(_d, _os_mod.W_OK | _os_mod.X_OK):
+            _die(f"cannot write to {_d} — nothing was run.")
+    # --fast trusts cached stages only when they were built by THIS code
+    # (content, not mtimes — S039-03). The stamp is removed now and
+    # rewritten when the run completes, so a run that stops half-way
+    # never vouches for stages it did not rebuild.
+    _code_stamp = cache / _CODE_STAMP
+    _code_fp = _package_fingerprint()
+    if not args.force:
+        try:
+            _old_fp = _code_stamp.read_text(encoding="utf-8").strip()
+        except OSError:
+            _old_fp = ""
+        if _old_fp != _code_fp:
+            print("==> taxjson's code changed since the cached stages were "
+                  "built (or no complete run recorded it) — rebuilding "
+                  "everything; --fast applies from the next run")
+            args.force = True
+    _code_stamp.unlink(missing_ok=True)
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -3115,6 +3277,21 @@ def cmd_run(args: argparse.Namespace) -> None:
         not in ("us", "usa")
         and sum(1 for _c in accounts.values()
                 if _c.get("type") == "taxable" and _c.get("crypto")) >= 2)
+    if not args.account:
+        # A per-account blend mirror is rewritten only for accounts IN
+        # this run's blend: one that left it (re-typed, the other
+        # crypto account removed) kept its old mirror, and its fixed
+        # problem was re-reported in every later banner (S038-08).
+        for _n, _c in accounts.items():
+            _c = _c or {}
+            _taxable = _c.get("type") == "taxable"
+            for _tag, _in_blend in (
+                    ("blend", _taxable and not _c.get("crypto")),
+                    ("cryptoblend", _taxable and bool(_c.get("crypto"))
+                     and _crypto_blend)):
+                _m = cache / f"{_n}_{_tag}.diag"
+                if not _in_blend and _m.exists():
+                    _m.unlink()
     for name, acfg in taxable_items:
         try:
             out = stage_account(name, acfg, settings, inputs_dir, cache,
@@ -3162,6 +3339,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             # --account and pending-election deferrals — transient.)
             for _stale in (cache / f"{name}_gains_wash.json",
                            cache / f"{name}_gains_wash.traces",
+                           cache / f"{name}_gains_wash.json.diag",
                            reports_dir / f"{name}_wash.sum"):
                 _stale.unlink(missing_ok=True)
 
@@ -3398,6 +3576,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     except Exception:
         pass                          # reminder must never break a run
 
+    if not args.account:
+        _code_stamp.write_text(_code_fp + "\n", encoding="utf-8")
     print(f"\nDone. Reports in {reports_dir}/")
 
     # Broker-positions cross-check, when taxjson.toml declares any
@@ -4067,15 +4247,15 @@ def cmd_elect(args: argparse.Namespace) -> None:
         print(f"\nElections saved. Re-run `taxjson run` to recompute.")
 
 
-def _tx_period_cutoff(period: str, root: Optional[Path] = None):
+def _tx_period_cutoff(period: str):
     """Oldest date to include for a look-back window: 30d / 6w / 3m / 1y,
     `mtd` / `ytd` (calendar month/year to date), or `all` for no lower bound
     (full history). Days and weeks are exact; months and years use calendar
-    arithmetic. With `root`, the year-shaped tokens every other PERIOD
-    command accepts resolve too — a literal YYYY and `tax_year`/`ty` map
-    to Jan 1 of that year (a lower bound only: the since-based commands
-    plot/measure through today). Without `root` they stay rejected —
-    the error message must then not advertise them."""
+    arithmetic. Year tokens (YYYY, tax_year) are NOT look-backs — the
+    callers resolve them to that calendar year first (_period_keep,
+    fees-sum); a lower-bound reading of them (the removed since-based
+    commands' "through today") disagreed with every period command
+    (S039-04)."""
     import re
     import calendar
     from datetime import date, timedelta
@@ -4089,23 +4269,10 @@ def _tx_period_cutoff(period: str, root: Optional[Path] = None):
         return date(today.year, today.month, 1)
     if tok == "ytd":
         return date(date.today().year, 1, 1)
-    if root is not None:
-        if _YEAR_TOKEN_RE.fullmatch(tok):
-            return date(int(tok), 1, 1)
-        if tok in _TAX_YEAR_TOKENS:
-            year = _soft_settings(root).get("year")
-            if not year:
-                _die("'tax_year' needs [settings] year in "
-                         "taxjson.toml (or give an explicit window "
-                         "like 1y).")
-            return date(int(year), 1, 1)
     m = re.fullmatch(r"\s*(\d+)\s*([dwmy])\s*", (period or "").lower())
     if not m:
-        year_forms = ", a year (2025), or tax_year" if root is not None \
-            else ""
         _die(f"invalid time period {period!r} "
-                 f"(use e.g. 30d, 6w, 3m, 1y, mtd, ytd, all"
-                 f"{year_forms})")
+                 f"(use e.g. 30d, 6w, 3m, 1y, mtd, ytd, all)")
     n, unit = int(m.group(1)), m.group(2)
     today = date.today()
     # Magnitudes that walk past year 1 raised ValueError (and huge day
@@ -4219,8 +4386,11 @@ def _native_tx_file(cache: Path, account: str) -> Optional[Path]:
 
 
 def _discover_tx_accounts(cache: Path) -> List[str]:
+    # The same suffixes the single-account form reads (_native_tx_file):
+    # after a failed fill-crypto stage only <acct>_sorted.json exists,
+    # and the all-accounts views dropped the account silently (S039-07).
     names = set()
-    for suf in ("_raw.json", "_filled.json"):
+    for suf in _NATIVE_TX_SUFFIXES:
         for p in cache.glob(f"*{suf}"):
             # pathlib's `*` matches leading dots — keep dot-prefixed
             # pipeline intermediates from masquerading as accounts.
@@ -4259,7 +4429,10 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
         date = tx["date_settle"]
     time = tx.get("time", "09:30:00")
     sym = tx.get("symbol", "")
-    cur = tx.get("currency") or "CAD"
+    # "?" like every other view (trades-sum, fees): a CAD label on a
+    # currency-less row misstated it in a non-CAD project, and the line
+    # is re-importable .tt (R1-287).
+    cur = tx.get("currency") or "?"
     qty, price = tx.get("quantity"), tx.get("price")
     net = float(tx.get("net_amount") or 0.0)
     gross = float(tx.get("gross_amount") or 0.0) or net
@@ -4426,6 +4599,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
 
     rows = []
     bad_dates = 0
+    # A "tax year N" window on a settle-basis project takes a trade by
+    # its settlement date, as the books and Schedule 3 do (S039-18).
+    _settle = _settle_basis(root)
     for acct in accounts:
         native = _native_tx_file(cache, acct)
         if native is None:
@@ -4442,7 +4618,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             if not _ISO_DATE_RE.match(d):    # can't place it in the window
                 bad_dates += 1
                 continue
-            if keep(d):
+            _wd = (_gains_row_date(tx, keep, _settle)
+                   if tx.get("action") in _TRADE_ACTIONS else d)
+            if keep(_wd):
                 rows.append((d, tx.get("time") or "", acct, tx))
     if label == "roc":
         for acct, tx in _dist_adjust_rows(cache, accounts, keep):
@@ -4451,10 +4629,20 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
 
     # Chronological, oldest → latest (date, then time), across all accounts.
     rows.sort(key=lambda r: (r[0], r[1], r[2]))
+    # A crypto account's DIVIDEND rows are staking rewards — ordinary
+    # income, their own total, never under TOTAL DIVIDEND (S023-11).
+    _crypto_accts = {n for n, c in (_soft_config(root).get("accounts")
+                                    or {}).items()
+                     if isinstance(c, dict) and c.get("crypto")}
 
     if getattr(args, "json", False):
+        # Payments in lieu are their own total, as in `sum` and dil-sum
+        # (one "dividend" bucket put them under TOTAL DIVIDEND, and the
+        # PIL-only `dil` view labelled them dividends — S039-19, S041-07).
         jb: Dict[str, Dict[str, float]] = {"buy": {}, "sell": {},
-                                           "dividend": {}}
+                                           "dividend": {},
+                                           "dividend_in_lieu": {},
+                                           "staking": {}}
         for _d, _t, acct, tx in rows:
             cur = tx.get("currency") or "?"
             act = tx.get("action")
@@ -4467,7 +4655,10 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             elif act in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 amt = (float(tx.get("gross_amount") or 0.0)
                        or float(tx.get("net_amount") or 0.0))
-                jb["dividend"][cur] = jb["dividend"].get(cur, 0.0) + amt
+                _k = ("dividend_in_lieu" if act != "DIVIDEND"
+                      else "staking" if acct in _crypto_accts
+                      else "dividend")
+                jb[_k][cur] = jb[_k].get(cur, 0.0) + amt
         _json_out({"rows": [dict(tx, account=acct)
                             for _d, _t, acct, tx in rows],
                    "totals": {k: v for k, v in jb.items() if v},
@@ -4488,6 +4679,8 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
     buys: Dict[str, float] = {}
     sells: Dict[str, float] = {}
     divs: Dict[str, float] = {}
+    pils: Dict[str, float] = {}
+    stake: Dict[str, float] = {}
     for _d, _t, acct, tx in rows:
         line = _tx_display_line(tx, settle=settle_dates)
         if line is None:
@@ -4508,7 +4701,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             # against the original posting rather than inflate the total.
             amt = (float(tx.get("gross_amount") or 0.0)
                    or float(tx.get("net_amount") or 0.0))
-            divs[cur] = divs.get(cur, 0.0) + amt
+            _b = (pils if act != "DIVIDEND"
+                  else stake if acct in _crypto_accts else divs)
+            _b[cur] = _b.get(cur, 0.0) + amt
     if not out_lines:
         # roc/dil are the views most often legitimately empty — zero
         # bytes at rc 0 was indistinguishable from a mis-typed window
@@ -4529,11 +4724,14 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         return ", ".join(f"{v:,.2f} {c}" for c, v in sorted(d.items()))
     footer = [(lbl, d) for lbl, d in
               (("TOTAL BUY:", buys), ("TOTAL SELL:", sells),
-               ("TOTAL DIVIDEND:", divs)) if d]
+               ("TOTAL DIVIDEND:", divs),
+               ("TOTAL DIVIDEND IN LIEU:", pils),
+               ("TOTAL STAKING (crypto, ordinary income):", stake)) if d]
     if footer:
         print()
+        _w = max(15, max(len(lbl) for lbl, _d in footer))
         for lbl, d in footer:
-            print(f"{lbl:<15} {_fmt(d)}")
+            print(f"{lbl:<{_w}} {_fmt(d)}")
 
     if skipped:
         print(f"note: skipped {skipped} row(s) with no taxtext representation "
@@ -4565,11 +4763,22 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cache = root / "work"
     want = (args.account or "").strip() or None
+    cfg = _soft_config(root)
+    if want and cfg and want not in (cfg.get("accounts") or {}):
+        # A typo read "no transfer rows ... the broker reported none"
+        # with rc 0, as if the account existed (S039-20).
+        _die(f"no [accounts.{want}] in taxjson.toml — check the name.")
+
+    def _fee(t: Dict[str, Any]) -> float:
+        # A custody move's fee (a crypto withdrawal's network fee) is
+        # in the sidecar; the view dropped it (S039-21).
+        return float(t.get("fee") or 0) + float(t.get("commission") or 0)
+
     rows: List[Dict[str, Any]] = []
     for p in sorted(cache.glob("*_transfers.json")):
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
             print(f"taxjson: warning: could not read {p.name}: {e}",
                   file=sys.stderr)
             continue
@@ -4586,16 +4795,21 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          # "BOOK VALUE nnn" rides along as evidence.
                          "value": float(t.get("net_amount")
                                         or t.get("book_value") or 0),
+                         "fee": _fee(t),
                          "currency": t.get("currency") or "",
                          "where": "sidecar"})
-    cfg = _soft_config(root)
     for name in (cfg.get("accounts") or {}):
         p = cache / f"{name}_base.json"
         if not p.exists():
             continue
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError) as e:
+            # Same warning as the sidecar loop: the account's in-book
+            # rows vanished with no word (S039-22).
+            print(f"taxjson: warning: could not read {p.name}: {e} — "
+                  f"its in-book TRANSFER rows are not shown.",
+                  file=sys.stderr)
             continue
         for t in (doc.get("transactions") if isinstance(doc, dict)
                   else doc) or []:
@@ -4617,6 +4831,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "quantity": float(t.get("quantity") or 0),
                          "type": t.get("description") or "",
                          "value": _value,
+                         "fee": _fee(t),
                          "currency": t.get("currency") or "",
                          "where": "book"})
     if want:
@@ -4635,7 +4850,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
               + " — re-run `taxjson run` after enabling the sidecar, "
                 "or the broker reported none.")
         return
-    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE CUR WHERE"]
+    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE FEE CUR WHERE"]
     for r in rows:
         # Type column: the transfer KIND (InterDepot/Internal/ATON…);
         # some brokers put a whole sentence here — cap it, the --json
@@ -4646,7 +4861,9 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         out_lines.append(" ".join([
             r["date"], r["account"], r["symbol"],
             fmt_qty(r["quantity"]), _ty,
-            fmt_money(r["value"]), r["currency"], r["where"]]))
+            fmt_money(r["value"]),
+            (f"{r['fee']:g}" if r["fee"] else "-"),
+            r["currency"], r["where"]]))
     _print_report_table(out_lines)
     print(f"\n{len(rows)} transfer row(s).")
 
@@ -5002,6 +5219,26 @@ def _leaps_contracts(root: Path, account: Optional[str],
                       key=lambda t: (str(t.get("date") or ""),
                                      str(t.get("time") or "")))
         for tx in rows:
+            if tx.get("action") == "SPLIT":
+                # A rename-SPLIT of a contract (an OCC adjustment) carries
+                # its lots — and its LEAPS entry — to the new symbol, as
+                # the engine carries them; the renamed LEAPS vanished
+                # from leaps/leaps-sum (S040-02).
+                _old = tx.get("symbol") or ""
+                _new = str(tx.get("symbol_new") or "").strip()
+                if (is_option_symbol(_old) and _new
+                        and _new.upper() != _old.upper()):
+                    _r = float(tx.get("quantity") or 1.0) or 1.0
+                    acct_bal[_new] = (acct_bal.get(_new, 0.0)
+                                      + acct_bal.pop(_old, 0.0) * _r)
+                    _mo = _map_sym(_old, _renames) if _renames else _old
+                    _mn = _map_sym(_new, _renames) if _renames else _new
+                    qty_by_symbol[_mn] = (qty_by_symbol.get(_mn, 0.0)
+                                          + qty_by_symbol.pop(_mo, 0.0)
+                                          * _r)
+                    if _mo in leaps:
+                        leaps.add(_mn)
+                continue
             if tx.get("action") not in ("BUYSELL", "ASSIGN"):
                 continue
             sym = tx.get("symbol") or ""
@@ -5153,15 +5390,31 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
     found = False
     resolved = resolve_gains_files(cache, account or None)
     basis = gains_basis_label(resolved)
+    tainted = 0
     for acct, path in resolved.items():
         data = _load_json_or_die(path)
         found = True
         _settle = _settle_basis(root, data)
+        # Phantom-basis LEAPS closes routed to manual reporting (or
+        # flagged in-line) vanished with no word, and the view said
+        # "No closed LEAPS positions" (S040-06): count them.
+        for e in data.get("manual_reporting_required") or []:
+            d = _gains_row_date(e, keep, _settle)
+            if ((e.get("symbol") or "") in leaps
+                    and _ISO_DATE_RE.match(d) and keep(d)):
+                tainted += 1
         for e in data.get("transactions", []):
             sym = e.get("symbol") or ""
             if sym not in leaps:
                 continue
             if e.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
+                continue
+            if (e.get("tainted") and "gain" in e
+                    and e.get("direction") != "SHORT"
+                    and not e.get("grant")):
+                d = _gains_row_date(e, keep, _settle)
+                if _ISO_DATE_RE.match(d) and keep(d):
+                    tainted += 1
                 continue
             if "gain" not in e or "qty" not in e or e.get("tainted"):
                 continue
@@ -5175,6 +5428,10 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
             entries.append((acct, e))
+    if tainted:
+        print(f"taxjson: warning: {tainted} LEAPS disposition(s) in this "
+              f"window have phantom cost basis and need MANUAL reporting "
+              f"— not shown here (see `taxjson sum`).", file=sys.stderr)
     return entries, found, basis
 
 
@@ -5233,14 +5490,14 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
                                  expiry=parse_option_expiry(sym))
                             for sym, rec in sorted(agg.items(),
                                                    key=sort_key)],
-                   "total_gain": round(sum(r2["gain"]
-                                           for r2 in agg.values()), 2),
+                   "total_gain": _foot(r2["gain"]
+                                       for r2 in agg.values()),
                    "taxable_gain": _split["taxable"],
                    "sheltered_gain": _split["sheltered"],
                    "currency": base_cur, "basis": basis})
         return
     for sym, rec in sorted(agg.items(), key=sort_key):
-        total += rec["gain"]
+        total += round(rec["gain"], 2)
         out_lines.append(" ".join([
             sym, parse_option_expiry(sym) or "?", f"{rec['qty']:g}",
             money(rec["proceeds"]), money(rec["cost"]),
@@ -5285,8 +5542,12 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     agg: Dict[str, Dict[str, float]] = {}
     _ccd_pairs: List[Tuple[str, float]] = []
     tainted_skipped = 0
-    for acct, f in resolved.items():
-        data = _load_json_or_die(f)
+    from taxjson.lib.ticker_map import class_share_aliases, underlying_of
+    _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
+    _aliases = class_share_aliases(
+        t.get("symbol") for _a, _d in _docs
+        for t in _d.get("transactions", []) or [])
+    for acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
         # tainted too — counted, never silent (audit S040-15 sibling).
@@ -5342,7 +5603,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             # inferred-short rows carry the legs swapped and positive.
             premium, buyback = ((cost, proceeds) if inferred
                                 else (-cost, -proceeds))
-            und = parse_option_underlying(sym) or sym
+            und = underlying_of(sym, _aliases)
             _ccd_pairs.append((acct, gain))
             rec = agg.setdefault(und, {"contracts": 0, "qty": 0.0,
                                        "proceeds": 0.0, "cost": 0.0,
@@ -5366,8 +5627,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
         _json_out({"rows": [dict(rec, underlying=und,
                                  contracts=int(rec["contracts"]))
                             for und, rec in sorted(agg.items())],
-                   "total_gain": round(sum(r["gain"]
-                                           for r in agg.values()), 2),
+                   "total_gain": _foot(r["gain"] for r in agg.values()),
                    "taxable_gain": _scope_split(root, _ccd_pairs)[
                        "taxable"],
                    "sheltered_gain": _scope_split(root, _ccd_pairs)[
@@ -5384,7 +5644,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     out_lines = ["UNDERLYING CLOSES QTY PREMIUM BUYBACK GAIN"]
     total = 0.0
     for und, rec in sorted(agg.items()):
-        total += rec["gain"]
+        total += round(rec["gain"], 2)
         out_lines.append(" ".join([
             und, str(int(rec["contracts"])), f"{rec['qty']:g}",
             money(rec["proceeds"]), money(rec["cost"]),
@@ -5428,8 +5688,12 @@ def cmd_winners(args: argparse.Namespace) -> None:
     groups = _account_group_of(root)
     grp_gain = {"taxable": 0.0, "sheltered": 0.0}
     shel_accts = set()
-    for _acct, f in resolved.items():
-        data = _load_json_or_die(f)
+    from taxjson.lib.ticker_map import class_share_aliases, underlying_of
+    _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
+    _aliases = class_share_aliases(
+        t.get("symbol") for _a, _d in _docs
+        for t in _d.get("transactions", []) or [])
+    for _acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Pipeline files ROUTE phantom-basis rows out of transactions[]
         # into manual_reporting_required: count them too, or the
@@ -5454,12 +5718,21 @@ def cmd_winners(args: argparse.Namespace) -> None:
                 tainted_skipped += 1
                 continue
             sym = str(t.get("symbol") or "?")
-            und = parse_option_underlying(sym) or sym
+            und = underlying_of(sym, _aliases)
             rec = agg.setdefault(und, {"closes": 0, "proceeds": 0.0,
                                        "cost": 0.0, "gain": 0.0})
-            rec["closes"] += 1
-            rec["proceeds"] += float(t.get("proceeds") or 0.0)
-            rec["cost"] += float(t.get("cost") or 0.0)
+            if not t.get("grant"):          # a WRITE is not a close
+                rec["closes"] += 1
+            # Real-world orientation, as ccd-sum and form-export show
+            # it: a SHORT row carries the engine's signed legs (cost =
+            # -premium, proceeds = -buyback), so the columns read
+            # negative and swapped (S040-14).
+            if t.get("direction") == "SHORT":
+                rec["proceeds"] -= float(t.get("cost") or 0.0)
+                rec["cost"] -= float(t.get("proceeds") or 0.0)
+            else:
+                rec["proceeds"] += float(t.get("proceeds") or 0.0)
+                rec["cost"] += float(t.get("cost") or 0.0)
             rec["gain"] += float(t.get("gain") or 0.0)
             _g = groups.get(_acct)
             if _g:
@@ -5476,8 +5749,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
         _json_out({"rows": [dict(rec, ticker=t,
                                  closes=int(rec["closes"]))
                             for t, rec in ranked],
-                   "total_gain": round(sum(r["gain"]
-                                           for _t, r in ranked), 2),
+                   "total_gain": _foot(r["gain"] for _t, r in ranked),
                    "total_gain_taxable": round(grp_gain["taxable"], 2),
                    "total_gain_sheltered": round(grp_gain["sheltered"], 2),
                    "sheltered_included": sorted(shel_accts),
@@ -5517,7 +5789,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
           f"top/bottom {top})")
     print()
     _print_report_table(out_lines)
-    total = sum(r["gain"] for _t, r in ranked)
+    total = _foot(r["gain"] for _t, r in ranked)
     if shel_accts:
         # A registered account's gains are not taxable events; the
         # headline alone overstated the owner's 2025 Schedule 3 gain by
@@ -5586,7 +5858,7 @@ def _view_income_rules(root: Path):
 
 
 def _collect_period_txs(args: argparse.Namespace, label: str, actions,
-                        date_of=None):
+                        date_of=None, settle_trades: bool = False):
     """Read native per-account transactions over a window, for the period-aware
     summaries (`fees`/`divs-sum`/`trades-sum`). The lone positional is a period
     (30d/6w/…) when it looks like one, else an account name; with no period the
@@ -5615,6 +5887,10 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions,
                      f"(run `taxjson run` first).")
 
     rows, bad = [], 0
+    # settle_trades: a "tax year N" window over a settle-basis project
+    # takes a trade by its SETTLEMENT date, as Schedule 3 does (a
+    # Dec-31 sale settling in January is next year's) — S039-18.
+    _settle = settle_trades and _settle_basis(root)
     for acct in accounts:
         native = _native_tx_file(cache, acct)
         if native is None:
@@ -5627,10 +5903,19 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions,
             if not _ISO_DATE_RE.match(d):
                 bad += 1
                 continue
-            if not keep(date_of(tx) if date_of else d):
+            if date_of:
+                d = date_of(tx)
+            elif _settle and tx.get("action") in _TRADE_ACTIONS:
+                d = _gains_row_date(tx, keep, True)
+            if not keep(d):
                 continue
             rows.append((acct, tx))
     return rows, scope, bad, keep
+
+
+# Native rows that are dispositions/acquisitions, windowed on the
+# project's tax_date basis in a tax-year view.
+_TRADE_ACTIONS = ("BUYSELL", "ASSIGN", "EXERCISE")
 
 
 def _account_group_of(root: Path) -> Dict[str, str]:
@@ -5741,6 +6026,22 @@ def cmd_fees(args: argparse.Namespace) -> None:
     print(f"\n{len(entries)} fee(s); TOTAL FEES: {tot}")
 
 
+def _foot(values) -> float:
+    """A report total that FOOTS: the sum of the rows as printed
+    (rounded to the cent), not the raw sum rounded once — the printed
+    TOTAL differed from the column by cents (S037-11; `sum` already
+    rounds per row)."""
+    return round(sum(round(float(v or 0.0), 2) for v in values), 2)
+
+
+def _foot_by_currency(pairs) -> Dict[str, float]:
+    """{currency: _foot of that currency's row amounts}."""
+    out: Dict[str, List[float]] = {}
+    for cur, v in pairs:
+        out.setdefault(cur, []).append(v)
+    return {c: _foot(vs) for c, vs in out.items()}
+
+
 def cmd_divs_sum(args: argparse.Namespace) -> None:
     """Dividend summary over a window (default: the tax year): total received
     per ticker, plus a per-currency grand total. `PERIOD` is 30d/6w/3m/1y/all;
@@ -5795,6 +6096,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
             if g == "sheltered":
                 shel_accts.add(acct)
     _warn_bad_dates(bad)
+    totals = _foot_by_currency((cur, amt) for (_s, cur), amt in agg.items())
     if getattr(args, "json", False):
         _json_out({"rows": [{"symbol": sym, "currency": cur,
                              "dividend": round(amt, 2)}
@@ -5869,6 +6171,11 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
     agg: Dict[Tuple[str, str, str], Dict[str, float]] = {}
     totals: Dict[str, float] = {}
     by_treat: Dict[str, Dict[str, float]] = {"dividend": {}, "ordinary": {}}
+    # A registered account's payment in lieu is not income at all: it
+    # is its own line, never "ordinary income" (S041-09).
+    groups = _account_group_of(Path(args.dir).resolve())
+    sheltered: Dict[str, float] = {}
+    shel_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         # Signed: reversal rows (negative) net against the original posting.
@@ -5881,6 +6188,10 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
         rec["amount"] += amt
         rec["rows"] += 1
         totals[cur] = totals.get(cur, 0.0) + amt
+        if groups.get(acct) == "sheltered":
+            sheltered[cur] = sheltered.get(cur, 0.0) + amt
+            shel_accts.add(acct)
+            continue
         by_treat[treat][cur] = by_treat[treat].get(cur, 0.0) + amt
     _warn_bad_dates(bad)
     if getattr(args, "json", False):
@@ -5895,6 +6206,9 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
                                        in by_treat["ordinary"].items()},
                    "totals_dividend": {c: round(v, 2) for c, v
                                        in by_treat["dividend"].items()},
+                   "totals_sheltered": {c: round(v, 2) for c, v
+                                        in sheltered.items()},
+                   "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
     if not agg:
@@ -5918,11 +6232,17 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
 
     def _tot(d):
         return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
-    if by_treat["dividend"]:
+    if by_treat["dividend"] or shel_accts:
         print(f"\nORDINARY INCOME: {_tot(by_treat['ordinary']) or '0.00'}")
+    if by_treat["dividend"]:
         print(f"DEEMED DIVIDENDS (s.260, in divs-sum): "
               f"{_tot(by_treat['dividend'])}")
-    print(f"\nTOTAL DIVIDEND IN LIEU: {_tot(totals)}")
+    if shel_accts:
+        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — not taxable "
+              f"income): {_tot(sheltered)}")
+    print(f"\nTOTAL DIVIDEND IN LIEU"
+          + (" (all accounts)" if shel_accts else "")
+          + f": {_tot(totals)}")
 
 
 def cmd_roc_sum(args: argparse.Namespace) -> None:
@@ -5960,8 +6280,21 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
 
     agg: Dict[Tuple[str, str], Dict[str, float]] = {}
     totals: Dict[str, float] = {}
+    # Registered accounts have no ACB to track and get no T3: the total
+    # a user ties to T3 box 42 is the TAXABLE one (S041-10), the same
+    # scope as the checklist's roc-entered step.
+    groups = _account_group_of(_root)
+    by_group: Dict[str, Dict[str, float]] = {"taxable": {},
+                                             "sheltered": {}}
+    shel_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
+        _g = groups.get(acct)
+        if _g:
+            _r = -float(tx.get("net_amount") or 0.0)
+            by_group[_g][cur] = by_group[_g].get(cur, 0.0) + _r
+            if _g == "sheltered":
+                shel_accts.add(acct)
         # ADJUST net_amount is the ACB delta (negative = reduction).
         # Present as capital RETURNED, so a normal ROC posting is
         # positive; negative values are reversals / manual ACB increases.
@@ -5987,6 +6320,11 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                              "dist_rows": int(rec["dist_rows"])}
                             for (sym, cur), rec in sorted(agg.items())],
                    "totals": {c: round(v, 2) for c, v in totals.items()},
+                   "totals_taxable": {c: round(v, 2) for c, v
+                                      in by_group["taxable"].items()},
+                   "totals_sheltered": {c: round(v, 2) for c, v
+                                        in by_group["sheltered"].items()},
+                   "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
     if not agg:
@@ -6002,8 +6340,17 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     print(f"RETURN OF CAPITAL / ACB ADJUSTMENTS — {scope}")
     print()
     _print_report_table(out_lines)
-    tot = ", ".join(f"{money(v)} {c}" for c, v in sorted(totals.items()))
-    print(f"\nTOTAL CAPITAL RETURNED (ACB reduced): {tot}")
+    def _tot(d):
+        return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
+    print()
+    if shel_accts:
+        print(f"TAXABLE (compare with T3 box 42): "
+              f"{_tot(by_group['taxable']) or '0.00'}")
+        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — no ACB to "
+              f"track, no T3): {_tot(by_group['sheltered'])}")
+        print(f"TOTAL CAPITAL RETURNED (all accounts): {_tot(totals)}")
+    else:
+        print(f"TOTAL CAPITAL RETURNED (ACB reduced): {_tot(totals)}")
     print("Positive = ACB reduced (capital returned). Negative rows are "
           "reversals or manual ACB increases (MAP_ROWS: distributions.map "
           "adjustments, a reinvested distribution shows negative). Enter "
@@ -6016,7 +6363,8 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
     buy/sell counts, value bought/sold, and fees, plus per-currency totals.
     `PERIOD` is 30d/6w/3m/1y/all; omit it for the tax year."""
     rows, scope, bad, _keep = _collect_period_txs(
-        args, "trades-sum", actions={"BUYSELL", "ASSIGN"})
+        args, "trades-sum", actions={"BUYSELL", "ASSIGN"},
+        settle_trades=True)
 
     money = fmt_money               # shared report-layer formatter
 
@@ -6024,11 +6372,20 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
     tot_bought: Dict[str, float] = {}
     tot_sold: Dict[str, float] = {}
     tot_fees: Dict[str, float] = {}
+    # The SOLD total pooled registered accounts with no word: it is not
+    # the T5008 figure, which covers taxable accounts only (S041-12).
+    groups = _account_group_of(Path(args.dir).resolve())
+    tax_sold: Dict[str, float] = {}
+    shel_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         q = float(tx.get("quantity") or 0.0)
         amt = _trade_total(tx)          # sells signed (S039-11)
         fee = _tx_fee(tx)
+        if groups.get(acct) == "sheltered":
+            shel_accts.add(acct)
+        elif q < 0:
+            tax_sold[cur] = tax_sold.get(cur, 0.0) + amt
         d = agg.setdefault((str(tx.get("symbol") or "?"), cur),
                            {"buys": 0, "sells": 0, "bought": 0.0, "sold": 0.0,
                             "fees": 0.0})
@@ -6043,6 +6400,11 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
         d["fees"] += fee
         tot_fees[cur] = tot_fees.get(cur, 0.0) + fee
     _warn_bad_dates(bad)
+    for _tot_d, _k in ((tot_bought, "bought"), (tot_sold, "sold"),
+                       (tot_fees, "fees")):
+        _tot_d.clear()
+        _tot_d.update(_foot_by_currency((cur, d[_k]) for (_s, cur), d
+                                        in agg.items()))
     if getattr(args, "json", False):
         _json_out({"rows": [dict(d, symbol=sym, currency=cur,
                                  buys=int(d["buys"]), sells=int(d["sells"]))
@@ -6052,6 +6414,9 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
                                   "fees": round(tot_fees.get(c, 0.0), 2)}
                               for c in sorted(set(tot_bought) | set(tot_sold)
                                               | set(tot_fees))},
+                   "sold_taxable": {c: round(v, 2)
+                                    for c, v in tax_sold.items()},
+                   "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
     if not agg:
@@ -6071,6 +6436,12 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
         print(f"TOTAL {c}: bought {money(tot_bought.get(c, 0.0))}, "
               f"sold {money(tot_sold.get(c, 0.0))}, "
               f"fees {money(tot_fees.get(c, 0.0))}")
+    if shel_accts:
+        print(f"(all accounts, including registered "
+              f"{', '.join(sorted(shel_accts))}; sold in taxable accounts "
+              f"only: " + (", ".join(f"{money(v)} {c}" for c, v
+                                     in sorted(tax_sold.items()))
+                           or "0.00") + ")")
 
 
 def _gain_display_line(g: dict) -> str:
@@ -6131,7 +6502,16 @@ def cmd_gains(args: argparse.Namespace) -> None:
         # while `sum` counts it (2026-09 audit S037-23).
         for _n, _c in sorted((_soft_config(root).get("accounts")
                               or {}).items()):
-            if (isinstance(_c, dict) and not _c.get("crypto")
+            if (isinstance(_c, dict) and _c.get("crypto")
+                    and _n not in accounts
+                    and (cache / f"{_n}_base.json").exists()):
+                # The all-accounts view left the crypto account out
+                # with no word while `sum` counted it (R1-274).
+                print(f"taxjson gains: note: crypto account {_n!r} is "
+                      f"not shown (crypto has no native-currency gains); "
+                      f"its gains are in `taxjson sum` / `taxjson "
+                      f"winners`.", file=sys.stderr)
+            elif (isinstance(_c, dict) and not _c.get("crypto")
                     and _n not in accounts
                     and (cache / f"{_n}_base.json").exists()):
                 print(f"taxjson gains: note: account {_n!r} has no native "
@@ -6205,16 +6585,22 @@ _PLAN_NAMES = ("tfsa", "rrsp", "lira", "rrif", "fhsa", "resp", "401k",
                "roth", "ira")
 
 
+_PLAN_KINDS = _PLAN_NAMES + ("taxable", "sheltered")
+
+
 def _account_plan(name: str, acfg: Dict[str, Any]) -> str:
     """Registered-plan kind for scan checks: explicit `plan = "tfsa"` in
-    taxjson.toml wins; else inferred from the account NAME (the init
-    scaffold names folders tfsa/rrsp/...); else the bare type."""
+    taxjson.toml wins (an unknown value is ignored — validate_config
+    warns); else inferred from a plan word that is a whole TOKEN of the
+    account NAME (the init scaffold names folders tfsa/rrsp/...; `rrsp2`
+    and `my-tfsa` count, `admiral` and `spiral` no longer read as an IRA
+    and silently skipped the US-LISTING check, R1-243); else the type."""
     explicit = str(acfg.get("plan") or "").strip().lower()
-    if explicit:
+    if explicit in _PLAN_KINDS:
         return explicit
     low = name.lower()
     for p in _PLAN_NAMES:
-        if p in low:
+        if re.search(rf"(?<![a-z]){re.escape(p)}(?![a-z])", low):
             return p
     return "taxable" if acfg.get("type") == "taxable" else "sheltered"
 
@@ -6390,7 +6776,15 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # the map itself — the cross-listing evidence base.
     seen_suffixes: Dict[str, set] = {}
 
+    from taxjson.lib.core import (is_option_symbol as _is_opt,
+                                  parse_option_underlying as _opt_und)
+
     def _see(sym: str) -> None:
+        # An option is a sighting of its underlying's listing: a pair
+        # evidenced on one side only by options was a "clean scan"
+        # while the engine kept two identity classes (S042-04).
+        if _is_opt(sym):
+            sym = _opt_und(sym) or sym
         r, suf = _scan_symbol_root(sym)
         if suf:
             seen_suffixes.setdefault(r, set()).add(suf)
@@ -6489,7 +6883,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             for _p in _audit_source_files(cache, _acct):
                 try:
                     _doc = json.loads(_p.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                except (OSError, ValueError):
                     continue
                 for _t in (_doc.get("transactions", _doc)
                            if isinstance(_doc, dict) else _doc) or []:
@@ -6858,12 +7252,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
                           f"only. Run a full `taxjson run` to refresh "
                           f"the wash-adjusted aggregates.",
                           file=sys.stderr)
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 res = None
         if res is None:
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
+            except (OSError, ValueError) as e:
                 if acct in taxable_accounts:
                     # A taxable account's books left out of the filing
                     # block, the estimate and instalments with rc 0
@@ -6914,6 +7308,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
                           "pil": round(pil, 2), "fees": round(fees, 2),
                           "total": round(cap + opt + div, 2),
                           "type": acct_types.get(acct, "")})
+        if (cfg.get("accounts", {}).get(acct) or {}).get("crypto"):
+            # Its DIVIDEND column is staking rewards (S023-11).
+            acct_rows[-1]["dividend_is_staking"] = True
 
     def _sum_rows(rows: List[Dict[str, Any]]) -> Dict[str, float]:
         # Summed from the DISPLAYED (2dp-rounded) per-account figures,
@@ -7143,6 +7540,16 @@ def cmd_summary(args: argparse.Namespace) -> None:
         print("ALL ACCOUNTS")
     _print_report_table(_table_lines(acct_rows, "TOTAL"),
                         rule_before_last=True)
+    _stk = [r for r in acct_rows
+            if r.get("dividend_is_staking") and abs(r["dividend"]) >= 0.005]
+    if _stk:
+        # The crypto rows' DIVIDEND is staking rewards: ordinary income
+        # (no gross-up/credit, no withholding), as the estimate treats
+        # it — not a figure for the dividend lines (S023-11).
+        print(f"NOTE: DIVIDEND for crypto account(s) "
+              + ", ".join(f"{r['account']} ({money(r['dividend'])})"
+                          for r in _stk)
+              + " is STAKING rewards — ordinary income, not dividends.")
 
     if filing_rows:
         from taxjson.lib.report_model import render_table as _rt
@@ -7462,10 +7869,30 @@ def cmd_instalments(args: argparse.Namespace) -> None:
     doc["vintage"] = r.get("vintage")
     doc["vintage_notes"] = (vintage_notes(year, str(r.get("vintage")))
                             if r.get("vintage") else [])
+    # The verdict rests on TOTAL net tax owing. Unset other income and
+    # withholding were read as 0 without a word, so an employee was
+    # told "no instalments required" on the investment tax alone
+    # (S041-00): name what was assumed.
+    _est_cfg = _soft_config(root).get("estimate") or {}
+    _assumed = []
+    if (getattr(args, "other_income", None) is None
+            and "other_income" not in _est_cfg):
+        _assumed.append("other income (employment, pension, business) "
+                        "is not set — assumed 0: set [estimate] "
+                        "other_income (or pass --other-income)")
+    if "withheld" not in icfg:
+        _assumed.append("tax withheld at source is not set — assumed 0: "
+                        "set [instalments] withheld")
+    doc["assumed_zero"] = _assumed
     if getattr(args, "json", False):
         _json_out(doc)
         return
     print(INST.render(doc, base))
+    if _assumed:
+        print()
+        for _n in _assumed:
+            print(_wrap_note("NOTE: " + _n + " — the figures above cover "
+                             "the investment income only."))
     if doc["vintage_notes"]:
         print()
         for _n in doc["vintage_notes"]:
@@ -7537,8 +7964,18 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
         p = Path(cache) / f"{acct}_base.json"
         try:
             data = _json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+            if not isinstance(data, dict):
+                raise ValueError("not a JSON object")
+        except (OSError, ValueError) as e:
+            # Skipping the account dropped its withholding AND its 15%
+            # fallback while its foreign dividends were still taxed
+            # (R1-223): fall back for it, and say so.
+            if foreign_by_account.get(acct):
+                print(f"taxjson: warning: could not read {p.name} "
+                      f"({e}) — assuming {CA_FOREIGN_WITHHOLDING:.0%} "
+                      f"withholding on {acct}'s foreign dividends; "
+                      f"re-run `taxjson run`.", file=sys.stderr)
+            data = {}
         acct_total = 0.0
         acct_seen = False
         for t in data.get("transactions", []):
@@ -7746,11 +8183,16 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 money)
             _print_trace_table([
                 (f"BPA credit ({CA_FED_BPA:,.0f} max @ "
-                 f"{CA_FED_BRACKETS[0][1] * 100:.0f}%)",
+                 f"{CA_FED_BRACKETS[0][1] * 100:g}%)",
                  -tb["fed_bpa"], -tw["fed_bpa"]),
                 (f"DTC 15.0198% x {money(r['grossed_eligible'])}",
                  -tb["fed_dtc"], -tw["fed_dtc"]),
-                (f"FTC 15% x {money(est['div_foreign'])}",
+                # The credit's source, as the summary line says: the
+                # actual TAX rows capped at 15%, or the 15% assumption
+                # (a fixed "15% x" label contradicted it, R1-224).
+                (("FTC TAX rows, max 15% x " if str(r.get(
+                    "ftc_source", "")).startswith("actual")
+                  else "FTC 15% x ") + money(est['div_foreign']),
                  -tb["fed_ftc"], -tw["fed_ftc"]),
                 ("= FEDERAL", r["tax_base"]["federal"],
                  r["tax_with"]["federal"]),
@@ -8509,6 +8951,16 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
         sys.exit(1)
 
 
+def _mask_ids_in_path(path: str) -> str:
+    """`path` with every broker-account-like id in its FILE NAME masked
+    to its first 2 characters + *** (U1234567 -> U1***, 53123456 ->
+    53***): an IB U-number or a run of 5+ digits."""
+    head, sep, name = str(path).rpartition("/")
+    name = re.sub(r"(?<![A-Za-z0-9])(U\d{5,}|\d{5,})(?!\d)",
+                  lambda m: m.group(1)[:2] + "***", name)
+    return head + sep + name
+
+
 def cmd_sanity(args: argparse.Namespace) -> None:
     """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
@@ -8732,6 +9184,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
 
     _OPT_RE = re.compile(r'^((?:F:)?[A-Z0-9.]+?)(\d{6}[CP]\d+)\.(\S+)$',
                          re.IGNORECASE)
+    _VENUE_SFX_RE = re.compile(r'^([A-Za-z0-9]+)\.[A-Za-z]{2,3}$')
 
     def _ext_book(paths: List[Path]) -> Tuple[Dict[str, float],
                                               List[str],
@@ -8779,6 +9232,13 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                              f"quantity is not finite")
                 if not sym or abs(q) <= 1e-12:
                     continue
+                if (str(h.get("asset_type") or "").lower() == "crypto"
+                        and _VENUE_SFX_RE.match(sym)):
+                    # A snapshot tool's venue suffix (portoml's
+                    # `LINK.KR` for Kraken): taxjson keys crypto by the
+                    # bare coin, so every coin showed twice, MISSING on
+                    # each side (R1-113, R1-334).
+                    sym = _VENUE_SFX_RE.match(sym).group(1)
                 tgt = _mapped(sym)
                 book[tgt] = book.get(tgt, 0.0) + q
                 und = str(h.get("underlying") or "").strip()
@@ -8877,7 +9337,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 shown = "~/" + str(p2.relative_to(Path.home()))
             except ValueError:
                 pass
-            extra = f"  (account {lbl})" if lbl not in p2.stem else ""
+            # A holdings file named after the broker account put the
+            # real account number on the console (R1-351): the file
+            # name's ids are masked like the IB warning masks them.
+            shown = _mask_ids_in_path(shown)
+            extra = (f"  (account {_mask_ids_in_path(lbl)})"
+                     if lbl not in p2.stem else "")
             print(f"  file:     {shown}{extra}")
         for a, b in grp["via_underlying"]:
             print(f"  -- option {a} matched taxjson's {b} via its "
@@ -9176,7 +9641,7 @@ def _soft_config(root: Path) -> Dict[str, Any]:
     cfg_path = root / "taxjson.toml"
     if cfg_path.exists() and tomllib is not None:
         try:
-            cfg = tomllib.loads(cfg_path.read_text(encoding="utf-8")) or {}
+            cfg = tomllib.loads(_read_config_text(cfg_path)) or {}
         except Exception as e:
             # Soft about a MISSING config only. An existing file that
             # does not parse is a user error to fix, not a reason to
@@ -9262,7 +9727,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     for _acct, f in files:
         try:
             _d2 = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue
         for h in _d2.get("inventory") or []:
             embedded += float(h.get("deferred_wash", 0) or 0)
@@ -9439,6 +9904,11 @@ def cmd_carryover(args: argparse.Namespace) -> None:
             crypto_argv += ["--crypto", str(base)]
         else:
             base_argv.append(str(base))
+    # An account the last run skipped for having no inputs has no books
+    # to miss — the warning fired for the scaffold's empty `crypto`
+    # account on every carryover (R1-264), unlike t1135 and the rest.
+    missing = [n for n in missing
+               if n not in _accounts_skipped_for_no_inputs(root)]
     if missing:
         print(f"taxjson: warning: no base file for taxable account(s) "
               f"{', '.join(missing)} — run `taxjson run` first; those "
@@ -10335,6 +10805,10 @@ def _explain_wash_sales(root: Path, cache: Path,
     common += ["--country", _country(settings)]
     if settings.get("tax_date"):
         common += ["--tax-date", settings["tax_date"]]
+    # The table lists the tax year's wash sales; the trace printed every
+    # year's under it (R1-284).
+    if isinstance(settings.get("year"), int):
+        common += ["--year", str(settings["year"])]
     # Sheltered history makes the ±30-day affiliated-balance window accurate
     # (a registered-account repurchase can trigger/permanently-deny a loss).
     sheltered_base = cache / "sheltered_base.json"
@@ -10566,6 +11040,13 @@ def _radar_engine_args(bases: List[Path],
     return out
 
 
+def _watch_threshold(args: argparse.Namespace) -> float:
+    """--threshold for the harvest dimension; an explicit 0 means "any
+    move" (`or 100.0` turned it into 100, R1-242)."""
+    v = getattr(args, "threshold", None)
+    return 100.0 if v is None else float(v)
+
+
 def cmd_watch(args: argparse.Namespace) -> None:
     """`taxjson watch`: report only what CHANGED since the last watch
     run — new/changed/cleared radar advisories, moved clear dates, and
@@ -10654,8 +11135,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
     changes = _watch.diff_radar(state.get("radar") or {}, cur_radar)
     if harvest_now is not None:
         hch = _watch.diff_harvest(state.get("harvest_now"), harvest_now,
-                                  float(getattr(args, "threshold",
-                                                100.0) or 100.0))
+                                  _watch_threshold(args))
         if hch:
             changes.append(hch)
         saved_harvest = harvest_now
@@ -10727,6 +11207,29 @@ def _questrade_token_write(tok_cache: Path, token: str) -> None:
         pass
 
 
+def _qt_auth_hint(token: str, tok_cache: Path, *,
+                  explicit: bool = False) -> str:
+    """Recovery advice for a failed Questrade refresh. The cached
+    rotating token wins over $QUESTRADE_REFRESH_TOKEN, so a fresh token
+    exported over a dead cache failed the same way with no word about
+    the env var being skipped (R1-353). Never prints a token."""
+    import os as _os
+    env = _os.environ.get("QUESTRADE_REFRESH_TOKEN", "").strip()
+    cached = (tok_cache.read_text(encoding="utf-8").strip()
+              if tok_cache.exists() else "")
+    if not explicit and cached and token == cached:
+        msg = (f" — the token used is the cached chain in {tok_cache}"
+               + (", NOT $QUESTRADE_REFRESH_TOKEN (the cache wins)"
+                  if env and env != cached else "")
+               + ". If that chain is dead, start a new one: "
+                 "`taxjson fetch --refresh-token <new token>` (or "
+                 f"delete {tok_cache.name} and set "
+                 "$QUESTRADE_REFRESH_TOKEN).")
+        return msg
+    return (" — generate a new refresh token in Questrade's API centre "
+            "and pass it once with `taxjson fetch --refresh-token`.")
+
+
 def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                       wanted: List[str], http, say) -> Dict[str, Path]:
     """Fetch live Questrade positions for each fetch-enabled account in
@@ -10759,7 +11262,8 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             try:
                 qt_session = F.qt_refresh(token, http)
             except RuntimeError as e:
-                _die(f"Questrade auth failed: {e}")
+                _die(f"Questrade auth failed: {e}"
+                     + _qt_auth_hint(token, tok_cache))
             _questrade_token_write(tok_cache,
                                    qt_session["refresh_token"])
         try:
@@ -11121,7 +11625,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                     qt_session = F.qt_refresh(token, http)
                 except RuntimeError as e:
                     sys.exit(f"taxjson fetch: Questrade auth failed: "
-                             f"{e}")
+                             f"{e}" + _qt_auth_hint(
+                                 token, tok_cache,
+                                 explicit=bool(getattr(
+                                     args, "refresh_token", None))))
                 # Persist the ROTATED token immediately — a later
                 # failure must not lose it (the old one is now dead).
                 _questrade_token_write(tok_cache,
@@ -12255,6 +12762,11 @@ def cmd_audit(args: argparse.Namespace) -> None:
                    "total_disallowed": round(
                        sum(d.get("total_disallowed") or 0.0
                            for d in json_docs), 2),
+                   # Each invocation's reasons: the merged document said
+                   # failed=true without saying why (R1-288).
+                   "reconciliation_failures": [
+                       f for d in json_docs
+                       for f in d.get("reconciliation_failures") or []],
                    "failed": any(d.get("failed") for d in json_docs)}
         _json_out(doc)
     if _uncovered and not _acct:
@@ -12394,6 +12906,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         cmd += ["--year", str(year)]
     if args.include_options:
         cmd += ["--include-options"]
+    if (root / "phantoms.json").exists():
+        cmd += ["--phantoms", str(root / "phantoms.json")]
     _exec_tool(cmd)
 
 
@@ -12460,6 +12974,9 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
                 "--rates", str(rates)]
     if args.by_account:
         cmd += ["--by-account"]
+    if (root / "ticker.map").exists():
+        # DELETE'd symbols' fees, like the books (S038-11).
+        cmd += ["--ticker-map", str(root / "ticker.map")]
     if args.json:
         cmd += ["--json"]
     _exec_tool(cmd)
@@ -12489,7 +13006,15 @@ def cmd_init(args: argparse.Namespace) -> None:
     # The positional `path` (if given) overrides the global -C/--dir flag.
     target = getattr(args, "path", None) or args.dir
     root = Path(target).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # An existing FILE, a path under a file, or an unwritable
+        # parent tracebacked (R1-263).
+        _die(f"cannot create the project directory {root}: "
+             + ("a file of that name exists"
+                if isinstance(e, FileExistsError) or root.is_file()
+                else (e.strerror or str(e))))
     cfg = root / "taxjson.toml"
     if cfg.exists() and not args.force:
         _die(f"{cfg} already exists (use --force to overwrite)")
@@ -13120,7 +13645,7 @@ def main() -> None:
                             "pairings come from taxjson.toml: each "
                             "account's `holdings = [...]` (paths of its "
                             "broker positions files)")
-    p_san.add_argument("--tolerance", type=float, default=1e-4,
+    p_san.add_argument("--tolerance", type=_nonneg_float_arg, default=1e-4,
                        help="Quantity tolerance (default: 0.0001)")
     p_san.add_argument("--json", action="store_true",
                        help="Emit JSON instead of text")
@@ -13154,7 +13679,7 @@ def main() -> None:
                          help="Also watch the harvestable-now loss "
                               "total (runs `taxjson harvest --json`; "
                               "needs a price source)")
-    p_watch.add_argument("--threshold", type=float, default=100.0,
+    p_watch.add_argument("--threshold", type=_nonneg_float_arg, default=100.0,
                          metavar="AMT",
                          help="Report the harvest total only when it "
                               "moves by more than AMT in base currency "
@@ -13414,7 +13939,7 @@ def main() -> None:
                        "(symbol/ticker, quantity/box 16, proceeds/box 21, "
                        "cost/box 20); several (one per broker) are "
                        "reconciled together")
-    p_rec.add_argument("--tolerance", type=float, default=None,
+    p_rec.add_argument("--tolerance", type=_nonneg_float_arg, default=None,
                        help="Absolute per-symbol tolerance (default 1.00)")
     p_rec.add_argument("--json", action="store_true",
                        help="Emit the reconciliation as JSON instead of "

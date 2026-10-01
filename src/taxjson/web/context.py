@@ -71,7 +71,11 @@ class ProjectContext:
             raise FileNotFoundError(
                 f"no taxjson.toml in {root} — run `taxjson serve` from a "
                 f"project directory (or pass `taxjson -C DIR serve`).")
-        cfg = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+        # A leading UTF-8 BOM is dropped, as the CLI does (S038-04).
+        raw = toml_path.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        cfg = tomllib.loads(raw.decode("utf-8"))
         # A missing / typo'd account type used to default to sheltered
         # here, hiding a taxable account's gains; refuse it like every
         # CLI command does (R1-268).
