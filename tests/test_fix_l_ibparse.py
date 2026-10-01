@@ -135,5 +135,78 @@ class TestIbExchangeTradeDate(unittest.TestCase):
         self.assertNotIn('unknown field', err)
 
 
+# ---------------------------------------------- R1-61 / R1-300 (Ca)
+def _xfers(*rows):
+    return HEAD + XFER_H + ''.join(rows)
+
+
+class TestIbTransferCancellations(unittest.TestCase):
+    """A Transfers `Ca` row consumes its original wherever it sits."""
+
+    def _legs(self, *rows):
+        p, txs, err = _parse_ib(_xfers(*rows))
+        return [(t['date'], t['quantity']) for t in txs
+                if t['action'] == 'TRANSFER'], err
+
+    def test_ca_posted_days_later_consumes_its_original(self):
+        # R1-61: Out 06-27, Ca 07-02, rebooked Out 07-03.
+        legs, err = self._legs(
+            _xfer('QZB', '2025-06-27', -300, -6000, typ='ATON', cur='CAD'),
+            _xfer('QZB', '2025-07-02', 300, 6000, typ='ATON', cur='CAD',
+                  code='Ca'),
+            _xfer('QZB', '2025-07-03', -300, -6000, typ='ATON', cur='CAD'))
+        self.assertEqual(legs, [('2025-07-03', -300)])
+        self.assertNotIn('not in this statement', err)
+
+    def test_ca_listed_before_its_original(self):
+        # R1-300: the same chain with each Ca moved before its original.
+        legs, err = self._legs(
+            _xfer('QZB', '2026-09-01', 24, 960, typ='ATON', code='Ca'),
+            _xfer('QZB', '2026-09-01', -24, -960, typ='ATON'),
+            _xfer('QZB', '2026-09-01', 24, 960, typ='ATON', code='Ca'),
+            _xfer('QZB', '2026-09-01', -24, -960, typ='ATON'),
+            _xfer('QZB', '2026-09-01', -24, -960, typ='ATON'))
+        self.assertEqual(legs, [('2026-09-01', -24)])
+        self.assertNotIn('not in this statement', err)
+
+    def test_original_in_an_earlier_statement_stays_a_netting_leg(self):
+        legs, err = self._legs(
+            _xfer('QZB', '2026-01-05', 50, 500, code='Ca'),
+            _xfer('QZB', '2026-02-01', -50, -500))   # a later, real move
+        self.assertEqual(sorted(legs), [('2026-01-05', 50),
+                                        ('2026-02-01', -50)])
+        self.assertIn('not in this statement', err)
+
+
+class TestIbCorporateActionCancellationOrder(unittest.TestCase):
+    """R1-300: a restated split keeps the REBOOKED date in every row
+    order (the Ca and its original share a date; the rebook differs)."""
+    ORIG = ('QZS(US0000000AA1) Split 2 for 1 (QZS, QZS INC, '
+            'US0000000AA1)')
+
+    def _rows(self):
+        orig = [_ca(self.ORIG, -100, when='2026-03-02, 20:25:00'),
+                _ca(self.ORIG, 200, when='2026-03-02, 20:25:00')]
+        canc = [_ca(self.ORIG, 100, when='2026-03-02, 20:25:00', code='Ca'),
+                _ca(self.ORIG, -200, when='2026-03-02, 20:25:00',
+                    code='Ca')]
+        rebook = [_ca(self.ORIG, -100, when='2026-03-03, 20:25:00'),
+                  _ca(self.ORIG, 200, when='2026-03-03, 20:25:00')]
+        return orig, canc, rebook
+
+    def test_every_order_keeps_the_rebooked_split(self):
+        import itertools
+        orig, canc, rebook = self._rows()
+        blocks = {'orig': orig, 'ca': canc, 'rebook': rebook}
+        for order in itertools.permutations(blocks):
+            with self.subTest(order=order):
+                text = HEAD + CA_H + ''.join(
+                    r for k in order for r in blocks[k])
+                _, txs, _ = _parse_ib(text)
+                splits = [(t['date'], round(t['quantity'], 6))
+                          for t in txs if t['action'] == 'SPLIT']
+                self.assertEqual(splits, [('2026-03-03', 2.0)])
+
+
 if __name__ == '__main__':
     unittest.main()

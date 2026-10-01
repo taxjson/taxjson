@@ -1139,6 +1139,10 @@ class IbBrokerage(BaseBrokerage):
         # suffix mapping (fell back to .US).
         isin_fallback: set = set()
         pending_ca: List[Dict[str, Any]] = []
+        # Transfers rows coded `Ca` listed before their original (or
+        # whose original is in an earlier statement): consumed by a
+        # later original, else kept as a reversing leg at the end.
+        pending_xfer_ca: List[Dict[str, Any]] = []
         # Trades rows coded `Ca` (cancelled): paired with their original
         # after the loop (lib/trade_cancel).
         trade_cancels: List[Dict[str, Any]] = []
@@ -1201,23 +1205,32 @@ class IbBrokerage(BaseBrokerage):
             return (not eff['consumed'] and eff['desc'] == ca['desc']
                     and abs(eff['qty'] + ca['qty']) < 1e-9)
 
-        def _ca_undo(ca: Dict[str, Any]) -> bool:
+        def _ca_undo(ca: Dict[str, Any], same_date_only: bool = False) -> bool:
             """A `Ca` row: undo the latest matching original (same
-            description, negated quantity; same date preferred)."""
-            cands = [e for e in ca_effects if _ca_matches(ca, e)]
+            description, negated quantity, dated on or before the
+            cancellation; same date preferred). `same_date_only` (the
+            row walk) leaves a Ca with no same-date original waiting,
+            so a rebooked row listed before the original is never the
+            one undone (audit R1-300); the end of the walk and the
+            account's other statements take the latest earlier
+            original."""
+            cands = [e for e in ca_effects if _ca_matches(ca, e)
+                     and e['date'] <= ca['date']]
             if not cands:
                 return False
             same = [e for e in cands if e['date'] == ca['date']]
+            if same_date_only and not same:
+                return False
             _ca_apply_undo((same or cands)[-1])
             return True
 
         def _ca_record(eff: Dict[str, Any]) -> None:
-            """Remember a translated row; a `Ca` row that arrived
-            BEFORE it (same description, negated quantity) undoes it
-            now."""
+            """Remember a translated row; a same-date `Ca` row that
+            arrived BEFORE it (same description, negated quantity)
+            undoes it now."""
             ca_effects.append(eff)
             for i, ca in enumerate(pending_ca):
-                if _ca_matches(ca, eff):
+                if _ca_matches(ca, eff) and eff['date'] == ca['date']:
                     pending_ca.pop(i)
                     _ca_apply_undo(eff)
                     self.note_row_consumed()      # the waiting Ca row
@@ -2209,7 +2222,7 @@ class IbBrokerage(BaseBrokerage):
                 if 'Ca' in re.split(r'[;,\s]+', _cacode or ''):
                     _ca = {'desc': description, 'date': date,
                            'qty': qty, 'where': where}
-                    if _ca_undo(_ca):
+                    if _ca_undo(_ca, same_date_only=True):
                         self.note_row_consumed()  # undid its original
                     else:
                         pending_ca.append(_ca)
@@ -2644,46 +2657,52 @@ class IbBrokerage(BaseBrokerage):
                          if abs_qty > 1e-6 and multiplier else 0.0)
 
                 # Cancel/rebook: IB lists a reversed ACATS/ATON leg
-                # as original + `Ca` cancellation (opposite qty,
-                # same date) + rebooked rows. A real RRSP move
-                # (IB -> Questrade) carried one symbol five times: Out,
-                # Ca, Out, Ca, Out — arithmetically -N, but the
-                # two Ca legs read as +N ACQUISITIONS to the
+                # as original + `Ca` cancellation (opposite qty) +
+                # rebooked rows — a transfer reversed and rebooked
+                # twice reads Out, Ca, Out, Ca, Out: arithmetically -N,
+                # but each Ca leg reads as a +N ACQUISITION to the
                 # superficial-loss walk. The Ca row consumes its
-                # original; only when the original sits in an
-                # earlier statement does the reversal stay as a
-                # netting leg.
+                # original wherever it sits in the statement: the
+                # latest earlier-or-same-dated one before it (same
+                # date preferred — a Ca posted days later used to miss
+                # it, audit R1-61), else the next one after it (a Ca
+                # listed first, R1-300). Only a Ca whose original is in
+                # an earlier statement stays as a netting leg (end of
+                # the walk).
                 _xcode = self._cell(row, header_map, 'Code')
+                _xleg = {'symbol': symbol, 'desc': xfer_desc,
+                         'qty': qty, 'date': date}
                 if 'Ca' in re.split(r'[;,\s]+', _xcode or ''):
-                    for _i in range(len(transactions) - 1, -1, -1):
-                        _t = transactions[_i]
+                    _hits = [
+                        _i for _i, _t in enumerate(transactions)
                         if (_t.get('action') == 'TRANSFER'
-                                and _t.get('symbol') == symbol
-                                and _t.get('date') == date
-                                and abs(float(_t.get('quantity') or 0)
-                                        + qty) < 1e-9
-                                and _t.get('description')
-                                == xfer_desc):
-                            del transactions[_i]
-                            self.note_row_consumed()  # + original
-                            break
+                            and _t.get('symbol') == symbol
+                            and (_t.get('date') or '') <= date
+                            and abs(float(_t.get('quantity') or 0)
+                                    + qty) < 1e-9
+                            and _t.get('description') == xfer_desc)]
+                    _same = [_i for _i in _hits
+                             if transactions[_i].get('date') == date]
+                    if _hits:
+                        del transactions[(_same or _hits)[-1]]
+                        self.note_row_consumed()  # + original
                     else:
-                        print(f"note: {symbol}: IB cancelled a "
-                              f"{transfer_type} transfer of {-qty:g} "
-                              f"on {date} whose original row is not "
-                              f"in this statement — kept as a "
-                              f"reversing TRANSFER leg.",
-                              file=sys.stderr)
-                        transactions.append({
-                            'action': 'TRANSFER', 'date': date,
-                            'time': '09:30:00', 'date_settle': date,
-                            'symbol': symbol, 'quantity': qty,
-                            'currency': currency, 'price': price,
-                            'net_amount': abs(total_cost),
-                            'account': 'IB',
-                            'description': f"{xfer_desc} (Ca)",
-                        })
-                        self.note_row_consumed()
+                        pending_xfer_ca.append(dict(
+                            _xleg, currency=currency, price=price,
+                            net=abs(total_cost), kind=transfer_type))
+                    continue
+
+                _waiting = [_c for _c in pending_xfer_ca
+                            if _c['symbol'] == symbol
+                            and _c['desc'] == xfer_desc
+                            and date <= _c['date']
+                            and abs(_c['qty'] + qty) < 1e-9]
+                if _waiting:
+                    _c = next((_c for _c in _waiting if _c['date'] == date),
+                              _waiting[0])
+                    pending_xfer_ca.remove(_c)
+                    self.note_row_consumed()      # this original
+                    self.note_row_consumed()      # the waiting Ca row
                     continue
 
                 transactions.append({
@@ -2731,6 +2750,30 @@ class IbBrokerage(BaseBrokerage):
                           f"they carry no trades or income.",
                           file=sys.stderr)
                 self.count_skip(f"section {section} (unknown)")
+
+        # Transfers `Ca` rows no original in this statement claimed: the
+        # original is in an earlier statement — kept as a reversing leg.
+        for _c in pending_xfer_ca:
+            print(f"note: {_c['symbol']}: IB cancelled a {_c['kind']} "
+                  f"transfer of {-_c['qty']:g} on {_c['date']} whose "
+                  f"original row is not in this statement — kept as a "
+                  f"reversing TRANSFER leg.", file=sys.stderr)
+            transactions.append({
+                'action': 'TRANSFER', 'date': _c['date'],
+                'time': '09:30:00', 'date_settle': _c['date'],
+                'symbol': _c['symbol'], 'quantity': _c['qty'],
+                'currency': _c['currency'], 'price': _c['price'],
+                'net_amount': _c['net'], 'account': 'IB',
+                'description': f"{_c['desc']} (Ca)",
+            })
+            self.note_row_consumed()
+
+        # Corporate Actions `Ca` rows with no same-date original: the
+        # latest earlier original in this statement, if any.
+        for _ca in list(pending_ca):
+            if _ca_undo(_ca):
+                pending_ca.remove(_ca)
+                self.note_row_consumed()
 
         if trade_cancels:
             _kept, _pairs, _unpaired = pair_cancellations(transactions)
