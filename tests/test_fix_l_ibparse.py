@@ -861,5 +861,148 @@ class TestSettleToTradeAtTheCutover(unittest.TestCase):
                 self.assertEqual(settlement_date(t, cur), settle)
 
 
+# ------------------------------------- detection and taxjson-brokerage
+from pathlib import Path as _P
+_EX = _P(__file__).resolve().parent.parent / 'examples'
+
+
+def _detect_text(text, encoding='utf-8', name='x.csv'):
+    import tempfile
+    from taxjson.bin.taxjson_detect_brokerage import detect_brokerage
+    with tempfile.TemporaryDirectory() as td:
+        p = _P(td) / name
+        p.write_bytes(text.encode(encoding) if isinstance(text, str)
+                      else text)
+        import contextlib, io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            return detect_brokerage(p), err.getvalue()
+
+
+class TestBrokerDetection(unittest.TestCase):
+    """R1-57 / S029-14 / R1-90 / S059-17."""
+
+    def setUp(self):
+        self.ib = (_EX / 'ib_demo.csv').read_text(encoding='utf-8')
+        self.rbc = (_EX / 'rbc_direct_demo.csv').read_text(encoding='utf-8')
+
+    def test_ib_variants_the_parser_reads(self):
+        lines = self.ib.splitlines(keepends=True)
+        trades_first = ''.join(l for l in lines
+                               if not l.startswith(('Statement,',
+                                                    'Account Information,')))
+        no_broker = ''.join(l for l in lines if 'BrokerName' not in l)
+        title_first = ''.join(
+            [lines[0], 'Statement,Data,Title,Activity Statement\n']
+            + lines[1:])
+        for label, text in (('trades-first', trades_first),
+                            ('no BrokerName', no_broker),
+                            ('BrokerName on row 3', title_first)):
+            with self.subTest(label):
+                self.assertEqual(_detect_text(text)[0], 'ib')
+
+    def test_fetch_accepts_what_detection_routes(self):
+        from taxjson.bin.taxjson_fetch import looks_like_ib_statement
+        self.assertTrue(looks_like_ib_statement(self.ib))
+        self.assertFalse(looks_like_ib_statement(
+            'Statement,Header,Field Name,Field Value\n'
+            'Statement,Data,Notes,LIBOR Rate Source\n'))
+
+    def test_rbc_header_after_a_partial_preamble_or_blank_line(self):
+        no_brand = self.rbc.split('\n', 1)[1]
+        spacer = '\n' + self.rbc[self.rbc.index('Date,Activity'):]
+        for label, text in (('no brand line', no_brand),
+                            ('blank first line', spacer)):
+            with self.subTest(label):
+                self.assertEqual(_detect_text(text)[0], 'rbc_direct')
+
+    def test_utf16_rbc_export(self):
+        self.assertEqual(_detect_text(self.rbc, 'utf-16')[0], 'rbc_direct')
+
+    def test_cp1252_file_gets_one_line(self):
+        got, err = _detect_text(self.ib.replace('Synthetic Demo',
+                                                'SOCI\u00c9T\u00c9'),
+                                'cp1252')
+        self.assertIsNone(got)
+        self.assertIn('not UTF-8 or UTF-16 text', err)
+        self.assertNotIn('Traceback', err)
+
+
+class TestBrokerageCliRefusals(unittest.TestCase):
+    """R1-262 / S059-17 / S026-21 / S027-02 / S059-10."""
+
+    def test_rbc_refusal_is_one_line(self):
+        rbc = (_EX / 'rbc_direct_demo.csv').read_text(encoding='utf-8')
+        bad = rbc.replace('-13009.95', '-13O09.95')
+        rc, out, err, _ = _brokerage_cli({'rbc.csv': bad},
+                                         brokerage='rbc_direct')
+        self.assertEqual(rc, 1)
+        self.assertNotIn('Traceback', err)
+        self.assertIn('taxjson-brokerage: error: rbc.csv', err)
+
+    def test_unknown_brokerage_is_a_usage_error(self):
+        rc, _, err, _ = _brokerage_cli({'x.csv': 'a,b\n'}, brokerage='nosuch')
+        self.assertEqual(rc, 2)
+        self.assertNotIn('Traceback', err)
+        self.assertIn('Unknown brokerage: nosuch', err)
+
+    def test_cp1252_questrade_file_is_one_line(self):
+        import os, subprocess, sys, tempfile
+        q = (_EX / 'questrade_demo.csv').read_text(encoding='utf-8')
+        with tempfile.TemporaryDirectory() as td:
+            p = _P(td) / 'qt.csv'
+            p.write_bytes(q.replace('APPLE INC', 'SOCI\u00c9T\u00c9', 1)
+                          .encode('cp1252'))
+            env = dict(os.environ, PYTHONPATH=str(_EX.parent / 'src'))
+            r = subprocess.run([sys.executable, '-m',
+                                'taxjson.bin.taxjson_brokerage',
+                                '--brokerage', 'questrade', str(p)],
+                               capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn('Traceback', r.stderr)
+        self.assertIn('not UTF-8 or UTF-16 text', r.stderr)
+
+    def test_alias_is_recorded_under_the_canonical_id(self):
+        ib = (_EX / 'ib_demo.csv').read_text(encoding='utf-8')
+        rc, out, err, _ = _brokerage_cli({'ib.csv': ib},
+                                         brokerage='interactive_brokers')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out['metadata']['source_brokerage'], 'ib')
+
+    def test_account_id_in_the_file_name_is_masked(self):
+        ib = (_EX / 'ib_demo.csv').read_text(encoding='utf-8')
+        rc, out, err, _ = _brokerage_cli(
+            {'U5550001_20250101_20251231.csv': ib})  # pii-ok
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn('U5550001', err)  # pii-ok
+        self.assertIn('U5***_20250101_20251231.csv', err)
+
+
+class TestTransfersViewInBookValue(unittest.TestCase):
+    """S027-06: an in-book RBC transfer shows its BOOK VALUE."""
+
+    def test_book_row_value_from_its_description(self):
+        import argparse, contextlib, io, json, tempfile
+        from taxjson.bin import taxjson_run as R
+        with tempfile.TemporaryDirectory() as td:
+            root = _P(td)
+            (root / 'taxjson.toml').write_text(
+                '[settings]\ncountry = "canada"\nyear = 2025\n'
+                '[accounts.tfsa]\ntype = "sheltered"\ntransfers = true\n')
+            (root / 'work').mkdir()
+            (root / 'work' / 'tfsa_base.json').write_text(json.dumps(
+                {'transactions': [{
+                    'action': 'TRANSFER', 'date': '2025-04-01',
+                    'symbol': 'QZD.TO', 'quantity': 2000, 'currency': 'CAD',
+                    'net_amount': 0.0, 'account': 'tfsa',
+                    'description': 'TFI QZD ETF BOOK VALUE 16,506.95'}]}))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                R.cmd_transfers_view(argparse.Namespace(
+                    dir=str(root), account=None, json=True))
+        rows = json.loads(out.getvalue())['transfers']
+        self.assertEqual([r['value'] for r in rows], [16506.95])
+
+
 if __name__ == '__main__':
     unittest.main()

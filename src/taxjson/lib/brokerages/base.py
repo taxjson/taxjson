@@ -223,6 +223,47 @@ class BrokerageParseError(ValueError):
     into a one-line error and a nonzero exit."""
 
 
+# An account id inside a file NAME: IB names its downloads after the
+# account (U1234567_20250101_20251231.csv). A digit run of 7+ that is
+# not a YYYYMMDD date counts too (a bank account number).
+_NAME_IB_ID_RE = re.compile(r'(?<![A-Za-z0-9])(?:DU|U|F|I)\d{5,8}(?![0-9])')
+_NAME_DIGITS_RE = re.compile(r'(?<![0-9])\d{7,12}(?![0-9])')
+_NAME_DATE_RE = re.compile(r'^(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])$')
+
+
+def shown_name(path) -> str:
+    """A file's name as diagnostics print it: account-id-shaped tokens
+    masked to their first 2 characters + *** (the parsers' rule for ids
+    in the data), so a broker's default download name does not carry
+    the id into reports/ (audit S027-02 / S059-10)."""
+    name = Path(str(path)).name
+
+    def _mask(m):
+        tok = m.group(0)
+        if _NAME_DATE_RE.match(tok):
+            return tok
+        return tok[:2] + '***'
+    return _NAME_DIGITS_RE.sub(_mask, _NAME_IB_ID_RE.sub(_mask, name))
+
+
+def decode_broker_text(raw: bytes, name: str = '') -> str:
+    """The text of a broker export, decoded the way every parser and
+    broker detection read it: a UTF-16 BOM is UTF-16, anything else
+    UTF-8 with an optional BOM. Any other encoding (a cp1252 re-save)
+    raises BrokerageParseError with a one-line remedy instead of a codec
+    traceback (audit S059-17)."""
+    try:
+        if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+            return raw.decode('utf-16')
+        return raw.decode('utf-8-sig')
+    except UnicodeDecodeError as e:
+        where = f"{name}: " if name else ''
+        raise BrokerageParseError(
+            f"{where}not UTF-8 or UTF-16 text (byte 0x{raw[e.start]:02x} "
+            f"at offset {e.start}) — a spreadsheet re-save in a legacy "
+            f"encoding? Re-export the file, or save it as CSV UTF-8.")
+
+
 # Strict number grammar for REQUIRED money/quantity cells. A leading
 # sign, then either a plain digit run or a comma-grouped integer part
 # whose groups are exactly three digits after a lead that is not 0

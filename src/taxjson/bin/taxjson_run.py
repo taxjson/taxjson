@@ -4532,6 +4532,10 @@ def cmd_transactions(args: argparse.Namespace) -> None:      # `events` view
     _run_tx_view(args, actions=None, label="events")
 
 
+_BOOK_VALUE_DESC_RE = re.compile(
+    r"\bBOOK\s+VALUE:?\s*\$?\s*(\d+(?:,\d+)*(?:\.\d+)?)", re.IGNORECASE)
+
+
 def cmd_transfers_view(args: argparse.Namespace) -> None:
     """`taxjson transfers`: the custody-evidence view. TRANSFER rows
     are deliberately NOT tax events — a taxable book's basis comes from
@@ -4582,12 +4586,22 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                   else doc) or []:
             if t.get("action") != "TRANSFER":
                 continue
+            # The book row lost the parser's book_value evidence (not a
+            # transaction field); RBC's description still carries it
+            # ("... BOOK VALUE 16506.95") — shown as the sidecar row is
+            # (audit S027-06).
+            _value = float(t.get("net_amount") or 0)
+            if not _value:
+                _bv = _BOOK_VALUE_DESC_RE.search(t.get("description") or "")
+                if _bv:
+                    from taxjson.lib.brokerages.base import desc_number
+                    _value = desc_number(_bv.group(1), strict=False) or 0.0
             rows.append({"date": t.get("date") or "",
                          "account": t.get("account") or name,
                          "symbol": t.get("symbol") or "",
                          "quantity": float(t.get("quantity") or 0),
                          "type": t.get("description") or "",
-                         "value": float(t.get("net_amount") or 0),
+                         "value": _value,
                          "currency": t.get("currency") or "",
                          "where": "book"})
     if want:

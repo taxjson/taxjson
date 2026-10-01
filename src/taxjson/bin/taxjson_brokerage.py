@@ -32,7 +32,8 @@ from pathlib import Path
 
 from taxjson.lib.core import (register_brokerage, TaxTransaction,
                               load_brokerage, is_option_symbol)
-from taxjson.lib.brokerages.base import BaseBrokerage, BrokerageParseError
+from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         shown_name)
 from taxjson.lib.country import country_arg
 from taxjson.lib.brokerages.schema import validate_transactions
 from taxjson.lib.brokerages import ib_extractor
@@ -56,6 +57,13 @@ register_brokerage("kr", kraken.KrakenBrokerage)
 register_brokerage("coinbase", coinbase.CoinbaseBrokerage)
 register_brokerage("cb", coinbase.CoinbaseBrokerage)
 register_brokerage("generic", generic.GenericBrokerage)
+
+# The id `taxjson run` passes for each parser (detect_broker); an alias
+# typed on the command line is recorded under it, so the fees report
+# does not split one broker into two rows (audit S026-21).
+_CANONICAL_ID = {'interactive_brokers': 'ib', 'rbc': 'rbc_direct',
+                 'qt': 'questrade', 'wb': 'webull', 'kr': 'kraken',
+                 'cb': 'coinbase'}
 
 
 # Parser fields that are evidence only (not TaxTransaction fields): kept
@@ -148,6 +156,16 @@ def apply_security_override(tx: dict, overrides, hits=None) -> None:
             if hits is not None:
                 hits[i] = hits.get(i, 0) + 1
             return
+
+
+def _refusal(e: Exception) -> str:
+    """The one-line text of a parser's refusal (a legacy-encoded file
+    included — a codec traceback named no file, audit S059-17)."""
+    if isinstance(e, UnicodeDecodeError):
+        return (f"not UTF-8 or UTF-16 text (byte 0x{e.object[e.start]:02x} "
+                f"at offset {e.start}) — re-export the file, or save it as "
+                f"CSV UTF-8")
+    return str(e)
 
 
 def _dedup_evidence(per_file) -> list:
@@ -304,6 +322,7 @@ Examples:
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
+    brokerage_id = _CANONICAL_ID.get(brokerage_id, brokerage_id)
     input_paths = [Path(p) for p in args.input_files]
     missing = [p for p in input_paths if not p.exists()]
     if missing:
@@ -313,7 +332,14 @@ Examples:
                   file=sys.stderr)
         sys.exit(2)
 
-    extractor_class = load_brokerage(brokerage_id)
+    try:
+        extractor_class = load_brokerage(brokerage_id)
+    except ValueError as e:
+        # A usage error (exit 2), one line — it was a traceback (R1-262).
+        print(f"taxjson-brokerage: error: {e} (known: "
+              f"{', '.join(sorted(set(_CANONICAL_ID.values()) | {'generic'}))}"
+              f")", file=sys.stderr)
+        sys.exit(2)
     valid_keys = set(inspect.signature(TaxTransaction).parameters.keys())
     try:
         overrides = (load_security_overrides(Path(args.security_overrides))
@@ -351,8 +377,9 @@ Examples:
                   f"input file ({e}) — see the per-file error below by "
                   f"parsing the files one at a time.", file=sys.stderr)
             sys.exit(2)
-        except BrokerageParseError as e:
-            print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
+        except (BrokerageParseError, ValueError, UnicodeDecodeError) as e:
+            print(f"taxjson-brokerage: error: {_refusal(e)}",
+                  file=sys.stderr)
             sys.exit(1)
 
     # s.90(1) is Canadian law: never the default without a country
@@ -393,18 +420,24 @@ Examples:
             # A >128KB field (or other csv-module limit) surfaced as a
             # raw traceback; name the file and the limit instead
             # (2026-09 security audit).
-            print(f"taxjson-brokerage: error: {input_path.name}: the "
+            print(f"taxjson-brokerage: error: {shown_name(input_path)}: the "
                   f"CSV module refused the file ({e}). A single field "
                   f"exceeding {csv.field_size_limit()} characters is "
                   f"the usual cause — inspect/trim the offending row.",
                   file=sys.stderr)
             sys.exit(2)
-        except BrokerageParseError as e:
+        except (BrokerageParseError, ValueError, UnicodeDecodeError) as e:
             # The parser refused the file rather than guess (missing
             # required column, unparseable money, a row whose money does
             # not add up, a Cash Report mismatch, a non-activity report).
-            # A finding in the DATA: exit 1, one line, no traceback.
-            print(f"taxjson-brokerage: error: {input_path.name}: {e}",
+            # A finding in the DATA: exit 1, one line, no traceback —
+            # also for the parsers whose refusals are plain ValueErrors
+            # (RBC's RbcFormatError, Kraken, Coinbase) and for a file in
+            # a legacy encoding (audit R1-262 / S059-17).
+            msg = _refusal(e)
+            shown = shown_name(input_path)
+            print(f"taxjson-brokerage: error: "
+                  f"{msg if msg.startswith(shown) else f'{shown}: {msg}'}",
                   file=sys.stderr)
             sys.exit(1)
         parsed_files.append((input_path, extractor, transactions))
@@ -416,7 +449,7 @@ Examples:
                                          str(t.get('description') or '')))
                      and m.group(1) != 'CA']
             if _froc:
-                print(f"taxjson-brokerage: note: {input_path.name}: "
+                print(f"taxjson-brokerage: note: {shown_name(input_path)}: "
                       f"{len(_froc)} return(s) of capital from a "
                       f"non-Canadian issuer booked as a cost reduction "
                       f"(no --country given); a Canadian filer passes "
@@ -434,10 +467,10 @@ Examples:
                 _other = parsed_files[_j][1]
                 if _j != _i and getattr(_other, 'ca_undo', None) \
                         and _other.ca_undo(_ca):
-                    print(f"note: {_p.name}: IB cancelled (Ca) "
+                    print(f"note: {shown_name(_p)}: IB cancelled (Ca) "
                           f"{_ca['desc']!r} ({_ca['qty']:g} on "
                           f"{_ca['date']}); its original in "
-                          f"{parsed_files[_j][0].name} is undone.",
+                          f"{shown_name(parsed_files[_j][0])} is undone.",
                           file=sys.stderr)
                     _done = True
                     break
@@ -490,7 +523,7 @@ Examples:
             _kept_this_file = len(_tr)
             if _tr:
                 kept_aside_per_file.append(_tr)
-                print(f"  {input_path.name}: {len(_tr)} TRANSFER "
+                print(f"  {shown_name(input_path)}: {len(_tr)} TRANSFER "
                       f"row(s) kept aside (custody evidence, not tax "
                       f"events — view with `taxjson transfers`)",
                       file=sys.stderr)
@@ -523,7 +556,7 @@ Examples:
             # Every parsed row was custody evidence (a deposit-only
             # Kraken ledger, say): the parser worked — it's not the
             # regression the warning below is for.
-            print(f"  {input_path.name}: 0 tax objects "
+            print(f"  {shown_name(input_path)}: 0 tax objects "
                   f"({_kept_this_file} TRANSFER row(s) kept aside)",
                   file=sys.stderr)
         elif (not transactions and file_size > 0
@@ -533,11 +566,11 @@ Examples:
             # export) — not the regression the warning below is for,
             # and a warning on every correct run trains users to
             # ignore real ones.
-            print(f"  {input_path.name}: 0 tax objects "
+            print(f"  {shown_name(input_path)}: 0 tax objects "
                   f"({extractor.zero_tx_reason})", file=sys.stderr)
         elif not transactions and file_size > 0:
             print(
-                f"warning: {input_path.name} parsed to 0 transactions "
+                f"warning: {shown_name(input_path)} parsed to 0 transactions "
                 f"({file_size} bytes input, brokerage={brokerage_id}): "
                 f"NONE of its rows are in the books. Check the CSV "
                 f"header / format — silent zero-tx output is usually a "
@@ -545,7 +578,7 @@ Examples:
                 file=sys.stderr,
             )
         else:
-            print(f"  {input_path.name}: {len(transactions)} tax objects",
+            print(f"  {shown_name(input_path)}: {len(transactions)} tax objects",
                   file=sys.stderr)
 
         if args.lint and getattr(extractor, '_rows_seen', None) is not None:
@@ -553,7 +586,7 @@ Examples:
             consumed = extractor._rows_consumed
             skipped = sum(extractor._skip_counts.values())
             unaccounted = seen - consumed - skipped
-            print(f"lint: {input_path.name}: rows={seen} consumed={consumed} "
+            print(f"lint: {shown_name(input_path)}: rows={seen} consumed={consumed} "
                   f"skipped={skipped} unaccounted={unaccounted}",
                   file=sys.stderr)
             if unaccounted:
@@ -566,7 +599,7 @@ Examples:
         _findings = getattr(extractor, 'lint_findings', None) or []
         if args.lint and _findings:
             for _f in _findings:
-                print(f"lint: {input_path.name}: {_f}", file=sys.stderr)
+                print(f"lint: {shown_name(input_path)}: {_f}", file=sys.stderr)
             lint_problems += len(_findings)
 
         for t in transactions:

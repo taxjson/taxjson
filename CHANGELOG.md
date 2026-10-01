@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Broker detection and `taxjson-brokerage`.** An IB file is routed by
+  its section,Header shape (a Trades-first Flex download, a statement
+  without the BrokerName row or with a Title row first), and `taxjson
+  fetch` accepts exactly what detection routes; an RBC header after a
+  partial preamble or a blank line is found. A file in a legacy encoding
+  (cp1252) gets one line naming the remedy, as do RBC, Kraken and
+  Coinbase refusals (they were tracebacks); an unknown `--brokerage` is
+  a usage error (exit 2). An alias (`--brokerage qt`) is recorded under
+  the canonical id, so fees.rpt shows one row per broker. An account id
+  in an input file's NAME (IB's default `U1234567_....csv`) is masked
+  in every parse line, so it no longer reaches reports/. `taxjson
+  transfers` shows an in-book RBC transfer's BOOK VALUE.
 - **Shared broker helpers.** The back-computed fee (Webull, RBC) is
   signed by the trade's direction — rounding noise is no longer turned
   into a charge — and a flat commission on a cheap option fill is kept

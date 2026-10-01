@@ -242,7 +242,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          encode_occ_strike,
                                          option_strike_text,
                                          is_roc_description,
-                                         parse_strict_number)
+                                         parse_strict_number, shown_name)
 from taxjson.lib.corp_actions import (ib_cash_merger, ib_merger_owned,
                                       ib_spinoff_parts, ib_tender_root)
 from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE, pair_cancellations
@@ -847,7 +847,7 @@ class IbBrokerage(BaseBrokerage):
             name = Path(path).name
             try:
                 rows = cls._read_rows(Path(path))
-                pre = _ib_prescan(rows, name)
+                pre = _ib_prescan(rows, shown_name(path))
             except (OSError, UnicodeError, BrokerageParseError):
                 continue                 # parse_file reports it
             for row in rows:
@@ -855,7 +855,7 @@ class IbBrokerage(BaseBrokerage):
                         and row[1] == 'Data' and row[2] == 'Period'):
                     span = _ib_period(row[3])
                     if span:
-                        ctx['periods'].append((name, *span))
+                        ctx['periods'].append((shown_name(path), *span))
                     break
             # Identity facts learned from ANY of the account's
             # statements: an option root alias listed only in last
@@ -894,11 +894,8 @@ class IbBrokerage(BaseBrokerage):
         byte, breaking the very first section-tag match; a UTF-16 BOM
         (a spreadsheet's "Unicode text" save) is decoded instead of
         failing on byte 0xFF."""
-        raw = Path(path).read_bytes()
-        if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
-            text = raw.decode('utf-16')
-        else:
-            text = raw.decode('utf-8-sig')
+        from taxjson.lib.brokerages.base import decode_broker_text
+        text = decode_broker_text(Path(path).read_bytes(), shown_name(path))
         return list(csv.reader(io.StringIO(text, newline='')))
 
     @staticmethod
@@ -918,11 +915,11 @@ class IbBrokerage(BaseBrokerage):
             return
         if _IB_REFUSED_TITLE_RE.search(title):
             raise BrokerageParseError(
-                f"{path.name}: this is an IB {title!r} report, not an "
+                f"{shown_name(path)}: this is an IB {title!r} report, not an "
                 f"Activity Statement — refusing to read it as trades and "
                 f"income. Download Reports > Statements > Activity (CSV) "
                 f"instead.")
-        print(f"warning: {path.name}: IB statement title {title!r} is not "
+        print(f"warning: {shown_name(path)}: IB statement title {title!r} is not "
               f"'Activity Statement' — parsing it as one; check the "
               f"result.", file=sys.stderr)
 
@@ -1185,14 +1182,14 @@ class IbBrokerage(BaseBrokerage):
             # (a dropped, doubled or word-matched money row) is then
             # off — said on the console, not silently (audit R1-53).
             if any(booked.values()):
-                print(f"{ATTENTION_PREFIX} {path.name}: the statement has "
+                print(f"{ATTENTION_PREFIX} {shown_name(path)}: the statement has "
                       f"no Cash Report — parsed money is NOT reconciled "
                       f"against IB's own totals. Include the Cash Report "
                       f"section in the export (Flex: add it to the query).",
                       file=sys.stderr)
             return
         if not pre['cash_currencies']:
-            print(f"note: {path.name}: the Cash Report has no per-currency "
+            print(f"note: {shown_name(path)}: the Cash Report has no per-currency "
                   f"rows — parsed money not reconciled against it.",
                   file=sys.stderr)
             return
@@ -1215,7 +1212,7 @@ class IbBrokerage(BaseBrokerage):
                         if any(ln in cr for _, cr in lines))
         if unread:
             raise BrokerageParseError(
-                f"{path.name}: the Cash Report total of "
+                f"{shown_name(path)}: the Cash Report total of "
                 f"{'; '.join(unread)} is not a number this parser reads — "
                 f"the parsed rows cannot be reconciled against it. "
                 f"Re-export the statement (English, decimal point).")
@@ -1230,7 +1227,7 @@ class IbBrokerage(BaseBrokerage):
                                f"(diff {mine - broker:+,.2f})")
         if bad:
             raise BrokerageParseError(
-                f"{path.name}: parsed rows do not reconcile with IB's own "
+                f"{shown_name(path)}: parsed rows do not reconcile with IB's own "
                 f"Cash Report — {'; '.join(bad)}. A money row was "
                 f"dropped, doubled or mis-signed; refusing to emit a book "
                 f"that disagrees with the broker.")
@@ -1490,7 +1487,7 @@ class IbBrokerage(BaseBrokerage):
         self._tag_warned: set = set()
 
         rows = self._read_rows(path)
-        pre = _ib_prescan(rows, path.name)
+        pre = _ib_prescan(rows, shown_name(path))
         ctx = self.account_context
         if ctx:
             # Option-root aliases from ALL of the account's statements
@@ -1507,7 +1504,7 @@ class IbBrokerage(BaseBrokerage):
                 for root, ids in by_root.items():
                     tgt.setdefault(root, set()).update(ids)
         else:
-            _warn_stock_aliases(pre['stock_conid_syms'], path.name)
+            _warn_stock_aliases(pre['stock_conid_syms'], shown_name(path))
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']
@@ -1520,7 +1517,7 @@ class IbBrokerage(BaseBrokerage):
         root_alias = pre['root_alias']
         aliased_roots: Dict[str, str] = {}
         if len(pre['accounts']) > 1:
-            print(f"warning: {path.name}: IB statement spans "
+            print(f"warning: {shown_name(path)}: IB statement spans "
                   f"{len(pre['accounts'])} accounts ("
                   f"{', '.join(sorted(_mask_account(a) for a in pre['accounts']))}"
                   f") — every row is booked to ONE account label. That "
@@ -1561,7 +1558,7 @@ class IbBrokerage(BaseBrokerage):
                 continue
 
             if section == 'Trades' or section == 'Options Expirations':
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 if section == 'Trades':
                     self.require_columns(header_map, ('Asset Category',),
                                          section=section, where=where)
@@ -1890,7 +1887,7 @@ class IbBrokerage(BaseBrokerage):
                 # one FAILS the parse (it used to fall back to row[0] —
                 # the literal section name — and later to a loud skip
                 # that still lost the income).
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 self.require_columns(
                     header_map, ('Currency', 'Date', 'Description',
                                  'Amount'), section=section, where=where)
@@ -2052,7 +2049,7 @@ class IbBrokerage(BaseBrokerage):
                     continue
                 self._check_symbol_tag(re.sub(
                     r'\.(TO|US|AX|L)$', '', symbol.strip(),
-                    flags=re.IGNORECASE), path.name)
+                    flags=re.IGNORECASE), shown_name(path))
                 open_position_syms.add(_ib_stock_symbol(
                     asset_cat, symbol, currency, fii))
                 self.note_row_consumed()      # read into parser state
@@ -2185,7 +2182,7 @@ class IbBrokerage(BaseBrokerage):
 
             elif section == 'Withholding Tax':
                 # Required columns — see the Dividends section.
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 self.require_columns(
                     header_map, ('Currency', 'Date', 'Description',
                                  'Amount'), section=section, where=where)
@@ -2238,7 +2235,7 @@ class IbBrokerage(BaseBrokerage):
 
             elif section == 'Interest':
                 # Required columns — see the Dividends section.
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 self.require_columns(
                     header_map, ('Currency', 'Date', 'Description',
                                  'Amount'), section=section, where=where)
@@ -2273,7 +2270,7 @@ class IbBrokerage(BaseBrokerage):
                 # Required columns — see the Dividends section. (Date
                 # may be BLANK on a row: the "for Mmm YYYY" fallback
                 # below; the COLUMN must exist.)
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 self.require_columns(
                     header_map, ('Currency', 'Date', 'Description',
                                  'Amount'), section=section, where=where)
@@ -2372,7 +2369,7 @@ class IbBrokerage(BaseBrokerage):
                 # Bound to the ticker named in the description
                 # (the fee report groups by symbol); CASH when the
                 # description names none.
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 self.require_columns(
                     header_map, ('Currency', 'Date', 'Description',
                                  'Amount'), section=section, where=where)
@@ -2429,7 +2426,7 @@ class IbBrokerage(BaseBrokerage):
                 # one fails the parse (Quantity/Value/Proceeds are the
                 # share and cash legs, Code carries the `Ca` marker a
                 # restatement depends on).
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 self.require_columns(
                     header_map, ('Currency', 'Date/Time', 'Description',
                                  'Quantity', 'Proceeds', 'Value', 'Code'),
@@ -2517,7 +2514,7 @@ class IbBrokerage(BaseBrokerage):
                 if _ca_cat and _ca_cat not in ('Stocks', 'Warrants'):
                     if qty != 0 or abs(proceeds) > 0.005:
                         _unbooked(
-                            f"{path.name} {date}: {_ca_cat} corporate "
+                            f"{shown_name(path)} {date}: {_ca_cat} corporate "
                             f"action {description[:90]!r} (quantity "
                             f"{qty:g}) — contract adjustments are not "
                             f"translated; book the old and the adjusted "
@@ -2559,7 +2556,7 @@ class IbBrokerage(BaseBrokerage):
                             and _delivered.upper() != _troot.upper()):
                         _tl['foreign'] = True
                         _unbooked(
-                            f"{path.name} {date}: tender/exchange offer "
+                            f"{shown_name(path)} {date}: tender/exchange offer "
                             f"for {_tsym} delivered {qty:g} {_delivered} "
                             f"(another security) — a share-for-share "
                             f"exchange is a disposition of {_tsym} (or a "
@@ -2747,7 +2744,7 @@ class IbBrokerage(BaseBrokerage):
                 if (qty < 0 and not handled
                         and ib_spinoff_parts(description) is not None):
                     _unbooked(
-                        f"{path.name} {date}: spin-off debit of {qty:g} on "
+                        f"{shown_name(path)} {date}: spin-off debit of {qty:g} on "
                         f"a SHORT parent position ({description[:90]!r}, "
                         f"Value {val:,.2f}) — the short spun-off position "
                         f"is not booked; add it by hand in a .tt file.")
@@ -2831,7 +2828,7 @@ class IbBrokerage(BaseBrokerage):
                         self.note_row_consumed()
                         _ca_record(_eff)
                     else:
-                        _unbooked(f"{path.name} {date}: stock dividend row "
+                        _unbooked(f"{shown_name(path)} {date}: stock dividend row "
                                   f"with quantity {qty:g} "
                                   f"({description[:90]!r}) — not booked.")
                     continue
@@ -2872,7 +2869,7 @@ class IbBrokerage(BaseBrokerage):
             elif section == 'Transfers':
                 # Required columns resolved by header name; a missing
                 # one fails the parse.
-                where = f"{path.name} line {lineno} ({section})"
+                where = f"{shown_name(path)} line {lineno} ({section})"
                 self.require_columns(
                     header_map, ('Asset Category', 'Type', 'Symbol',
                                  'Currency', 'Date', 'Qty',
@@ -3033,14 +3030,14 @@ class IbBrokerage(BaseBrokerage):
                 _money = sorted(_IB_MONEY_COLUMNS & set(header_map))
                 if _money:
                     raise BrokerageParseError(
-                        f"{path.name} line {lineno}: unknown IB section "
+                        f"{shown_name(path)} line {lineno}: unknown IB section "
                         f"{section!r} carries money columns "
                         f"({', '.join(_money)}) and has no parser branch "
                         f"— refusing to drop its rows. Re-export the "
                         f"statement in English, or report the section.")
                 if section not in unknown_sections:
                     unknown_sections.add(section)
-                    print(f"warning: {path.name}: unknown IB section "
+                    print(f"warning: {shown_name(path)}: unknown IB section "
                           f"{section!r} (no parser branch, not known "
                           f"metadata) — its rows are skipped; check "
                           f"they carry no trades or income.",
@@ -3052,11 +3049,11 @@ class IbBrokerage(BaseBrokerage):
                                for k, n in sorted(unknown_row_types.items()))
             if self._rows_seen == sum(unknown_row_types.values()):
                 raise BrokerageParseError(
-                    f"{path.name}: the statement has Header rows but no "
+                    f"{shown_name(path)}: the statement has Header rows but no "
                     f"'Data' rows (row types {_kinds}) — not IB's CSV "
                     f"layout; refusing to read it as an empty statement. "
                     f"Re-download the Activity Statement CSV.")
-            print(f"warning: {path.name}: rows of a type IB does not "
+            print(f"warning: {shown_name(path)}: rows of a type IB does not "
                   f"write were skipped ({_kinds}) — check they carry no "
                   f"trades or income.", file=sys.stderr)
 
@@ -3090,13 +3087,13 @@ class IbBrokerage(BaseBrokerage):
             transactions[:] = _kept
             expiry_txs[:] = [t for t in expiry_txs if id(t) not in _gone]
             for _o, _c in _pairs:
-                print(f"note: {path.name}: IB cancelled (Ca) the "
+                print(f"note: {shown_name(path)}: IB cancelled (Ca) the "
                       f"{_o['symbol']} trade of {_o['quantity']:g} @ "
                       f"{_o['price']:g} on {_o['date']} — the trade and "
                       f"its cancellation are both dropped.",
                       file=sys.stderr)
             for _c in _unpaired:
-                print(f"note: {path.name}: IB cancelled (Ca) a "
+                print(f"note: {shown_name(path)}: IB cancelled (Ca) a "
                       f"{_c['symbol']} trade of {-_c['quantity']:g} @ "
                       f"{_c['price']:g} on {_c['date']} whose original "
                       f"row is not in this statement — kept as a "
@@ -3122,7 +3119,7 @@ class IbBrokerage(BaseBrokerage):
                 and _adj['trade_date'] in (
                     t.get('date'), (t.get('broker_time') or '')[:10])]
             if len(_hits) != 1:
-                print(f"note: {path.name}: commission adjustment of "
+                print(f"note: {shown_name(path)}: commission adjustment of "
                       f"{_adj['amount']:+.2f} {_adj['currency']} on "
                       f"{_adj['date']} ({_adj['ticker']} {_adj['qty']:g} on "
                       f"{_adj['trade_date']}) matches "
@@ -3142,7 +3139,7 @@ class IbBrokerage(BaseBrokerage):
                                if t is not _adj['fee_tx']]
             _folded += 1
         if _folded:
-            print(f"note: {path.name}: {_folded} commission "
+            print(f"note: {shown_name(path)}: {_folded} commission "
                   f"adjustment(s) folded into the trade(s) they name "
                   f"(a refund lowers a purchase's cost / raises a sale's "
                   f"proceeds).", file=sys.stderr)
@@ -3170,7 +3167,7 @@ class IbBrokerage(BaseBrokerage):
         self._reconcile_cash_report(pre, cash_booked, path)
 
         for _c in pending_cil:
-            print(f"note: {path.name}: {_c['symbol']}: cash in lieu of "
+            print(f"note: {shown_name(path)}: {_c['symbol']}: cash in lieu of "
                   f"{_c['frac']:g} share(s) on {_c['date']} matched no split "
                   f"of the symbol within {_IB_CIL_WINDOW} days — booked as a "
                   f"sale of the fraction only.", file=sys.stderr)
@@ -3295,10 +3292,10 @@ class IbBrokerage(BaseBrokerage):
 
         for _ct in cash_takeovers:
             print(f"NOTE: cash takeover booked as a sale: {_ct} "
-                  f"({path.name}).", file=sys.stderr)
+                  f"({shown_name(path)}).", file=sys.stderr)
         if corp_owned_rows:
             print(f"note: {len(corp_owned_rows)} merger/spin-off "
-                  f"Corporate Action row(s) in {path.name} are booked by "
+                  f"Corporate Action row(s) in {shown_name(path)} are booked by "
                   f"taxjson-corp-actions after the tax election (`taxjson "
                   f"run` runs it), not by this parser.", file=sys.stderr)
         for _m in stock_dividends:
@@ -3314,7 +3311,7 @@ class IbBrokerage(BaseBrokerage):
             # double-booked what corp-actions already books (R1-140).
             print(
                 f"{UNBOOKED_PREFIX} {total} unhandled Corporate Action "
-                f"row(s) in {path.name} for: {tickers}. Only splits, cash "
+                f"row(s) in {shown_name(path)} for: {tickers}. Only splits, cash "
                 f"in lieu, stock dividends, tenders and cash takeovers are "
                 f"booked here (mergers and spin-offs by "
                 f"taxjson-corp-actions). If the event changed your "
@@ -3395,7 +3392,7 @@ class IbBrokerage(BaseBrokerage):
                 for sym, pay, amt, cur in open_accruals
             )
             print(
-                f"warning: {len(open_accruals)} dividend(s) in {path.name} are "
+                f"warning: {len(open_accruals)} dividend(s) in {shown_name(path)} are "
                 f"accrued but not yet booked as posted dividends ({details}). "
                 f"IB books the cash with a lag — accruals are estimates and "
                 f"are NOT counted as income. If a more recent statement "
@@ -3418,7 +3415,7 @@ class IbBrokerage(BaseBrokerage):
         for t in transactions:
             t.pop('_isin', None)
         for _sym, _isin, _held in sorted(_isin_mismatch):
-            print(f"warning: {path.name}: income on {_sym} (ISIN {_isin}) "
+            print(f"warning: {shown_name(path)}: income on {_sym} (ISIN {_isin}) "
                   f"was NOT moved to the held listing {_held}: that "
                   f"listing is a different security (another ISIN) with "
                   f"the same ticker.", file=sys.stderr)
@@ -3433,7 +3430,7 @@ class IbBrokerage(BaseBrokerage):
                     if t.get('action') in _INCOME_ACTIONS
                     or t.get('action') == 'ADJUST'))
             if _still:
-                print(f"warning: {path.name}: income booked on "
+                print(f"warning: {shown_name(path)}: income booked on "
                       f"{', '.join(f'{s} (ISIN {c})' for s, c in _still)}"
                       f" — the ISIN country has no exchange-suffix "
                       f"mapping, so .US was assumed and no position in "
@@ -3469,5 +3466,5 @@ class IbBrokerage(BaseBrokerage):
         # subtotals, metadata sections) and one for rows the parser
         # could not classify — the other parsers already do this; IB
         # counted but never reported.
-        self.emit_skip_summary(path.name)
+        self.emit_skip_summary(shown_name(path))
         return transactions
