@@ -368,5 +368,115 @@ class TestCrossFileDedupEndToEnd(unittest.TestCase):
         self.assertNotIn("ATTENTION: dedup", out)
 
 
+# ---------------------------------------------------------------- S027-05
+
+_GEN_MAP = """[columns]
+date = "Date"
+action = "Type"
+symbol = "Ticker"
+quantity = "Shares"
+price = "Price"
+fee = "Commission"
+amount = "Net"
+[actions]
+"BUY" = "buy"
+"SELL" = "sell"
+[defaults]
+currency = "CAD"
+"""
+_GEN_HDR = "Date,Type,Ticker,Shares,Price,Commission,Net\n"
+_Q2024 = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+          "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+          "Activity Type,Account #,Account Type\n"
+          "2024-02-01,2024-02-05,Buy,RY.TO,ROYAL BANK,100,120.00,-12000.00,"
+          "-5.00,-12005.00,CAD,Trades,55500001,Margin\n")  # pii-ok
+
+
+class TestGenericBrokerName(unittest.TestCase):
+    """S027-05: every generic-imported file was 'generic'; the fees
+    report lumped two brokers and said Questrade had NO fees."""
+
+    def _project(self, qt_name='[broker]\nname = "questrade"\n',
+                 ws_name='[broker]\nname = "Wealthsimple"\n'):
+        import shutil
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, td, True)
+        m = td / "inputs" / "margin"
+        m.mkdir(parents=True)
+        (td / "taxjson.toml").write_text(_TOML)
+        (m / "questrade_2024.csv").write_text(_Q2024)
+        (m / "generic_questrade_2025.csv").write_text(
+            _GEN_HDR + "2025-03-03,SELL,RY,100,150.00,5.00,14995.00\n"
+            "2025-04-01,BUY,TD,50,80.00,5.00,-4005.00\n")
+        (m / "generic_questrade_2025.csv.toml").write_text(_GEN_MAP + qt_name)
+        (m / "generic_wealthsimple_2025.csv").write_text(
+            _GEN_HDR + "2025-05-05,BUY,BNS,10,60.00,1.00,-601.00\n")
+        (m / "generic_wealthsimple_2025.csv.toml").write_text(
+            _GEN_MAP + ws_name)
+        r = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(td),
+             "run", "--no-input"], stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, env=_env())
+        return td, r
+
+    def test_named_generic_brokers_are_parsed_and_reported_apart(self):
+        td, r = self._project()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        work = td / "work"
+        q = json.loads((work / "margin_generic-questrade.json").read_text())
+        w = json.loads((work / "margin_generic-wealthsimple.json").read_text())
+        self.assertEqual(q["metadata"]["source_brokerage"], "generic:questrade")
+        self.assertEqual(w["metadata"]["source_brokerage"],
+                         "generic:wealthsimple")
+        self.assertEqual([Path(f).name for f in q["metadata"]["input_files"]],
+                         ["generic_questrade_2025.csv"])
+        self.assertFalse((work / "margin_generic.json").exists())
+        rpt = (td / "reports" / "fees.rpt").read_text()
+        self.assertIn("generic:questrade", rpt)
+        self.assertIn("generic:wealthsimple", rpt)
+        self.assertNotIn("NO fees in this period: questrade", rpt)
+        g = json.loads((work / "margin_gains.json").read_text())
+        self.assertAlmostEqual(g["summary"]["total_gain"],
+                               14995.00 - 12005.00, places=2)
+
+    def test_unnamed_mappings_keep_the_generic_group(self):
+        td, r = self._project(qt_name="", ws_name="")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        d = json.loads((td / "work" / "margin_generic.json").read_text())
+        self.assertEqual(d["metadata"]["source_brokerage"], "generic")
+
+    def test_bad_broker_name_is_refused(self):
+        from taxjson.lib.brokerages.generic import mapping_broker_name
+        with tempfile.TemporaryDirectory() as t:
+            c = Path(t) / "generic_x.csv"
+            c.write_text(_GEN_HDR)
+            Path(str(c) + ".toml").write_text(
+                _GEN_MAP + '[broker]\nname = "a/b"\n')
+            with self.assertRaises(ValueError) as cm:
+                mapping_broker_name(c)
+            self.assertIn("[broker].name", str(cm.exception))
+            Path(str(c) + ".toml").write_text(
+                _GEN_MAP + '[broker]\nnmae = "x"\n')
+            with self.assertRaises(ValueError):
+                mapping_broker_name(c)
+
+    def test_one_parse_refuses_two_named_brokers(self):
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            for nm in ("aaa", "bbb"):
+                c = t / f"generic_{nm}.csv"
+                c.write_text(_GEN_HDR
+                             + "2025-04-01,BUY,TD,50,80.00,5.00,-4005.00\n")
+                Path(str(c) + ".toml").write_text(
+                    _GEN_MAP + f'[broker]\nname = "{nm}"\n')
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+                 "--brokerage", "generic", str(t / "generic_aaa.csv"),
+                 str(t / "generic_bbb.csv")],
+                capture_output=True, text=True, env=_env())
+            self.assertEqual(r.returncode, 2, r.stderr)
+            self.assertIn("name different brokers", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

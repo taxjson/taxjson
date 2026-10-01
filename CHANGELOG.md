@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Generic importer: name the real broker.** A mapping can set
+  `[broker] name = "wealthsimple"`. `taxjson run` then parses each named
+  broker's generic files on their own and records them as
+  `generic:<name>`, so `fees-sum` gives each broker its own row. A
+  broker whose fees come in only through a named generic file is no
+  longer listed as having "NO fees". One `taxjson-brokerage` call
+  refuses files whose mappings name different brokers (audit S027-05).
+
 - **Cross-file dedup no longer deletes separate trades.** Every parsed
   row now records its input file. Identical rows in two `.tt` files, or
   in IB statements of two different broker accounts, are both booked;

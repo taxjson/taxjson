@@ -495,6 +495,25 @@ Examples:
         BaseBrokerage.clamp_settlement_across(
             [t for _, _, _txs in parsed_files for t in _txs], _all_expiries)
 
+    # The generic importer's mappings may name the real broker
+    # ([broker].name): the source is then recorded as generic:<name>,
+    # so the fees report attributes it (audit S027-05). One parse holds
+    # one broker — `taxjson run` splits the generic files by name.
+    source_label = brokerage_id
+    if brokerage_id == 'generic':
+        _names = {getattr(ex, 'broker_name', None)
+                  for _p, ex, _t in parsed_files}
+        if len(_names) > 1:
+            _shown = ", ".join(sorted(n or "(none)" for n in _names))
+            print(f"taxjson-brokerage: error: the generic files' mappings "
+                  f"name different brokers ([broker].name: {_shown}) — "
+                  f"parse each broker's files in a separate call "
+                  f"(`taxjson run` does this).", file=sys.stderr)
+            sys.exit(2)
+        _nm = next(iter(_names), None) if _names else None
+        if _nm:
+            source_label = f"generic:{_nm}"
+
     # Provenance for cross-file dedup (bin/taxjson_sort.plan_dedup,
     # audit R1-296): each row's input file (its masked shown name, made
     # unique within this parse) and, per file, the broker accounts the
@@ -685,7 +704,7 @@ Examples:
         "transactions": [t.to_dict() for t in normalized],
         "metadata": {
             "format_version": "1.0",
-            "source_brokerage": brokerage_id,
+            "source_brokerage": source_label,
             "input_files": [str(p) for p in input_paths],
             **({"source_accounts": source_accounts}
                if source_accounts else {}),

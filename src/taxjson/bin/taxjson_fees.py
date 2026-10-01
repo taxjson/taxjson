@@ -234,8 +234,16 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
             add_stat(B["cur"].setdefault(curr, new_stats()),
                      fee, qty, is_opt, notional, is_fut)
 
-    zero_fee = sorted(brokers_seen - {k.split("/")[0] for k in buckets}
-                      - {MANUAL_TT})
+    # A generic-imported file whose mapping names its broker is booked
+    # as generic:<name>: that broker's fees ARE in the report, so it is
+    # not 'fee-free' just because its own-parser exports had none
+    # (audit S027-05).
+    from taxjson.bin.taxjson_brokerage import _CANONICAL_ID
+    _fee_brokers = {k.split("/")[0] for k in buckets}
+    _covered = {_CANONICAL_ID.get(b.split(":", 1)[1], b.split(":", 1)[1])
+                for b in _fee_brokers if b.startswith("generic:")}
+    zero_fee = sorted(b for b in brokers_seen - _fee_brokers - {MANUAL_TT}
+                      if _CANONICAL_ID.get(b, b) not in _covered)
     # A hand-entered .tt file names no broker, so its fees cannot be
     # attributed: a broker whose period trades live only in a .tt is
     # not 'fee-free' (R1-101).

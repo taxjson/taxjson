@@ -36,6 +36,12 @@ one shared `generic.toml` in the same folder. Example:
     allow_large_fees = false    # fee > 5% of gross refused unless true
     settle_on_trade_date = false  # true for crypto: no settlement cycle
 
+    [broker]
+    name = "wealthsimple"       # optional: the real broker. taxjson run
+                                # parses each named broker on its own;
+                                # its rows are recorded as
+                                # generic:wealthsimple (fees report)
+
 The mapping is validated strictly: an unknown section or key (a typo
 such as `ammount`, `commission` or `[format]`) is refused with a
 suggestion, dividend/tax/interest/fee targets require `amount`, and
@@ -131,7 +137,12 @@ _INCOME_TARGETS = ("dividend", "tax", "interest", "fee")
 # The mapping vocabulary. Anything else is a typo that used to be
 # ignored without a word (`ammount`, `commission`, `[format]`,
 # `tax_sgn`), so it is refused with a suggestion.
-_SECTIONS = ("columns", "formats", "actions", "defaults", "options")
+_SECTIONS = ("columns", "formats", "actions", "defaults", "options",
+             "broker")
+_BROKER_KEYS = ("name",)
+# A broker name becomes part of a work/ file name and of the
+# `generic:<name>` source label.
+_BROKER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _COLUMN_KEYS = ("date", "settle", "action", "symbol", "quantity", "price",
                 "amount", "fee", "currency")
 _FORMAT_KEYS = ("date", "settle", "tax_sign", "fee_sign")
@@ -215,6 +226,17 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 _FORMAT_KEYS)
     _check_keys(path.name, "defaults", mapping.get("defaults") or {},
                 _DEFAULT_KEYS)
+    _check_keys(path.name, "broker", mapping.get("broker") or {},
+                _BROKER_KEYS)
+    if "name" in (mapping.get("broker") or {}):
+        raw_name = mapping["broker"]["name"]
+        bname = raw_name.strip().lower() if isinstance(raw_name, str) else ""
+        if not _BROKER_NAME_RE.match(bname):
+            raise ValueError(
+                f"generic importer: {path.name}: [broker].name must be a "
+                f"short name of letters, digits, '-' or '_' (e.g. "
+                f"\"wealthsimple\"), got {raw_name!r}")
+        mapping["broker"]["name"] = bname
     for k, v in cols.items():
         if not isinstance(v, str):
             raise ValueError(
@@ -289,6 +311,14 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 f"is mapped — the cost/proceeds would be the fee alone.")
     mapping["_path"] = path.name
     return mapping
+
+
+def mapping_broker_name(csv_path: Path) -> Optional[str]:
+    """The `[broker].name` of the mapping that applies to `csv_path`
+    (lower case), or None when it names no broker. Raises ValueError
+    like the importer for a missing or invalid mapping."""
+    return ((_load_mapping(csv_path).get("broker") or {}).get("name")
+            or None)
 
 
 def _check_trade_row(where: str, target: str, qty: float, price: float,
@@ -454,8 +484,13 @@ class GenericBrokerage(BaseBrokerage):
                 return sym[:-len(suf)] + suf
         return self.apply_currency_suffix(sym, currency)
 
+    # The real broker named by the last parsed file's mapping
+    # ([broker].name), None when unnamed (audit S027-05).
+    broker_name: Optional[str] = None
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         mapping = _load_mapping(path)
+        self.broker_name = (mapping.get("broker") or {}).get("name") or None
         cols: Dict[str, str] = {k: v for k, v in
                                 (mapping.get("columns") or {}).items()}
         actions: Dict[str, str] = {

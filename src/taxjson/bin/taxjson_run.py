@@ -1266,6 +1266,42 @@ def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
     return out
 
 
+def _is_generic_group(broker: str) -> bool:
+    return broker == "generic" or broker.startswith("generic-")
+
+
+def _generic_files(grouped: Dict[str, List[Path]]) -> List[Path]:
+    return [p for b, ps in grouped.items() if _is_generic_group(b)
+            for p in ps]
+
+
+def _split_generic_groups(grouped: Dict[str, List[Path]]
+                          ) -> Dict[str, List[Path]]:
+    """generic_*.csv files whose mapping names the real broker
+    (`[broker] name = "wealthsimple"`) are parsed per broker, in a
+    `generic-<name>` group (work/<acct>_generic-<name>.json, recorded as
+    source_brokerage generic:<name>), so the fees report attributes each
+    broker instead of one 'generic' bucket (audit S027-05). Unnamed
+    mappings stay in the plain `generic` group."""
+    files = grouped.get("generic")
+    if not files:
+        return grouped
+    from taxjson.lib.brokerages.generic import mapping_broker_name
+    out: Dict[str, List[Path]] = {}
+    for b, ps in grouped.items():
+        if b != "generic":
+            out[b] = ps
+            continue
+        for p in ps:
+            try:
+                nm = mapping_broker_name(p)
+            except ValueError:
+                nm = None       # the parse stage reports the mapping error
+            out.setdefault(f"generic-{nm}" if nm else "generic",
+                           []).append(p)
+    return out
+
+
 def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
     """Symbols whose NATIVE-currency pool would mix currencies —
     following SPLIT renames. A cross-currency rollover (e.g. SSL.TO
@@ -1776,7 +1812,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     is_taxable = acfg.get("type", "sheltered") == "taxable"
     include_transfers = acfg.get("transfers", False)
 
-    grouped = group_inputs(acct_dir)
+    grouped = _split_generic_groups(group_inputs(acct_dir))
     if not grouped and not input_files(acct_dir, ".tt"):
         _msg = (f"taxjson: warning: no CSVs or .tt files in "
                 f"{acct_dir}; skipping account '{name}'.")
@@ -1842,7 +1878,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # dropped out of `sources`, so the merge output looked fresh against
     # every remaining dep).
     _map_entries = []
-    for _c in grouped.get("generic", []):
+    for _c in _generic_files(grouped):
         _sc = _c.with_name(_c.name + ".toml")
         _m = _sc if _sc.exists() else _c.parent / "generic.toml"
         # Record WHICH mapping is effective per file: deleting a
@@ -1881,7 +1917,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         [p for csvs in grouped.values() for p in csvs]
         + list(input_files(acct_dir, ".tt"))
         + [_c.with_name(_c.name + ".toml")
-           for _c in grouped.get("generic", [])]
+           for _c in _generic_files(grouped)]
         + [acct_dir / "generic.toml"]
         + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS])
     if (not _fp_file.exists()
@@ -1896,7 +1932,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         out = cache / f"{name}_{broker}.json"
         deps = (list(csvs) + [src_manifest]
                 + ([security_overrides] if security_overrides else []))
-        if broker == "generic":
+        if _is_generic_group(broker):
             # A mapping edit must rebuild the parse like a CSV edit.
             for _c in csvs:
                 _sc = _c.with_name(_c.name + ".toml")
@@ -1910,7 +1946,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # contract multiplier ...) stops the run instead of
             # scrolling past as a warning into the filed numbers.
             cmd = _cmd("taxjson-brokerage") + ["--account", name,
-                                               "--brokerage", broker,
+                                               "--brokerage",
+                                               "generic"
+                                               if _is_generic_group(broker)
+                                               else broker,
                                                "--strict",
                                                "--account-type",
                                                "taxable" if is_taxable

@@ -104,7 +104,11 @@ folder. Start from the template in
 [`examples/generic_wealthsimple.toml`](./examples/generic_wealthsimple.toml):
 map your CSV's header names in `[columns]`, its date format in `[formats]`, and
 each action value to one of `buy | sell | dividend | tax | interest | fee |
-skip` in `[actions]`. Conventions match the hand-written parsers: signed
+skip` in `[actions]`. An optional `[broker] name = "wealthsimple"` names the
+real broker. `taxjson run` then parses that broker's generic files on their own
+(`work/<acct>_generic-wealthsimple.json`) and records them as
+`generic:wealthsimple`, so the fees report gives each broker its own row.
+Without a name, every generic file goes into one `generic` row. Conventions match the hand-written parsers: signed
 amounts are preserved, unmapped action values are counted and summarized (never
 silently dropped — an unmapped row that carries a quantity or an amount is an
 `UNBOOKED` warning on the console, refused by `run --strict` and failed by
