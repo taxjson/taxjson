@@ -186,12 +186,10 @@ def main(*, prog: str, description: str, direction: str, calls_only: bool,
         # precision; the money columns are 2dp with thousands separators.
         for tx in groups[und]['lines']:
             a, b = _legs(tx, direction)
-            qty = abs(float(tx.get('qty', 0) or 0))
-            if direction == 'SHORT':
-                a_u, b_u = (a / qty, b / qty) if qty else (0.0, 0.0)
-            else:
-                a_u = _per_unit(tx, 'cost_per_share', 'cost')
-                b_u = _per_unit(tx, 'proceeds_per_share', 'proceeds')
+            a_u = _per_unit(tx, 'cost_per_share', 'cost')
+            b_u = _per_unit(tx, 'proceeds_per_share', 'proceeds')
+            if direction == 'SHORT' and tx.get('direction') is not None:
+                a_u, b_u = -a_u, -b_u       # same orientation as a, b
             print(f"{tx.get('date'):<12} "
                   f"{tx.get('symbol'):<26} "
                   f"{float(tx.get('qty', 0)):10.4f} "
