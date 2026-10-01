@@ -37,6 +37,13 @@ def encode_occ_strike(strike) -> str:
 OPTION_STRIKE_RE = r'([1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?|[\d\.]+)'
 
 
+# A number inside broker DESCRIPTION text ("ON 1,000 SHS", "BOOK COST
+# $5,293.06", "REINV@C$1,234.56"): digits with any commas, so a decimal
+# comma is captured whole and judged by `desc_number` instead of being
+# stripped (1,16 read as 116) or cut at the comma (1,234.56 read as 1).
+DESC_NUMBER_RE = r'(\d+(?:,\d+)*(?:\.\d+)?|\.\d+)'
+
+
 def option_strike_text(raw: str) -> str:
     """A matched strike with its thousands separators removed."""
     return (raw or '').replace(',', '')
@@ -91,7 +98,7 @@ def income_facts_from_description(desc: Optional[str],
 # at record date × per-share rate ≈ amount). Falls back to None when
 # the pattern doesn't match so the caller can default to zeros.
 _DIV_QTY_ON_SHS_RE = re.compile(
-    r'\bON\s+([\d,]+(?:\.\d+)?)\s+SH(?:S|RS|ARES)?\b',
+    r'\bON\s+' + DESC_NUMBER_RE + r'\s+SH(?:S|RS|ARES)?\b',
     re.IGNORECASE,
 )
 _DIV_PER_SHARE_RE = re.compile(
@@ -127,10 +134,9 @@ def _parse_div_qty_rate(description: str, amount: float):
     rate = 0.0
     m_qty = _DIV_QTY_ON_SHS_RE.search(description or '')
     if m_qty:
-        try:
-            qty = float(m_qty.group(1).replace(',', ''))
-        except ValueError:
-            qty = 0.0
+        # A decimal comma ('ON 1,5 SHS') is not a share count: left
+        # unset (informational), never read as 15 (audit S062-13).
+        qty = desc_number(m_qty.group(1), strict=False) or 0.0
     m_rate = _DIV_PER_SHARE_RE.search(description or '')
     if m_rate:
         try:
@@ -248,6 +254,22 @@ def check_comma_grouping(num_text: str, raw=None, *, where: str = '',
         f"separator — a decimal comma (French/European locale)? It is "
         f"refused rather than read 10x-100x too large. Re-export with a "
         f"decimal POINT (e.g. 1234.56 or 1,234.56).")
+
+
+def desc_number(text: str, *, where: str = '', field: str = 'value',
+                strict: bool = True) -> Optional[float]:
+    """A number captured from description text (audit S062-13 / S064-19 /
+    S016-01): thousands commas only. A decimal comma raises
+    BrokerageParseError when `strict` (money and share counts), else
+    returns None (an informational field the caller leaves unset)."""
+    s = (text or '').strip()
+    try:
+        check_comma_grouping(s, where=where, field=field)
+        return float(s.replace(',', ''))
+    except BrokerageParseError:
+        if strict:
+            raise
+        return None
 
 
 # Unicode minus signs and dashes spreadsheets substitute for '-'.
@@ -795,6 +817,23 @@ class BaseBrokerage:
             d, s = tx.get('date') or '', tx.get('date_settle') or ''
             if d and s and d <= exp < s:
                 tx['date_settle'] = exp
+
+    @staticmethod
+    def check_settle_order(date_iso: str, settle_iso: str, *,
+                           where: str = '', what: str = '') -> None:
+        """A broker-printed settlement date EARLIER than the trade date is
+        a garbled cell, not a settlement: the tax year follows the settle
+        date, so it moved the disposition into the prior year with no
+        warning (audit R1-75 / S065-05). Refused (CA-DATE-03 /
+        US-DATE-04)."""
+        if date_iso and settle_iso and settle_iso < date_iso:
+            loc = f"{where}: " if where else ''
+            raise BrokerageParseError(
+                f"{loc}Settlement Date {settle_iso} is before the trade "
+                f"date {date_iso}{f' ({what})' if what else ''} — a "
+                f"settlement never precedes its trade, and the tax year "
+                f"follows the settle date; refusing to guess. Fix the "
+                f"cell (or blank it for the standard cycle).")
 
     def settlement_date_t1(self, date_str: str, *formats: str,
                            currency: str = 'USD') -> str:
