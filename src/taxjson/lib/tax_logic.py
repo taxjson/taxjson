@@ -929,7 +929,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
-                 "engine)."),
+                 "engine), sized at 100 shares per contract, each contract "
+                 "flagged against one loss's shares only; a buy that "
+                 "closes a written call is not an acquisition."),
             Rule("US-WASH-14",
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),

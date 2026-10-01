@@ -294,5 +294,139 @@ class TestGrantWriteLoss(unittest.TestCase):
         self.assertFalse(r["summary"].get("total_disallowed"))
 
 
+def _one(book, country, year=2025, **req):
+    """One country's run_gains on `book` (stderr captured)."""
+    import copy
+    from taxjson.lib.pipeline import GainsRequest, run_gains
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = run_gains(copy.deepcopy(list(book)), [], [],
+                        req=GainsRequest(country=country, taxable=True,
+                                         year=year, **req))
+    res["_stderr"] = err.getvalue()
+    return res
+
+
+def _us(book, year=2025):
+    return {"usa": _one(book, "usa", year)}
+
+
+def _btx(*a, **k):
+    from tax_rules.dual import tx
+    return tx(*a, **k)
+
+
+class TestUsOptionReplacementWarning(unittest.TestCase):
+    """R1-181, S069-17, S070-00, S070-01, S070-03, S070-04, S070-22: the
+    US call-as-replacement warning (warn-only)."""
+
+    CALL = "XYZ250620C00010000.US"
+
+    def _warns(self, book, year=2025):
+        r = _us(book, year)["usa"]
+        return r.get("option_replacement_warnings") or [], r
+
+    @rule("US-WASH-12")
+    def test_one_contract_sized_and_used_once_across_fills(self):
+        for fills in (1, 10):
+            book = [_btx("BUYSELL", "2025-01-10", "XYZ.US", 1000, -20000)]
+            for i in range(fills):
+                book.append(_btx("BUYSELL", "2025-04-15", "XYZ.US",
+                                 -1000 / fills, 10000 / fills,
+                                 time=f"10:00:{i:02d}"))
+            book.append(_btx("BUYSELL", "2025-04-22", self.CALL, 1, -100))
+            w, r = self._warns(book)
+            self.assertEqual(len(w), 1, fills)
+            self.assertEqual(w[0]["covered_shares"], 100.0)
+            self.assertAlmostEqual(w[0]["at_risk_amount"], -1000.0, 2)
+            self.assertIn("up to 100 of the", r["_stderr"])
+
+    @rule("US-WASH-12")
+    def test_one_contract_two_losses(self):
+        book = [_btx("BUYSELL", "2025-01-10", "LLL.US", 200, -6200),
+                _btx("BUYSELL", "2025-05-01", "LLL.US", -100, 2550),
+                _btx("BUYSELL", "2025-05-02", "LLL250919C00030000.US", 1,
+                     -100),
+                _btx("BUYSELL", "2025-05-08", "LLL.US", -100, 2550)]
+        w, _ = self._warns(book)
+        self.assertEqual([x["loss_date"] for x in w], ["2025-05-01"])
+        self.assertAlmostEqual(w[0]["at_risk_amount"], -550.0, 2)
+
+    @rule("US-WASH-12")
+    def test_buy_to_close_is_not_an_acquisition(self):
+        C = "XYZ250620C00030000.US"
+        head = [_btx("BUYSELL", "2025-05-01", C, -1, 100),
+                _btx("BUYSELL", "2025-01-10", "XYZ.US", 100, -2000),
+                _btx("BUYSELL", "2025-06-02", "XYZ.US", -100, 1000)]
+        w, _ = self._warns(head + [_btx("BUYSELL", "2025-06-12", C, 1, -50)])
+        self.assertEqual(w, [])
+        # Buying 2 against a -1 short: 1 closes, 1 opens.
+        w, _ = self._warns(head + [_btx("BUYSELL", "2025-06-12", C, 2, -100)])
+        self.assertEqual(len(w), 1)
+        self.assertEqual(w[0]["option_qty"], 1.0)
+
+    @rule("US-WASH-01", "US-WASH-12")
+    def test_window_edges(self):
+        def book(day):
+            return [_btx("BUYSELL", "2025-01-10", "XYZ.US", 100, -2000),
+                    _btx("BUYSELL", "2025-04-15", "XYZ.US", -100, 1000),
+                    _btx("BUYSELL", day, self.CALL, 1, -100)]
+        for day, n in (("2025-03-16", 1), ("2025-03-15", 0),
+                       ("2025-05-15", 1), ("2025-05-16", 0)):
+            w, _ = self._warns(book(day))
+            self.assertEqual(len(w), n, day)
+
+    @rule("US-WASH-12")
+    def test_prior_year_warning_not_printed_in_year_run(self):
+        book = [_btx("BUYSELL", "2024-01-10", "XYZ.US", 100, -2000),
+                _btx("BUYSELL", "2024-06-03", "XYZ.US", -100, 1000),
+                _btx("BUYSELL", "2024-06-10", "XYZ241220C00010000.US", 1,
+                     -100),
+                _btx("BUYSELL", "2025-02-03", "ABC.US", 10, -100)]
+        w, r = self._warns(book, year=2025)
+        self.assertEqual(w, [])
+        self.assertNotIn("option-replacement", r["_stderr"])
+        w, r = self._warns(book, year=2024)
+        self.assertEqual(len(w), 1)
+        self.assertIn("option-replacement", r["_stderr"])
+
+    def test_us_count_is_year_scoped(self):
+        book = [_btx("BUYSELL", "2024-01-10", "AAA.US", 30, -300),
+                _btx("BUYSELL", "2024-03-10", "AAA.US", -10, 110),
+                _btx("BUYSELL", "2024-04-10", "AAA.US", -10, 110),
+                _btx("BUYSELL", "2025-03-10", "AAA.US", -10, 120)]
+        r = _us(book)["usa"]
+        self.assertEqual(r["summary"]["count"], len(r["transactions"]))
+        self.assertEqual(r["summary"]["count"], 1)
+
+
+class TestCanadaCallRuleWindowEdges(unittest.TestCase):
+    """S070-03 (Canada now enforces the call rule): a call bought on day
+    -30 or +30 counts, day 31 does not; a call sold ON day +30 is not
+    held at the end of day 30."""
+
+    CALL = "XYZ250620C00010000.US"
+
+    def _gain(self, extra):
+        book = [_btx("BUYSELL", "2025-01-10", "XYZ.US", 100, -2000),
+                _btx("BUYSELL", "2025-04-15", "XYZ.US", -100, 1000)] + extra
+        return _one(book, "canada")["summary"]
+
+    @rule("CA-SL-01", "CA-SL-02", "CA-SL-05")
+    def test_edges(self):
+        buy = lambda d: _btx("BUYSELL", d, self.CALL, 1, -100)  # noqa: E731
+        self.assertAlmostEqual(self._gain([buy("2025-05-15")])
+                               ["total_disallowed"], 1000.0, 2)
+        self.assertFalse(self._gain([buy("2025-05-16")])
+                         .get("total_disallowed"))
+        self.assertAlmostEqual(self._gain([buy("2025-03-16")])
+                               ["total_disallowed"], 1000.0, 2)
+        self.assertFalse(self._gain([buy("2025-03-15")])
+                         .get("total_disallowed"))
+        sold = self._gain([buy("2025-04-20"),
+                           _btx("BUYSELL", "2025-05-15", self.CALL, -1, 50)])
+        self.assertFalse(sold.get("total_disallowed"))
+
+
 if __name__ == "__main__":
     unittest.main()

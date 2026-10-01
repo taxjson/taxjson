@@ -1015,6 +1015,10 @@ def run_gains(transactions, sheltered_transactions=(),
         _extra['option_grant_since'] = req.option_grant_since
         _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
         _extra['option_grant_basis'] = tax_date
+    # The engine's option/right-replacement warnings are printed below,
+    # after the year filter: printed by the engine they put a prior
+    # year's warning in this year's .sum DIAGNOSTICS (audit S070-04).
+    rules.emit_replacement_stderr = False
     results = rules.compute_gains(
         transactions,
         sheltered_transactions=sheltered_transactions,
@@ -1201,6 +1205,13 @@ def run_gains(transactions, sheltered_transactions=(),
         bucket['total'] += fee
     results['summary']['total_fees_by_currency'] = fees_by_currency
 
+    # The engine's option/right-replacement warnings, printed here after
+    # the year filter above (audit S070-04).
+    if results.get('option_replacement_warnings'):
+        from taxjson.lib.core import _emit_option_replacement_stderr
+        _emit_option_replacement_stderr(
+            results['option_replacement_warnings'], country=req.country)
+
     # Split tainted dispositions (those drawing from a phantom pool OR a
     # TRANSFER opening) into a separate "manual_reporting_required"
     # section. Their gain values are bogus by construction (cost basis =
@@ -1233,6 +1244,10 @@ def run_gains(transactions, sheltered_transactions=(),
     # Recompute total_gain from clean transactions only.
     if 'summary' in results and (tainted_txs or req.incomplete_history):
         results['summary']['total_gain'] = sum(t.get('gain', 0.0) for t in clean_txs)
+    # The US engine's count is taken before the year filter and the
+    # tainted split (audit S070-22): it counts the records in this file.
+    if 'count' in results.get('summary', {}):
+        results['summary']['count'] = len(clean_txs)
 
     # Traces after the split (audit R1-165): the trace file's header and
     # per-symbol totals then match the gains JSON, and phantom-basis

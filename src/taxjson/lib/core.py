@@ -3,7 +3,7 @@ import re
 import hashlib
 import sys
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -275,22 +275,45 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
     scopes)."""
     canon = canonical or (lambda s: s)
 
-    acqs = []                       # (canonical underlying, right, tx)
-    for ev in events:
+    def _when(ev):
+        return (str(date_of(ev) or ''), str(getattr(ev, 'time', '') or ''))
+
+    # Only the OPENING part of a long-call buy acquires a right (audit
+    # R1-181): a buy that closes a written call acquires nothing. The
+    # position before each buy is walked per (account, contract) in
+    # event order (stable: same-stamp rows keep the export's order).
+    bal: Dict[Tuple[str, str], float] = {}
+    acqs = []                # [canonical underlying, right, tx, opening]
+    for ev in sorted(events, key=_when):
+        if parse_option_right(ev.symbol) is None or ev.action not in (
+                'BUYSELL', 'ASSIGN', 'OPENING_BALANCE', 'TRANSFER'):
+            continue
+        k = (getattr(ev, 'account', ''), ev.symbol)
+        before = bal.get(k, 0.0)
+        bal[k] = before + ev.quantity
         if ev.action != 'BUYSELL' or ev.quantity <= 0:
             continue
-        right = parse_option_right(ev.symbol)
-        if right is None:
+        opening = ev.quantity - min(ev.quantity, max(0.0, -before))
+        if opening <= 1e-9:
             continue
-        acqs.append((canon(parse_option_underlying(ev.symbol)), right, ev))
+        acqs.append([canon(parse_option_underlying(ev.symbol)),
+                     parse_option_right(ev.symbol), ev, opening])
     if not acqs:
         return []
 
     def _d(s):
         return datetime.strptime(s, '%Y-%m-%d')
 
+    # Each contract is a right to OPTION_CONTRACT_SHARES shares and backs
+    # one denial: it is used up across the losses in date order (audit
+    # S069-17 / S070-00 / S070-01 — one contract used to be cited as
+    # denying every loss in its window in full).
+    left = {id(a[2]): a[3] * OPTION_CONTRACT_SHARES for a in acqs}
     out = []
-    for loss in loss_entries:
+    order = sorted(range(len(loss_entries)),
+                   key=lambda n: str(loss_entries[n].get('date') or ''))
+    for n in order:
+        loss = loss_entries[n]
         symbol = loss['symbol']
         if is_option_symbol(symbol):
             continue
@@ -303,9 +326,11 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
             continue
         loss_c = canon(symbol)
         window_end = loss_dt + timedelta(days=window_days)
+        loss_qty = abs(float(loss.get('qty') or 0.0))
+        need = loss_qty if loss_qty > 1e-9 else float('inf')
         by_contract: Dict[str, Dict[str, Any]] = {}
-        for und_c, right, ev in acqs:
-            if right != want or und_c != loss_c:
+        for und_c, right, ev, _opening in acqs:
+            if right != want or und_c != loss_c or need <= 1e-9:
                 continue
             try:
                 ev_dt = _d(date_of(ev))
@@ -313,34 +338,44 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
                 continue
             if abs((ev_dt - loss_dt).days) > window_days:
                 continue
-            rec = by_contract.setdefault(ev.symbol,
-                                         {'qty': 0.0, 'first': None})
-            rec['qty'] += ev.quantity
+            take = min(need, left[id(ev)])
+            if take <= 1e-9:
+                continue
+            left[id(ev)] -= take
+            need -= take
+            rec = by_contract.setdefault(ev.symbol, {'shares': 0.0,
+                                                     'first': None})
+            rec['shares'] += take
             if rec['first'] is None or date_of(ev) < rec['first']:
                 rec['first'] = date_of(ev)
         for occ, rec in sorted(by_contract.items()):
             held = None
             if check_held_at_end:
-                bal = 0.0
+                hb = 0.0
                 for ev in events:
                     if ev.symbol != occ or \
                             ev.action not in ('BUYSELL', 'ASSIGN'):
                         continue
                     try:
                         if _d(date_of(ev)) <= window_end:
-                            bal += ev.quantity
+                            hb += ev.quantity
                     except (TypeError, ValueError):
                         continue
-                held = bal > 1e-6
+                held = hb > 1e-6
+            frac = (min(1.0, rec['shares'] / loss_qty)
+                    if loss_qty > 1e-9 else 1.0)
             out.append({
                 'rule': 'call_vs_share_loss',
                 'loss_symbol': symbol,
                 'loss_date': loss['date'],
                 'loss_amount': round(float(loss['amount']), 2),
                 'loss_id': loss.get('id', ''),
+                'loss_qty': loss_qty or None,
                 'option_symbol': occ,
                 'option_acquired': rec['first'],
-                'option_qty': rec['qty'],
+                'option_qty': rec['shares'] / OPTION_CONTRACT_SHARES,
+                'covered_shares': rec['shares'],
+                'at_risk_amount': round(float(loss['amount']) * frac, 2),
                 'held_at_window_end': held,
                 'statute': statute_label,
             })
@@ -444,10 +479,19 @@ def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
                     if w['held_at_window_end'] else
                     ' — NOT held at window end (s.54 would likely not '
                     'apply)')
-        verdict = ("this loss would be denied"
-                   if w['rule'] != 'right_vs_share_loss' else
-                   f"a warrant/right is a right to acquire the shares, so "
-                   f"{_LOSS_TERM[country]} — review it by hand")
+        if w['rule'] == 'right_vs_share_loss':
+            verdict = (f"a warrant/right is a right to acquire the "
+                       f"shares, so {_LOSS_TERM[country]} — review it "
+                       f"by hand")
+        elif w.get('loss_qty'):
+            verdict = (f"up to {w['covered_shares']:g} of the "
+                       f"{w['loss_qty']:g} shares' loss "
+                       f"({w['at_risk_amount']:+,.2f}) would be denied "
+                       f"({w['option_qty']:g} contract(s) x "
+                       f"{OPTION_CONTRACT_SHARES:g} shares, each used "
+                       f"once)")
+        else:
+            verdict = "this loss would be denied"
         print(
             f"warning: option-replacement (warn-only, numbers unchanged): "
             f"{w['loss_symbol']} loss {w['loss_amount']:+,.2f} on "
@@ -3692,8 +3736,11 @@ class CanadaTaxRules(TaxRules):
                 all_txs, date_of=get_sort_date,
                 canonical=alias_of,
                 statute_label="ITA s.54 ('a right to acquire')")
-        _emit_option_replacement_stderr(option_replacement_warnings,
-                                        country='canada')
+        if getattr(self, 'emit_replacement_stderr', True):
+            # run_gains turns this off and prints the warnings after its
+            # year filter (audit S070-04).
+            _emit_option_replacement_stderr(option_replacement_warnings,
+                                            country='canada')
 
         # Conservation post-conditions (see the helpers' docstrings).
         _pool_qty: Dict[str, float] = {}
@@ -5395,6 +5442,7 @@ class USATaxRules(TaxRules):
         _orw_losses = [
             {'symbol': g['symbol'],
              'date': g['date'],
+             'qty': abs(float(g.get('qty') or 0.0)),
              'amount': g.get('raw_gain', g['gain']),
              'id': g.get('id', ''),
              'direction': g.get('direction', 'LONG')}
@@ -5412,8 +5460,11 @@ class USATaxRules(TaxRules):
             date_of=lambda t: t.date,
             canonical=split_timeline.canonical,
             statute_label="IRS §1091 ('contract or option to acquire')")
-        _emit_option_replacement_stderr(option_replacement_warnings,
-                                        country='usa')
+        if getattr(self, 'emit_replacement_stderr', True):
+            # run_gains turns this off and prints the warnings after its
+            # year filter (audit S070-04).
+            _emit_option_replacement_stderr(option_replacement_warnings,
+                                            country='usa')
 
         # Conservation post-condition (see _verify_share_conservation).
         _inv_qty: Dict[str, float] = {}

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **US: the call-as-replacement warning is sized.** Only the opening
+  part of a call purchase counts (a buy that closes a written call is
+  not an acquisition), each contract stands for 100 shares and is used
+  against one loss's shares only, and the warning says how much of the
+  loss is at risk. In a year-scoped run a prior year's warning no
+  longer reaches this year's diagnostics, and `summary.count` counts the
+  records in the file. tax-logic US-WASH-12.
 - **Canada, grant timing: a write whose commission exceeds its premium**
   follows the same rule as a buy-back loss: exempt from the
   superficial-loss rule unless `option_buyback_loss_superficial = true`,
