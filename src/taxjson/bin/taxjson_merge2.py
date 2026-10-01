@@ -37,7 +37,8 @@ from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import (
     TaxTransaction, coerce_transaction_row, strip_json_comments,
 )
-from taxjson.bin.taxjson_sort import sort_transactions, deduplicate
+from taxjson.bin.taxjson_sort import (deduplicate, sort_transactions,
+                                      source_accounts_of)
 from taxjson.bin.taxjson_ticker_map import (
     load_map_file, apply_mapping, apply_drops, merge_renames,
     guard_option_listing_collisions,
@@ -356,7 +357,10 @@ def main():
     if args.sort or args.dedup:
         txs = sort_transactions(txs)
     if args.dedup:
-        txs, dropped = deduplicate(txs, return_dropped=True)
+        txs, dropped = deduplicate(
+            txs, return_dropped=True, report=sys.stderr,
+            source_accounts=source_accounts_of(
+                s.get('original_metadata') for s in sources))
         if dropped:
             print(
                 f"note: --dedup removed {len(dropped)} duplicate row(s):",
@@ -379,7 +383,9 @@ def main():
                 print(
                     f"  {date} {time:<8} {action:<10} {symbol:<16} "
                     f"qty={qty:>10} price={price:>10} net={net:>12} "
-                    f"account={account} id={tx_id}",
+                    f"account={account} id={tx_id}"
+                    + (f" source={tx.source}" if getattr(tx, 'source', '')
+                       else ""),
                     file=sys.stderr,
                 )
 

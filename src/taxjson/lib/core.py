@@ -117,6 +117,13 @@ class TaxTransaction:
     # on option and futures rows only; 0 = not declared (audit S026-22).
     # NOT part of compute_id, omitted from to_dict() when 0.
     multiplier: float = 0.0
+    # The input file the row was read from ("questrade_2025.csv",
+    # "history.tt"), stamped by taxjson-brokerage / convert-tt. Cross-
+    # file dedup tells an overlapping re-export (one row, two files)
+    # from separate records that happen to look alike (bin/taxjson_sort
+    # .plan_dedup, audit R1-296). NOT part of compute_id, omitted when
+    # empty.
+    source: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -170,7 +177,7 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
                       'dealer_country', 'issuer_country')
 # The other optional evidence fields, omitted from to_dict() when empty.
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
-                   'broker_basis', 'multiplier')
+                   'broker_basis', 'multiplier', 'source')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or

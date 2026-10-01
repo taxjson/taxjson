@@ -63,6 +63,12 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
+### Identical rows in two exports with little overlap are booked once
+- **Where:** `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, used by `taxjson-merge2 --dedup`, `taxjson-sort --dedup` and `fees-sum`.
+- **Current behavior:** the same row in two exports of one account is booked once. Sometimes the files' overlap cannot show that they are copies of one export: they share only that row, or each holds rows the other lacks on the dates both cover, or a `.tt` line equals an exported row. The row is still booked once, as a re-export, and `taxjson run` prints `warning: ATTENTION: dedup: ...` naming both files and the row. Exports are cut by date, so two exports can only both hold one fill when they both cover its whole day, and then both files hold all of that day's fills. Two separate identical trades can only end up split across files when an export is cut up by hand. Identical lines in two `.tt` files, and identical rows in IB statements of two different broker accounts, are both booked.
+- **Why this is the choice:** an export carries no row id. Booking such a row twice would double-count the common case, a boundary day that both exports include.
+- **Workaround:** if the ATTENTION line names two separate trades, enter the second one as a `.tt` line.
+
 ### Kraken fees taken in the traded coin are not in the fee reports
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose ledger shows the fee taken in the base coin) and the ledger instant-trade path (a crypto leg's fee).
 - **Current behavior:** the fee coins are folded into the quantity (fewer coins received on a buy, more given on a sale) and the fill's `fee` field is 0, so cost basis and proceeds are right, but `fees.rpt`, `taxjson fees-sum` and the `.sum` FEES line leave these fees out (on real 2025 data more than half of the Kraken trading fees). The parse note says so.
@@ -246,12 +252,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `lib/core.py` closing branch.
 - **Current behavior:** the days-held figure counts from trade dates while every other Canadian date is settlement-basis. Canada has no holding-period rule, but the figure also gives the year of acquisition `form-export` prints on Schedule 3 (disposition date minus days held), so a lot bought on a late-December trade date that settled in January shows the earlier year.
 
-### Non-eligible dividends and capital-gains dividends are estimated as eligible
+### Non-eligible dividends are estimated as eligible
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
-- **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Non-eligible dividends (small-business corporations, some REIT/LP distributions: 15% gross-up, smaller credit) are taxed HIGHER than that, so the estimate understates them. Split-share and mutual-fund corporations report on a T5 whose dividends are usually eligible; their gap is T5 box 18 capital-gains dividends, which belong on line 17400 at the 50% inclusion rate but are booked as eligible dividends, so the estimate overstates them (audit S023-08). T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
+- **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Non-eligible dividends (small-business corporations, some REIT/LP distributions: 15% gross-up, smaller credit) are taxed HIGHER than that, so the estimate understates them. T5 box 18 capital-gains dividends (split-share and mutual-fund corporations) are no longer part of this: name them in `capital_gains_dividends.map` (README) and the estimate taxes them as capital gains (audit R1-62, S023-08). T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
 - **Why deferred:** brokers' activity exports do not carry the T5 box; the split is only known from the slip.
 - **Workaround:** the estimate is disclosed as an estimate; use the T5/T3 slips for the return. (`taxjson reconcile-slips` reads only T5008 / 1099-B disposition slips; it does not check dividend slips.)
-- **Capital-gains dividends (T5 box 18).** A split-share or mutual-fund corporation's capital-gains dividend is a 50%-inclusion capital gain, not a dividend; IB ("(Ordinary Dividend)"), RBC and Questrade label it as an ordinary dividend, so it is estimated with the eligible gross-up and credit (the estimate is overstated by a few percent of those amounts). Only the slip (or IBKR's own dividends report, "T5: Capital Gains") says which payments are box 18; the filed return takes line 17400 from the slip. No ACB is affected.
 
 ### reconcile-slips cannot read per-type-code T5008s or scope a slip to one broker
 - **Where:** `src/taxjson/bin/taxjson_reconcile_slips.py`.

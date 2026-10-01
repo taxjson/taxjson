@@ -20,9 +20,12 @@ transactions themselves carry no broker tag. So this tool consumes the
 PARSED per-broker JSONs in the cache — `<account>_<broker>.json` — NOT the
 merged/base/gains files (which have already blended brokers together).
 
-Because the parsed files predate the merge's dedup, rows are de-duplicated by
-transaction `id` (the same key taxjson-sort --dedup uses) so a re-downloaded,
-overlapping statement isn't double-counted.
+Because the parsed files predate the merge's dedup, rows are de-duplicated
+with the books' own rule (taxjson_sort.plan_dedup: one id in two overlapping
+exports is one row; identical rows in separate .tt files or in statements of
+different broker accounts are separate trades), so a re-downloaded,
+overlapping statement isn't double-counted and the report agrees with the
+books.
 
 Usage:
     taxjson-fees-sum --cache work --year 2026
@@ -139,7 +142,6 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
     Each bucket = {'base': stats, 'cur': {CUR: stats}}."""
     buckets: Dict[str, Dict[str, Any]] = {}
     grand = {"base": new_stats(), "cur": {}}
-    seen_ids: set = set()
     brokers_seen: set = set()
     skipped_no_broker: List[str] = []
     n_dups = 0
@@ -155,6 +157,13 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         return convert_currency(amount, curr, to_curr,
                                 {(curr, to_curr): rate}, default_rate)
 
+    # Every parsed row first, then ONE dedup over all of them with the
+    # books' own rule (taxjson_sort.plan_dedup): an id-only pass here
+    # dropped a real commission when two separate exports held identical
+    # rows (audit S031-02), and the report has to agree with the books.
+    all_rows: List[Dict[str, Any]] = []
+    row_broker: List[str] = []
+    metas: List[Dict[str, Any]] = []
     for fp in files:
         # A named (or --cache) book that cannot be read stops the
         # report: skipping it dropped a whole broker's fees from the
@@ -166,60 +175,75 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
             continue
         files_read += 1
         brokers_seen.add(broker)
-
+        metas.append(data.get("metadata") or {})
         for tx in data.get("transactions", []):
-            if tx.get("action") not in TRADE_ACTIONS:
-                continue
-            # ticker.map DELETE rows never reach the books (merge2 drops
-            # them, by the broker's raw symbol): their fees are not fees
-            # the books paid either (S038-11).
-            if str(tx.get("symbol") or "").upper() in deleted:
-                continue
-            fee = float(tx.get("commission") or 0) + float(tx.get("fee") or 0)
-            if fee == 0:
-                continue
-            # TRADE-date basis, matching the per-trade `taxjson fees`
-            # view — the two windows disagreed at year boundaries
-            # (Dec-30 trade settling Jan-2 landed in different years
-            # per tool; 2026-09 audit). Fees are incurred at trade.
-            date = tx.get("date") or tx.get("date_settle") or ""
-            if year and not date.startswith(year):
-                continue
-            if since and (not date or date < since):
-                continue
-            txid = tx.get("id")
-            if txid is not None:
-                if txid in seen_ids:
-                    n_dups += 1
-                    continue
-                seen_ids.add(txid)
-            else:
-                n_no_id += 1
-            n_rows += 1
+            if isinstance(tx, dict):
+                all_rows.append(tx)
+                row_broker.append(broker)
 
-            curr = tx.get("currency") or "?"
-            # A row without an account stamp (hand-run on unstamped
-            # JSON) is '<broker>/?', like a missing currency — not the
-            # literal 'None' (S031-03).
-            key = (f"{broker}/{tx.get('account') or '?'}" if by_account
-                   else broker)
-            is_opt = _is_option(tx.get("symbol") or "")
-            from taxjson.lib.futures import is_plain_future
-            is_fut = is_plain_future(tx.get("symbol") or "")
-            qty = abs(float(tx.get("quantity") or 0))
-            notional = abs(float(tx.get("gross_amount") or tx.get("net_amount") or 0))
-            fee_base = to_base(fee, curr, date)
-            notional_base = to_base(notional, curr, date)
+    from taxjson.bin.taxjson_sort import plan_dedup, source_accounts_of
+    plan = plan_dedup(all_rows, source_accounts_of(metas))
+    dropped = set(plan.drop)
 
-            bucket = buckets.setdefault(key, {"base": new_stats(), "cur": {}})
-            for B in (bucket, grand):
-                add_stat(B["base"], fee_base, qty, is_opt, notional_base,
-                         is_fut)
-                add_stat(B["cur"].setdefault(curr, new_stats()),
-                         fee, qty, is_opt, notional, is_fut)
+    for i, tx in enumerate(all_rows):
+        broker = row_broker[i]
+        if tx.get("action") not in TRADE_ACTIONS:
+            continue
+        # ticker.map DELETE rows never reach the books (merge2 drops
+        # them, by the broker's raw symbol): their fees are not fees
+        # the books paid either (S038-11).
+        if str(tx.get("symbol") or "").upper() in deleted:
+            continue
+        fee = float(tx.get("commission") or 0) + float(tx.get("fee") or 0)
+        if fee == 0:
+            continue
+        # TRADE-date basis, matching the per-trade `taxjson fees`
+        # view — the two windows disagreed at year boundaries
+        # (Dec-30 trade settling Jan-2 landed in different years
+        # per tool; 2026-09 audit). Fees are incurred at trade.
+        date = tx.get("date") or tx.get("date_settle") or ""
+        if year and not date.startswith(year):
+            continue
+        if since and (not date or date < since):
+            continue
+        if i in dropped:
+            n_dups += 1
+            continue
+        if tx.get("id") is None:
+            n_no_id += 1
+        n_rows += 1
 
-    zero_fee = sorted(brokers_seen - {k.split("/")[0] for k in buckets}
-                      - {MANUAL_TT})
+        curr = tx.get("currency") or "?"
+        # A row without an account stamp (hand-run on unstamped
+        # JSON) is '<broker>/?', like a missing currency — not the
+        # literal 'None' (S031-03).
+        key = (f"{broker}/{tx.get('account') or '?'}" if by_account
+               else broker)
+        is_opt = _is_option(tx.get("symbol") or "")
+        from taxjson.lib.futures import is_plain_future
+        is_fut = is_plain_future(tx.get("symbol") or "")
+        qty = abs(float(tx.get("quantity") or 0))
+        notional = abs(float(tx.get("gross_amount") or tx.get("net_amount") or 0))
+        fee_base = to_base(fee, curr, date)
+        notional_base = to_base(notional, curr, date)
+
+        bucket = buckets.setdefault(key, {"base": new_stats(), "cur": {}})
+        for B in (bucket, grand):
+            add_stat(B["base"], fee_base, qty, is_opt, notional_base,
+                     is_fut)
+            add_stat(B["cur"].setdefault(curr, new_stats()),
+                     fee, qty, is_opt, notional, is_fut)
+
+    # A generic-imported file whose mapping names its broker is booked
+    # as generic:<name>: that broker's fees ARE in the report, so it is
+    # not 'fee-free' just because its own-parser exports had none
+    # (audit S027-05).
+    from taxjson.bin.taxjson_brokerage import _CANONICAL_ID
+    _fee_brokers = {k.split("/")[0] for k in buckets}
+    _covered = {_CANONICAL_ID.get(b.split(":", 1)[1], b.split(":", 1)[1])
+                for b in _fee_brokers if b.startswith("generic:")}
+    zero_fee = sorted(b for b in brokers_seen - _fee_brokers - {MANUAL_TT}
+                      if _CANONICAL_ID.get(b, b) not in _covered)
     # A hand-entered .tt file names no broker, so its fees cannot be
     # attributed: a broker whose period trades live only in a .tt is
     # not 'fee-free' (R1-101).
@@ -227,7 +251,7 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
     info = {
         "files_read": files_read, "rows": n_rows, "dups": n_dups,
         "no_id": n_no_id, "skipped": skipped_no_broker, "zero_fee": zero_fee,
-        "manual_fees": manual_fees,
+        "manual_fees": manual_fees, "attention": list(plan.attention),
     }
     return buckets, grand, info
 
@@ -515,8 +539,10 @@ def main():
     # whether or not the body was read.
     emit_fallback_summary(args.default_rate)
     if info["dups"]:
-        print(f"\n({info['dups']} duplicate row(s) collapsed by transaction id.)",
-              file=sys.stderr)
+        print(f"\n({info['dups']} duplicate row(s) collapsed: the same "
+              f"row in overlapping exports.)", file=sys.stderr)
+    for line in info.get("attention") or ():
+        print(f"warning: ATTENTION: {line}", file=sys.stderr)
     return 0
 
 

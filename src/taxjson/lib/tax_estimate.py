@@ -595,7 +595,8 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
 
 CA_ASSUMPTIONS = (
     "Assumes: Canadian-listed dividends are all ELIGIBLE (non-eligible "
-    "dividends would be taxed higher); foreign withholding creditable "
+    "dividends would be taxed higher) except the T5 box 18 capital-gains "
+    "dividends named in capital_gains_dividends.map; foreign withholding creditable "
     "up to 15%; crypto staking is ordinary income; no QC abatement or "
     "low-income reductions; interest income and interest paid are "
     "not included and no taxjson view totals them — take them from the "
@@ -618,13 +619,21 @@ def estimate_canada(*, realized: float, eligible_div: float,
                     actual_withheld=None,
                     staking: float = 0.0,
                     deductions: float = 0.0,
-                    carrying_charges: float = 0.0) -> Dict[str, Any]:
+                    carrying_charges: float = 0.0,
+                    capital_gains_dividends: float = 0.0
+                    ) -> Dict[str, Any]:
     """`deductions`: amounts deducted at lines 20700-23500 that the
     AMT allows in full (RRSP 20800, FHSA 20805, RPP 20700, ...);
     `carrying_charges`: line 22100 interest and carrying charges,
     allowed at 50% in the post-2024 AMT base. Both lower net and
-    taxable income, other income first."""
+    taxable income, other income first.
+    `capital_gains_dividends`: T5 box 18 (line 17400) — a capital gain
+    of the shareholder (ITA s.130.1(4)/s.131(1); tax-logic CA-INC-06),
+    taxed with `realized` at the inclusion rate; the caller has already
+    taken it OUT of `eligible_div`."""
     import math
+    cg_div = float(capital_gains_dividends or 0.0)
+    realized = float(realized) + cg_div
     for _n, _v in (("deductions", deductions),
                    ("carrying_charges", carrying_charges)):
         if not math.isfinite(float(_v)) or float(_v) < 0:
@@ -701,6 +710,7 @@ def estimate_canada(*, realized: float, eligible_div: float,
         "notes": notes,
         "assumptions": CA_ASSUMPTIONS,
         "taxable_gain": round(taxable_gain, 2),
+        "capital_gains_dividends": round(cg_div, 2),
         "losses_applied": round(losses_applied, 2),
         "losses_unused": round(losses_unused, 2),
         "grossed_eligible": round(grossed, 2),

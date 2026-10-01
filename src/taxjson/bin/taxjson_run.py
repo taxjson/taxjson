@@ -252,6 +252,19 @@ UNBOOKED_PREFIX = "warning: UNBOOKED:"
 ATTENTION_PREFIX = "warning: ATTENTION:"
 
 
+def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
+    """Print the ATTENTION lines of a stage's persisted .diag (only
+    those whose text starts with `prefix`) on the console."""
+    diag_path = out_path.with_name(out_path.name + ".diag")
+    try:
+        lines = diag_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        if line.startswith(ATTENTION_PREFIX + " " + prefix):
+            print(f"  {line}")
+
+
 def unbooked_lines(out_path: Path) -> List[str]:
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
@@ -1277,6 +1290,42 @@ def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
     return out
 
 
+def _is_generic_group(broker: str) -> bool:
+    return broker == "generic" or broker.startswith("generic-")
+
+
+def _generic_files(grouped: Dict[str, List[Path]]) -> List[Path]:
+    return [p for b, ps in grouped.items() if _is_generic_group(b)
+            for p in ps]
+
+
+def _split_generic_groups(grouped: Dict[str, List[Path]]
+                          ) -> Dict[str, List[Path]]:
+    """generic_*.csv files whose mapping names the real broker
+    (`[broker] name = "wealthsimple"`) are parsed per broker, in a
+    `generic-<name>` group (work/<acct>_generic-<name>.json, recorded as
+    source_brokerage generic:<name>), so the fees report attributes each
+    broker instead of one 'generic' bucket (audit S027-05). Unnamed
+    mappings stay in the plain `generic` group."""
+    files = grouped.get("generic")
+    if not files:
+        return grouped
+    from taxjson.lib.brokerages.generic import mapping_broker_name
+    out: Dict[str, List[Path]] = {}
+    for b, ps in grouped.items():
+        if b != "generic":
+            out[b] = ps
+            continue
+        for p in ps:
+            try:
+                nm = mapping_broker_name(p)
+            except ValueError:
+                nm = None       # the parse stage reports the mapping error
+            out.setdefault(f"generic-{nm}" if nm else "generic",
+                           []).append(p)
+    return out
+
+
 def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
     """Symbols whose NATIVE-currency pool would mix currencies —
     following SPLIT renames. A cross-currency rollover (e.g. SSL.TO
@@ -1787,7 +1836,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     is_taxable = acfg.get("type", "sheltered") == "taxable"
     include_transfers = acfg.get("transfers", False)
 
-    grouped = group_inputs(acct_dir)
+    grouped = _split_generic_groups(group_inputs(acct_dir))
     if not grouped and not input_files(acct_dir, ".tt"):
         _msg = (f"taxjson: warning: no CSVs or .tt files in "
                 f"{acct_dir}; skipping account '{name}'.")
@@ -1853,7 +1902,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # dropped out of `sources`, so the merge output looked fresh against
     # every remaining dep).
     _map_entries = []
-    for _c in grouped.get("generic", []):
+    for _c in _generic_files(grouped):
         _sc = _c.with_name(_c.name + ".toml")
         _m = _sc if _sc.exists() else _c.parent / "generic.toml"
         # Record WHICH mapping is effective per file: deleting a
@@ -1892,7 +1941,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         [p for csvs in grouped.values() for p in csvs]
         + list(input_files(acct_dir, ".tt"))
         + [_c.with_name(_c.name + ".toml")
-           for _c in grouped.get("generic", [])]
+           for _c in _generic_files(grouped)]
         + [acct_dir / "generic.toml"]
         + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS])
     if (not _fp_file.exists()
@@ -1907,7 +1956,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         out = cache / f"{name}_{broker}.json"
         deps = (list(csvs) + [src_manifest]
                 + ([security_overrides] if security_overrides else []))
-        if broker == "generic":
+        if _is_generic_group(broker):
             # A mapping edit must rebuild the parse like a CSV edit.
             for _c in csvs:
                 _sc = _c.with_name(_c.name + ".toml")
@@ -1921,7 +1970,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # contract multiplier ...) stops the run instead of
             # scrolling past as a warning into the filed numbers.
             cmd = _cmd("taxjson-brokerage") + ["--account", name,
-                                               "--brokerage", broker,
+                                               "--brokerage",
+                                               "generic"
+                                               if _is_generic_group(broker)
+                                               else broker,
                                                "--strict",
                                                "--account-type",
                                                "taxable" if is_taxable
@@ -2365,6 +2417,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                       f"be wrong. Details: reports/{name}.sum "
                       f"DIAGNOSTICS (or {_diag.name}).",
                       file=sys.stderr)
+
+    # Cross-file dedup ambiguities (bin/taxjson_sort.plan_dedup, audit
+    # R1-296): echoed from the persisted .diag on EVERY run, cached or
+    # not — a row booked once (or twice) on a guess must not scroll by.
+    echo_attention_lines(cache / f"{name}_sorted.json" if is_crypto
+                         else base_json, prefix="dedup: ")
 
     # 5. gains
     gains_json = cache / f"{name}_gains.json"
@@ -6215,6 +6273,52 @@ def _foot_by_currency(pairs) -> Dict[str, float]:
     return {c: _foot(vs) for c, vs in out.items()}
 
 
+def _box18_fractions(root: Path, rules=None
+                     ) -> Optional[Dict[Tuple[str, str], float]]:
+    """{(account, row id): share of the DIVIDEND row that is a T5 box 18
+    capital-gains dividend} from the project's capital_gains_dividends.map
+    (lib/cg_dividends; tax-logic CA-INC-06), or None without the file.
+    Canada only: a US project's file is refused (lib/country
+    PROJECT_FILE_COUNTRY). Matched over EVERY year in the native books,
+    on the dividend's tax date; an entry without an account covers the
+    taxable accounts."""
+    from taxjson.lib.cg_dividends import (MAP_NAME, CgDividendMapError,
+                                          allocate, load_map)
+    if not (root / MAP_NAME).is_file():
+        return None
+    settings = _soft_settings(root)
+    country = _country(settings)
+    from taxjson.lib.country import project_file_problems
+    probs = project_file_problems(root, country)
+    if probs:
+        _die("; ".join(probs))
+    try:
+        entries = load_map(root) or []
+    except CgDividendMapError as e:
+        _die(str(e))
+    if rules is None:
+        rules = _view_income_rules(root)
+    date_of = (rules.income_date if rules is not None
+               else (lambda t: str(t.get("date") or "")))
+    cache = root / "work"
+    rows: List[Tuple[str, dict]] = []
+    for acct in _discover_tx_accounts(cache):
+        native = _native_tx_file(cache, acct)
+        if native is None:
+            continue
+        for t in _load_json_or_die(native).get("transactions", []):
+            if t.get("action") == "DIVIDEND":
+                rows.append((acct, t))
+    groups = _account_group_of(root)
+    taxable = ({a for a, g in groups.items() if g == "taxable"}
+               if groups else None)
+    try:
+        return allocate(entries, rows, date_of=date_of,
+                        default_accounts=taxable)
+    except CgDividendMapError as e:
+        _die(str(e))
+
+
 def cmd_divs_sum(args: argparse.Namespace) -> None:
     """Dividend summary over a window (default: the tax year): total received
     per ticker, plus a per-currency grand total. `PERIOD` is 30d/6w/3m/1y/all;
@@ -6253,11 +6357,28 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     staking: Dict[str, float] = {}
     staking_taxable: Dict[str, float] = {}
     staking_accts = set()
+    # T5 box 18 capital-gains dividends named in capital_gains_dividends
+    # .map (Canada, tax-logic CA-INC-06): a capital gain, not a
+    # dividend — shown apart and left out of the dividend totals.
+    _box18 = _box18_fractions(Path(args.dir).resolve(), _rules)
+    cg_agg: Dict[Tuple[str, str], float] = {}
+    cg_by_group: Dict[str, Dict[str, float]] = {"taxable": {},
+                                                "sheltered": {}}
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         # Signed: reversal rows (negative) net against the original posting.
         amt = (float(tx.get("gross_amount") or 0.0)
                or float(tx.get("net_amount") or 0.0))
+        _f = (_box18 or {}).get((acct, str(tx.get("id")))) \
+            if tx.get("action") == "DIVIDEND" else None
+        if _f:
+            _cg = amt * _f
+            amt -= _cg
+            _k = (str(tx.get("symbol") or "?"), cur)
+            cg_agg[_k] = cg_agg.get(_k, 0.0) + _cg
+            _g = groups.get(acct)
+            if _g:
+                cg_by_group[_g][cur] = cg_by_group[_g].get(cur, 0.0) + _cg
         key = (str(tx.get("symbol") or "?"), cur)
         agg[key] = agg.get(key, 0.0) + amt
         totals[cur] = totals.get(cur, 0.0) + amt
@@ -6278,10 +6399,24 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     # "compare with slips" line counted staking in (S048-24).
     slips = {c: v - staking_taxable.get(c, 0.0)
              for c, v in by_group["taxable"].items()}
+    cg_totals = _foot_by_currency((cur, a) for (_s, cur), a
+                                  in cg_agg.items())
+    cg_doc = None
+    if _box18 is not None:
+        cg_doc = {"rows": [{"symbol": sym, "currency": cur,
+                            "amount": round(a, 2)}
+                           for (sym, cur), a in sorted(cg_agg.items())],
+                  "totals": {c: round(v, 2) for c, v in cg_totals.items()},
+                  "totals_taxable": {c: round(v, 2) for c, v
+                                     in cg_by_group["taxable"].items()},
+                  "totals_sheltered": {c: round(v, 2) for c, v
+                                       in cg_by_group["sheltered"].items()},
+                  "line": "17400"}
     if getattr(args, "json", False):
         _json_out({"rows": [{"symbol": sym, "currency": cur,
                              "dividend": round(amt, 2)}
                             for (sym, cur), amt in sorted(agg.items())],
+                   "capital_gains_dividends": cg_doc,
                    "totals": {c: round(v, 2) for c, v in totals.items()},
                    "totals_taxable": {c: round(v, 2) for c, v
                                       in by_group["taxable"].items()},
@@ -6295,7 +6430,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
                    "payments_in_lieu_as_dividends": n_pil_div,
                    "scope": scope})
         return
-    if not agg:
+    if not agg and not cg_agg:
         print(f"No dividends in {scope}.")
         return
     out_lines = ["SYMBOL CUR DIVIDEND"]
@@ -6332,6 +6467,20 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
         print(f"  of which crypto staking rewards "
               f"({', '.join(sorted(staking_accts))} — other income, not "
               f"dividends; no T5/T3 slip): {_tot(staking)}")
+    if cg_agg:
+        print()
+        print("CAPITAL-GAINS DIVIDENDS (T5 box 18, line 17400 — a capital "
+              "gain at 50% inclusion, not a dividend; named in "
+              "capital_gains_dividends.map, NOT in the totals above)")
+        print()
+        _print_report_table(["SYMBOL CUR AMOUNT"] + [
+            " ".join([sym, cur, money(a)])
+            for (sym, cur), a in sorted(cg_agg.items())])
+        print()
+        if cg_by_group["sheltered"]:
+            print(f"TAXABLE: {_tot(cg_by_group['taxable']) or '0.00'}; "
+                  f"SHELTERED: {_tot(cg_by_group['sheltered'])}")
+        print(f"TOTAL CAPITAL-GAINS DIVIDENDS: {_tot(cg_totals)}")
 
 
 def cmd_dil_sum(args: argparse.Namespace) -> None:
@@ -7343,6 +7492,48 @@ def cmd_scan(args: argparse.Namespace) -> None:
     raise SystemExit(1)
 
 
+def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
+                         year, foreign_by_acct: Dict[str, float]) -> None:
+    """Move the tax year's T5 box 18 capital-gains dividends named in
+    capital_gains_dividends.map out of the estimate's dividends and into
+    `est["cg_div"]` (taxed as capital gains by estimate_canada). Base-
+    currency amounts from each taxable account's base book (the native
+    row's id is the base row's id). No map: nothing changes."""
+    fr = _box18_fractions(root)
+    est.setdefault("cg_div", 0.0)
+    if not fr:
+        return
+    from taxjson.lib.cg_dividends import row_amount
+    rules = _view_income_rules(root)
+    ystr = str(year or "")
+    cache = root / "work"
+    for acct in sorted(accounts):
+        p = cache / f"{acct}_base.json"
+        try:
+            data = _read_work_doc(p)
+        except (OSError, ValueError) as e:
+            _die(f"could not read {p.name} ({e}) for the capital-gains "
+                 f"dividends in capital_gains_dividends.map — re-run "
+                 f"`taxjson run`.")
+        for t in data.get("transactions", []):
+            f = fr.get((acct, str(t.get("id"))))
+            if not f or t.get("action") != "DIVIDEND":
+                continue
+            d = rules.income_date(t) if rules is not None \
+                else str(t.get("date") or "")
+            if ystr and not str(d).startswith(ystr):
+                continue
+            cg = row_amount(t) * f
+            sym = str(t.get("symbol") or "")
+            if sym.rsplit(".", 1)[-1].upper() in ("TO", "V", "CN", "NE"):
+                est["div_ca"] = max(0.0, est["div_ca"] - cg)
+            else:
+                est["div_foreign"] = max(0.0, est["div_foreign"] - cg)
+                foreign_by_acct[acct] = max(
+                    0.0, foreign_by_acct.get(acct, 0.0) - cg)
+            est["cg_div"] += cg
+
+
 def cmd_summary(args: argparse.Namespace) -> None:
     """One-row-per-account realized-gains summary (base currency) on the
     filing basis: wash-adjusted gains where the pipeline built the
@@ -7549,6 +7740,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
         if (cfg.get("accounts", {}).get(acct) or {}).get("crypto"):
             # Its DIVIDEND column is staking rewards (S023-11).
             acct_rows[-1]["dividend_is_staking"] = True
+    if want_estimate and cfg:
+        # T5 box 18 capital-gains dividends (capital_gains_dividends.map,
+        # tax-logic CA-INC-06): out of the dividends, into the gains.
+        _box18_into_estimate(root, est, set(files) & taxable_accounts,
+                             year or (cfg.get("settings") or {}).get("year"),
+                             _foreign_by_acct)
 
     def _sum_rows(rows: List[Dict[str, Any]]) -> Dict[str, float]:
         # Summed from the DISPLAYED (2dp-rounded) per-account figures,
@@ -8317,7 +8514,9 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                                    actual_withheld=actual_withheld,
                                    staking=est.get("staking", 0.0),
                                    deductions=deductions,
-                                   carrying_charges=carrying_charges)
+                                   carrying_charges=carrying_charges,
+                                   capital_gains_dividends=est.get(
+                                       "cg_div", 0.0))
         except ValueError as e:
             _die(str(e))
     if deductions or carrying_charges:
@@ -8373,8 +8572,14 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         rows = [
             ("Other income", other_income, ""),
             ("Capital gains (taxable)", r["taxable_gain"],
-             f"[{money(est['realized'])} realized - "
-             f"{money(r['losses_applied'])} other losses, x50%]"),
+             f"[{money(est['realized'])} realized"
+             + (f" + {money(r['capital_gains_dividends'])} box 18"
+                if r.get("capital_gains_dividends") else "")
+             + f" - {money(r['losses_applied'])} other losses, x50%]"),
+        ] + ([("Capital-gains dividends", r["capital_gains_dividends"],
+               "[T5 box 18, line 17400: in the gains above, not "
+               "grossed up]")]
+             if r.get("capital_gains_dividends") else []) + [
             ("Eligible dividends (grossed)", r["grossed_eligible"],
              f"[{money(est['div_ca'])} x1.38, Canadian-listed]"),
             ("Foreign dividends", est["div_foreign"],

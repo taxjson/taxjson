@@ -27,6 +27,40 @@
   and a note says when the year's back-dated Dec-31 book-cost
   adjustments may not be posted yet (audit S063-22).
 
+- **Generic importer: name the real broker.** A mapping can set
+  `[broker] name = "wealthsimple"`. `taxjson run` then parses each named
+  broker's generic files on their own and records them as
+  `generic:<name>`, so `fees-sum` gives each broker its own row. A
+  broker whose fees come in only through a named generic file is no
+  longer listed as having "NO fees". One `taxjson-brokerage` call
+  refuses files whose mappings name different brokers (audit S027-05).
+
+- **Cross-file dedup no longer deletes separate trades.** Every parsed
+  row now records its input file. Identical rows in two `.tt` files, or
+  in IB statements of two different broker accounts, are both booked;
+  before, the second was dropped as a duplicate, which left a phantom
+  short and a wrong gain. The same row in two overlapping exports is
+  still booked once. When the files' overlap is too thin to tell, the
+  row is booked once and an `ATTENTION: dedup` line names both files.
+  `fees-sum` applies the same rule, so its trade count and commissions
+  agree with the books (audit R1-296, S031-02).
+
+- **Renaming an account keeps its corporate-action elections.** An
+  election's event id no longer includes the taxjson account name (the
+  elections manifest is already stored per account). A manifest written
+  by the old scheme is rekeyed on the next run, and so is one whose
+  account was renamed first: the single saved election with the event's
+  date and symbols is carried over, with a note. Before, every election
+  went back to pending (exit 3) after a rename (audit R1-301).
+
+- **Canada: T5 box 18 capital-gains dividends can be named.** A new
+  project-root `capital_gains_dividends.map` (`SYMBOL YEAR-or-DATE
+  all-or-AMOUNT [ACCOUNT]`) lists the split-share / mutual-fund
+  dividends the slip reports in box 18. `divs-sum` shows them apart as
+  CAPITAL-GAINS DIVIDENDS (line 17400) and the Canadian estimate taxes
+  them as a capital gain instead of a grossed-up eligible dividend. The
+  ledger and ACB are unchanged; a US project refuses the file
+  (tax-logic CA-INC-06; audit R1-62).
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent

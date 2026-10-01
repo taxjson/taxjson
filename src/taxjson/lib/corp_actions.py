@@ -150,12 +150,18 @@ class CorporateAction:
             return head
         return s
 
-    def _hash(self, n: int) -> str:
+    def _hash(self, n: int, *, account_salted: bool = False) -> str:
+        """Hash of the event's identifying fields. The taxjson account
+        name is NOT one of them (R1-301): the manifest is stored per
+        account, so the name added no uniqueness, and renaming
+        [accounts.rrsp] to retireA orphaned every election. Ids made
+        before that fix were salted with the account name —
+        `account_salted=True` reproduces them for migration."""
         parts = (
             self._normalize_date(self.date),
             self.action_type, self.source_isin, self.target_isin,
-            f"{self.ratio_new}-for-{self.ratio_old}", self.account,
-        )
+            f"{self.ratio_new}-for-{self.ratio_old}",
+        ) + ((self.account,) if account_salted else ())
         return hashlib.sha256("|".join(parts).encode()).hexdigest()[:n]
 
     @staticmethod
@@ -170,22 +176,30 @@ class CorporateAction:
         root = re.sub(r'[^A-Za-z0-9]', '', symbol).lower()
         return root or 'x'
 
-    def _compute_id(self) -> str:
+    def _compute_id(self, *, account_salted: bool = False) -> str:
         """Human-legible id: `YYYYMMDD-src-tgt-hhhh`, e.g.
         `20251022-ssl-rgld-51d7`. The readable part carries date and
         symbols; the 4-hex suffix (hashed from the FULL identifying
-        fields: ISINs, ratio, account) keeps ids unique when the
-        readable part collides. Pre-2026-07 manifests used the bare
-        12-hex hash — `legacy_event_id()` + `Manifest.migrate_legacy`
-        rekey them automatically."""
+        fields: ISINs, ratio — not the account name) keeps ids unique
+        when the readable part collides. Older manifests used the bare
+        12-hex hash, or this form salted with the account name —
+        `Manifest.migrate_legacy` rekeys both automatically."""
         date = self._normalize_date(self.date).replace('-', '')
         return (f"{date}-{self._sym_root(self.source_symbol)}-"
-                f"{self._sym_root(self.target_symbol)}-{self._hash(4)}")
+                f"{self._sym_root(self.target_symbol)}-"
+                f"{self._hash(4, account_salted=account_salted)}")
+
+    def account_salted_event_id(self) -> str:
+        """The id this event had before R1-301 (4-hex suffix salted
+        with the taxjson account name) — the alias every manifest
+        written by that scheme is keyed by."""
+        return self._compute_id(account_salted=True)
 
     def legacy_event_id(self) -> str:
-        """The pre-2026-07 opaque id (12-hex content hash) — kept so
-        existing manifests migrate instead of orphaning elections."""
-        return self._hash(12)
+        """The pre-2026-07 opaque id (12-hex content hash, which was
+        salted with the account name) — kept so existing manifests
+        migrate instead of orphaning elections."""
+        return self._hash(12, account_salted=True)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -2246,6 +2260,7 @@ class Manifest:
 
     def __init__(self, records: Optional[Dict[str, ElectionRecord]] = None):
         self.records = records or {}
+        self.migration_notes: List[str] = []
 
     @classmethod
     def load(cls, path: Path) -> "Manifest":
@@ -2354,39 +2369,82 @@ class Manifest:
             raise
 
     def migrate_legacy(self, events: List["CorporateAction"]) -> int:
-        """Rekey records saved under the old opaque 12-hex ids to the
-        current human-legible ids. Returns the number migrated (caller
-        saves when > 0). Elections are the non-rebuildable user
-        artifact — an id-scheme change must never orphan them."""
+        """Rekey records saved under an older id scheme to the current
+        ids. Returns the number migrated (caller saves when > 0).
+        Elections are the non-rebuildable user artifact — an id-scheme
+        change, or renaming the account, must never orphan them.
+
+        Aliases tried, in order, for an event whose current id has no
+        record: the pre-2026-07 opaque 12-hex hash; the account-salted
+        id of the R1-301 scheme change (`account_salted_event_id`,
+        computed with the CURRENT account name); a record that differs
+        only in the readable symbol roots; and last, for a manifest
+        written under ANOTHER account name (the account was renamed
+        before this migration ran), the one record with the event's
+        date and symbol roots that no event of this run claims — only
+        when exactly one record and exactly one event share that
+        prefix. Each rename adoption is described in
+        `self.migration_notes` (the caller prints them)."""
+        self.migration_notes: List[str] = []
         migrated = 0
+        unclaimed = []
         for ev in events:
             if ev.event_id in self.records:
                 continue
-            legacy = ev.legacy_event_id()
-            rec = self.records.pop(legacy, None)
+            rec = None
+            for alias in (ev.legacy_event_id(), ev.account_salted_event_id()):
+                if alias != ev.event_id and alias in self.records:
+                    rec = self.records.pop(alias)
+                    break
             if rec is None:
                 rec = self._pop_resymbolled(ev)
             if rec is None:
+                unclaimed.append(ev)
                 continue
             rec.event_id = ev.event_id
             self.records[ev.event_id] = rec
             migrated += 1
+        if unclaimed:
+            current = {ev.event_id for ev in events}
+            for ev in unclaimed:
+                if ev.event_id in self.records:
+                    continue
+                prefix = ev.event_id.rsplit('-', 1)[0] + '-'
+                if sum(1 for e in events
+                       if e.event_id.startswith(prefix)) != 1:
+                    continue
+                hits = [eid for eid in self.records
+                        if eid.startswith(prefix) and eid not in current
+                        and eid.count('-') == ev.event_id.count('-')]
+                if len(hits) != 1:
+                    continue
+                rec = self.records.pop(hits[0])
+                self.migration_notes.append(
+                    f"election {hits[0]} ({rec.election}) was saved "
+                    f"under another account name (the account was "
+                    f"renamed); carried over to {ev.event_id}")
+                rec.event_id = ev.event_id
+                self.records[ev.event_id] = rec
+                migrated += 1
         return migrated
 
     def _pop_resymbolled(self, ev: "CorporateAction") -> Optional[ElectionRecord]:
         """A record whose id differs from `ev`'s only in the readable
         symbol roots. The date prefix and the 4-hex suffix (hashed from
-        ISINs, ratio and account) are the event's identity; the roots
-        are display only, and an extractor that learns a better ticker
-        (a broker-internal parent code resolved to the traded symbol)
-        changes them. Requires exactly one candidate."""
+        ISINs and ratio — or, in the pre-R1-301 scheme, also the
+        account name) are the event's identity; the roots are display
+        only, and an extractor that learns a better ticker (a broker-
+        internal parent code resolved to the traded symbol) changes
+        them. Requires exactly one candidate."""
         date, _src, _tgt, suffix = ev.event_id.split('-', 3) \
             if ev.event_id.count('-') == 3 else ('', '', '', '')
         if not date or not suffix:
             return None
+        suffixes = {suffix, ev.account_salted_event_id().rsplit('-', 1)[-1]}
         hits = [eid for eid in self.records
                 if eid.count('-') == 3
-                and eid.startswith(f"{date}-") and eid.endswith(f"-{suffix}")]
+                and eid.startswith(f"{date}-")
+                and eid.rsplit('-', 1)[-1] in suffixes]
         if len(hits) != 1:
             return None
         return self.records.pop(hits[0])

@@ -1232,6 +1232,12 @@ class IbBrokerage(BaseBrokerage):
                 f"dropped, doubled or mis-signed; refusing to emit a book "
                 f"that disagrees with the broker.")
 
+    def statement_accounts(self) -> set:
+        """Account ids named by the last parsed statement (Account
+        Information / Accounts Included / the per-row Account column)."""
+        pre = getattr(self, '_ib_pre', None) or {}
+        return set(pre.get('accounts') or ())
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions = []
         # Corporate Actions rows that aren't SPLIT or Spinoff (e.g.

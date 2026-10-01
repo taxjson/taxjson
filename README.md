@@ -104,7 +104,11 @@ folder. Start from the template in
 [`examples/generic_wealthsimple.toml`](./examples/generic_wealthsimple.toml):
 map your CSV's header names in `[columns]`, its date format in `[formats]`, and
 each action value to one of `buy | sell | dividend | tax | interest | fee |
-skip` in `[actions]`. Conventions match the hand-written parsers: signed
+skip` in `[actions]`. An optional `[broker] name = "wealthsimple"` names the
+real broker. `taxjson run` then parses that broker's generic files on their own
+(`work/<acct>_generic-wealthsimple.json`) and records them as
+`generic:wealthsimple`, so the fees report gives each broker its own row.
+Without a name, every generic file goes into one `generic` row. Conventions match the hand-written parsers: signed
 amounts are preserved, unmapped action values are counted and summarized (never
 silently dropped — an unmapped row that carries a quantity or an amount is an
 `UNBOOKED` warning on the console, refused by `run --strict` and failed by
@@ -405,6 +409,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `inputs/slips/` | Broker T5008 / 1099-B slip CSVs for `taxjson reconcile-slips` (the checklist looks here). Not an account folder — needs no `[accounts.slips]`. |
 | `ticker.map` | Symbol rules, one per line: `GLOBAL from to` (plain rename, every stage), `TOBASE from to` (cross-listing consolidated in the base pipeline only), `JOURNAL from to` (Norbert's Gambit pair — consolidated AND netted in holdings), `DELETE from` (drop a pure artifact), `DISTINCT a b` (records that two look-alike listings are deliberately separate securities — a CDR vs its US underlying — and silences the scan's MAP-GAP nag and the `crosslistings.rpt` REVIEW; changes no symbol). For TOBASE pairs the holdings view keeps the listings separate **except** where the broker's own transfer rows prove a depot flip — the holdings export applies those evidenced quantities from the transfer sidecars (see `taxjson transfers`), so `JOURNAL` is only for intrinsically fungible classes like DLR's gambit units. Symbols are case-insensitive (upper-cased on load) and matched exactly — a suffix-less `GLOBAL QQOL QQNW` does not touch `QQOL.US`; notes go after `#`. Renames chain (`GLOBAL OLD.US NEW.US` + `TOBASE NEW.US NEW.TO` sends OLD.US to NEW.TO). `taxjson run` refuses a map with a malformed line, a rename cycle, one symbol renamed to two different targets, or a `DISTINCT` pair that the renames pool together. A rule on the shares also renames their options through the root (`BCE…C….US` → `BCE…C….TO`), except where that would land on a contract code the account already trades on the other listing — a USD-strike US option and a CAD-strike Montreal option are different property, so the US one keeps its symbol and the `.sum` DIAGNOSTICS name it. `taxjson init` writes a commented stub. |
 | `distributions.map` | Non-cash fund distributions: `SYMBOL RECORD_DATE PER_SHARE` (negative = ROC). |
+| `capital_gains_dividends.map` | Canada only: T5 box 18 capital-gains dividends booked as dividends: `SYMBOL YEAR-or-DATE all-or-AMOUNT [ACCOUNT]`. |
 | `t1135.map`, `yf_ticker.map`, `sector.map`, `crypto_ticker.map` | Per-symbol overrides: T1135 domicile, yfinance spelling, timeline sectors, crypto Yahoo-collision fixes (`crypto_ticker.map` is read from the project root whatever the cwd; editing it re-prices under `run --fast`). |
 | `phantoms.json`, `claimed_losses.txt` | Missing-basis phantoms (auto-applied); losses actually claimed on filed returns (`YEAR AMOUNT`). |
 | `work/` | Intermediate per-stage artifacts and price/FX caches. Rebuildable; gitignored. |
@@ -464,6 +469,8 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson serve` | Launch the local web UI (needs the `[web]` extra). |
 
 **Non-cash distributions (`distributions.map`):** Canadian ETFs declare reinvested (phantom) capital-gains distributions — usually each December — that never appear in broker CSVs yet raise your ACB; some funds publish return-of-capital factors only after year-end. Put one line per event in a project-root `distributions.map` (`SYMBOL RECORD_DATE PER_SHARE`, negative for ROC) and `taxjson run` converts them into ACB adjustments for every taxable account holding the fund on the record date (shares covered by `phantoms.json` count as held). The symbol is matched case-insensitively, through your `ticker.map` renames, and along ticker changes (the adjustment lands on the ticker that held the shares on the record date). Only the ACB side is booked: the distribution itself is income for the year on your T3/T5 slip, which taxjson does not add to the estimate or `divs-sum` — the run's NOTE reminds you. The per-share amount is a plain decimal and the date `YYYY-MM-DD` (anything else stops the run); a `0` is a placeholder and is not applied; a symbol and date entered on two lines are both applied (they add) with a warning.
+
+**Capital-gains dividends (`capital_gains_dividends.map`, Canada only):** a split-share or mutual-fund corporation may designate part of a dividend a capital-gains dividend (T5 box 18, line 17400): a capital gain at 50% inclusion, with no gross-up or dividend tax credit. No broker export says which payments those are (IB prints "(Ordinary Dividend)"; RBC and Questrade a plain dividend), so the books carry them as dividends. Copy them from the slip (or IBKR's dividends report, "T5: Capital Gains") into a project-root `capital_gains_dividends.map`, one line each: `SYMBOL WHEN AMOUNT [ACCOUNT]`, where WHEN is a year (every dividend of the symbol paid that year) or a pay date, AMOUNT is `all` or the box 18 amount in the dividend's currency (the total over the matching payments, shared pro rata), and ACCOUNT restricts the line to one account (default: the taxable accounts). Example: `LFE.TO 2025 all`, `XTD.TO 2025-09-10 5.50`. `divs-sum` then lists them under CAPITAL-GAINS DIVIDENDS, apart from the dividend totals, and the Canadian estimate (`taxjson estimate`, and `sum` with `--other-income`) moves them from the grossed-up eligible dividends into capital gains. The ledger and ACB do not change (box 18 does not touch ACB). A line that matches no dividend, an amount above the matching dividends, or matches in two currencies stops the view with the line number. A US project refuses the file.
 
 Query/report commands are detailed below; every command also takes `--help`,
 and `taxjson --version` prints the installed version.
@@ -1380,6 +1387,24 @@ counts the rows whose two dates differ; `taxjson events PERIOD ACCOUNT` (one
 account, pure taxtext) does the same on a settle-basis project. Two identical
 `ACQUIRED` lots arriving the same day are two arrival legs (their counter
 transfers are combined, not de-duplicated away).
+
+**Duplicate rows across files.** Overlapping exports of one account (a
+re-download, a 2025 export that runs into January next to the 2026 one) hold
+the same rows twice, and the books keep each row once. The rule, which the
+fees report uses too:
+- two identical rows in ONE file are one row, unless the parser marked them
+  as separate fills (`[fill #2]`);
+- the same row in two exports is one row when the files overlap as copies:
+  on the dates both files cover, one file's rows are a subset of the
+  other's, and they share at least two rows;
+- identical lines in two `.tt` files are separate records, so both are
+  booked; identical rows in IB statements of two different broker accounts
+  are both booked as well;
+- anything else (the files share only that one row, the files disagree on
+  the dates they both cover, or a `.tt` line equals an exported row) is booked
+  once, and `taxjson run` prints `warning: ATTENTION: dedup: ...` with both
+  file names. If they really are two trades, enter the second one as a `.tt`
+  line. If a `.tt` line was typed into two files, delete one copy.
 
 ### When you can't get the real cost basis
 

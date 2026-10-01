@@ -39,3 +39,9 @@ currency = "CAD"
 
 # [options]
 # settle_on_trade_date = true  # crypto-only export: no settlement cycle
+
+# Optional: the real broker. `taxjson run` parses each named broker's
+# generic files on their own and the fees report shows them as
+# generic:wealthsimple (instead of one "generic" row for every broker).
+[broker]
+name = "wealthsimple"

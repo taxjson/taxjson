@@ -572,8 +572,12 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
             by_id[tx['id']] = tx
         combined.append(tx)
     transactions = combined
+    from taxjson.lib.brokerages.base import shown_name
     for tx in transactions:
         tx['id'] = compute_tt_id(tx)
+        # Provenance for cross-file dedup (not part of the id): two .tt
+        # files holding the same line are separate records (R1-296).
+        tx['source'] = shown_name(input_path)
     return {
         "transactions": transactions,
         "metadata": {
