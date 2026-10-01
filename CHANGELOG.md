@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Gains JSON keeps full precision for `wash_trigger.trigger_qty` and
+  `phantom_application_log[].opening_qty` (a 6.76e-06 AVAX trigger read
+  0.0), and `--gen-phantoms` notes keep a crypto short's size;
+  find-missing-history links a merger receipt posted up to 7 days after
+  the removal; US engine: after a rename, same-day lots are sold in
+  order of their purchase time.
 - **Two byte-identical rows each keep their own superficial-loss /
   wash-sale result** (hand-made JSON passed to `taxjson-gains`): they
   shared one id, so only one took its denial or basis bump. The engine

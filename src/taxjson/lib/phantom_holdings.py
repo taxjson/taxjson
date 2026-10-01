@@ -574,6 +574,18 @@ class MergerLink:
     ratio: float            # new shares per old, if parseable (else 0.0)
 
 
+MERGER_LINK_DAYS = 7
+
+
+def _day_gap(a: str, b: str) -> int:
+    try:
+        from datetime import datetime
+        return abs((datetime.strptime(str(a)[:10], '%Y-%m-%d')
+                    - datetime.strptime(str(b)[:10], '%Y-%m-%d')).days)
+    except ValueError:
+        return 10 ** 6
+
+
 def detect_corp_action_links(
     transactions: Iterable[TaxTransaction],
     *,
@@ -612,11 +624,18 @@ def detect_corp_action_links(
     for rem in removals:
         m = _MERGER_TO_RE.search(rem.description or '')
         target = _norm_company(m.group(1)) if m else ''
-        same = [(i, rc) for i, rc in enumerate(receipts)
-                if i not in used and rc.account == rem.account
-                and rc.date == rem.date]
+        # A receipt can post a few days after the removal (audit
+        # S075-23): a NAME-matched receipt within MERGER_LINK_DAYS links,
+        # nearest first (the RBC reorganization pairing allows ±7 days);
+        # the lone fallback stays same-date.
+        near = sorted(
+            ((i, rc) for i, rc in enumerate(receipts)
+             if i not in used and rc.account == rem.account
+             and _day_gap(rc.date, rem.date) <= MERGER_LINK_DAYS),
+            key=lambda e: _day_gap(e[1].date, rem.date))
+        same = [(i, rc) for i, rc in near if rc.date == rem.date]
         pick = None
-        for i, rc in same:                                  # 1) name match
+        for i, rc in near:                                  # 1) name match
             rcm = _RECVCO_RE.search(rc.description or '')
             rcco = _norm_company(rcm.group(1)) if rcm else _norm_company(rc.symbol)
             if target and rcco and (target in rcco or rcco in target):
@@ -660,8 +679,10 @@ def format_suggestions(candidates: List[PhantomCandidate]) -> str:
             "account": c.account,
             "_note": note,
             "_first_negative": c.first_negative_date,
-            "_peak_short": round(c.peak_short, 4),
-            "_end_position": round(c.end_position, 4),
+            # Full precision (audit S074-22: a 3e-05 BTC short read
+            # -0.0); 10 dp only trims float noise.
+            "_peak_short": round(c.peak_short, 10),
+            "_end_position": round(c.end_position, 10),
             "_disposition_count": c.disposition_count,
         })
     return json.dumps(entries, indent=2) + "\n"

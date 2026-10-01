@@ -471,5 +471,92 @@ class TestIdenticalRowsKeepTheirOwnDenial(unittest.TestCase):
         self.assertAlmostEqual(r["summary"]["total_gain"], -460.0, 2)
 
 
+class TestQuantityKeysNotRounded(unittest.TestCase):
+    """R1-317 (part 1) / S074-22: trigger_qty and opening_qty are coin
+    counts, but the gains JSON rounded them to 4 dp (6.76e-06 -> 0.0)."""
+
+    def test_keys(self):
+        from taxjson.lib.numeric import round_floats
+        out = round_floats({"wash_trigger": {"trigger_qty": 6.76e-06,
+                                             "trigger_price": 0.00001234},
+                            "phantom_application_log": [
+                                {"opening_qty": 12.345678}],
+                            "option_qty": 0.333333333})
+        self.assertEqual(out["wash_trigger"]["trigger_qty"], 6.76e-06)
+        self.assertEqual(out["wash_trigger"]["trigger_price"], 0.0)
+        self.assertEqual(out["phantom_application_log"][0]["opening_qty"],
+                         12.345678)
+        self.assertEqual(out["option_qty"], 0.333333333)
+
+    def test_suggestions_keep_precision(self):
+        from taxjson.lib.phantom_holdings import (PhantomCandidate,
+                                                  format_suggestions)
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(PhantomCandidate)}
+        kw = {k: None for k in fields}
+        kw.update(symbol="BTC", account="crypto", registered=False,
+                  first_negative_date="2025-01-02", peak_short=-3e-05,
+                  end_position=-3e-05, disposition_count=1)
+        doc = json.loads(format_suggestions([PhantomCandidate(**kw)]))
+        self.assertEqual(doc[0]["_peak_short"], -3e-05)
+        self.assertEqual(doc[0]["_end_position"], -3e-05)
+
+
+class TestMergerReceiptPostedLater(unittest.TestCase):
+    """S075-23: a merger receipt posted a day after the removal was not
+    linked (same-date only); the RBC reorganization pairing allows ±7."""
+
+    def _rows(self, recv_date):
+        from taxjson.lib.core import TaxTransaction
+        mk = lambda d, s, q, desc: TaxTransaction(  # noqa: E731
+            action="BUYSELL", date=d, time="10:00:00", symbol=s,
+            quantity=q, net_amount=0.0, currency="USD", account="margin",
+            description=desc)
+        return [mk("2025-07-01", "H015283.US", -100,
+                   "MGR - HESS CORPORATION MERGER TO CHEVRON CORPORATION "
+                   "1.025 NEW = 1 OLD"),
+                mk(recv_date, "CVX.US", 102,
+                   "MGR - CHEVRON CORPORATION SHRS RECEIVED THRU MERGER")]
+
+    def test_next_day_receipt_links(self):
+        from taxjson.lib.phantom_holdings import detect_corp_action_links
+        links = detect_corp_action_links(self._rows("2025-07-02"))
+        self.assertEqual([(l.old_symbol, l.new_symbol) for l in links],
+                         [("H015283.US", "CVX.US")])
+        self.assertEqual(detect_corp_action_links(self._rows("2025-07-20")),
+                         [])
+
+
+class TestUsRenameMergeKeepsAcquisitionTime(unittest.TestCase):
+    """S070-14: after a rename, same-date lots kept insertion order (the
+    target's lots first) instead of acquisition time."""
+
+    def _run(self, t_old, t_new):
+        from taxjson.lib.core import TaxTransaction, USATaxRules
+
+        def mk(d, s, q, net, t="10:00:00"):
+            return TaxTransaction(action="BUYSELL", date=d, time=t,
+                                  date_settle=d, symbol=s, quantity=q,
+                                  price=abs(net / q), net_amount=net,
+                                  currency="USD", account="ZZ1")
+        txs = [mk("2025-01-06", "OLD.US", 100, 4000.0, t_old),
+               mk("2025-01-06", "NEW.US", 100, 5000.0, t_new),
+               TaxTransaction(action="SPLIT", date="2025-02-03",
+                              time="00:00:00", symbol="OLD.US",
+                              symbol_new="NEW.US", quantity=1.0,
+                              currency="USD", date_settle="2025-02-03",
+                              account="ZZ1"),
+               mk("2025-03-03", "NEW.US", -100, 4500.0)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            return USATaxRules().compute_gains(txs)
+
+    @rule("US-BASIS-01")
+    def test_fifo_by_time(self):
+        r = self._run("09:00:00", "15:00:00")
+        self.assertAlmostEqual(r["summary"]["total_gain"], 500.0, 2)
+        r = self._run("15:00:00", "09:00:00")
+        self.assertAlmostEqual(r["summary"]["total_gain"], -500.0, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3964,6 +3964,10 @@ class USATaxRules(TaxRules):
             key=lambda x: event_sort_key(x, profile='us_main',
                                          date_of=get_sort_date),
         )
+        # A lot's acquisition time, by its source row's id (lots carry
+        # the id, not the time): the rename merge orders same-date lots
+        # by it.
+        _lot_time = {t.id: (t.time or '') for t in all_events}
 
         # === PRE-PASS: classify each event and build replacement indexes. ===
         # The "opening portion" of each transaction is what's eligible to be
@@ -4464,10 +4468,12 @@ class USATaxRules(TaxRules):
                             # shifting plain basis between realized
                             # gains and held inventory (conservation
                             # broke by exactly that basis difference).
-                            # Stable sort keeps append order (itself
-                            # chronological per source symbol) for
-                            # same-date ties in both runs.
-                            inv[_tk].sort(key=lambda l: l['date'])
+                            # Same-date lots go by their acquisition
+                            # TIME (audit S070-14: the target's own lots
+                            # always came first), then append order (the
+                            # export's row order for same-stamp rows).
+                            inv[_tk].sort(key=lambda l: (
+                                l['date'], _lot_time.get(l.get('id'), '')))
                     # Move wash-sale replacement records too. Wash-sale
                     # matching is by symbol key, so a post-rename SELL
                     # of RGLD.US would otherwise miss any open
