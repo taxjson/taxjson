@@ -693,10 +693,15 @@ printed under them).
 
 **`taxjson fees-sum [PERIOD] [ACCOUNT]`** — trading-fee report by **brokerage**
 (commission/fee totals with per-trade averages, $/share, %notional), converted
-to the base currency — the same report `taxjson run` writes to
-`reports/fees.rpt`. Broken down **by account** by default (`--no-by-account` for
-brokerage-only totals). A `PERIOD` window scopes it (e.g. `taxjson fees-sum
-2025`); `--json` emits machine output.
+to the base currency — the same totals `taxjson run` writes to
+`reports/fees.rpt` (which is grouped by brokerage only). Broken down **by
+account** by default (`--no-by-account` for brokerage-only totals). A `PERIOD`
+window scopes it (e.g. `taxjson fees-sum 2025`); `--json` emits machine output.
+Its year is each fee's **trade** date, converted at that date's rate (as in
+`taxjson fees`), so it differs from `taxjson sum`'s FEES column — which follows
+the project's tax_date (settle in Canada) — by the fees of trades that straddle
+Dec 31, and by cents of FX. Plain futures fees are their own bucket (not stock
+fees, not counted in $/share).
 
 Money is shown to 2 decimals; quantities and per-share prices keep full
 precision. Rows with a missing/unparseable date are excluded with a warning.

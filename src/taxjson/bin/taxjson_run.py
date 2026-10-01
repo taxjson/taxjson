@@ -326,6 +326,19 @@ def collect_diagnostics(cache: Path, account: str, *,
                 blocks[-1].append(line.rstrip())
             else:
                 kept_prev = False
+    # The gains stage and the blend stage both persist the engine's
+    # stderr, so every engine line reached a _wash.sum twice (audit
+    # R1-181): a block (marker line + continuations) already kept is
+    # not repeated.
+    seen: set = set()
+    _uniq: List[List[str]] = []
+    for b in blocks:
+        key = "\n".join(b)
+        if key in seen:
+            continue
+        seen.add(key)
+        _uniq.append(b)
+    blocks = _uniq
     later: List[List[str]] = []
     if year is not None:
         # Past the year's end AND its 30-day window (a January rebuy
@@ -13969,8 +13982,8 @@ def main() -> None:
     p_fsum = sub.add_parser(
         "fees-sum",
         help="Trading-fee report by brokerage (base currency) over a window "
-             "(default: tax year); same report `taxjson run` writes to "
-             "reports/fees.rpt")
+             "(default: tax year; trade dates); the totals `taxjson run` "
+             "writes to reports/fees.rpt, by account by default")
     p_fsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_fsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_fsum.add_argument("--by-account", action=argparse.BooleanOptionalAction,

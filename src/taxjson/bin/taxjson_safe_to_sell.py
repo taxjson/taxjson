@@ -25,6 +25,7 @@ import sys
 from datetime import datetime
 from typing import List, Optional
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import add_country_argument
 
 # Radar category -> this view's status. EXITABLE: only a FULL exit is
@@ -42,6 +43,7 @@ _STATUS = {
 }
 
 
+@guard_main("taxjson-safe-to-sell")
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Taxable-Only Safe-to-Sell Audit")
     # nargs='+' + extend: both `--taxable a b` (historical) and repeated

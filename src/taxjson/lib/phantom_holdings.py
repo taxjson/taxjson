@@ -195,7 +195,7 @@ def detect_phantoms(
     # walks' convention — the engines keep the export's row order, see
     # corporate_timeline._walk_rest): a Norbert's-gambit pair — sell DLR.TO, buy
     # DLR.U.TO the same morning, folded to one symbol by the ticker map —
-    # otherwise read as a 4,000-share phantom short (real 2025 book).
+    # otherwise read as an N-share phantom short.
     sorted_txs = _drop_duplicate_splits(sorted(
         transactions,
         key=lambda t: (event_sort_key(t, profile='phantom_walk'),
@@ -574,6 +574,18 @@ class MergerLink:
     ratio: float            # new shares per old, if parseable (else 0.0)
 
 
+MERGER_LINK_DAYS = 7
+
+
+def _day_gap(a: str, b: str) -> int:
+    try:
+        from datetime import datetime
+        return abs((datetime.strptime(str(a)[:10], '%Y-%m-%d')
+                    - datetime.strptime(str(b)[:10], '%Y-%m-%d')).days)
+    except ValueError:
+        return 10 ** 6
+
+
 def detect_corp_action_links(
     transactions: Iterable[TaxTransaction],
     *,
@@ -612,11 +624,18 @@ def detect_corp_action_links(
     for rem in removals:
         m = _MERGER_TO_RE.search(rem.description or '')
         target = _norm_company(m.group(1)) if m else ''
-        same = [(i, rc) for i, rc in enumerate(receipts)
-                if i not in used and rc.account == rem.account
-                and rc.date == rem.date]
+        # A receipt can post a few days after the removal (audit
+        # S075-23): a NAME-matched receipt within MERGER_LINK_DAYS links,
+        # nearest first (the RBC reorganization pairing allows ±7 days);
+        # the lone fallback stays same-date.
+        near = sorted(
+            ((i, rc) for i, rc in enumerate(receipts)
+             if i not in used and rc.account == rem.account
+             and _day_gap(rc.date, rem.date) <= MERGER_LINK_DAYS),
+            key=lambda e: _day_gap(e[1].date, rem.date))
+        same = [(i, rc) for i, rc in near if rc.date == rem.date]
         pick = None
-        for i, rc in same:                                  # 1) name match
+        for i, rc in near:                                  # 1) name match
             rcm = _RECVCO_RE.search(rc.description or '')
             rcco = _norm_company(rcm.group(1)) if rcm else _norm_company(rc.symbol)
             if target and rcco and (target in rcco or rcco in target):
@@ -645,6 +664,35 @@ def detect_corp_action_links(
     return links
 
 
+def report_phantom_log(logs: List[List[Dict[str, Any]]],
+                       accounts: Set[str]) -> None:
+    """One stderr line per phantoms.json entry that did nothing in these
+    books (whose account they belong to): a spelling mismatch (no rows),
+    or a stale entry whose rows never go short — the note used to live
+    only in the gains JSON, so a typo silently booked the phantom sale
+    (audit S076-05). Entries of accounts not in these books are another
+    stage's business and stay quiet."""
+    by_pair: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for log in logs:
+        for e in log or []:
+            by_pair.setdefault((e.get('symbol', ''), e.get('account', '')),
+                               []).append(e)
+    for (symbol, account), es in sorted(by_pair.items()):
+        if account not in accounts or any(e.get('inserted') for e in es):
+            continue
+        notes = [str(e.get('note') or '') for e in es]
+        if any(n.startswith('no opening needed') for n in notes):
+            print(f"note: phantoms.json lists {symbol} / {account}, but "
+                  f"its rows never go short — no opening was needed; "
+                  f"remove the entry if its history is complete.",
+                  file=sys.stderr)
+        elif notes and all(n.startswith('no rows') for n in notes):
+            print(f"warning: phantoms.json lists {symbol} / {account}, but "
+                  f"no row in the data has that symbol and account — "
+                  f"nothing was applied. Check the spelling.",
+                  file=sys.stderr)
+
+
 def format_suggestions(candidates: List[PhantomCandidate]) -> str:
     """Write the candidate JSON to a string. Underscore-prefixed fields are
     notes for human review; the loader ignores them."""
@@ -660,8 +708,10 @@ def format_suggestions(candidates: List[PhantomCandidate]) -> str:
             "account": c.account,
             "_note": note,
             "_first_negative": c.first_negative_date,
-            "_peak_short": round(c.peak_short, 4),
-            "_end_position": round(c.end_position, 4),
+            # Full precision (audit S074-22: a 3e-05 BTC short read
+            # -0.0); 10 dp only trims float noise.
+            "_peak_short": round(c.peak_short, 10),
+            "_end_position": round(c.end_position, 10),
             "_disposition_count": c.disposition_count,
         })
     return json.dumps(entries, indent=2) + "\n"
@@ -671,7 +721,13 @@ def load_phantoms(path: Path) -> Set[Tuple[str, str]]:
     """Load phantoms.json. Returns a set of (symbol, account) pairs.
     Underscore-prefixed metadata fields are ignored."""
     with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as e:
+            # Name the file: it is hand-edited, and the bare decoder
+            # message gave no hint which input was bad (audit S076-01).
+            raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc,
+                                       e.pos) from None
     if not isinstance(data, list):
         raise ValueError(f"{path}: expected a JSON array of phantom entries")
     out: Set[Tuple[str, str]] = set()
@@ -788,6 +844,7 @@ def detect_superficial_loss_warnings(
 def synthesize_openings(
     transactions: List[TaxTransaction],
     phantoms: Set[Tuple[str, str]],
+    *, warn: bool = False,
 ) -> Tuple[List[TaxTransaction], List[Dict[str, Any]]]:
     """For each (symbol, account) in phantoms, compute the minimum running
     position over the data and prepend an OPENING_BALANCE transaction with
@@ -927,10 +984,15 @@ def synthesize_openings(
             # (audit S075-24 / S076-00).
             entry['note'] = ('no rows for this symbol/account in the data — '
                              'check the spelling in phantoms.json')
-            print(f"warning: phantoms.json lists {symbol} / {account}, but "
-                  f"no row in the data has that symbol and account — "
-                  f"nothing was applied. Check the spelling.",
-                  file=sys.stderr)
+            # Quiet by default: every account's stage is handed the
+            # whole project file, so another account's entry has no rows
+            # here by design. pipeline.prepare_books reports the
+            # project-level result once (report_phantom_log).
+            if warn:
+                print(f"warning: phantoms.json lists {symbol} / {account}, "
+                      f"but no row in the data has that symbol and "
+                      f"account — nothing was applied. Check the "
+                      f"spelling.", file=sys.stderr)
             applied.append(entry)
             continue
         if min_pos >= -1e-6:

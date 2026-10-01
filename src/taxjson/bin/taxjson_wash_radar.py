@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
@@ -226,6 +227,7 @@ def _qfmt(x: float) -> str:
     return "0" if s in ("", "-", "-0") else s
 
 
+@guard_main("taxjson-wash-radar")
 def main():
     parser = argparse.ArgumentParser(description="Tax-Efficient Holding Advisor")
     # nargs='+' + extend: both `--taxable a b` (historical) and repeated

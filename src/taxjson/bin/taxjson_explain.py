@@ -26,7 +26,7 @@ Examples:
     # One-line summaries (use this first to find ids worth diving into)
     taxjson-explain --country canada --list txs.json
 
-    # Include the wash-sale window traces too
+    # Only the wash-sale gains (each with its trigger lot)
     taxjson-explain --country canada --wash-sales txs.json
 """
 
@@ -35,6 +35,7 @@ import os
 import sys
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import get_tax_rules
 from taxjson.lib.json_input import load_transactions_or_exit
 from taxjson.lib.country import (add_country_argument, default_tax_date,
@@ -83,10 +84,10 @@ def parse_args():
              "or partnership — ITA s.251.1; a parent, child or sibling is "
              "related but not affiliated).",
     )
-    parser.add_argument("--symbol", help="Filter to a symbol; prefix match (e.g. AAPL matches AAPL.USD).")
+    parser.add_argument("--symbol", help="Filter to a symbol; case-insensitive prefix match (e.g. aapl matches AAPL.US).")
     parser.add_argument("--date", help="Filter to one disposition date (YYYY-MM-DD).")
     parser.add_argument("--id", dest="gain_id", help="Filter to one tx id (prefix match).")
-    parser.add_argument("--year", type=int, help="Filter to one tax year.")
+    parser.add_argument("--year", type=tax_year, help="Filter to one tax year.")
     parser.add_argument(
         "--tax-date",
         choices=["trade", "settle"],
@@ -150,7 +151,9 @@ def gain_matches(g, args) -> bool:
         return False
     date_key = 'date_settle' if args.tax_date == 'settle' else 'date'
     effective_date = g.get(date_key) or g.get('date', '')
-    if args.symbol and not g.get('symbol', '').startswith(args.symbol):
+    # Case-insensitive, like `taxjson audit` and buy-check (S029-19).
+    if args.symbol and not str(g.get('symbol') or '').upper().startswith(
+            args.symbol.upper()):
         return False
     if args.date and effective_date != args.date:
         return False
@@ -251,6 +254,7 @@ def _timing_default_note(args, prog):
         args.option_premium_timing = 'close'
 
 
+@guard_main("taxjson-explain", value_errors=True)
 def main():
     args = parse_args()
     refuse_foreign_flags(args, "taxjson-explain")

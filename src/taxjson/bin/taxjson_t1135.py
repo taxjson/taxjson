@@ -55,6 +55,7 @@ import re
 import sys
 from decimal import Decimal
 from pathlib import Path
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.futures import is_plain_future
 from taxjson.lib.numeric import positive_float_arg
 from taxjson.lib.report_model import fmt_money, load_report_json
@@ -885,6 +886,7 @@ def render_report(rep: Dict[str, Any]) -> str:
 
 # ---------------------------------------------------------------- main
 
+@guard_main("taxjson-t1135")
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="CRA T1135 foreign-property helper: filing-threshold "
@@ -896,7 +898,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--gains", action="append", type=Path, default=[],
                         help="Year-scoped <account>_gains.json for the "
                              "income and gain(loss) columns (repeatable)")
-    parser.add_argument("--year", type=int, required=True,
+    parser.add_argument("--year", type=tax_year, required=True,
                         help="Tax year")
     parser.add_argument("--map", type=Path, default=None,
                         help="t1135.map override file (SYMBOL COUNTRY lines)")

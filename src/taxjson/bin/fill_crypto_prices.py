@@ -9,6 +9,7 @@ import math
 import time
 import os
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import TaxTransaction, load_transactions
 from taxjson.lib import cli_diag
 from taxjson.lib.offline import offline_enabled
@@ -22,9 +23,9 @@ def load_cache():
     # degrades to a refetch, not a traceback.
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, 'r') as f:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (ValueError, OSError):   # JSON or UTF-8 damage (S055-04)
             pass
     return {}
 
@@ -126,6 +127,7 @@ def get_crypto_price(symbol, date_str):
         cli_diag.warn(PROG, f"failed to fetch crypto price for {symbol} on {date_str}: {e}")
     return 0.0
 
+@guard_main("taxjson-fill-crypto")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", nargs="?", help="Input JSON file (taxjson schema)")
