@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`taxjson audit`:** a grant-timing write is headed WRITE with its
+  premium as proceeds (it read "COVER ... (short)" with proceeds 0.00 and
+  a negative cost); a short's proceeds and cost are shown as filed (the
+  short sale and the cover, not the engine's negated legs); an option's
+  per-share note is "N contracts × 100 sh @ price" (it divided by the
+  contract count); a denial that is partly deferred and partly permanent
+  names both amounts and destinations (the deferred part read as lost);
+  a cross-zero option fill's long close and its grant write are two
+  events (they were summed into one meaningless SELL); a US sale over
+  long- and short-term lots is MIXED with the per-term gains; a `--check`
+  file named twice is read once (every tie-out failed); a saved
+  disposition with no id fails the reconciliation (it was skipped). The
+  totals say they are unrounded engine sums (Schedule 3 rows round to the
+  cent first), and the multi-book `--json` keeps the reconciliation
+  failures.
 - **T1135:** before Dec 31 a "below the threshold" verdict says "so far
   (books through DATE)" and the checklist keeps the step open (it read
   "no T1135 required this year" with a green [x] in September); the

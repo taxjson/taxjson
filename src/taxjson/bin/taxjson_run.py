@@ -12212,19 +12212,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
                "date).")
 
     if getattr(args, "json", False):
-        if len(json_docs) == 1:
-            doc = json_docs[0]
-        else:
-            doc = {"base_currency": base_currency, "country": country,
-                   "events": [e for d in json_docs
-                              for e in d.get("events") or []],
-                   "total_gain": round(sum(d.get("total_gain") or 0.0
-                                           for d in json_docs), 2),
-                   "total_disallowed": round(
-                       sum(d.get("total_disallowed") or 0.0
-                           for d in json_docs), 2),
-                   "failed": any(d.get("failed") for d in json_docs)}
-        _json_out(doc)
+        _json_out(_merge_audit_json(json_docs, base_currency, country))
     if _uncovered and not _acct:
         print(f"taxjson audit: WARNING: not audited — no books for "
               f"{', '.join(sorted(set(_uncovered)))}; their dispositions "
@@ -12233,6 +12221,29 @@ def cmd_audit(args: argparse.Namespace) -> None:
         rc = max(rc, 1)
     if rc:
         raise SystemExit(rc)
+
+
+def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
+                      country: str) -> Dict[str, Any]:
+    """One `taxjson audit --json` document from the per-book
+    taxjson-audit runs: events concatenated, totals summed over EVERY
+    book (S026-11 pins it), reconciliation failures kept (they were
+    dropped when two books were merged)."""
+    if len(docs) == 1:
+        return docs[0]
+    from taxjson.bin.taxjson_audit import TOTALS_NOTE
+    return {"base_currency": base_currency, "country": country,
+            "events": [e for d in docs for e in d.get("events") or []],
+            "total_gain": round(sum(float(d.get("total_gain") or 0.0)
+                                    for d in docs), 2),
+            "total_disallowed": round(
+                sum(float(d.get("total_disallowed") or 0.0)
+                    for d in docs), 2),
+            "totals_note": TOTALS_NOTE,
+            "reconciliation_failures": [
+                f for d in docs
+                for f in d.get("reconciliation_failures") or []],
+            "failed": any(d.get("failed") for d in docs)}
 
 
 def cmd_find_missing_history(args: argparse.Namespace) -> None:
