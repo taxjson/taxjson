@@ -722,7 +722,7 @@ Defaults to every taxable account (sheltered accounts are never `--taxable`
 targets); pass an account to scope to one. The combined `sheltered_base.json` is
 included automatically for cross-account detection when present. `--verbose` for
 more detail; `--all` to also list CLEAR (no-risk) positions. Sections group by
-advisory in fixed order (VIOLATION, BLOCKED, LOCKED, EXITABLE — loss OK only with a FULL exit, CAUTION — sheltered leg exited so a full-exit loss stands unless re-bought within 30 days, COOLING, RISK, CLEAR). The
+advisory in fixed order (VIOLATION, BLOCKED, LOCKED, EXITABLE — loss OK only with a FULL exit, CAUTION — sheltered leg exited so a loss sale of any size stands unless re-bought within 30 days, COOLING, RISK, CLEAR). The
 same reports are written to `reports/wash_radar_<account>.rpt` during `taxjson
 run`. A trade is counted from its **trade date** (a sale made today settles
 tomorrow but is already in the books), while the ±30-day windows run on
@@ -738,8 +738,14 @@ account held before the window never do, and in Canada a new short sale or
 written option is not an acquisition (`country = "usa"` keeps §1091's re-short
 rule, and an IRA purchase in the window locks the loss even after the IRA sold).
 A VIOLATION names who must sell what to rescue the loss; a LOCKED row states how
-many of your taxable shares' loss a sale today would lose. `buy-check`,
-`sell-check`, `watch` and `harvest`'s ADVISORY column read the same radar.
+many of your taxable shares' loss a sale today would lose. A rebuy denies the
+loss only on as many shares as it buys (BLOCKED and `buy-check` print the amount
+per unit). A crypto VIOLATION's last day is the settle bound itself (a coin
+settles on its trade date). `buy-check`, `sell-check`, `watch` and `harvest`'s
+ADVISORY column read the same radar. Every verdict covers **this project's
+accounts only** and says so: a purchase by your spouse or common-law partner or a
+corporation you control (Canada: affiliated persons, s.251.1; US: IRS Pub. 550)
+also denies a loss (tax-logic CA-PLAN-04 / US-PLAN-04).
 
 In a **US project** the radar applies §1091, not s.54 (tax-logic US-PLAN-01):
 windows run on **trade** dates, and each recent loss's verdict is the **US
@@ -1145,7 +1151,9 @@ FX-converted, with its source marked (`^` IBKR live, `+` yfinance,
 losses by when the radar says they become claimable: `now` (no lock),
 then cumulatively within 7/14/30 days from the clear dates — estimates
 at today's prices, and any new buy on either side pushes a clear date
-out. `RISK` losses count as claimable **now** — the superficial-loss rule
+out. The TOTAL row's `PCT` is the total unrealized over the gross cost of the
+listed positions (a short's credited proceeds do not net against long cost).
+An input harvest cannot read stops it (exit 2). `RISK` losses count as claimable **now** — the superficial-loss rule
 needs an acquisition inside the ±30-day window, not mere sheltered
 ownership — but carry a forward caveat: an affiliated buy (a DRIP is
 the classic) within 30 days *after* the sale denies the loss
