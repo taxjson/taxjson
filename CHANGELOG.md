@@ -2114,14 +2114,14 @@
   Comm/Fee already includes per-fill levies (UK stamp tax, SEC/FINRA
   fees); the Transaction Fees section only breaks them down (the Cash
   Report shows Commissions + Transaction Fees = the Comm/Fee sum). The
-  parser folded the levy into the trade again: on a real 2025 AWE buy the
-  fee drops from 103.74 to 54.34 GBP and the cost basis from 9,983.74 to
-  9,934.34 (IB's own Basis). A layout that ever excluded the levy now
+  parser folded the levy into the trade again, so an LSE buy's fee and
+  cost basis were overstated by the stamp levy; they now equal IB's own
+  Basis. A layout that ever excluded the levy now
   fails the Cash Report check instead of under-booking.
 - **IB: commission rebates keep their sign.** A positive Comm/Fee is a
   rebate; abs() booked it as a charge, overstating costs and understating
-  proceeds by twice the rebate (real 2025 margin statement: 65 rows,
-  245.95 USD; 2026: 195 rows, 624.94 USD; RRSP 17.66 and 6.04 USD). The
+  proceeds by twice the rebate (seen on real statements in every IB
+  account that earns rebates). The
   fee is now negative for a rebate and net_amount is the cash IB moved.
   Questrade's commission is signed the same way (none of its real
   exports carries a rebate).
@@ -2211,8 +2211,8 @@
   a stock trade at the strike. Both legs are now marked ASSIGN when the
   stock trade matches in quantity, direction and price within a few
   days, so the premium folds into the shares' cost (s.49(3)) instead of
-  being realized as an expiry; seen on real 2025 exports (LULU and DOCU
-  put assignments, a DELL call exercise).
+  being realized as an expiry; seen on real exports (put assignments
+  and a call exercise).
 - **RBC: split-corp retractions are dispositions.** RBC books an issuer
   retraction as an `Other` row coded `TEN` ("... RETRACTION AT C$x PER
   SHARE") with a blank price; it was skipped as unclassified, so the
@@ -2727,7 +2727,7 @@ the engine against the Act (docs/design/canada-rules-2026-09.md):
   column says CAD. The parser filed such buys as `.TO` (a CDR-shaped
   symbol the `DISTINCT` rule then kept apart from the real US pool) with
   the USD gross taken as the CAD cost, under-stating the ACB by the
-  whole exchange rate (real AVGO/GS/CAT/BABA rows, 2026-09-18). They are
+  whole exchange rate (seen on real RBC rows). They are
   now the `.US` listing, costed at the CAD actually paid, and their
   dividends key to the US listing too.
 - Kraken: the 2026 ledger format (new `amountusd` / `feeusd` /
@@ -2866,10 +2866,9 @@ fixed:
   statement is kept as a reversing leg with a note.
 - IB parser: per-fill Transaction Fees rows all fold into their Order
   row. IB levies UK Stamp Tax per fill while the Trades section
-  carries one Order row, so a 10,000-share buy filled 8,900 + 1,100
-  had two levy rows; the taken-once fold sent the second out as a
-  standalone FEE that never reached the ACB (real 2025 AWE.L buy,
-  5.43 GBP). Each trade now keeps an unlevied quantity so several
+  carries one Order row, so a buy filled in two lots had two levy
+  rows; the taken-once fold sent the second out as a standalone FEE
+  that never reached the ACB (seen on a real LSE buy). Each trade now keeps an unlevied quantity so several
   rows can fold into it; two same-day trades with one levy each still
   pair 1:1.
 - `taxjson.toml` accounts accept `holdings = [...]` — paths of the

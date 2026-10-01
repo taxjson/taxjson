@@ -884,8 +884,12 @@ ENB.US   CA      # Canadian corp held on NYSE — not specified foreign property
 GLXY.TO  USA     # foreign corp listed on TSX — still specified foreign property
 ```
 
-Symbols with no market suffix (typically exchange-held crypto) are flagged
-country `??` for manual review. Amounts are **cost** (ACB-style) — correct for
+Symbols with no market suffix (typically exchange-held crypto) are
+bucketed as country `CRYPTO` and counted toward the threshold: crypto held
+on a foreign exchange is generally specified foreign property, so map each
+one in `t1135.map` (`SYMBOL <ISO3>`, or `SYMBOL CA` for a Canadian
+platform) once you have checked where it is held. Country `??` marks only
+an unknown market suffix, for manual review. Amounts are **cost** (ACB-style) — correct for
 the threshold test and the "maximum cost amount" columns; the category-7
 detailed method's month-end **fair market value** boxes need your broker's
 statements, which this tool does not fetch. Not tax advice.
@@ -1407,7 +1411,13 @@ defended in layers rather than by tests alone:
   in every gate and as the `pre-push` hook, fails closed, and reads a
   private denylist kept outside the repository; `taxjson redact` strips
   the account numbers, names and contact details it recognises from an
-  export — review the output before sharing it.
+  export — review the output before sharing it. One exception is by
+  design: git publishes the author, committer and tagger name and e-mail
+  of every pushed commit and tag. The hook refuses any other identity
+  that hits the scan but only warns about your own configured
+  `user.name` / `user.email`, so set a pseudonym and a
+  `users.noreply.github.com` address before pushing if you do not want
+  your name public.
 - **Filed-year locks.** `taxjson close-year` snapshots a filed year;
   every later run recomputes it and reports drift.
 
