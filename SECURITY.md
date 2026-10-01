@@ -51,10 +51,14 @@ current-price chain behind `harvest`, `watch --harvest` and the GUI's
 Harvest tab (IBKR gateway / Yahoo Finance): they serve
 `work/.price_cache.json` only and refuse the lookup on a miss.
 Everything else that touches the network is opt-in by command: `fetch`
-(your broker's API, with your credentials), `scan --online` (Yahoo
-Finance names), `verify` (Questrade positions), and
-`taxjson-generate-parser`, which sends the ENTIRE sample CSV you hand
-it to an LLM API — run `taxjson redact` on it first.
+(your broker's API, with your credentials; `fetch --positions` reads
+live Questrade positions), `scan --online` (Yahoo Finance names), and
+`taxjson-generate-parser`, which sends the first `--sample-lines`
+(default 30) lines of the sample CSV you hand it to an LLM API. Those
+lines are where broker exports keep the holder's name, account number
+and address, so it scans them first and refuses to send a sample that
+still carries an identity shape (`--allow-unredacted` overrides) — run
+`taxjson redact` on the sample first.
 
 **What Yahoo Finance learns.** Every Yahoo lookup (FX fallback, crypto
 prices, `harvest` / `watch --harvest` current prices, `scan --online`)
@@ -110,6 +114,14 @@ also requires a random per-run access token: the startup line prints
 HttpOnly, SameSite=Strict cookie, and every request without either gets
 401. Prefer an SSH tunnel to the loopback server. `/healthz` reports no
 filesystem paths.
+
+A loopback bind has no token: `127.0.0.1` is reachable by every account
+on the same machine, so while `taxjson serve` runs, any other local user
+(or anyone who can reach that host's loopback, e.g. through their own SSH
+tunnel) can read your holdings, cost bases and trade history through it,
+even though the project files themselves are owner-only (0600). On a
+shared or multi-user host, run it only while you use it, or pass
+`--token` to require the per-run token on loopback as well.
 
 ## Supported versions
 

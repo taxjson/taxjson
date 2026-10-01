@@ -292,5 +292,87 @@ class TestWatchlistPlatformSuffix(unittest.TestCase):
         self.assertEqual(f("QZV.V", "tradingview", {"QZV.V": "XYZ"}), "XYZ:QZV")
 
 
+_IB_SAMPLE = """Statement,Header,Field Name,Field Value
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Name,Pat Contributor
+Account Information,Data,Account,U5550001
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Proceeds,Comm/Fee
+Trades,Data,Order,Stocks,USD,MSFT,"2024-02-12, 09:35:14",50,400.00,-20000.00,-1.00
+"""  # pii-ok (synthetic)
+
+
+class TestGenerateParserPrivacy(unittest.TestCase):
+    """R1-342 / S033-18: taxjson-generate-parser sends the sample to an
+    LLM provider. The provider calls are stubbed: no network."""
+
+    def _main(self, d, sample, *extra):
+        import contextlib
+        import io
+        from unittest import mock
+        sys.path.insert(0, str(SRC))
+        import taxjson.bin.taxjson_generate_parser as gp
+        csv = Path(d) / "sample.csv"
+        csv.write_text(sample, encoding="utf-8")
+        sent = []
+
+        def fake(system_text, user_text, model_id):
+            sent.append(user_text)
+            return "x = 1\n"
+        err = io.StringIO()
+        argv = ["taxjson-generate-parser", str(csv), "-o",
+                str(Path(d) / "out.py"), *extra]
+        with mock.patch.object(gp, "_call_claude", fake), \
+                mock.patch.object(sys, "argv", argv), \
+                mock.patch.dict(os.environ, {"TAXJSON_PII_DENYLIST": ""}), \
+                contextlib.redirect_stderr(err):
+            os.environ.pop("TAXJSON_PII_DENYLIST", None)
+            with mock.patch("pathlib.Path.home", return_value=Path(d)):
+                try:
+                    gp.main()
+                    rc = 0
+                except SystemExit as e:
+                    rc = e.code
+        return rc, sent, err.getvalue()
+
+    def test_identity_in_sample_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            rc, sent, err = self._main(d, _IB_SAMPLE)
+            self.assertEqual(rc, 1)
+            self.assertEqual(sent, [])
+            self.assertIn("personal data", err)
+            self.assertIn("taxjson redact", err)
+            self.assertNotIn("U5550001", err)  # pii-ok
+
+    def test_override_sends_with_warning(self):
+        with tempfile.TemporaryDirectory() as d:
+            rc, sent, err = self._main(d, _IB_SAMPLE, "--allow-unredacted")
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(len(sent), 1)
+            self.assertIn("warning: sending a sample", err)
+
+    def test_redacted_sample_passes(self):
+        sys.path.insert(0, str(SRC))
+        from taxjson.bin.taxjson_redact import redact_text
+        clean, _ = redact_text(_IB_SAMPLE)
+        with tempfile.TemporaryDirectory() as d:
+            rc, sent, err = self._main(d, clean)
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(len(sent), 1)
+            self.assertNotIn("Pat Contributor", sent[0])
+
+    def test_non_positive_sample_lines_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            rc, sent, err = self._main(d, "a,b\n1,2\n", "--sample-lines", "0")
+            self.assertEqual(rc, 2)
+            self.assertIn("--sample-lines must be at least 1", err)
+
+    def test_prompt_steers_required_cells_to_parse_strict_number(self):
+        sys.path.insert(0, str(SRC))
+        import taxjson.bin.taxjson_generate_parser as gp
+        text = gp._SYSTEM_TEMPLATE
+        self.assertIn("parse_strict_number", text)
+        self.assertIn("ONLY for optional cells", text)
+
+
 if __name__ == "__main__":
     unittest.main()
