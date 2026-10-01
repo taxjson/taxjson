@@ -813,6 +813,18 @@ def main(argv=None) -> int:
 
     date_key = "date_settle" if args.tax_date == "settle" else "date"
 
+    # The symbol filter also takes the broker's own ticker: every block
+    # prints the source row (SELL 200 CCJ.US) and its MAPPING, yet
+    # `audit CCJ.US` matched nothing because the books carry the
+    # ticker.map target (CCO.TO) (S048-17).
+    _want_syms = [str(w).upper() for w in (args.symbol or [])]
+    if _want_syms and tmap is not None:
+        for _attr in ("glob", "tobase", "journal"):
+            for _src, _dst in (getattr(tmap, _attr, {}) or {}).items():
+                if _dst and any(str(_src).upper().startswith(w)
+                                for w in _want_syms):
+                    _want_syms.append(str(_dst).upper())
+
     def in_scope(g) -> bool:
         if g.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU") \
                 or not g.get("qty") or "gain" not in g:
@@ -826,9 +838,9 @@ def main(argv=None) -> int:
         if args.date and args.date not in (g.get("date"),
                                            g.get("date_settle")):
             return False
-        if args.symbol and not any(
-                str(g.get("symbol") or "").upper().startswith(s.upper())
-                for s in args.symbol):
+        if _want_syms and not any(
+                str(g.get("symbol") or "").upper().startswith(s)
+                for s in _want_syms):
             return False
         if args.gain_id and not (g.get("id") or "").startswith(
                 args.gain_id):

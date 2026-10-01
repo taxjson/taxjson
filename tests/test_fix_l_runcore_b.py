@@ -885,5 +885,93 @@ class TestWashAdvice(unittest.TestCase):
             self.assertNotIn("before ~31 days", flat)
 
 
+
+class TestAuditAndMissingHistory(unittest.TestCase):
+    """S047-17 (merged total rounded once), S048-17 (broker ticker
+    filter), S048-18 (locked-year timing), S047-19 (phantoms hint),
+    S049-01 (renamed symbol traced to the broker's)."""
+
+    def test_merged_audit_total_is_rounded_once(self):
+        cfg = _CONFIG + '\n[accounts.kr]\ntype = "taxable"\ncrypto = true\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp, tt=(
+                "BUYSELL 2025-01-10 09:30:00 XEI.TO 100 CAD 10.0 -1000.0 0\n"
+                "BUYSELL 2025-04-01 09:30:00 XEI.TO -100 CAD 11.0 1100.004 0\n"),
+                config=cfg, run=False)
+            (root / "inputs" / "kr").mkdir()
+            (root / "inputs" / "kr" / "rows.tt").write_text(
+                "BUYSELL 2025-01-10 09:30:00 ETH 1 CAD 1000 -1000 0\n"
+                "BUYSELL 2025-04-01 09:30:00 ETH -1 CAD 1050.004 1050.004 0\n")
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "audit", "--json", "--no-trace")
+            j = json.loads(r.stdout)
+            self.assertEqual(len(j["events"]), 2, r.stderr)
+            self.assertEqual(j["total_gain"], 150.01)
+
+    def test_filter_takes_the_broker_ticker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp, tt=(
+                "BUYSELL 2025-01-10 09:30:00 XEIOLD.TO 100 CAD 10.0 -1000.0 0\n"
+                "BUYSELL 2025-04-01 09:30:00 XEIOLD.TO -100 CAD 11.0 1100.0 0\n"),
+                run=False)
+            (root / "ticker.map").write_text("TOBASE XEIOLD.TO XEI.TO\n")
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "audit", "--summary", "XEIOLD.TO")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("XEI.TO", r.stdout)
+
+    def test_locked_year_uses_its_recorded_timing(self):
+        cfg = _CONFIG.replace("year = 2025", "year = 2026").replace(
+            "option_grant_timing_since = 2025\n", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _tt_project(tmp, tt=(
+                "BUYSELL 2025-12-10 09:30:00 ABC261218C00050000.TO -1 CAD "
+                "4.0 400.0 0\n"
+                "BUYSELL 2026-01-10 09:30:00 ABC261218C00050000.TO 1 CAD "
+                "1.0 -100.0 0\n"), config=cfg)
+            (root / "filed").mkdir()
+            (root / "filed" / "2025.json").write_text(json.dumps(
+                {"year": 2025, "option_timing": {
+                    "option_premium_timing": "grant",
+                    "option_grant_since": 2025}}))
+            r = _run_cli(root, "audit", "--year", "2025", "--json",
+                         "--no-trace")
+            self.assertIn("2025 is locked", r.stderr)
+            j = json.loads(r.stdout)
+            self.assertEqual(j["total_gain"], 400.0)
+
+    def _short_project(self, tmp, tmap=None):
+        root = _tt_project(tmp, tt=(
+            "BUYSELL 2025-03-03 09:30:00 XEIOLD.TO -10 CAD 10.0 100.0 0\n"),
+            run=False)
+        if tmap:
+            (root / "ticker.map").write_text(tmap)
+        r = _run_cli(root, "run", "--no-input")
+        self.assertIn(r.returncode, (0, 1), r.stderr)
+        return root
+
+    def test_gen_phantoms_hint_resolves_the_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._short_project(tmp)
+            e = dict(os.environ, TAXJSON_OFFLINE="1")
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                 str(root), "find-missing-history", "--gen-phantoms",
+                 "phantoms.json"], cwd=root, capture_output=True,
+                text=True, env=e, stdin=subprocess.DEVNULL)
+            self.assertTrue((root / "phantoms.json").exists(), r.stderr)
+            self.assertIn("`taxjson run` auto-detects it", r.stderr)
+            self.assertNotIn("save it as", r.stderr)
+
+    def test_renamed_short_names_the_broker_ticker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._short_project(tmp, "TOBASE XEIOLD.TO XEI.TO\n")
+            r = _run_cli(root, "find-missing-history")
+            self.assertIn("XEI.TO", r.stdout)
+            self.assertIn("XEI.TO <- XEIOLD.TO", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

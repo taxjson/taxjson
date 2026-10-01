@@ -12972,6 +12972,37 @@ def cmd_audit(args: argparse.Namespace) -> None:
     rates = cache / "to_base.csv"
     tmap = root / "ticker.map"
 
+    # A LOCKED year is recomputed with the option timing its lock
+    # recorded, as check-filed does: `audit --year 2025` from a 2026
+    # project without since = 2025 printed -1,000 for a year filed at
+    # -601, with no word (S048-18).
+    _timing_flags = option_timing_flags(settings)
+    if year and str(year) != str(settings.get("year")):
+        from taxjson.bin import taxjson_filed as _tf
+        _lp = _tf.snapshot_path(root, year)
+        if _lp.exists():
+            try:
+                _lock = _json.loads(_lp.read_text(encoding="utf-8"))
+                _lot = (_lock.get("option_timing")
+                        if isinstance(_lock, dict) else None)
+            except (OSError, ValueError) as e:
+                _lot = None
+                print(f"taxjson audit: warning: cannot read "
+                      f"filed/{_lp.name} ({e}) — {year} is recomputed "
+                      f"with this project's option timing, which may "
+                      f"not be the timing it was filed on.",
+                      file=sys.stderr)
+            if isinstance(_lot, dict):
+                _lf = _tf._lock_timing_flags(settings, int(year), _lot)
+                if _lf != _timing_flags:
+                    print(f"taxjson audit: note: {year} is locked "
+                          f"(filed/{_lp.name}) — recomputed with the "
+                          f"option timing its lock recorded "
+                          f"({' '.join(_lf)}), not this project's "
+                          f"({' '.join(_timing_flags) or 'none'}).",
+                          file=sys.stderr)
+                _timing_flags = _lf
+
     def common_flags() -> List[str]:
         fl = ["--country", country, "--tax-date", tax_date,
               "--base-currency", base_currency]
@@ -12986,7 +13017,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl += ["--map", str(tmap)]
         if phantoms.exists():
             fl += ["--incomplete-history", str(phantoms)]
-        fl += option_timing_flags(settings)
+        fl += _timing_flags
         for sym in getattr(args, "symbol", None) or []:
             fl += ["--symbol", sym]
         if getattr(args, "gain_id", None):
@@ -13153,11 +13184,16 @@ def cmd_audit(args: argparse.Namespace) -> None:
             doc = {"base_currency": base_currency, "country": country,
                    "events": [e for d in json_docs
                               for e in d.get("events") or []],
-                   "total_gain": round(sum(d.get("total_gain") or 0.0
-                                           for d in json_docs), 2),
-                   "total_disallowed": round(
-                       sum(d.get("total_disallowed") or 0.0
-                           for d in json_docs), 2),
+                   # Summed over the events, rounded once: summing each
+                   # invocation's already-rounded total put the audit a
+                   # cent off wash-sales (S047-17).
+                   "total_gain": round(sum(
+                       float(e.get("gain") or 0.0) for d in json_docs
+                       for e in d.get("events") or []), 2),
+                   "total_disallowed": round(sum(
+                       float(e.get("disallowed_amount") or 0.0)
+                       for d in json_docs
+                       for e in d.get("events") or []), 2),
                    # Each invocation's reasons: the merged document said
                    # failed=true without saying why (R1-288).
                    "reconciliation_failures": [
@@ -13272,8 +13308,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
                      f"e.g. {out / 'phantoms.json' if out.is_dir() else 'phantoms.json'}")
         n_reg = sum(1 for e in rows
                     if "Registered" in (e.get("_note") or ""))
+        # Resolved: a relative path names a file under the CWD, and
+        # comparing it unresolved with the resolved root told the user
+        # to save a file already in place (S047-19).
         hint = ("`taxjson run` auto-detects it"
-                if out.name == "phantoms.json" and out.parent == root
+                if out.resolve() == (root / "phantoms.json").resolve()
                 else f"save it as {root / 'phantoms.json'} and `taxjson run` "
                      f"picks it up, or pass it to taxjson-gains "
                      f"--incomplete-history")
@@ -13304,6 +13343,9 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         cmd += ["--include-options"]
     if (root / "phantoms.json").exists():
         cmd += ["--phantoms", str(root / "phantoms.json")]
+    if (root / "ticker.map").exists():
+        # Name the broker's ticker of a renamed symbol (S049-01).
+        cmd += ["--ticker-map", str(root / "ticker.map")]
     _exec_tool(cmd)
 
 

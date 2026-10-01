@@ -112,6 +112,35 @@ def _sheltered_title(yr, country) -> str:
             f"{rule} walk:")
 
 
+def _rename_sources(map_path, symbols):
+    """{reported symbol: [ticker.map source spellings]} for each symbol
+    (or option underlying) that a GLOBAL/TOBASE/JOURNAL rule renames
+    INTO. {} without a readable map."""
+    if not map_path or not symbols:
+        return {}
+    try:
+        from taxjson.bin.taxjson_ticker_map import load_map_file
+        tm = load_map_file(Path(map_path))
+    except Exception as e:                          # noqa: BLE001
+        print(f"taxjson-missing-history: warning: could not read "
+              f"{map_path} ({e}) — renamed symbols are not traced back.",
+              file=sys.stderr)
+        return {}
+    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    by_target = {}
+    for attr in ("glob", "tobase", "journal"):
+        for src, dst in (getattr(tm, attr, {}) or {}).items():
+            by_target.setdefault(str(dst).upper(), set()).add(str(src))
+    out = {}
+    for sym in symbols:
+        key = str(sym or "").upper()
+        if is_option_symbol(key):
+            key = str(parse_option_underlying(key) or key).upper()
+        if key in by_target:
+            out[sym] = sorted(by_target[key])
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -136,6 +165,11 @@ def main(argv=None):
     ap.add_argument("--include-options", action="store_true",
                     help="also include OCC option symbols (a negative option "
                          "position is normal sell-to-open, so skipped by default)")
+    ap.add_argument("--ticker-map", metavar="FILE",
+                    help="the project's ticker.map: a reported symbol "
+                         "that is a rename target is shown with the "
+                         "broker's own ticker, where a missing buy "
+                         "belongs")
     args = ap.parse_args(argv)
 
     txs, failed = _load_all(args.files)
@@ -342,6 +376,21 @@ def main(argv=None):
             _print_zero_section(
                 f"NOT relevant to {yr} - sold in other years; safe to ignore:",
                 irr)
+
+    # The rows show the books' symbol — AFTER ticker.map — in the base
+    # currency: K.TO / CAD for a short the broker booked as KGC.US in
+    # USD. A missing buy entered as reported lands on a listing the
+    # broker never used and breaks the holdings hand-off (S049-01).
+    _renamed = _rename_sources(args.ticker_map,
+                               {r.candidate.symbol for r in short_rows}
+                               | {r.symbol for r in zero_rows})
+    if _renamed:
+        print("\nNOTE: these symbols are ticker.map's consolidated names "
+              "(amounts in the base currency); the broker booked them "
+              "as: " + "; ".join(f"{t} <- {', '.join(srcs)}"
+                                 for t, srcs in sorted(_renamed.items()))
+              + ". Enter a missing buy under the broker's symbol and "
+                "currency, as the account labels it.")
 
     if (yr and (any(r.affects_year and not _covered(r)
                     for r in short_rows)

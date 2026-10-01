@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **audit and find-missing-history follow ticker.map and the locks.**
+  `audit SYMBOL` also matches the broker's own ticker of a renamed
+  security (`audit CCJ.US` found nothing although every block prints
+  `SELL ... CCJ.US` and its MAPPING); `audit --year <locked year>`
+  recomputes with the option timing the lock recorded, and says so;
+  the merged `audit --json` total is summed over the events and
+  rounded once (it was a cent off wash-sales). find-missing-history
+  names the broker's ticker of a renamed symbol (K.TO <- KGC.US: a
+  missing buy belongs under the broker's symbol and currency), and
+  `--gen-phantoms phantoms.json` from the project root says `taxjson
+  run` auto-detects it (audit S048-17, S048-18, S047-17, S049-01,
+  S047-19).
+
 - **Wash advice: the still-held test, coins, US crypto.** buy-check no
   longer says any loss sale within 31 days of a buy "would be
   superficial" or that a rebuy always cancels a loss: in a Canadian
