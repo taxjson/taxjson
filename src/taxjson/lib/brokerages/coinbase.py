@@ -155,6 +155,10 @@ class CoinbaseBrokerage(BaseBrokerage):
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions: List[Dict[str, Any]] = []
         self._blank_totals = 0
+        # Rows of a type the parser does not book that carry coins
+        # (S056-12): (type, date, asset, quantity).
+        unbooked: List[tuple] = []
+        self.lint_findings: List[str] = []
         # utf-8-sig swallows a BOM if present, plain utf-8 reads it as a
         # data byte and silently breaks the first column match.
         with open(path, 'r', encoding='utf-8-sig') as f:
@@ -192,8 +196,20 @@ class CoinbaseBrokerage(BaseBrokerage):
                                 f"column names to _HEADER_SYNONYMS."
                             )
                     continue
-                if not row or len(row) < 3:
+                if not row or not any(c.strip() for c in row):
                     continue
+                _need = max(header_map[f] for f in _REQUIRED_FIELDS)
+                if len(row) <= _need:
+                    # A truncated row: missing cells used to read as ''
+                    # / 0 (a 2-cell tail vanished uncounted; a 3-4 cell
+                    # one booked a qty-0 or symbol-less row) — audit
+                    # R1-115.
+                    raise ValueError(
+                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"the row has {len(row)} cells but the header has "
+                        f"{len(header)} — a truncated row (a cut-off "
+                        f"export?); refusing to read the missing cells "
+                        f"as 0. Re-export the file.")
                 # A quoted cell that never closes (Notes ending in an
                 # unescaped quote) swallows every following row into one
                 # cell: those trades vanished with no message (S056-06).
@@ -245,9 +261,12 @@ class CoinbaseBrokerage(BaseBrokerage):
                                 f"asset={self._col(row, header_map, 'asset')!r}, "
                                 f"timestamp={self._col(row, header_map, 'timestamp')!r}, "
                                 f"notes={self._col(row, header_map, 'notes')!r}. "
-                                f"Workaround: pre-edit the Convert row "
-                                f"into a paired Buy+Sell "
-                                f"(USD-denominated). See KNOWN_ISSUES.md."
+                                f"Remove the row from the export and enter "
+                                f"its two legs in a .tt file: a BUYSELL "
+                                f"selling the coin given up and one buying "
+                                f"the coin received, both at the "
+                                f"conversion's value in the row's "
+                                f"currency (its Subtotal)."
                             )
                         if legs:
                             # [] = a counted non-event (ETH <-> ETH2,
@@ -271,6 +290,18 @@ class CoinbaseBrokerage(BaseBrokerage):
                     if _tl in ('send', 'receive'):
                         _q = abs(self._num(row, header_map,
                                            'quantity transacted'))
+                        if not _q:
+                            # A blank/0 quantity used to fall through to
+                            # the "unclassified type" skip, losing the
+                            # custody evidence of a possible disposition
+                            # (S055-06).
+                            raise ValueError(
+                                f"Coinbase {type_raw.strip()} row "
+                                f"{self._col(row, header_map, 'timestamp')!r} "
+                                f"({self._col(row, header_map, 'asset')!r}) "
+                                f"has no Quantity Transacted — refusing "
+                                f"to drop it. Fill it in from the "
+                                f"Coinbase statement.")
                         _spot = abs(self._num(row, header_map,
                                               'price at transaction'))
                         # Same policy as every other dated row: never
@@ -300,8 +331,22 @@ class CoinbaseBrokerage(BaseBrokerage):
                         self.count_nonevent(f"type {type_raw.strip()}")
                         continue
                     # Rewards-of-unknown-type etc.: no tax-event
-                    # semantics ASSUMED — but never silent.
+                    # semantics ASSUMED — but never silent. One that
+                    # moves coins (an airdrop, a new reward label) is an
+                    # UNBOOKED warning: echoed by `taxjson run`, fatal
+                    # under --strict, a --lint failure (S056-12).
                     self.count_skip(f"type {type_raw.strip() or '?'!s}")
+                    try:
+                        _uq = self._num(row, header_map,
+                                        'quantity transacted')
+                    except ValueError:
+                        _uq = 1.0           # unparseable: treat as live
+                    if _uq:
+                        _ud = self._col(row, header_map, 'timestamp')[:10]
+                        unbooked.append((type_raw.strip() or '?', _ud,
+                                         _cb_symbol(self._col(
+                                             row, header_map, 'asset')),
+                                         _uq))
                     continue
 
                 # Refusing to silently stamp the row as today — that
@@ -395,8 +440,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # staking commission ("Fees and/or Spread", ~25-35% of
                     # the gross reward) — coins you never received. Booking
                     # the Total overstated staking income and the rewarded
-                    # coins' ACB by that commission (134.48 CAD on one
-                    # real 2025 export).
+                    # coins' ACB by that commission.
                     _sub = abs(self._num(row, header_map, 'subtotal')) \
                         if 'subtotal' in header_map else 0.0
                     if _sub:
@@ -440,7 +484,8 @@ class CoinbaseBrokerage(BaseBrokerage):
 
                 qty = self.signed_quantity(qty, action_is_sell=is_sell)
 
-                if not self._col(row, header_map, 'total').strip():
+                derived = not self._col(row, header_map, 'total').strip()
+                if derived:
                     # R1-103: a blank Total read as 0 booked $0 cost /
                     # $0 proceeds with no warning. Derive it the way
                     # Coinbase builds it, or refuse.
@@ -452,7 +497,9 @@ class CoinbaseBrokerage(BaseBrokerage):
                 # Coinbase Advanced Trade Sell rows store both qty and total
                 # as negative ("money out, position out"); store the magnitude
                 # so the gain engine sees positive proceeds. Matches the old
-                # cb_trades.pl convention (abs($total_raw)).
+                # cb_trades.pl convention (abs($total_raw)). A DERIVED
+                # total is already signed the engine's way (a sale whose
+                # fee exceeds its value is negative).
                 tx = {
                     'action': 'BUYSELL',
                     'date': date_str,
@@ -462,7 +509,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     'quantity': qty,
                     'currency': currency,
                     'price': price,
-                    'net_amount': abs(total),
+                    'net_amount': total if derived else abs(total),
                     'gross_amount': price * abs(qty),
                     'fee': abs(fee),
                     'account': self.DEFAULT_ACCOUNT,
@@ -488,6 +535,22 @@ class CoinbaseBrokerage(BaseBrokerage):
         # export lacks per-row IDs (with them, ids are already unique).
         if header and 'id' not in header_map:
             self.disambiguate_split_fills(transactions)
+        if unbooked:
+            kinds: Dict[str, int] = {}
+            for k, _d, _a, _q in unbooked:
+                kinds[k] = kinds.get(k, 0) + 1
+            dates = sorted(d for _k, d, _a, _q in unbooked)
+            assets = sorted({a for _k, _d, a, _q in unbooked})
+            msg = (f"Coinbase {path.name}: {len(unbooked)} row(s) of "
+                   f"type(s) the parser does not book "
+                   f"({', '.join(f'{k} x{n}' for k, n in sorted(kinds.items()))}"
+                   f"; {dates[0]}..{dates[-1]}; assets "
+                   f"{', '.join(assets[:8])}) move coins — an airdrop or "
+                   f"reward is income and an acquisition, a payment a "
+                   f"disposition. They are NOT in the books: enter each "
+                   f"via a .tt file.")
+            print(f"warning: UNBOOKED: {msg}", file=sys.stderr)
+            self.lint_findings.append(msg)
         self.emit_skip_summary(path.name)
         return transactions
 
@@ -602,7 +665,11 @@ class CoinbaseBrokerage(BaseBrokerage):
             return [buy]
         if to_asset in cash:
             if subtotal:
-                sell['net_amount'] = max(subtotal - fee, 0.0)
+                # A fee above the value (a dust convert with a minimum
+                # fee) nets NEGATIVE proceeds — the schema and engine
+                # take a negative sale; clamping at 0 dropped the
+                # excess fee from the loss silently (S056-18).
+                sell['net_amount'] = subtotal - fee
                 sell['fee'] = fee
             return [sell]
         return [sell, buy]
@@ -629,7 +696,8 @@ class CoinbaseBrokerage(BaseBrokerage):
                 f"price is there to derive it from — refusing to book "
                 f"$0 {'proceeds' if is_sell else 'cost'}. Fill in the "
                 f"Total from the Coinbase statement.")
-        return max(sub - fee, 0.0) if is_sell else sub + fee
+        # A sale whose fee exceeds the value nets negative (S056-18).
+        return sub - fee if is_sell else sub + fee
 
     def _crypto_pair_legs(self, row, header_map, tx, type_raw, is_sell,
                           quote, cb_id):

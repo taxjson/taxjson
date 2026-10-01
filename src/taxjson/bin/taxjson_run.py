@@ -1226,6 +1226,17 @@ def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
     for csv in input_files(account_dir, ".csv"):
         broker = detect_broker(csv)
         if not broker:
+            # Content detection cannot read a cp1252 re-save: the
+            # rename advice below pointed at the wrong fix (S024-03).
+            try:
+                _raw = csv.read_bytes()
+                if _raw[:2] not in (b"\xff\xfe", b"\xfe\xff"):
+                    _raw.decode("utf-8-sig")
+            except UnicodeDecodeError as e:
+                from taxjson.lib.cli_diag import not_utf8
+                _die(str(not_utf8(csv, e)))
+            except OSError:
+                pass
             _die(f"cannot detect broker for {csv}. "
                      f"Rename to start with one of: cb_, kr_ (for crypto), "
                      f"generic_ (any other broker, with a TOML column "
@@ -3102,7 +3113,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         # gain; its warning used to reach only reports/*.sum while the
         # run (even --strict) exited 0 (S009-03). Refuse up front.
         from taxjson.bin.taxjson_ticker_map import map_file_problems
-        _tm_problems = map_file_problems(ticker_map)
+        try:
+            _tm_problems = map_file_problems(ticker_map)
+        except OSError as e:        # not UTF-8 (S053-06)
+            _die(str(e))
         if _tm_problems:
             _die(f"{len(_tm_problems)} ticker.map problem(s) — a "
                  f"malformed line's rule would be silently dropped, and "
@@ -5017,6 +5031,17 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         print(f"\n== {acct}: {len(sends)} unmatched send(s), "
               f"{adoc['undecided']} undecided; {adoc['matched']} matched "
               f"to an arrival (self-custody moves, `taxjson transfers`)")
+        _short = adoc.get("unbooked_network_fees") or []
+        if _short:
+            # R1-26: the coins lost in transit paid the network fee — a
+            # disposition at fair value the books do not hold.
+            print(f"  {len(_short)} matched send(s) arrived SHORT — the "
+                  f"difference is the network fee paid in the coin, a "
+                  f"disposition at fair value that is NOT booked (enter "
+                  f"it as a .tt sale if it matters):")
+            for _s in _short:
+                print(f"    {_s['summary']}: "
+                      f"{CS.fmt_qty(_s['gap'])} {_s['symbol']} short")
         for e in sends:
             dec = (e["decision"] or "PENDING").upper()
             ref = f"   ref {e['ref']}" if e["ref"] else ""
@@ -11696,9 +11721,26 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                                        qt_session["refresh_token"])
             _fetch_year = (getattr(args, "year", None)
                            or cfg.get("settings", {}).get("year"))
-            start, end = F.qt_window(getattr(args, "days", None),
-                                     getattr(args, "from_date", None),
-                                     year=_fetch_year)
+            try:
+                start, end = F.qt_window(getattr(args, "days", None),
+                                         getattr(args, "from_date", None),
+                                         year=_fetch_year)
+            except ValueError as e:
+                sys.exit(f"taxjson fetch: {e}")
+            if _fetch_year and (getattr(args, "days", None)
+                                or getattr(args, "from_date", None)):
+                from datetime import date as _dd
+                _y = int(_fetch_year)
+                if (start < _dd(_y - 1, 12, 1)
+                        or end > _dd(_y + 1, 1, 31)):
+                    # R1-354: the file is named for the project year
+                    # whatever the window; the parser dates each row
+                    # itself, so this is only a label — but say so.
+                    say(f"  note: the window {start} -> {end} reaches "
+                        f"outside tax year {_y}'s (Dec 1 {_y - 1} .. Jan "
+                        f"31 {_y + 1}); those rows go into "
+                        f"questrade_{_y}.csv too (each row is still "
+                        f"dated by its own trade/settle date).")
             say(f"fetch {a}: questrade #{number} "
                 f"{start} -> {end}")
             try:

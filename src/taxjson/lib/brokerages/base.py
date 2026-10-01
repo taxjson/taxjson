@@ -636,7 +636,7 @@ class BaseBrokerage:
     def clean_number(raw: str, default: float = 0.0) -> float:
         """LEGACY lenient CSV numeric, for OPTIONAL cells. Strips commas
         and currency symbols. Accounting parentheses are NEGATIVE
-        (`(1,352.97)` == -1352.97) — the old magnitude reading silently
+        (`(1,234.56)` == -1234.56) — the old magnitude reading silently
         flipped the sign of any parenthesized amount whose parser did
         not abs() it; a caller that wants a magnitude (Webull's buy
         proceeds) takes abs() itself. The unicode minus is a minus.

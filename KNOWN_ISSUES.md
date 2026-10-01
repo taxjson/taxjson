@@ -63,6 +63,11 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
+### Kraken fees taken in the traded coin are not in the fee reports
+- **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose ledger shows the fee taken in the base coin) and the ledger instant-trade path (a crypto leg's fee).
+- **Current behavior:** the fee coins are folded into the quantity (fewer coins received on a buy, more given on a sale) and the fill's `fee` field is 0, so cost basis and proceeds are right, but `fees.rpt`, `taxjson fees-sum` and the `.sum` FEES line leave these fees out (on real 2025 data more than half of the Kraken trading fees). The parse note says so.
+- **Why deferred:** the `fee` field feeds the engine's per-row fee figures; recording a fee already inside the quantity there needs an informational-only fee field first.
+
 ### Questrade `commission` vs everyone else `fee`
 - **Where:** `src/taxjson/lib/brokerages/questrade.py`.
 - **Current behavior:** Questrade transactions emit a `commission` key; IB / RBC / Webull / Kraken / Coinbase all emit `fee`.
@@ -427,8 +432,13 @@ carry the spot price so the `.tt` FMV sell is copy-paste; Kraken
 ledgers carry no fiat value (price/net stay 0). Stablecoin evidence
 keeps its own name (a USDC gift is a disposition of USDC the
 property) even though trade books fold USDC/USDT/DAI to USD for
-pricing. Kraken Earn shuffles (`hybridearnwithdrawal` etc.) remain
-ignored — internal moves. Tax semantics still not assumed: only the
+pricing. Kraken Earn allocation/deallocation shuffles (paired rows)
+remain ignored — internal moves; a `hybridearnwithdrawal` row has no
+counter-leg and is custody evidence like a withdrawal (a TRANSFER in the
+sidecar). A Kraken coin fee on a withdrawal/deposit is named in the
+TRANSFER's description (`withdrawal (fee 0.002 TAO)`) and booked as its
+own sale of the fee coin (CA-CRYPTO-03), never in the row's money `fee`
+field. Tax semantics still not assumed: only the
 user knows gift vs self-custody move; genuine gifts are declared as
 `.tt` sells at FMV. Pinned by tests/test_transfer_sidecar.py
 (TestCryptoSendsBecomeEvidence). Since then `taxjson crypto-sends`

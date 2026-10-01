@@ -62,7 +62,7 @@ import re
 import sys
 from decimal import Decimal
 from pathlib import Path
-from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
 from taxjson.lib.futures import is_plain_future
 from taxjson.lib.numeric import positive_float_arg
 from taxjson.lib.report_model import fmt_money, load_report_json
@@ -181,7 +181,7 @@ def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
     # utf-8-sig: a BOM (Windows editors) became part of the first key
     # and silently disabled that override (S008-03, S051-18).
     for lineno, line in enumerate(
-            path.read_text(encoding="utf-8-sig").splitlines(), 1):
+            read_text_utf8(path).splitlines(), 1):
         stripped = line.split("#", 1)[0].strip()
         if not stripped:
             continue

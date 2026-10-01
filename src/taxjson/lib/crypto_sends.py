@@ -137,6 +137,9 @@ def _dt(row: Dict[str, Any]) -> datetime:
 
 
 # ------------------------------------------------------------- evidence
+_FEE_DESC_RE = re.compile(r"\(fee ([0-9.eE+-]+) ([A-Za-z0-9.]+)\)")
+
+
 def load_transfer_rows(cache: Path, accounts: Iterable[str]
                        ) -> List[Dict[str, Any]]:
     """TRANSFER evidence rows from the crypto sidecars of `accounts`."""
@@ -159,20 +162,27 @@ def load_transfer_rows(cache: Path, accounts: Iterable[str]
                 if not q or not t.get("date"):
                     continue
                 desc = str(t.get("description") or "")
-                fee = float(t.get("fee") or 0.0)
-                # "(fee X CCY)" marks a fee in ANOTHER currency; a bare
-                # fee is in the coin itself.
-                fee_other = "(fee " in desc
+                sym = str(t.get("symbol") or "").upper()
+                # "(fee X CCY)" names the fee and its currency (Kraken,
+                # every fee since S061-17); only a fee in the coin
+                # itself left the sent quantity. Older sidecars carry a
+                # same-coin fee in the `fee` field instead.
+                m = _FEE_DESC_RE.search(desc)
+                if m:
+                    fee = (float(m.group(1))
+                           if m.group(2).upper() == sym else 0.0)
+                else:
+                    fee = float(t.get("fee") or 0.0)
                 rows.append({
                     "account": acct,
                     "exchange": exch,
                     "date": str(t.get("date")),
                     "time": str(t.get("time") or "00:00:00"),
-                    "symbol": str(t.get("symbol") or "").upper(),
+                    "symbol": sym,
                     "quantity": q,
                     "price": abs(float(t.get("price") or 0.0)),
                     "currency": str(t.get("currency") or "").upper(),
-                    "fee": 0.0 if fee_other else abs(fee),
+                    "fee": abs(fee),
                     "kind": desc.split(" (fee ")[0] or "transfer",
                     "ref": mask_ref(t.get("id")),
                 })
@@ -797,11 +807,28 @@ def build_report(root: Path, cfg: Dict[str, Any],
             sends.append(entry)
         live = {e["id"] for e in sends}
         matched = sum(1 for o, _i in pairs if o["account"] == acct)
+        # A matched send that ARRIVED SHORT lost the difference to the
+        # network fee — coins paid for a service, a disposition the
+        # books do not hold when the sending exchange's export does not
+        # state the fee (a Coinbase Send: the fee is inside the sent
+        # quantity, audit R1-26). Listed, not booked: the owner decides.
+        short = []
+        for o, i in pairs:
+            if o["account"] != acct or o["fee"]:
+                continue
+            if is_cash_stablecoin(o["symbol"], o["exchange"]) \
+                    and country != "usa":
+                continue
+            gap = -o["quantity"] - i["quantity"]
+            if gap > 1e-12:
+                short.append({"summary": _summary(o), "symbol": o["symbol"],
+                              "date": o["date"], "gap": gap})
         out["accounts"][acct] = {
             "sends": sends,
             "matched": matched,
             "undecided": sum(1 for e in sends if not e["decision"]),
             "orphans": sorted(k for k in decisions if k not in live),
+            "unbooked_network_fees": short,
             "manifest": str(man_path),
             "tt_file": str(root / "inputs" / acct / TT_NAME),
         }

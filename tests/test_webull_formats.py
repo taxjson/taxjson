@@ -28,7 +28,7 @@ _H24 = ('"Currency\nDevise",Date,"Action Code\nCode d\'action","Symbol\nSymbole"
 _H25 = _H24.replace('"Price\nPrix",', '"Price\nPrix",,')
 
 F24 = (_PRE + _H24 +
-       'USD,02-12-2024,BUY,@ZZQ,CALL ZZQ01/17/25 50,OPC,3,4.50,"(1,352.97)"\n'
+       'USD,02-12-2024,BUY,@ZZQ,CALL ZZQ01/17/25 50,OPC,2,3.10,"(621.97)"\n'
        'USD,18-12-2024,BUY,,,,2,2.20,(441.98)\n'
        'USD,,,,,,,,\n'
        'USD,31-12-2024,BUY,ZZR,ZZR HOLDINGS INC CLASS A,SHS,140,38.49,"(5,388.60)"\n')
@@ -52,9 +52,9 @@ class TestBothLayouts(unittest.TestCase):
         tx = _parse(F24)
         self.assertEqual(len(tx), 3)
         opt = [t for t in tx if t["symbol"].startswith("ZZQ250117C")]
-        self.assertEqual([t["quantity"] for t in opt], [3.0, 2.0])
+        self.assertEqual([t["quantity"] for t in opt], [2.0, 2.0])
         # The purchase amount is the NET, never 0 and never the fee.
-        self.assertEqual([t["net_amount"] for t in opt], [1352.97, 441.98])
+        self.assertEqual([t["net_amount"] for t in opt], [621.97, 441.98])
         self.assertTrue(all(0 < t["fee"] < 5 for t in opt))
         stk = [t for t in tx if t["symbol"] == "ZZR.US"][0]
         self.assertEqual((stk["quantity"], stk["net_amount"]), (140.0, 5388.60))

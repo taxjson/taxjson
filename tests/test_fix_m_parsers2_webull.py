@@ -280,6 +280,6 @@ class TestTradeMoneyIdentity(unittest.TestCase):
     def test_normal_commissions_accepted(self):
         text = (_PRE + _H25 +
                 'USD,10-03-2025,BUY,AAPL,APPLE INC,SHS,100,185.00,,"(18,503.99)"\n'
-                'USD,11-03-2025,BUY,@ZZQ,CALL ZZQ01/17/26 50,OPC,3,4.50,,"(1,352.97)"\n')
+                'USD,11-03-2025,BUY,@ZZQ,CALL ZZQ01/17/26 50,OPC,2,3.10,,"(621.97)"\n')
         tx, _ = _parse(text)
         self.assertEqual(len(tx), 2)
