@@ -139,5 +139,60 @@ class TestStakingValue(unittest.TestCase):
         self.assertAlmostEqual(buy["net_amount"], 40.00)
 
 
+class TestSendNetworkFeeListed(unittest.TestCase):
+    """R1-26: a Coinbase Send carries its network fee inside the sent
+    quantity; the arrival on Kraken is short by it. Not booked (an owner
+    decision) — but crypto-sends lists it instead of nothing."""
+
+    def _report(self, country):
+        import json
+        from taxjson.lib.crypto_sends import build_report
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "work").mkdir()
+
+            def side(broker, rows):
+                (root / "work" / f"c_{broker}_transfers.json").write_text(
+                    json.dumps({"metadata": {"kind": "transfer_sidecar",
+                                             "brokerage": broker},
+                                "transactions": rows}))
+            side("coinbase", [
+                {"action": "TRANSFER", "date": "2025-06-02",
+                 "time": "08:00:00", "symbol": "SOL", "quantity": -1.0001,
+                 "price": 150.0, "currency": "CAD", "fee": 0.0,
+                 "description": "Send", "id": "cb1"},
+                {"action": "TRANSFER", "date": "2025-06-02",
+                 "time": "08:00:00", "symbol": "USDC", "quantity": -100.5,
+                 "price": 1.0, "currency": "USD", "fee": 0.0,
+                 "description": "Send", "id": "cb2"}])
+            side("kraken", [
+                {"action": "TRANSFER", "date": "2025-06-02",
+                 "time": "08:20:00", "symbol": "SOL", "quantity": 1.0,
+                 "currency": "USD", "fee": 0.0, "description": "deposit",
+                 "id": "kr1"},
+                {"action": "TRANSFER", "date": "2025-06-02",
+                 "time": "08:20:00", "symbol": "USDC", "quantity": 100.0,
+                 "currency": "USD", "fee": 0.0, "description": "deposit",
+                 "id": "kr2"}])
+            cfg = {"settings": {"country": country,
+                                "base_currency": "CAD" if country == "canada"
+                                else "USD"},
+                   "accounts": {"c": {"crypto": True}}}
+            return build_report(root, cfg, None, with_pool=False)
+
+    def test_short_arrival_is_listed(self):
+        rep = self._report("canada")
+        short = rep["accounts"]["c"]["unbooked_network_fees"]
+        # The USDC send is US-dollar cash in a Canada book: not a coin.
+        self.assertEqual([s["symbol"] for s in short], ["SOL"])
+        self.assertAlmostEqual(short[0]["gap"], 0.0001)
+
+    def test_us_project_lists_the_stablecoin_too(self):
+        rep = self._report("usa")
+        short = rep["accounts"]["c"]["unbooked_network_fees"]
+        self.assertEqual(sorted(s["symbol"] for s in short),
+                         ["SOL", "USDC"])
+
+
 if __name__ == "__main__":
     unittest.main()

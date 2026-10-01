@@ -4774,6 +4774,17 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         print(f"\n== {acct}: {len(sends)} unmatched send(s), "
               f"{adoc['undecided']} undecided; {adoc['matched']} matched "
               f"to an arrival (self-custody moves, `taxjson transfers`)")
+        _short = adoc.get("unbooked_network_fees") or []
+        if _short:
+            # R1-26: the coins lost in transit paid the network fee — a
+            # disposition at fair value the books do not hold.
+            print(f"  {len(_short)} matched send(s) arrived SHORT — the "
+                  f"difference is the network fee paid in the coin, a "
+                  f"disposition at fair value that is NOT booked (enter "
+                  f"it as a .tt sale if it matters):")
+            for _s in _short:
+                print(f"    {_s['summary']}: "
+                      f"{CS.fmt_qty(_s['gap'])} {_s['symbol']} short")
         for e in sends:
             dec = (e["decision"] or "PENDING").upper()
             ref = f"   ref {e['ref']}" if e["ref"] else ""

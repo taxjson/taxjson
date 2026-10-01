@@ -807,11 +807,28 @@ def build_report(root: Path, cfg: Dict[str, Any],
             sends.append(entry)
         live = {e["id"] for e in sends}
         matched = sum(1 for o, _i in pairs if o["account"] == acct)
+        # A matched send that ARRIVED SHORT lost the difference to the
+        # network fee — coins paid for a service, a disposition the
+        # books do not hold when the sending exchange's export does not
+        # state the fee (a Coinbase Send: the fee is inside the sent
+        # quantity, audit R1-26). Listed, not booked: the owner decides.
+        short = []
+        for o, i in pairs:
+            if o["account"] != acct or o["fee"]:
+                continue
+            if is_cash_stablecoin(o["symbol"], o["exchange"]) \
+                    and country != "usa":
+                continue
+            gap = -o["quantity"] - i["quantity"]
+            if gap > 1e-12:
+                short.append({"summary": _summary(o), "symbol": o["symbol"],
+                              "date": o["date"], "gap": gap})
         out["accounts"][acct] = {
             "sends": sends,
             "matched": matched,
             "undecided": sum(1 for e in sends if not e["decision"]),
             "orphans": sorted(k for k in decisions if k not in live),
+            "unbooked_network_fees": short,
             "manifest": str(man_path),
             "tt_file": str(root / "inputs" / acct / TT_NAME),
         }
