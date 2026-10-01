@@ -440,5 +440,78 @@ class TestMutationScripts(unittest.TestCase):
             self.assertIn("== CANDIDATE", r.stdout)
 
 
+_PY_STUB = """#!/usr/bin/env bash
+# python stand-in for the installer test: no venv, no pip, no network.
+case "$1" in
+  -c) exit 0 ;;
+  --version) echo "Python 3.12.0" ;;
+  -m)
+    case "$2" in
+      venv) mkdir -p "$3/bin"; cp "$0" "$3/bin/python"
+            printf '#!/bin/sh\\necho "taxjson 0.0.0"\\n' > "$3/bin/taxjson"
+            chmod +x "$3/bin/taxjson" ;;
+    esac ;;
+esac
+exit 0
+"""
+
+
+class TestInstallerTagSelection(unittest.TestCase):
+    """S023-01: users run install.sh straight from main, so its release
+    channel's tag choice is pinned here (a stub python; local git only)."""
+
+    def _git(self, cwd, *args):
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="Sam",
+                   GIT_AUTHOR_EMAIL="sam@example.com",
+                   GIT_COMMITTER_NAME="Sam",
+                   GIT_COMMITTER_EMAIL="sam@example.com")
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                           text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_release_channel_takes_the_newest_plain_vXYZ_tag(self):
+        import shutil
+        if not shutil.which("git"):
+            self.skipTest("git required")
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            src = d / "src"
+            src.mkdir()
+            self._git(src, "init", "-q", "-b", "main")
+            for i, tag in enumerate(("v0.2.0", "v0.10.0", "v0.11.0-rc1",
+                                     "v0.12.0.1", "v1.0", "release-9")):
+                (src / "f.txt").write_text(f"{i}\n")
+                self._git(src, "add", "f.txt")
+                self._git(src, "commit", "-q", "-m", tag)
+                self._git(src, "tag", "-a", tag, "-m", tag)
+            stub = d / "stub"
+            stub.mkdir()
+            for name in ("python3", "python3.9", "python3.10", "python3.11",
+                         "python3.12", "python3.13"):
+                (stub / name).write_text(_PY_STUB)
+                (stub / name).chmod(0o755)
+            env = dict(os.environ, HOME=str(d), TAXJSON_REPO=str(src),
+                       TAXJSON_DIR=str(d / "inst"), TAXJSON_BIN=str(d / "bin"),
+                       PATH=f"{stub}:{os.environ['PATH']}",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+            def install():
+                r = subprocess.run(["bash", str(REPO / "install.sh")], env=env,
+                                   capture_output=True, text=True,
+                                   stdin=subprocess.DEVNULL)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                return self._git(d / "inst", "describe", "--tags",
+                                 "--exact-match")
+            self.assertEqual(install(), "v0.10.0",
+                             "an rc / four-part / two-part tag never ships")
+            self.assertTrue((d / "bin" / "taxjson").is_symlink())
+            (src / "f.txt").write_text("next\n")
+            self._git(src, "commit", "-q", "-am", "next")
+            self._git(src, "tag", "-a", "v0.10.1", "-m", "v0.10.1")
+            self.assertEqual(install(), "v0.10.1", "re-running upgrades")
+
+
 if __name__ == "__main__":
     unittest.main()
