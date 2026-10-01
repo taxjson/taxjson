@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Kraken: PYUSD and GUSD are US-dollar cash in a Canada project.** As
+  on Coinbase and like USDC/USDT/DAI: a PYUSD/USD buy is a currency
+  conversion, an ETH/PYUSD fill a purchase for dollars, a PYUSD reward
+  dollar income at 1.00 — no PYUSD pool that never closes, no Yahoo
+  lookup; `crypto-sends` gives a Kraken PYUSD gift the currency gain.
+  A US project keeps every stablecoin as property (audit S060-24).
+
 - **fetch / watch.** `fetch` masks the Questrade account number in its
   progress line and in API error messages (`questrade #59***`,
   `/v1/accounts/59***/activities: HTTP 400 ...`); `--trim-overlap`

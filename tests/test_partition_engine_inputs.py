@@ -854,11 +854,13 @@ class TestRulesBothCountriesState(unittest.TestCase):
                           ("DIVIDEND", "USDC", 12.5)])
 
     @rule("CA-CRYPTO-08")
-    def test_kraken_pyusd_is_a_coin_send(self):
-        # SPEC-26: the Kraken parser books PYUSD/GUSD as coins, so their
-        # sends are coin sends (a sale line), not stablecoin cash.
+    def test_kraken_pyusd_is_a_cash_send(self):
+        # SPEC-26 pinned PYUSD/GUSD as coins on Kraken; the owner decided
+        # (audit S060-24) they are US-dollar cash there too, as on
+        # Coinbase, so a Kraken PYUSD send gets the currency gain, not a
+        # sale line.
         from taxjson.lib import crypto_sends as cs
-        self.assertFalse(cs.is_cash_stablecoin("PYUSD", "kraken"))
+        self.assertTrue(cs.is_cash_stablecoin("PYUSD", "kraken"))
         self.assertTrue(cs.is_cash_stablecoin("PYUSD", "coinbase"))
         self.assertTrue(cs.is_cash_stablecoin("USDC", "kraken"))
 
@@ -870,8 +872,8 @@ class TestRulesBothCountriesState(unittest.TestCase):
         send = {"symbol": "PYUSD", "date": "2025-05-01", "quantity": -10.0,
                 "exchange": "kraken", "price": 0.99, "currency": "USD"}
         fv = cs.fair_value(send, R(), None)
-        self.assertIn("spot price", fv["source"])
-        self.assertAlmostEqual(fv["price"], 0.99 * 1.40, places=4)
+        self.assertIn("US-dollar cash", fv["source"])
+        self.assertAlmostEqual(fv["price"], 1.40, places=4)
 
     @rule("CA-CRYPTO-06")
     @rule("US-CRYPTO-05")

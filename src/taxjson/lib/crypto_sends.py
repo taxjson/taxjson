@@ -62,23 +62,19 @@ class RefusedDecision(ValueError):
     .tt is still written — WITHOUT the refused sends — so nothing books
     them; the caller stops with this message."""
 
-# USD-pegged stablecoins the crypto books treat as US-dollar cash (the
-# Kraken parser folds USDC/USDT/DAI to USD; the Coinbase parser also
-# PYUSD/GUSD). A sale line for one would sell a position that does not
-# exist.
+# USD-pegged stablecoins the crypto books treat as US-dollar cash in a
+# Canada project (both parsers fold USDC/USDT/DAI/PYUSD/GUSD to USD —
+# Kraken folded only the first three until audit S060-24). A sale line
+# for one would sell a position that does not exist.
 STABLECOINS = frozenset({"USDC", "USDT", "DAI", "PYUSD", "GUSD"})
 USD_FAMILY = STABLECOINS | {"USD"}
-# Which coins each exchange's parser books as US-dollar cash: the Kraken
-# parser folds only USDC/USDT/DAI and books PYUSD/GUSD as coins, so a
-# Kraken PYUSD send is a coin send (partition SPEC-26).
-_CASH_COINS_BY_EXCHANGE = {"kraken": frozenset({"USDC", "USDT", "DAI"}),
-                           "coinbase": STABLECOINS}
 
 
 def is_cash_stablecoin(symbol: str, exchange: str) -> bool:
     """Whether `symbol` is US-dollar cash in `exchange`'s books (the
-    Canadian model; a US project books every stablecoin as a coin)."""
-    return symbol in _CASH_COINS_BY_EXCHANGE.get(exchange, STABLECOINS)
+    Canadian model, the same on every exchange; a US project books
+    every stablecoin as a coin)."""
+    return symbol in STABLECOINS
 
 _EXCH_ABBR = {"kraken": "kr", "coinbase": "cb"}
 _EXCH_NAME = {"kraken": "Kraken", "coinbase": "Coinbase"}

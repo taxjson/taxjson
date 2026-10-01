@@ -635,11 +635,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "a sale of one and a purchase of the other at fair "
                  "value."),
             Rule("CA-CRYPTO-02",
-                 "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
-                 "Coinbase) are treated as US-dollar cash, an "
-                 "approximation (their own gain or loss, a de-peg, is not "
-                 "computed; a fill more than 2% off 1.00 USD is warned "
-                 "about)."),
+                 "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
+                 "Kraken and Coinbase alike) are treated as US-dollar "
+                 "cash, an approximation (their own gain or loss, a "
+                 "de-peg, is not computed; a fill more than 2% off 1.00 "
+                 "USD is warned about)."),
             Rule("CA-CRYPTO-03",
                  "A Kraken withdrawal fee paid in a coin is a sale of that "
                  "coin."),
@@ -669,9 +669,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "and stablecoin pool. A loss is treated as superficial "
                  "— the whole loss excluded, a conservative reading of "
                  "the pro-rata rule — when US dollars or stablecoins were "
-                 "acquired within 30 days and are still held. (PYUSD and "
-                 "GUSD are cash on Coinbase only; on Kraken they are "
-                 "coins.)"),
+                 "acquired within 30 days and are still held."),
         ]),
         ("Reports", [
             Rule("CA-RPT-01",
