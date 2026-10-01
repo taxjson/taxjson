@@ -904,6 +904,22 @@ def prepare_books(transactions, sheltered_transactions=(),
         candidates = detect_phantoms(
             transactions + sheltered_transactions + affiliated_transactions,
             registered_accounts=_types)
+        for c in candidates:
+            if c.broker_says_closing:
+                # The broker coded the sale CLOSING (IB code C): what it
+                # sold was bought before the data — not a short, not a
+                # written option, whatever the books do with it until
+                # the history is supplied (audit S013-00).
+                print(f"warning: ATTENTION: {c.symbol} ({c.account}): the "
+                      f"broker codes the sale on {c.first_negative_date} "
+                      f"CLOSING (IB code C"
+                      + (f", IB Basis {c.broker_basis}" if c.broker_basis
+                         else "")
+                      + f"), but the data holds no position to close — "
+                        f"it is booked as a new short until the missing "
+                        f"purchase is supplied (`taxjson "
+                        f"find-missing-history --gen-phantoms "
+                        f"phantoms.json`).", file=sys.stderr)
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
@@ -994,6 +1010,34 @@ class GainsRequest:
         return self.taxable and not self.no_wash
 
 
+def declared_multipliers(transactions) -> Dict[str, float]:
+    """{symbol: the contract size its rows declare} (the parser's
+    `multiplier`: a futures option's CL 1000 or ES 50, an equity option's
+    100). A symbol whose rows declare two sizes is left out (unknown),
+    as is one that declares none."""
+    seen: Dict[str, set] = {}
+    for t in transactions:
+        m = float(getattr(t, 'multiplier', 0.0) or 0.0)
+        if m > 0 and getattr(t, 'symbol', ''):
+            seen.setdefault(t.symbol, set()).add(round(m, 10))
+    return {s: next(iter(v)) for s, v in seen.items() if len(v) == 1}
+
+
+def annotate_inventory_multipliers(results: dict, transactions) -> None:
+    """Put the declared contract size on each held option/futures line
+    of the year-end inventory (`multiplier`), so the holdings export, the
+    reports and the what-if never assume an equity option's 100 for a
+    futures option (audit S026-22). Lines with no declared size are left
+    as they are (the consumer then says it does not know)."""
+    mults = declared_multipliers(transactions)
+    if not mults:
+        return
+    for item in results.get('inventory') or []:
+        m = mults.get(item.get('symbol'))
+        if m:
+            item['multiplier'] = m
+
+
 def run_gains(transactions, sheltered_transactions=(),
               affiliated_transactions=(), req: GainsRequest = None, *,
               trace_sink: Optional[Callable[[dict], None]] = None,
@@ -1075,6 +1119,8 @@ def run_gains(transactions, sheltered_transactions=(),
         detect_wash_sales=req.effective_detect_wash(),
         **_extra,
     )
+
+    annotate_inventory_multipliers(results, transactions)
 
     # Capture tainted dispositions across ALL years before the year filter
     # strips them. The superficial-loss warning below pairs in-year clean

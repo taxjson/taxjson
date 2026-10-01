@@ -968,10 +968,15 @@ def _us_expired_options(ctx: Ctx) -> Result:
     if found:
         shown = ", ".join(f"{x['symbol']} {x['quantity']:g} ({x['account']}, "
                           f"expired {x['expiry']})" for x in found[:3])
+        _closing = [x for x in found if x.get("broker_closing")]
         return Result("option-boundary", "attention",
                       f"{len(found)} option position(s) still open past "
                       f"expiry: {shown}{' ...' if len(found) > 3 else ''} — "
-                      f"import the expiry, exercise or assignment row")
+                      f"import the expiry, exercise or assignment row"
+                      + (f" ({len(_closing)} opened by a trade the broker "
+                         f"codes CLOSING, IB code C: add the missing "
+                         f"purchase instead — `taxjson find-missing-history`)"
+                         if _closing else ""))
     return Result("option-boundary", "done",
                   "no option position open past its expiry")
 

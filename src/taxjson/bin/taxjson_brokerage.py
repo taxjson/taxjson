@@ -358,9 +358,10 @@ Examples:
     override_renamed: dict = {}
     override_kept: set = set()
     normalized = []
-    # Parser-declared contract multipliers, parallel to `normalized`
-    # (not a TaxTransaction field — they feed only the schema notional
-    # check below, which is an ERROR for rows that declare one).
+    # Parser-declared contract multipliers, parallel to `normalized`:
+    # they feed the schema notional check below (an ERROR for rows that
+    # declare one). Option and futures rows also keep theirs on the
+    # TaxTransaction (`multiplier`); a share's 1 is checked here only.
     multipliers = []
     dropped_keys = {}
     lint_problems = 0
@@ -617,6 +618,18 @@ Examples:
                         and k not in ('qty', 'multiplier'):
                     dropped_keys[k] = dropped_keys.get(k, 0) + 1
             clean = {k: v for k, v in t.items() if k in valid_keys}
+            # The declared contract size is kept on option and futures
+            # rows (the holdings export, the .tt check and the what-if
+            # read it — audit S026-22); a share's 1 is not news.
+            _sym = str(clean.get('symbol') or '')
+            if not (is_option_symbol(_sym)
+                    or _sym.startswith(('F:', '/', '\\'))):
+                clean.pop('multiplier', None)
+            elif clean.get('multiplier') is not None:
+                try:
+                    clean['multiplier'] = float(clean['multiplier'])
+                except (TypeError, ValueError):
+                    clean.pop('multiplier', None)
             # Only override the parser's account label when --account
             # was explicitly given. Defaulting to the literal "default"
             # (the old behaviour) silently erased the per-parser

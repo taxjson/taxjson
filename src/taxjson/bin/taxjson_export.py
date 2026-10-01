@@ -336,6 +336,14 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
                                       'position_start_date': None})
         bucket['qty'] += float(item.get('qty', 0))
         bucket['total_cost'] += float(item.get('total_cost', 0))
+        # The contract size the parser declared (a futures option's CL
+        # 1000 — audit S026-22); two inputs that disagree leave it
+        # unknown.
+        _m = item.get('multiplier')
+        if _m:
+            if bucket.get('multiplier') not in (None, float(_m)):
+                bucket['multiplier_conflict'] = True
+            bucket['multiplier'] = float(_m)
         # Per-currency sub-buckets: JOURNAL folds (DLR.US -> DLR.TO)
         # deliberately merge cross-currency listings, and summing their
         # NATIVE costs into one number made total_cost currency salad.
@@ -369,6 +377,19 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
 _OPTION_CONTRACT_MULTIPLIER = 100
 
 
+def contract_multiplier_of(sym: str, bucket: Dict[str, Any]):
+    """The contract size of a held line: the size its rows declared
+    (`multiplier` on the inventory — a futures option's CL 1000), else
+    100 for an equity option; None for a futures option whose size was
+    not declared (never the equity 100 — audit S026-22, S030-09) and
+    for anything else."""
+    if bucket.get('multiplier') and not bucket.get('multiplier_conflict'):
+        return float(bucket['multiplier'])
+    if is_option_ticker(sym) and not is_future_ticker(sym):
+        return float(_OPTION_CONTRACT_MULTIPLIER)
+    return None
+
+
 def render_report(agg: Dict[str, Dict[str, Any]],
                    dust_threshold: float = 1e-9,
                    year: Any = None) -> List[str]:
@@ -385,8 +406,9 @@ def render_report(agg: Dict[str, Dict[str, Any]],
     cost are dropped — a sub-fractional residue (e.g. -3.3e-05 shares
     left by a corp-action ratio) is float noise, not a real holding.
 
-    A futures option's cost/share is per contract: its multiplier is
-    not the equity 100 and is not known here (audit S030-09).
+    A futures option's cost/share is divided by the contract size its
+    rows declared (CL 1000 — audit S026-22); with none declared it stays
+    per contract (never the equity 100 — S030-09).
 
     The inventory is the END of the data, not a tax-year end; the title
     says so (`year` names the report's tax year — audit S030-01).
@@ -401,8 +423,9 @@ def render_report(agg: Dict[str, Dict[str, Any]],
         # A fully-netted JOURNAL pair leaves a qty-0 inventory row;
         # --dust-threshold 0 keeps it, so guard the division.
         cps = total / qty if abs(qty) > 1e-12 else 0.0
-        if is_option_ticker(sym) and not is_future_ticker(sym):
-            cps /= _OPTION_CONTRACT_MULTIPLIER
+        _m = contract_multiplier_of(sym, b)
+        if is_option_ticker(sym) and _m:
+            cps /= _m
         rows.append((sym, qty, cps, total,
                      "MIXED" if b.get('mixed_currency')
                      else b['currency']))
@@ -678,18 +701,24 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
             if opt['expiry']:
                 # TOML local date — bare, unquoted.
                 lines.append(f"expiry = {opt['expiry']}")
-            if not is_fut:
-                lines.append("contract_multiplier = 100")
+            _cm = contract_multiplier_of(sym, b)
+            if _cm:
+                # The declared size (a futures option: the future's —
+                # CL 1000, ES 50 — audit S026-22), else the equity 100.
+                lines.append(f"contract_multiplier = {_cm:g}")
                 # Unit reminder next to the figure a reader is most
                 # likely to misread (2026-09 audit S030-08): the
                 # trades' prices are per share, cost_per_share is per
                 # contract.
                 lines.append("# cost_per_share below is per CONTRACT; "
-                             "trades[].price is per share")
+                             "trades[].price is per "
+                             + ("unit of the underlying" if is_fut
+                                else "share"))
             else:
                 # A futures option's multiplier is the future's (CL
                 # 1000, micro contracts 0.1 ...), not the equity 100:
-                # omitted rather than guessed (audit S030-09).
+                # omitted rather than guessed when no row declared it
+                # (audit S030-09).
                 lines.append("# futures option: contract_multiplier "
                              "unknown here (not the equity 100)")
         lines.append(f"quantity = {float(qty)!r}")

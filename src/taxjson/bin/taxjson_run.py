@@ -1134,6 +1134,21 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
             "inventory") or []
     except (OSError, ValueError, AttributeError):
         inv = []
+    # Positions the broker says were opened BEFORE the data (IB code C on
+    # the trade that opened them in the books): the missing row is the
+    # purchase, not the expiry (audit S013-00).
+    _closing: set = set()
+    if any(is_option_symbol(str(h.get("symbol") or "")) for h in inv):
+        try:
+            from taxjson.lib.core import load_transactions
+            from taxjson.lib.option_boundary import expired_open
+            _base = cache / f"{name}_base.json"
+            if _base.exists():
+                _closing = {x["symbol"] for x in expired_open(
+                    load_transactions(_base), int(year))
+                    if x.get("broker_closing")}
+        except (OSError, ValueError, TypeError):
+            _closing = set()
     for h in inv:
         sym = str(h.get("symbol") or "")
         try:
@@ -1146,6 +1161,15 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
         if not exp or exp >= cutoff:
             continue
         side = "long" if qty > 0 else "written"
+        if sym in _closing:
+            lines.append(
+                f"warning: {name}: {sym} expired {exp} and the books still "
+                f"hold {qty:g} ({side}), but the broker coded the trade "
+                f"that opened it CLOSING (IB code C): it closed a position "
+                f"opened before the data — add the missing "
+                f"{'write' if qty > 0 else 'purchase'} (`taxjson "
+                f"find-missing-history`), not an expiry row.")
+            continue
         lines.append(
             f"warning: {name}: {sym} expired {exp} but the books still "
             f"hold {qty:g} ({side}) — the export is missing its expiry, "
@@ -9888,7 +9912,12 @@ def cmd_positions(args: argparse.Namespace) -> None:
             # harvest and the holdings report (it was per contract,
             # 100x theirs — S045-03).
             _sym = str(h.get("symbol") or "")
-            _mult = (100.0 if _is_opt_sym(_sym)
+            # A declared contract size (a futures option's CL 1000 —
+            # S026-22) wins; an undeclared futures option stays per
+            # contract.
+            _mult = (float(h["multiplier"]) if _is_opt_sym(_sym)
+                     and h.get("multiplier")
+                     else 100.0 if _is_opt_sym(_sym)
                      and not _is_future_sym(_sym) else 1.0)
             cps = cost / (qty * _mult) if qty else 0.0
             deferred = float(h.get("deferred_wash", 0) or 0)

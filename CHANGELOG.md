@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **IB open/close codes reach the missing-history checks.** IB's Trades
+  `Code` (O opening, C closing, C;O both) is kept on each trade. A short
+  IB declares (a sale coded O, or C;O that closed the long and opened the
+  short) is listed as a real short, not "missing a buy — fix before
+  filing", and is never offered as a phantom (the owner's 2025 AMZN short
+  no longer blocks the checklist). A sale coded C with no position in the
+  data — a long option bought before the statements — is always flagged
+  (options and futures included) with IB's Basis, and `option-boundary`
+  and the expired-option warning ask for the missing purchase instead of
+  an expiry row. Order-level codes are read per order, not per fill
+  (audit S013-00, S058-02, S060-12).
+- **A futures option keeps its contract size.** The size IB's instrument
+  list declares (CL 1000, ES 50, micro 0.1) is kept on option and futures
+  rows and on the year-end inventory: the holdings export writes it as
+  `contract_multiplier` and divides COST/SHARE by it, `taxjson list` too,
+  the web what-if prices a futures option with it (still refused when no
+  row declares one), and a `.tt` line may end in `x1000` so its total is
+  checked at the real size (audit S026-22).
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent

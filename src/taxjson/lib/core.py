@@ -98,6 +98,25 @@ class TaxTransaction:
     # a CDR or another company from an interlisting (audit S057-24).
     # Evidence only: NOT part of compute_id, omitted when empty.
     security_name: str = ''
+    # The broker's own open/close marker on a trade (IB Trades `Code`:
+    # "O" opening, "C" closing, "C;O" a sale that closed a long and
+    # opened a short in one fill). Evidence for the missing-history
+    # checks (find-missing-history, option-boundary): a sale coded "O"
+    # is a broker-declared short, a sale coded only "C" closed a
+    # position bought before the data. NOT part of compute_id, omitted
+    # from to_dict() when empty (audit S013-00, S058-02, S060-12).
+    open_close: str = ''
+    # The broker's own cost basis of the position a closing trade
+    # closed, as "<amount> <currency>" (IB Trades `Basis` on a row coded
+    # "C") — shown next to a closing sale that has no position in the
+    # data. Evidence only, never booked.
+    broker_basis: str = ''
+    # Contract size the parser read from the export (IB Financial
+    # Instrument Information Multiplier: 100 per equity option, 1000 per
+    # CL future or futures option, 0.1 per micro-crypto future) — kept
+    # on option and futures rows only; 0 = not declared (audit S026-22).
+    # NOT part of compute_id, omitted from to_dict() when 0.
+    multiplier: float = 0.0
 
     def __post_init__(self):
         if self.id is None:
@@ -139,7 +158,7 @@ class TaxTransaction:
 
     def to_dict(self):
         d = asdict(self)
-        for k in INCOME_FACT_FIELDS + ('broker_time', 'security_name'):
+        for k in INCOME_FACT_FIELDS + EVIDENCE_FIELDS:
             if not d.get(k):
                 d.pop(k, None)
         return d
@@ -149,6 +168,9 @@ class TaxTransaction:
 # from to_dict() when empty so every other row keeps its shape.
 INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
                       'dealer_country', 'issuer_country')
+# The other optional evidence fields, omitted from to_dict() when empty.
+EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
+                   'broker_basis', 'multiplier')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or
@@ -690,7 +712,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     # phantom walk's arithmetic, and `"symbol": 0` crashed the engines
     # — none of them caught by the tools' ValueError handlers.
     for _fld in ('quantity', 'price', 'proceeds', 'commission', 'fee',
-                 'net_amount', 'gross_amount'):
+                 'net_amount', 'gross_amount', 'multiplier'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -715,7 +737,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'symbol_new', 'corp_event_id', 'corp_election', 'id',
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
-                 'security_name'):
+                 'security_name', 'open_close', 'broker_basis'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -887,8 +909,11 @@ def _effective_fee_for_trace(tx) -> float:
     net = float(tx.net_amount)
     if qty < 1e-9 or price < 1e-9:
         return 0.0
-    is_option = is_option_symbol(tx.symbol or '')
-    multiplier = 100 if is_option else 1
+    # The contract size the parser declared (a futures option: CL 1000,
+    # ES 50 — audit S026-22), else 100 per equity option, 1 per share.
+    multiplier = float(getattr(tx, 'multiplier', 0.0) or 0.0)
+    if multiplier <= 0:
+        multiplier = 100 if is_option_symbol(tx.symbol or '') else 1
     theoretical = qty * price * multiplier
     # The SIGNED residual (audit S070-24 / S071-00): a buy pays gross +
     # fee, a sale receives gross - fee (a cheap option's fee can exceed
