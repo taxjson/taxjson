@@ -436,6 +436,17 @@ def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], yea
     lines.append(f"{CYAN}{'-' * 112}{RESET}")
     return "\n".join(lines)
 
+def _require_gains(doc, where) -> None:
+    """A non-gains document (no 'transactions', a stage file) printed
+    GRAND TOTAL 0.00 at exit 0 (S033-01)."""
+    from taxjson.lib.json_input import InputFileError, require_gains_doc
+    try:
+        require_gains_doc(doc, where)
+    except InputFileError as e:
+        cli_diag.error(PROG, str(e))
+        sys.exit(2)
+
+
 @guard_main("taxjson-sum-gains")
 def main():
     parser = argparse.ArgumentParser(description="Summarize gains from taxjson_gains.py output.")
@@ -458,6 +469,7 @@ def main():
         if not isinstance(raw, dict):
             cli_diag.error(PROG, "<stdin>: expected a JSON object")
             sys.exit(2)
+        _require_gains(raw, "<stdin>")
         report_data = summarize_gains(raw)
     else:
         all_by_ticker = {}
@@ -476,6 +488,7 @@ def main():
         wash_iters = None
         for fp in file_paths:
             data = load_json_doc_or_exit(PROG, fp)
+            _require_gains(data, fp)
             if 'by_ticker' in data:
                 all_by_ticker.update(data['by_ticker'])
             if 'transactions' in data:

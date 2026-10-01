@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Schedule 3 / Form 8949 export:** under grant timing a written option
+  and its buy-back count their contracts once in the units column (5
+  contracts showed 10); crypto unit counts keep full precision (a
+  0.00003 BTC sale showed 0 units); a write for a net debit shows no
+  proceeds and the debit as an outlay (it showed the debit as proceeds
+  and an invented ACB of twice it); a permanently denied superficial loss
+  is worded for an affiliated person's purchase too; the 2025 crypto-line
+  note follows the line routing itself. Form 8949 rows foot — (h) = (d)
+  − (e) + (g) on the rounded cells — so part totals, the printed 8949 and
+  the TXF agree to the cent. The stand-alone `taxjson-form-export`
+  refuses gains rows in another currency (the native `*_raw_gains.json`
+  summed USD and CAD under a CAD label), and `--csv` no longer leaves a
+  truncated file after a failed write. `taxjson sum` FOR THE RETURN says
+  when its cent-rounded rows differ from the gains files' unrounded
+  total.
+- **Stand-alone report tools refuse a non-gains file:** form-export,
+  sum-gains, ccd-gains, leaps-gains and t1135 refuse a JSON with no
+  `transactions` list or a pre-gains stage file (it rendered a $0
+  Schedule 3 / GRAND TOTAL 0.00 at exit 0); `taxjson-gains` (stdin) and
+  `taxjson-merge` refuse a document without the list.
 - **`taxjson audit`:** a grant-timing write is headed WRITE with its
   premium as proceeds (it read "COVER ... (short)" with proceeds 0.00 and
   a negative cost); a short's proceeds and cost are shown as filed (the

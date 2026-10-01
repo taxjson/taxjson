@@ -853,3 +853,350 @@ class TestAuditTotalsPinned(unittest.TestCase):
         self.assertEqual(total.split()[2], "3")
         self.assertIn("+$250.00", total)
         self.assertIn("$20.00", total)
+
+
+# ---------------------------------------------------------------------------
+# form-export, sum FOR THE RETURN, stand-alone layout checks
+# ---------------------------------------------------------------------------
+
+from taxjson.bin import taxjson_form_export as FE  # noqa: E402
+
+
+def _g(symbol="AAA.TO", qty=-100.0, proceeds=1000.0, cost=800.0,
+       gain=None, direction="LONG", date="2025-05-02", settle=None, **kw):
+    e = {"symbol": symbol, "qty": qty, "proceeds": proceeds, "cost": cost,
+         "gain": (proceeds - cost) if gain is None else gain,
+         "direction": direction, "date": date,
+         "date_settle": settle or date, "commission": 0.0, "fee": 0.0,
+         "disallowed_amount": 0.0, "permanently_disallowed": 0.0,
+         "days_held": 30, "currency": "CAD", "account": "margin"}
+    e.update(kw)
+    return e
+
+
+def _row(rep, symbol):
+    return next(r for r in rep["rows"] if r["symbol"] == symbol)
+
+
+class TestSchedule3Units(unittest.TestCase):
+    """S003-04 / S033-02: a written option under grant timing counted its
+    write AND its buy-back (5 contracts showed 10 units)."""
+
+    @rule("CA-OPT-01")
+    def test_grant_write_and_buyback_count_once(self):
+        from taxjson.lib.core import get_tax_rules, TaxTransaction
+        sym = "QQQ250620C00050000.TO"
+        rows = [TaxTransaction(action="BUYSELL", date=d, date_settle=s,
+                               symbol=sym, quantity=q, net_amount=n,
+                               currency="CAD", account="margin", time=t)
+                for d, s, q, n, t in (
+                    ("2025-02-03", "2025-02-04", -5.0, 649.0, "10:00:00"),
+                    ("2025-04-01", "2025-04-02", 5.0, -161.0, "10:00:00"))]
+        for timing in ("grant", "close"):
+            with self.subTest(timing=timing):
+                res = get_tax_rules("canada").compute_gains(
+                    rows, option_premium_timing=timing)
+                rep = FE.build_schedule3(res["transactions"], 2025)
+                r = _row(rep, sym)
+                self.assertEqual(r["units"], 5.0)
+                self.assertAlmostEqual(r["gain"], 488.0, places=2)
+
+    def test_open_write_counts_at_the_write(self):
+        rep = FE.build_schedule3([
+            _g(symbol="XYZ250620P00040000.TO", qty=-4.0, proceeds=0.0,
+               cost=-400.0, gain=400.0, direction="SHORT", grant=True)],
+            2025)
+        self.assertEqual(rep["rows"][0]["units"], 4.0)
+
+    def test_crypto_units_keep_full_precision(self):
+        # S032-21: 0.00003 BTC showed 0 units beside nonzero proceeds.
+        rep = FE.build_schedule3(FE.mark_crypto([
+            _g(symbol="BTC", qty=-0.00003, proceeds=2.70, cost=2.00),
+            _g(symbol="ETH", qty=-0.34325885, proceeds=1000.0,
+               cost=900.0)]), 2025)
+        self.assertEqual(_row(rep, "BTC")["units"], 0.00003)
+        self.assertEqual(_row(rep, "ETH")["units"], 0.34325885)
+        text = FE.render_schedule3(rep, 2025, "CAD")
+        self.assertIn("0.00003 | BTC", text)
+        self.assertIn("0.34325885 | ETH", text)
+
+
+class TestSchedule3Amounts(unittest.TestCase):
+    def test_net_debit_write_shows_no_proceeds(self):
+        # S032-19: a put written for a net debit showed proceeds 0.35
+        # and an invented ACB of 0.70.
+        rep = FE.build_schedule3([
+            _g(symbol="ZZ250620P00010000.US", qty=-1.0, proceeds=-0.0,
+               cost=0.3459, gain=-0.3459, direction="SHORT")], 2025)
+        r = rep["rows"][0]
+        self.assertEqual((r["proceeds"], r["acb"], r["outlays"], r["gain"]),
+                         (0.0, 0.0, 0.35, -0.35))
+        # A credit write of the same size: proceeds 0.35, ACB 0.
+        rep = FE.build_schedule3([
+            _g(symbol="ZZ250620P00010000.US", qty=-1.0, proceeds=-0.0,
+               cost=-0.3459, gain=0.3459, direction="SHORT")], 2025)
+        r = rep["rows"][0]
+        self.assertEqual((r["proceeds"], r["acb"], r["gain"]),
+                         (0.35, 0.0, 0.35))
+
+    @rule("CA-ACB-02")
+    def test_commission_and_fee_are_both_outlays(self):
+        # S032-18: the outlays accumulator was unpinned.
+        ents = [_g(proceeds=8993.0, cost=7000.0, commission=5.0, fee=2.0)]
+        rep = FE.build_schedule3(ents, 2025)
+        r = rep["rows"][0]
+        self.assertEqual(r["proceeds"], 9000.0)
+        self.assertEqual(r["outlays"], 7.0)
+        self.assertEqual(r["acb"], 7000.0)
+        self.assertEqual(r["gain"], 1993.0)
+        tot = FE.filing_totals(ents, 2025)
+        self.assertEqual((tot["proceeds"], tot["outlays"], tot["acb"]),
+                         (9000.0, 7.0, 7000.0))
+        self.assertEqual(rep["lines"][0]["proceeds"], 9000.0)
+
+    @rule("CA-SL-09")
+    def test_denials_sum_and_split_notes(self):
+        # S032-20 / R1-312 / S033-03.
+        rep = FE.build_schedule3([
+            _g(proceeds=500.0, cost=600.0, gain=0.0, raw_gain=-100.0,
+               disallowed_amount=100.0),
+            _g(proceeds=500.0, cost=600.0, gain=0.0, raw_gain=-100.0,
+               disallowed_amount=100.0, date="2025-06-02"),
+            _g(symbol="MIX.TO", proceeds=300.0, cost=1000.0, gain=0.0,
+               raw_gain=-700.0, disallowed_amount=700.0,
+               permanently_disallowed=300.0),
+            _g(symbol="PERM.TO", proceeds=300.0, cost=500.0, gain=0.0,
+               raw_gain=-200.0, disallowed_amount=200.0,
+               permanently_disallowed=200.0)], 2025)
+        r = _row(rep, "AAA.TO")
+        self.assertEqual(r["denied"], 200.0)
+        self.assertEqual(r["dispositions"], 2)
+        self.assertIn("superficial loss 200.00 denied", r["notes"])
+        m = _row(rep, "MIX.TO")["notes"]
+        self.assertIn("superficial loss 400.00 denied", m)
+        self.assertIn("superficial loss 300.00 PERMANENTLY denied", m)
+        p = _row(rep, "PERM.TO")["notes"]
+        self.assertNotIn("add it to the ACB of the replacement", p)
+        self.assertIn("affiliated person", p)
+
+
+class TestSchedule3Render(unittest.TestCase):
+    def test_crypto_note_follows_the_line_routing(self):
+        # S032-23: the note's own year test was unpinned.
+        ents = FE.mark_crypto([_g(symbol="BTC", qty=-1.0)])
+        for year, want in ((2025, "crypto-assets on 15200/15301"),
+                           (2024, "crypto-assets with the other "
+                                  "properties (15199/15300)")):
+            with self.subTest(year=year):
+                rep = FE.build_schedule3(ents, year)
+                self.assertIn(want, FE.render_schedule3(rep, year, "CAD"))
+
+    def test_csv_write_is_atomic(self):
+        # S032-24: a failed write left a truncated CSV in place.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.csv"
+            out.write_text("good\n")
+            rep = FE.build_schedule3([_g()], 2025)
+
+            def boom(_rep, path):
+                Path(path).write_text("partial")
+                raise OSError(27, "File too large")
+            with mock.patch.object(FE, "_write_csv", boom):
+                with self.assertRaises(OSError):
+                    FE.write_csv(rep, out)
+            self.assertEqual(out.read_text(), "good\n")
+            self.assertEqual(sorted(p.name for p in Path(td).iterdir()),
+                             ["out.csv"])
+            FE.write_csv(rep, out)
+            self.assertIn("AAA.TO", out.read_text())
+
+
+class TestForm8949Footing(unittest.TestCase):
+    """S032-16: (d), (e), (g), (h) rounded separately — rows and part
+    totals did not foot, and the TXF gain differed from the printed (h)."""
+
+    def test_rows_and_totals_foot(self):
+        ents = [_g(symbol="AAPL.US", qty=-1.0, proceeds=10.006, cost=5.004,
+                   gain=5.002, term="SHORT_TERM", date=f"2025-03-{i:02d}")
+                for i in range(1, 29)]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rep = FE.build_8949(ents)
+        for r in rep["part_I"]:
+            self.assertAlmostEqual(r["proceeds"] - r["cost"]
+                                   + r["adjustment"], r["gain"], places=9)
+        t = rep["part_I_totals"]
+        self.assertAlmostEqual(t["proceeds"] - t["cost"] + t["adjustment"],
+                               t["gain"], places=9)
+        txf = FE.build_txf(rep, "A")
+        cost = sum(float(l[1:]) for l in txf.splitlines()[4:]
+                   if l.startswith("$"))
+        self.assertGreater(cost, 0)
+
+
+class TestFormExportInputs(unittest.TestCase):
+    def _fe(self, *files, extra=()):
+        return _run(FE.main, [*map(str, files), "--form", "schedule3",
+                              "--country", "canada", "--year", "2025",
+                              *extra])
+
+    def test_native_currency_gains_are_refused(self):
+        # S032-13: USD + CAD rows summed under a CAD label.
+        with tempfile.TemporaryDirectory() as td:
+            g = _gains(td, [_g(currency="USD", proceeds=10000.0),
+                            _g(symbol="BBB.TO", proceeds=5000.0)],
+                       "margin_raw_gains.json")
+            rc, out, err = self._fe(g)
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn("USD", err)
+        self.assertIn("raw_gains", err)
+
+    def test_stage_file_and_foreign_layout_are_refused(self):
+        # S033-01: a base stage file or {'Transactions': ...} gave a
+        # $0 Schedule 3 at exit 0.
+        with tempfile.TemporaryDirectory() as td:
+            base = _base(td, [_tx(qty=10, net=-1000.0)])
+            other = Path(td) / "other.json"
+            other.write_text(json.dumps({"Transactions": [_g()]}))
+            for f in (base, other):
+                with self.subTest(file=f.name):
+                    rc, out, err = self._fe(f)
+                    self.assertEqual(rc, 2, out + err)
+                    self.assertNotIn("Line 13199", out)
+            # an income-only gains file is still a gains file
+            inc = _gains(td, [{"action": "DIVIDEND", "symbol": "AAA.TO",
+                               "qty": 0, "gain": 0.0, "dividend": 5.0,
+                               "date": "2025-03-03",
+                               "date_settle": "2025-03-03"}], "inc.json")
+            rc, out, err = self._fe(inc)
+            self.assertEqual(rc, 0, out + err)
+
+    def test_sibling_tools_refuse_a_non_gains_document(self):
+        env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
+        with tempfile.TemporaryDirectory() as td:
+            base = _base(td, [_tx(qty=10, net=-1000.0)])
+            other = Path(td) / "other.json"
+            other.write_text(json.dumps({"Transactions": [_g()]}))
+            for mod, argv, stdin in (
+                    ("taxjson_sum_gains", [str(base)], None),
+                    ("taxjson_sum_gains", [str(other)], None),
+                    ("taxjson_ccd_gains", [str(base)], None),
+                    ("taxjson_leaps_gains", [str(other)], None),
+                    ("taxjson_merge", [str(other)], None),
+                    ("taxjson_gains", ["--country", "canada"],
+                     json.dumps({"Transactions": [_tx(qty=1, net=-1)]})),
+                    ("taxjson_t1135", [str(other), "--year", "2025"],
+                     None)):
+                with self.subTest(mod=mod, argv=argv[0]):
+                    r = subprocess.run(
+                        [sys.executable, "-m", f"taxjson.bin.{mod}",
+                         *argv], input=stdin or "", capture_output=True,
+                        text=True, env=env, timeout=120)
+                    self.assertNotEqual(r.returncode, 0,
+                                        r.stdout + r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+                    low = r.stderr.lower()
+                    self.assertTrue("transactions" in low
+                                    or "'gain'" in low, r.stderr)
+
+
+class TestDateKeysPinned(unittest.TestCase):
+    """R1-303: the settle-vs-trade date key of form-export, carryover and
+    fx-cash was unpinned (t1135: TestT1135Walk)."""
+
+    @rule("CA-DATE-01")
+    def test_form_export_year_by_settle_date(self):
+        ents = [_g(date="2025-12-31", settle="2026-01-02"),
+                _g(symbol="BBB.TO", date="2025-06-02")]
+        with tempfile.TemporaryDirectory() as td:
+            g = _gains(td, ents)
+            rc, out, err = _run(FE.main, [
+                str(g), "--form", "schedule3", "--country", "canada",
+                "--year", "2026", "--date-basis", "settle", "--json"])
+            self.assertEqual(rc, 0, err)
+            self.assertEqual([r["symbol"] for r in json.loads(out)["rows"]],
+                             ["AAA.TO"])
+            rc, out, err = _run(FE.main, [
+                str(g), "--form", "schedule3", "--country", "canada",
+                "--year", "2025", "--date-basis", "settle", "--json"])
+            self.assertEqual([r["symbol"] for r in json.loads(out)["rows"]],
+                             ["BBB.TO"])
+
+    @rule("CA-DATE-01")
+    def test_carryover_buckets_by_settle_date(self):
+        from taxjson.bin.taxjson_carryover import yearly_nets
+        res = {"transactions": [_g(date="2025-12-31", settle="2026-01-02",
+                                   proceeds=900.0, cost=1000.0)]}
+        self.assertEqual(list(yearly_nets(res, "settle")), [2026])
+        self.assertEqual(list(yearly_nets(res, "trade")), [2025])
+
+    @rule("CA-SL-13")
+    def test_carryover_blends_canadian_crypto_into_the_wash_pass(self):
+        from taxjson.bin import taxjson_carryover as CO
+        with tempfile.TemporaryDirectory() as td:
+            eq = _base(td, [_tx(qty=10, net=-1000.0, symbol="AAA.TO")],
+                       "margin_base.json")
+            cr = _base(td, [
+                _tx(date="2025-02-03", qty=1.0, net=-50000.0, symbol="BTC"),
+                _tx(date="2025-03-03", qty=-1.0, net=40000.0, symbol="BTC"),
+                _tx(date="2025-03-10", qty=1.0, net=-41000.0,
+                    symbol="BTC")], "crypto_base.json")
+            rc, out, err = _run(CO.main, [str(eq), "--crypto", str(cr),
+                                          "--country", "canada", "--json"])
+        self.assertEqual(rc, 0, err)
+        doc = json.loads(out)
+        rows = doc.get("ledger") or doc.get("years") or doc.get("rows")
+        row = next(r for r in rows if int(r.get("year")) == 2025)
+        # The BTC loss is superficial (repurchased within 30 days, still
+        # held): the year's net is 0, not -10,000.
+        net = next(row[k] for k in ("net_gain", "net", "realized")
+                   if k in row)
+        self.assertAlmostEqual(float(net), 0.0, places=2)
+
+    @rule("CA-FX-07")
+    def test_fx_cash_walks_in_settlement_order(self):
+        from taxjson.bin.taxjson_fx_cash import build_ledger
+        rates = {("USD", "2026-02-11"): 1.30, ("USD", "2026-02-12"): 1.40}
+        txs = [dict(action="BUYSELL", date="2026-02-09",
+                    date_settle="2026-02-12", time="10:00:00",
+                    symbol="AAA.US", quantity=10, currency="USD",
+                    net_amount=1000.0, account="margin"),
+               dict(action="BUYSELL", date="2026-02-10",
+                    date_settle="2026-02-11", time="10:00:00",
+                    symbol="BBB.US", quantity=-10, currency="USD",
+                    net_amount=1000.0, account="margin")]
+        doc = build_ledger(txs, "CAD", {}, 2026,
+                           rate_of=lambda c, d: rates.get((c, d)))
+        self.assertEqual(doc["overdrafts"], {})
+        self.assertAlmostEqual(doc["net_gain"], 100.0, places=2)
+
+
+class TestSumRoundingNote(unittest.TestCase):
+    """R1-166: FOR THE RETURN (rows rounded to the cent) disagreed with
+    the gains files' unrounded total by cents without a word."""
+
+    def test_return_row_names_the_unrounded_total(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            _gains(root / "work", [
+                _g(symbol=f"S{i}.TO", proceeds=1001.004, cost=1000.0,
+                   gain=1.004) for i in range(3)])
+            env = {**os.environ, "TAXJSON_OFFLINE": "1",
+                   "PYTHONPATH": str(REPO / "src")}
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                 str(root), "sum"], capture_output=True, text=True,
+                env=env, timeout=300)
+            j = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                 str(root), "sum", "--json"], capture_output=True,
+                text=True, env=env, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("unrounded total gain is 3.01", r.stdout)
+        doc = json.loads(j.stdout)
+        self.assertEqual(doc["filing"]["totals"]["gain"], 3.0)
+        self.assertEqual(doc["filing"]["engine_gain_unrounded"], 3.01)

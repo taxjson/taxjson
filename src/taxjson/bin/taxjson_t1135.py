@@ -154,6 +154,10 @@ def load_transactions(paths: List[Path],
         ph = load_phantoms(phantoms)
     for p in paths:
         raw = load_json(p)
+        if isinstance(raw, dict) and "transactions" not in raw:
+            # Read as an empty book: 'no T1135 required' (S033-01).
+            raise ValueError(f"{p}: no 'transactions' list — not a "
+                             f"taxjson base book")
         rows = raw.get("transactions", []) if isinstance(raw, dict) else raw
         rows = [t for t in rows if isinstance(t, dict)]
         if ph:
@@ -604,9 +608,12 @@ def join_income_gains(gains_paths: List[Path], year: int,
     for p in gains_paths:
         try:
             data = load_json(p)
-        except (OSError, json.JSONDecodeError) as e:
+            from taxjson.lib.json_input import require_gains_doc
+            require_gains_doc(data, p)
+        except (OSError, ValueError) as e:
             # A skipped taxable gains file zeroed that account's income
-            # and gain columns with rc 0 (R1-277).
+            # and gain columns with rc 0 (R1-277); so did a stage file
+            # or a JSON without 'transactions' (S033-01).
             raise UnreadableGains(
                 f"taxjson-t1135: could not read {p}: {e} — re-run "
                 f"`taxjson run` to rebuild it.")

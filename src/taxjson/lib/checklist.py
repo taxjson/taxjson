@@ -89,7 +89,8 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "The audit walks each sale from the broker row to the reported gain."),
     ("wash-reviewed", 2, "Every superficial-loss denial reviewed",
      "taxjson wash-sales",
-     "A permanently denied loss (registered-account repurchase) is money gone; make sure each is real."),
+     "A permanently denied loss (registered-account or affiliated-person repurchase) is gone from "
+     "your return; make sure each is real (an affiliated person adds it to their own ACB)."),
     ("option-boundary", 2, "Year-straddling written options need no prior-year amendment",
      "taxjson option-boundary",
      "Under ITA s.49 an assignment in a later year moves the premium; a filed year may need a T1-ADJ."),
@@ -780,7 +781,8 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
         return Result("wash-reviewed", "blocked", "no gains files — run `taxjson run`")
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
-                      f"{perm:,.2f} permanently denied (registered-account repurchase) "
+                      f"{perm:,.2f} permanently denied (registered-account or "
+                      f"affiliated-person repurchase) "
                       f"— confirm each with `taxjson wash-sales`")
     if denied > 0.005:
         return Result("wash-reviewed", "done",

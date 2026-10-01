@@ -27,7 +27,8 @@ import sys
 from typing import Dict, List
 
 from taxjson.lib import cli_diag
-from taxjson.lib.json_input import InputFileError, read_json_doc
+from taxjson.lib.json_input import (InputFileError, read_json_doc,
+                                    require_gains_doc)
 from taxjson.lib.ticker_map import (get_option_type, get_underlying,
                                     is_option_ticker)
 
@@ -113,11 +114,18 @@ def load_inputs(prog: str, files: List[str]):
         if not isinstance(doc, dict):
             cli_diag.error(prog, "<stdin>: expected a JSON object")
             sys.exit(1)
+        try:
+            require_gains_doc(doc, "<stdin>")
+        except InputFileError as e:
+            cli_diag.error(prog, str(e))
+            sys.exit(1)
         return [doc]
     docs = []
     for path in files:
         try:
-            docs.append(read_json_doc(path))
+            # A stage file or a non-gains JSON printed TOTAL 0.00
+            # (S033-01).
+            docs.append(require_gains_doc(read_json_doc(path), path))
         except InputFileError as e:
             # A report missing an input is not a report: the old code
             # printed TOTAL 0.00 and exited 0 (audit R1-173).

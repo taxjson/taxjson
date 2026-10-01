@@ -6997,6 +6997,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
     filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
                     for k in _fkeys}
+    # The RETURN row sums the per-row cents, as filed; the gains files,
+    # wash-sales and audit total the unrounded engine values — a few
+    # cents apart on a large year (R1-166). Shown, not hidden.
+    _engine_gain = round(sum(float(e.get("gain") or 0.0)
+                             for e in _filing_ents), 2)
+    _round_gap = (round(filing_total.get("gain", 0.0) - _engine_gain, 2)
+                  if filing_line_rows else 0.0)
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
     # (T4037) but lives outside the engine's dispositions; show the
     # estimate beside the block when the ledger builds, else a pointer.
@@ -7083,6 +7090,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                        ("parts_8949" if _is_us else "lines"):
                            filing_line_rows,
                        "fx_cash": _fx_note,
+                       "engine_gain_unrounded": _engine_gain,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "run_state_problems": _run_state,
@@ -7154,6 +7162,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   "allowed gain; the disallowed loss moves to the "
                   "replacement shares' basis. Per-sale rows: `taxjson "
                   "form-export`.")
+            if abs(_round_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total gain is "
+                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
+                      f"RETURN row).")
         else:
             print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
@@ -7175,13 +7188,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
                            ["<", ">", ">", ">", ">", ">"], _body, _foot):
                 print(_ln)
             print("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed gain. "
-                  "Short sales are shown as |amounts| and sell-side "
-                  "commissions as outlays, as on the form. Where a "
+                  "A short sale shows what it brought in as PROCEEDS and "
+                  "the cover as ACB, and sell-side commissions are "
+                  "outlays, as on the form. Where a "
                   "superficial loss was DENIED the ACB is REDUCED by it, "
                   "so the gain stays the allowed one; the denied amount "
                   "is added to the ACB of the replacement property "
                   "instead. Per-security rows: `taxjson form-export`; "
                   "per account: `taxjson sum --json`.")
+            if abs(_round_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total gain is "
+                      f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
+                      f"RETURN row).")
             if _fx_note is not None:
                 print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
                       f"the rows above): net {money(_fx_note['net_gain'])}, "
