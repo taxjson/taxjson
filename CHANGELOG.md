@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Canada: T5 box 18 capital-gains dividends can be named.** A new
+  project-root `capital_gains_dividends.map` (`SYMBOL YEAR-or-DATE
+  all-or-AMOUNT [ACCOUNT]`) lists the split-share / mutual-fund
+  dividends the slip reports in box 18. `divs-sum` shows them apart as
+  CAPITAL-GAINS DIVIDENDS (line 17400) and the Canadian estimate taxes
+  them as a capital gain instead of a grossed-up eligible dividend. The
+  ledger and ACB are unchanged; a US project refuses the file
+  (tax-logic CA-INC-06; audit R1-62).
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent
