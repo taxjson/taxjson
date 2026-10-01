@@ -40,7 +40,7 @@ _SUGAR_ACTIONS = ('ACQUIRED',)
 # A token past these used to be ignored without a word — a stray
 # column is a typo to fix (notes belong after `#`).
 _MAX_TOKENS = {
-    'BUYSELL': 9, 'ASSIGN': 9, 'SPLIT': 6,
+    'BUYSELL': 10, 'ASSIGN': 10, 'SPLIT': 6,
     'DIVIDEND': 9, 'DIVIDEND_IN_LIEU': 9, 'TAX': 9,
     'INTEREST': 5, 'FEE': 5, 'ADJUST': 6, 'DISALLOW': 6,
 }
@@ -49,6 +49,11 @@ _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # a .tt line, so no qty x price comparison is possible.
 _FUTURES_PREFIXES = ('F:', '/', '\\')
 _TIME_RE = re.compile(r'^\d{2}:\d{2}:\d{2}$')
+# Optional contract size after the fee on a BUYSELL/ASSIGN line: `x1000`
+# (a CL futures option), `x50` (ES), `x0.1` (a micro crypto future) —
+# audit S026-22. Without it an option line is checked at the equity 100
+# and a futures line is not checked at all.
+_MULT_RE = re.compile(r'^[xX](\d+(?:\.\d+)?)$')
 
 
 def strip_tt_comment(line: str) -> str:
@@ -163,10 +168,31 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 tx['price'] = 0.0
                 tx['net_amount'] = 0.0
             else:
+                _declared = None
+                if action in ('BUYSELL', 'ASSIGN'):
+                    # The optional `x<size>` token is the LAST one (after
+                    # the fee); any other trailing token is refused.
+                    if len(parts) > 8 and _MULT_RE.match(parts[-1]):
+                        _declared = float(_MULT_RE.match(parts[-1]).group(1))
+                        if _declared <= 0:
+                            raise ValueError(
+                                f"{_where(source)}contract size "
+                                f"{parts[-1]!r} must be > 0: "
+                                f"{line.strip()!r}")
+                        parts = parts[:-1]
+                    if len(parts) > 9:
+                        raise ValueError(
+                            f"{_where(source)}{action} row has 1 "
+                            f"unexpected trailing token(s) {parts[9:]} "
+                            f"(only a contract size like `x1000` may "
+                            f"follow the fee) — put notes after `#`: "
+                            f"{line.strip()!r}")
                 tx['quantity'] = _tt_num(parts[4])
                 tx['currency'] = parts[5].upper()
                 tx['price'] = _tt_num(parts[6])
                 tx['net_amount'] = _tt_num(parts[7])
+                if _declared is not None:
+                    tx['multiplier'] = _declared
                 if action == 'TRANSFER':
                     # Past the 8 core fields a TRANSFER may carry a
                     # legacy fee-style number and/or the DECLARED token
@@ -208,7 +234,11 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 # 1/100 guess called every correct futures total a typo
                 # (S029-00), so no comparison for them.
                 from taxjson.lib.core import is_option_symbol
-                _mult = 100.0 if is_option_symbol(tx['symbol']) else 1.0
+                _is_fut = tx['symbol'].startswith(_FUTURES_PREFIXES)
+                _mult = (tx['multiplier'] if tx.get('multiplier')
+                         else 100.0 if (is_option_symbol(tx['symbol'])
+                                        and not _is_fut)
+                         else 1.0)
                 _q = tx['quantity']
                 _fee = tx.get('fee', 0.0)
                 _expected = (abs(_q) * tx['price'] * _mult
@@ -221,13 +251,15 @@ def parse_tt_line(line: str, account_name: str = 'default',
                     _expected = max(_expected, 0.0)
                 _total = abs(tx['net_amount'])
                 if (tx['price'] > 0 and abs(_q) > 0
-                        and not tx['symbol'].startswith(_FUTURES_PREFIXES)
+                        # A futures line is checked only with its size
+                        # on the line (`x1000`).
+                        and (not _is_fut or tx.get('multiplier'))
                         and abs(_total - _expected) >
                         max(0.05, 0.01 * max(_expected, 1.0))):
                     print(
                         f"warning: {_where(source)}.tt line total "
                         f"{_total:.2f} differs from "
-                        f"qty*price{'*100' if _mult > 1 else ''}"
+                        f"qty*price{f'*{_mult:g}' if _mult != 1 else ''}"
                         f"{'+' if _q > 0 else '-'}fee = "
                         f"{_expected:.2f} by more than 1%: {line.strip()!r} "
                         f"— check for a typo (the total IS what the engine "
@@ -390,7 +422,20 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # corruption the parser-level sign fixes removed. Direction
         # still comes from qty. parse_tt_line refuses a negative SELL
         # total (R1-117): a commission above the gross is written 0.
-        return f"{action} {date} {time} {symbol} {qty:.8f} {currency} {price:.8f} {net:.5f} {fee:.5f}"
+        line = (f"{action} {date} {time} {symbol} {qty:.8f} {currency} "
+                f"{price:.8f} {net:.5f} {fee:.5f}")
+        # A declared contract size other than the equity option's 100
+        # (or any size on a futures line) rides along as `x<size>`
+        # (audit S026-22).
+        try:
+            _m = float(tx.get('multiplier') or 0.0)
+        except (TypeError, ValueError):
+            _m = 0.0
+        from taxjson.lib.core import is_option_symbol as _is_opt
+        if _m > 0 and (str(symbol).startswith(_FUTURES_PREFIXES)
+                       or (_is_opt(str(symbol)) and _m != 100.0)):
+            line += f" x{_m:g}"
+        return line
 
     if action == 'TRANSFER':
         line = (f"TRANSFER {date} {time} {symbol} {qty:.8f} {currency} "
@@ -559,7 +604,8 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
             two_dates += 1
         m = tx.get('multiplier')
         try:
-            if m not in (None, '') and float(m) not in (1.0, 100.0):
+            if (m not in (None, '') and float(m) not in (1.0, 100.0)
+                    and not re.search(r' x[0-9.]+$', line)):
                 mults.append(f"{tx.get('symbol')} x{float(m):g}")
         except (TypeError, ValueError):
             mults.append(f"{tx.get('symbol')} x{m!r}")

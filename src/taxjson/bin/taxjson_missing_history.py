@@ -57,6 +57,12 @@ def _load_all(paths):
     return txs, failed
 
 
+def _is_derivative(symbol: str) -> bool:
+    from taxjson.lib.core import is_option_symbol
+    return (is_option_symbol(symbol or '')
+            or (symbol or '').startswith(('F:', '/', '\\')))
+
+
 def _print_section(title, rows, *, show_year_cols):
     if not rows:
         return
@@ -81,6 +87,16 @@ def _print_section(title, rows, *, show_year_cols):
             print(f"{c.symbol:<24} {c.account:<10} {(c.currency or '?'):<4} "
                   f"{c.peak_short:12.4f} {c.first_negative_date:<12} "
                   f"{r.in_year_dispositions:10d} {c.end_position:12.4f} {reg}")
+        if getattr(c, 'broker_says_closing', False):
+            # (indented: a detail line, not a table row — the checklist
+            # counts rows only)
+            print(f"    broker says closing (IB code C): the sale closed a "
+                  f"position bought before the data"
+                  + (f" (IB Basis {c.broker_basis})" if c.broker_basis
+                     else "")
+                  + " — add the missing purchase; it is not a short sale"
+                  + (" or a written option" if _is_derivative(c.symbol)
+                     else "") + ".")
 
 
 def _print_zero_section(title, rows):
@@ -163,8 +179,11 @@ def main(argv=None):
                          "(the run applies them) are listed apart, not "
                          "as work still to do")
     ap.add_argument("--include-options", action="store_true",
-                    help="also include OCC option symbols (a negative option "
-                         "position is normal sell-to-open, so skipped by default)")
+                    help="also include OCC option symbols and futures (a "
+                         "negative position is normal sell-to-open, so "
+                         "skipped by default — except a sale the broker "
+                         "codes CLOSING, IB code C, which is always "
+                         "reported)")
     ap.add_argument("--ticker-map", metavar="FILE",
                     help="the project's ticker.map: a reported symbol "
                          "that is a rename target is shown with the "
@@ -261,9 +280,14 @@ def main(argv=None):
         print(f"\n## Broker-marked short sales (real shorts, NOT missing "
               f"history): {len(broker_shorts)}")
         for c in broker_shorts:
+            _how = ("codes the sale O (opening)"
+                    if c.short_marker == 'IB code O'
+                    else "marks the sales SHORT." if c.short_marker
+                    in ('', 'SHORT.')
+                    else f"marks the sales short ({c.short_marker})")
             print(f"  {c.symbol} [{c.account}] went short on "
                   f"{c.first_negative_date} (peak {c.peak_short:g}); the "
-                  f"broker marks the sales SHORT. — nothing to fix, do not "
+                  f"broker {_how} — nothing to fix, do not "
                   f"add a phantom for it.")
 
     if not short_rows and not zero_rows and not links:

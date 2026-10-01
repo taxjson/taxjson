@@ -151,6 +151,17 @@ class PhantomCandidate:
     # short-sale marker (RBC "... SHORT."): a real short, not missing
     # history (audit R1-8).
     broker_marked_short: bool = False
+    # A sale that took the position short is one the broker itself
+    # codes CLOSING (IB Trades code "C", no "O"): it sold a position
+    # bought before the data — missing history for certain, also for an
+    # option or a future, which are otherwise skipped by default (audit
+    # S013-00). `broker_basis` is the broker's cost of what it closed
+    # ("450.00 CAD"), when the export gives it.
+    broker_says_closing: bool = False
+    broker_basis: str = ''
+    # How the broker marked the short ("SHORT." / "IB code O"), for the
+    # report's wording.
+    short_marker: str = ''
 
 
 # The broker's short-sale marker on a sale's description: RBC writes
@@ -158,8 +169,74 @@ class PhantomCandidate:
 _BROKER_SHORT_RE = re.compile(r'(?<![A-Z])SHORT\.(?=\s|$)')
 
 
+def open_close_codes(tx) -> Tuple[str, ...]:
+    """The broker's open/close marker on a row ('O', 'C' or both, in
+    the broker's order; () when the export has none) — IB's Trades
+    Code, carried as `open_close`."""
+    raw = str(getattr(tx, 'open_close', '') or '')
+    return tuple(c for c in re.split(r'[;,\s]+', raw.upper())
+                 if c in ('O', 'C'))
+
+
+def broker_short_marker(tx) -> str:
+    """How the broker marks this sale as a short sale: 'SHORT.' (RBC's
+    description) or 'IB code O' (an IB sale coded O or C;O — it opened
+    a short); '' when it does not."""
+    if _BROKER_SHORT_RE.search((tx.description or '').upper()):
+        return 'SHORT.'
+    if float(tx.quantity or 0) < 0 and 'O' in open_close_codes(tx):
+        return 'IB code O'
+    return ''
+
+
+def unbacked_close(tx, prev: float, order_prev: Optional[float] = None
+                   ) -> bool:
+    """The broker codes this trade as (partly) CLOSING (IB code C) but
+    the position the data holds cannot back the close: a sale coded C
+    alone that sells more than is held (`prev`, the position before this
+    row), a sale coded C;O with no long held when its ORDER began
+    (`order_prev`: IB stamps the order's code on every fill of it, so
+    the second fill of a "C;O" order that closed 1 and opened 1 carries
+    C;O too) — and the mirror cases for a buy. What it closed was
+    opened before the data: missing history, never a new short or a new
+    long (audit S013-00)."""
+    codes = open_close_codes(tx)
+    if 'C' not in codes:
+        return False
+    if order_prev is None:
+        order_prev = prev
+    q = float(tx.quantity or 0)
+    if q < 0:
+        if 'O' in codes:
+            return order_prev <= 1e-9
+        return prev + q < -1e-9
+    if q > 0:
+        if 'O' in codes:
+            return order_prev >= -1e-9
+        return prev + q > 1e-9
+    return False
+
+
+class OrderStarts:
+    """The position each broker ORDER began from, for unbacked_close:
+    consecutive rows of one (symbol, account) with the same clock stamp,
+    direction and open/close code are fills of one order."""
+
+    def __init__(self):
+        self._last: Dict[Any, Tuple[Any, float]] = {}
+
+    def prev(self, key, tx, prev: float) -> float:
+        q = float(tx.quantity or 0)
+        sig = (tx.date, tx.time, q > 0, open_close_codes(tx))
+        last = self._last.get(key)
+        if last is not None and last[0] == sig:
+            return last[1]
+        self._last[key] = (sig, prev)
+        return prev
+
+
 def _is_marked_short(tx) -> bool:
-    return bool(_BROKER_SHORT_RE.search((tx.description or '').upper()))
+    return bool(broker_short_marker(tx))
 
 
 def detect_phantoms(
@@ -184,10 +261,17 @@ def detect_phantoms(
     Pass include_options=True to include both anyway.
 
     A pair whose every short-opening sale carries the broker's own
-    short-sale marker (RBC "SHORT.") is a REAL short: it is left out
-    unless include_broker_shorts=True (then flagged
+    short-sale marker (RBC "SHORT.", or IB's Trades code O — `C;O` on
+    a sale that closed a long and opened a short) is a REAL short: it
+    is left out unless include_broker_shorts=True (then flagged
     broker_marked_short) — a phantom for it removed a real loss and
-    left phantom shares (audit R1-8).
+    left phantom shares (audit R1-8, S058-02).
+
+    A pair where a sale the broker codes CLOSING (IB code C, no O)
+    takes the position short is missing history for certain: it is
+    reported even for an option or a future (broker_says_closing) —
+    otherwise the sale of a long option bought before the data reads
+    as a write (audit S013-00).
     """
     # state[(symbol, account, currency)] -> running, peak_short, first_neg, count
     state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
@@ -201,6 +285,7 @@ def detect_phantoms(
         key=lambda t: (event_sort_key(t, profile='phantom_walk'),
                        0 if float(t.quantity or 0) > 0 else 1),
     ))
+    orders = OrderStarts()
 
     for tx in sorted_txs:
         # TRANSFER also moves position and is now consumed by the engine,
@@ -208,28 +293,36 @@ def detect_phantoms(
         # TRANSFER-in + sell pair would falsely register as a phantom.
         if tx.action not in ('BUYSELL', 'ASSIGN', 'SPLIT', 'OPENING_BALANCE', 'TRANSFER'):
             continue
-        if not include_options and (is_option_symbol(tx.symbol)
-                                    # Futures (IB `F:` prefix): a short
-                                    # is an ordinary opening position
-                                    # (IB codes it `O`), exactly like
-                                    # an option sell-to-open.
-                                    or (tx.symbol or '').startswith(
-                                        ('F:', '/', '\\'))):
-            continue
+        # Options and futures are walked too, but reported only with
+        # include_options — or when the broker says a sale that took
+        # them short was a CLOSING one (below). Futures (IB `F:`
+        # prefix): a short is an ordinary opening position (IB codes it
+        # `O`), exactly like an option sell-to-open.
+        derivative = (is_option_symbol(tx.symbol)
+                      or (tx.symbol or '').startswith(('F:', '/', '\\')))
         # One pool per (symbol, account) — NOT per currency: the engine
         # pools identical property regardless of the leg's native
         # currency (base conversion happens before pooling), so a CAD
         # sell against a USD buy of the same mapped symbol is one pool.
         key = (tx.symbol, tx.account, '')
-        s = state.setdefault(key, {
-            'running': 0.0,
-            'peak_short': 0.0,
-            'first_negative_date': None,
-            'disposition_count': 0,
-            'currencies': set(),
-            'marked': False,
-            'unmarked': False,
-        })
+
+        def _new_state(_deriv=derivative):
+            return {
+                'running': 0.0,
+                'peak_short': 0.0,
+                'first_negative_date': None,
+                'disposition_count': 0,
+                'currencies': set(),
+                'marked': False,
+                'unmarked': False,
+                'closing': False,
+                'basis': '',
+                'markers': set(),
+                'derivative': _deriv,
+            }
+        s = state.get(key)
+        if s is None:
+            s = state[key] = _new_state()
         if tx.currency:
             s['currencies'].add(tx.currency)
 
@@ -242,13 +335,11 @@ def detect_phantoms(
                 # aren't seen as appearing from nowhere. Without this, a
                 # later sale of the renamed position reads as a phantom
                 # short (the acquirer never had a BUY in this data).
-                tgt = state.setdefault((new_sym, tx.account, ''), {
-                    'running': 0.0,
-                    'peak_short': 0.0,
-                    'first_negative_date': None,
-                    'disposition_count': 0,
-                    'currencies': set(),
-                })
+                tgt = state.get((new_sym, tx.account, ''))
+                if tgt is None:
+                    tgt = state[(new_sym, tx.account, '')] = _new_state(
+                        is_option_symbol(new_sym)
+                        or new_sym.startswith(('F:', '/', '\\')))
                 tgt['running'] += s['running'] * factor
                 s['running'] = 0.0
             else:
@@ -256,6 +347,7 @@ def detect_phantoms(
             continue
 
         prev = s['running']
+        order_prev = orders.prev(key, tx, prev)
         s['running'] += tx.quantity
 
         # A disposition while running is negative is one of the events
@@ -263,9 +355,25 @@ def detect_phantoms(
         # disposition" and "was already negative when this disposition fired."
         if tx.quantity < 0 and (prev < 0 or s['running'] < 0):
             s['disposition_count'] += 1
-            if prev <= 1e-9:
-                # A sale that OPENS (or extends) the short side.
-                s['marked' if _is_marked_short(tx) else 'unmarked'] = True
+            if s['running'] < -1e-9:
+                # A sale that OPENS (or extends) the short side — also
+                # one that crosses zero (IB `C;O`: closed the long, the
+                # rest opened a short in the same fill).
+                if unbacked_close(tx, prev, order_prev):
+                    # The broker says this sale CLOSED a position the
+                    # data never bought (audit S013-00) — even with an
+                    # O beside it (C;O on a sale with no long held).
+                    s['closing'] = True
+                    s['unmarked'] = True
+                    s['basis'] = s['basis'] or str(
+                        getattr(tx, 'broker_basis', '') or '')
+                else:
+                    _mk = broker_short_marker(tx)
+                    if _mk:
+                        s['marked'] = True
+                        s['markers'].add(_mk)
+                    else:
+                        s['unmarked'] = True
 
         if s['running'] < s['peak_short']:
             s['peak_short'] = s['running']
@@ -275,6 +383,9 @@ def detect_phantoms(
     out: List[PhantomCandidate] = []
     for (symbol, account, currency), s in state.items():
         if s['peak_short'] >= -1e-6:
+            continue
+        closing = bool(s.get('closing'))
+        if s.get('derivative') and not include_options and not closing:
             continue
         marked = bool(s.get('marked')) and not s.get('unmarked')
         if marked and not include_broker_shorts:
@@ -290,6 +401,9 @@ def detect_phantoms(
             registered=is_registered_account(account, registered_accounts,
                                              country),
             broker_marked_short=marked,
+            broker_says_closing=closing,
+            broker_basis=s.get('basis') or '',
+            short_marker=' / '.join(sorted(s.get('markers') or ())),
         ))
     out.sort(key=lambda c: (c.symbol, c.account))
     return out
@@ -703,6 +817,12 @@ def format_suggestions(candidates: List[PhantomCandidate]) -> str:
             if c.registered else
             "Margin/cash account — could be real short or phantom history"
         )
+        if c.broker_says_closing:
+            note = ("The broker codes the sale CLOSING (IB code C): it "
+                    "sold a position bought before the data — missing "
+                    "history, not a short or a written option"
+                    + (f" (IB Basis {c.broker_basis})"
+                       if c.broker_basis else ""))
         entries.append({
             "symbol": c.symbol,
             "account": c.account,
