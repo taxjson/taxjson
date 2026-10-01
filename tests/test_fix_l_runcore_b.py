@@ -10,12 +10,11 @@ import os
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_fix_l_runcore_a import (_CONFIG, _MARGIN_CSV, _QT_HEADER,  # noqa: E402
+from test_fix_l_runcore_a import (_CONFIG, _QT_HEADER,  # noqa: E402
                                   REPO_ROOT, _project, _run_cli,
                                   _with_setting)
 
