@@ -209,12 +209,12 @@ class TestUSAffiliatedReplacement(unittest.TestCase):
     def _run(self, short=False, detect=True):
         from taxjson.lib.core import USATaxRules
         if short:
-            mine = [self._tx("o1", "2025-01-02", -100, 1000.0, "U5550001"),
-                    self._tx("c1", "2025-06-02", 100, -2000.0, "U5550001")]
+            mine = [self._tx("o1", "2025-01-02", -100, 1000.0, "U5550001"),  # pii-ok
+                    self._tx("c1", "2025-06-02", 100, -2000.0, "U5550001")]  # pii-ok
             theirs = [self._tx("a1", "2025-06-10", -100, 1000.0, "SPOUSE")]
         else:
-            mine = [self._tx("b1", "2025-01-02", 100, -2000.0, "U5550001"),
-                    self._tx("s1", "2025-06-02", -100, 1000.0, "U5550001")]
+            mine = [self._tx("b1", "2025-01-02", 100, -2000.0, "U5550001"),  # pii-ok
+                    self._tx("s1", "2025-06-02", -100, 1000.0, "U5550001")]  # pii-ok
             theirs = [self._tx("a1", "2025-06-10", 100, -1000.0, "SPOUSE")]
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
