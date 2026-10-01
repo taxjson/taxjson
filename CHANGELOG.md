@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **taxjson-corp-actions reads IB Corporate Actions columns by name.** A
+  header missing a column, or Data rows before any Header, is refused;
+  the fixed-position fallback read Report Date as the event date in IB's
+  consolidated layout or dropped the merger (S072-22). Questrade's
+  `ON 1,500 SHS` reads as 1500 (the ratio showed 150-for-1) (S073-02).
+
 - **RBC: another company's cash in lieu is no longer folded into a
   reorganization.** A CIL row joins an event only by the same ticker or
   the company's full name; half the name in common (ALPHA GOLD vs ALPHA

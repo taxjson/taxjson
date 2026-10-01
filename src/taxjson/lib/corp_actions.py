@@ -351,6 +351,11 @@ def _num_text(s: str, where: str = '') -> float:
     return float(s.replace(',', ''))
 
 
+# The Corporate Actions columns read by name (S072-22).
+_IB_CA_COLUMNS = ('Currency', 'Date/Time', 'Description', 'Quantity',
+                  'Value')
+
+
 def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
     """The Corporate Actions rows of one IB statement, sorted into merger
     rows, spin-off rows (and their `Ca` cancellations) and merger-shaped
@@ -384,18 +389,37 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
                 continue
             if raw_row[1] == 'Header':
                 header_map = {c: i for i, c in enumerate(raw_row)}
+                # Columns by NAME only: the fixed-position fallback fit
+                # the single-account layout, and in the consolidated
+                # (Account-column) layout it read Report Date as the
+                # event date — or matched no merger at all (S072-22).
+                missing = [c for c in _IB_CA_COLUMNS if c not in header_map]
+                if missing:
+                    from taxjson.lib.brokerages.base import \
+                        BrokerageParseError
+                    raise BrokerageParseError(
+                        f"{Path(csv_path).name}: Corporate Actions header "
+                        f"is missing column(s) {', '.join(missing)} — "
+                        f"refusing to guess them by position")
                 continue
             if raw_row[1] != 'Data':
                 continue
+            if not header_map:
+                from taxjson.lib.brokerages.base import BrokerageParseError
+                raise BrokerageParseError(
+                    f"{Path(csv_path).name}: a Corporate Actions Data row "
+                    f"comes before any Corporate Actions Header row — its "
+                    f"columns are unknown (IB's two layouts differ); "
+                    f"re-download the statement")
 
-            def cell(col, default):
-                i = header_map.get(col, default)
+            def cell(col, default=None):
+                i = header_map.get(col)
                 return raw_row[i] if i is not None and i < len(raw_row) else ''
-            currency = cell('Currency', 3)
+            currency = cell('Currency')
             if currency in ('', 'Total', 'Total in CAD'):
                 continue
-            desc = cell('Description', 6) or ''
-            row_account = cell('Account', None) if 'Account' in header_map \
+            desc = cell('Description') or ''
+            row_account = cell('Account') if 'Account' in header_map \
                 else ''
             # Cancellation rows undo a previous entry — drop them, don't
             # let them slip through and double the position.
@@ -404,9 +428,9 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
             spin = ib_spinoff_parts(desc)
             if spin is not None:
                 (spin_cancels if is_cancel else spin_rows).append({
-                    'currency': currency, 'date_time': cell('Date/Time', 5),
-                    'description': desc, 'qty': _f(cell('Quantity', 7)),
-                    'value': _f(cell('Value', 9)), 'parts': spin,
+                    'currency': currency, 'date_time': cell('Date/Time'),
+                    'description': desc, 'qty': _f(cell('Quantity')),
+                    'value': _f(cell('Value')), 'parts': spin,
                     'account': row_account})
                 continue
             if is_cancel:
@@ -423,10 +447,10 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
                 continue
             rec = {
                 'currency': currency,
-                'date_time': cell('Date/Time', 5),
+                'date_time': cell('Date/Time'),
                 'description': desc,
-                'quantity': cell('Quantity', 7),
-                'value': cell('Value', 9),
+                'quantity': cell('Quantity'),
+                'value': cell('Value'),
                 'account': row_account,
             }
             if (_IB_ANY_MERGER_RE.search(desc)
@@ -1073,7 +1097,10 @@ _QT_SPINOFF_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b', re.IGNORE
 _QT_PARENT_RE = re.compile(
     r'FROM\s+SEC#\s+(\S+)\s+(.+?)\s+REC\s', re.IGNORECASE,
 )
-_QT_ON_SHS_RE = re.compile(r'\bON\s+([\d.]+)\s+SHS\b', re.IGNORECASE)
+# Thousands commas are part of the number: '[\d.]+' stopped at the comma,
+# missed 'ON 1,500 SHS' and showed a 150-for-1 ratio (audit S073-02).
+_QT_ON_SHS_RE = re.compile(
+    r'\bON\s+(\d{1,3}(?:,\d{3})+(?:\.\d+)?|[\d.]+)\s+SHS\b', re.IGNORECASE)
 _QT_REC_PAY_RE = re.compile(
     r'\bREC\s+(\S+)\s+PAY\s+(\S+)', re.IGNORECASE)
 
@@ -1172,10 +1199,14 @@ def parse_questrade_corporate_actions(
         key = _get_desc_key(row.get('Description') or '')
         if key:
             name_to_symbol.setdefault(key, set()).add((sym, lst))
-        try:
-            q = float((row.get('Quantity') or '0').replace(',', '') or 0)
-        except ValueError:
-            q = 0.0
+        # The parser's strict number (a decimal comma is refused, never
+        # read 100x too large — the S072-17 sibling): this lookup sizes
+        # the parent held on the spin-off date.
+        from taxjson.lib.brokerages.base import parse_strict_number
+        q = parse_strict_number(row.get('Quantity'), field='Quantity',
+                                where=f"Questrade {row.get('Symbol') or ''} "
+                                      f"row of {row.get('Transaction Date')}",
+                                allow_blank=True, blank=0.0)
         moves[(sym, lst)].append(
             (_parse_qt_date(row.get('Transaction Date', '')), q))
 
@@ -1236,7 +1267,7 @@ def parse_questrade_corporate_actions(
         m_shs = _QT_ON_SHS_RE.search(description)
         if m_rp:
             key = ('chain', m_rp.group(1), m_rp.group(2),
-                   m_shs.group(1) if m_shs else '')
+                   m_shs.group(1).replace(',', '') if m_shs else '')
         else:
             key = ('symbol', symbol)
         by_target[key].append({
@@ -1371,7 +1402,7 @@ def parse_questrade_corporate_actions(
         for r in rows:
             m = _QT_ON_SHS_RE.search(r['description'])
             if m:
-                source_qty = float(m.group(1))
+                source_qty = _num_text(m.group(1), where=r['description'])
                 break
 
         currency = rows[0]['currency']

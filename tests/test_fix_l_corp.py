@@ -301,5 +301,86 @@ class TestRbcLow(unittest.TestCase):
             self.assertNotIn("temporary code", r.stderr)
 
 
+# ===================================================== IB / Questrade
+_IB_HEAD = ('Statement,Header,Field Name,Field Value\n'
+            'Account Information,Header,Field Name,Field Value\n'
+            'Account Information,Data,Account,U5550001\n')  # pii-ok
+_IB_MRG = ('SSX(CA0000000001) Merged(Acquisition) WITH US0000000002 1 for 16 '
+           '({t}, {n}, {i})')
+_IB_OUT = _IB_MRG.format(t='SSX', n='SSX GOLD LTD', i='CA0000000001')
+_IB_IN = _IB_MRG.format(t='RGX', n='RGX GOLD INC', i='US0000000002')
+
+
+def _ib_file(tmp, header_cols, rows):
+    p = Path(tmp) / "ib.csv"
+    head = ("Corporate Actions,Header," + ",".join(header_cols) + "\n"
+            if header_cols else "")
+    p.write_text(_IB_HEAD + head + "".join(rows))
+    return p
+
+
+class TestIbQuestradeExtractorsLow(unittest.TestCase):
+    # Consolidated layout: an Account column at index 4, Report Date at 5.
+    COLS = ['Asset Category', 'Currency', 'Account', 'Report Date',
+            'Date/Time', 'Description', 'Quantity', 'Proceeds', 'Value',
+            'Realized P/L', 'Code']
+
+    def _rows(self):
+        return [f'Corporate Actions,Data,Stocks,{cur},U5550001,2026-01-05,'
+                f'"2025-12-31, 20:25:00","{d}",{q},0,{v},0,\n'  # pii-ok
+                for d, q, v, cur in ((_IB_OUT, -1600, -25920, 'CAD'),
+                                     (_IB_IN, 100, 25840, 'USD'))]
+
+    def test_s072_22_columns_by_name(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        from taxjson.lib.corp_actions import parse_ib_corporate_actions
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _quiet(parse_ib_corporate_actions,
+                              _ib_file(tmp, self.COLS, self._rows()), "m")
+            self.assertEqual([(e.date, e.qty_disposed, e.qty_received)
+                              for e in evs],
+                             [("2025-12-31", 1600.0, 100.0)], err)
+            # A missing header cell used to fall back to position 5 —
+            # Report Date in this layout (2026-01-05: the wrong year).
+            cols = [c for c in self.COLS if c != 'Date/Time'] + ['X']
+            with self.assertRaises(BrokerageParseError) as cm:
+                _quiet(parse_ib_corporate_actions,
+                       _ib_file(tmp, cols, self._rows()), "m")
+            self.assertIn("missing column(s) Date/Time", str(cm.exception))
+            # Data rows before any Header: refused, not silently dropped.
+            with self.assertRaises(BrokerageParseError) as cm:
+                _quiet(parse_ib_corporate_actions,
+                       _ib_file(tmp, None, self._rows()), "m")
+            self.assertIn("before any Corporate Actions Header",
+                          str(cm.exception))
+
+    def test_s073_02_on_shs_with_thousands_comma(self):
+        from taxjson.lib.corp_actions import parse_questrade_corporate_actions
+        head = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
+                'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
+                'Activity Type,Account #,Account Type\n')
+
+        def row(date, action, sym, desc, qty, act, price='0', net='0'):
+            return (f'{date} 12:00:00 AM,{date} 12:00:00 AM,{action},{sym},'
+                    f'"{desc}",{qty},{price},{net},0,{net},USD,{act},'
+                    f'55500001,Individual margin\n')  # pii-ok
+        out = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            for n in ("1,500", "1500"):
+                p = Path(tmp) / "qt.csv"
+                p.write_text(head + row('2025-02-05', 'Buy', 'QZD',
+                                        'QUUZ CORP', '1500', 'Trades',
+                                        '10', '-15000')
+                             + row('2025-10-27', 'DIS', 'QZDW',
+                                   f'QZD WTS SPINOFF ON {n} SHS FROM SEC# '
+                                   f'J0001 QUUZ CORP REC 10/20/25 PAY '
+                                   f'10/27/25', '150', 'Dividends'))
+                (ev,), err = _quiet(parse_questrade_corporate_actions, p,
+                                    "m")
+                out[n] = (ev.ratio_old, ev.event_id)
+        self.assertEqual(out["1,500"][0], 1500.0)
+        self.assertEqual(out["1,500"], out["1500"])
+
+
 if __name__ == "__main__":
     unittest.main()
