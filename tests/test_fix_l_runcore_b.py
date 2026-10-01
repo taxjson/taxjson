@@ -1029,5 +1029,44 @@ class TestFetchAndWatch(unittest.TestCase):
         self.assertNotIn('questrade #{number}', src)
 
 
+
+class TestPins(unittest.TestCase):
+    """S050-09 (taxjson-sort orders a day by clock time), G1-13 (the
+    blended-pass conservation check warns on a gap, only on a gap)."""
+
+    def test_sort_orders_same_day_rows_by_time(self):
+        from taxjson.bin.taxjson_sort import sort_transactions
+        from taxjson.lib.core import coerce_transaction_row
+        rows = [{"date": "2025-03-03", "time": t, "action": "BUYSELL",
+                 "symbol": "ETH", "quantity": 1, "price": 1.0,
+                 "currency": "CAD", "net_amount": -1.0,
+                 "description": d}
+                for t, d in (("14:00:00", "late"), ("10:00:00", "early"),
+                             ("09:00:00", "next-day"))]
+        rows[2]["date"] = "2025-03-04"
+        txs = [coerce_transaction_row(r, i, "t") for i, r in enumerate(rows)]
+        got = [t.description for t in sort_transactions(txs)]
+        self.assertEqual(got, ["early", "late", "next-day"])
+
+    def test_blend_conservation_check(self):
+        from taxjson.bin.taxjson_run import _blend_conservation_gaps
+        blended = {"inventory": [{"symbol": "AEM.TO", "qty": 100},
+                                 {"symbol": "XEI.TO", "qty": 50},
+                                 {"symbol": "AEM.TO", "qty": 60,
+                                  "account": "margin"}]}
+        split = [{"inventory": [{"symbol": "AEM.TO", "qty": 60,
+                                 "blended_pool": True},
+                                {"symbol": "XEI.TO", "qty": 50,
+                                 "blended_pool": True}]},
+                 {"inventory": [{"symbol": "AEM.TO", "qty": 40,
+                                 "blended_pool": True}]}]
+        self.assertEqual(_blend_conservation_gaps(blended, split), [])
+        split[1]["inventory"][0]["qty"] = 30
+        gaps = _blend_conservation_gaps(blended, split)
+        self.assertEqual(len(gaps), 1)
+        self.assertIn("blended AEM.TO holds 100 but the per-account split "
+                      "accounts for only 90", gaps[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2692,31 +2692,41 @@ def stage_blended_wash_pass(names: List[str],
     # row and say so instead of staying silent.
     try:
         import json as _json
-        blended_inv = {r.get("symbol"): float(r.get("qty") or 0.0)
-                       for r in (_json.loads(combined_wash.read_text(
-                           encoding="utf-8")).get("inventory") or [])
-                       if not r.get("account")}
-        split_sums: Dict[str, float] = {}
-        for name in names:
-            for r in (_json.loads(
-                    (cache / f"{name}_gains_wash.json").read_text(
-                        encoding="utf-8")).get("inventory") or []):
-                if r.get("blended_pool"):
-                    split_sums[r.get("symbol")] = (
-                        split_sums.get(r.get("symbol"), 0.0)
-                        + float(r.get("qty") or 0.0))
-        for sym, total in sorted(blended_inv.items()):
-            got = split_sums.get(sym, 0.0)
-            if abs(total - got) > 1e-4:
-                print(f"taxjson: warning: blended {sym} holds "
-                      f"{total:g} but the per-account split accounts "
-                      f"for only {got:g} — the difference is likely "
-                      f"phantom (phantoms.json) shares, which the "
-                      f"split cannot attribute to an account. "
-                      f"Per-account holdings under-report by the gap.",
-                      file=sys.stderr)
-    except (OSError, ValueError):
+        for _msg in _blend_conservation_gaps(
+                _json.loads(combined_wash.read_text(encoding="utf-8")),
+                [_json.loads((cache / f"{name}_gains_wash.json")
+                             .read_text(encoding="utf-8"))
+                 for name in names]):
+            print(f"taxjson: warning: {_msg}", file=sys.stderr)
+    except (OSError, ValueError, AttributeError):
         pass
+
+
+def _blend_conservation_gaps(blended_doc: Dict[str, Any],
+                             split_docs: List[Dict[str, Any]]) -> List[str]:
+    """One message per blended inventory row whose per-account split
+    does not add back up to it (the blended-pass conservation check —
+    pinned by tests, G1-13)."""
+    blended_inv = {r.get("symbol"): float(r.get("qty") or 0.0)
+                   for r in (blended_doc.get("inventory") or [])
+                   if not r.get("account")}
+    split_sums: Dict[str, float] = {}
+    for doc in split_docs:
+        for r in (doc.get("inventory") or []):
+            if r.get("blended_pool"):
+                split_sums[r.get("symbol")] = (
+                    split_sums.get(r.get("symbol"), 0.0)
+                    + float(r.get("qty") or 0.0))
+    out: List[str] = []
+    for sym, total in sorted(blended_inv.items()):
+        got = split_sums.get(sym, 0.0)
+        if abs(total - got) > 1e-4:
+            out.append(f"blended {sym} holds {total:g} but the per-account "
+                       f"split accounts for only {got:g} — the difference "
+                       f"is likely phantom (phantoms.json) shares, which "
+                       f"the split cannot attribute to an account. "
+                       f"Per-account holdings under-report by the gap.")
+    return out
 
 
 _EXPORT_MATRIX: Tuple[Tuple[str, List[str]], ...] = (
