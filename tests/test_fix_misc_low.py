@@ -189,5 +189,88 @@ class TestLintCrosslistings(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
 
 
+try:
+    from fastapi.testclient import TestClient  # noqa: F401
+    _HAVE_WEB = True
+except Exception:
+    _HAVE_WEB = False
+
+_TOML = ('[settings]\nyear = 2025\ncountry = "canada"\n'
+         '[accounts.margin]\ntype = "taxable"\n')
+
+
+@unittest.skipUnless(_HAVE_WEB, "web extra not installed")
+class TestWebServe(unittest.TestCase):
+    def _app(self, root):
+        from taxjson.web.app import create_app
+        from taxjson.web.context import ProjectContext
+        return create_app(ProjectContext.load(root))
+
+    def test_testserver_host_is_refused(self):
+        # S078-10: Host: testserver (Starlette's TestClient name) was on
+        # the production allowlist of a token-less loopback server.
+        from fastapi.testclient import TestClient
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "taxjson.toml").write_text(_TOML)
+            app = self._app(d)
+            self.assertEqual(TestClient(app).get("/healthz").status_code, 400)
+            for h in ("testserver", "testserver:8765", "evil.example"):
+                r = TestClient(app, base_url="http://127.0.0.1").get(
+                    "/healthz", headers={"host": h})
+                self.assertEqual(r.status_code, 400, h)
+            for h in ("127.0.0.1:8765", "localhost:8765"):
+                r = TestClient(app, base_url="http://127.0.0.1").get(
+                    "/healthz", headers={"host": h})
+                self.assertEqual(r.status_code, 200, h)
+
+    def test_config_edit_with_same_mtime_reloads(self):
+        # S078-12: the reload was keyed on st_mtime_ns alone.
+        from fastapi.testclient import TestClient
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "taxjson.toml"
+            cfg.write_text(_TOML)
+            c = TestClient(self._app(d), base_url="http://127.0.0.1")
+            self.assertEqual(c.get("/healthz").json()["accounts"], ["margin"])
+            st = cfg.stat()
+            cfg.write_text(_TOML + '[accounts.tfsa]\ntype = "sheltered"\n')
+            os.utime(cfg, ns=(st.st_atime_ns, st.st_mtime_ns))
+            self.assertEqual(cfg.stat().st_mtime_ns, st.st_mtime_ns)
+            self.assertEqual(c.get("/healthz").json()["accounts"],
+                             ["margin", "tfsa"])
+
+    def test_serve_token_flag_on_loopback(self):
+        # R1-346: `taxjson serve --token` issues the per-run token on a
+        # loopback bind too (127.0.0.1 is reachable by every local user).
+        import contextlib
+        import io
+        import uvicorn
+        import taxjson.web.app as app_mod
+        from taxjson.web import server
+        seen = {}
+
+        def fake_create_app(ctx, allowed_hosts=None, auth_token=None):
+            seen["token"] = auth_token
+            return object()
+        orig = app_mod.create_app, uvicorn.run
+        app_mod.create_app, uvicorn.run = fake_create_app, lambda *a, **k: None
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "taxjson.toml").write_text(_TOML)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    server.serve(d, host="127.0.0.1", port=1,
+                                 require_token=True)
+                self.assertTrue(seen["token"])
+                self.assertIn(f"?token={seen['token']}", err.getvalue())
+                self.assertNotIn("exposes your tax data", err.getvalue())
+                with contextlib.redirect_stderr(io.StringIO()):
+                    server.serve(d, host="127.0.0.1", port=1)
+                self.assertIsNone(seen["token"])
+        finally:
+            app_mod.create_app, uvicorn.run = orig
+        r = _run("taxjson.bin.taxjson_run", "serve", "--help")
+        self.assertIn("--token", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

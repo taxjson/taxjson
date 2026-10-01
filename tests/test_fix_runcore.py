@@ -627,7 +627,7 @@ class TestWebRadarDefaultsToCombined(unittest.TestCase):
                 'type = "taxable"\n')
             for a in ("margin", "margin2", "COMBINED"):
                 (root / "reports" / f"wash_radar_{a}.rpt").write_text("")
-            c = TestClient(create_app(ProjectContext.load(root)))
+            c = TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
             page = c.get("/wash-radar").text
             self.assertIn("radar — COMBINED", page)
             page = c.get("/wash-radar?account=margin").text

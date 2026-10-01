@@ -19,9 +19,11 @@ _HERE = Path(__file__).parent
 
 # Hosts a request may arrive as. Anything else is refused (400): a
 # DNS-rebinding page in a browser on the same machine would otherwise be
-# able to read /api/holdings off 127.0.0.1. "testserver" is Starlette's
-# TestClient host.
-_DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1", "testserver")
+# able to read /api/holdings off 127.0.0.1. Loopback names only — the
+# TestClient's "testserver" was on this list, so a resolver that answered
+# that single-label name let a rebinding page read the books (S078-10);
+# tests use base_url="http://127.0.0.1".
+_DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
 AUTH_COOKIE = "taxjson_token"
@@ -64,8 +66,19 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")),
               name="static")
     app.state.ctx = ctx
+
+    def _cfg_key(path):
+        """Change key for taxjson.toml: (mtime_ns, size, content hash).
+        mtime alone missed an edit that kept the stamp (`touch -r`,
+        `cp -p`, two saves within a coarse filesystem tick) and kept
+        serving the old account list (S078-12); the file is small."""
+        import hashlib
+        st_ = path.stat()
+        return (st_.st_mtime_ns, st_.st_size,
+                hashlib.sha256(path.read_bytes()).hexdigest())
+
     try:
-        app.state._cfg_mtime = (ctx.root / "taxjson.toml").stat().st_mtime_ns
+        app.state._cfg_mtime = _cfg_key(ctx.root / "taxjson.toml")
     except OSError:
         app.state._cfg_mtime = None
 
@@ -78,7 +91,7 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
         snapshot."""
         st = app.state
         try:
-            m = (st.ctx.root / "taxjson.toml").stat().st_mtime_ns
+            m = _cfg_key(st.ctx.root / "taxjson.toml")
         except OSError:
             return st.ctx
         if m != st._cfg_mtime:

@@ -158,7 +158,7 @@ class TestServeToken(unittest.TestCase):
             import secrets
             tok = secrets.token_urlsafe(16)
             app = self._app(tmp, allowed_hosts=["*"], auth_token=tok)
-            c = TestClient(app)
+            c = TestClient(app, base_url="http://127.0.0.1")
             h = {"host": "192.168.1.5:8765"}
             self.assertEqual(c.get("/healthz", headers=h).status_code, 401)
             self.assertEqual(c.get("/healthz?token=wrong", headers=h).status_code, 401)
@@ -167,12 +167,12 @@ class TestServeToken(unittest.TestCase):
             self.assertIn("httponly", r.headers.get("set-cookie", "").lower())
             # The cookie alone now authenticates.
             self.assertEqual(c.get("/healthz", headers=h).status_code, 200)
-            c2 = TestClient(app)
+            c2 = TestClient(app, base_url="http://127.0.0.1")
             self.assertEqual(c2.get("/api/holdings", headers=h).status_code, 401)
 
     def test_healthz_has_no_filesystem_path(self):
         with tempfile.TemporaryDirectory() as tmp:
-            c = TestClient(self._app(tmp))
+            c = TestClient(self._app(tmp), base_url="http://127.0.0.1")
             doc = c.get("/healthz").json()
             self.assertNotIn("root", doc)
             self.assertNotIn(str(Path(tmp).resolve()), json.dumps(doc))

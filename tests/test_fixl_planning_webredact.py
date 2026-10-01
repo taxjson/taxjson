@@ -103,7 +103,7 @@ class TestWebRoutes(unittest.TestCase):
         (self.root / "reports" / "margin_holdings.toml").write_text(
             '[[holding]]\nsymbol = "AAA.TO"\nquantity = 100.0\n')
         from taxjson.web.app import create_app
-        self.c = TestClient(create_app(_ctx(self.root)))
+        self.c = TestClient(create_app(_ctx(self.root)), base_url="http://127.0.0.1")
 
     def test_api_whatif_unknown_account_is_404(self):
         r = self.c.get("/api/whatif", params=dict(

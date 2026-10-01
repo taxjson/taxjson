@@ -12468,7 +12468,8 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     # Lazy import so the [web] extra is only needed for this subcommand.
     from taxjson.web.server import serve
-    raise SystemExit(serve(args.dir, host=args.host, port=args.port))
+    raise SystemExit(serve(args.dir, host=args.host, port=args.port,
+                           require_token=getattr(args, "token", False)))
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -13511,6 +13512,11 @@ def main() -> None:
                          help="Bind host (default: 127.0.0.1, local-only)")
     p_serve.add_argument("--port", type=int, default=8765,
                          help="Bind port, 1-65535 (default: %(default)s)")
+    p_serve.add_argument("--token", action="store_true",
+                         help="Require the per-run access token on a "
+                              "loopback bind too (127.0.0.1 is reachable by "
+                              "every account on this machine; any other "
+                              "bind always requires it)")
     p_serve.set_defaults(func=cmd_serve)
 
     p_help = sub.add_parser(
