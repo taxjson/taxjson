@@ -612,15 +612,23 @@ the earliest table also says the post-2024 AMT shown did not apply).
   to provincial tax x foreign income / net income). The estimate is
   signed: eligible dividends at a low bracket can show a negative
   figure — a saving on the tax of the other income. Not modelled: QC,
-  low-income reductions, non-eligible dividends, and a prior-year
+  low-income reductions, non-eligible dividends, a prior-year
   minimum tax carryover (T691 Part 8, line 40427, ITA s.120.2) — when
   AMT does not bind, a NOTE names the headroom such a carryover could
-  use.
+  use — non-refundable credits other than the basic personal amount
+  (CPP/EI, Canada employment, age, pension, donations ...), the OAS
+  recovery tax (s.180.2) and AMT adjustments outside the books (the
+  s.110(1)(d) stock-option deduction, donated securities): see
+  KNOWN_ISSUES.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
   brackets; losses net ST first, then LT, then up to $3,000 of ordinary
-  income (a net-loss year shows a negative estimate — a saving); NIIT
-  3.8% above $200k MAGI; no state tax.
+  income (a net-loss year shows a negative estimate — a saving), and
+  that deduction also reduces net investment income; the carryforward
+  shown counts as used only what taxable income absorbs (Capital Loss
+  Carryover Worksheet line 4); NIIT 3.8% above $200k MAGI; no foreign
+  tax credit (the withholding in the books is not credited) and no
+  state tax.
 
 Add `--verbose` (`-v`) for the **CALCULATION TRACE** — every bracket
 slice, credit and surtax tier, side by side for the base and
@@ -954,7 +962,9 @@ supports; record what you actually claimed on filed returns in a
 — auto-detected, or pass `--claimed FILE`) and it's folded into the running
 balance. **Units:** Canada — the 100% capital loss applied that year, i.e.
 the line 25300 amount divided by the inclusion rate (x2 at 50%); US — the
-Schedule D line 21 deduction against ordinary income (not the line 6/14
+Schedule D line 21 deduction against ordinary income as far as taxable
+income absorbed it (line 4 of the next year's Capital Loss Carryover
+Worksheet — 0 in a year with negative taxable income; not the line 6/14
 carryover coming in). `1,234.56` and `$1,234.56` are accepted, and so is a
 UTF-8 BOM; a line that cannot be read (or whose year is not a plausible
 tax year) is named, left out, and makes the checklist's carryover step

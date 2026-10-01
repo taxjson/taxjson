@@ -1051,6 +1051,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "short-term, and a net capital loss as offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
+            Rule("US-EST-NIIT-LOSS",
+                 "That up-to-$3,000 capital loss deduction also reduces "
+                 "net investment income for NIIT (Form 8960 line 5a).",
+                 cont=True),
+            Rule("US-EST-CARRY-TI",
+                 "The carryforward it shows counts as used only the part "
+                 "of the $3,000 that taxable income absorbs (Capital Loss "
+                 "Carryover Worksheet line 4).", cont=True),
             Rule("US-RPT-08",
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "

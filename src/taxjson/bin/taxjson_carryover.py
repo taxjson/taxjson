@@ -28,7 +28,9 @@ actually claimed on filed returns may differ — record reality in a
 `--claimed FILE` (lines of `YEAR AMOUNT`, `#` comments): each line is the
 loss amount actually applied against that YEAR's return — Canada: the
 100% capital loss (line 25300 divided by the inclusion rate, x2 at 50%);
-US: the Schedule D line 21 deduction against ordinary income. Claims fold into
+US: the Schedule D line 21 deduction against ordinary income, as far as
+taxable income absorbed it (Capital Loss Carryover Worksheet line 4 —
+less than line 21 when taxable income is negative). Claims fold into
 the running balance (a claim recorded before the loss exists — e.g. a
 carryback entered under the target year — is held pending and consumed
 when the loss arrives).
@@ -517,8 +519,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "loss applied that year — the line 25300 "
                              "amount divided by the inclusion rate (x2 at "
                              "50%%). US: the Schedule D line 21 deduction "
-                             "against ordinary income that year (not the "
-                             "line 6/14 carryover coming in).")
+                             "against ordinary income that year, as far "
+                             "as taxable income absorbed it (line 4 of "
+                             "the next year's Capital Loss Carryover "
+                             "Worksheet; 0 when taxable income was "
+                             "negative) — not the line 6/14 carryover "
+                             "coming in.")
     parser.add_argument("--project-year", type=int, default=None,
                         metavar="YEAR",
                         help="The project's tax year: earlier rows are "

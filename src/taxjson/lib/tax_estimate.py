@@ -601,7 +601,11 @@ CA_ASSUMPTIONS = (
     "not included and no taxjson view totals them — take them from the "
     "broker statements (the rows are listed by `taxjson events`); "
     "deductions below line 15000 only as entered (--deductions, "
-    "--carrying-charges); no prior-year minimum tax carryover.")
+    "--carrying-charges); no prior-year minimum tax carryover; the basic "
+    "personal amount is the only non-refundable credit (no CPP/EI, "
+    "Canada employment, age, pension or donation credits); no OAS "
+    "recovery tax; the AMT sees only these books and other income (no "
+    "stock-option deduction add-back or donated securities).")
 
 
 def estimate_canada(*, realized: float, eligible_div: float,
@@ -767,12 +771,27 @@ def estimate_usa(*, st: float, lt: float, qualified_div: float,
     with_inv = _usa_tax(other_income + inv_ordinary, inv_pref)
     base = _usa_tax(other_income, 0.0)
 
-    inv_income_for_niit = st_net + lt_net + qualified_div + pil
+    # Form 8960 line 5a takes the capital gain or LOSS from Form 1040
+    # line 7, which in a net-loss year is the (up to) $3,000 s.1211(b)
+    # deduction — it reduces net investment income too (Reg.
+    # 1.1411-4(d)); clamping the nets at 0 and stopping there overstated
+    # NIIT by up to 3.8% x 3,000 (S077-24, S078-02).
+    inv_income_for_niit = (st_net + lt_net + qualified_div + pil
+                           - ordinary_offset)
     magi = other_income + inv_ordinary + inv_pref
     niit = US_NIIT_RATE * min(
         max(0.0, inv_income_for_niit),
         max(0.0, magi - US_NIIT_MAGI_THRESHOLD))
 
+    # The carryforward counts as USED only the part of the offset the
+    # year's taxable income absorbs: Capital Loss Carryover Worksheet
+    # line 4 = min(line 7 loss, max(0, taxable income + that loss)),
+    # taxable income = AGI - standard deduction, possibly negative
+    # (IRC s.1212(b)(2); S078-01: 7,000 carried instead of 10,000 at
+    # zero other income).
+    taxable_income = magi - US_STD_DEDUCTION
+    offset_used = min(ordinary_offset,
+                      max(0.0, taxable_income + ordinary_offset))
     # Signed: a net-loss year (the $3,000 ordinary offset) legitimately
     # REDUCES tax vs the base — report the saving as a negative estimate.
     est = with_inv["total"] - base["total"] + niit
@@ -786,8 +805,9 @@ def estimate_usa(*, st: float, lt: float, qualified_div: float,
         "notes": vintage_notes(year, pick, country="usa"),
         "st_net": round(st_net, 2), "lt_net": round(lt_net, 2),
         "ordinary_offset": round(ordinary_offset, 2),
+        "offset_used_for_carryover": round(offset_used, 2),
         "losses_unused": round(loss + max(0.0, -net_cap)
-                               - ordinary_offset, 2),
+                               - offset_used, 2),
         "niit": round(niit, 2),
         "niit_base": round(min(max(0.0, inv_income_for_niit),
                                max(0.0, magi - US_NIIT_MAGI_THRESHOLD)), 2),

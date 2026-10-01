@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **US estimate (experimental): NIIT and the loss carryforward.** The
+  up-to-$3,000 capital loss deduction now reduces net investment income
+  (Form 8960 line 5a; NIIT was up to $114 too high), and the
+  carryforward shown counts as used only what taxable income absorbs
+  (Capital Loss Carryover Worksheet line 4: zero other income carries
+  the whole loss). The US `--claimed` guidance says the same. tax-logic
+  US-EST-NIIT-LOSS, US-EST-CARRY-TI (audit S077-24, S078-01, S078-02).
+- **Canada estimate: what it does not model is stated** — credits
+  other than the BPA, the OAS recovery tax, and AMT adjustments outside
+  the books (README, KNOWN_ISSUES, the printed assumptions) (audit
+  S077-15, S077-17, S077-20; S077-22: the README now says the US
+  estimate gives no foreign tax credit).
 - **fx-cash: a sale whose commission exceeds its proceeds pays
   currency** (it was counted as received, leaving phantom currency in
   the pool) (audit S033-09).

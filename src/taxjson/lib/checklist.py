@@ -1237,7 +1237,9 @@ def d_carryover(ctx: Ctx) -> Result:
                       + " — fix the line (`YEAR AMOUNT`)")
     if is_us(ctx.settings.get("country")):
         what = ("record each year's Schedule D line 21 deduction against "
-                "ordinary income (not the line 6 / 14 carryover)")
+                "ordinary income as far as taxable income absorbed it "
+                "(Capital Loss Carryover Worksheet line 4), not the "
+                "line 6 / 14 carryover")
     else:
         what = ("record the 100% loss applied each year (line 25300 "
                 "divided by the inclusion rate: x2 at 50%)")
