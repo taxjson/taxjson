@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+- **Webull: a sale's debit keeps its sign.** A close at $0.00 whose
+  commission was charged ("(1.50)" in Proceeds) books -1.50 proceeds,
+  not +1.50 received; a BUY with a credit Proceeds is refused. The row's
+  Type Code decides option vs shares (an OPC row with an unreadable
+  description, or an SHS row whose description reads as a contract, is
+  refused). The skip warning names only the skipped action codes;
+  exercise/assignment messages cite s.49(3) for a call, s.49(3.1) for a
+  put.
+- **Coinbase hardening.** A truncated row and a Send/Receive with no
+  quantity are refused; a row of an unknown type that moves coins (an
+  airdrop) is an UNBOOKED warning (fatal under `run --strict`); a dust
+  convert into a stablecoin whose fee exceeds its value books negative
+  proceeds (the excess fee was dropped); the Convert refusal carries its
+  own `.tt` workaround.
+- **Kraken fees and pairs.** A withdrawal fee charged in another coin
+  (`feecurrency`) is a sale of that coin; a coin fee is named in the
+  transfer's description instead of the money `fee` field (`taxjson
+  fees` read 25 XRP as 25 USD); the ledger's `feeusd` / `amountusd`
+  value a coin fee and a trades-CSV crypto/crypto fill; a fee on an Earn
+  wallet move is UNBOOKED; a legacy pair ending in PYUSD/RLUSD/FDUSD/GUSD
+  is refused as ambiguous; every "use a .tt file" refusal also says to
+  remove the row. The coin-fee note says those fees are not in the fee
+  reports (KNOWN_ISSUES).
+- **`taxjson crypto-sends` lists matched sends that arrived short** — the
+  network fee a Coinbase Send carries inside its quantity, which is not
+  booked as a sale.
+- **Generic importer.** An explicit 0 in the amount cell of a priced
+  trade is refused (it was silently replaced by qty x price); the
+  fee-share refusal prints the share to 2 decimals and the 5% limit.
+- **`.tt` converter.** A file with a byte-order mark converts; json->tt
+  and tt->json write atomically; a row with no currency is refused (it
+  was written as CAD); currencies are upper-cased; a sale entered with
+  total 0 because the commission exceeded the gross no longer warns
+  "check for a typo". `taxjson audit` names the `.tt` file of a
+  hand-entered row.
+- **ticker.map tools.** The DELETE audit note prints the signed net cash
+  (a buy and a sale no longer add up) and names the `DELETE` line;
+  `taxjson-ticker-map` refuses a positional map plus `--map`; `merge2
+  --map` help describes the keyword format.
+- **Non-UTF-8 text files name themselves.** A latin-1 `ticker.map`,
+  `distributions.map`, `ticker_extraction_overrides.txt`, `t1135.map` or
+  `claimed_losses.txt` is a one-line error naming the file (`taxjson
+  run` too); a cp1252 broker export that detection cannot read says
+  "not UTF-8" instead of "rename it". `taxjson-lint-crosslistings`
+  refuses a non-numeric quantity in one line.
+- **`taxjson fetch`.** A project year whose window has not started is
+  refused (it fetched the previous year's last 90 days into the new
+  year's file); `--from` with `--days` is refused; a window outside the
+  year is noted; an API row with no settlement date is written with its
+  posting date. `taxjson-fill-crypto` never caches today's still-open
+  candle.
+
 - **Broker detection and `taxjson-brokerage`.** An IB file is routed by
   its section,Header shape (a Trades-first Flex download, a statement
   without the BrokerName row or with a Title row first), and `taxjson
