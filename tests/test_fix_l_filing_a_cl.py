@@ -391,3 +391,23 @@ class TestSanityNamesUnreadableBook(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExportTradeRoundSettleKey(unittest.TestCase):
+    """S067-03 (EX1): holdings.toml's current-round trades are ordered on
+    the settlement date — a sale that settles after a later trade's
+    settlement does not end the round."""
+
+    def test_settle_order(self):
+        from taxjson.bin.taxjson_export import _load_trade_events
+        rows = [{"action": "BUYSELL", "symbol": "ABC.TO", "quantity": 10,
+                 "price": 10, "date": "2025-06-02", "date_settle": "2025-06-03"},
+                {"action": "BUYSELL", "symbol": "ABC.TO", "quantity": -10,
+                 "price": 11, "date": "2026-01-02", "date_settle": "2026-01-06"},
+                {"action": "BUYSELL", "symbol": "ABC.TO", "quantity": 10,
+                 "price": 12, "date": "2026-01-03", "date_settle": "2026-01-05"}]
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "margin_base.json"
+            p.write_text(json.dumps({"transactions": rows}))
+            ev = _load_trade_events([p])
+        self.assertEqual(len(ev["ABC.TO"]), 3)
