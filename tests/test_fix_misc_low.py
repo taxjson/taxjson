@@ -391,5 +391,54 @@ class TestStrictMoney(unittest.TestCase):
             self.assertAlmostEqual(m(good), v, msg=good)
 
 
+class TestMutationScripts(unittest.TestCase):
+    """S025-00 / S025-04. The harness itself is never run here: only its
+    restore handlers are exercised, on a scratch file."""
+
+    def _harness(self, d, tail):
+        target = Path(d) / "engine.py"
+        code = (
+            "import importlib.util, os, signal, sys, time\n"
+            f"spec = importlib.util.spec_from_file_location('ma', "
+            f"{str(REPO / 'scripts' / 'mutation_audit.py')!r})\n"
+            "m = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(m)\n"
+            "m.install_restore_handlers()\n"
+            f"p = {str(target)!r}\n"
+            "m._ORIGINALS[p] = 'ORIGINAL\\n'\n"
+            "open(p, 'w').write('MUTANT\\n')\n" + tail)
+        r = subprocess.run([PY, "-c", code], capture_output=True, text=True,
+                           env=dict(os.environ, PYTHONPATH=str(SRC)))
+        return r, target.read_text()
+
+    def test_sigterm_and_sighup_restore_the_source(self):
+        import signal
+        with tempfile.TemporaryDirectory() as d:
+            for sig in (signal.SIGTERM, signal.SIGHUP):
+                r, text = self._harness(
+                    d, f"os.kill(os.getpid(), {int(sig)})\ntime.sleep(5)\n")
+                self.assertEqual(text, "ORIGINAL\n", r.stderr)
+                self.assertEqual(r.returncode, 128 + int(sig), r.stderr)
+            r, text = self._harness(d, "sys.exit(3)\n")      # atexit
+            self.assertEqual(text, "ORIGINAL\n", r.stderr)
+
+    def test_triage_help_and_missing_report(self):
+        script = str(REPO / "scripts" / "mutation_triage.py")
+        r = subprocess.run([PY, script, "--help"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("usage", r.stdout)
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run([PY, script, str(Path(d) / "none.txt")],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1)
+            self.assertNotIn("Traceback", r.stderr)
+            rep = Path(d) / "rep.txt"
+            rep.write_text("SURVIVED: 1\n  core.py:1 [cmp]\n")
+            r = subprocess.run([PY, script, str(rep)], capture_output=True,
+                               text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("== CANDIDATE", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
