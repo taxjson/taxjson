@@ -211,5 +211,61 @@ class TestQtRowShapesLow(unittest.TestCase):
         self.assertIn("Unless ticker.map already maps R223608.TO", err)
 
 
+# ------------------------------------------------------------- RBC rows
+
+class TestRbcRowsLow(unittest.TestCase):
+
+    def test_holdings_export_is_named(self):
+        """R1-332: a clean refusal that names the report type."""
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        body = ('Holdings Export as of Jun 20, 2025\n'
+                '"Symbol","Quantity","Market Value"\n"QZH","10","100.00"\n')
+        with self.assertRaises(RbcFormatError) as cm:
+            rbc_parse(body, raw=True)
+        self.assertIn('Holdings export', str(cm.exception))
+
+    def test_split_with_blank_quantity_names_the_quantity(self):
+        """S063-20: the warning blamed a missing 'ON N SHS' base."""
+        body = (rrow("March 3, 2025", "Buy", "QZQ", "QZQ CORP", "300", "10",
+                     "-3009.95", "CAD", "QZQ CORP")
+                + rrow("June 13, 2025", "Reorganization", "QZQ", "QZQ CORP",
+                       "", "", "0", "CAD",
+                       "DIS - QZQ CORP STK SPLIT ON 300 SHS"))
+        txs, err, _ = rbc_parse(body)
+        self.assertEqual(of(txs, action='SPLIT'), [])
+        self.assertIn('UNBOOKED', err)
+        self.assertIn('no Quantity', err)
+        self.assertNotIn("without a usable 'ON N SHS'", err)
+
+    def test_spinoff_note_is_country_neutral(self):
+        """S064-20: the note cited ITA s.86.1 and told a non-Canadian
+        project to add a .tt row the corp-actions stage already books."""
+        body = (rrow("March 3, 2025", "Buy", "QZN", "QZN CORP", "100", "10",
+                     "-1009.95", "USD", "QZN CORP")
+                + rrow("June 2, 2025", "Reorganization", "QZV", "QZV CORP",
+                       "30", "", "0", "USD", "DIS - QZN CORP SPINOFF ON 100 "
+                       "SHS FROM SEC# 123 QZN CORP"))
+        _, err, _ = rbc_parse(body)
+        self.assertIn('spin-off', err)
+        self.assertNotIn('s.86.1', err)
+        self.assertNotIn('canada', err)
+        self.assertIn('do not also enter', err)
+
+    def test_option_transfer_takes_the_contract_symbol(self):
+        """S065-02: an in-kind option transfer kept the RBC code."""
+        body = (rrow("March 3, 2025", "Buy", "8QZQQQ1",
+                     "CALL .QZT 01/15/27 22 QZT CORP", "2", "1.50", "-311.95",
+                     "USD", "CALL .QZT 01/15/27 22 QZT CORP")
+                + rrow("June 2, 2025", "Transfers", "8QZQQQ1",
+                       "CALL .QZT 01/15/27 22 QZT CORP", "-2", "", "0", "USD",
+                       "TFO - CALL .QZT 01/15/27 22 ACCOUNT TRANSFER"))
+        txs, err, _ = rbc_parse(body)
+        syms = {t['action']: t['symbol'] for t in txs}
+        self.assertEqual(syms['TRANSFER'], syms['BUYSELL'])
+        self.assertEqual(syms['TRANSFER'], 'QZT270115C00022000.US')
+        self.assertEqual(of(txs, action='TRANSFER')[0]['multiplier'], 100.0)
+        self.assertNotIn('internal code', err)
+
+
 if __name__ == '__main__':
     unittest.main()
