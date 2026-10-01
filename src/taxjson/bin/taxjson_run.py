@@ -11122,9 +11122,26 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                                        qt_session["refresh_token"])
             _fetch_year = (getattr(args, "year", None)
                            or cfg.get("settings", {}).get("year"))
-            start, end = F.qt_window(getattr(args, "days", None),
-                                     getattr(args, "from_date", None),
-                                     year=_fetch_year)
+            try:
+                start, end = F.qt_window(getattr(args, "days", None),
+                                         getattr(args, "from_date", None),
+                                         year=_fetch_year)
+            except ValueError as e:
+                sys.exit(f"taxjson fetch: {e}")
+            if _fetch_year and (getattr(args, "days", None)
+                                or getattr(args, "from_date", None)):
+                from datetime import date as _dd
+                _y = int(_fetch_year)
+                if (start < _dd(_y - 1, 12, 1)
+                        or end > _dd(_y + 1, 1, 31)):
+                    # R1-354: the file is named for the project year
+                    # whatever the window; the parser dates each row
+                    # itself, so this is only a label — but say so.
+                    say(f"  note: the window {start} -> {end} reaches "
+                        f"outside tax year {_y}'s (Dec 1 {_y - 1} .. Jan "
+                        f"31 {_y + 1}); those rows go into "
+                        f"questrade_{_y}.csv too (each row is still "
+                        f"dated by its own trade/settle date).")
             say(f"fetch {a}: questrade #{number} "
                 f"{start} -> {end}")
             try:

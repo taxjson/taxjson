@@ -218,9 +218,21 @@ def _value_swaps_once(pairs, unpriced):
     return n
 
 
+def _utc_today() -> str:
+    """Today's date in UTC — the Yahoo daily candle's key."""
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+
+
 def _fill(args):
     cache = load_cache()
     cache_dirty = False
+    # A close for TODAY (UTC) or later is the still-open candle's
+    # intraday price: used for this run, never cached — caching it
+    # fixed a provisional FMV for good (audit S025-08; to_base_curr
+    # applies the same rule to FX).
+    provisional = {}
+    today_utc = _utc_today()
 
     # Shared loader funnel: `#` comments, qty alias, type guards.
     try:
@@ -290,7 +302,7 @@ def _fill(args):
                 # symbol (stage-tools audit).
                 y_symbol = SYMBOL_OVERRIDES.get(tx.symbol, tx.symbol)
                 cache_key = f"{y_symbol}-{tx.date}"
-                if cache_key not in cache:
+                if cache_key not in cache and cache_key not in provisional:
                     if tx.symbol == 'USD' or tx.symbol in _STABLE_ONE_TO_ONE:
                         p = 1.0
                     else:
@@ -302,11 +314,21 @@ def _fill(args):
                     # miss would book this lot at $0 cost basis on every future
                     # run with no retry. Leaving it uncached lets a later run
                     # re-fetch; the row keeps price≈0 and the warning fires.
-                    if p > 0:
+                    if p > 0 and tx.date >= today_utc:
+                        provisional[cache_key] = p
+                        cli_diag.note(
+                            PROG,
+                            f"{tx.symbol} {tx.date}: today's candle is "
+                            f"still open — its intraday price {p:g} is "
+                            f"used for this run only (not cached); "
+                            f"re-run after the UTC day closes for the "
+                            f"final FMV.")
+                    elif p > 0:
                         cache[cache_key] = p
                         cache_dirty = True
 
-                fetched_price = cache.get(cache_key, 0.0)
+                fetched_price = cache.get(cache_key,
+                                          provisional.get(cache_key, 0.0))
                 if not fetched_price > 0:
                     unpriced.append(tx)
                 if fetched_price > 0:
