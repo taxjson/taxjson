@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Tests: mutation pins for fill-crypto, the tax estimate, merge2,
+  option-boundary, crypto-sends, income dating, the country helpers
+  and the settlement calendars (audit G1-0): the kill score of those
+  eight modules went from 59.5% to 89%; the survivors left are
+  equivalent mutants (epsilon boundaries, formatting, dead defaults).
+  No behaviour change.
 - **US: a spouse's replacement purchase is a permanent denial in your
   books.** With affiliated trades given (`taxjson-gains --affiliated`),
   a loss whose replacement your spouse or controlled corporation bought
