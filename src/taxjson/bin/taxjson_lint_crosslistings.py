@@ -10,7 +10,12 @@ interlisting (e.g. AEM.US → AEM.TO). This lint scans the radar's OWN input
 BOTH `.TO` and `.US`, and classifies each:
 
   OK    — CDR (CIBC depositary receipt: a DIFFERENT instrument, correctly
-          separate), or a JOURNAL/Norbert's-Gambit pair.
+          separate), a JOURNAL/Norbert's-Gambit pair, or a pair ticker.map
+          declares `DISTINCT` (two different securities).
+
+A listing counts when the books hold its shares OR options on it (an
+option on a security is substituted property for the superficial-loss
+rule, s.54), and share positions follow SPLIT ratios and renames.
   WARN  — a TOBASE entry links the pair but BOTH listings are still present,
           so consolidation did not actually apply (e.g. the .TO leg isn't
           held in that account). The radar will MISS the superficial-loss
@@ -43,9 +48,11 @@ def _is_option(sym: str) -> bool:
 
 
 def _load_txs(paths: List[str]) -> List[Dict[str, Any]]:
+    """Every row of every file, each tagged `_src` (its file's index):
+    a SPLIT scales only the position of the book it is in."""
     out: List[Dict[str, Any]] = []
     from taxjson.lib.json_input import load_json_doc_or_exit, rows_or_exit
-    for p in paths:
+    for i, p in enumerate(paths):
         # An unreadable book stops the lint: skipping it printed
         # '(Clean.)' at exit 0, even under --strict (audit S035-13,
         # S028-09); a bare-array book is accepted (S079-11).
@@ -56,59 +63,94 @@ def _load_txs(paths: List[str]) -> List[Dict[str, Any]]:
         # quantity is one line naming the file and row, not a
         # traceback (audit S053-01).
         from taxjson.lib.core import coerce_transaction_row
-        for i, t in enumerate(rows):
+        for n, t in enumerate(rows):
             try:
                 coerce_transaction_row(
                     {k: v for k, v in t.items()
-                     if not str(k).startswith('_')}, i, str(p))
+                     if not str(k).startswith('_')}, n, str(p))
             except ValueError as e:
                 print(f"taxjson-lint-crosslistings: error: {e}",
                       file=sys.stderr)
                 sys.exit(2)
-        out.extend(rows)
+            out.append(dict(t, _src=i) if isinstance(t, dict) else t)
     return out
 
 
 def _load_map(path):
-    tobase, journal = set(), set()
+    """(tobase, journal, distinct) as sets of symbol pairs, read by the
+    engine's own ticker.map parser: the lint's private reader skipped
+    lower-case keywords and every DISTINCT line, so a pair the map
+    settles was still a REVIEW (R1-144). A map that cannot be read
+    stops the lint instead of reading as 'no rules'."""
+    tobase, journal, distinct = set(), set(), set()
     if not path:
-        return tobase, journal
+        return tobase, journal, distinct
+    from pathlib import Path
+    from taxjson.bin.taxjson_ticker_map import load_map_file
     try:
-        for ln in open(path, encoding="utf-8"):
-            s = ln.split("#")[0].split()
-            if len(s) >= 3 and s[0] == "TOBASE":
-                tobase.add(frozenset((s[1], s[2])))
-            elif len(s) >= 3 and s[0] == "JOURNAL":
-                journal.add(frozenset((s[1], s[2])))
-    except OSError as e:
-        print(f"warning: could not read map {path}: {e}", file=sys.stderr)
-    return tobase, journal
+        tmap = load_map_file(Path(path))
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"taxjson-lint-crosslistings: error: cannot read map "
+              f"{path}: {e}", file=sys.stderr)
+        sys.exit(1)
+    tobase = {frozenset((a, b)) for a, b in tmap.tobase.items()}
+    journal = {frozenset((a, b)) for a, b in tmap.journal.items()}
+    distinct = {frozenset(p) for p in tmap.distinct}
+    return tobase, journal, distinct
+
+
+_LISTED = (".TO", ".US")
 
 
 def _net_by_symbol(txs):
-    """{(symbol): net_qty} over BUYSELL/ASSIGN equity rows, + descriptions."""
-    net: Dict[str, float] = {}
+    """(net shares by listing, net option contracts by the underlying
+    listing, descriptions). Shares follow each book's rows in order:
+    BUYSELL/ASSIGN/TRANSFER/OPENING_BALANCE add, a SPLIT scales by its
+    ratio (and moves the position to `symbol_new`) — summing quantities
+    alone left a flat split position at -100 (S035-02). Option rows
+    count toward their underlying's listing (S035-03)."""
+    from taxjson.lib.core import parse_option_underlying
+    by_src: Dict[Any, Dict[str, float]] = {}
+    opt: Dict[str, float] = {}
     desc: Dict[str, str] = {}
     for t in txs:
-        s = t.get("symbol", "")
-        if not (s.endswith(".TO") or s.endswith(".US")) or _is_option(s):
+        if not isinstance(t, dict):
             continue
-        # The broker's security name when the description is only the
-        # ticker (IB rows: audit S057-24).
-        name = t.get("security_name") or t.get("description")
-        if name and s not in desc:
-            desc[s] = name
-        if t.get("action") in ("BUYSELL", "ASSIGN"):
+        s = t.get("symbol", "") or ""
+        act = t.get("action")
+        if _is_option(s):
+            und = parse_option_underlying(s)
+            if und and und.endswith(_LISTED) and act in ("BUYSELL", "ASSIGN"):
+                opt[und] = opt.get(und, 0.0) + float(t.get("quantity") or 0)
+            continue
+        if s.endswith(_LISTED):
+            # The broker's security name when the description is only
+            # the ticker (IB rows: audit S057-24).
+            name = t.get("security_name") or t.get("description")
+            if name and s not in desc:
+                desc[s] = name
+        net = by_src.setdefault(t.get("_src"), {})
+        if act in ("BUYSELL", "ASSIGN", "TRANSFER", "OPENING_BALANCE"):
             net[s] = net.get(s, 0.0) + float(t.get("quantity") or 0)
-    return net, desc
+        elif act == "SPLIT":
+            ratio = float(t.get("quantity") or 0)
+            dst = (t.get("symbol_new") or "").strip() or s
+            moved = net.pop(s, 0.0) * ratio
+            net[dst] = (net.get(dst, 0.0) if dst != s else 0.0) + moved
+    total: Dict[str, float] = {}
+    for net in by_src.values():
+        for s, q in net.items():
+            if s.endswith(_LISTED):
+                total[s] = total.get(s, 0.0) + q
+    return total, opt, desc
 
 
-def analyze(taxable_txs, sheltered_txs, tobase, journal):
-    tax_net, tax_desc = _net_by_symbol(taxable_txs)
-    shl_net, shl_desc = _net_by_symbol(sheltered_txs)
+def analyze(taxable_txs, sheltered_txs, tobase, journal, distinct=()):
+    tax_net, tax_opt, tax_desc = _net_by_symbol(taxable_txs)
+    shl_net, shl_opt, shl_desc = _net_by_symbol(sheltered_txs)
     desc = {**shl_desc, **tax_desc}
     roots: Dict[str, set] = {}
-    for s in set(tax_net) | set(shl_net):
+    for s in set(tax_net) | set(shl_net) | set(tax_opt) | set(shl_opt):
         root, ex = s.rsplit(".", 1)
         roots.setdefault(root, set()).add(ex)
 
@@ -121,6 +163,9 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal):
             sev, note = "OK", "CDR — different instrument, correctly separate"
         elif pair in journal:
             sev, note = "OK", "JOURNAL / Norbert's Gambit pair"
+        elif pair in distinct:
+            sev, note = ("OK", "DISTINCT in ticker.map — declared separate "
+                         "securities")
         elif pair in tobase:
             sev, note = ("WARN",
                          "TOBASE entry exists but BOTH listings still present "
@@ -134,6 +179,13 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal):
             "root": root, "severity": sev, "note": note,
             "tax_to": tax_net.get(to, 0.0), "tax_us": tax_net.get(us, 0.0),
             "shl_to": shl_net.get(to, 0.0), "shl_us": shl_net.get(us, 0.0),
+            "tax_to_opt": tax_opt.get(to, 0.0),
+            "tax_us_opt": tax_opt.get(us, 0.0),
+            "shl_to_opt": shl_opt.get(to, 0.0),
+            "shl_us_opt": shl_opt.get(us, 0.0),
+            "options_only": [x for x in ("TO", "US")
+                             if f"{root}.{x}" not in tax_net
+                             and f"{root}.{x}" not in shl_net],
             "desc_to": desc.get(to, ""), "desc_us": desc.get(us, ""),
         })
     return findings
@@ -189,10 +241,10 @@ def main():
                         "exposure is found (for CI / pre-commit use).")
     args = p.parse_args()
 
-    tobase, journal = _load_map(args.map_file)
+    tobase, journal, distinct = _load_map(args.map_file)
     taxable_txs = _load_txs(args.taxable)
     sheltered_txs = _load_txs(args.sheltered)
-    findings = analyze(taxable_txs, sheltered_txs, tobase, journal)
+    findings = analyze(taxable_txs, sheltered_txs, tobase, journal, distinct)
     splits = venue_splits(taxable_txs, sheltered_txs)
 
     actionable = 0
@@ -219,19 +271,23 @@ def main():
 
     order = {"WARN": 0, "REVIEW": 1, "OK": 2}
     for f in sorted(findings, key=lambda x: (order[x["severity"]], x["root"])):
-        tax_exposed = abs(f["tax_to"]) > 1e-6 or abs(f["tax_us"]) > 1e-6
+        tax_exposed = any(abs(f[k]) > 1e-6 for k in (
+            "tax_to", "tax_us", "tax_to_opt", "tax_us_opt"))
         flag = f["severity"]
         if flag in ("WARN", "REVIEW") and tax_exposed:
             flag += " ‼"           # taxable exposure → actionable now
             actionable += 1
         print(f"\n[{flag}] {f['root']}  ({f['note']})")
-        print(f"    .TO  taxable={f['tax_to']:+.0f}  sheltered={f['shl_to']:+.0f}"
-              f"   {f['desc_to'][:48]!r}")
-        print(f"    .US  taxable={f['tax_us']:+.0f}  sheltered={f['shl_us']:+.0f}"
-              f"   {f['desc_us'][:48]!r}")
+        for x in ("to", "us"):
+            o_t, o_s = f[f"tax_{x}_opt"], f[f"shl_{x}_opt"]
+            opts = (f"  options: taxable={o_t:+.0f} sheltered={o_s:+.0f}"
+                    if (o_t or o_s or x.upper() in f["options_only"]) else "")
+            print(f"    .{x.upper()}  taxable={f[f'tax_{x}']:+.0f}  "
+                  f"sheltered={f[f'shl_{x}']:+.0f}{opts}"
+                  f"   {f[f'desc_{x}'][:48]!r}")
 
     print("\n" + "-" * 100)
-    print("OK = correctly separate (CDR / Norbert's). "
+    print("OK = correctly separate (CDR / Norbert's / DISTINCT). "
           "WARN = mapped but not consolidated. "
           "REVIEW = needs a human call. ‼ = has taxable exposure (act now).")
     if args.strict and actionable:

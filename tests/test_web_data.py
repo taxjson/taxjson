@@ -182,7 +182,7 @@ class TestRoutes(unittest.TestCase):
                 "quantity": 100, "price": 10.0, "net_amount": 1000.0,
                 "currency": "CAD", "account": "margin"}]
         root = _project(tmp, txs, holdings_toml=holdings)
-        return TestClient(create_app(ProjectContext.load(root)))
+        return TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
 
     def test_pages_render(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -238,7 +238,7 @@ class TestRoutes(unittest.TestCase):
         from taxjson.web.app import create_app
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, [], holdings_toml="[[holding\nnot toml")
-            c = TestClient(create_app(ProjectContext.load(root)))
+            c = TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
             # Dashboard and holdings page render an error banner, not 500.
             r = c.get("/")
             self.assertEqual(r.status_code, 200)
@@ -450,7 +450,7 @@ class TestMixedCurrencyHoldingsRender(unittest.TestCase):
                 "quantity": 200, "price": 4.55, "net_amount": 910.0,
                 "currency": "CAD", "account": "margin"}]
         root = _project(tmp, txs, holdings_toml=_MIXED_HOLDINGS)
-        return TestClient(create_app(ProjectContext.load(root)))
+        return TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
 
     def test_list_and_detail_show_per_currency_cost(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -509,7 +509,7 @@ class TestWhatIfShelteredNotDeductible(unittest.TestCase):
         from taxjson.web.context import ProjectContext
         from taxjson.web.app import create_app
         with tempfile.TemporaryDirectory() as tmp:
-            c = TestClient(create_app(ProjectContext.load(self._root(tmp))))
+            c = TestClient(create_app(ProjectContext.load(self._root(tmp))), base_url="http://127.0.0.1")
             r = c.post("/whatif", data={"account": "rrsp", "symbol": "BBB.TO",
                                         "qty": "100", "price": "10"})
             self.assertEqual(r.status_code, 200)
@@ -518,7 +518,7 @@ class TestWhatIfShelteredNotDeductible(unittest.TestCase):
             root = Path(tmp)
             (root / "work" / "margin_base.json").write_text(json.dumps(
                 {"transactions": [dict(self._TXS[0], account="margin")]}))
-            c = TestClient(create_app(ProjectContext.load(root)))
+            c = TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
             r = c.post("/whatif", data={"account": "margin",
                                         "symbol": "BBB.TO",
                                         "qty": "100", "price": "10"})

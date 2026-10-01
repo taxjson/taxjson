@@ -35,8 +35,10 @@ taxjson-brokerage --brokerage $BROKER --account demo --country $COUNTRY \
 #    futures follow the country's lot rule)
 taxjson-merge2 --dedup --validate /tmp/${BROKER}.json > /tmp/${BROKER}_merged.json
 
-# 3. Compute gains for the tax year
-taxjson-gains --country $COUNTRY --year 2024 \
+# 3. Compute gains for the tax year. --taxable turns on the superficial-
+#    loss (ca) / wash-sale (us) rules — leave it out only for a registered
+#    account, where they do not apply the same way.
+taxjson-gains --country $COUNTRY --year 2024 --taxable \
     /tmp/${BROKER}_merged.json > /tmp/${BROKER}_gains.json
 
 # 4. Summarize
@@ -50,7 +52,7 @@ taxjson-sum-income /tmp/${BROKER}_merged.json
 Two AAPL buys (100 @ 185, 50 @ 170), two AAPL sells (75 @ 200, 75 @ 180), one AAPL dividend ($18), and an open SHOP.TO position. Demonstrates ACB averaging across two lots and a mixed gain/loss disposition pattern.
 
 ### `ib_demo.csv`
-MSFT round-trip (50 @ 400 → 50 @ 440), plus an NVDA loss followed by repurchase within 30 days (10 @ 850 → -10 @ 140 → 10 @ 135). Under `--country us` this exercises the §1091 wash-sale matcher. Also includes two MSFT dividends with US withholding-tax rows.
+MSFT round-trip (50 @ 400 → 50 @ 440), plus an NVDA loss followed by repurchase within 30 days (10 @ 148 in July 2024, after NVDA's June 10:1 split → -10 @ 140 → 10 @ 135). Step 3 passes `--taxable`, which is what turns on the loss-denial rules: the 82.00 USD loss is denied (§1091 wash sale under `--country us`, superficial loss under `--country ca`). Without `--taxable` the loss is allowed in full. Also includes two MSFT dividends with US withholding-tax rows.
 
 ### `rbc_direct_demo.csv`
 RY.TO position built in two lots (100 @ 130, 50 @ 140), partial sale (100 @ 165), plus an ENB.TO open position. Two dividends include the "ON N SHS … PER SHARE" pattern so the parser extracts per-share rate and quantity.
@@ -62,7 +64,7 @@ BTC and ETH trades using Kraken's `XXBT/ZUSD` and `XETH/ZUSD` pair notation with
 BTC and ETH buys/sells plus two `Staking Income` rows. Each staking row produces a paired `DIVIDEND` (income at FMV) and zero-net `BUYSELL` (adds tokens to the inventory pool at cost basis = FMV).
 
 ### `webull_demo.csv`
-AAPL position built in two lots (100 @ 185, 50 @ 170), partial sell (75 @ 200), an ABBV call option round-trip (buy 10 @ 1.60 → sell 10 @ 2.50), and a CAD-listed SHOP buy. Exercises Webull's day-first dates (`%d-%m-%Y`), the `@` symbol prefix, the `(parentheses for negative)` Proceeds format, the option-symbol reconstruction from `CALL ABBV01/17/25 190`, and the currency→exchange suffix mapping (`USD`→`.US`, `CAD`→`.TO`).
+AAPL position built in two lots (100 @ 185, 50 @ 170), partial sell (75 @ 200), an ABBV call option round-trip (buy 10 @ 1.55 → sell 10 @ 2.50), and a CAD-listed SHOP buy. Exercises Webull's day-first dates (`%d-%m-%Y`), the `@` symbol prefix, the `(parentheses for negative)` Proceeds format, the option-symbol reconstruction from `CALL ABBV01/17/25 190`, and the currency→exchange suffix mapping (`USD`→`.US`, `CAD`→`.TO`).
 
 ## Expected output
 

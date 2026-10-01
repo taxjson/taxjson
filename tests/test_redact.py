@@ -134,7 +134,7 @@ class TestRedactAuditFindings(unittest.TestCase):
 
     def test_more_id_and_identity_shapes(self):
         text = ('Account ID: 5550000301\nName,Jane Q Sample\nPrimary Owner: Jane Q Sample\n'  # pii-ok (synthetic fixture)
-                'Wire ref U55512346_2025\nid DU55512347 and F55512348\n'
+                'Wire ref U55512346_2025\nid DU55512347 and F55512348\n'  # pii-ok (synthetic fixture)
                 '"Account: 555-00004-1 - Margin"\nAccount Number\nZ55512345\n5551-2345\n'  # pii-ok (synthetic fixture)
                 '"Name: Sample, Jane",x\n')
         out, rep = redact_text(text)
@@ -168,7 +168,7 @@ class TestRedactAuditFindings(unittest.TestCase):
 
     def test_id_in_file_name_is_replaced_and_report_masks(self):
         from taxjson.bin.taxjson_redact import redacted_name, Report
-        self.assertEqual(redacted_name(Path("U55512345_20250101_20251231.csv"), {}),
+        self.assertEqual(redacted_name(Path("U55512345_20250101_20251231.csv"), {}),  # pii-ok (synthetic)
                          "U99900001_20250101_20251231.redacted.csv")
         self.assertEqual(Report.masked("U55512345"), "U + 8 digits")  # pii-ok (synthetic fixture)
         self.assertEqual(Report.masked("55512"), "5 digits")

@@ -403,7 +403,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `inputs/<account>/manifest.json` | Saved corp-action elections — **commit this**. |
 | `inputs/<crypto account>/sends.json`, `crypto_sends.tt` | Your decision for each crypto send that did not arrive on another of your exchanges (`self` / `gift` / `payment`, plus a note) — **commit it** — and the `.tt` file `taxjson crypto-sends --write` (and `taxjson run`) generates from it: one BUYSELL at fair value per gift or payment. Never hand-edit the generated file; a hand-written `crypto_sends.tt` is never overwritten. |
 | `inputs/slips/` | Broker T5008 / 1099-B slip CSVs for `taxjson reconcile-slips` (the checklist looks here). Not an account folder — needs no `[accounts.slips]`. |
-| `ticker.map` | Symbol rules, one per line: `GLOBAL from to` (plain rename, every stage), `TOBASE from to` (cross-listing consolidated in the base pipeline only), `JOURNAL from to` (Norbert's Gambit pair — consolidated AND netted in holdings), `DELETE from` (drop a pure artifact), `DISTINCT a b` (records that two look-alike listings are deliberately separate securities — a CDR vs its US underlying — and silences the scan's MAP-GAP nag; changes no symbol). For TOBASE pairs the holdings view keeps the listings separate **except** where the broker's own transfer rows prove a depot flip — the holdings export applies those evidenced quantities from the transfer sidecars (see `taxjson transfers`), so `JOURNAL` is only for intrinsically fungible classes like DLR's gambit units. Symbols are case-insensitive (upper-cased on load) and matched exactly — a suffix-less `GLOBAL QQOL QQNW` does not touch `QQOL.US`; notes go after `#`. Renames chain (`GLOBAL OLD.US NEW.US` + `TOBASE NEW.US NEW.TO` sends OLD.US to NEW.TO). `taxjson run` refuses a map with a malformed line, a rename cycle, one symbol renamed to two different targets, or a `DISTINCT` pair that the renames pool together. A rule on the shares also renames their options through the root (`BCE…C….US` → `BCE…C….TO`), except where that would land on a contract code the account already trades on the other listing — a USD-strike US option and a CAD-strike Montreal option are different property, so the US one keeps its symbol and the `.sum` DIAGNOSTICS name it. `taxjson init` writes a commented stub. |
+| `ticker.map` | Symbol rules, one per line: `GLOBAL from to` (plain rename, every stage), `TOBASE from to` (cross-listing consolidated in the base pipeline only), `JOURNAL from to` (Norbert's Gambit pair — consolidated AND netted in holdings), `DELETE from` (drop a pure artifact), `DISTINCT a b` (records that two look-alike listings are deliberately separate securities — a CDR vs its US underlying — and silences the scan's MAP-GAP nag and the `crosslistings.rpt` REVIEW; changes no symbol). For TOBASE pairs the holdings view keeps the listings separate **except** where the broker's own transfer rows prove a depot flip — the holdings export applies those evidenced quantities from the transfer sidecars (see `taxjson transfers`), so `JOURNAL` is only for intrinsically fungible classes like DLR's gambit units. Symbols are case-insensitive (upper-cased on load) and matched exactly — a suffix-less `GLOBAL QQOL QQNW` does not touch `QQOL.US`; notes go after `#`. Renames chain (`GLOBAL OLD.US NEW.US` + `TOBASE NEW.US NEW.TO` sends OLD.US to NEW.TO). `taxjson run` refuses a map with a malformed line, a rename cycle, one symbol renamed to two different targets, or a `DISTINCT` pair that the renames pool together. A rule on the shares also renames their options through the root (`BCE…C….US` → `BCE…C….TO`), except where that would land on a contract code the account already trades on the other listing — a USD-strike US option and a CAD-strike Montreal option are different property, so the US one keeps its symbol and the `.sum` DIAGNOSTICS name it. `taxjson init` writes a commented stub. |
 | `distributions.map` | Non-cash fund distributions: `SYMBOL RECORD_DATE PER_SHARE` (negative = ROC). |
 | `t1135.map`, `yf_ticker.map`, `sector.map`, `crypto_ticker.map` | Per-symbol overrides: T1135 domicile, yfinance spelling, timeline sectors, crypto Yahoo-collision fixes (`crypto_ticker.map` is read from the project root whatever the cwd; editing it re-prices under `run --fast`). |
 | `phantoms.json`, `claimed_losses.txt` | Missing-basis phantoms (auto-applied); losses actually claimed on filed returns (`YEAR AMOUNT`). |
@@ -903,9 +903,12 @@ ENB.US   CA      # Canadian corp held on NYSE — not specified foreign property
 GLXY.TO  USA     # foreign corp listed on TSX — still specified foreign property
 ```
 
-Symbols with no market suffix (typically exchange-held crypto) are bucketed
-as country `CRYPTO` and counted toward the threshold (check where they are
-held and map them); an unknown market suffix is flagged `??` for review. Amounts are **cost** (ACB-style) — correct for
+Symbols with no market suffix (typically exchange-held crypto) are
+bucketed as country `CRYPTO` and counted toward the threshold: crypto held
+on a foreign exchange is generally specified foreign property, so map each
+one in `t1135.map` (`SYMBOL <ISO3>`, or `SYMBOL CA` for a Canadian
+platform) once you have checked where it is held. Country `??` marks only
+an unknown market suffix, for manual review. Amounts are **cost** (ACB-style) — correct for
 the threshold test and the "maximum cost amount" columns; the category-7
 detailed method's month-end **fair market value** boxes need your broker's
 statements, which this tool does not fetch. Not tax advice.
@@ -934,8 +937,10 @@ FILE` writes importable rows, `--json` the raw report.
   included, is converted at that closing leg's rate and shown the way the
   broker's T5008 shows it — a gain as proceeds with ACB 0, a loss as ACB
   with proceeds 0, no separate outlays.
-  Sell-side commissions are re-split into the outlays column (gain
-  unchanged), and every row foots — proceeds − ACB − outlays = the allowed
+  Sell-side commissions on long sales are re-split into the outlays
+  column (gain unchanged); a written option's premium (and a short sale's
+  proceeds) is shown NET of the opening commission with no outlay — same
+  gain, slightly lower proceeds than a broker slip. Every row foots — proceeds − ACB − outlays = the allowed
   gain: a superficial loss denied on the row shows as an ACB reduced by the
   denial, noted per row (the denied amount goes onto the replacement
   property's ACB; a registered-account or affiliated-person denial is noted
@@ -1268,7 +1273,7 @@ stdout.
 | Tool | Purpose |
 | --- | --- |
 | `taxjson-fees-sum --cache work --year YYYY --to CAD --rates work/to_base.csv` | Trading fees by brokerage with comparison stats (avg/median per trade, $/share, %notional). Add `--json` for machine output. |
-| `taxjson-lint-crosslistings --taxable work/margin_base.json --sheltered work/sheltered_base.json --map ticker.map` | Flag cross-listed (`.TO`/`.US`) tickers the wash radar may not consolidate (also run automatically → `reports/crosslistings.rpt`). |
+| `taxjson-lint-crosslistings --taxable work/margin_base.json --sheltered work/sheltered_base.json --map ticker.map` | Flag cross-listed (`.TO`/`.US`) tickers the wash radar may not consolidate (also run automatically → `reports/crosslistings.rpt`). A listing counts when the books hold its shares or options on it; share positions follow splits; `DISTINCT` pairs are OK. |
 | `taxjson-sum-gains work/margin_gains.json` | The per-account gains summary behind `reports/<account>.sum`. |
 
 ## Importing manual cost basis
@@ -1440,7 +1445,13 @@ defended in layers rather than by tests alone:
   in every gate and as the `pre-push` hook, fails closed, and reads a
   private denylist kept outside the repository; `taxjson redact` strips
   the account numbers, names and contact details it recognises from an
-  export — review the output before sharing it.
+  export — review the output before sharing it. One exception is by
+  design: git publishes the author, committer and tagger name and e-mail
+  of every pushed commit and tag. The hook refuses any other identity
+  that hits the scan but only warns about your own configured
+  `user.name` / `user.email`, so set a pseudonym and a
+  `users.noreply.github.com` address before pushing if you do not want
+  your name public.
 - **Filed-year locks.** `taxjson close-year` snapshots a filed year;
   every later run recomputes it and reports drift.
 

@@ -103,7 +103,7 @@ class TestWebRoutes(unittest.TestCase):
         (self.root / "reports" / "margin_holdings.toml").write_text(
             '[[holding]]\nsymbol = "AAA.TO"\nquantity = 100.0\n')
         from taxjson.web.app import create_app
-        self.c = TestClient(create_app(_ctx(self.root)))
+        self.c = TestClient(create_app(_ctx(self.root)), base_url="http://127.0.0.1")
 
     def test_api_whatif_unknown_account_is_404(self):
         r = self.c.get("/api/whatif", params=dict(
@@ -331,7 +331,7 @@ class TestRedactLow(unittest.TestCase):
             self.assertNotIn("U55512345", got)  # pii-ok
         # A name-only 8-digit id gets its own placeholder, not a renumber
         # of the placeholder digits.
-        got = redacted_name(Path("U55512345_55599999.csv"), rep.accounts)
+        got = redacted_name(Path("U55512345_55599999.csv"), rep.accounts)  # pii-ok (synthetic)
         self.assertIn(ph, got)
         self.assertNotIn("55599999", got)
 

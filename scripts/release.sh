@@ -9,7 +9,8 @@
 #      (or requires that heading to exist already);
 #   3. bumps pyproject.toml, reinstalls so `taxjson --version` agrees;
 #   4. runs the FULL local gate (scripts/ci.sh, fuzzers included);
-#   5. commits, tags (annotated), and pushes main + the tag.
+#   5. commits, tags (annotated), runs the pre-push PII gate itself, and
+#      pushes main + the tag.
 # Roll back a bad release by tagging the previous good commit as the
 # next patch version — never by moving or deleting a published tag.
 set -euo pipefail
@@ -50,5 +51,14 @@ git add CHANGELOG.md pyproject.toml
 # An earlier aborted run may already have committed the bump: tag HEAD then.
 git diff --cached --quiet || git commit -q -m "release $TAG"
 git tag -a "$TAG" -m "taxjson $TAG"
+# The pre-push PII gate (commit and tag messages, identities, ref names,
+# binary files) runs here whether or not this clone has the hook
+# installed: ci.sh's tree scan never sees messages or identities (S025-06).
+Z=0000000000000000000000000000000000000000
+printf 'refs/heads/main %s refs/heads/main %s\nrefs/tags/%s %s refs/tags/%s %s\n' \
+    "$(git rev-parse HEAD)" "$(git rev-parse origin/main)" \
+    "$TAG" "$(git rev-parse "$TAG")" "$TAG" "$Z" \
+  | scripts/hooks/pre-push origin "$(git remote get-url origin)" \
+  || { echo "pre-push PII gate refused — nothing pushed (the commit and tag $TAG are local; fix, then delete the tag and re-run)"; exit 1; }
 git push --quiet origin main "$TAG"
 echo "released $TAG — installers pick it up on their next run"

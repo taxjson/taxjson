@@ -365,7 +365,7 @@ class TestKrakenCoinUnitFees(unittest.TestCase):
         # Row shape: funding-style refid, no counter-leg in any earn
         # wallet, spot balance swept to dust — the coins left the ledger.
         csv = KR_HEAD_2026 + (
-            '"L1","FTQZQZQ","2026-05-10 04:37:05","hybridearnwithdrawal",'
+            '"L1","FTQZQZQ","2026-05-12 09:14:41","hybridearnwithdrawal",'
             '"","currency","stable_coin","USDC","spot / main",'
             '"-500.00000000","0","0.00000032","-499.9","0","0",""\n')
         txs, _ = _parse(KrakenBrokerage(), csv, prefix='kr_ledgers_')
@@ -449,12 +449,12 @@ class TestFuturesShortNotPhantom(unittest.TestCase):
     def test_futures_sell_to_open_not_flagged(self):
         from taxjson.lib.phantom_holdings import detect_phantoms
         body = (IB_TRADES_HDR
-                + _ib_trade('Futures', 'QZFK6', '2026-05-14, 21:19:06',
-                            1, 80000, 8000, -2, 'O')
-                + _ib_trade('Futures', 'QZFK6', '2026-05-29, 06:15:26',
-                            -2, 73000, 14600, -4, 'C;O')
-                + _ib_trade('Futures', 'QZFK6', '2026-05-29, 06:15:54',
-                            1, 73100, 7310, -2, 'C')
+                + _ib_trade('Futures', 'QZFK6', '2026-05-12, 15:48:20',
+                            1, 78000, 7800, -2, 'O')
+                + _ib_trade('Futures', 'QZFK6', '2026-05-27, 09:41:03',
+                            -2, 74500, 14900, -4, 'C;O')
+                + _ib_trade('Futures', 'QZFK6', '2026-05-27, 09:42:30',
+                            1, 74600, 7460, -2, 'C')
                 + _ib_trade('Stocks', 'QZS', '2026-05-29, 10:00:00',
                             -5, 10, 50, -1, 'O')
                 + _ib_fii_futures('QZFK6', '0.1'))

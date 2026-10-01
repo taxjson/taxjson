@@ -401,7 +401,7 @@ class TestWebStatus(unittest.TestCase):              # web polish
         from taxjson.web.app import create_app
         from taxjson.web.context import ProjectContext
         root = _project(td)
-        return TestClient(create_app(ProjectContext.load(root)))
+        return TestClient(create_app(ProjectContext.load(root)), base_url="http://127.0.0.1")
 
     def test_unknown_account_pages_are_404(self):
         with tempfile.TemporaryDirectory() as td:

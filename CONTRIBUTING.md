@@ -45,8 +45,15 @@ at `~/.config/taxjson/pii-denylist` (one regex per line: your real account
 numbers, name, addresses; it lives outside every repository, so the strings
 it guards are never themselves committed). It runs in every `scripts/ci.sh`
 mode and as the `pre-push` hook that `scripts/dev-setup.sh` installs, which
-scans only the lines, messages and author/committer/tagger identities a push
-would add and refuses on any hit (your own configured identity only warns).
+scans only what a push would add — the diff lines, the text inside binary
+files (PDF/Office metadata, spreadsheet cells), branch and tag names,
+commit and tag messages, and author/committer/tagger identities (against
+the denylist and the e-mail allowlist) — and refuses on any hit (your own
+configured identity only warns). `scripts/release.sh` runs the same hook
+itself before it pushes. Account-id shapes count in folder names as well
+as file names, and an 8-9 digit value under an `Account` / `Account #`
+CSV column counts as an account number; other broker id layouts are
+caught only by your private denylist, so fill it in.
 Mark a genuine false positive with a `# pii-ok` (or `pii-ok:`) comment on that
 line — the bare word does not count; bypass knowingly with
 `git push --no-verify`. Fixtures must be synthetic: fake account ids
@@ -69,10 +76,13 @@ Or use the wrapper:
 
 ### The full gate: `scripts/ci.sh`
 
-Run this before every push. It is the authoritative CI — GitHub
-Actions on this private repo is billing-gated, so the workflow file
-(`.github/workflows/tests.yml`, Python 3.9–3.13 on Linux) is a mirror of
-these stages rather than the source of truth:
+Run this before every push. It is the authoritative CI; the workflow
+file (`.github/workflows/tests.yml`, Python 3.9–3.13 on Linux) mirrors
+its stages for pull requests on the public repository — lint,
+consistency, tax-rules, the PII scan (generic patterns only: a hosted
+runner has no private denylist) and the suite. A missing `ruff` fails
+the lint stage; `pip install -e ".[dev]"` (or `scripts/dev-setup.sh`)
+installs it:
 
 ```bash
 scripts/ci.sh            # lint (ruff, critical tier) + suite + fuzzers at CI depth  (~2 min)
