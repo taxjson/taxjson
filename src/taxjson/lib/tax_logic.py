@@ -959,7 +959,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CORP-04",
                  "reorg_368 (all-stock §368(a) reorganization: basis "
                  "carries over, §358, and the holding period tacks, "
-                 "§1223(1)),", cont=True),
+                 "§1223(1); tax-free by law when it qualifies, and only a "
+                 "significant holder attaches the Reg. §1.368-3 "
+                 "statement),", cont=True),
             Rule("US-CORP-05",
                  "or reorg_368_boot (§356: gain recognised up to the cash "
                  "received, a loss never; new basis = old basis - cash + "
@@ -972,7 +974,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CORP-07",
                  "or tax_free_355 (§355: the basis moved to the spin-off "
                  "is the dollar amount you give, per the company's Form "
-                 "8937; §358(b)).", cont=True),
+                 "8937; §358(b); only a significant distributee attaches "
+                 "the Reg. §1.355-5 statement).", cont=True),
             Rule("US-CORP-08",
                  "ignore skips broker noise only; on a real event it "
                  "leaves the books wrong."),

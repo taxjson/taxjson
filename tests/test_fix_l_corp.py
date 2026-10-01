@@ -10,6 +10,8 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
+from tax_rules import rule
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -380,6 +382,85 @@ class TestIbQuestradeExtractorsLow(unittest.TestCase):
                 out[n] = (ev.ratio_old, ev.event_id)
         self.assertEqual(out["1,500"][0], 1500.0)
         self.assertEqual(out["1,500"], out["1500"])
+
+
+# ========================================================== elections
+def _spin(**kw):
+    from taxjson.lib.corp_actions import CorporateAction
+    base = dict(date='2025-06-02', time='09:30:00', action_type='spinoff',
+                source_symbol='PAR.US', source_isin='US0000000901',
+                target_symbol='SPN.US', target_isin='US0000000902',
+                ratio_new=1, ratio_old=5, qty_disposed=0, qty_received=20,
+                fmv=0.0, currency='USD', target_currency='USD',
+                account='margin')
+    base.update(kw)
+    return CorporateAction(**base)
+
+
+def _merger(**kw):
+    return _spin(**dict(dict(action_type='merger', target_symbol='NEW.US',
+                             qty_disposed=100, qty_received=50), **kw))
+
+
+class TestElectionsLow(unittest.TestCase):
+    def _zero_alloc(self, country, election, hint):
+        from taxjson.lib.corp_actions import resolve_event
+        rows, err = _quiet(resolve_event, _spin(), election,
+                           country=country, hints={hint: 0.0})
+        buy = [r for r in rows if r['action'] == 'BUYSELL']
+        self.assertEqual(buy[0]['net_amount'], 0.0)
+        self.assertIn("allocated cost of 0", err)
+        # `taxjson run` repeats it on every run, into the .sum/checklist.
+        from taxjson.bin.taxjson_run import _warn_zero_value_spinoffs
+        with tempfile.TemporaryDirectory() as tmp:
+            corp = Path(tmp) / "margin_ib_corp.json"
+            corp.write_text(json.dumps({"transactions": rows}))
+            _, out = _quiet(_warn_zero_value_spinoffs, "margin", True,
+                            [corp], Path(tmp))
+            diag = (Path(tmp) / "margin_corp_spinoff_value.diag")
+            text = diag.read_text()
+            self.assertIn("$0 allocated cost", text)
+            self.assertIn(f"--hint {hint}=<amount>", text)
+            # A real allocation: quiet.
+            rows2, err2 = _quiet(resolve_event, _spin(), election,
+                                 country=country, hints={hint: 500.0})
+            self.assertNotIn("allocated cost of 0", err2)
+            corp.write_text(json.dumps({"transactions": rows2}))
+            _quiet(_warn_zero_value_spinoffs, "margin", True, [corp],
+                   Path(tmp))
+            self.assertFalse(diag.exists())
+
+    def test_s073_21_s074_04_zero_allocation_s86_1(self):
+        self._zero_alloc('canada', 'rollover_s_86_1', 'allocated_acb_cad')
+
+    def test_s073_21_s074_04_zero_allocation_355(self):
+        self._zero_alloc('usa', 'tax_free_355', 'allocated_acb')
+
+    def test_s073_22_boot_merger_without_fmv_warns(self):
+        from taxjson.lib.corp_actions import resolve_event
+        hints = {'cash_boot': 500.0, 'source_basis_total': 1000.0}
+        rows, err = _quiet(resolve_event, _merger(qty_received=25),
+                           'reorg_368_boot', country='usa',
+                           hints=dict(hints, fmv_per_share=0.0))
+        self.assertIn("no value for the new shares", err)
+        _, err2 = _quiet(resolve_event, _merger(qty_received=25),
+                         'reorg_368_boot', country='usa',
+                         hints=dict(hints, fmv_per_share=80.0))
+        self.assertNotIn("no value for the new shares", err2)
+
+    @rule("US-CORP-04", "US-CORP-07")
+    def test_s073_00_us_nonrecognition_is_not_optional(self):
+        from taxjson.lib.corp_actions import (FILING_REQUIRED_ELECTIONS,
+                                              USA_MERGER, USA_SPINOFF)
+        for k in ('reorg_368', 'reorg_368_boot', 'tax_free_355'):
+            self.assertNotIn(k, FILING_REQUIRED_ELECTIONS)
+        m, sp = dict(USA_MERGER.options), dict(USA_SPINOFF.options)
+        self.assertNotIn("aren't claiming", m['taxable_exchange'])
+        self.assertIn("not by choice", m['taxable_exchange'])
+        self.assertIn("significant holder", m['reorg_368'])
+        self.assertIn("§1.368-3", m['reorg_368_boot'])
+        self.assertIn("§1.355-5", sp['tax_free_355'])
+        self.assertIn("does NOT qualify", sp['taxable_distribution_301'])
 
 
 if __name__ == "__main__":

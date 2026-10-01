@@ -924,12 +924,23 @@ def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
 FILING_REQUIRED_ELECTIONS: Dict[str, str] = {
     'rollover_s_86_1': "file the s. 86.1 election with your return "
                        "(spinoff must be on CRA's eligibility list)",
-    'reorg_368': "attach the Reg. §1.368-3 statement to your return",
-    'reorg_368_boot': "attach the Reg. §1.368-3 statement to your "
-                      "return",
-    'tax_free_355': "attach the Reg. §1.355-5 statement to your "
-                    "return",
+    # No US entry: §354/§355 non-recognition applies by law when the
+    # transaction qualifies, and the Reg. §1.368-3 / §1.355-5 statement
+    # is due only from a significant holder — omitting it does not undo
+    # the deferral. The reminder told every holder "the deferral is only
+    # valid with the paperwork" (audit S073-00, the US mirror of R1-138);
+    # the option text says who files.
 }
+
+# Who attaches the US reorganization statement (Reg. §1.368-3(c),
+# §1.355-5(c)): a holder of at least 5% of a publicly traded company's
+# stock, 1% of a non-public one, or securities with a basis of $1M or
+# more.
+_US_SIGNIFICANT_HOLDER = (
+    "Only a significant holder (at least 5% of a public company's "
+    "stock, 1% of a private one, or a basis of $1 million or more) "
+    "attaches the Reg. §{reg} statement to the return; others file "
+    "nothing.")
 
 # Universal election available alongside every country/event-type rule.
 # Useful for IB's cross-listing replay-noise rows that look like real
@@ -2838,6 +2849,20 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             file=sys.stderr,
         )
 
+    if tgt_fmv <= 0 and event.qty_received > 0:
+        # Without the new shares' value the realized gain is understated
+        # (boot - basis), so the §356 gain is capped too low and the
+        # §358 basis understated by the same amount (audit S073-22).
+        print(
+            f"warning: boot merger {event.source_symbol}→"
+            f"{event.target_symbol} on {event.date} has no value for the "
+            f"new shares (fmv_per_share=0 and none reported) — the "
+            f"realized gain counts only the cash, so the recognized gain "
+            f"and the new basis are understated. Re-run `taxjson elect "
+            f"--redo` with the FMV per new share.",
+            file=sys.stderr,
+        )
+
     realized = (max(tgt_fmv, 0.0) + boot) - basis
     recognized = max(0.0, min(realized, boot))   # §356: capped at boot; no losses
     proceeds = basis + recognized
@@ -2888,16 +2913,19 @@ USA_MERGER = RuleSpec(
     options=[
         (
             'taxable_exchange',
-            "Default. Fully taxable exchange (§1001): old shares sold at "
-            "FMV, new shares acquired at FMV. Use when the transaction "
-            "doesn't qualify as a §368(a) reorganization or you aren't "
-            "claiming tax-free treatment.",
+            "Fully taxable exchange (§1001): old shares sold at FMV, new "
+            "shares acquired at FMV. Only when the merger does NOT qualify "
+            "as a §368(a) reorganization (the company's Form 8937 says "
+            "which). A qualifying reorganization is tax-free by law "
+            "(§354), not by choice: picking this for one books a gain or "
+            "loss the Code does not recognize.",
         ),
         (
             'reorg_368',
             "§368(a) tax-free reorganization (all-stock): no gain "
             "recognized; basis carries to the new shares (§358) and the "
-            "holding period tacks (§1223(1)).",
+            "holding period tacks (§1223(1)). "
+            + _US_SIGNIFICANT_HOLDER.format(reg="1.368-3"),
         ),
         (
             'reorg_368_boot',
@@ -2905,7 +2933,8 @@ USA_MERGER = RuleSpec(
             "to the lesser of your realized gain or the cash received; "
             "losses are NOT recognized. New basis = old basis − boot + "
             "gain recognized (§358(a)). You supply the boot and your "
-            "total pre-merger basis. Holding dates reset in this model.",
+            "total pre-merger basis. Holding dates reset in this model. "
+            + _US_SIGNIFICANT_HOLDER.format(reg="1.368-3"),
         ),
     ],
     apply=lambda ev, opt, hints: (
@@ -2931,17 +2960,22 @@ USA_SPINOFF = RuleSpec(
     options=[
         (
             'taxable_distribution_301',
-            "Default. §301 distribution: the spun-off shares are taxable "
-            "income at FMV on receipt (a dividend to the extent of "
-            "earnings & profits — see your 1099-DIV); cost basis of the "
-            "new position = FMV. You supply the per-share FMV.",
+            "§301 distribution: the spun-off shares are taxable income at "
+            "FMV on receipt (a dividend to the extent of earnings & "
+            "profits — see your 1099-DIV); cost basis of the new position "
+            "= FMV. You supply the per-share FMV. Only when the spin-off "
+            "does NOT qualify under §355 (the company's Form 8937 says "
+            "which).",
         ),
         (
             'tax_free_355',
-            "§355 tax-free spinoff: no current income; basis is allocated "
-            "between parent and spin-co in proportion to relative FMV "
+            "§355 tax-free spinoff (applies by law when the spin-off "
+            "qualifies): no current income; basis is allocated between "
+            "parent and spin-co in proportion to relative FMV "
             "(§358(b)-(c)) — the company's Form 8937 publishes the "
-            "allocation. You supply the dollar basis moved to the spin-co.",
+            "allocation. You supply the dollar basis moved to the "
+            "spin-co. "
+            + _US_SIGNIFICANT_HOLDER.format(reg="1.355-5"),
         ),
     ],
     apply=lambda ev, opt, hints: (
@@ -3051,6 +3085,23 @@ def zero_value_merger_rows(rows: List[dict]) -> List[dict]:
             and abs(float(r.get('net_amount') or 0.0)) < 0.005]
 
 
+# The basis-allocating spin-off elections and the hint each one takes.
+ALLOCATED_BASIS_HINT = {'rollover_s_86_1': 'allocated_acb_cad',
+                        'tax_free_355': 'allocated_acb'}
+
+
+def zero_basis_rollover_rows(rows: List[dict]) -> List[dict]:
+    """Spun-off share BUY rows of an s.86.1 / §355 election booked with
+    $0 allocated basis: the parent keeps its whole cost and the gain
+    moves to the spin-off's sale (audits S073-21, S074-04). `taxjson
+    run` keeps it loud on every run, like a $0 spin-off."""
+    return [r for r in rows
+            if r.get('action') == 'BUYSELL'
+            and float(r.get('quantity') or 0.0) > 0
+            and r.get('corp_election') in ALLOCATED_BASIS_HINT
+            and abs(float(r.get('net_amount') or 0.0)) < 0.005]
+
+
 def zero_value_spinoff_rows(rows: List[dict]) -> List[dict]:
     """DIVIDEND rows of taxable spin-off elections booked at $0 — the
     deferred-FMV state `taxjson run` keeps loud on every run."""
@@ -3101,6 +3152,18 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     # position only receives `adjusted_acb` would silently vaporize the
     # fractional basis (frac/qty * allocated_acb). Keeping it in the
     # parent defers it rather than losing it.
+    if abs(allocated_acb) < 0.005 and event.qty_received > 0:
+        # A spin-off with value is never allocated $0 (s.86.1(2) /
+        # §358(b) apportion by relative FMV): the parent kept its whole
+        # cost and the spun-off shares booked at $0, with no word
+        # (audits S073-21, S074-04). Loud; `taxjson run` repeats it.
+        print(f"warning: spin-off {event.source_symbol}→"
+              f"{event.target_symbol} on {event.date}: the basis-allocating "
+              f"election carries an allocated cost of 0 — the spun-off "
+              f"shares get $0 cost and the parent keeps all of it, which "
+              f"moves gain from the parent's sale to the spin-off's. "
+              f"Enter the allocated amount (parent cost x the spin-off's "
+              f"share of the combined FMV).", file=sys.stderr)
     whole_qty, adjusted_acb, frac_qty = _snap_received(event,
         event.qty_received, allocated_acb,
     )
@@ -3135,9 +3198,12 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
 
 
 def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: dict) -> List[dict]:
-    """Canada wrapper: s. 86.1 foreign-spinoff rollover. Only valid if
-    the spinoff is on CRA's eligibility list (Income Tax Folio S4-F8-C1)
-    AND the user files the election with their return."""
+    """Canada wrapper: s. 86.1 foreign-spinoff rollover. Only valid for
+    an "eligible distribution" under ITA s. 86.1(2) — among other
+    conditions the distributing corporation must provide the required
+    information to the Minister; CRA publishes the foreign spin-offs it
+    has accepted on canada.ca — AND when the user elects in writing with
+    their return."""
     if 'allocated_acb_cad' not in hints and (event.currency or 'CAD'
                                              ).upper() != 'CAD':
         print(f"warning: s.86.1 spin-off {event.source_symbol}→"

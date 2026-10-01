@@ -664,8 +664,9 @@ def d_elections(ctx: Ctx) -> Result:
     if zero:
         return Result("elections", "attention",
                       f"{zero} spin-off/merger(s) booked at $0 — set "
-                      f"fmv_per_share with `taxjson elect` (see the .sum "
-                      f"DIAGNOSTICS)")
+                      f"fmv_per_share (or the allocated cost of an "
+                      f"s.86.1 / §355 rollover) with `taxjson elect` (see "
+                      f"the .sum DIAGNOSTICS)")
     if "No pending elections" in out or (code == 0 and not out.strip()):
         return Result("elections", "done", "none pending")
     if code != 0 and not out:

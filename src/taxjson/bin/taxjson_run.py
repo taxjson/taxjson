@@ -956,7 +956,9 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
     account's .sum — until a value is set (2026-09 audit: it was silent
     after the prompt). Registered accounts: no tax effect, no warning."""
     import json as _json
-    from taxjson.lib.corp_actions import (zero_value_merger_rows,
+    from taxjson.lib.corp_actions import (ALLOCATED_BASIS_HINT,
+                                          zero_basis_rollover_rows,
+                                          zero_value_merger_rows,
                                           zero_value_spinoff_rows)
     diag = cache / f"{name}_corp_spinoff_value.diag"
     lines: List[str] = []
@@ -990,6 +992,19 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
                     f"value: taxjson elect {name} --set "
                     f"{eid}={r.get('corp_election')} --hint "
                     f"fmv_per_share=<value>")
+            # An s.86.1 / §355 rollover allocated $0: the parent keeps
+            # its whole cost, the spin-off's sale books the gain
+            # (audits S073-21, S074-04).
+            for r in zero_basis_rollover_rows(rows):
+                eid = r.get("corp_event_id", "?")
+                el = r.get("corp_election")
+                lines.append(
+                    f"warning: {name}: spin-off {r.get('symbol')} on "
+                    f"{r.get('date')} (event {eid}, {el}) is booked with "
+                    f"$0 allocated cost — the parent keeps all of it and "
+                    f"the spin-off's sale books the gain. Set it: taxjson "
+                    f"elect {name} --set {eid}={el} --hint "
+                    f"{ALLOCATED_BASIS_HINT[el]}=<amount>")
     if lines:
         diag.write_text("\n".join(lines) + "\n", encoding="utf-8")
         for ln in lines:
@@ -4014,6 +4029,16 @@ def cmd_elect(args: argparse.Namespace) -> None:
                   f"{election} at $0 — no income and a $0 cost for the "
                   f"new shares. Every `taxjson run` and the checklist "
                   f"flag it until a value is set.", file=sys.stderr)
+        from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT
+        _ak = ALLOCATED_BASIS_HINT.get(election)
+        if _ak and _ak in hints and abs(hints[_ak]) < 0.005:
+            # The missing hint is refused; an explicit 0 was saved with
+            # no word (audits S073-21, S074-04).
+            print(f"taxjson elect: warning: {_ak}=0 moves NO cost to the "
+                  f"spun-off shares — they book at $0 and the parent "
+                  f"keeps all of it. Enter the allocated amount; every "
+                  f"`taxjson run` and the checklist flag it until then.",
+                  file=sys.stderr)
         return
 
     if not (args.redo or args.reset):
