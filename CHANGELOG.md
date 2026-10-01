@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Adjusted-series and futures calls are flagged as possible
+  replacement property.** A call on an adjusted option series (root +
+  digit, e.g. `XYZ1`) or on the loss's futures contract by its family
+  root (`F:CL` after a loss on `F:CLG6`) bought inside a loss's window
+  is named for a manual superficial-loss / wash-sale check, the way a
+  warrant is, in both countries; warn-only, the numbers do not change
+  (audit S069-23; tax-logic CA-SL-15, US-WASH-15).
+
 - **fetch / watch.** `fetch` masks the Questrade account number in its
   progress line and in API error messages (`questrade #59***`,
   `/v1/accounts/59***/activities: HTTP 400 ...`); `--trim-overlap`

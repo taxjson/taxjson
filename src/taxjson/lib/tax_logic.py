@@ -535,6 +535,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A warrant or right bought in the window is flagged for a "
                  "manual superficial-loss check only (the shares it "
                  "converts into are not in the books).", cont=True),
+            Rule("CA-SL-15",
+                 "So is a call on an adjusted option series (root + digit, "
+                 "e.g. XYZ1) or a futures option on the loss's futures "
+                 "contract.", cont=True),
             Rule("CA-SL-07",
                  "Only purchases count: writing an option or shorting "
                  "again never replaces, including after a loss on covering "
@@ -974,6 +978,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-14",
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),
+            Rule("US-WASH-15",
+                 "So is a call on an adjusted option series (root + digit, "
+                 "e.g. XYZ1) or a futures option on the loss's futures "
+                 "contract (a commodity future is usually outside §1091).",
+                 cont=True),
             Rule("US-WASH-13",
                  "Accounts marked crypto are not subject to the wash-sale "
                  "rule."),

@@ -853,6 +853,17 @@ acquires nothing either). The experimental US engine does not enforce the
 call rule yet; it prints a warning for each case (§1091 "option to
 acquire"). The old `cross_asset` setting is retired and ignored.
 
+Some rights to acquire are only **flagged** for a manual check, in both
+countries (warn-only, the numbers do not change): a warrant or
+subscription right on the loss shares (`right_vs_share_loss`), a call on an
+**adjusted** option series (root + digit, e.g. `XYZ1` after a corporate
+action on XYZ: its deliverable is not 100 shares; `adjusted_option_vs_loss`),
+and a call on the loss's **futures** contract named by its family root
+(`F:CL` after a loss on `F:CLG6`) or another prefix spelling
+(`futures_option_vs_loss`; in a US project the note adds that a commodity
+future is usually outside §1091). What these convert into is not in the
+books, so the engine cannot size a denial.
+
 **`taxjson t1135`** — CRA **Form T1135** (Foreign Income Verification Statement)
 helper, for Canadian filers holding foreign securities. Answers the filing
 question first: it replays the full history of every **taxable** account in base
