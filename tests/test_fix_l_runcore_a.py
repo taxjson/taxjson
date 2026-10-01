@@ -1204,5 +1204,31 @@ class TestDefaultsAndTotalsPinned(unittest.TestCase):
             self.assertIn("350.00", lt)           # deferred total
 
 
+
+class TestClassShareGrouping(unittest.TestCase):
+    """S040-11: an RCI...TO option on RCI.B.TO shares groups under the
+    class share in the per-underlying reports."""
+
+    def test_aliases_and_sum_gains(self):
+        from taxjson.lib.ticker_map import class_share_aliases, underlying_of
+        from taxjson.bin.taxjson_sum_gains import summarize_gains
+        al = class_share_aliases(["RCI.B.TO", "RCI260320C00055000.TO",
+                                  "ABC.TO"])
+        self.assertEqual(al, {"RCI.TO": "RCI.B.TO"})
+        self.assertEqual(underlying_of("RCI260320C00055000.TO", al),
+                         "RCI.B.TO")
+        # Two classes on one root: ambiguous, no alias.
+        self.assertEqual(class_share_aliases(["X.A.TO", "X.B.TO"]), {})
+        res = summarize_gains({"transactions": [
+            {"symbol": "RCI.B.TO", "date": "2025-04-01", "qty": 100,
+             "cost": 5000.0, "proceeds": 5298.0, "gain": 298.0,
+             "currency": "CAD"},
+            {"symbol": "RCI260320C00055000.TO", "date": "2025-03-05",
+             "qty": 1, "cost": -199.0, "proceeds": -51.0, "gain": 148.0,
+             "currency": "CAD", "direction": "SHORT"}],
+            "summary": {"year": 2025}})
+        self.assertEqual(set(res["ticker_stats"]), {"RCI.B.TO"})
+
+
 if __name__ == "__main__":
     unittest.main()
