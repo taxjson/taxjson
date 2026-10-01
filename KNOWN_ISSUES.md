@@ -63,6 +63,12 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
+### Identical rows in two exports with little overlap are booked once
+- **Where:** `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, used by `taxjson-merge2 --dedup`, `taxjson-sort --dedup` and `fees-sum`.
+- **Current behavior:** the same row in two exports of one account is booked once. Sometimes the files' overlap cannot show that they are copies of one export: they share only that row, or each holds rows the other lacks on the dates both cover, or a `.tt` line equals an exported row. The row is still booked once, as a re-export, and `taxjson run` prints `warning: ATTENTION: dedup: ...` naming both files and the row. Exports are cut by date, so two exports can only both hold one fill when they both cover its whole day, and then both files hold all of that day's fills. Two separate identical trades can only end up split across files when an export is cut up by hand. Identical lines in two `.tt` files, and identical rows in IB statements of two different broker accounts, are both booked.
+- **Why this is the choice:** an export carries no row id. Booking such a row twice would double-count the common case, a boundary day that both exports include.
+- **Workaround:** if the ATTENTION line names two separate trades, enter the second one as a `.tt` line.
+
 ### Kraken fees taken in the traded coin are not in the fee reports
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose ledger shows the fee taken in the base coin) and the ledger instant-trade path (a crypto leg's fee).
 - **Current behavior:** the fee coins are folded into the quantity (fewer coins received on a buy, more given on a sale) and the fill's `fee` field is 0, so cost basis and proceeds are right, but `fees.rpt`, `taxjson fees-sum` and the `.sum` FEES line leave these fees out (on real 2025 data more than half of the Kraken trading fees). The parse note says so.
