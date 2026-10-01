@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Wash radar / safe-to-sell: a small crypto lot gets its advisory.**
+  A 0.0009 BTC position (about $120) is held for the superficial-loss
+  test, as in the engine, but the radar's 0.01-unit display threshold
+  showed it with no verdict. Crypto now uses the engine's threshold.
 - **harvest: an input it cannot read stops it.** A missing or truncated
   gains, `--sheltered` or `--radar` file now exits 2 naming the file. It
   used to print "No open positions." or show SH_QTY/SH_ADD as '-' (the

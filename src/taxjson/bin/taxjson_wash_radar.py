@@ -803,6 +803,11 @@ def main():
         tax_q = 0.0
         shl_q = 0.0
         cls = alias_of(ticker)
+        # "Held" for the advisories: 0.01 units hides equity dust (a
+        # DRIP residue), but a crypto lot of 0.0009 BTC is ~$120 and the
+        # engine's still-held test counts it (1e-6) — it was shown with
+        # no advisory at all (audit S049-20, S030-00's class).
+        _eps = 1e-6 if is_crypto_symbol(ticker) else 0.01
 
         # ALL losses still inside their own 30-day windows — not just the
         # latest one. A newer small loss must not hide an older loss whose
@@ -937,7 +942,7 @@ def main():
         # loss with a position left is BLOCKED (don't add), else COOLING.
         held_any = (sum(abs(qty) for (t, grp, acct), qty
                         in account_pool_qty.items()
-                        if alias_of(t) == cls and abs(qty) > 0.01)
+                        if alias_of(t) == cls and abs(qty) > _eps)
                     + sum(calls_held.values()))
 
         adv = ""
@@ -1103,7 +1108,7 @@ def main():
                 # loss sale costs 1% of it (audit S054-07).
                 _per = (f" — ${loss_amt / loss_units:.4f} of it for each "
                         f"unit bought back" if loss_units > 1e-9 else "")
-                if held_any > 0.01:
+                if held_any > _eps:
                     # Still holding, but no replacement bought in the
                     # window is held: the loss is allowed so far —
                     # buying MORE before the window closes would disallow.
@@ -1133,7 +1138,7 @@ def main():
         _sl_adj = "a wash sale" if us_mode else "superficial"
         _reg = "IRA(s)" if us_mode else "SHELTERED account(s)"
 
-        if not adv and abs(tax_q) > 0.01:
+        if not adv and abs(tax_q) > _eps:
             # Forward view: a loss sale of the taxable position TODAY.
             # Its window reaches back 30 days; each holder's backing is
             # what it bought in that span and still holds.
@@ -1173,7 +1178,7 @@ def main():
                     f"{epoch_to_date(gone_last['epoch'])} but holds none "
                     f"of it now — that leg re-arms only if an affiliated "
                     f"account re-buys within 30 days AFTER your sale.")
-            pre_window_shl = (abs(cls_shl_q) > 0.01 and not shl_back)
+            pre_window_shl = (abs(cls_shl_q) > _eps and not shl_back)
             if at_risk > 1e-6:
                 is_relevant = True
                 latest = max([b['last'] for b in shl_back.values()]
@@ -1264,7 +1269,7 @@ def main():
                        f"whole or partial — no account holds shares "
                        f"bought in the last 30 days. {shl_caveat}")
 
-        if not adv and abs(tax_q) > 0.01 and abs(cls_shl_q) > 0.01:
+        if not adv and abs(tax_q) > _eps and abs(cls_shl_q) > _eps:
             # No acquisition on EITHER side within the past 30 days:
             # s.40(2)(g) needs an acquisition INSIDE the ±30-day
             # window, not mere ownership — so a loss sale TODAY is
@@ -1291,7 +1296,7 @@ def main():
                        "days, or sell the sheltered shares too.")
 
         if not adv:
-            if abs(tax_q) > 0.01 or abs(shl_q) > 0.01:
+            if abs(tax_q) > _eps or abs(shl_q) > _eps:
                 is_relevant = True
                 adv = "CLEAR: No recent buys. Safe to sell at a loss (do not repurchase for 30 days)."
             # (Fully-exited recent losses are routed to COOLING in the loss

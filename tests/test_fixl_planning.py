@@ -503,5 +503,85 @@ class TestHarvestCountry(unittest.TestCase):
         self.assertIn("--country must be", err)
 
 
+# -------------------------------------------------------- safe-to-sell
+def _sts(taxable, as_of, sheltered=None, taxable2=None):
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp) / "margin_base.json"
+        t.write_text(json.dumps({"transactions": taxable}))
+        cmd = [sys.executable, "-m", "taxjson.bin.taxjson_safe_to_sell",
+               "--country", "canada", "--taxable", str(t), "--date", as_of]
+        if taxable2 is not None:
+            t2 = Path(tmp) / "cash_base.json"
+            t2.write_text(json.dumps({"transactions": taxable2}))
+            cmd += ["--taxable", str(t2)]
+        if sheltered is not None:
+            sp = Path(tmp) / "sheltered_base.json"
+            sp.write_text(json.dumps({"transactions": sheltered}))
+            cmd += ["--sheltered", str(sp)]
+        r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
+                           text=True)
+    assert r.returncode == 0, r.stderr
+    rows = {}
+    for ln in r.stdout.splitlines():
+        c = ln.split()
+        if len(c) >= 3 and c[1].replace(".", "").lstrip("-").isdigit():
+            rows[c[0]] = (float(c[1]), c[2])
+    return rows, r.stdout
+
+
+class TestSafeToSellAlreadyFixed(unittest.TestCase):
+    """The safe-to-sell findings closed by its rewrite as a radar view
+    (R1-233); pinned here."""
+
+    def test_full_exit_is_allowed_after_a_recent_add(self):   # S049-19
+        rows, out = _sts([_row("2025-08-01", "AAA.TO", 100, 2000.0),
+                          _row("2025-09-18", "AAA.TO", 50, 900.0)],
+                         "2025-09-29")
+        self.assertEqual(rows["AAA.TO"], (150.0, "FULL-EXIT-ONLY"))
+        self.assertIn("s.251.1", out)            # S054-22 scope note
+
+    def test_sub_milli_crypto_lot_is_listed(self):   # S049-20
+        rows, _ = _sts([_row("2026-09-20", "BTC", 0.0009, 119.70),
+                        _row("2026-09-20", "ETH", 0.5, 2000.0)],
+                       "2026-09-25")
+        self.assertIn("BTC", rows)
+        self.assertEqual(rows["BTC"][1], "FULL-EXIT-ONLY")
+
+    def test_day_31_edges(self):   # S050-02
+        book = [_row("2025-03-03", "EDG.TO", 100, 2000.0)]
+        self.assertEqual(_sts(book, "2025-03-03")[0]["EDG.TO"][1],
+                         "FULL-EXIT-ONLY")
+        self.assertEqual(_sts(book, "2025-04-02")[0]["EDG.TO"][1],
+                         "FULL-EXIT-ONLY")
+        self.assertEqual(_sts(book, "2025-04-03")[0]["EDG.TO"][1], "SAFE")
+
+    def test_split_applies_once_per_account(self):   # S050-04
+        a = [_row("2025-01-06", "XYZ.TO", 100, 1000.0),
+             _row("2025-03-03", "XYZ.TO", 2.0, 0.0, action="SPLIT")]
+        b = [dict(r, account="cash") for r in a]
+        rows, _ = _sts(a, "2025-09-29", taxable2=b)
+        self.assertEqual(rows["XYZ.TO"][0], 400.0)
+
+    def test_duplicate_split_applies_once(self):   # S050-05
+        book = [_row("2026-01-06", "XYZ.TO", 100, 1000.0),
+                dict(_row("2026-06-01", "XYZ.TO", 2.0, 0.0,
+                          action="SPLIT"), id="s1"),
+                dict(_row("2026-06-01", "XYZ.TO", 2.0, 0.0,
+                          action="SPLIT"), id="s2", time="11:00:00")]
+        rows, _ = _sts(book, "2026-09-01")
+        self.assertEqual(rows["XYZ.TO"][0], 200.0)
+
+    def test_exited_sheltered_buy_does_not_lock(self):   # S050-08
+        rows, _ = _sts(
+            [_row("2026-01-05", "ABC.TO", 100, 2000.0),
+             _row("2026-09-20", "XYZ.TO", 100, 2000.0)], "2026-09-29",
+            sheltered=[_row("2026-09-18", "ABC.TO", 50, 1000.0,
+                            account="tfsa"),
+                       _row("2026-09-22", "ABC.TO", -50, 990.0,
+                            account="tfsa")])
+        self.assertEqual(rows["ABC.TO"][1], "SAFE*")
+        self.assertEqual(rows["XYZ.TO"][1], "FULL-EXIT-ONLY")
+
+
 if __name__ == "__main__":
     unittest.main()
