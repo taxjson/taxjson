@@ -30,6 +30,10 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
     # We rebuild the summary from the transaction list to ensure year-filtering and currency are correct.
     transactions = data.get('transactions', [])
     target_year = data.get('summary', {}).get('year') or 'all'
+    # An option whose root names no share listing but one class share
+    # (RCI...TO with RCI.B.TO shares) groups under that share (S040-11).
+    from taxjson.lib.ticker_map import class_share_aliases
+    _aliases = class_share_aliases(t.get('symbol') for t in transactions)
 
     for tx in transactions:
         symbol = tx.get('symbol')
@@ -38,6 +42,8 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         is_opt = is_option_ticker(symbol)
         base_ticker = get_base_ticker(symbol) if is_opt else symbol
         if base_ticker is None: base_ticker = symbol
+        if is_opt:
+            base_ticker = _aliases.get(base_ticker.upper(), base_ticker)
         
         # If the gain entry is missing currency, bucket it under '?' rather
         # than silently mis-attributing to CAD. The engine populates this

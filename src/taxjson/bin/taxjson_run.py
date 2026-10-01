@@ -859,6 +859,13 @@ def validate_config(cfg: Dict[str, Any],
             if flag in acfg and not isinstance(acfg[flag], bool):
                 _die(f"[accounts.{name}] {flag} must be "
                          f"true/false, got {acfg[flag]!r}")
+        _plan = acfg.get("plan")
+        if _plan is not None and str(_plan).strip().lower() \
+                not in _PLAN_KINDS:
+            warnings.append(
+                f"[accounts.{name}] plan {_plan!r} is not a known plan "
+                f"kind ({' | '.join(_PLAN_KINDS)}) and is ignored"
+                f"{_suggest(str(_plan).strip().lower(), _PLAN_KINDS)}")
         brok = acfg.get("brokerage")
         if brok is not None and str(brok) not in ("questrade",
                                                   "ibkr_flex"):
@@ -2867,11 +2874,13 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
     # capture_diag=True: taxjson-fees emits FX default-rate fallback and
     # skipped-file warnings on stderr; persist them to the .diag so a silently
     # wrong rate can't slip through (the report body carries them too).
+    _tm = cache.parent / "ticker.map"
     run_to_file(_cmd("taxjson-fees") + [
         "--cache", str(cache),
         "--year", str(settings["year"]),
         "--to", settings["base_currency"], "--rates", str(rates),
-    ], reports_dir / "fees.rpt")
+    ] + (["--ticker-map", str(_tm)] if _tm.exists() else []),
+        reports_dir / "fees.rpt")
     print(f"  → {reports_dir}/fees.rpt")
 
 
@@ -4225,15 +4234,15 @@ def cmd_elect(args: argparse.Namespace) -> None:
         print(f"\nElections saved. Re-run `taxjson run` to recompute.")
 
 
-def _tx_period_cutoff(period: str, root: Optional[Path] = None):
+def _tx_period_cutoff(period: str):
     """Oldest date to include for a look-back window: 30d / 6w / 3m / 1y,
     `mtd` / `ytd` (calendar month/year to date), or `all` for no lower bound
     (full history). Days and weeks are exact; months and years use calendar
-    arithmetic. With `root`, the year-shaped tokens every other PERIOD
-    command accepts resolve too — a literal YYYY and `tax_year`/`ty` map
-    to Jan 1 of that year (a lower bound only: the since-based commands
-    plot/measure through today). Without `root` they stay rejected —
-    the error message must then not advertise them."""
+    arithmetic. Year tokens (YYYY, tax_year) are NOT look-backs — the
+    callers resolve them to that calendar year first (_period_keep,
+    fees-sum); a lower-bound reading of them (the removed since-based
+    commands' "through today") disagreed with every period command
+    (S039-04)."""
     import re
     import calendar
     from datetime import date, timedelta
@@ -4247,23 +4256,10 @@ def _tx_period_cutoff(period: str, root: Optional[Path] = None):
         return date(today.year, today.month, 1)
     if tok == "ytd":
         return date(date.today().year, 1, 1)
-    if root is not None:
-        if _YEAR_TOKEN_RE.fullmatch(tok):
-            return date(int(tok), 1, 1)
-        if tok in _TAX_YEAR_TOKENS:
-            year = _soft_settings(root).get("year")
-            if not year:
-                _die("'tax_year' needs [settings] year in "
-                         "taxjson.toml (or give an explicit window "
-                         "like 1y).")
-            return date(int(year), 1, 1)
     m = re.fullmatch(r"\s*(\d+)\s*([dwmy])\s*", (period or "").lower())
     if not m:
-        year_forms = ", a year (2025), or tax_year" if root is not None \
-            else ""
         _die(f"invalid time period {period!r} "
-                 f"(use e.g. 30d, 6w, 3m, 1y, mtd, ytd, all"
-                 f"{year_forms})")
+                 f"(use e.g. 30d, 6w, 3m, 1y, mtd, ytd, all)")
     n, unit = int(m.group(1)), m.group(2)
     today = date.today()
     # Magnitudes that walk past year 1 raised ValueError (and huge day
@@ -4590,6 +4586,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
 
     rows = []
     bad_dates = 0
+    # A "tax year N" window on a settle-basis project takes a trade by
+    # its settlement date, as the books and Schedule 3 do (S039-18).
+    _settle = _settle_basis(root)
     for acct in accounts:
         native = _native_tx_file(cache, acct)
         if native is None:
@@ -4606,7 +4605,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             if not _ISO_DATE_RE.match(d):    # can't place it in the window
                 bad_dates += 1
                 continue
-            if keep(d):
+            _wd = (_gains_row_date(tx, keep, _settle)
+                   if tx.get("action") in _TRADE_ACTIONS else d)
+            if keep(_wd):
                 rows.append((d, tx.get("time") or "", acct, tx))
     if label == "roc":
         for acct, tx in _dist_adjust_rows(cache, accounts, keep):
@@ -5191,6 +5192,26 @@ def _leaps_contracts(root: Path, account: Optional[str],
                       key=lambda t: (str(t.get("date") or ""),
                                      str(t.get("time") or "")))
         for tx in rows:
+            if tx.get("action") == "SPLIT":
+                # A rename-SPLIT of a contract (an OCC adjustment) carries
+                # its lots — and its LEAPS entry — to the new symbol, as
+                # the engine carries them; the renamed LEAPS vanished
+                # from leaps/leaps-sum (S040-02).
+                _old = tx.get("symbol") or ""
+                _new = str(tx.get("symbol_new") or "").strip()
+                if (is_option_symbol(_old) and _new
+                        and _new.upper() != _old.upper()):
+                    _r = float(tx.get("quantity") or 1.0) or 1.0
+                    acct_bal[_new] = (acct_bal.get(_new, 0.0)
+                                      + acct_bal.pop(_old, 0.0) * _r)
+                    _mo = _map_sym(_old, _renames) if _renames else _old
+                    _mn = _map_sym(_new, _renames) if _renames else _new
+                    qty_by_symbol[_mn] = (qty_by_symbol.get(_mn, 0.0)
+                                          + qty_by_symbol.pop(_mo, 0.0)
+                                          * _r)
+                    if _mo in leaps:
+                        leaps.add(_mn)
+                continue
             if tx.get("action") not in ("BUYSELL", "ASSIGN"):
                 continue
             sym = tx.get("symbol") or ""
@@ -5494,8 +5515,12 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     agg: Dict[str, Dict[str, float]] = {}
     _ccd_pairs: List[Tuple[str, float]] = []
     tainted_skipped = 0
-    for acct, f in resolved.items():
-        data = _load_json_or_die(f)
+    from taxjson.lib.ticker_map import class_share_aliases, underlying_of
+    _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
+    _aliases = class_share_aliases(
+        t.get("symbol") for _a, _d in _docs
+        for t in _d.get("transactions", []) or [])
+    for acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
         # tainted too — counted, never silent (audit S040-15 sibling).
@@ -5551,7 +5576,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             # inferred-short rows carry the legs swapped and positive.
             premium, buyback = ((cost, proceeds) if inferred
                                 else (-cost, -proceeds))
-            und = parse_option_underlying(sym) or sym
+            und = underlying_of(sym, _aliases)
             _ccd_pairs.append((acct, gain))
             rec = agg.setdefault(und, {"contracts": 0, "qty": 0.0,
                                        "proceeds": 0.0, "cost": 0.0,
@@ -5635,8 +5660,12 @@ def cmd_winners(args: argparse.Namespace) -> None:
     groups = _account_group_of(root)
     grp_gain = {"taxable": 0.0, "sheltered": 0.0}
     shel_accts = set()
-    for _acct, f in resolved.items():
-        data = _load_json_or_die(f)
+    from taxjson.lib.ticker_map import class_share_aliases, underlying_of
+    _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
+    _aliases = class_share_aliases(
+        t.get("symbol") for _a, _d in _docs
+        for t in _d.get("transactions", []) or [])
+    for _acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Pipeline files ROUTE phantom-basis rows out of transactions[]
         # into manual_reporting_required: count them too, or the
@@ -5661,7 +5690,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
                 tainted_skipped += 1
                 continue
             sym = str(t.get("symbol") or "?")
-            und = parse_option_underlying(sym) or sym
+            und = underlying_of(sym, _aliases)
             rec = agg.setdefault(und, {"closes": 0, "proceeds": 0.0,
                                        "cost": 0.0, "gain": 0.0})
             if not t.get("grant"):          # a WRITE is not a close
@@ -5801,7 +5830,7 @@ def _view_income_rules(root: Path):
 
 
 def _collect_period_txs(args: argparse.Namespace, label: str, actions,
-                        date_of=None):
+                        date_of=None, settle_trades: bool = False):
     """Read native per-account transactions over a window, for the period-aware
     summaries (`fees`/`divs-sum`/`trades-sum`). The lone positional is a period
     (30d/6w/…) when it looks like one, else an account name; with no period the
@@ -5830,6 +5859,10 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions,
                      f"(run `taxjson run` first).")
 
     rows, bad = [], 0
+    # settle_trades: a "tax year N" window over a settle-basis project
+    # takes a trade by its SETTLEMENT date, as Schedule 3 does (a
+    # Dec-31 sale settling in January is next year's) — S039-18.
+    _settle = settle_trades and _settle_basis(root)
     for acct in accounts:
         native = _native_tx_file(cache, acct)
         if native is None:
@@ -5842,10 +5875,19 @@ def _collect_period_txs(args: argparse.Namespace, label: str, actions,
             if not _ISO_DATE_RE.match(d):
                 bad += 1
                 continue
-            if not keep(date_of(tx) if date_of else d):
+            if date_of:
+                d = date_of(tx)
+            elif _settle and tx.get("action") in _TRADE_ACTIONS:
+                d = _gains_row_date(tx, keep, True)
+            if not keep(d):
                 continue
             rows.append((acct, tx))
     return rows, scope, bad, keep
+
+
+# Native rows that are dispositions/acquisitions, windowed on the
+# project's tax_date basis in a tax-year view.
+_TRADE_ACTIONS = ("BUYSELL", "ASSIGN", "EXERCISE")
 
 
 def _account_group_of(root: Path) -> Dict[str, str]:
@@ -6296,7 +6338,8 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
     buy/sell counts, value bought/sold, and fees, plus per-currency totals.
     `PERIOD` is 30d/6w/3m/1y/all; omit it for the tax year."""
     rows, scope, bad, _keep = _collect_period_txs(
-        args, "trades-sum", actions={"BUYSELL", "ASSIGN"})
+        args, "trades-sum", actions={"BUYSELL", "ASSIGN"},
+        settle_trades=True)
 
     money = fmt_money               # shared report-layer formatter
 
@@ -6517,16 +6560,22 @@ _PLAN_NAMES = ("tfsa", "rrsp", "lira", "rrif", "fhsa", "resp", "401k",
                "roth", "ira")
 
 
+_PLAN_KINDS = _PLAN_NAMES + ("taxable", "sheltered")
+
+
 def _account_plan(name: str, acfg: Dict[str, Any]) -> str:
     """Registered-plan kind for scan checks: explicit `plan = "tfsa"` in
-    taxjson.toml wins; else inferred from the account NAME (the init
-    scaffold names folders tfsa/rrsp/...); else the bare type."""
+    taxjson.toml wins (an unknown value is ignored — validate_config
+    warns); else inferred from a plan word that is a whole TOKEN of the
+    account NAME (the init scaffold names folders tfsa/rrsp/...; `rrsp2`
+    and `my-tfsa` count, `admiral` and `spiral` no longer read as an IRA
+    and silently skipped the US-LISTING check, R1-243); else the type."""
     explicit = str(acfg.get("plan") or "").strip().lower()
-    if explicit:
+    if explicit in _PLAN_KINDS:
         return explicit
     low = name.lower()
     for p in _PLAN_NAMES:
-        if p in low:
+        if re.search(rf"(?<![a-z]){re.escape(p)}(?![a-z])", low):
             return p
     return "taxable" if acfg.get("type") == "taxable" else "sheltered"
 
@@ -6702,7 +6751,15 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # the map itself — the cross-listing evidence base.
     seen_suffixes: Dict[str, set] = {}
 
+    from taxjson.lib.core import (is_option_symbol as _is_opt,
+                                  parse_option_underlying as _opt_und)
+
     def _see(sym: str) -> None:
+        # An option is a sighting of its underlying's listing: a pair
+        # evidenced on one side only by options was a "clean scan"
+        # while the engine kept two identity classes (S042-04).
+        if _is_opt(sym):
+            sym = _opt_und(sym) or sym
         r, suf = _scan_symbol_root(sym)
         if suf:
             seen_suffixes.setdefault(r, set()).add(suf)
@@ -7783,10 +7840,30 @@ def cmd_instalments(args: argparse.Namespace) -> None:
     doc["vintage"] = r.get("vintage")
     doc["vintage_notes"] = (vintage_notes(year, str(r.get("vintage")))
                             if r.get("vintage") else [])
+    # The verdict rests on TOTAL net tax owing. Unset other income and
+    # withholding were read as 0 without a word, so an employee was
+    # told "no instalments required" on the investment tax alone
+    # (S041-00): name what was assumed.
+    _est_cfg = _soft_config(root).get("estimate") or {}
+    _assumed = []
+    if (getattr(args, "other_income", None) is None
+            and "other_income" not in _est_cfg):
+        _assumed.append("other income (employment, pension, business) "
+                        "is not set — assumed 0: set [estimate] "
+                        "other_income (or pass --other-income)")
+    if "withheld" not in icfg:
+        _assumed.append("tax withheld at source is not set — assumed 0: "
+                        "set [instalments] withheld")
+    doc["assumed_zero"] = _assumed
     if getattr(args, "json", False):
         _json_out(doc)
         return
     print(INST.render(doc, base))
+    if _assumed:
+        print()
+        for _n in _assumed:
+            print(_wrap_note("NOTE: " + _n + " — the figures above cover "
+                             "the investment income only."))
     if doc["vintage_notes"]:
         print()
         for _n in doc["vintage_notes"]:
@@ -8844,6 +8921,16 @@ def _checklist_walk(ctx, cl, only, quick: bool = False) -> None:
         sys.exit(1)
 
 
+def _mask_ids_in_path(path: str) -> str:
+    """`path` with every broker-account-like id in its FILE NAME masked
+    to its first 2 characters + *** (U1234567 -> U1***, 53123456 ->
+    53***): an IB U-number or a run of 5+ digits."""
+    head, sep, name = str(path).rpartition("/")
+    name = re.sub(r"(?<![A-Za-z0-9])(U\d{5,}|\d{5,})(?!\d)",
+                  lambda m: m.group(1)[:2] + "***", name)
+    return head + sep + name
+
+
 def cmd_sanity(args: argparse.Namespace) -> None:
     """`taxjson sanity ITEM... [--tolerance N] [--json]`: LOOSE
     cross-check of open positions against externally produced holdings
@@ -9057,6 +9144,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
 
     _OPT_RE = re.compile(r'^((?:F:)?[A-Z0-9.]+?)(\d{6}[CP]\d+)\.(\S+)$',
                          re.IGNORECASE)
+    _VENUE_SFX_RE = re.compile(r'^([A-Za-z0-9]+)\.[A-Za-z]{2,3}$')
 
     def _ext_book(paths: List[Path]) -> Tuple[Dict[str, float],
                                               List[str],
@@ -9104,6 +9192,13 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                              f"quantity is not finite")
                 if not sym or abs(q) <= 1e-12:
                     continue
+                if (str(h.get("asset_type") or "").lower() == "crypto"
+                        and _VENUE_SFX_RE.match(sym)):
+                    # A snapshot tool's venue suffix (portoml's
+                    # `LINK.KR` for Kraken): taxjson keys crypto by the
+                    # bare coin, so every coin showed twice, MISSING on
+                    # each side (R1-113, R1-334).
+                    sym = _VENUE_SFX_RE.match(sym).group(1)
                 tgt = _mapped(sym)
                 book[tgt] = book.get(tgt, 0.0) + q
                 und = str(h.get("underlying") or "").strip()
@@ -9202,7 +9297,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                 shown = "~/" + str(p2.relative_to(Path.home()))
             except ValueError:
                 pass
-            extra = f"  (account {lbl})" if lbl not in p2.stem else ""
+            # A holdings file named after the broker account put the
+            # real account number on the console (R1-351): the file
+            # name's ids are masked like the IB warning masks them.
+            shown = _mask_ids_in_path(shown)
+            extra = (f"  (account {_mask_ids_in_path(lbl)})"
+                     if lbl not in p2.stem else "")
             print(f"  file:     {shown}{extra}")
         for a, b in grp["via_underlying"]:
             print(f"  -- option {a} matched taxjson's {b} via its "
@@ -11058,6 +11158,29 @@ def _questrade_token_write(tok_cache: Path, token: str) -> None:
         pass
 
 
+def _qt_auth_hint(token: str, tok_cache: Path, *,
+                  explicit: bool = False) -> str:
+    """Recovery advice for a failed Questrade refresh. The cached
+    rotating token wins over $QUESTRADE_REFRESH_TOKEN, so a fresh token
+    exported over a dead cache failed the same way with no word about
+    the env var being skipped (R1-353). Never prints a token."""
+    import os as _os
+    env = _os.environ.get("QUESTRADE_REFRESH_TOKEN", "").strip()
+    cached = (tok_cache.read_text(encoding="utf-8").strip()
+              if tok_cache.exists() else "")
+    if not explicit and cached and token == cached:
+        msg = (f" — the token used is the cached chain in {tok_cache}"
+               + (", NOT $QUESTRADE_REFRESH_TOKEN (the cache wins)"
+                  if env and env != cached else "")
+               + ". If that chain is dead, start a new one: "
+                 "`taxjson fetch --refresh-token <new token>` (or "
+                 f"delete {tok_cache.name} and set "
+                 "$QUESTRADE_REFRESH_TOKEN).")
+        return msg
+    return (" — generate a new refresh token in Questrade's API centre "
+            "and pass it once with `taxjson fetch --refresh-token`.")
+
+
 def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
                       wanted: List[str], http, say) -> Dict[str, Path]:
     """Fetch live Questrade positions for each fetch-enabled account in
@@ -11090,7 +11213,8 @@ def _qt_live_holdings(root: Path, cache: Path, cfg: Dict[str, Any],
             try:
                 qt_session = F.qt_refresh(token, http)
             except RuntimeError as e:
-                _die(f"Questrade auth failed: {e}")
+                _die(f"Questrade auth failed: {e}"
+                     + _qt_auth_hint(token, tok_cache))
             _questrade_token_write(tok_cache,
                                    qt_session["refresh_token"])
         try:
@@ -11452,7 +11576,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                     qt_session = F.qt_refresh(token, http)
                 except RuntimeError as e:
                     sys.exit(f"taxjson fetch: Questrade auth failed: "
-                             f"{e}")
+                             f"{e}" + _qt_auth_hint(
+                                 token, tok_cache,
+                                 explicit=bool(getattr(
+                                     args, "refresh_token", None))))
                 # Persist the ROTATED token immediately — a later
                 # failure must not lose it (the old one is now dead).
                 _questrade_token_write(tok_cache,
@@ -12700,6 +12827,8 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         cmd += ["--year", str(year)]
     if args.include_options:
         cmd += ["--include-options"]
+    if (root / "phantoms.json").exists():
+        cmd += ["--phantoms", str(root / "phantoms.json")]
     _exec_tool(cmd)
 
 
@@ -12766,6 +12895,9 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
                 "--rates", str(rates)]
     if args.by_account:
         cmd += ["--by-account"]
+    if (root / "ticker.map").exists():
+        # DELETE'd symbols' fees, like the books (S038-11).
+        cmd += ["--ticker-map", str(root / "ticker.map")]
     if args.json:
         cmd += ["--json"]
     _exec_tool(cmd)

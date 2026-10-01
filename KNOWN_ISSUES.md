@@ -192,6 +192,12 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Why deferred:** s.53(1)(f) does not prescribe an allocation and CRA has published none; the ordering is a stated policy, not a rule. A "taxable first" option would be a defensible alternative.
 - **Workaround:** `taxjson wash-sales` shows the trigger chosen; a `.tt` note of the intended attribution is the record.
 
+### Purchases by an affiliated person (spouse, controlled corporation) are not an input of `taxjson run`
+- **Where:** `taxjson.toml` account types are `taxable | sheltered`; `taxjson run` never passes affiliated trades to the engine (`taxjson-gains` / `-explain` / `-audit --affiliated` take them, and the engine applies them).
+- **Current behavior:** a loss whose identical property your spouse (or a corporation you control) buys within 30 days is ALLOWED unless their trades are in the project — s.54 "superficial loss" covers an acquisition by an affiliated person (US: §1091 reaches a spouse's purchase too). Nothing warns.
+- **Why deferred (owner decision):** a first-class affiliated account type would need its own book that is never reported as yours; until then the tool cannot see trades it is not given.
+- **Workaround:** add the affiliated person's account as `type = "sheltered"`: the loss is then denied (permanently for you, as s.53(1)(f) puts the ACB bump on the affiliated holder). The account then also shows in the SHELTERED tables and the radar as if it were your registered plan — read it as theirs.
+
 ### Transfers TO a registered plan at a loss (s.40(2)(g)(iv))
 - **Where:** taxable-account TRANSFER rows are dropped at parse and rejected by the engine.
 - **Current behavior:** the taxable-side disposition of an in-kind contribution is booked only if you record it as a `.tt` BUYSELL at fair market value in the taxable account. A loss on it is then denied indirectly (as a superficial loss against the plan's acquisition, permanent), which coincides with s.40(2)(g)(iv) — a loss on a transfer to an RRSP/TFSA is nil — in the common case; a gain is taxable as usual.

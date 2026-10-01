@@ -18,6 +18,10 @@ PROG = "taxjson-ccd-gains"
 
 def process_data(data, ccd_by_underlying):
     transactions = data.get('transactions', [])
+    # RCI...TO calls on RCI.B.TO shares group under the class share,
+    # not a phantom RCI.TO (S040-11).
+    from taxjson.lib.ticker_map import class_share_aliases
+    _aliases = class_share_aliases(t.get('symbol') for t in transactions)
     for tx in transactions:
         symbol = tx.get('symbol', '')
         if not is_option_ticker(symbol):
@@ -64,6 +68,7 @@ def process_data(data, ccd_by_underlying):
         underlying = get_underlying(symbol)
         if not underlying:
             continue
+        underlying = _aliases.get(underlying.upper(), underlying)
             
         if underlying not in ccd_by_underlying:
             ccd_by_underlying[underlying] = {

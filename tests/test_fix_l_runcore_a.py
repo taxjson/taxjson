@@ -446,11 +446,12 @@ class TestDiagnosticsBanner(unittest.TestCase):
 
 
 
-def _qt_row(d, s, act, q, p, sym="XEI.TO", acct="55500001"):
+def _qt_row(d, s, act, q, p, sym="XEI.TO", acct="55500001", comm=0):
     g = abs(q) * p
-    net = -g if act == "Buy" else g
+    net = -g - comm if act == "Buy" else g - comm
     return (f"{d} 09:30:00 AM,{s} 12:00:00 AM,{act},{sym},DESC,{q},"
-            f"{p:.2f},{g:.2f},0,{net:.2f},CAD,{acct},Trades,Individual\n")
+            f"{p:.2f},{g:.2f},{comm},{net:.2f},CAD,{acct},Trades,"
+            f"Individual\n")
 
 
 # A wash sale in 2024 AND one in 2025.
@@ -905,6 +906,303 @@ class TestReportLabelsAndTotals(unittest.TestCase):
             j = json.loads(_run_cli(root, "sum", "--json").stdout)
             kr = [a for a in j["accounts"] if a["account"] == "kr"]
             self.assertTrue(kr and kr[0].get("dividend_is_staking"))
+
+
+
+class TestScanSanityFetch(unittest.TestCase):
+    """R1-243, S042-04 (scan), R1-113 / R1-334 / R1-351 (sanity),
+    R1-353 (Questrade auth hint)."""
+
+    def test_account_plan_is_a_whole_token(self):
+        from taxjson.bin.taxjson_run import _account_plan
+        tx = {"type": "taxable"}
+        self.assertEqual(_account_plan("admiral", tx), "taxable")
+        self.assertEqual(_account_plan("spiral", tx), "taxable")
+        self.assertEqual(_account_plan("rrsp2", {"type": "sheltered"}),
+                         "rrsp")
+        self.assertEqual(_account_plan("my-tfsa", {"type": "sheltered"}),
+                         "tfsa")
+        self.assertEqual(_account_plan("x", {"type": "taxable",
+                                             "plan": "bogus"}), "taxable")
+        self.assertEqual(_account_plan("x", {"type": "sheltered",
+                                             "plan": " TFSA "}), "tfsa")
+
+    def test_unknown_plan_value_warns(self):
+        from taxjson.bin.taxjson_run import validate_config
+        w = validate_config({"settings": {"year": 2025,
+                                          "country": "canada"},
+                             "accounts": {"m": {"type": "taxable",
+                                                "plan": "non-registered"}}})
+        self.assertTrue(any("plan" in x and "non-registered" in x
+                            for x in w), w)
+
+    def test_option_listing_counts_for_map_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            (root / "reports" / "margin_holdings.toml").write_text(
+                '[[holding]]\nsymbol = "AAQ.TO"\nquantity = 100\n'
+                '[[holding]]\nsymbol = "AAQ261218C00040000.US"\n'
+                'quantity = 2\n')
+            r = _run_cli(root, "scan")
+            self.assertIn("MAP-GAP", r.stdout)
+            self.assertIn("AAQ.TO/AAQ.US", r.stdout)
+
+    def _sanity_project(self, tmp):
+        root = _project(tmp, _CONFIG + '[accounts.kr]\ntype = '
+                        '"taxable"\ncrypto = true\n')
+        (root / "inputs" / "kr").mkdir()
+        (root / "inputs" / "kr" / "kr_trades.csv").write_text(_KR2)
+        self.assertEqual(_run_cli(root, "run", "--no-input").returncode, 0)
+        return root
+
+    def test_sanity_pairs_venue_suffixed_crypto(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._sanity_project(tmp)
+            f = Path(tmp) / "U5550001_holdings.toml"  # pii-ok
+            f.write_text('[meta]\naccount = "U5550001"\n'  # pii-ok
+                         '[[holding]]\nsymbol = "BTC.KR"\n'
+                         'quantity = 1.0\nasset_type = "crypto"\n')
+            r = _run_cli(root, "sanity", f"kr={f}")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertNotIn("MISSING", r.stdout)
+            # R1-351: the id in the file name and label is masked.
+            self.assertNotIn("U5550001", r.stdout)  # pii-ok
+            self.assertIn("U5***_holdings.toml", r.stdout)
+
+    def test_questrade_auth_hint_names_the_skipped_env_token(self):
+        from taxjson.bin.taxjson_run import _qt_auth_hint
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "tok"
+            cache.write_text("DEADOLD\n")
+            old = os.environ.get("QUESTRADE_REFRESH_TOKEN")
+            os.environ["QUESTRADE_REFRESH_TOKEN"] = "NEWENV"
+            try:
+                h = _qt_auth_hint("DEADOLD", cache)
+            finally:
+                if old is None:
+                    os.environ.pop("QUESTRADE_REFRESH_TOKEN", None)
+                else:
+                    os.environ["QUESTRADE_REFRESH_TOKEN"] = old
+            self.assertIn("NOT $QUESTRADE_REFRESH_TOKEN", h)
+            self.assertIn("--refresh-token", h)
+            self.assertNotIn("DEADOLD", h)
+            self.assertNotIn("NEWENV", h)
+            h = _qt_auth_hint("ARG", cache, explicit=True)
+            self.assertIn("--refresh-token", h)
+
+
+def _zzz_short_csv():
+    return _QT_HEADER + "".join([
+        _qt_row("2025-02-03", "2025-02-04", "Buy", 50, 10, sym="ZZZ.TO"),
+        _qt_row("2025-05-05", "2025-05-06", "Sell", -150, 12,
+                sym="ZZZ.TO")])
+
+
+class TestMoreViews(unittest.TestCase):
+    """R1-339, S031-05, S038-11, S040-02, S041-00, S039-18,
+    OWNER-FEES-SIGN."""
+
+    def test_missing_history_lists_phantom_covered_pairs_apart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=_zzz_short_csv())
+            (root / "phantoms.json").write_text(
+                '[{"symbol": "ZZZ.TO", "account": "margin"}]')
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "find-missing-history")
+            self.assertIn("COVERED by phantoms.json", r.stdout)
+            self.assertNotIn("AFFECTS 2025", r.stdout)
+            self.assertNotIn("--suggest-phantoms", r.stdout)
+            from taxjson.lib import checklist
+            self.assertIn("COVERED", checklist.d_missing_history.__code__
+                          .co_consts.__repr__())
+
+    def test_fees_json_without_conversion_has_no_mixed_total(self):
+        from taxjson.bin.taxjson_fees import aggregate, render_json
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "m_ib.json"
+            f.write_text(json.dumps({
+                "metadata": {"source_brokerage": "ib"},
+                "transactions": [
+                    {"id": "1", "action": "BUYSELL", "date": "2025-01-02",
+                     "symbol": "A.US", "quantity": 1, "fee": 10.0,
+                     "currency": "USD", "net_amount": -100},
+                    {"id": "2", "action": "BUYSELL", "date": "2025-01-03",
+                     "symbol": "B.TO", "quantity": 1, "fee": 5.0,
+                     "currency": "CAD", "net_amount": -100}]}))
+            b, g, info = aggregate([f], year="2025", since=None,
+                                   to_curr=None, history={},
+                                   default_rate=1.35, by_account=False)
+            doc = json.loads(render_json(b, g, info, to_curr=None,
+                                         by_account=False, year="2025"))
+            self.assertIsNone(doc["total"]["total"])
+            self.assertEqual(set(doc["total"]["by_currency"]),
+                             {"CAD", "USD"})
+
+    def test_fees_report_skips_deleted_symbols(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv = _QT_HEADER + "".join([
+                _qt_row("2025-01-15", "2025-01-16", "Buy", 100, 10),
+                _qt_row("2025-06-20", "2025-06-23", "Sell", -100, 15),
+                _qt_row("2025-02-15", "2025-02-16", "Buy", 10, 1,
+                        sym="JUNK.TO", comm=50),
+                _qt_row("2025-03-15", "2025-03-16", "Sell", -10, 1,
+                        sym="JUNK.TO", comm=50)])
+            root = _project(tmp, csv=csv)
+            (root / "ticker.map").write_text("DELETE JUNK.TO\n")
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            self.assertNotIn("100.00", (root / "reports" / "fees.rpt")
+                             .read_text())
+            r = _run_cli(root, "fees-sum", "--json")
+            j = json.loads(r.stdout)
+            self.assertLess(j["total"]["total"] or 0.0, 50.0)
+
+    def test_renamed_leaps_keeps_its_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=_QT_HEADER)
+            (root / "inputs" / "margin" / "questrade_2025.csv").unlink()
+            (root / "inputs" / "margin" / "x.tt").write_text(
+                "BUYSELL 2024-02-01 10:00:00 XYZ260116C00050000.TO 1 CAD "
+                "5.00 509.95 9.95\n"
+                "BUYSELL 2024-02-01 10:00:00 ABC260116C00050000.TO 1 CAD "
+                "5.00 509.95 9.95\n"
+                "SPLIT 2024-08-01 10:00:00 XYZ260116C00050000.TO "
+                "XYZ1260116C00050000.TO 1\n"
+                "BUYSELL 2025-03-03 10:00:00 XYZ1260116C00050000.TO -1 CAD "
+                "8.00 790.05 9.95\n"
+                "BUYSELL 2025-03-03 10:00:00 ABC260116C00050000.TO -1 CAD "
+                "8.00 790.05 9.95\n")
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            j = json.loads(_run_cli(root, "leaps-sum", "--json").stdout)
+            self.assertEqual({x["contract"] for x in j["rows"]},
+                             {"ABC260116C00050000.TO",
+                              "XYZ1260116C00050000.TO"})
+            self.assertAlmostEqual(j["total_gain"], 560.20, places=2)
+
+    def test_instalments_name_assumed_zero_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _CONFIG.replace(
+                "option_grant_timing_since = 2025\n",
+                'option_grant_timing_since = 2025\nprovince = "ON"\n')
+                + '[instalments]\nbasis = "current_year"\n')
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "instalments")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("other income", r.stdout)
+            self.assertIn("assumed 0", r.stdout)
+            j = json.loads(_run_cli(root, "instalments", "--json").stdout)
+            self.assertEqual(len(j["assumed_zero"]), 2)
+
+    def test_tax_year_trade_views_use_the_settlement_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv = _QT_HEADER + "".join([
+                _qt_row("2025-03-02", "2025-03-03", "Buy", 100, 10,
+                        sym="GAIN.TO"),
+                _qt_row("2025-12-31", "2026-01-02", "Sell", -100, 20,
+                        sym="GAIN.TO")])
+            root = _project(tmp, _CONFIG.replace("year = 2025",
+                                                 "year = 2026"), csv=csv)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            j = json.loads(_run_cli(root, "trades-sum", "--json").stdout)
+            self.assertAlmostEqual(j["totals"]["CAD"]["sold"], 2000.0)
+            r = _run_cli(root, "trades")
+            self.assertIn("GAIN.TO", r.stdout)
+            r = _run_cli(root, "trades", "2025")
+            self.assertNotIn("-100", r.stdout)
+
+    def test_questrade_fee_rows_are_positive_charges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=_MARGIN_CSV
+                            + "2025-07-02 09:30:00 AM,2025-07-02 12:00:00 "
+                            "AM,FCH,,PLUS PLAN FEE,0,0.00,0.00,0.00,-9.96,"
+                            "CAD,55500001,Fees and rebates,Individual\n")
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            j = json.loads(_run_cli(root, "fees", "--json").stdout)
+            fee = [x for x in j["rows"] if x["action"] == "FEE"]
+            self.assertEqual([x["fee"] for x in fee], [9.96])
+
+
+class TestDefaultsAndTotalsPinned(unittest.TestCase):
+    """S038-06: a Canada project without tax_date runs on SETTLEMENT
+    dates at every consumer; S040-22: the printed totals of winners,
+    dil-sum, roc-sum, trades-sum, list and wash-sales over 2+ rows."""
+
+    def test_canada_tax_date_defaults_to_settle_everywhere(self):
+        from taxjson.bin import taxjson_filed, taxjson_run as R
+        from taxjson.lib.country import default_tax_date
+        self.assertEqual(default_tax_date("canada"), "settle")
+        self.assertEqual(taxjson_filed._tax_date({}, "canada"), "settle")
+        self.assertEqual(R._tax_date({"country": "canada"}), "settle")
+        self.assertEqual(R._tax_date_basis({"country": "canada"}),
+                         "settle")
+        # End to end: traded 2024-12-31, settled 2025-01-02 -> 2025.
+        with tempfile.TemporaryDirectory() as tmp:
+            csv = _QT_HEADER + "".join([
+                _qt_row("2024-06-03", "2024-06-04", "Buy", 100, 10),
+                _qt_row("2024-12-31", "2025-01-02", "Sell", -100, 15)])
+            root = _project(tmp, csv=csv)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            j = json.loads(_run_cli(root, "sum", "--json").stdout)
+            self.assertAlmostEqual(j["filing"]["totals"]["gain"], 500.0)
+            a = json.loads(_run_cli(root, "audit", "--json").stdout)
+            self.assertEqual(len(a["events"]), 1)
+            r = _run_mod("taxjson.bin.taxjson_explain", "--country",
+                         "canada", "--year", "2025",
+                         str(root / "work" / "margin_base.json"))
+            self.assertIn("XEI.TO", r.stdout)
+            r = _run_mod("taxjson.bin.taxjson_audit", "--country",
+                         "canada", "--year", "2025", "--json", "--base",
+                         str(root / "work" / "margin_base.json"))
+            self.assertEqual(len(json.loads(r.stdout)["events"]), 1)
+
+    def test_report_totals_over_several_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv = _QT_HEADER + "".join([
+                _qt_row("2025-01-06", "2025-01-07", "Buy", 100, 10,
+                        sym="AAA.TO"),
+                _qt_row("2025-02-03", "2025-02-04", "Sell", -100, 15,
+                        sym="AAA.TO"),
+                _qt_row("2025-01-06", "2025-01-07", "Buy", 100, 20,
+                        sym="BBB.TO"),
+                _qt_row("2025-02-03", "2025-02-04", "Sell", -100, 21,
+                        sym="BBB.TO"),
+                # two wash sales: CCC and DDD rebought and held
+                _qt_row("2025-01-06", "2025-01-07", "Buy", 100, 10,
+                        sym="CCC.TO"),
+                _qt_row("2025-03-03", "2025-03-04", "Sell", -100, 8,
+                        sym="CCC.TO"),
+                _qt_row("2025-03-10", "2025-03-11", "Buy", 100, 8,
+                        sym="CCC.TO"),
+                _qt_row("2025-01-06", "2025-01-07", "Buy", 50, 30,
+                        sym="DDD.TO"),
+                _qt_row("2025-04-01", "2025-04-02", "Sell", -50, 27,
+                        sym="DDD.TO"),
+                _qt_row("2025-04-08", "2025-04-09", "Buy", 50, 27,
+                        sym="DDD.TO")])
+            root = _project(tmp, csv=csv)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            w = _run_cli(root, "winners").stdout
+            self.assertIn("TOTAL REALIZED GAIN: 600.00 CAD", w)
+            ws = _run_cli(root, "wash-sales").stdout
+            self.assertIn("2 wash sale(s); 350.00 CAD of losses denied",
+                          ws)
+            ts = _run_cli(root, "trades-sum").stdout
+            self.assertIn("sold 5,750.00", ts)
+            lst = _run_cli(root, "list", "--json")
+            j = json.loads(lst.stdout)
+            self.assertAlmostEqual(sum(float(r.get("cost") or 0)
+                                       for r in j["rows"]), 2500.0)
+            lt = _run_cli(root, "list").stdout
+            self.assertIn("350.00", lt)           # deferred total
 
 
 if __name__ == "__main__":

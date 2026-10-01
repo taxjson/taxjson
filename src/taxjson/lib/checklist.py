@@ -627,7 +627,7 @@ def d_missing_history(ctx: Ctx) -> Result:
         if ln.startswith("AFFECTS"):
             in_affects = True
             continue
-        if ln.startswith("NOT relevant") or ln.startswith("To fix"):
+        if ln.startswith(("NOT relevant", "To fix", "COVERED")):
             in_affects = False
         m = re.match(r"^([A-Z0-9.\-]+)\s+(\S+)\s+[A-Z]{3}\s", ln)
         if in_affects and m:

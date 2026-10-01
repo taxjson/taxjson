@@ -457,7 +457,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson form-export` | Filing-shaped output: IRS Form 8949 / CRA Schedule 3 (default follows the country), or a TurboTax-importable TXF via `--form txf [--box A|B|C] --out gains.txf`. |
 | `taxjson reconcile-slips SLIP.csv [SLIP.csv ...]` | Diff broker T5008 / 1099-B slips against computed dispositions before filing (exit 1 on mismatch); several slip files (one per broker) are reconciled together. |
 | `taxjson help [COMMAND]` | Show top-level help, or help for one subcommand. |
-| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain. See "Importing manual cost basis". |
+| `taxjson find-missing-history [NAME]` | Report positions with missing cost basis (truncated buy history, or $0-basis corp-action shares) that distort a year's gain; pairs the project's `phantoms.json` already covers are listed apart (COVERED), not as work to do. See "Importing manual cost basis". |
 | `taxjson elect` | Review, redo, or non-interactively set (`--set ID=ELECTION`) a corporate-action tax election. |
 | `taxjson init --country canada\|usa [PATH] [--year YYYY]` | Scaffold a new project directory (config, currencies, and account folders per jurisdiction; `--force` to overwrite). |
 | `taxjson harvest [SYMBOL ...]` | Unrealized gain/(loss) per open position at current prices — "if I sold this today, is it a loss?" Losses first, wash-radar advisory on each loss, `LT_IN` days-to-long-term for US projects. |
@@ -1115,9 +1115,11 @@ Lints the whole project for placement mistakes the pipeline can see:
   every unmapped US-listed dividend payer — candidates to verify, not
   verdicts (same root can be a different issuer).
 
-Registered-plan kinds are inferred from account names (`tfsa`, `rrsp`, …);
-override per account with `plan = "tfsa"` in `taxjson.toml` when a name
-doesn't say. Exit 1 when findings exist, 0 on a clean scan — cron-friendly.
+Registered-plan kinds are inferred from a plan word that is a whole token
+of the account name (`tfsa`, `rrsp2`, `my-tfsa`; not `admiral`); override
+per account with `plan = "tfsa"` in `taxjson.toml` when a name doesn't say
+(an unknown `plan` value is warned about and ignored). An option counts as
+a sighting of its underlying's listing for MAP-GAP / US-LISTING. Exit 1 when findings exist, 0 on a clean scan — cron-friendly.
 
 ### Tax-loss harvesting (`taxjson harvest`)
 

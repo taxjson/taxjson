@@ -2313,6 +2313,23 @@
   a grant-timing WRITE record no longer counts as a close in `ccd-sum`,
   `winners` or the `.sum` trade statistics; `reports/ccd.rpt` prints the
   premium and the buy-back as positive PREMIUM / BUYBACK columns.
+- **scan, sanity, fetch.** `scan` matches a plan word only as a whole
+  token of the account name (`admiral` is no IRA), warns about an unknown
+  `plan`, and counts an option as a sighting of its underlying's listing
+  (MAP-GAP / US-LISTING); `sanity` pairs a crypto snapshot's
+  venue-suffixed symbols (`LINK.KR`) with the bare coin and masks account
+  ids in the holdings file names it prints; a failed Questrade refresh
+  says which token was used (the cached chain wins over
+  `$QUESTRADE_REFRESH_TOKEN`) and how to start a new chain.
+- **More views say what they mean.** `find-missing-history` lists pairs
+  `phantoms.json` already covers apart (the checklist step clears);
+  `fees.rpt` / `fees-sum` leave out ticker.map DELETE'd rows and their
+  unconverted JSON no longer adds currencies into one total; a LEAPS
+  renamed by a SPLIT keeps its LEAPS entry; `instalments` names the inputs
+  it assumed to be 0 (other income, withholding); `trades`, `trades-sum`
+  and `events` take a trade by its settlement date in a tax-year window on
+  a settle-basis project, as Schedule 3 does; per-underlying reports file
+  an `RCI…` option under the `RCI.B.TO` shares it is written on.
 
 ## v0.16.0 (2026-09-25)
 
