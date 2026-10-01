@@ -374,5 +374,22 @@ class TestGenerateParserPrivacy(unittest.TestCase):
         self.assertIn("ONLY for optional cells", text)
 
 
+class TestStrictMoney(unittest.TestCase):
+    def test_doubled_signs_and_lenient_float_syntax_refused(self):
+        # R1-114: '--5' read as +5, '1_000' as 1000 (float() syntax).
+        sys.path.insert(0, str(SRC))
+        from taxjson.lib.brokerages._crypto_common import strict_money as m
+        for bad in ("--5", "(-5)", "-$-5", "$--5", "+-5", "1_000",
+                    "1_000.5", "1e", "\u0661\u0662\u0663", "nan", "0x10"):
+            with self.assertRaises(ValueError, msg=bad):
+                m(bad)
+        for good, v in (("CA$-4.00", -4.0), ("(12.00)", -12.0),
+                        ("-$12.00", -12.0), ("$-4.00", -4.0), ("+3", 3.0),
+                        ("1,234.56", 1234.56), (".5", 0.5),
+                        ("0.00000100", 1e-6), ("", 0.0), ("US$4", 4.0),
+                        ("1e-8", 1e-8)):
+            self.assertAlmostEqual(m(good), v, msg=good)
+
+
 if __name__ == "__main__":
     unittest.main()

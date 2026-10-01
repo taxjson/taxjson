@@ -29,6 +29,11 @@ _MONEY_PREFIXES = ('CA$', 'US$', 'C$', 'A$', '$', '€', '£')
 # A first group of 0 is a decimal comma ('0,125'), never thousands
 # (audit S055-08).
 _THOUSANDS_OK = re.compile(r'^[1-9]\d{0,2}(,\d{3})+(\.\d*)?$')
+# What is left once sign, currency and thousands commas are stripped:
+# ASCII digits with at most one decimal point, and an optional exponent
+# (tiny crypto quantities: 1e-8). float() also took '1_000' and
+# non-ASCII digits (R1-114).
+_PLAIN_NUMBER = re.compile(r'^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$', re.ASCII)
 
 
 def strict_money(raw, what: str = 'amount', context: str = '') -> float:
@@ -43,28 +48,44 @@ def strict_money(raw, what: str = 'amount', context: str = '') -> float:
         return 0.0
     orig = s
     neg = False
+    signs = 0          # at most ONE of (x), a leading -/+, a -/+ after $
     if s.startswith('(') and s.endswith(')'):
         neg = True
+        signs += 1
         s = s[1:-1].strip()
     if s.startswith('-'):
         neg = not neg
+        signs += 1
         s = s[1:].strip()
     elif s.startswith('+'):
+        signs += 1
         s = s[1:].strip()
     for p in _MONEY_PREFIXES:
         if s.upper().startswith(p):
             s = s[len(p):].strip()
             break
     # A sign AFTER the currency marker (`CA$-4.00`, `$-4.00`).
-    if s.startswith('-'):
-        neg = not neg
+    if s[:1] in ('-', '+'):
+        neg = neg != (s[0] == '-')
+        signs += 1
         s = s[1:].strip()
+    if signs > 1:
+        # '--5', '(-5)', '-$-5' used to cancel into +5 (R1-114).
+        raise ValueError(
+            f"unparseable {what} {orig!r}{_ctx(context)}: more than one "
+            f"sign marker — refusing to guess the sign.")
     if ',' in s:
         if not _THOUSANDS_OK.match(s):
             raise ValueError(
                 f"unparseable {what} {orig!r}{_ctx(context)}: commas are "
                 f"only accepted as thousands separators (1,234.56).")
         s = s.replace(',', '')
+    if not _PLAIN_NUMBER.match(s):
+        # float() also takes '1_000', non-ASCII digits and 'nan'.
+        raise ValueError(
+            f"unparseable {what} {orig!r}{_ctx(context)} — refusing to "
+            f"book it as 0. Fix the cell or report the new export "
+            f"format.")
     try:
         v = float(s)
     except ValueError:
