@@ -472,15 +472,26 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # A futures option's multiplier depends on the contract — refuse
     # rather than guess.
     from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.pipeline import declared_multipliers
     multiplier = 1
+    is_futopt = False
     if is_option_symbol(symbol):
         if symbol.upper().startswith(("F:", "/", "\\")):
-            return {"ok": False, "warnings": warnings,
-                    "reason": f"{symbol} is a futures option — its "
-                              f"contract multiplier varies by contract, "
-                              f"so the what-if cannot price it; use "
-                              f"`taxjson-explain` on a booked sale."}
-        multiplier = 100
+            # The contract size the book's rows declare (IB's
+            # instrument list: CL 1000, ES 50 — audit S026-22); never
+            # the equity 100.
+            _declared = declared_multipliers(txs).get(symbol)
+            if not _declared:
+                return {"ok": False, "warnings": warnings,
+                        "reason": f"{symbol} is a futures option whose "
+                                  f"contract multiplier no booked row "
+                                  f"declares — the what-if cannot price "
+                                  f"it; use `taxjson-explain` on a booked "
+                                  f"sale."}
+            multiplier = _declared
+            is_futopt = True
+        else:
+            multiplier = 100
     proceeds = abs(qty) * price * multiplier
     # The simulated trade settles like a real one (era- and holiday-
     # aware, T+1 today): the superficial-loss window and the tax year
@@ -490,6 +501,15 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     from taxjson.lib.dates import settlement_date
     mkt_cur = (price_currency or ctx.base_currency or "CAD").strip().upper()
     settle_on = settlement_date(on, mkt_cur, multiplier == 100)
+    if is_futopt:
+        # A futures option settles as the project's futures_settle says
+        # (the parser's rule: the trade date, or the next business day).
+        from taxjson.lib.country import futures_settle_mode
+        if futures_settle_mode(ctx.settings or {}) == "next_day":
+            from taxjson.lib.market_calendar import add_settlement_days
+            settle_on = add_settlement_days(on, 1, mkt_cur).isoformat()
+        else:
+            settle_on = on
     basis = ctx.tax_date
     tax_year = int((settle_on if basis == "settle" else on)[:4])
     if tax_year != int(on[:4]):
@@ -512,6 +532,7 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         quantity=(-abs(qty) if side == "sell" else abs(qty)),
         price=price, net_amount=proceeds, proceeds=proceeds,
         currency=ctx.base_currency, account=account,
+        multiplier=float(multiplier) if is_futopt else 0.0,
         id=f"whatif-simulated-{symbol}-{on}")
 
     # Same wash policy as the CLI (GainsRequest.effective_detect_wash +

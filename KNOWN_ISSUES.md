@@ -114,19 +114,13 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### RBC exports by Date miss back-dated year-end book-cost rows
 - **Where:** the RBC export window (not the parser: `rbc_direct.py:_build_book_adjust` books the rows correctly when present).
-- **Current behavior:** RBC posts year-end book-cost adjustments ("2022 NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST", a year-end ROC) dated Dec 31 but only in the following spring. An export for the calendar year taken before then, and next year's export (which starts Jan 1), both lack them; nothing in the inputs can show the gap (2026-09 audit R1-85: a 2023 VDY loss understated by 5,291.90).
+- **Current behavior:** RBC posts year-end book-cost adjustments ("2022 NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST", a year-end ROC) dated Dec 31 but only in the following spring. An export for the calendar year taken before then, and next year's export (which starts Jan 1), both lack them (2026-09 audit R1-85: a 2023 VDY loss understated by 5,291.90). Since 2026-10 the parse reads each export's "Activity Export as of" stamp: when every export holding the tax year's rows was taken before June 30 of the next year and the account held a position at the year end, the account's `.sum` carries a note saying the adjustments may be missing (audit S063-22). The rows themselves cannot be seen until RBC posts them; an export taken before Dec 31 of the year is an ATTENTION on the console, and `checklist` inputs-frozen checks each account's latest RBC export against Jan 31.
 - **Workaround:** export each RBC year with an end date after the following June (or re-export the prior year once the T3s are out) and keep the overlapping files: overlapping downloads of one account are de-duplicated row by row.
 
 ### RBC notional distributions raise ACB only
 - **Where:** `src/taxjson/lib/brokerages/rbc_direct.py:_build_book_adjust`.
 - **Current behavior:** a "NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST $x" row becomes an ACB increase (ADJUST `dist`), and the parse warns that the distribution itself is income on the fund's T3 (usually box 21) and is NOT in taxjson's income totals (2026-09 audit S063-17). Stated in tax-logic (CA-DIST-02 / US-DIST-02).
 - **Why (owner decision 2026-09-30, D6: stays a warning):** booking it as income needs its character (capital-gain distribution vs other income), which only the T3 gives; booking it as a dividend would gross it up as eligible. Take the amount from the slip.
-
-### RBC export "as of" date is not a coverage check
-- **Where:** `rbc_direct.py:_find_header` skips the "Activity Export as of <date>" preamble; `checklist.py` `inputs-frozen` looks at the latest activity across ALL sources.
-- **Current behavior:** an RBC export taken before year-end (so missing a late-December sale) is accepted, and the checklist can call the inputs complete from another broker's later dates (2026-09 audit S063-22, the RBC sibling of the IB statement-period item).
-- **Why deferred:** needs a per-statement coverage record carried from the parsers into `run`/`checklist`; the export's timestamp is only an upper bound on coverage (RBC does not write the chosen date range).
-- **Workaround:** export RBC activity after Jan 31 of the next year.
 
 ### Stock dividends: $0 in Canada until the declared amount is added
 - **Where:** the parsers emit a neutral stock-dividend event — a $0 BUYSELL of the new shares typed `stock_dividend` — from `questrade.py` (the `DIS` + stock-dividend branch), `ib_extractor.py` (a Corporate Actions `Stock Dividend` row; IB's exact wording is modelled, not seen in a real statement; its `ATTENTION` line shows the row's Value) and `rbc_direct.py:_build_stock_dividend`. Each gains engine applies its country's rule (`lib/core.STOCK_DIVIDEND`).

@@ -464,10 +464,17 @@ class TestFuturesShortNotPhantom(unittest.TestCase):
                for r in txs]
         syms = {c.symbol for c in detect_phantoms(tts)}
         self.assertNotIn('F:QZFK6.US', syms)
-        self.assertIn('QZS.US', syms)          # equities still flagged
-        self.assertIn('F:QZFK6.US',
-                      {c.symbol for c in detect_phantoms(
-                          tts, include_options=True)})
+        # A stock sale IB codes O is a broker-declared short since
+        # S058-02 / S060-12: listed as one, never as missing history.
+        self.assertNotIn('QZS.US', syms)
+        marked = {c.symbol: c for c in detect_phantoms(
+            tts, include_options=True, include_broker_shorts=True)}
+        self.assertTrue(marked['QZS.US'].broker_marked_short)
+        self.assertTrue(marked['F:QZFK6.US'].broker_marked_short)
+        # Without the code the sign-only walk still flags the equity.
+        for t in tts:
+            t.open_close = ''
+        self.assertIn('QZS.US', {c.symbol for c in detect_phantoms(tts)})
 
 
 class TestForeignRocCli(unittest.TestCase):

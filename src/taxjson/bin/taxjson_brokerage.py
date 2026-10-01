@@ -323,6 +323,16 @@ Examples:
             "run` passes it from the account's `type`."
         ),
     )
+    parser.add_argument(
+        "--tax-year", dest="tax_year", type=int, default=None,
+        metavar="YYYY",
+        help=(
+            "The tax year the books are for. Parsers whose exports carry "
+            "their own timestamp check it against the year (RBC: an "
+            "export taken before the year ended cannot hold the rest of "
+            "it). `taxjson run` passes the project year."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -358,9 +368,10 @@ Examples:
     override_renamed: dict = {}
     override_kept: set = set()
     normalized = []
-    # Parser-declared contract multipliers, parallel to `normalized`
-    # (not a TaxTransaction field — they feed only the schema notional
-    # check below, which is an ERROR for rows that declare one).
+    # Parser-declared contract multipliers, parallel to `normalized`:
+    # they feed the schema notional check below (an ERROR for rows that
+    # declare one). Option and futures rows also keep theirs on the
+    # TaxTransaction (`multiplier`); a share's 1 is checked here only.
     multipliers = []
     dropped_keys = {}
     lint_problems = 0
@@ -385,6 +396,12 @@ Examples:
             print(f"taxjson-brokerage: error: {_refusal(e)}",
                   file=sys.stderr)
             sys.exit(1)
+        # Per-statement coverage against the tax year (RBC "as of"
+        # timestamps, audit S063-22).
+        _cov = getattr(extractor_class, 'coverage_messages', None)
+        if _cov is not None and args.tax_year and shared_context is not None:
+            for _m in _cov(shared_context, args.tax_year):
+                print(_m, file=sys.stderr)
 
     # s.90(1) is Canadian law: never the default without a country
     # (partition INPUTS-03), and refused for a US filer.
@@ -617,6 +634,18 @@ Examples:
                         and k not in ('qty', 'multiplier'):
                     dropped_keys[k] = dropped_keys.get(k, 0) + 1
             clean = {k: v for k, v in t.items() if k in valid_keys}
+            # The declared contract size is kept on option and futures
+            # rows (the holdings export, the .tt check and the what-if
+            # read it — audit S026-22); a share's 1 is not news.
+            _sym = str(clean.get('symbol') or '')
+            if not (is_option_symbol(_sym)
+                    or _sym.startswith(('F:', '/', '\\'))):
+                clean.pop('multiplier', None)
+            elif clean.get('multiplier') is not None:
+                try:
+                    clean['multiplier'] = float(clean['multiplier'])
+                except (TypeError, ValueError):
+                    clean.pop('multiplier', None)
             # Only override the parser's account label when --account
             # was explicitly given. Defaulting to the literal "default"
             # (the old behaviour) silently erased the per-parser

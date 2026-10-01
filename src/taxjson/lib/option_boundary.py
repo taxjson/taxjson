@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 from taxjson.lib.core import (TaxTransaction, is_option_symbol,
                               parse_option_expiry, parse_option_underlying)
 from taxjson.lib.corporate_timeline import event_sort_key
+from taxjson.lib.phantom_holdings import OrderStarts, unbacked_close
 
 
 def _sort_date(t: TaxTransaction) -> str:
@@ -96,6 +97,11 @@ class WriteLot:
     premium: float       # net premium received for these units
     closes: List[Close] = field(default_factory=list)
     open_units: float = 0.0
+    # The broker coded the sale that "wrote" this lot CLOSING (IB code
+    # C) with no long position in the data to close: it sold a long
+    # bought before the data — not a write (audit S013-00).
+    broker_closing: bool = False
+    broker_basis: str = ''
 
     @property
     def per_unit(self) -> float:
@@ -129,6 +135,7 @@ def write_lots(transactions: List[TaxTransaction],
     pos: Dict[str, float] = {}
     lots: Dict[str, List[WriteLot]] = {}
     out: List[WriteLot] = []
+    orders = OrderStarts()
     for t in rows:
         q = float(t.quantity or 0.0)
         sym = t.symbol
@@ -147,6 +154,7 @@ def write_lots(transactions: List[TaxTransaction],
                 lots.setdefault(new, []).extend(moved)
             continue
         p = pos.get(sym, 0.0)
+        p_order = orders.prev(sym, t, p)
         if t.action == "OPENING_BALANCE":
             # A phantom opening (phantoms.json, --include-options): the
             # contracts were held LONG before the history starts, so the
@@ -164,7 +172,10 @@ def write_lots(transactions: List[TaxTransaction],
                 lot = WriteLot(symbol=sym, account=t.account or "", write_date=_date_of(t),
                                write_year=int(_date_of(t)[:4]), units=opening,
                                premium=net * (opening / -q),
-                               open_units=opening)
+                               open_units=opening,
+                               broker_closing=unbacked_close(t, p, p_order),
+                               broker_basis=str(getattr(t, "broker_basis", "")
+                                                or ""))
                 lots.setdefault(sym, []).append(lot); out.append(lot)
         elif q > 0 and p < -1e-9:
             rem = min(q, -p)
@@ -236,6 +247,30 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         later = [c for c in lot.closes if int(c.date[:4]) > lot.write_year]
         still_open = lot.open_units > 1e-9 and lot.write_year <= year
         if not later and not still_open:
+            continue
+        if lot.broker_closing:
+            # Not a write at all (audit S013-00): the broker says the
+            # sale CLOSED a long the data never bought. Asking for an
+            # expiry row, or placing a premium in a year, is wrong
+            # advice — the missing purchase is the fix.
+            rows.append({
+                "symbol": lot.symbol, "account": lot.account,
+                "written": lot.write_date, "write_year": lot.write_year,
+                "units": lot.units, "premium": round(lot.premium, 2),
+                "closed": "", "close_kind": "broker-closing",
+                "close_year": None, "paid": 0.0, "timing": "",
+                "broker_closing": True,
+                "where": (f"broker says closing (IB code C"
+                          + (f", IB Basis {lot.broker_basis}"
+                             if lot.broker_basis else "")
+                          + "): the sale closed a LONG position bought "
+                            "before the data — not a written option"),
+                "action": ("ATTENTION: add the missing purchase "
+                           "(`taxjson find-missing-history --gen-phantoms "
+                           "phantoms.json`, then `taxjson run`); until "
+                           "then the books treat the sale as a write "
+                           "whose premium is a gain"),
+                "attention": True})
             continue
         grant = grant_mode and (since is None or lot.write_year >= since)
         wy = lot.write_year
@@ -391,6 +426,11 @@ def expired_open(transactions: List[TaxTransaction], year: int,
                   key=lambda x: event_sort_key(x, profile="ca_main",
                                                date_of=_date_of))
     pos: Dict[Any, float] = {}
+    # Positions the broker says were opened before the data (a sale
+    # coded IB C with no long held, a buy coded C with no short): the
+    # missing row is the PURCHASE (or the write), not the expiry.
+    closing: Dict[Any, bool] = {}
+    orders = OrderStarts()
     for t in rows:
         key = (t.account or "", t.symbol)
         q = float(t.quantity or 0.0)
@@ -400,8 +440,15 @@ def expired_open(transactions: List[TaxTransaction], year: int,
             p = pos.pop(key, 0.0) * ratio
             nk = (t.account or "", new)
             pos[nk] = pos.get(nk, 0.0) + p
+            if closing.pop(key, False):
+                closing[nk] = True
             continue
+        _p = pos.get(key, 0.0)
+        if unbacked_close(t, _p, orders.prev(key, t, _p)):
+            closing[key] = True
         pos[key] = pos.get(key, 0.0) + q
+        if abs(pos[key]) < 1e-9:
+            closing.pop(key, None)
     last = max((_date_of(t) for t in transactions if _date_of(t)),
                default="")
     cutoff = min(max(f"{year}-12-31", last[:10]),
@@ -414,5 +461,6 @@ def expired_open(transactions: List[TaxTransaction], year: int,
         if expiry and expiry <= cutoff:
             out.append({"account": acct, "symbol": sym, "quantity": q,
                         "expiry": expiry,
-                        "side": "written" if q < 0 else "long"})
+                        "side": "written" if q < 0 else "long",
+                        "broker_closing": bool(closing.get((acct, sym)))})
     return out
