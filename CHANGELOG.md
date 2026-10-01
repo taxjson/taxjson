@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **US: a spouse's replacement purchase is a permanent denial in your
+  books.** With affiliated trades given (`taxjson-gains --affiliated`),
+  a loss whose replacement your spouse or controlled corporation bought
+  was reported as a deferral (permanently_disallowed 0) that no lot in
+  your books carried, so it never came back and the wash conservation
+  did not foot. §1091(d) puts the basis adjustment on THEIR shares: the
+  loss is now permanently disallowed here, as for an IRA replacement,
+  and the trace says the basis goes to the affiliated holder. tax-logic
+  states the rule (US-WASH-16) (partition SPEC-30, ENGINE-I1).
+- **US: FIFO is per account on any merged book.** `taxjson-gains
+  --country usa` (and the library's GainsRequest) now keeps FIFO lots
+  per account by default, as `taxjson run`'s blended pass always did;
+  a direct run on a merged book used to pool the accounts' lots
+  (tax-logic US-BASIS-01, partition SPEC-30). `--per-account-basis` is
+  still accepted.
+
 - **Canada: a coin residue under a millionth stays a holding.** The
   pool walk emptied any position under 1e-6 units after a sale, so
   9e-7 BTC left after selling 1 BTC vanished from the holdings and its

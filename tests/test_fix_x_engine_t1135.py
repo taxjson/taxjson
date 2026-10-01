@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tax_rules import rule
+from tax_rules import rule, rule_absent
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -190,6 +190,93 @@ class TestCoinPoolFuzz(unittest.TestCase):
                                  if g.get("qty") and "gain" in g)
                     self.assertAlmostEqual(gain - parked, n_gain + perm,
                                            delta=0.05, msg=ctx)
+
+
+class TestUSAffiliatedReplacement(unittest.TestCase):
+    """SPEC-30 / ENGINE-I1: a spouse's (affiliated) purchase in the window
+    disallows the loss; §1091(d) puts the basis adjustment on THEIR
+    replacement shares, so these books never recover it — it is reported
+    as permanently disallowed, not as a deferral no lot carries."""
+
+    @staticmethod
+    def _tx(i, d, q, net, acct):
+        from taxjson.lib.core import TaxTransaction
+        return TaxTransaction(id=i, action="BUYSELL", date=d, date_settle=d,
+                              time="10:00:00", symbol="XYZ.US", quantity=q,
+                              net_amount=net, price=abs(net / q),
+                              currency="USD", account=acct)
+
+    def _run(self, short=False, detect=True):
+        from taxjson.lib.core import USATaxRules
+        if short:
+            mine = [self._tx("o1", "2025-01-02", -100, 1000.0, "U5550001"),
+                    self._tx("c1", "2025-06-02", 100, -2000.0, "U5550001")]
+            theirs = [self._tx("a1", "2025-06-10", -100, 1000.0, "SPOUSE")]
+        else:
+            mine = [self._tx("b1", "2025-01-02", 100, -2000.0, "U5550001"),
+                    self._tx("s1", "2025-06-02", -100, 1000.0, "U5550001")]
+            theirs = [self._tx("a1", "2025-06-10", 100, -1000.0, "SPOUSE")]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            return USATaxRules().compute_gains(
+                mine, affiliated_transactions=theirs,
+                detect_wash_sales=detect)
+
+    @rule("US-WASH-16")
+    def test_spouse_buy_is_permanent_in_these_books(self):
+        res = self._run()
+        (g,) = [g for g in res["transactions"] if g.get("is_wash_sale")]
+        self.assertAlmostEqual(g["disallowed_amount"], 1000.0, 2)
+        self.assertAlmostEqual(g["permanently_disallowed"], 1000.0, 2)
+        self.assertTrue(g["wash_replacements"][0]["is_affiliated"])
+        self.assertEqual(sum(float(i.get("deferred_wash") or 0)
+                             for i in res["inventory"]), 0.0)
+        # Conservation (I1): realized - parked - permanent = no-wash.
+        nowash = self._run(detect=False)
+        tot = lambda r: sum(float(x["gain"]) for x in r["transactions"]
+                            if x.get("qty") and "gain" in x)
+        self.assertAlmostEqual(tot(res) - 1000.0, tot(nowash), 2)
+
+    @rule("US-WASH-16")
+    def test_spouse_short_is_permanent_in_these_books(self):
+        res = self._run(short=True)
+        (g,) = [g for g in res["transactions"] if g.get("is_wash_sale")]
+        self.assertAlmostEqual(g["permanently_disallowed"],
+                               g["disallowed_amount"], 2)
+        self.assertGreater(g["disallowed_amount"], 0)
+
+    @rule("US-WASH-16")
+    def test_trace_names_the_affiliated_holder(self):
+        from taxjson.lib.trace_format import _render_wash_explanation as render_wash_block
+        res = self._run()
+        (g,) = [g for g in res["transactions"] if g.get("is_wash_sale")]
+        text = "\n".join(render_wash_block(g))
+        self.assertIn("affiliated", text)
+        self.assertNotIn("Rev. Rul. 2008-5", text)
+
+
+class TestUSPerAccountFifoDefault(unittest.TestCase):
+    """SPEC-30: run_gains(country=usa) on a merged two-account book keeps
+    FIFO per account by default (as the blended pass always did); the
+    same book under Canada is one s.47 pool across the accounts."""
+
+    @rule("US-BASIS-01")
+    @rule_absent("US-BASIS-01", country="canada")
+    @rule("CA-ACB-01")
+    @rule_absent("CA-ACB-01", country="usa")
+    def test_merged_book_fifo_per_account(self):
+        from tax_rules.dual import gains_both, tx
+        book = [tx("BUYSELL", "2025-01-02", "XYZ.US", 100, 1000,
+                   account="A"),
+                tx("BUYSELL", "2025-02-03", "XYZ.US", 100, 2000,
+                   account="B"),
+                tx("BUYSELL", "2025-09-02", "XYZ.US", -100, 1500,
+                   account="B")]
+        r = gains_both(book)
+        self.assertAlmostEqual(r["usa"]["summary"]["total_gain"], -500.0,
+                               places=2)               # B's own lot at 20
+        self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 0.0,
+                               places=2)               # s.47 average 15
 
 
 class TestT1135EarlierYearDenial(unittest.TestCase):

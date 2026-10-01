@@ -998,6 +998,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-11",
                  "A replacement bought in an IRA makes it permanent.",
                  cont=True),
+            Rule("US-WASH-16",
+                 "A purchase by your spouse or a corporation you control "
+                 "in the window disallows the loss too, when their trades "
+                 "are given (`taxjson-gains --affiliated`; in a project, "
+                 "declare their account type = \"sheltered\", which also "
+                 "lists it as if it were your IRA). §1091(d) adds the "
+                 "loss to the basis of THEIR replacement shares, so in "
+                 "your books it is reported as permanently disallowed: "
+                 "give them the amount for their basis."),
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "

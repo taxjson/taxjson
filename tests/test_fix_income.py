@@ -573,8 +573,10 @@ class TestRbcNotionalAndDrip(unittest.TestCase):
         self.assertFalse([t for t in txs if t["action"] == "DIVIDEND"])
         from taxjson.lib.core import coerce_transaction_row
         book = [coerce_transaction_row(t, i, "t") for i, t in enumerate(txs)]
+        # The sale is in the same account: US FIFO is per account
+        # (US-BASIS-01, the run_gains default since SPEC-30).
         book.append(tx("BUYSELL", "2026-02-02", book[0].symbol, -100,
-                       6000, currency="CAD"))
+                       6000, currency="CAD", account=book[0].account))
         r = gains_both(book, year=2026)
         for c in C.COUNTRIES:
             with self.subTest(country=c):

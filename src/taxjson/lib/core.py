@@ -5167,7 +5167,11 @@ class USATaxRules(TaxRules):
                             rep['remaining_qty'] -= match_qty / _uf
                             remaining_loss_qty -= match_qty
 
-                            if rep['is_sheltered']:
+                            if rep['is_sheltered'] or rep.get('is_affiliated'):
+                                # IRA (Rev. Rul. 2008-5) or a spouse /
+                                # controlled corporation: the §1091(d)
+                                # adjustment belongs to THEIR position,
+                                # never to a lot in these books (ENGINE-I1).
                                 permanently_disallowed_amt += match_disallowed
                             elif rep.get('fully_consumed'):
                                 # Replacement short was already opened AND
@@ -5542,7 +5546,15 @@ class USATaxRules(TaxRules):
                                 < _tack_lot['effective_acq_date']):
                             _tack_lot['effective_acq_date'] = _tacked_eff
 
-                        if rep['is_sheltered']:
+                        if rep['is_sheltered'] or rep.get('is_affiliated'):
+                            # IRA (Rev. Rul. 2008-5: no basis transfer)
+                            # or a spouse / controlled corporation
+                            # (§1091(d) adds the loss to THEIR
+                            # replacement's basis): no lot in these
+                            # books carries it, so it is not a deferral
+                            # here — reporting it as one left a
+                            # deferred amount nothing recovers
+                            # (partition ENGINE-I1, tax-logic US-WASH-16).
                             permanently_disallowed_amt += match_disallowed
                         elif rep.get('fully_consumed'):
                             # Replacement lot was already sold before this

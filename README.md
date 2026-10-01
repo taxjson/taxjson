@@ -790,7 +790,11 @@ engine applies them only when it is given them (`taxjson-gains
 `type = "sheltered"`: their purchases then deny your loss, for good (the
 ACB addition belongs to the affiliated holder, s.53(1)(f)), but the account
 also shows in the SHELTERED tables and the radar as if it were your
-registered plan — read it as theirs (KNOWN_ISSUES; tax-logic CA-SL-04).
+registered plan — read it as theirs (KNOWN_ISSUES; tax-logic CA-SL-04). The
+US engine does the same: §1091(d) adds the disallowed loss to the basis of
+the affiliated holder's replacement shares, so in your books it is reported
+as permanently disallowed (give them the amount for their basis; tax-logic
+US-WASH-16).
 
 In a **US project** the radar applies §1091, not s.54 (tax-logic US-PLAN-01):
 windows run on **trade** dates, and each recent loss's verdict is the **US
