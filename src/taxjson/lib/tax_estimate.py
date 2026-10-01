@@ -600,6 +600,8 @@ CA_ASSUMPTIONS = (
     "low-income reductions; interest income and interest paid are "
     "not included and no taxjson view totals them — take them from the "
     "broker statements (the rows are listed by `taxjson events`); "
+    "FX gains/losses on foreign cash (s.39(1.1), line 15300 — `taxjson "
+    "fx-cash`) and capital gains on T3/T5 slips are not included; "
     "deductions below line 15000 only as entered (--deductions, "
     "--carrying-charges); no prior-year minimum tax carryover; the basic "
     "personal amount is the only non-refundable credit (no CPP/EI, "

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **sum: rows foot and TOTAL counts PIL.** NON-OPT + OPTION = REALIZED
+  on every row as printed (REALIZED is rounded once; OPTION takes the
+  cent), and TOTAL = REALIZED + DIVIDEND + PIL, the same figure as the
+  `.sum` GRAND TOTAL (a payment in lieu was printed but left out). The
+  FOR THE RETURN footer no longer says every DENIED amount goes onto a
+  replacement's ACB: it names the permanently denied part (a
+  registered-account acquisition, s.40(2)(g)(i)) and the JSON carries
+  `permanently_denied`; form-export's general note says the same
+  (audit S042-21, S042-22, S043-02, S048-04).
+- **estimate / instalments say what they leave out**: the FX result on
+  foreign cash (line 15300; US §988) and slip capital gains, and for
+  instalments CPP/EI on self-employment earnings (`NOT MODELLED`
+  notes, JSON `not_modelled`). `[instalments]` amounts must be TOML
+  numbers (`"5_000"` was read as 5000). The withholding credit is
+  summed in a stable order (audit S048-12, S043-15, S043-05, S043-20;
+  test pins S042-20, S043-04, G1-3, G1-11).
+
 - **scan: no false all-clear, no egress while offline.** An unreadable
   holdings report stops the scan (it warned, then printed "No findings
   — clean scan." with exit 0); the unused-ticker.map-rule note is

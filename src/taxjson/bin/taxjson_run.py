@@ -637,7 +637,9 @@ def _nonneg_money(value: Any, what: str) -> float:
     """A config money figure: a finite, non-negative number (a TOML
     boolean is refused — float(True) is 1.0). Dies naming `what`."""
     import math as _math
-    if isinstance(value, bool):
+    # A TOML number only: float() also read the string "5_000" as 5000
+    # and "nan" as nan (S043-05).
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         _die(f"{what} must be a number, got {value!r}")
     try:
         f = float(value)
@@ -7327,12 +7329,22 @@ def cmd_summary(args: argparse.Namespace) -> None:
         fees = sum(float(v) for v in (res.get("total_fees") or {}).values())
         tainted_included += int(res.get("tainted_count") or 0)
         tainted_routed += int(res.get("tainted_routed") or 0)
-        acct_rows.append({"account": acct, "stock": round(cap, 2),
-                          "option": round(opt, 2),
-                          "realized": round(cap + opt, 2),
-                          "dividend": round(div, 2),
-                          "pil": round(pil, 2), "fees": round(fees, 2),
-                          "total": round(cap + opt + div, 2),
+        # Every row foots as printed (S042-21): REALIZED is the engine's
+        # gain rounded once (what the .sum and the checklist compare),
+        # NON-OPT is rounded on its own, and OPTION is the cent
+        # difference — rounding the three separately left rows whose
+        # NON-OPT + OPTION missed REALIZED by a cent. TOTAL adds the
+        # displayed REALIZED, DIVIDEND and PIL: a payment in lieu is
+        # income like the .sum's GRAND TOTAL counts it (S042-22).
+        _stock_r = round(cap, 2)
+        _real_r = round(cap + opt, 2)
+        _div_r, _pil_r = round(div, 2), round(pil, 2)
+        acct_rows.append({"account": acct, "stock": _stock_r,
+                          "option": round(_real_r - _stock_r, 2) + 0.0,
+                          "realized": _real_r,
+                          "dividend": _div_r,
+                          "pil": _pil_r, "fees": round(fees, 2),
+                          "total": round(_real_r + _div_r + _pil_r, 2),
                           "type": acct_types.get(acct, "")})
         if (cfg.get("accounts", {}).get(acct) or {}).get("crypto"):
             # Its DIVIDEND column is staking rewards (S023-11).
@@ -7434,6 +7446,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
     filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
                     for k in _fkeys}
+    if not _is_us:
+        # The part of DENIED that no replacement's ACB ever recovers: a
+        # registered-account (affiliated) acquisition (s.40(2)(g)(i)).
+        # The footer said every denied amount goes onto the
+        # replacement's ACB (S043-02, S048-04).
+        filing_total["permanently_denied"] = round(sum(
+            float(e.get("permanently_disallowed") or 0.0)
+            for e in _filing_ents), 2)
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
     # (T4037) but lives outside the engine's dispositions; show the
     # estimate beside the block when the ledger builds, else a pointer.
@@ -7548,7 +7568,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
           f"basis: {basis}  "
           f"(REALIZED = NON-OPT + OPTION capital gain; NON-OPT = "
           f"shares, units, futures and crypto; "
-          f"TOTAL = REALIZED + DIVIDEND)")
+          f"TOTAL = REALIZED + DIVIDEND + PIL)")
     if sheltered_included:
         _filing = ("carryover/form-export"
                    if _is_us
@@ -7621,13 +7641,18 @@ def cmd_summary(args: argparse.Namespace) -> None:
                             "OUTLAYS", "GAIN", "DENIED"],
                            ["<", ">", ">", ">", ">", ">"], _body, _foot):
                 print(_ln)
+            _permd = filing_total.get("permanently_denied") or 0.0
             print("PROCEEDS − COST(ACB) − OUTLAYS = GAIN, the allowed gain. "
                   "Short sales are shown as |amounts| and sell-side "
                   "commissions as outlays, as on the form. Where a "
                   "superficial loss was DENIED the ACB is REDUCED by it, "
-                  "so the gain stays the allowed one; the denied amount "
-                  "is added to the ACB of the replacement property "
-                  "instead. Per-security rows: `taxjson form-export`; "
+                  "so the gain stays the allowed one; a deferred denial "
+                  "is added to the ACB of the replacement property, but "
+                  "one caused by a registered-account (affiliated) "
+                  "acquisition is lost for good — no ACB addition"
+                  + (f" ({money(_permd)} of the DENIED total)"
+                     if _permd > 0.005 else "")
+                  + ". Per-security rows: `taxjson form-export`; "
                   "per account: `taxjson sum --json`.")
             if _fx_note is not None:
                 print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
@@ -7760,8 +7785,9 @@ def _instalment_config(root: Path,
             # walk parses with it, so an unpadded date accepted here
             # crashed later behind a misleading error.
             d = date_cls.fromisoformat(str(d)).isoformat()
-            if isinstance(a, bool):
-                raise TypeError("boolean amount")
+            if isinstance(a, bool) or not isinstance(a, (int, float)):
+                # A TOML number only: "5_000" read as 5000 (S043-05).
+                raise TypeError("not a number")
             a = float(a)
             import math as _math
             if not _math.isfinite(a):
@@ -7910,6 +7936,16 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         _assumed.append("tax withheld at source is not set — assumed 0: "
                         "set [instalments] withheld")
     doc["assumed_zero"] = _assumed
+    # Not modelled at all (S043-15, S048-12): CPP/EI payable on
+    # self-employment earnings is part of the instalment amount CRA
+    # asks for (not of net tax owing or the $3,000 test), and the FX
+    # result on foreign cash (line 15300) is outside the estimate.
+    doc["not_modelled"] = [
+        "CPP/EI payable on self-employment earnings (T1 lines 42100 / "
+        "42120) — CRA adds it to the instalments due; add it yourself",
+        "FX gains/losses on foreign cash (s.39(1.1), line 15300 — "
+        "`taxjson fx-cash`) and capital gains on T3/T5 slips are not in "
+        "the estimate this schedule is built on"]
     if getattr(args, "json", False):
         _json_out(doc)
         return
@@ -7919,6 +7955,9 @@ def cmd_instalments(args: argparse.Namespace) -> None:
         for _n in _assumed:
             print(_wrap_note("NOTE: " + _n + " — the figures above cover "
                              "the investment income only."))
+    print()
+    for _n in doc["not_modelled"]:
+        print(_wrap_note("NOT MODELLED: " + _n + "."))
     if doc["vintage_notes"]:
         print()
         for _n in doc["vintage_notes"]:
@@ -7986,7 +8025,12 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
     # systematically under-credited.
     from taxjson.lib.tax_estimate import CA_FOREIGN_WITHHOLDING
     foreign_by_account = foreign_by_account or {}
-    for acct in taxable_accounts:
+    # Sorted, and summed exactly: callers pass a SET, whose order made
+    # the unrounded FTC differ in its last digit from run to run
+    # (S043-20).
+    import math as _math
+    parts: List[float] = []
+    for acct in sorted(taxable_accounts):
         p = Path(cache) / f"{acct}_base.json"
         try:
             data = _json.loads(p.read_text(encoding="utf-8"))
@@ -8002,7 +8046,7 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
                       f"withholding on {acct}'s foreign dividends; "
                       f"re-run `taxjson run`.", file=sys.stderr)
             data = {}
-        acct_total = 0.0
+        acct_parts: List[float] = []
         acct_seen = False
         for t in data.get("transactions", []):
             if t.get("action") != "TAX":
@@ -8011,13 +8055,14 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
             if ystr and not d.startswith(ystr):
                 continue
             acct_seen = True
-            acct_total += float(t.get("net_amount") or 0.0)
+            acct_parts.append(float(t.get("net_amount") or 0.0))
         if acct_seen:
             seen = True
-            total += acct_total
+            parts.extend(acct_parts)
         else:
-            total += (CA_FOREIGN_WITHHOLDING
-                      * float(foreign_by_account.get(acct) or 0.0))
+            parts.append(CA_FOREIGN_WITHHOLDING
+                         * float(foreign_by_account.get(acct) or 0.0))
+    total = _math.fsum(parts)
     return max(0.0, total) if seen else None
 
 
@@ -8361,7 +8406,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
             print(_wrap_note("NOTE: " + _n, indent=""))
         print("Assumes: single filer, standard deduction, all dividends "
               "QUALIFIED, no foreign tax credit, no state tax; interest "
-              "income not included.")
+              "income and the §988 result on foreign currency (`taxjson "
+              "fx-cash`) not included.")
 
 
 def _sanity_items_from_config(accounts_cfg: Dict[str, Any],

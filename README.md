@@ -534,8 +534,12 @@ declare its `type` — `taxjson run` refuses a config with an untyped account
 (it would otherwise drop out of the return); gains files whose account is no
 longer in `taxjson.toml` are shown in their own UNTYPED table.
 Single-type projects and `taxjson sum <account>` keep the one-table layout.
-Every table's total row is the exact sum of the rows above it, and the
-numbers match each `reports/<account>.sum`. `--json` carries a per-account
+Every table's total row is the exact sum of the rows above it, and every
+row foots as printed: REALIZED = NON-OPT + OPTION (REALIZED is the gain
+rounded once, OPTION takes the cent difference) and TOTAL = REALIZED +
+DIVIDEND + PIL, the `reports/<account>.sum` GRAND TOTAL (each figure
+matches the .sum to the cent; a grand total summed from cent-rounded rows
+can differ from one rounded once by a cent or two). `--json` carries a per-account
 `type` and a `subtotals` object alongside `totals`.
 
 ```
@@ -620,8 +624,11 @@ the earliest table also says the post-2024 AMT shown did not apply).
   use — non-refundable credits other than the basic personal amount
   (CPP/EI, Canada employment, age, pension, donations ...), the OAS
   recovery tax (s.180.2) and AMT adjustments outside the books (the
-  s.110(1)(d) stock-option deduction, donated securities): see
-  KNOWN_ISSUES.
+  s.110(1)(d) stock-option deduction, donated securities), the FX
+  result on foreign cash (line 15300, `taxjson fx-cash`), T3/T5 slip
+  capital gains, and — for `taxjson instalments` — CPP/EI payable on
+  self-employment earnings (lines 42100/42120, which CRA adds to the
+  instalments due); the output says so. See KNOWN_ISSUES.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
   brackets; losses net ST first, then LT, then up to $3,000 of ordinary
