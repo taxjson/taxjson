@@ -36,23 +36,33 @@ def get_base_ticker_info(symbol: str):
     
     return full_ticker, ext
 
+# Canadian venue suffix -> TradingView exchange prefix.
+_CA_TV_PREFIX = {'TO': 'TSX', 'V': 'TSXV', 'CN': 'CSE', 'NE': 'NEO'}
+
+
 def format_ticker_for_platform(symbol: str, platform: str, tv_map: dict = None) -> str:
     """Formats a ticker for a specific platform (SeekingAlpha, TradingView, FastGraph)."""
     base, ext = get_base_ticker_info(symbol)
     if not ext:
         return base
-        
+    # Every Canadian venue is a Canadian listing: .V/.CN/.NE used to fall
+    # through to the US branch (S078-03). An unknown foreign suffix keeps
+    # its own spelling rather than becoming a US ticker.
+    canadian = ext in _CA_TV_PREFIX
+
     if platform == 'seekingalpha':
-        if ext == 'TO': return f"{base}:CA"
-        return base
+        if canadian: return f"{base}:CA"
+        if ext == 'US': return base
+        return f"{base}.{ext}"
     elif platform == 'tradingview':
         # tv_exchange.map keys may be a bare ticker (applies to every
         # listing of it) or extension-qualified — `OR.US` / `OR.TO` —
         # which lets a dual-listed name get a different exchange prefix
         # per listing. The qualified key wins over the bare one.
         tvm = tv_map or {}
-        if ext == 'TO':
-            prefix = tvm.get(f"{base}.TO") or tvm.get(base, 'TSX')
+        if canadian:
+            prefix = (tvm.get(f"{base}.{ext}") or tvm.get(base)
+                      or _CA_TV_PREFIX[ext])
             return f"{prefix}:{base}"
         if ext == 'US':
             prefix = tvm.get(f"{base}.US") or tvm.get(base)
@@ -61,8 +71,9 @@ def format_ticker_for_platform(symbol: str, platform: str, tv_map: dict = None) 
         if ext == 'L': return f"LSE:{base}"
         return base
     elif platform == 'fastgraph':
-        if ext == 'TO': return f"{base}:CA"
-        return f"{base}:US"
+        if canadian: return f"{base}:CA"
+        if ext == 'US': return f"{base}:US"
+        return f"{base}.{ext}"
     
     return f"{base}.{ext}"
 
