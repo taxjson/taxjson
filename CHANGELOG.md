@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- **PII gate (`scripts/check-pii.sh`, pre-push, release).** The text
+  inside binary files is scanned (PDF /Author, DOCX creator, PNG text,
+  spreadsheet cells — tree, ad hoc and the binaries a push adds); an
+  account-id shape in a folder name, an 8-9 digit value under an
+  `Account` / `Account #` CSV column, Webull's bilingual account line and
+  an IB id inside a token (`_U<id>Body`) are hits; identities get the
+  e-mail allowlist; branch and tag names a push publishes are scanned; a
+  ':' in a path no longer unmasks a denylist hit. `release.sh` runs the
+  pre-push gate itself, a missing `ruff` fails `ci.sh` (it is in the
+  `[dev]` extra), and the GitHub workflow runs the consistency, tax-rules
+  and PII stages (audit S023-00, S024-04/07/09/11/13/14/16/21/23/24,
+  S025-06).
+- **`taxjson serve`.** The Host allowlist is loopback names only (the
+  test client's `testserver` let a rebinding page read the books);
+  `taxjson.toml` hot-reload notices an edit that keeps the mtime;
+  `--token` requires the per-run token on a loopback bind too, and
+  SECURITY.md says other local users can reach a loopback server
+  (audit S078-10, S078-12, R1-346).
+- **`taxjson-generate-parser` refuses a sample that still carries
+  personal data** (account ids, names, contact details, denylist matches;
+  `--allow-unredacted` overrides), rejects `--sample-lines` below 1, and
+  tells drafted parsers to read required cells with
+  `parse_strict_number` (audit R1-342, S033-18).
+- **Cross-listing lint (`crosslistings.rpt`).** Reads ticker.map with the
+  engine's parser (`DISTINCT` pairs are OK, keywords in any case, an
+  unreadable map fails), nets share positions through splits, and counts
+  option rows toward their underlying's listing (audit R1-144, S035-02,
+  S035-03).
+- **`taxjson-fees-sum`.** `--year` help names the trade date; `--since`
+  must be YYYY-MM-DD; a row without an account is `<broker>/?`; fees in a
+  hand-entered `.tt` no longer leave the footer claiming the other
+  brokers had NO fees (audit R1-101, R1-154, R1-289, S031-03, S031-06).
+- Watchlist export: `.V` / `.CN` / `.NE` listings are Canadian
+  (`TSXV:` / `CSE:` / `NEO:` on TradingView, `:CA` elsewhere) (audit
+  S078-03). `merge2 --to` without `--rates` names the 1.35 default rate
+  it uses (audit R1-155). Crypto money cells with two sign markers
+  (`--5`, `(-5)`) or `1_000` are refused (audit R1-114).
+- `scripts/mutation_audit.py` restores the engine sources on SIGTERM,
+  SIGHUP and exit; `scripts/mutation_triage.py` has `--help` (audit
+  S025-00, S025-04).
+- Docs and samples: README T1135 (suffix-less symbols are the CRYPTO
+  bucket), the git-identity exception to "nothing personal leaves the
+  machine", form-export's outlays split (long sales only), REFERENCES
+  (no s.53(1)(h) citation), SECURITY.md egress list; `examples/README`
+  step 3 passes `--taxable`, the IB and Webull demo rows are fabricated
+  and self-consistent; real trade figures are gone from this changelog
+  and from test fixtures (audit R1-344, R1-355, R1-40, S023-13, S023-17,
+  S023-18, S023-22, S023-24, S024-00, S079-13, S079-14).
+
 - **US estimate (experimental): NIIT and the loss carryforward.** The
   up-to-$3,000 capital loss deduction now reduces net investment income
   (Form 8960 line 5a; NIIT was up to $114 too high), and the
