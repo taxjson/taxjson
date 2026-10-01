@@ -16,7 +16,12 @@ def is_loopback(host: str) -> bool:
         return False
 
 
-def serve(root=".", host: str = "127.0.0.1", port: int = 8765) -> int:
+def serve(root=".", host: str = "127.0.0.1", port: int = 8765,
+          require_token: bool = False) -> int:
+    """`require_token` (`taxjson serve --token`) issues the per-run token on
+    a loopback bind too: 127.0.0.1 is reachable by every account on the
+    machine, so on a shared host another user could read the books
+    through the server that the 0600 files deny them (R1-346)."""
     try:
         import uvicorn  # noqa: F401
     except ModuleNotFoundError:
@@ -60,12 +65,16 @@ def serve(root=".", host: str = "127.0.0.1", port: int = 8765) -> int:
     # Any non-loopback bind also requires a per-run random token (URL
     # ?token= once, then an HttpOnly cookie): without it anyone on the
     # network could read the books (2026-09 security audit).
-    token = None if is_loopback(host) else secrets.token_urlsafe(24)
+    token = (secrets.token_urlsafe(24)
+             if require_token or not is_loopback(host) else None)
     if host in ("0.0.0.0", "::", "*"):
         app = create_app(ctx, allowed_hosts=["*"], auth_token=token)
     else:
         app = create_app(ctx, allowed_hosts=[host], auth_token=token)
-    if token:
+    if token and is_loopback(host):
+        print(f"taxjson serve → http://{host}:{port}/?token={token}   "
+              f"(project: {ctx.root}; token required)", file=sys.stderr)
+    elif token:
         print(f"warning: binding to {host} exposes your tax data on the "
               f"network (plain HTTP, token-protected). Prefer 127.0.0.1 "
               f"and reach it remotely via an SSH tunnel.",

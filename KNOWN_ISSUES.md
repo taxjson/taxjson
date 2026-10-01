@@ -63,6 +63,11 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
+### Kraken fees taken in the traded coin are not in the fee reports
+- **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose ledger shows the fee taken in the base coin) and the ledger instant-trade path (a crypto leg's fee).
+- **Current behavior:** the fee coins are folded into the quantity (fewer coins received on a buy, more given on a sale) and the fill's `fee` field is 0, so cost basis and proceeds are right, but `fees.rpt`, `taxjson fees-sum` and the `.sum` FEES line leave these fees out (on real 2025 data more than half of the Kraken trading fees). The parse note says so.
+- **Why deferred:** the `fee` field feeds the engine's per-row fee figures; recording a fee already inside the quantity there needs an informational-only fee field first.
+
 ### Questrade `commission` vs everyone else `fee`
 - **Where:** `src/taxjson/lib/brokerages/questrade.py`.
 - **Current behavior:** Questrade transactions emit a `commission` key; IB / RBC / Webull / Kraken / Coinbase all emit `fee`.
@@ -126,7 +131,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** the parsers emit a neutral stock-dividend event — a $0 BUYSELL of the new shares typed `stock_dividend` — from `questrade.py` (the `DIS` + stock-dividend branch), `ib_extractor.py` (a Corporate Actions `Stock Dividend` row; IB's exact wording is modelled, not seen in a real statement; its `ATTENTION` line shows the row's Value) and `rbc_direct.py:_build_stock_dividend`. Each gains engine applies its country's rule (`lib/core.STOCK_DIVIDEND`).
 - **Current behavior:** Canada: the shares enter the pool at $0 cost and count as an acquisition for the superficial-loss rule (tax-logic CA-STKDIV-01); the taxable amount is the fund's *declared* amount, which the CSV does not carry, and the gains run prints a `NOTE:` naming the symbol, date and share count. US: a pro-rata stock dividend is not income (§305(a)) — the new shares join the lots held, the basis is spread over old and new (§307), the purchase dates carry over (§1223(5)), and they are not a §1091 purchase (US-STKDIV-01). A taxable US stock dividend (§305(b)) is not detected.
 - **Impact:** registered accounts — none. Canadian taxable accounts — ACB is understated (gain overstated at sale) until the declared amount is supplied; the zero-basis walk also surfaces the position via `taxjson find-missing-history`.
-- **Workaround (the intended flow, Canada):** add the fund's declared per-share amount for the record date to `distributions.map`; `taxjson run` converts it into the ACB-raising ADJUST.
+- **Workaround (the intended flow, Canada):** add the fund's declared per-share amount for the record date to `distributions.map`; `taxjson run` converts it into the ACB-raising ADJUST. That books the cost side only: the declared amount is also a dividend of the year, reported from the T5/T3 slip — taxjson's income totals, `divs-sum` and `estimate` do not include it (the run's NOTE says so).
 
 ### Settlement cycles outside North America are keyed on currency, with weekends-only calendars
 - **Where:** `src/taxjson/lib/dates.py` (`_T1_CUTOVER`), `src/taxjson/lib/market_calendar.py`.
@@ -299,6 +304,11 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 - **Current behavior:** the cost walk adds each s.53(1)(f) amount the engine denied in the project year (the gains files' `wash_sales`) to the replacement's cost, at the later of the losing sale and the replacement purchase. A loss denied in an EARLIER year onto a position still held is not in the year-scoped gains files, so the walk carries it only if the project's own rows do (a hand-off `margin_start.tt` needs the `ADJUST` line — see the hand-off check); the report names what the engine's inventory still defers beyond the year's additions and says when it could lift the maximum over the threshold.
 - **Why deferred:** replaying every earlier year's wash pass (with its registered-account context) inside `t1135` re-runs the engine. Sketch: one full-history `run_gains` pass in `cmd_t1135` (as `carryover` does), feeding each earlier year's `wash_sales` through the same `wash_adjustments`.
 
+### T1135 sees only the brokerage books
+- **Where:** `src/taxjson/bin/taxjson_t1135.py` (`build_report`, `render_report`).
+- **Current behavior:** the $100,000 test sums the cost of the foreign property in the taxable accounts' books. Specified foreign property held outside them — a foreign bank account or cash, shares held in certificate form, foreign real estate or a debt owed by a non-resident — counts toward the same threshold at the same time (ITA 233.3) and is not seen. The report says so beside its verdict ("on these books"), and the verdict is provisional ("so far") until the year has ended. A long option the books still hold after its expiry date is counted at cost and named.
+- **Why deferred:** the books carry no such property, and its cost on each day of the year (the test is on the simultaneous total) needs an input of its own. Sketch: a `[t1135] other_property = [{cost, from, to, country}]` table added to the walk's daily total and the per-country table.
+
 ### Futures are booked on their settled P/L (both countries)
 - **Where:** `src/taxjson/lib/futures.py` (applied by convert-currency / merge2 with the project's `--country`; it used to key on a CAD target), `core._trade_money` and the US engine's `tx_net`, `taxjson_form_export.build_schedule3`.
 - **Current behavior:** a plain futures fill that opens a position carries no money, and a close carries the realized native P/L (average cost, commissions on both legs), converted at the closing leg's rate. So the per-account `.sum` shows COST 0 and PROCEEDS = the P/L for futures, `list`/holdings show an open futures position at ACB 0, and Schedule 3 line 6 shows a gain as proceeds and a loss as ACB. The P/L is realized at the close, not marked to market daily; converting each day's variation margin at that day's rate would differ by about P/L x the FX move over the holding period. Blended pools across accounts settle each account's futures separately. A futures row other than a BUYSELL fill (an OPENING_BALANCE, a transfer) stops the conversion with the row named. US books use the same settlement basis, with a partial close taken FIFO from the open contracts (Canada: average cost); §1256 marking and 60/40 are still not modelled (see above).
@@ -427,8 +437,13 @@ carry the spot price so the `.tt` FMV sell is copy-paste; Kraken
 ledgers carry no fiat value (price/net stay 0). Stablecoin evidence
 keeps its own name (a USDC gift is a disposition of USDC the
 property) even though trade books fold USDC/USDT/DAI to USD for
-pricing. Kraken Earn shuffles (`hybridearnwithdrawal` etc.) remain
-ignored — internal moves. Tax semantics still not assumed: only the
+pricing. Kraken Earn allocation/deallocation shuffles (paired rows)
+remain ignored — internal moves; a `hybridearnwithdrawal` row has no
+counter-leg and is custody evidence like a withdrawal (a TRANSFER in the
+sidecar). A Kraken coin fee on a withdrawal/deposit is named in the
+TRANSFER's description (`withdrawal (fee 0.002 TAO)`) and booked as its
+own sale of the fee coin (CA-CRYPTO-03), never in the row's money `fee`
+field. Tax semantics still not assumed: only the
 user knows gift vs self-custody move; genuine gifts are declared as
 `.tt` sells at FMV. Pinned by tests/test_transfer_sidecar.py
 (TestCryptoSendsBecomeEvidence). Since then `taxjson crypto-sends`

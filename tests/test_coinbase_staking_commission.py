@@ -10,7 +10,7 @@ CSV = ("Transactions\n"
        "User,Test User,00000000-0000-0000-0000-000000000000\n"
        "ID,Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,"
        "Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n"
-       "aaaaaaaaaaaaaaaaaaaaaaaa,2025-07-18 18:45:04 UTC,Staking Income,ZZC,0.2,CAD,$200.00,$40.00,$60.00,$20.00,\n")
+       "aaaaaaaaaaaaaaaaaaaaaaaa,2025-07-16 08:21:37 UTC,Staking Income,ZZC,0.2,CAD,$200.00,$40.00,$60.00,$20.00,\n")
 
 
 class TestStakingCommission(unittest.TestCase):

@@ -122,6 +122,223 @@
   no longer picks up a sibling `margin_us`'s parses (audit S047-12,
   S047-13).
 
+- **PII gate (`scripts/check-pii.sh`, pre-push, release).** The text
+  inside binary files is scanned (PDF /Author, DOCX creator, PNG text,
+  spreadsheet cells — tree, ad hoc and the binaries a push adds); an
+  account-id shape in a folder name, an 8-9 digit value under an
+  `Account` / `Account #` CSV column, Webull's bilingual account line and
+  an IB id inside a token (`_U<id>Body`) are hits; identities get the
+  e-mail allowlist; branch and tag names a push publishes are scanned; a
+  ':' in a path no longer unmasks a denylist hit. `release.sh` runs the
+  pre-push gate itself, a missing `ruff` fails `ci.sh` (it is in the
+  `[dev]` extra), and the GitHub workflow runs the consistency, tax-rules
+  and PII stages (audit S023-00, S024-04/07/09/11/13/14/16/21/23/24,
+  S025-06).
+- **`taxjson serve`.** The Host allowlist is loopback names only (the
+  test client's `testserver` let a rebinding page read the books);
+  `taxjson.toml` hot-reload notices an edit that keeps the mtime;
+  `--token` requires the per-run token on a loopback bind too, and
+  SECURITY.md says other local users can reach a loopback server
+  (audit S078-10, S078-12, R1-346).
+- **`taxjson-generate-parser` refuses a sample that still carries
+  personal data** (account ids, names, contact details, denylist matches;
+  `--allow-unredacted` overrides), rejects `--sample-lines` below 1, and
+  tells drafted parsers to read required cells with
+  `parse_strict_number` (audit R1-342, S033-18).
+- **Cross-listing lint (`crosslistings.rpt`).** Reads ticker.map with the
+  engine's parser (`DISTINCT` pairs are OK, keywords in any case, an
+  unreadable map fails), nets share positions through splits, and counts
+  option rows toward their underlying's listing (audit R1-144, S035-02,
+  S035-03).
+- **`taxjson-fees-sum`.** `--year` help names the trade date; `--since`
+  must be YYYY-MM-DD; a row without an account is `<broker>/?`; fees in a
+  hand-entered `.tt` no longer leave the footer claiming the other
+  brokers had NO fees (audit R1-101, R1-154, R1-289, S031-03, S031-06).
+- Watchlist export: `.V` / `.CN` / `.NE` listings are Canadian
+  (`TSXV:` / `CSE:` / `NEO:` on TradingView, `:CA` elsewhere) (audit
+  S078-03). `merge2 --to` without `--rates` names the 1.35 default rate
+  it uses (audit R1-155). Crypto money cells with two sign markers
+  (`--5`, `(-5)`) or `1_000` are refused (audit R1-114).
+- `scripts/mutation_audit.py` restores the engine sources on SIGTERM,
+  SIGHUP and exit; `scripts/mutation_triage.py` has `--help` (audit
+  S025-00, S025-04).
+- Docs and samples: README T1135 (suffix-less symbols are the CRYPTO
+  bucket), the git-identity exception to "nothing personal leaves the
+  machine", form-export's outlays split (long sales only), REFERENCES
+  (no s.53(1)(h) citation), SECURITY.md egress list; `examples/README`
+  step 3 passes `--taxable`, the IB and Webull demo rows are fabricated
+  and self-consistent; real trade figures are gone from this changelog
+  and from test fixtures (audit R1-344, R1-355, R1-40, S023-13, S023-17,
+  S023-18, S023-22, S023-24, S024-00, S079-13, S079-14).
+
+- **Webull: a sale's debit keeps its sign.** A close at $0.00 whose
+  commission was charged ("(1.50)" in Proceeds) books -1.50 proceeds,
+  not +1.50 received. The row's
+  Type Code decides option vs shares (an OPC row with an unreadable
+  description, or an SHS row whose description reads as a contract, is
+  refused). The skip warning names only the skipped action codes;
+  exercise/assignment messages cite s.49(3) for a call, s.49(3.1) for a
+  put.
+- **Coinbase hardening.** A truncated row and a Send/Receive with no
+  quantity are refused; a row of an unknown type that moves coins (an
+  airdrop) is an UNBOOKED warning (fatal under `run --strict`); a dust
+  convert into a stablecoin whose fee exceeds its value books negative
+  proceeds (the excess fee was dropped); the Convert refusal carries its
+  own `.tt` workaround.
+- **Kraken fees and pairs.** A withdrawal fee charged in another coin
+  (`feecurrency`) is a sale of that coin; a coin fee is named in the
+  transfer's description instead of the money `fee` field (`taxjson
+  fees` read 25 XRP as 25 USD); the ledger's `feeusd` / `amountusd`
+  value a coin fee and a trades-CSV crypto/crypto fill; a fee on an Earn
+  wallet move is UNBOOKED; a legacy pair ending in PYUSD/RLUSD/FDUSD/GUSD
+  is refused as ambiguous; every "use a .tt file" refusal also says to
+  remove the row. The coin-fee note says those fees are not in the fee
+  reports (KNOWN_ISSUES).
+- **`taxjson crypto-sends` lists matched sends that arrived short** — the
+  network fee a Coinbase Send carries inside its quantity, which is not
+  booked as a sale.
+- **Generic importer.** An explicit 0 in the amount cell of a priced
+  trade is refused (it was silently replaced by qty x price); the
+  fee-share refusal prints the share to 2 decimals and the 5% limit.
+- **`.tt` converter.** A file with a byte-order mark converts; json->tt
+  and tt->json write atomically; a row with no currency is refused (it
+  was written as CAD); currencies are upper-cased; a sale entered with
+  total 0 because the commission exceeded the gross no longer warns
+  "check for a typo". `taxjson audit` names the `.tt` file of a
+  hand-entered row.
+- **ticker.map tools.** The DELETE audit note prints the signed net cash
+  (a buy and a sale no longer add up) and names the `DELETE` line;
+  `taxjson-ticker-map` refuses a positional map plus `--map`; `merge2
+  --map` help describes the keyword format.
+- **Non-UTF-8 text files name themselves.** A latin-1 `ticker.map`,
+  `distributions.map`, `ticker_extraction_overrides.txt`, `t1135.map` or
+  `claimed_losses.txt` is a one-line error naming the file (`taxjson
+  run` too); a cp1252 broker export that detection cannot read says
+  "not UTF-8" instead of "rename it". `taxjson-lint-crosslistings`
+  refuses a non-numeric quantity in one line.
+- **`taxjson fetch`.** A project year whose window has not started is
+  refused (it fetched the previous year's last 90 days into the new
+  year's file); `--from` with `--days` is refused; a window outside the
+  year is noted; an API row with no settlement date is written with its
+  posting date. `taxjson-fill-crypto` never caches today's still-open
+  candle.
+
+- **Corporate-action legs never share a second.** An event stamped
+  23:59:59 (or with no time) put both legs of a taxable exchange on one
+  second, so a same-symbol exchange could pool the new shares before
+  selling the old; event times now leave room for the one-second leg
+  bump (S074-02).
+
+- **A spin-off rollover allocated $0 is loud.** An s.86.1 (Canada) or
+  §355 (US) election with `allocated_acb_cad` / `allocated_acb` = 0 booked
+  the spun-off shares at $0 with the parent keeping its whole cost and no
+  word; `elect --set`, the corp-actions stage, every `taxjson run` and
+  the checklist now flag it (S073-21, S074-04). A US §356 boot merger
+  with no value for the new shares warns that the recognized gain and
+  basis are understated (S073-22).
+- **US mergers and spin-offs: non-recognition is not optional.** The
+  option text no longer offers `taxable_exchange` for a qualifying
+  §368(a) reorganization "you aren't claiming", and the end-of-run
+  FILING REQUIRED reminder no longer fires for `reorg_368`,
+  `reorg_368_boot` or `tax_free_355`: only a significant holder (5% of a
+  public company, 1% of a private one, or a $1M basis) attaches the
+  Reg. §1.368-3 / §1.355-5 statement (S073-00).
+
+- **taxjson-corp-actions reads IB Corporate Actions columns by name.** A
+  header missing a column, or Data rows before any Header, is refused;
+  the fixed-position fallback read Report Date as the event date in IB's
+  consolidated layout or dropped the merger (S072-22). Questrade's
+  `ON 1,500 SHS` reads as 1500 (the ratio showed 150-for-1) (S073-02).
+
+- **RBC: another company's cash in lieu is no longer folded into a
+  reorganization.** A CIL row joins an event only by the same ticker or
+  the company's full name; half the name in common (ALPHA GOLD vs ALPHA
+  RESOURCES) moved the cash into the wrong sale and hid its "NOT booked"
+  warning (S072-01).
+- **RBC spin-off under a temporary code:** the warning names the symbol
+  as booked (`C135859.TO`) with the exact `GLOBAL` line, and stops once
+  ticker.map renames it (`taxjson run` passes the map to the corp-actions
+  stage) (S072-03).
+
+- **A broken elections manifest is a one-line error everywhere.**
+  `taxjson elect` (and every other command) on a manifest that is not
+  UTF-8, not JSON, or not the documented shape (a bare-string record, a
+  list of hints) printed a traceback; `taxjson elect <account>` now marks
+  an election key no rule knows as UNKNOWN (S072-05, S072-16).
+
+- **distributions.map is read strictly.** A per-share amount must be a
+  plain decimal (`nan`, `inf`, `1e309` and `1_0` were accepted) and the
+  date a real `YYYY-MM-DD`; a `0` is a placeholder that is no longer
+  reported as an applied return of capital; a symbol and date entered
+  twice are both applied with a warning and each ADJUST gets its own
+  id; `taxjson-apply-distributions --account` refuses a label no row of
+  the book carries (S025-12/14/16/19/23).
+
+- **Schedule 3 / Form 8949 export:** under grant timing a written option
+  and its buy-back count their contracts once in the units column (5
+  contracts showed 10); crypto unit counts keep full precision (a
+  0.00003 BTC sale showed 0 units); a write for a net debit shows no
+  proceeds and the debit as an outlay (it showed the debit as proceeds
+  and an invented ACB of twice it); a permanently denied superficial loss
+  is worded for an affiliated person's purchase too; the 2025 crypto-line
+  note follows the line routing itself. Form 8949 rows foot — (h) = (d)
+  − (e) + (g) on the rounded cells — so part totals, the printed 8949 and
+  the TXF agree to the cent. The stand-alone `taxjson-form-export`
+  refuses gains rows in another currency (the native `*_raw_gains.json`
+  summed USD and CAD under a CAD label), and `--csv` no longer leaves a
+  truncated file after a failed write. `taxjson sum` FOR THE RETURN says
+  when its cent-rounded rows differ from the gains files' unrounded
+  total.
+- **Stand-alone report tools refuse a non-gains file:** form-export,
+  sum-gains, ccd-gains, leaps-gains and t1135 refuse a JSON with no
+  `transactions` list or a pre-gains stage file (it rendered a $0
+  Schedule 3 / GRAND TOTAL 0.00 at exit 0); `taxjson-gains` (stdin) and
+  `taxjson-merge` refuse a document without the list.
+- **`taxjson audit`:** a grant-timing write is headed WRITE with its
+  premium as proceeds (it read "COVER ... (short)" with proceeds 0.00 and
+  a negative cost); a short's proceeds and cost are shown as filed (the
+  short sale and the cover, not the engine's negated legs); an option's
+  per-share note is "N contracts × 100 sh @ price" (it divided by the
+  contract count); a denial that is partly deferred and partly permanent
+  names both amounts and destinations (the deferred part read as lost);
+  a cross-zero option fill's long close and its grant write are two
+  events (they were summed into one meaningless SELL); a US sale over
+  long- and short-term lots is MIXED with the per-term gains; a `--check`
+  file named twice is read once (every tie-out failed); a saved
+  disposition with no id fails the reconciliation (it was skipped). The
+  totals say they are unrounded engine sums (Schedule 3 rows round to the
+  cent first), and the multi-book `--json` keeps the reconciliation
+  failures.
+- **T1135:** before Dec 31 a "below the threshold" verdict says "so far
+  (books through DATE)" and the checklist keeps the step open (it read
+  "no T1135 required this year" with a green [x] in September); the
+  year-end column is headed with the books' last date while the year is
+  open. Books in another currency than `--base-currency` (a native
+  `_raw.json`, a USD-base book) are refused instead of tested against
+  CAD 100,000 as if they were CAD; a non-CAD `--base-currency` warns.
+  `--threshold` / `--detailed-threshold` must be finite numbers >= 0.
+  `t1135.map` symbols match case-insensitively, and a COUNTRY word that
+  is not an ISO-3 code or CA/EXCLUDE (EXCLUDED, CDN) is ignored with a
+  did-you-mean warning instead of becoming a "country". Crypto rows
+  under 1e-6 units add their cost (as the engine books them). A long
+  option still held after its expiry is named. The report says the
+  test covers the brokerage books only (foreign bank accounts and other
+  property outside them must be added by hand), attributes the $250,000
+  Part A/B line to the T1135 instructions, and `--help` carries the
+  caveats.
+- **reconcile-slips:** a slip whose currency column (T5008 Box 13) names
+  another currency than the books is refused with a message naming Box
+  13 (a USD Webull T5008 gave one MISMATCH per symbol, every amount off
+  by the FX rate); an unreadable cost cell (`50000,00`, `nan`, `1 500.00
+  CAD`) fails the check like an unreadable proceeds or quantity cell
+  (the cost note vanished or came from a partial sum); a directory or a
+  CSV with bytes cp1252 cannot decode is one error line, not a
+  traceback; `--tolerance` must be a finite number >= 0 (nan or a
+  negative turned every symbol into "off by +0.00", and the `taxjson`
+  wrapper forwarded `-inf` as a separate token); `--help` lists the
+  accepted column spellings; a tainted count reads "1", not "1.0". The
+  checklist's T5/T3 step says the slip check is by hand and lists the
+  known reasons divs-sum differs from the slips.
 - **US estimate (experimental): NIIT and the loss carryforward.** The
   up-to-$3,000 capital loss deduction now reduces net investment income
   (Form 8960 line 5a; NIIT was up to $114 too high), and the
@@ -2234,14 +2451,14 @@
   Comm/Fee already includes per-fill levies (UK stamp tax, SEC/FINRA
   fees); the Transaction Fees section only breaks them down (the Cash
   Report shows Commissions + Transaction Fees = the Comm/Fee sum). The
-  parser folded the levy into the trade again: on a real 2025 AWE buy the
-  fee drops from 103.74 to 54.34 GBP and the cost basis from 9,983.74 to
-  9,934.34 (IB's own Basis). A layout that ever excluded the levy now
+  parser folded the levy into the trade again, so an LSE buy's fee and
+  cost basis were overstated by the stamp levy; they now equal IB's own
+  Basis. A layout that ever excluded the levy now
   fails the Cash Report check instead of under-booking.
 - **IB: commission rebates keep their sign.** A positive Comm/Fee is a
   rebate; abs() booked it as a charge, overstating costs and understating
-  proceeds by twice the rebate (real 2025 margin statement: 65 rows,
-  245.95 USD; 2026: 195 rows, 624.94 USD; RRSP 17.66 and 6.04 USD). The
+  proceeds by twice the rebate (seen on real statements in every IB
+  account that earns rebates). The
   fee is now negative for a rebate and net_amount is the cash IB moved.
   Questrade's commission is signed the same way (none of its real
   exports carries a rebate).
@@ -2331,8 +2548,8 @@
   a stock trade at the strike. Both legs are now marked ASSIGN when the
   stock trade matches in quantity, direction and price within a few
   days, so the premium folds into the shares' cost (s.49(3)) instead of
-  being realized as an expiry; seen on real 2025 exports (LULU and DOCU
-  put assignments, a DELL call exercise).
+  being realized as an expiry; seen on real exports (put assignments
+  and a call exercise).
 - **RBC: split-corp retractions are dispositions.** RBC books an issuer
   retraction as an `Other` row coded `TEN` ("... RETRACTION AT C$x PER
   SHARE") with a blank price; it was skipped as unclassified, so the
@@ -2922,7 +3139,7 @@ the engine against the Act (docs/design/canada-rules-2026-09.md):
   column says CAD. The parser filed such buys as `.TO` (a CDR-shaped
   symbol the `DISTINCT` rule then kept apart from the real US pool) with
   the USD gross taken as the CAD cost, under-stating the ACB by the
-  whole exchange rate (real AVGO/GS/CAT/BABA rows, 2026-09-18). They are
+  whole exchange rate (seen on real RBC rows). They are
   now the `.US` listing, costed at the CAD actually paid, and their
   dividends key to the US listing too.
 - Kraken: the 2026 ledger format (new `amountusd` / `feeusd` /
@@ -3061,10 +3278,9 @@ fixed:
   statement is kept as a reversing leg with a note.
 - IB parser: per-fill Transaction Fees rows all fold into their Order
   row. IB levies UK Stamp Tax per fill while the Trades section
-  carries one Order row, so a 10,000-share buy filled 8,900 + 1,100
-  had two levy rows; the taken-once fold sent the second out as a
-  standalone FEE that never reached the ACB (real 2025 AWE.L buy,
-  5.43 GBP). Each trade now keeps an unlevied quantity so several
+  carries one Order row, so a buy filled in two lots had two levy
+  rows; the taken-once fold sent the second out as a standalone FEE
+  that never reached the ACB (seen on a real LSE buy). Each trade now keeps an unlevied quantity so several
   rows can fold into it; two same-day trades with one levy each still
   pair 1:1.
 - `taxjson.toml` accounts accept `holdings = [...]` — paths of the

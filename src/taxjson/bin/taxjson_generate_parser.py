@@ -35,6 +35,7 @@ import re
 import sys
 import warnings
 from pathlib import Path
+from typing import List
 
 from taxjson.lib.brokerages.schema import render_schema_prompt
 
@@ -63,6 +64,15 @@ absolute (self.back_compute_fee when the CSV doesn't break fees out);
 commission only when the CSV has a real Commission column; quantity
 sign via self.signed_quantity.
 
+Number parsing: every REQUIRED money or quantity cell (quantity, price,
+net/gross amount, a real fee/commission column) MUST go through
+`parse_strict_number(cell, field=..., where=...)` (import it from
+`taxjson.lib.brokerages.base`): it raises on a blank or ambiguous cell
+instead of returning 0. `self.clean_number` is ONLY for optional cells,
+because it turns a blank into 0.0 — a blank net read that way makes
+back_compute_fee book the whole trade value as a fee and the sale as $0.
+Call back_compute_fee only with a strictly parsed, non-blank net.
+
 # BaseBrokerage source (the helpers available to you)
 ```python
 {base_source}
@@ -77,8 +87,9 @@ sign via self.signed_quantity.
 - Output ONLY valid Python source code for a single file.
 - Subclass `BaseBrokerage` from `taxjson.lib.brokerages.base`.
 - Implement `parse_file(self, path: Path) -> List[Dict[str, Any]]`.
-- Prefer self.* helpers (apply_currency_suffix, signed_quantity,
-  clean_number, back_compute_fee, theoretical_gross, parse_date,
+- Prefer the base helpers (parse_strict_number for required numbers,
+  apply_currency_suffix, signed_quantity, back_compute_fee,
+  theoretical_gross, clean_number for OPTIONAL cells only, parse_date,
   equity_settlement_date for EQUITY settle dates (era-aware T+2/T+1),
   settlement_date_t1 for OPTIONS only, parse_option_from_description,
   format_occ_symbol). Crypto settles on the trade date: date_settle =
@@ -127,6 +138,35 @@ def _read_sample(csv_path: Path, n: int) -> str:
                 break
             lines.append(line.rstrip('\n'))
     return '\n'.join(lines)
+
+
+# Synthetic ids the redactor and check-pii treat as placeholders.
+_SYNTHETIC_ID = re.compile(r"^(U?9990\d*|U1234567\d?|1234567[89])$")
+
+
+def identity_findings(sample: str) -> List[str]:
+    """What `taxjson redact` would still find in `sample`, as counts
+    ('2 account id(s)', 'a name', ...) — never the values. Placeholder
+    ids (U9990..., 9990...) and transaction ids do not count, so an
+    already-redacted sample passes."""
+    from taxjson.bin.taxjson_redact import (
+        redact_text, load_denylist, DenylistMissing)
+    try:
+        deny = load_denylist()
+    except DenylistMissing as e:
+        return [f"configured denylist {e} is missing"]
+    _out, rep = redact_text(sample, deny)
+    found = []
+    ids = [a for a in rep.accounts if not _SYNTHETIC_ID.match(a)]
+    for n, what in ((len(ids), "account id(s)"), (rep.names, "name(s)"),
+                    (rep.emails, "e-mail(s)"), (rep.phones, "phone(s)"),
+                    (rep.addresses, "address(es)"),
+                    (rep.postal_codes, "postal code(s)"),
+                    (rep.sins, "SIN(s)"), (len(rep.wallets), "wallet(s)"),
+                    (rep.patterns, "private-denylist match(es)")):
+        if n:
+            found.append(f"{n} {what}")
+    return found
 
 
 def _default_class_name(brokerage_name: str) -> str:
@@ -217,7 +257,11 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Draft a Python brokerage parser from a sample CSV using an LLM. "
-            "Output is a Python file for manual review, NOT parsed transactions."
+            "Output is a Python file for manual review, NOT parsed transactions. "
+            "PRIVACY: the first --sample-lines lines of the file are sent to "
+            "the provider. Run `taxjson redact` on a real export first; a "
+            "sample that still carries an account id, name, e-mail, address, "
+            "SIN or private-denylist match is refused."
         ),
     )
     parser.add_argument("input_file", help="Sample CSV from the new brokerage")
@@ -253,7 +297,15 @@ def main():
         "--sample-lines", type=int, default=30,
         help="Number of leading CSV lines to send to the model (default: 30)",
     )
+    parser.add_argument(
+        "--allow-unredacted", action="store_true",
+        help="Send the sample even when it still carries identity shapes "
+             "(account ids, names, contact details, denylist matches).",
+    )
     args = parser.parse_args()
+    if args.sample_lines < 1:
+        parser.error(f"--sample-lines must be at least 1 "
+                     f"(got {args.sample_lines})")
 
     input_path = Path(args.input_file)
     output_path = Path(args.output)
@@ -274,6 +326,22 @@ def main():
     if not sample:
         print(f"taxjson-generate-parser: error: {input_path} is empty", file=sys.stderr)
         sys.exit(1)
+    # The sample goes to a third-party API, and broker exports keep the
+    # holder's name, account id and address in their first lines: scan it
+    # with the redactor's detectors (and the private denylist) and refuse
+    # unless told otherwise (R1-342).
+    found = identity_findings(sample)
+    if found and not args.allow_unredacted:
+        print(f"taxjson-generate-parser: error: the first {args.sample_lines} "
+              f"line(s) of {input_path.name} still carry personal data "
+              f"({', '.join(found)}) and would be sent to {args.provider}. "
+              f"Run `taxjson redact {input_path.name}` and use its output, "
+              f"or pass --allow-unredacted to send it anyway.",
+              file=sys.stderr)
+        sys.exit(1)
+    if found:
+        print(f"warning: sending a sample that carries personal data "
+              f"({', '.join(found)}) — --allow-unredacted", file=sys.stderr)
 
     system_text = _SYSTEM_TEMPLATE.format(schema_block=render_schema_prompt(), 
         base_source=_load_text(base_path),

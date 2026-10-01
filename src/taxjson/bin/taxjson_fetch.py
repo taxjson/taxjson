@@ -276,7 +276,13 @@ def qt_to_csv(activities: List[Dict[str, Any]], number: str) -> str:
             # manually-exported rows and the books double-counted.
             _qt_date(str(a.get("tradeDate")
                          or a.get("transactionDate") or "")),
-            _qt_date(str(a.get("settlementDate") or "")),
+            # transactionDate is the posting (= settlement) date: with
+            # no settlementDate it IS the settle date. A blank cell
+            # made the parser add a second settlement lag on top of it
+            # — a Dec-30 trade posted Dec 31 settled in January
+            # (S031-10).
+            _qt_date(str(a.get("settlementDate")
+                         or a.get("transactionDate") or "")),
             a.get("action") or "",
             a.get("symbol") or "",
             # Collapse whitespace runs: the API pads descriptions
@@ -591,8 +597,15 @@ def qt_window(days: Optional[int], since: Optional[str],
     late-December trade settling in January both fall inside it. Re-fetching the full window keeps the file equivalent to a
     manual YTD export and self-heals late-posted or corrected rows
     anywhere in the year; the union-merge dedups the overlap. Falls
-    back to a trailing 90 days when no year is known."""
+    back to a trailing 90 days when no year is known. Raises ValueError
+    for --from with --days (one would be ignored silently, S031-15) and
+    for a tax year that has not started (it used to fall back to the
+    trailing 90 days of the PREVIOUS year, written under the new year's
+    file name — R1-354)."""
     end = today or date.today()
+    if since and days:
+        raise ValueError("--from and --days both pick the start of the "
+                         "window — give one")
     if since:
         return date.fromisoformat(since), end
     if days:
@@ -613,6 +626,10 @@ def qt_window(days: Optional[int], since: Optional[str],
         end = min(end, date(int(year) + 1, 1, 31))
         if start <= end:
             return start, end
+        raise ValueError(
+            f"the project's tax year {year} window starts {start}, after "
+            f"today — nothing of {year} to fetch yet (pass --from or "
+            f"--days to fetch a recent window explicitly)")
     return end - timedelta(days=90), end
 
 

@@ -254,5 +254,202 @@ class TestMediumRoundGaps(_Sandbox):
         self.assertEqual(self.scan("--text", stdin="ref 123 456 789\n").returncode, 0)  # bad check digit
 
 
+def _zip_bytes(members):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, text in members.items():
+            z.writestr(name, text)
+    return buf.getvalue()
+
+
+def _png_with_text(key, text):
+    import struct
+    import zlib
+
+    def chunk(kind, body):
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff))
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0)
+    idat = zlib.compress(b"\x00\x00")
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+            + chunk(b"zTXt", key.encode() + b"\x00\x00" + zlib.compress(text.encode()))
+            + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
+
+
+class TestLowRoundGaps(_Sandbox):
+    """S024-04/07/09/11/13/14/16/21/24 and S025-06 (low round)."""
+
+    def _hook(self, lines):
+        return subprocess.run(["bash", str(self.repo / "scripts" / "hooks" / "pre-push"),
+                               "origin", "unused-url"], cwd=self.repo,
+                              capture_output=True, text=True, input=lines, env=self.env)
+
+    # S024-04 / S024-07: text inside binary documents is scanned.
+    def test_binary_document_metadata_is_scanned(self):
+        pdf = (b"%PDF-1.4\n1 0 obj << /Author (" + _NAME.encode()
+               + b") /Producer (x) >> endobj\ntrailer << /Info 1 0 R >>\n%%EOF\n")
+        docx = _zip_bytes({"docProps/core.xml":
+                           f"<cp:coreProperties><dc:creator>{_NAME}</dc:creator>"
+                           "</cp:coreProperties>",
+                           "word/document.xml": "<w:t>hello</w:t>"})
+        cases = {"docs/deck.pdf": pdf, "docs/notes.docx": docx,
+                 "docs/shot.png": _png_with_text("Author", _NAME)}
+        for rel, data in cases.items():
+            f = self.repo / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(data)
+            r = self.scan()
+            self.assertEqual(r.returncode, 1, rel + r.stdout)
+            self.assertIn("private denylist match", r.stdout)
+            self.assertIn("(embedded text)", r.stdout)
+            self.assertNotIn(_NAME.split()[0], r.stdout)
+            f.unlink()
+        self.assertEqual(self.scan().returncode, 0)
+
+    def test_spreadsheet_cells_and_upper_case_suffix(self):
+        xlsx = _zip_bytes({"xl/sharedStrings.xml":
+                           f"<sst><si><t>Account</t></si><si><t>{_REAL_U}</t></si></sst>"})
+        (self.repo / "statement.xlsx").write_bytes(xlsx)
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("IB account id", r.stdout)
+        (self.repo / "statement.xlsx").unlink()
+        (self.repo / "TRADES.CSV").write_bytes(f"Account,{_REAL_U}\n".encode("utf-16-le"))
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("NUL bytes", r.stdout)
+
+    # S024-09: one positive test per generic detector.
+    def test_each_generic_detector_fires(self):
+        cases = {
+            "IB account id": f"moved from {_REAL_U} today",
+            "8-digit number next to the word account": "account no. 8765" + "4321",
+            "home directory path": "see /ho" + "me/quinn/books",
+            "e-mail address not on the allowlist": "mail quinn" + "@corp.io",
+            "credential-looking string": "token = ghp_" + "A" * 36,
+        }
+        for label, text in cases.items():
+            r = self.scan("--text", stdin=text + "\n")
+            self.assertEqual(r.returncode, 1, label)
+            self.assertIn(label, r.stdout)
+            self.assertIn("<masked>", r.stdout + "<masked>")
+        (self.repo / f"stmt_{_REAL_U}.csv").write_text("a,b\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("file NAME carries an account-id shape", r.stdout)
+        self.assertNotIn(_REAL_U, r.stdout)
+
+    # S024-11: account numbers under an Account column, and Webull's
+    # bilingual label.
+    def test_account_column_and_bilingual_label(self):
+        acct = "5123" + "4567"
+        (self.repo / "q.csv").write_text(
+            "Transaction Date,Action,Symbol,\"Description, long\",Account #\n"
+            f"2025-01-02,Buy,XYZ,\"XYZ, INC\",{acct}\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("under an Account column", r.stdout)
+        self.assertNotIn(acct, r.stdout)
+        (self.repo / "q.csv").write_text("Account,Symbol\n99901234,XYZ\n")
+        self.assertEqual(self.scan().returncode, 0)          # synthetic 9990…
+        text = "Account Number / Numéro de compte:,,,,,,,," + acct + ",\n"
+        r = self.scan("--text", stdin=text)
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    # S024-13: an IB id inside a token (HTML element id).
+    def test_ib_id_inside_a_token(self):
+        for text in (f'id="tblAccountInformation_{_REAL_U}Body"',
+                     f"secAccountInformation_{_REAL_U}Heading"):
+            r = self.scan("--text", stdin=text + "\n")
+            self.assertEqual(r.returncode, 1, text)
+        self.assertEqual(self.scan("--text", stdin="ref XU76543210 1\n").returncode, 0)
+
+    # S024-14: identities get the e-mail allowlist.
+    def test_identity_email_allowlist(self):
+        ident = "Pat Contributor <pat.c" + "@gmail.com>"
+        r = self.scan("--identity", stdin=ident + "\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("e-mail address not on the allowlist", r.stdout)
+        ok = "Pat <123+pat" + "@users.noreply.github.com>"
+        self.assertEqual(self.scan("--identity", stdin=ok + "\n").returncode, 0)
+
+    # S024-16: an id-named directory.
+    def test_id_in_directory_name(self):
+        d = self.repo / "tests" / "fixtures" / _REAL_U
+        d.mkdir(parents=True)
+        (d / "trades.csv").write_text("a,b\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("file NAME carries an account-id shape", r.stdout)
+        diff = (f"diff --git a/tests/fixtures/{_REAL_U}/t.csv b/tests/fixtures/{_REAL_U}/t.csv\n"
+                f"+++ b/tests/fixtures/{_REAL_U}/t.csv\n+a,b\n")
+        self.assertEqual(self.scan("--diff", stdin=diff).returncode, 1)
+
+    # S024-21: a ':' in the path must not unmask a denylist hit.
+    def test_colon_in_path_keeps_the_hit_hidden(self):
+        d = self.repo / "2025:export"
+        d.mkdir()
+        (d / "notes.txt").write_text(f"holder,{_NAME}\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("<content hidden>", r.stdout)
+        self.assertNotIn(_NAME.split()[1], r.stdout)
+
+    # S024-24 + binary blobs in the push.
+    def test_pre_push_scans_ref_names_and_binary_blobs(self):
+        (self.repo / "a.txt").write_text("hello\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "c1")
+        sha = self.git("rev-parse", "HEAD").strip()
+        z = "0" * 40
+        for ref in (f"refs/heads/fix/{_REAL_U}-import",
+                    f"refs/heads/wip/{_ACCT}-books"):
+            r = self._hook(f"{ref} {sha} {ref} {z}\n")
+            self.assertEqual(r.returncode, 1, ref + r.stderr)
+            self.assertIn("NAME hit the scan", r.stderr)
+        r = self._hook(f"refs/heads/main {sha} refs/heads/main {z}\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        pdf = (b"%PDF-1.4\n%\x00\x01\xe2\xe3\n<< /Author (" + _NAME.encode()
+               + b") >>\n%%EOF\n")                    # binary to git
+        (self.repo / "deck.pdf").write_bytes(pdf)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "deck")
+        sha2 = self.git("rev-parse", "HEAD").strip()
+        r = self._hook(f"refs/heads/main {sha2} refs/heads/main {sha}\n")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("BINARY", r.stderr)
+
+
+class TestReleaseAndCiGates(unittest.TestCase):
+    """S025-06, S024-23, S023-00: static checks of the gate wiring."""
+
+    def test_release_runs_the_pre_push_gate_before_pushing(self):
+        text = (REPO_ROOT / "scripts" / "release.sh").read_text()
+        hook = text.index("scripts/hooks/pre-push origin")
+        self.assertLess(hook, text.index("git push --quiet origin main"))
+
+    def test_missing_ruff_fails_and_dev_extra_installs_it(self):
+        ci = (REPO_ROOT / "scripts" / "ci.sh").read_text()
+        self.assertNotIn("== lint == skipped", ci)
+        self.assertIn('FAILED+=("lint")', ci)
+        try:
+            import tomllib
+        except ImportError:                       # Python < 3.11
+            import tomli as tomllib
+        doc = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+        dev = doc["project"]["optional-dependencies"]["dev"]
+        self.assertTrue(any(d.startswith("ruff") for d in dev), dev)
+
+    def test_workflow_runs_pii_and_consistency(self):
+        wf = (REPO_ROOT / ".github" / "workflows" / "tests.yml").read_text()
+        for stage in ("scripts/check-pii.sh", "scripts/check-consistency.sh",
+                      "scripts/check_tax_rules.py"):
+            self.assertIn(stage, wf)
+        for doc in ("scripts/ci.sh", "CONTRIBUTING.md"):
+            self.assertNotIn("private repo", (REPO_ROOT / doc).read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

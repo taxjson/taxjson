@@ -41,6 +41,28 @@ class InputReadError(OSError):
     must not swallow it — it is an environment error, exit 2."""
 
 
+def not_utf8(path, exc: UnicodeDecodeError) -> InputReadError:
+    """The error for a text input that is not UTF-8, naming the file —
+    the bare UnicodeDecodeError carries no file name, so a latin-1
+    ticker.map or a cp1252 re-saved broker export printed a traceback
+    (or a one-liner) that never said WHICH file (audits S024-03 /
+    S053-06)."""
+    return InputReadError(
+        f"{path}: not UTF-8 text (byte 0x{exc.object[exc.start]:02x} at "
+        f"offset {exc.start}) — re-export it, or save it as UTF-8 in "
+        f"your editor")
+
+
+def read_text_utf8(path, encoding: str = "utf-8-sig") -> str:
+    """A text input's contents; a non-UTF-8 file raises InputReadError
+    naming it (see not_utf8)."""
+    from pathlib import Path
+    try:
+        return Path(path).read_text(encoding=encoding)
+    except UnicodeDecodeError as e:
+        raise not_utf8(path, e) from None
+
+
 def describe_input_error(exc: BaseException) -> str:
     """The one-line text for an input a tool could not read."""
     import json

@@ -75,7 +75,7 @@ class TestApplyDrops(unittest.TestCase):
         kept, err = _drops(txs, {'RGLD.CAD.TO'})
         self.assertEqual([t['symbol'] for t in kept], ['NVDA.US'])
         # The deletion is audited, not silent.
-        self.assertIn('DROP removed 2 RGLD.CAD.TO', err)
+        self.assertIn('DELETE removed 2 RGLD.CAD.TO', err)
         self.assertIn('net qty -0.0026', err)
 
     def test_fractional_artifact_no_warning(self):

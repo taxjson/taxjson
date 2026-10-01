@@ -53,7 +53,7 @@ class TestCleanNumberDecimalComma(unittest.TestCase):
     def test_thousands_separator_still_works(self):
         from taxjson.lib.brokerages.base import BaseBrokerage
         self.assertEqual(BaseBrokerage.clean_number("1,234.56"), 1234.56)
-        self.assertEqual(BaseBrokerage.clean_number("(1,352.97)"), -1352.97)
+        self.assertEqual(BaseBrokerage.clean_number("(1,234.56)"), -1234.56)
         self.assertEqual(BaseBrokerage.clean_number("1,000"), 1000.0)
         self.assertEqual(BaseBrokerage.clean_number("$1,234,567.8"),
                          1234567.8)

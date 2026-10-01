@@ -71,7 +71,8 @@ EXTRACTORS = {
 
 
 def extract_events(extractor, csv_paths: List[Path],
-                   account: Optional[str] = None) -> List[CorporateAction]:
+                   account: Optional[str] = None,
+                   renames: Optional[dict] = None) -> List[CorporateAction]:
     """Run `extractor` over every file of one broker group of an
     account. Extractors that resolve securities by name (Questrade and
     RBC spin-off parents, RBC merger placeholders) see ALL the group's
@@ -83,6 +84,8 @@ def extract_events(extractor, csv_paths: List[Path],
     for csv_path in paths:
         kw = ({'context_files': paths}
               if getattr(extractor, 'accepts_context', False) else {})
+        if renames and getattr(extractor, 'accepts_renames', False):
+            kw['renames'] = renames
         if account is None:
             events.extend(extractor(csv_path, **kw))
         else:
@@ -370,6 +373,11 @@ def main():
         help="The rates file's target (base) currency (default: CAD).",
     )
     parser.add_argument(
+        '--ticker-map', metavar='FILE', default=None,
+        help="The project's ticker.map (`taxjson run` passes it): a "
+             "temporary code it already renames is not warned about.",
+    )
+    parser.add_argument(
         '--list', dest='list_only', action='store_true',
         help="Just print extracted events; don't prompt, don't write, don't emit JSON.",
     )
@@ -416,8 +424,20 @@ def main():
     # change made to taxjson-brokerage so a forgotten flag doesn't
     # clobber a meaningful default with the literal string 'default'.
     from taxjson.lib.brokerages.base import BrokerageParseError
+    renames = None
+    if args.ticker_map and Path(args.ticker_map).exists():
+        from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                    merge_renames)
+        try:
+            renames = merge_renames(_parse_map_file(
+                Path(args.ticker_map))[0], to_base=True)
+        except (OSError, ValueError) as e:
+            print(f"taxjson-corp-actions: error: {args.ticker_map}: {e}",
+                  file=sys.stderr)
+            raise SystemExit(2)
     try:
-        events = extract_events(extractor, csv_paths, args.account_name)
+        events = extract_events(extractor, csv_paths, args.account_name,
+                                renames=renames)
     except BrokerageParseError as e:
         print(f"taxjson-corp-actions: error: {e}", file=sys.stderr)
         raise SystemExit(2)

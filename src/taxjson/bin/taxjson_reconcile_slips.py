@@ -19,6 +19,8 @@ Headers are matched loosely, so common broker/T5008 spellings work as-is:
     proceeds:  proceeds | proceeds of disposition | gross proceeds | box 21
     cost:      cost | cost or other basis | book value | acb | box 20
                (optional — omit the column to skip basis comparison)
+    currency:  currency | currency code | box 13 | devise
+               (optional — blank means the project's base currency)
 
 Comparison is per symbol. A slip symbol without a market suffix matches the
 computed listing of that root (slip `AAPL` matches computed `AAPL.US`); when
@@ -34,7 +36,11 @@ cannot be compared: transcribe a per-security CSV.
 taxjson proceeds are net of sell-side commissions;
 slips are usually gross — the tool compares against gross first and falls
 back to net, telling you which one matched. Amounts must be in the same
-currency as the project's base currency; the tool cannot convert slips.
+currency as the project's base currency; the tool cannot convert slips, so
+a slip whose currency column (T5008 Box 13) names another currency is
+refused (a USD Webull T5008: convert boxes 20/21 to CAD first).
+An unreadable proceeds, quantity or cost cell (a decimal comma '1234,56',
+'nan', '1 500.00 CAD') is reported and fails the check.
 
 Exit codes: 0 = everything reconciled; 1 = at least one mismatch or missing
 symbol; 2 = usage error.
@@ -76,7 +82,15 @@ _HEADER_SYNONYMS = {
              "cost/book value", "adjusted cost base", "acb", "box 20",
              "cost", "cost or book value", "coût ou valeur comptable",
              "valeur comptable", "prix de base rajusté"),
+    # T5008 Box 13 (R1-20): a USD slip compared against CAD books gave
+    # one MISMATCH per symbol, every amount off by the FX rate.
+    "currency": ("currency", "currency code", "box 13",
+                 "currency of report", "devise", "code de devise"),
 }
+
+# Spellings of a currency cell -> ISO code.
+_CURRENCY_ALIASES = {"CDN": "CAD", "C$": "CAD", "CA$": "CAD", "CAN": "CAD",
+                     "US$": "USD", "US": "USD", "U.S.": "USD"}
 
 # Broker option descriptions -> OCC (R1-209): IB prints
 # "XYZ 21MAR25 50 C", Webull "CALL XYZ03/21/25 50"; the books carry
@@ -152,7 +166,11 @@ def _clean_amount(raw: str) -> Optional[float]:
         return None
 
 
-class AmbiguousHeader(SystemExit):
+class SlipRefused(SystemExit):
+    """A slip CSV the tool will not compare (exit 2, one line)."""
+
+
+class AmbiguousHeader(SlipRefused):
     pass
 
 
@@ -195,18 +213,29 @@ def _map_headers(fieldnames: List[str], path: Optional[Path] = None
 
 
 def _read_text(path: Path) -> str:
-    raw = path.read_bytes()
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        raise SlipRefused(f"taxjson-reconcile-slips: cannot read {path}: "
+                          f"{e.strerror or e}")
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         # Excel "Unicode text" exports (R1-209): read as UTF-16 instead
         # of reporting mojibake headers as an unrecognized column.
-        return raw.decode("utf-16")
+        return raw.decode("utf-16", errors="replace")
     try:
         return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
+        pass
+    try:
         # Québec-broker T5008 exports (Desjardins, NBDB, RBC French)
         # are commonly cp1252/latin-1 — the utf-8-only open crashed
         # with a raw UnicodeDecodeError traceback (REVIEW #22).
         return raw.decode("cp1252")
+    except UnicodeDecodeError:
+        # Bytes cp1252 leaves undefined (0x81/0x8D/0x8F/0x90/0x9D):
+        # latin-1 decodes every byte (S036-09) — a garbled cell then
+        # surfaces as an unreadable row, not a traceback.
+        return raw.decode("latin-1")
 
 
 def _rename_fn(renames: Optional[Dict[str, str]]):
@@ -245,12 +274,20 @@ def _bump(rec: Dict[str, Any], sfx: str, **vals) -> None:
                 tgt[k] += v
 
 
-def load_slip(path: Path, renames: Optional[Dict[str, str]] = None
+def _norm_currency(raw: str) -> str:
+    s = (raw or "").strip().upper()
+    return _CURRENCY_ALIASES.get(s, s)
+
+
+def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
+              base_currency: Optional[str] = None
               ) -> Dict[str, Dict[str, Any]]:
     """Aggregate the slip CSV per symbol root:
     {ROOT: {qty, proceeds, cost (or None), rows, listings}}, where
     listings splits the root by the listing suffix the slip wrote
-    ('' when it wrote none)."""
+    ('' when it wrote none). With `base_currency`, a row whose currency
+    cell (T5008 Box 13) names another currency refuses the file
+    (SlipRefused): the tool cannot convert slip amounts (R1-20)."""
     text = _read_text(path)
     rename = _rename_fn(renames)
     import io
@@ -268,6 +305,7 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None
                     f"accepted spellings.")
         out: Dict[str, Dict[str, Any]] = {}
         dropped = 0
+        foreign: Dict[str, int] = {}
 
         def _drop(what: str) -> None:
             nonlocal dropped
@@ -281,8 +319,13 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None
 
         for lineno, row in enumerate(reader, 2):
             cells = {k: (row.get(cols[k]) or "").strip()
-                     for k in ("symbol", "quantity", "proceeds", "cost")
+                     for k in ("symbol", "quantity", "proceeds", "cost",
+                               "currency")
                      if k in cols}
+            ccy = _norm_currency(cells.get("currency", ""))
+            if ccy and base_currency and ccy != base_currency.upper():
+                foreign[ccy] = foreign.get(ccy, 0) + 1
+                continue
             sym = rename(slip_symbol(cells["symbol"]))
             if not sym:
                 if any(cells.get(k) for k in ("quantity", "proceeds",
@@ -309,13 +352,34 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None
                     _drop(f"unreadable quantity for {sym} "
                           f"({cells['quantity']!r})")
                     continue
-            c = _clean_amount(cells["cost"]) if cells.get("cost") else None
+            c = None
+            if cells.get("cost"):
+                c = _clean_amount(cells["cost"])
+                if c is None:
+                    # An unreadable cost cell was dropped silently: the
+                    # cost note vanished, or came from a partial sum
+                    # (S035-19, S036-07, R1-335's '50000,00').
+                    _drop(f"unreadable cost for {sym} "
+                          f"({cells['cost']!r})")
+                    continue
             root, sfx = split_listing(sym)
             rec = out.setdefault(root, {"qty": 0.0, "proceeds": 0.0,
                                         "cost": None, "rows": 0,
                                         "listings": {}})
             _bump(rec, sfx, rows=1, proceeds=proceeds,
                   qty=abs(q) if q is not None else 0.0, cost=c)
+        if foreign:
+            got = ", ".join(f"{n} row(s) in {c}"
+                            for c, n in sorted(foreign.items()))
+            raise SlipRefused(
+                f"taxjson-reconcile-slips: {path}: the slip reports "
+                f"amounts in another currency (Box 13 / currency column: "
+                f"{got}) but the books are in {base_currency.upper()}. "
+                f"reconcile-slips cannot convert slip amounts: convert "
+                f"boxes 20/21 to {base_currency.upper()} at the Bank of "
+                f"Canada rate for each row's settlement date (the rate "
+                f"taxjson used) and blank the currency column, or leave "
+                f"this slip out.")
         if dropped:
             out["__dropped_rows__"] = dropped   # consumed (popped) in main
         return out
@@ -454,7 +518,7 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
                          f"legitimate (per-broker book value vs blended "
                          f"ACB / lot method); document the reason")
     if c.get("tainted_rows"):
-        notes.append(f"{c['tainted_rows']} tainted disposition(s) with "
+        notes.append(f"{int(c['tainted_rows'])} tainted disposition(s) with "
                      f"phantom basis included")
     return {"symbol": label, "status": "MISMATCH" if problems else "OK",
             "detail": "; ".join(problems + notes)}
@@ -612,17 +676,19 @@ def render(rep: Dict[str, Any], tolerance: float,
                      "security at more than one broker — document it, don't "
                      "'fix' it.")
     lines.append("  - Amounts are compared in the project base currency; "
-                 "slips in another currency will not reconcile.")
+                 "a slip whose currency column (T5008 Box 13) names "
+                 "another currency is refused, not converted.")
     return "\n".join(lines)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Reconcile T5008 / 1099-B slip CSVs against taxjson's "
-                    "computed dispositions.")
+        prog="taxjson-reconcile-slips",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("slip_csv", type=Path, nargs="+",
-                        help="Slip CSV(s) (see --help header docs for "
-                             "accepted column spellings). Several files "
+                        help="Slip CSV(s) (accepted column spellings: "
+                             "see above). Several files "
                              "(one per broker) are reconciled TOGETHER "
                              "against the combined dispositions.")
     parser.add_argument("--gains", action="append", type=Path, default=[],
@@ -660,6 +726,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"taxjson-reconcile-slips: no such file: {sp}",
                   file=sys.stderr)
             return 2
+        if not sp.is_file():
+            # A directory raised IsADirectoryError (S036-09).
+            print(f"taxjson-reconcile-slips: {sp}: not a file",
+                  file=sys.stderr)
+            return 2
     for p in args.gains:
         if not p.exists():
             print(f"taxjson-reconcile-slips: no such file: {p}",
@@ -674,11 +745,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                     merge_renames)
         renames = merge_renames(load_map_file(args.ticker_map),
                                 to_base=True)
+    from taxjson.lib.country import home_currency
+    base_ccy = home_currency(args.country or "canada")
     slip: Dict[str, Dict[str, Any]] = {}
     dropped_rows = 0
     try:
         for sp in args.slip_csv:
-            one = load_slip(sp, renames)
+            one = load_slip(sp, renames, base_currency=base_ccy)
             dropped_rows += int(one.pop("__dropped_rows__", 0) or 0)
             for root, rec in one.items():
                 acc = slip.setdefault(root, {"qty": 0.0, "proceeds": 0.0,
@@ -688,7 +761,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     _bump(acc, sfx, qty=sub["qty"],
                           proceeds=sub["proceeds"], rows=sub["rows"],
                           cost=sub["cost"])
-    except AmbiguousHeader as e:
+    except SlipRefused as e:
         print(e.code, file=sys.stderr)
         return 2
     from taxjson.lib.json_input import InputFileError
@@ -712,7 +785,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render(rep, args.tolerance, args.country))
         if dropped_rows:
             print(f"\nNOT RECONCILED: {dropped_rows} slip row(s) had "
-                  f"unreadable proceeds (see warnings above).")
+                  f"an unreadable cell (see warnings above).")
     return 0 if rep["clean"] else 1
 
 

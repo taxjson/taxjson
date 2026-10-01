@@ -77,7 +77,10 @@ def _parse_map_file(file_path: Path):
     # from -> (target, where, line) of its first rename rule
     first_rule: Dict[str, tuple] = {}
     distinct_where: Dict[frozenset, tuple] = {}
-    with file_path.open("r", encoding="utf-8-sig") as f:
+    from io import StringIO
+    from taxjson.lib.cli_diag import read_text_utf8
+    # A non-UTF-8 map is a one-line error naming it (S053-06).
+    with StringIO(read_text_utf8(file_path)) as f:
         for lineno, raw in enumerate(f, 1):
             line = raw.split('#', 1)[0].strip()
             if not line:
@@ -242,7 +245,7 @@ def apply_drops(transactions: List[TaxTransaction], drops) -> List[TaxTransactio
     For each dropped ticker, prints a NOTE — count, net quantity, net
     amount — so the deletion is auditable rather than silent. If a
     dropped ticker's net quantity looks like a real position
-    (|net| >= 1 share) a loud warning is printed, since DROP discards
+    (|net| >= 1 share) a loud warning is printed, since DELETE discards
     its cost basis. Returns the kept transactions."""
     if not drops:
         return transactions
@@ -270,20 +273,36 @@ def apply_drops(transactions: List[TaxTransaction], drops) -> List[TaxTransactio
         else:
             kept.append(tx)
 
+    def _cash(tx):
+        """Signed cash of one row: a trade's net_amount is a magnitude
+        with the direction in the quantity sign (a buy pays it, a sale
+        receives it); income rows carry signed cash; TAX and FEE are
+        positive = paid. Summing the raw net_amount added a buy's cost
+        to a sale's proceeds (audit S052-23)."""
+        act = str((tx.get('action') if isinstance(tx, dict)
+                   else getattr(tx, 'action', '')) or '').upper()
+        net = _field(tx, 'net_amount')
+        if act in ('BUYSELL', 'ASSIGN'):
+            return -net if _field(tx, 'quantity') > 0 else net
+        if act in ('TAX', 'FEE'):
+            return -net
+        return net
+
     for sym in sorted(removed):
         rows = removed[sym]
         net_qty = sum(_field(t, 'quantity') for t in rows)
-        net_amt = sum(_field(t, 'net_amount') for t in rows)
+        net_cash = sum(_cash(t) for t in rows)
         print(
-            f"NOTE: ticker-map DROP removed {len(rows)} {sym} row(s) "
-            f"(net qty {net_qty:.4f}, net amount {net_amt:.2f}).",
+            f"NOTE: ticker-map DELETE removed {len(rows)} {sym} row(s) "
+            f"(net qty {net_qty:.4f}, net cash {net_cash:+.2f}).",
             file=sys.stderr,
         )
         if abs(net_qty) >= 1.0:
             print(
                 f"warning: dropped ticker {sym} has a net quantity of "
                 f"{net_qty:.4f} — that looks like a real position, and "
-                f"DROP discards its cost basis. Remove the DROP line if "
+                f"DELETE discards its cost basis. Remove the `DELETE "
+                f"{sym}` line from ticker.map if "
                 f"{sym} is not a pure artifact.",
                 file=sys.stderr,
             )
@@ -392,7 +411,14 @@ def main():
                              "JOURNAL assume exchange-suffixed "
                              "cross-listings).")
     args = parser.parse_args()
-    if args.map_flag and not args.map_file:
+    if args.map_flag and args.map_file:
+        # Two map sources: the positional one used to win silently
+        # (audit S053-00).
+        print("taxjson-ticker-map: error: give the map once — either "
+              "the positional MAP_FILE or --map, not both",
+              file=sys.stderr)
+        sys.exit(2)
+    if args.map_flag:
         args.map_file = args.map_flag
 
     from taxjson.lib.json_input import load_transactions_or_exit

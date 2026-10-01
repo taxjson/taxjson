@@ -41,6 +41,13 @@ Caveats printed with every report (also see --help):
     crypto held on a foreign exchange is generally SFP; check where it
     is held and map it (`SYMBOL <ISO3>` or `SYMBOL CA`) in t1135.map.
 
+  - The verdict is on these books alone: specified foreign property
+    held outside them (a foreign bank account or cash, shares held in
+    certificate form, a foreign rental property, ...) counts toward the
+    same $100,000 and is not seen — add its cost by hand.
+  - Before Dec 31 the figures run only to the last date in the books:
+    a "below the threshold" verdict is provisional until the year ends.
+
 Usage:
     taxjson-t1135 --year 2025 margin_base.json crypto_base.json \\
         --gains margin_gains.json --gains crypto_gains.json \\
@@ -55,15 +62,17 @@ import re
 import sys
 from decimal import Decimal
 from pathlib import Path
-from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
 from taxjson.lib.futures import is_plain_future
 from taxjson.lib.numeric import positive_float_arg
 from taxjson.lib.report_model import fmt_money
 from typing import Any, Dict, List, Optional, Tuple
 
-# Filing thresholds, ITA 233.3: SFP total cost > $100,000 CAD at any time in
-# the year requires the form; >= $250,000 at any time disqualifies the
-# simplified (Part A) method.
+# Filing threshold: ITA 233.3(1) "reporting entity" — SFP total cost more
+# than $100,000 CAD at any time in the year requires the form. The
+# simplified (Part A) vs detailed (Part B) split at $250,000 (reached at
+# any time in the year -> Part B) comes from the CRA Form T1135
+# instructions, not the Act (S052-16).
 FILING_THRESHOLD = 100_000.0
 DETAILED_THRESHOLD = 250_000.0
 
@@ -93,6 +102,27 @@ _QTY_EPS = 1e-6
 # Sentinel country code for symbols we cannot classify (an unknown market
 # suffix). Deliberately ugly so it reads as "review me".
 REVIEW = "??"
+
+# t1135.map COUNTRY vocabulary (S051-16): an ISO 3166-1 alpha-3 code or
+# one of the "not foreign property" words; anything else (EXCLUDED, CDN,
+# NOT-FOREIGN) became a bogus country and flipped the verdict.
+_NOT_FOREIGN_WORDS = ("CA", "CAN", "CANADA", "EXCLUDE")
+_ISO3 = frozenset("""
+ABW AFG AGO AIA ALA ALB AND ARE ARG ARM ASM ATA ATF ATG AUS AUT AZE BDI
+BEL BEN BES BFA BGD BGR BHR BHS BIH BLM BLR BLZ BMU BOL BRA BRB BRN BTN
+BVT BWA CAF CAN CCK CHE CHL CHN CIV CMR COD COG COK COL COM CPV CRI CUB
+CUW CXR CYM CYP CZE DEU DJI DMA DNK DOM DZA ECU EGY ERI ESH ESP EST ETH
+FIN FJI FLK FRA FRO FSM GAB GBR GEO GGY GHA GIB GIN GLP GMB GNB GNQ GRC
+GRD GRL GTM GUF GUM GUY HKG HMD HND HRV HTI HUN IDN IMN IND IOT IRL IRN
+IRQ ISL ISR ITA JAM JEY JOR JPN KAZ KEN KGZ KHM KIR KNA KOR KWT LAO LBN
+LBR LBY LCA LIE LKA LSO LTU LUX LVA MAC MAF MAR MCO MDA MDG MDV MEX MHL
+MKD MLI MLT MMR MNE MNG MNP MOZ MRT MSR MTQ MUS MWI MYS MYT NAM NCL NER
+NFK NGA NIC NIU NLD NOR NPL NRU NZL OMN PAK PAN PCN PER PHL PLW PNG POL
+PRI PRK PRT PRY PSE PYF QAT REU ROU RUS RWA SAU SDN SEN SGP SGS SHN SJM
+SLB SLE SLV SMR SOM SPM SRB SSD STP SUR SVK SVN SWE SWZ SXM SYC SYR TCA
+TCD TGO THA TJK TKL TKM TLS TON TTO TUN TUR TUV TWN TZA UGA UKR UMI URY
+USA UZB VAT VCT VEN VGB VIR VNM VUT WLF WSM YEM ZAF ZMB ZWE
+""".split())
 # Bucket for suffix-less symbols — equity parsers always stamp a market
 # suffix, so these are crypto. Crypto held on a foreign exchange is
 # generally specified foreign property (funds/intangibles held outside
@@ -129,6 +159,10 @@ def load_transactions(paths: List[Path],
     for p in paths:
         try:
             raw = load_json(p)
+            if isinstance(raw, dict) and "transactions" not in raw:
+                # Read as an empty book: 'no T1135 required' (S033-01).
+                raise ValueError(f"{p}: no 'transactions' list — not a "
+                                 f"taxjson base book")
         except ValueError as e:
             # A truncated / wrong-shape base book: one line, not a
             # traceback (S042-18). OSError keeps guard_main's message.
@@ -157,7 +191,7 @@ def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
     # utf-8-sig: a BOM (Windows editors) became part of the first key
     # and silently disabled that override (S008-03, S051-18).
     for lineno, line in enumerate(
-            path.read_text(encoding="utf-8-sig").splitlines(), 1):
+            read_text_utf8(path).splitlines(), 1):
         stripped = line.split("#", 1)[0].strip()
         if not stripped:
             continue
@@ -166,11 +200,24 @@ def load_overrides(path: Optional[Path]) -> Dict[str, Optional[str]]:
             print(f"warning: {path.name}:{lineno}: expected `SYMBOL COUNTRY`, "
                   f"got {stripped!r} — line ignored", file=sys.stderr)
             continue
-        symbol, code = parts[0], parts[1].upper()
-        if code in ("CA", "CAN", "CANADA", "EXCLUDE"):
+        # Book symbols are upper case: a lower-case 'btc CA' never
+        # matched and was ignored without a word (R1-212).
+        symbol, code = parts[0].upper(), parts[1].upper()
+        if code in _NOT_FOREIGN_WORDS:
             overrides[symbol] = None
-        else:
+        elif code in _ISO3:
             overrides[symbol] = code
+        else:
+            import difflib
+            near = difflib.get_close_matches(
+                code, list(_NOT_FOREIGN_WORDS) + sorted(_ISO3), n=1,
+                cutoff=0.6)
+            hint = f" — did you mean {near[0]}?" if near else ""
+            print(f"warning: {path.name}:{lineno}: {parts[1]!r} is not an "
+                  f"ISO 3166 alpha-3 country code or "
+                  f"{'/'.join(_NOT_FOREIGN_WORDS)}{hint} — line ignored "
+                  f"({symbol} keeps its listing-suffix country)",
+                  file=sys.stderr)
     return overrides
 
 
@@ -251,7 +298,8 @@ def _sort_key(tx: Dict[str, Any], tax_date: str = "settle") -> Tuple:
 
 def walk_costs(transactions: List[Dict[str, Any]], year: int,
                overrides: Dict[str, Optional[str]],
-               tax_date: str = "settle") -> Dict[str, Any]:
+               tax_date: str = "settle",
+               today: Optional[str] = None) -> Dict[str, Any]:
     """Replay full history in base currency; return per-symbol cost stats
     for `year` plus the maximum TOTAL foreign cost observed in the year
     (the ITA 233.3 filing-threshold test). `overrides` is updated with
@@ -305,10 +353,12 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # dedupe the same way, core._dedupe_corporate_splits).
     from taxjson.lib.corporate_timeline import split_seen
     seen_splits: set = set()
+    last_date = ""
     for tx in sorted(transactions, key=lambda t: _sort_key(t, tax_date)):
         date = _tx_date(tx, tax_date)
         if date > year_end:
             break
+        last_date = max(last_date, date)
         if (tx.get("action") or "").upper() == "SPLIT":
             # Same split booked on two dates by two brokers = one event.
             if split_seen(seen_splits, tx.get("symbol") or "",
@@ -381,7 +431,10 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
             # BUYSELL / ASSIGN / EXERCISE-shaped rows: average-cost pool,
             # same conventions as the Canada engine (buy cost added =
             # |net_amount|, which parsers emit fee-inclusive).
-            if abs(qty) < _QTY_EPS:
+            # Only an exact zero is skipped, as in the Canada engine
+            # (R1-24): the 1e-6 share epsilon dropped staking rewards
+            # of under a millionth of a coin and their cost (S052-02).
+            if qty == 0:
                 continue
             if tax_date != "trade" and tx.get("date") and \
                     tx.get("date_settle") and \
@@ -459,6 +512,18 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         # still the year's maximum.
         snapshot(year_start)
 
+    # A long option still held after its expiry date (S052-22): the
+    # books lack its expiry / exercise row, so its cost stays in the
+    # pools — counted (the conservative side) but named, since the
+    # contract stopped being property at expiry.
+    from taxjson.lib.core import parse_option_expiry
+    cutoff = min(year_end, today) if today else year_end
+    expired_held = sorted(
+        s for s, p in pools.items()
+        if p.qty > _QTY_EPS and is_option_symbol(s)
+        and classify_country(s, overrides) is not None
+        and (parse_option_expiry(s) or "9999") < cutoff)
+
     per_symbol = {}
     for s, p in pools.items():
         country = classify_country(s, overrides)
@@ -483,6 +548,8 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
         "max_total_cost": round(max_total, 2),
         "max_total_date": max_total_date,
         "futures_symbols": sorted(futures_seen),
+        "expired_options_held": expired_held,
+        "last_date": last_date,
     }
 
 
@@ -490,6 +557,46 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
 
 class UnreadableGains(SystemExit):
     pass
+
+
+class CurrencyMismatch(SystemExit):
+    pass
+
+
+def check_currency(paths: List[Path], base_currency: str) -> None:
+    """Refuse books whose rows (or metadata.target_currency) are in
+    another currency than `base_currency` (S051-15, S052-17): the walk
+    sums net_amount as base currency, so a native work/<acct>_raw.json
+    or a USD-base book was tested against 100,000 as if it were CAD —
+    80,000 USD of US stock read 'no T1135 required'."""
+    base = (base_currency or "").upper()
+    for p in paths:
+        try:
+            doc = load_json(p)
+        except (OSError, ValueError):
+            continue                    # the readers report it
+        meta = doc.get("metadata") if isinstance(doc, dict) else None
+        tgt = str((meta or {}).get("target_currency") or "").upper()
+        rows = (doc.get("transactions") or []) if isinstance(doc, dict) \
+            else (doc if isinstance(doc, list) else [])
+        other: Dict[str, int] = {}
+        for t in rows:
+            c = str((t or {}).get("currency") or "").upper() \
+                if isinstance(t, dict) else ""
+            if c and c != base:
+                other[c] = other.get(c, 0) + 1
+        if tgt and tgt != base:
+            other.setdefault(tgt, 0)
+        if other:
+            got = ", ".join(f"{c} ({n} row(s))" if n else
+                            f"{c} (metadata.target_currency)"
+                            for c, n in sorted(other.items()))
+            raise CurrencyMismatch(
+                f"taxjson-t1135: {p}: amounts in {got}, not "
+                f"{base} — the cost walk sums them as {base}. Pass the "
+                f"converted books (work/<account>_base.json and the "
+                f"<account>_gains*.json beside them; `taxjson t1135` "
+                f"does), or --base-currency matching them.")
 
 
 def join_income_gains(gains_paths: List[Path], year: int,
@@ -512,9 +619,12 @@ def join_income_gains(gains_paths: List[Path], year: int,
     for p in gains_paths:
         try:
             data = load_json(p)
+            from taxjson.lib.json_input import require_gains_doc
+            require_gains_doc(data, p)
         except (OSError, ValueError) as e:
             # A skipped taxable gains file zeroed that account's income
-            # and gain columns with rc 0 (R1-277).
+            # and gain columns with rc 0 (R1-277); so did a stage file
+            # or a JSON without 'transactions' (S033-01).
             raise UnreadableGains(
                 f"taxjson-t1135: could not read {p}: {e} — re-run "
                 f"`taxjson run` to rebuild it.")
@@ -648,7 +758,15 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  threshold: float = FILING_THRESHOLD,
                  detailed_threshold: float = DETAILED_THRESHOLD,
                  phantoms: Optional[Path] = None,
-                 tax_date: str = "settle") -> Dict[str, Any]:
+                 tax_date: str = "settle",
+                 today: Optional[str] = None) -> Dict[str, Any]:
+    """The T1135 report model. `today` (ISO date, default the real
+    date) decides whether the year is complete: before Dec 31 the
+    figures run to the last date in the books and a negative verdict is
+    provisional (S051-22, S052-15)."""
+    from datetime import date as _date
+    today = today or _date.today().isoformat()
+    check_currency(list(base_paths) + list(gains_paths), base_currency)
     txs = load_transactions(base_paths, phantoms)
     user_keys = set(overrides)
     overrides = dict(overrides)         # the walk adds rename targets
@@ -656,7 +774,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     # (G7-0); the sort puts each after the trades at its stamp.
     wash = wash_adjustments(gains_paths, txs, tax_date)
     txs = txs + wash
-    walk = walk_costs(txs, year, overrides, tax_date)
+    walk = walk_costs(txs, year, overrides, tax_date, today=today)
     inc = join_income_gains(gains_paths, year, overrides, tax_date)
     # An override that matches nothing (a ticker change, a ticker.map
     # consolidation, a typo) silently reversed the filing verdict
@@ -730,6 +848,17 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
             c[k] = round(c[k], 2)
 
     max_total = walk["max_total_cost"]
+    year_end = f"{year}-12-31"
+    year_complete = today > year_end
+    as_of = year_end if year_complete else (
+        walk.get("last_date") or min(today, year_end))
+    expired = list(walk.get("expired_options_held") or [])
+    if expired:
+        print(f"warning: {len(expired)} long option(s) still held in the "
+              f"books after their expiry date ({', '.join(expired[:6])}"
+              f"{' ...' if len(expired) > 6 else ''}): their cost is still "
+              f"counted in the T1135 figures — add the missing expiry or "
+              f"exercise row and re-run.", file=sys.stderr)
     return {
         "year": year,
         "base_currency": base_currency,
@@ -755,6 +884,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         # by up to this (KNOWN_ISSUES).
         "deferred_wash_not_in_cost": deferred,
         "tax_date_basis": tax_date,
+        "year_complete": year_complete,
+        "as_of": as_of,
+        "expired_options_held": expired,
     }
 
 
@@ -763,6 +895,9 @@ _money = fmt_money                  # shared report-layer formatter
 
 def render_report(rep: Dict[str, Any]) -> str:
     cur = rep["base_currency"]
+    complete = rep.get("year_complete", True)
+    as_of = rep.get("as_of") or f"{rep['year']}-12-31"
+    so_far = "" if complete else f" (books through {as_of})"
     lines: List[str] = []
     lines.append(f"T1135 — Foreign Income Verification Statement helper "
                  f"(tax year {rep['year']}, amounts in {cur})")
@@ -770,19 +905,37 @@ def render_report(rep: Dict[str, Any]) -> str:
     lines.append("Filing requirement (total-cost test, ITA 233.3):")
     when = f" on {rep['max_total_date']}" if rep["max_total_date"] else ""
     lines.append(f"  Maximum total cost of specified foreign property during "
-                 f"{rep['year']}: {_money(rep['max_total_cost'])} {cur}{when}")
+                 f"{rep['year']}{so_far}: {_money(rep['max_total_cost'])} "
+                 f"{cur}{when}")
     if rep["filing_required"]:
         lines.append(f"  => T1135 FILING REQUIRED "
                      f"(exceeds {_money(rep['filing_threshold'])} {cur})")
         if rep["simplified_method_available"]:
             lines.append(f"  => Simplified method (Part A) available "
-                         f"(stayed under {_money(rep['detailed_threshold'])} {cur})")
+                         f"(stayed under {_money(rep['detailed_threshold'])} "
+                         f"{cur}{' so far' if not complete else ''}; "
+                         f"T1135 instructions)")
         else:
             lines.append(f"  => Detailed method (Part B) required "
-                         f"(reached {_money(rep['detailed_threshold'])} {cur})")
-    else:
+                         f"(reached {_money(rep['detailed_threshold'])} "
+                         f"{cur}; T1135 instructions)")
+    elif complete:
         lines.append(f"  => below the {_money(rep['filing_threshold'])} {cur} "
-                     f"threshold — no T1135 required this year")
+                     f"threshold on these books — no T1135 required this "
+                     f"year unless foreign property outside them (see "
+                     f"notes) takes the total over")
+    else:
+        # In-year (S051-22, S052-15): ITA 233.3 counts cost at ANY time
+        # up to Dec 31 — a mid-year 'not required' is not a verdict.
+        lines.append(f"  => below the {_money(rep['filing_threshold'])} {cur} "
+                     f"threshold so far (books through {as_of}) — the test "
+                     f"runs to Dec 31; re-run after the year ends")
+    if rep.get("expired_options_held"):
+        _ex = rep["expired_options_held"]
+        lines.append(f"  !! {len(_ex)} long option(s) still held after their "
+                     f"expiry date ({', '.join(_ex[:6])}"
+                     f"{' ...' if len(_ex) > 6 else ''}) are counted at "
+                     f"cost — the books lack their expiry/exercise row.")
     _dw = sum((rep.get("deferred_wash_not_in_cost") or {}).values())
     if _dw:
         lines.append(f"  !! cost amounts EXCLUDE {_money(_dw)} {cur} of "
@@ -801,8 +954,11 @@ def render_report(rep: Dict[str, Any]) -> str:
     lines.append("")
 
     rows = rep["properties"]
+    # The column is the cost at the last date of the books while the year
+    # is open — 'COST AT DEC 31' labelled a September figure (S051-22).
+    end_col = "COST AT DEC 31" if complete else f"COST AT {as_of}"
     if rows:
-        header = ("SYMBOL", "COUNTRY", "MAX COST IN YR", "COST AT DEC 31",
+        header = ("SYMBOL", "COUNTRY", "MAX COST IN YR", end_col,
                   "INCOME", "GAIN(LOSS)", "NOTES")
         table = []
         for r in rows:
@@ -834,7 +990,7 @@ def render_report(rep: Dict[str, Any]) -> str:
         lines.append("")
 
         lines.append("PER COUNTRY (upper-bound aggregates)")
-        cheader = ("COUNTRY", "MAX COST IN YR", "COST AT DEC 31",
+        cheader = ("COUNTRY", "MAX COST IN YR", end_col,
                    "INCOME", "GAIN(LOSS)")
         ctable = [(c, _money(v["max_cost"]), _money(v["year_end_cost"]),
                    _money(v["income"]), _money(v["gain"]))
@@ -887,6 +1043,11 @@ def render_report(rep: Dict[str, Any]) -> str:
                      "counted toward the threshold (the conservative side).")
     lines.append("  - Registered accounts (RRSP/TFSA/...) are excluded by "
                  "law and were not read.")
+    lines.append("  - The test covers these brokerage books only. Specified "
+                 "foreign property held outside them — a foreign bank "
+                 "account or cash, shares held in certificate form, a "
+                 "foreign rental property — counts toward the same "
+                 "threshold at the same time: add its cost by hand.")
     lines.append("  - US-situs property inside T1135 does not include US "
                  "property held only through Canadian mutual funds/ETFs.")
     lines.append("  - Not tax advice; reconcile against broker statements "
@@ -898,10 +1059,16 @@ def render_report(rep: Dict[str, Any]) -> str:
 
 @guard_main("taxjson-t1135")
 def main(argv: Optional[List[str]] = None) -> int:
+    _doc = __doc__ or ""
+    _cav = _doc[_doc.find("Caveats printed"):_doc.find("Usage:")].rstrip()
     parser = argparse.ArgumentParser(
+        prog="taxjson-t1135",
         description="CRA T1135 foreign-property helper: filing-threshold "
                     "test + per-property/per-country tables from taxjson "
-                    "base/gains files.")
+                    "base/gains files.",
+        # The docstring's caveats, as it promises (S052-04).
+        epilog=_cav or None,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("files", nargs="+", type=Path, metavar="FILE",
                         help="TAXABLE <account>_base.json files (full "
                              "history, base currency)")
@@ -944,6 +1111,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     overrides = load_overrides(args.map)
+    if args.base_currency.upper() != "CAD":
+        # The wrapper says so for a non-CAD project; the stand-alone
+        # tool took the flag as a bare label (S052-17).
+        print(f"taxjson-t1135: warning: --base-currency "
+              f"{args.base_currency.upper()}: the T1135 thresholds are in "
+              f"CAD — the amounts are compared with them as if they were "
+              f"CAD.", file=sys.stderr)
     try:
         rep = build_report(args.files, args.gains, args.year, overrides,
                            args.base_currency.upper(),
@@ -951,7 +1125,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                            detailed_threshold=args.detailed_threshold,
                            phantoms=args.incomplete_history,
                            tax_date=args.tax_date)
-    except UnreadableGains as e:
+    except (UnreadableGains, CurrencyMismatch) as e:
         print(e.code, file=sys.stderr)
         return 2
     except (OSError, ValueError) as e:

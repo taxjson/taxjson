@@ -49,7 +49,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.bin.taxjson_convert_currency import positive_rate
-from taxjson.lib.core import get_tax_rules, load_transactions
+from taxjson.lib.core import (get_tax_rules, is_option_symbol,
+                              load_transactions)
 from taxjson.lib.country import (add_country_argument, canonical_country,
                                  refuse_foreign_flags)
 from taxjson.lib.pipeline import prepare_books
@@ -80,11 +81,19 @@ def _load_doc(path: Path) -> Dict[str, Any]:
 def _source_label(path: Path, meta: Dict[str, Any]) -> str:
     """Human name for a parsed-source file: the original input files
     when the parser recorded them, else the work-file name."""
-    files = meta.get("input_files") or []
+    # convert-tt records its .tt as `source_file` (S029-09: a
+    # hand-entered row was labelled with the work file only).
+    files = meta.get("input_files") or (
+        [meta["source_file"]] if meta.get("source_file") else [])
     names = ", ".join(Path(f).name for f in files[:4])
     if len(files) > 4:
         names += f", +{len(files) - 4} more"
     return f"{path.name}" + (f" ({names})" if names else "")
+
+
+# Shares per listed equity option contract (the per-share quote a
+# statement prints; the engine's own 100x, core.py).
+OPTION_MULTIPLIER = 100
 
 
 def build_source_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
@@ -141,7 +150,19 @@ def build_check_index(paths: List[Path]) -> Tuple[
     lot records per sell id, hence the list."""
     index: Dict[str, List[Dict[str, Any]]] = {}
     labels: List[str] = []
+    seen: set = set()
     for p in paths:
+        # A gains file named twice summed every id's records twice and
+        # failed every tie-out as "the books changed" (S026-01).
+        try:
+            key = Path(p).resolve()
+        except OSError:
+            key = Path(p)
+        if key in seen:
+            print(f"taxjson-audit: warning: --check {p} given more than "
+                  f"once — read once.", file=sys.stderr)
+            continue
+        seen.add(key)
         doc = _load_doc(p)
         labels.append(p.name)
         for g in doc.get("transactions") or []:
@@ -153,10 +174,69 @@ def build_check_index(paths: List[Path]) -> Tuple[
             # flagged every saved PIL row as "fabricated".
             if g.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 continue
-            gid = g.get("id")
-            if gid:
-                index.setdefault(gid, []).append(g)
+            # A disposition with no id cannot be joined; it is kept under
+            # NOID so the reverse sweep reports it instead of skipping
+            # it (S026-02: a record without an id passed at exit 0).
+            index.setdefault(g.get("id") or NOID, []).append(g)
     return index, labels
+
+
+NOID = "\x00no-id"
+
+
+def _kind(g: Dict[str, Any]) -> Tuple[str, bool, bool]:
+    """What kind of record a gains row is: one sell id can carry a LONG
+    close and a grant WRITE (a cross-zero option fill) — two events
+    that must not be summed into one (S026-19)."""
+    return (str(g.get("direction") or "LONG"), bool(g.get("grant")),
+            bool(g.get("deemed")))
+
+
+def merge_lot_records(gains: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One event per (id, kind): US FIFO splits one sell into lot
+    records, which are summed here. A sale whose lots differ in term is
+    MIXED with the per-term gains in `term_split` (the first lot's term
+    labelled the whole sale, S026-15); days_held is kept only when every
+    lot agrees (else `days_held_range`)."""
+    by_key: Dict[Tuple, List[Dict[str, Any]]] = {}
+    order: List[Tuple] = []
+    for g in gains:
+        k = (g.get("id") or f"?{len(order)}",) + _kind(g)
+        if k not in by_key:
+            order.append(k)
+        by_key.setdefault(k, []).append(g)
+    merged: List[Dict[str, Any]] = []
+    for k in order:
+        lots = by_key[k]
+        if len(lots) == 1:
+            merged.append(lots[0])
+            continue
+        agg = dict(lots[0])
+        agg["qty"] = sum(float(l.get("qty") or 0) for l in lots)
+        for f in ("gain", "raw_gain", "proceeds", "cost",
+                  "disallowed_amount", "permanently_disallowed"):
+            agg[f] = sum(float(l.get(f) or 0) for l in lots)
+        agg["is_wash_sale"] = any(l.get("is_wash_sale") for l in lots)
+        agg["replacement_lot_ids"] = [
+            r for l in lots for r in (l.get("replacement_lot_ids") or [])]
+        agg["trace"] = [ln for l in lots for ln in (l.get("trace") or [])]
+        agg["lots"] = len(lots)
+        terms: Dict[str, float] = {}
+        for l in lots:
+            t = l.get("term")
+            if t:
+                terms[t] = terms.get(t, 0.0) + float(l.get("gain") or 0)
+        if len(terms) > 1:
+            agg["term"] = "MIXED"
+            agg["term_split"] = {t: round(v, 2)
+                                 for t, v in sorted(terms.items())}
+        days = {l.get("days_held") for l in lots}
+        if len(days) > 1:
+            agg["days_held"] = None
+            _d = [int(d) for d in days if d is not None]
+            agg["days_held_range"] = [min(_d), max(_d)] if _d else None
+        merged.append(agg)
+    return merged
 
 
 def rate_with_provenance(currency: str, date_str: str,
@@ -249,8 +329,17 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
         "permanently_disallowed": g.get("permanently_disallowed"),
         "is_wash_sale": bool(g.get("is_wash_sale")),
         "term": g.get("term"), "days_held": g.get("days_held"),
+        # The verb and the per-share note need what kind of record this
+        # is: build_event dropped grant/deemed, so every grant-timing
+        # WRITE printed as a COVER with proceeds 0.00 (S026-04).
+        "grant": bool(g.get("grant")), "deemed": bool(g.get("deemed")),
+        "is_option": bool(g.get("is_option")
+                          or is_option_symbol(str(g.get("symbol") or ""))),
         "warnings": [], "failures": [],
     }
+    for _k in ("lots", "term_split", "days_held_range", "note"):
+        if g.get(_k):
+            ev[_k] = g[_k]
 
     # --- source rows (nominal) --------------------------------------
     hits = source_index.get(gid) or []
@@ -342,6 +431,10 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
 
     # --- pipeline tie-out ---------------------------------------------
     checks = check_index.get(gid) or []
+    if len({_kind(c) for c in checks}) > 1:
+        # One id, two kinds of record (a cross-zero fill's LONG close and
+        # its grant WRITE): each event ties to its own kind (S026-19).
+        checks = [c for c in checks if _kind(c) == _kind(g)]
     tie: Dict[str, Any] = {"records": len(checks)}
     if checks:
         # US FIFO can split one sell across lots; compare against the
@@ -492,18 +585,38 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
     def money(label, v, mark=""):
         _cont(out, f"{label:<15}{_fmt(v):>16}{mark}")
 
+    is_opt = bool(ev.get("is_option")
+                  or is_option_symbol(str(ev.get("symbol") or "")))
+
     def per_share(v):
         # (1,000 sh @ 41.0500) — the ACB/share (or sale price/share)
-        # the reader wants to sanity-check against a statement.
+        # the reader wants to sanity-check against a statement. An
+        # option is quoted per share: N contracts x 100 (S026-05).
         if qty and abs(qty) > 1e-9:
+            if is_opt:
+                n = abs(qty)
+                return paint(f"   ({n:,g} contract{'s' if n != 1 else ''}"
+                             f" \u00d7 {OPTION_MULTIPLIER} sh @ "
+                             f"{abs(v) / (n * OPTION_MULTIPLIER):,.4f})",
+                             "dim")
             return paint(f"   ({abs(qty):,g} sh @ "
                          f"{abs(v) / abs(qty):,.4f})", "dim")
         return ""
 
     _pr = float(ev.get("proceeds") or 0)
     _cb = float(ev.get("cost") or 0)
+    if ev.get("direction") == "SHORT":
+        # Engine signed short convention: `cost` holds the NEGATED
+        # short-sale proceeds, `proceeds` the NEGATED cover cost. Shown
+        # as the return shows them (form-export): proceeds = what the
+        # short sale (or the write) brought in, cost = the cover
+        # (S026-08); gain = proceeds - cost is unchanged.
+        _pr, _cb = -_cb + 0.0, -float(ev.get("proceeds") or 0) + 0.0
     money("proceeds", _pr, per_share(_pr))
     money("cost basis", _cb, per_share(_cb))
+    if ev.get("direction") == "SHORT":
+        _cont(out, paint("short: proceeds = the short sale / write, cost "
+                         "= the buy-to-cover (as on the return)", "dim"))
 
     # ---- wash / superficial loss ------------------------------------
     dis = float(ev.get("disallowed_amount") or 0.0)
@@ -529,21 +642,32 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                 _cont(out, f"replacement {r['id'][:12]} "
                            + paint("(row not in supplied books)",
                                    "warn"))
+        defer = dis - perm
+        _us = country in ("us", "usa")
+        dests = []
+        if defer > TIE or perm <= TIE:
+            # The deferred part: on the replacement's ACB. A split
+            # denial named only the permanent part, so a deferred loss
+            # read as lost for good (S026-10).
+            _amt = f"{_fmt(defer)} " if perm > TIE else ""
+            dests.append(
+                f"{_amt}denied loss \u2192 replacement lot's ACB "
+                f"(s.53(1)(f))" if not _us else
+                f"{_amt}denied loss \u2192 replacement lot's basis; "
+                f"holding period tacks (\u00a71223(3))")
         if perm > TIE:
-            dest = ("denied loss PERMANENTLY lost to the "
-                    "registered-account replacement (no ACB bump "
-                    "outside a taxable account)"
-                    if country not in ("us", "usa") else
-                    "denied loss PERMANENTLY lost (replacement in a "
-                    "sheltered account — Rev. Rul. 2008-5)")
-        else:
-            dest = ("denied loss \u2192 replacement lot's ACB "
-                    "(s.53(1)(f))" if country not in ("us", "usa")
-                    else "denied loss \u2192 replacement lot's basis; "
-                         "holding period tacks (\u00a71223(3))")
+            dests.append(
+                f"{_fmt(perm)} denied loss PERMANENTLY lost: the "
+                f"replacement is in a registered account or held by an "
+                f"affiliated person — no ACB addition on this return (an "
+                f"affiliated person adds it to their own ACB, "
+                f"s.53(1)(f))" if not _us else
+                f"{_fmt(perm)} denied loss PERMANENTLY lost (replacement "
+                f"in a sheltered account — Rev. Rul. 2008-5)")
         import textwrap as _tw
-        for _ln in _tw.wrap(dest, width=W - _GUT - 2):
-            _cont(out, paint(_ln, "dim"))
+        for dest in dests:
+            for _ln in _tw.wrap(dest, width=W - _GUT - 2):
+                _cont(out, paint(_ln, "dim"))
         money("allowed gain", float(ev.get("gain") or 0))
     else:
         money("gain", float(ev.get("gain") or 0))
@@ -613,7 +737,8 @@ def render_reconciliation(events: List[Dict[str, Any]],
               if check_labels else ""),
            paint("\u2500" * W, "dim"),
            f"  events audited     {n:>14,}",
-           f"  total gain         {_fmt(total_gain):>14}",
+           f"  total gain         {_fmt(total_gain):>14}  "
+           + paint("(unrounded engine sum)", "dim"),
            f"  total disallowed   {_fmt(total_dis):>14}",
            f"  source rows        {sourced:>7,}/{n:,} traced to a "
            f"parsed broker row  " + mark(n - sourced, sourced == n),
@@ -633,8 +758,16 @@ def render_reconciliation(events: List[Dict[str, Any]],
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
             "dim"))
+    out.append(paint(f"  {TOTALS_NOTE}", "dim"))
     out.append(paint("\u2550" * W, "dim"))
     return out
+
+
+# R1-267: the audit sums unrounded engine values; Schedule 3 (form-export,
+# `sum` FOR THE RETURN) rounds each row to the cent first.
+TOTALS_NOTE = ("Totals are unrounded engine sums; Schedule 3 rows "
+               "(form-export, sum FOR THE RETURN) are rounded to the cent "
+               "first, so those totals can differ by a few cents.")
 
 
 # ---------------------------------------------------------------------------
@@ -853,32 +986,9 @@ def main(argv=None) -> int:
 
     # US FIFO: one sell id can produce several lot records. The audit
     # block is per taxable EVENT (the sell); aggregate the lots and
-    # keep each lot's trace.
-    by_id: Dict[str, List[Dict[str, Any]]] = {}
-    order: List[str] = []
-    for g in gains:
-        gid = g.get("id") or f"?{len(order)}"
-        if gid not in by_id:
-            order.append(gid)
-        by_id.setdefault(gid, []).append(g)
-
-    merged: List[Dict[str, Any]] = []
-    for gid in order:
-        lots = by_id[gid]
-        if len(lots) == 1:
-            merged.append(lots[0])
-            continue
-        agg = dict(lots[0])
-        agg["qty"] = sum(float(l.get("qty") or 0) for l in lots)
-        for f in ("gain", "raw_gain", "proceeds", "cost",
-                  "disallowed_amount", "permanently_disallowed"):
-            agg[f] = sum(float(l.get(f) or 0) for l in lots)
-        agg["is_wash_sale"] = any(l.get("is_wash_sale") for l in lots)
-        agg["replacement_lot_ids"] = [
-            r for l in lots for r in (l.get("replacement_lot_ids") or [])]
-        agg["trace"] = [ln for l in lots for ln in (l.get("trace") or [])]
-        agg["lots"] = len(lots)
-        merged.append(agg)
+    # keep each lot's trace — but never fold a grant WRITE into the
+    # LONG close that shares its id (S026-19).
+    merged = merge_lot_records(gains)
 
     merged.sort(key=lambda g: (g.get(date_key) or g.get("date") or "",
                                g.get("symbol") or ""))
@@ -936,6 +1046,14 @@ def main(argv=None) -> int:
             if not scoped:
                 continue
             _g = sum(float(c.get("gain") or 0.0) for c in scoped)
+            if gid == NOID:
+                reconciliation_failures.append(
+                    f"check file carries {len(scoped)} disposition(s) "
+                    f"with NO id (first: {scoped[0].get('symbol')} "
+                    f"{scoped[0].get('date')}; gain {_g:,.2f}) — they "
+                    f"cannot be tied to the engine re-run: a hand-edited "
+                    f"or corrupted gains file.")
+                continue
             reconciliation_failures.append(
                 f"check file carries disposition id {gid[:12]} "
                 f"({scoped[0].get('symbol')} {scoped[0].get('date')}, "
@@ -999,6 +1117,7 @@ def main(argv=None) -> int:
                    "total_disallowed": round(
                        sum(float(e.get("disallowed_amount") or 0)
                            for e in events), 2),
+                   "totals_note": TOTALS_NOTE,
                    "reconciliation_failures": reconciliation_failures,
                    "failed": failed},
                   sys.stdout, indent=2, default=str)

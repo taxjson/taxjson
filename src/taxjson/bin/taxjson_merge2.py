@@ -308,8 +308,10 @@ def main():
     )
     parser.add_argument(
         '--map', dest='map_file', metavar='FILE',
-        help="Apply ticker mappings from a `ticker.map` file (whitespace-"
-             "separated `from to` lines, '#' comments).",
+        help="Apply ticker mappings from a `ticker.map` file: one rule "
+             "per line, `GLOBAL|TOBASE|JOURNAL FROM TO`, `DELETE SYM` or "
+             "`DISTINCT A B`, '#' comments (a line without a keyword is "
+             "refused).",
     )
     parser.add_argument(
         '--to', dest='target_currency', metavar='CURR',
@@ -425,7 +427,7 @@ def main():
             print(
                 f"warning: --to {target_currency} given without --rates; "
                 f"every cross-currency row will be converted with the "
-                f"hardcoded --default-rate ({args.default_rate}). Pass "
+                f"hardcoded --default-rate ({resolve_default_rate(args.default_rate)}). Pass "
                 f"--rates rates.csv to use real historical rates.",
                 file=sys.stderr,
             )

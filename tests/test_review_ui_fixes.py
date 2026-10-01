@@ -501,7 +501,7 @@ class TestR6_CliRenderingHardening(unittest.TestCase):
             root = self._proj(tmp)
             ctx = ProjectContext.load(root)
             app = create_app(ctx, allowed_hosts=["*"])
-            client = TestClient(app)
+            client = TestClient(app, base_url="http://127.0.0.1")
             r = client.get("/", headers={"host": "192.168.1.5:8765"})
             self.assertNotEqual(r.status_code, 400)
 
@@ -662,7 +662,7 @@ class TestR9_WebWhatIf(unittest.TestCase):
         from fastapi.testclient import TestClient
         from taxjson.web.app import create_app
         from taxjson.web.context import ProjectContext
-        return TestClient(create_app(ProjectContext.load(d)))
+        return TestClient(create_app(ProjectContext.load(d)), base_url="http://127.0.0.1")
 
     def _project(self, tmp):
         from datetime import date

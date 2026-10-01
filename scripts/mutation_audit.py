@@ -7,9 +7,12 @@ runs the fast engine test set against each, and reports SURVIVORS —
 mutants the tests fail to kill. A survivor is either an equivalent
 mutant (no observable behavior change) or a genuine test gap.
 
-Mutates IN PLACE with backup/restore; safe to interrupt (restores on
-exit). Writes progress + results to mutation_report.txt next to this
-script.
+Mutates IN PLACE with backup/restore. The original source is written
+back after every mutant, and on Ctrl-C, SIGTERM, SIGHUP (a killed
+`timeout`, an ssh drop, a CI cancel) or any other exit Python gets to
+run; only SIGKILL or a power cut can leave a mutant applied — restore
+with `git checkout -- src/taxjson/lib/`. Writes progress + results to
+mutation_report.txt next to this script.
 """
 import ast
 import os
@@ -129,7 +132,43 @@ def mutate(tree, kind, node):
     return node
 
 
+# path -> original source of every file currently being mutated.
+_ORIGINALS = {}
+
+
+def _restore_originals():
+    """Write every registered original back (idempotent)."""
+    for path, src in list(_ORIGINALS.items()):
+        try:
+            with open(path, "w") as f:
+                f.write(src)
+        except OSError as e:
+            print(f"mutation_audit: COULD NOT RESTORE {path}: {e} — run "
+                  f"`git checkout -- {path}`", file=sys.stderr)
+            continue
+        _ORIGINALS.pop(path, None)
+
+
+def _on_signal(signum, _frame):
+    _restore_originals()
+    print(f"mutation_audit: stopped by signal {signum}; sources restored",
+          file=sys.stderr)
+    os._exit(128 + signum)
+
+
+def install_restore_handlers():
+    """SIGTERM / SIGHUP used to kill the run between writing a mutant
+    and the try/finally that restores it, leaving a de-commented,
+    mutated engine behind (audit S025-00)."""
+    import atexit
+    atexit.register(_restore_originals)
+    for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, _on_signal)
+
+
 def main():
+    install_restore_handlers()
     results = {"killed": 0, "timeout": 0, "survived": [],
                "compile_error": 0}
     t0 = time.time()
@@ -146,6 +185,7 @@ def main():
     for path, lo, hi in TARGETS:
         src = open(path).read()
         backup = src
+        _ORIGINALS[path] = backup
         _, sites = find_sites(src, lo, hi)
         total += len(sites)
         for i, (kind, _) in enumerate(sites):
@@ -189,6 +229,7 @@ def main():
                               f"{len(results['survived'])} survived, "
                               f"{time.time()-t0:.0f}s\n")
         open(path, "w").write(backup)
+        _ORIGINALS.pop(path, None)
 
     with open(REPORT, "a") as rep:
         rep.write(f"\nDONE in {time.time()-t0:.0f}s\n")

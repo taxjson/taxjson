@@ -209,7 +209,7 @@ class TestContextFlags(unittest.TestCase):
         from taxjson.web.app import create_app
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, {"margin": []})
-            c = TestClient(create_app(_ctx(root)))
+            c = TestClient(create_app(_ctx(root)), base_url="http://127.0.0.1")
             cfg = root / "taxjson.toml"
             cfg.write_text(cfg.read_text().replace('"taxable"',
                                                    '"Taxable"'))
@@ -368,7 +368,7 @@ class TestStaleRadarSidecar(unittest.TestCase):
             os.utime(root / "reports" / "wash_radar_margin.rpt",
                      (time.time() - 1000,) * 2)
             (root / "work" / "sheltered_base.json").write_text("{}")
-            r = TestClient(create_app(_ctx(root))).get(
+            r = TestClient(create_app(_ctx(root)), base_url="http://127.0.0.1").get(
                 "/wash-radar?account=margin")
         self.assertIn("older than the books", r.text)
 

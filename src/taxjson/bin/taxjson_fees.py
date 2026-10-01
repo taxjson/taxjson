@@ -56,6 +56,23 @@ PROG = "taxjson-fees-sum"
 
 TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 
+# convert-tt's source label for hand-entered .tt files (no broker named).
+MANUAL_TT = "manual (.tt)"
+
+
+def _iso_date(text: str) -> str:
+    """argparse type for --since: a real YYYY-MM-DD date. The filter
+    compares date strings, so '2025-6-1' or '2025/06/01' silently
+    dropped every fee at exit 0 (S031-06)."""
+    from datetime import date
+    try:
+        if len(text) != 10:
+            raise ValueError
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a YYYY-MM-DD date")
+
 
 def _is_option(symbol: str) -> bool:
     try:
@@ -181,7 +198,11 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
             n_rows += 1
 
             curr = tx.get("currency") or "?"
-            key = f"{broker}/{tx.get('account')}" if by_account else broker
+            # A row without an account stamp (hand-run on unstamped
+            # JSON) is '<broker>/?', like a missing currency — not the
+            # literal 'None' (S031-03).
+            key = (f"{broker}/{tx.get('account') or '?'}" if by_account
+                   else broker)
             is_opt = _is_option(tx.get("symbol") or "")
             from taxjson.lib.futures import is_plain_future
             is_fut = is_plain_future(tx.get("symbol") or "")
@@ -197,10 +218,16 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
                 add_stat(B["cur"].setdefault(curr, new_stats()),
                          fee, qty, is_opt, notional, is_fut)
 
-    zero_fee = sorted(brokers_seen - {k.split("/")[0] for k in buckets})
+    zero_fee = sorted(brokers_seen - {k.split("/")[0] for k in buckets}
+                      - {MANUAL_TT})
+    # A hand-entered .tt file names no broker, so its fees cannot be
+    # attributed: a broker whose period trades live only in a .tt is
+    # not 'fee-free' (R1-101).
+    manual_fees = any(k.split("/")[0] == MANUAL_TT for k in buckets)
     info = {
         "files_read": files_read, "rows": n_rows, "dups": n_dups,
         "no_id": n_no_id, "skipped": skipped_no_broker, "zero_fee": zero_fee,
+        "manual_fees": manual_fees,
     }
     return buckets, grand, info
 
@@ -308,8 +335,14 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
                f"fee rows: {info['rows']} | dups collapsed: {info['dups']}"
                + (f" | rows w/o id: {info['no_id']}" if info['no_id'] else ""))
     if info["zero_fee"]:
-        out.append(f"Brokers with NO fees in this period: "
-                   f"{', '.join(info['zero_fee'])}")
+        if info.get("manual_fees"):
+            out.append(f"Brokers with no fees in their own exports this "
+                       f"period: {', '.join(info['zero_fee'])} — the "
+                       f"{MANUAL_TT} fees above are not attributed to a "
+                       f"broker and may belong to one of them.")
+        else:
+            out.append(f"Brokers with NO fees in this period: "
+                       f"{', '.join(info['zero_fee'])}")
     if info["skipped"]:
         # In --cache mode most files legitimately lack a brokerage tag, so a
         # full dump is noise; name them only when the list is short.
@@ -377,6 +410,7 @@ def render_json(buckets, grand, info, *, to_curr, by_account, year,
             "dups_collapsed": info["dups"], "rows_without_id": info["no_id"],
             "skipped_files": info["skipped"],
             "zero_fee_brokers": info["zero_fee"],
+            "manual_tt_fees_unattributed": bool(info.get("manual_fees")),
         },
         "brokerages": {name: serialize(b) for name, b in buckets.items()},
         "total": serialize(grand),
@@ -394,9 +428,10 @@ def main():
     p.add_argument("--cache", metavar="DIR",
                    help="Add every *.json in DIR (non-broker files are skipped).")
     p.add_argument("--year", type=tax_year, metavar="YYYY",
-                   help="Only count fees whose (settlement) date is in this "
-                        "year. Default: all years.")
-    p.add_argument("--since", metavar="YYYY-MM-DD",
+                   help="Only count fees whose TRADE date is in this year "
+                        "(the settlement date only when a row has no trade "
+                        "date). Default: all years.")
+    p.add_argument("--since", metavar="YYYY-MM-DD", type=_iso_date,
                    help="Only count fees on/after this date — the cutoff "
                         "channel `taxjson fees-sum PERIOD` drives.")
     p.add_argument("--to", dest="to_curr", metavar="CURR",
