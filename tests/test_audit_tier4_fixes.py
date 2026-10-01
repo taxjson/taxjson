@@ -4,8 +4,8 @@
   fmv_per_share hint (+ cash-in-lieu) when the broker booked $0 rows.
 - RBC removal/receipt on different dates pair within a ±7-day window; an
   unmatched removal warns instead of silently vanishing shares.
-- is_rbc_cil_row matches 'CIL' as a whole word (FACILITIES/COUNCIL no longer
-  swallow real securities' rows).
+- the RBC classifier keys cash-in-lieu on the CIL code or the CASH IN LIEU
+  phrase (FACILITIES/COUNCIL/CILANTRO never make a row cash-in-lieu).
 - taxjson-corp-actions emits each event_id once (overlapping statement CSVs
   double-emitted the same event).
 - WASH virtual-tx ids carry FULL transaction ids (8-hex prefixes collided).
@@ -42,20 +42,37 @@ def _write(content):
 
 
 class TestRbcCilWordBoundary(unittest.TestCase):
+    # The live classifier (rbc_direct.classify_rbc_row), not the dead
+    # is_rbc_cil_row helper these tests used to pin (audit S073-18).
+    def _classify(self, activity, desc, qty=""):
+        from taxjson.lib.brokerages.rbc_direct import (classify_rbc_row,
+                                                       read_rbc_rows)
+        p = _write(_RBC_HEADER + (
+            f'"2025-07-24 00:00:00","{activity}","XYZ","XYZ CORP",'
+            f'"{qty}","","2025-07-24 00:00:00","123","1.00","CAD",'
+            f'"{desc}"\n'))
+        try:
+            (r,) = read_rbc_rows(p).rows
+        finally:
+            os.remove(p)
+        return classify_rbc_row(r)
+
     def test_facilities_and_cilantro_not_cil(self):
-        from taxjson.lib.corp_actions import is_rbc_cil_row
-        self.assertFalse(is_rbc_cil_row(
-            "Dividends", "DIV - MEDICAL FACILITIES FUND CASH DIV ON 100 SHS"))
-        self.assertFalse(is_rbc_cil_row("Buy", "CILANTRO HOLDINGS PURCHASE"))
+        self.assertEqual(self._classify(
+            "Dividends", "DIV - MEDICAL FACILITIES FUND CASH DIV ON 100 SHS"),
+            "dividend")
+        self.assertEqual(self._classify(
+            "Reorganization", "MGR - CILANTRO COUNCIL HOLDINGS MERGER TO "
+            "NEWCO 1 NEW = 1 OLD", qty="-10"), "reorg")
 
     def test_genuine_cil_rows_still_match(self):
-        from taxjson.lib.corp_actions import is_rbc_cil_row
-        self.assertTrue(is_rbc_cil_row(
+        self.assertEqual(self._classify(
             "Reorganization",
-            "CIL - CHEVRON CORPORATION CASH IN LIEU OF FRAC SHARES 166764"))
-        self.assertTrue(is_rbc_cil_row(
+            "CIL - CHEVRON CORPORATION CASH IN LIEU OF FRAC SHARES 166764"),
+            "cil")
+        self.assertEqual(self._classify(
             "Reorganization",
-            "CIL - CHEVRON CORPORATION ADDITIONAL CIL PAYMENT 166764"))
+            "CIL - CHEVRON CORPORATION ADDITIONAL CIL PAYMENT 166764"), "cil")
 
 
 class TestRbcDifferentDateMerger(unittest.TestCase):

@@ -43,7 +43,9 @@ right share count.
 """
 
 import argparse
+import datetime as _dt
 import json
+import re
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -55,10 +57,22 @@ from taxjson.lib.country import country_arg
 PROG = "taxjson-apply-distributions"
 
 
+# A per-share amount is a plain decimal: float() also took 'nan', 'inf',
+# '1e309' and '1_0' (read as 10), which either failed later at the gains
+# stage under a wrong ROC/ACB-up label or silently applied 100x the
+# amount (audit S025-14).
+_AMOUNT_RE = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)")
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def load_map(path: Path) -> List[Tuple[str, str, float]]:
     """[(symbol, date, per_share)] — malformed lines are fatal: a typo
-    here silently mis-adjusts ACB, so refuse rather than skip."""
+    here silently mis-adjusts ACB, so refuse rather than skip. A
+    repeated SYMBOL+DATE is kept (two components of one distribution
+    can be entered on two lines) but warned about: a pasted line or an
+    appended correction ADDS to the first one."""
     rows: List[Tuple[str, str, float]] = []
+    seen: dict = {}
     # utf-8-sig: an editor's byte-order mark used to become part of the
     # first symbol, so that row was skipped as "no \ufeffXYZ.TO shares
     # held" with the BOM invisible in the note (audit S000-06).
@@ -72,17 +86,32 @@ def load_map(path: Path) -> List[Tuple[str, str, float]]:
             sys.exit(f"{PROG}: {path}:{lineno}: expected "
                      f"'SYMBOL DATE PER_SHARE', got {raw!r}")
         sym, date, amt = parts
-        try:
-            per_share = float(amt)
-        except ValueError:
+        if not _AMOUNT_RE.fullmatch(amt):
             sys.exit(f"{PROG}: {path}:{lineno}: bad per-share amount "
-                     f"{amt!r}")
-        if len(date) != 10 or date[4] != "-" or date[7] != "-":
+                     f"{amt!r} (want a plain decimal such as 0.4297 or "
+                     f"-0.12)")
+        per_share = float(amt)
+        # YYYY-MM-DD exactly, and a real date: '2025/06/19' or
+        # '2025-6-19' compared as strings against the book's ISO dates
+        # and sized the wrong record-date balance (audit S025-19).
+        try:
+            if not _DATE_RE.fullmatch(date):
+                raise ValueError
+            _dt.date.fromisoformat(date)
+        except ValueError:
             sys.exit(f"{PROG}: {path}:{lineno}: bad date {date!r} "
                      f"(want YYYY-MM-DD)")
         # Book symbols are upper case: a lowercase key matched nothing
         # and the row was skipped as "no shares held" (audit S025-13).
-        rows.append((sym.upper(), date, per_share))
+        key = (sym.upper(), date)
+        if key in seen:
+            print(f"{PROG}: warning: {path}:{lineno}: {key[0]} {date} "
+                  f"repeats line {seen[key]} — both amounts are applied "
+                  f"(they ADD). If this line is a correction or a pasted "
+                  f"copy, delete the other one.", file=sys.stderr)
+        else:
+            seen[key] = lineno
+        rows.append((key[0], date, per_share))
     return rows
 
 
@@ -277,7 +306,18 @@ def apply_distributions(doc: dict, map_rows, account: str,
            if not str(t.get("id") or "").startswith("DIST-")]
     sizing = txs + _phantom_openings(txs, phantoms)
     applied = 0
+    used_ids: set = set()
     for key, date, per_share in map_rows:
+        if per_share == 0:
+            # A 0 is a placeholder (the fund has not published yet), not
+            # a distribution: it used to be reported as an applied
+            # "return of capital" and a $0 ADJUST that the checklist's
+            # roc-entered step counted (audit S025-23).
+            print(f"NOTE: distributions.map: {key} {date} has per-share "
+                  f"amount 0 — a placeholder, NOT applied. Enter the "
+                  f"fund's declared amount once it is published.",
+                  file=sys.stderr)
+            continue
         sym = key
         if renames:
             from taxjson.bin.taxjson_ticker_map import map_symbol
@@ -294,6 +334,15 @@ def apply_distributions(doc: dict, map_rows, account: str,
         _cost = "basis" if country == "usa" else "ACB"
         kind = (f"reinvested distribution ({_cost} up)" if per_share > 0
                 else f"return of capital ({_cost} down)")
+        # Deterministic AND unique: a SYMBOL+DATE entered twice (two
+        # components, or a pasted line load_map warned about) gives
+        # each ADJUST its own id (audit S025-16).
+        rid = f"DIST-{sym}-{date}-{account}"
+        n = 2
+        while rid in used_ids:
+            rid = f"DIST-{sym}-{date}-{account}-{n}"
+            n += 1
+        used_ids.add(rid)
         txs.append({
             "action": "ADJUST",
             "date": date, "time": "23:59:58", "date_settle": date,
@@ -302,7 +351,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
             "net_amount": amount, "gross_amount": 0.0,
             "type": "dist",
             "account": account,
-            "id": f"DIST-{sym}-{date}-{account}",
+            "id": rid,
             "description": f"{kind}: {bal:g} sh x {per_share:g}/sh "
                            f"per distributions.map",
         })
@@ -364,6 +413,18 @@ def main(argv=None) -> int:
         cli_diag.error(PROG, f"could not read {e}")
         return 2
 
+    book_accounts = sorted({str(t.get("account"))
+                            for t in doc.get("transactions", [])
+                            if t.get("account")})
+    if args.account and book_accounts \
+            and args.account not in book_accounts:
+        # The ADJUST is booked on the label given: one no row carries
+        # (a typo, a different case) put the ACB change in a pool of its
+        # own — dropped by the US per-account basis (audit S025-12).
+        cli_diag.error(PROG, f"--account {args.account!r} is not an "
+                             f"account of {args.base_json.name} (its rows "
+                             f"carry {', '.join(map(repr, book_accounts))})")
+        return 2
     account = args.account or next(
         (t.get("account") for t in doc.get("transactions", [])
          if t.get("account")), "")

@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+- **Corporate-action legs never share a second.** An event stamped
+  23:59:59 (or with no time) put both legs of a taxable exchange on one
+  second, so a same-symbol exchange could pool the new shares before
+  selling the old; event times now leave room for the one-second leg
+  bump (S074-02).
+
+- **A spin-off rollover allocated $0 is loud.** An s.86.1 (Canada) or
+  §355 (US) election with `allocated_acb_cad` / `allocated_acb` = 0 booked
+  the spun-off shares at $0 with the parent keeping its whole cost and no
+  word; `elect --set`, the corp-actions stage, every `taxjson run` and
+  the checklist now flag it (S073-21, S074-04). A US §356 boot merger
+  with no value for the new shares warns that the recognized gain and
+  basis are understated (S073-22).
+- **US mergers and spin-offs: non-recognition is not optional.** The
+  option text no longer offers `taxable_exchange` for a qualifying
+  §368(a) reorganization "you aren't claiming", and the end-of-run
+  FILING REQUIRED reminder no longer fires for `reorg_368`,
+  `reorg_368_boot` or `tax_free_355`: only a significant holder (5% of a
+  public company, 1% of a private one, or a $1M basis) attaches the
+  Reg. §1.368-3 / §1.355-5 statement (S073-00).
+
+- **taxjson-corp-actions reads IB Corporate Actions columns by name.** A
+  header missing a column, or Data rows before any Header, is refused;
+  the fixed-position fallback read Report Date as the event date in IB's
+  consolidated layout or dropped the merger (S072-22). Questrade's
+  `ON 1,500 SHS` reads as 1500 (the ratio showed 150-for-1) (S073-02).
+
+- **RBC: another company's cash in lieu is no longer folded into a
+  reorganization.** A CIL row joins an event only by the same ticker or
+  the company's full name; half the name in common (ALPHA GOLD vs ALPHA
+  RESOURCES) moved the cash into the wrong sale and hid its "NOT booked"
+  warning (S072-01).
+- **RBC spin-off under a temporary code:** the warning names the symbol
+  as booked (`C135859.TO`) with the exact `GLOBAL` line, and stops once
+  ticker.map renames it (`taxjson run` passes the map to the corp-actions
+  stage) (S072-03).
+
+- **A broken elections manifest is a one-line error everywhere.**
+  `taxjson elect` (and every other command) on a manifest that is not
+  UTF-8, not JSON, or not the documented shape (a bare-string record, a
+  list of hints) printed a traceback; `taxjson elect <account>` now marks
+  an election key no rule knows as UNKNOWN (S072-05, S072-16).
+
+- **distributions.map is read strictly.** A per-share amount must be a
+  plain decimal (`nan`, `inf`, `1e309` and `1_0` were accepted) and the
+  date a real `YYYY-MM-DD`; a `0` is a placeholder that is no longer
+  reported as an applied return of capital; a symbol and date entered
+  twice are both applied with a warning and each ADJUST gets its own
+  id; `taxjson-apply-distributions --account` refuses a label no row of
+  the book carries (S025-12/14/16/19/23).
+
 - **US estimate (experimental): NIIT and the loss carryforward.** The
   up-to-$3,000 capital loss deduction now reduces net investment income
   (Form 8960 line 5a; NIIT was up to $114 too high), and the

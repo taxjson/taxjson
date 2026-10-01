@@ -107,6 +107,12 @@ class CorporateAction:
     broker_account: str = ''
 
     def __post_init__(self):
+        # The emitters date a second leg one second AFTER the event
+        # (`_bump_time`): an event at 23:59:59 (or with no time) put
+        # both legs on one second, so a same-symbol exchange's new BUY
+        # could pool before the SELL of the old shares (audit S074-02).
+        # Leave room for the bump. Not part of the event id.
+        self.time = _clamp_time(self.time, _LATEST_EVENT_TIME)
         if not self.event_id:
             self.event_id = self._compute_id()
 
@@ -351,6 +357,11 @@ def _num_text(s: str, where: str = '') -> float:
     return float(s.replace(',', ''))
 
 
+# The Corporate Actions columns read by name (S072-22).
+_IB_CA_COLUMNS = ('Currency', 'Date/Time', 'Description', 'Quantity',
+                  'Value')
+
+
 def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
     """The Corporate Actions rows of one IB statement, sorted into merger
     rows, spin-off rows (and their `Ca` cancellations) and merger-shaped
@@ -384,18 +395,37 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
                 continue
             if raw_row[1] == 'Header':
                 header_map = {c: i for i, c in enumerate(raw_row)}
+                # Columns by NAME only: the fixed-position fallback fit
+                # the single-account layout, and in the consolidated
+                # (Account-column) layout it read Report Date as the
+                # event date — or matched no merger at all (S072-22).
+                missing = [c for c in _IB_CA_COLUMNS if c not in header_map]
+                if missing:
+                    from taxjson.lib.brokerages.base import \
+                        BrokerageParseError
+                    raise BrokerageParseError(
+                        f"{Path(csv_path).name}: Corporate Actions header "
+                        f"is missing column(s) {', '.join(missing)} — "
+                        f"refusing to guess them by position")
                 continue
             if raw_row[1] != 'Data':
                 continue
+            if not header_map:
+                from taxjson.lib.brokerages.base import BrokerageParseError
+                raise BrokerageParseError(
+                    f"{Path(csv_path).name}: a Corporate Actions Data row "
+                    f"comes before any Corporate Actions Header row — its "
+                    f"columns are unknown (IB's two layouts differ); "
+                    f"re-download the statement")
 
-            def cell(col, default):
-                i = header_map.get(col, default)
+            def cell(col, default=None):
+                i = header_map.get(col)
                 return raw_row[i] if i is not None and i < len(raw_row) else ''
-            currency = cell('Currency', 3)
+            currency = cell('Currency')
             if currency in ('', 'Total', 'Total in CAD'):
                 continue
-            desc = cell('Description', 6) or ''
-            row_account = cell('Account', None) if 'Account' in header_map \
+            desc = cell('Description') or ''
+            row_account = cell('Account') if 'Account' in header_map \
                 else ''
             # Cancellation rows undo a previous entry — drop them, don't
             # let them slip through and double the position.
@@ -404,9 +434,9 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
             spin = ib_spinoff_parts(desc)
             if spin is not None:
                 (spin_cancels if is_cancel else spin_rows).append({
-                    'currency': currency, 'date_time': cell('Date/Time', 5),
-                    'description': desc, 'qty': _f(cell('Quantity', 7)),
-                    'value': _f(cell('Value', 9)), 'parts': spin,
+                    'currency': currency, 'date_time': cell('Date/Time'),
+                    'description': desc, 'qty': _f(cell('Quantity')),
+                    'value': _f(cell('Value')), 'parts': spin,
                     'account': row_account})
                 continue
             if is_cancel:
@@ -423,10 +453,10 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
                 continue
             rec = {
                 'currency': currency,
-                'date_time': cell('Date/Time', 5),
+                'date_time': cell('Date/Time'),
                 'description': desc,
-                'quantity': cell('Quantity', 7),
-                'value': cell('Value', 9),
+                'quantity': cell('Quantity'),
+                'value': cell('Value'),
                 'account': row_account,
             }
             if (_IB_ANY_MERGER_RE.search(desc)
@@ -730,7 +760,9 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
             _CURRENCY_SUFFIX.get(cont['currency'], cont['currency']))
         date_part, _, time_part = mb['date_time'].partition(',')
         date = date_part.strip()
-        time = (time_part.strip() or '20:25:00')
+        # One second below the event clamp: the spin-off legs below sit
+        # one second after this merger (S074-02).
+        time = _clamp_time(time_part.strip() or '20:25:00', '23:59:57')
         cn, co = _pair_for(cont)
         events.append(CorporateAction(
             date=date, time=time, action_type='merger',
@@ -900,12 +932,23 @@ def _ib_unsupported_events(odd_rows, account, acct_of, quiet: bool = False
 FILING_REQUIRED_ELECTIONS: Dict[str, str] = {
     'rollover_s_86_1': "file the s. 86.1 election with your return "
                        "(spinoff must be on CRA's eligibility list)",
-    'reorg_368': "attach the Reg. §1.368-3 statement to your return",
-    'reorg_368_boot': "attach the Reg. §1.368-3 statement to your "
-                      "return",
-    'tax_free_355': "attach the Reg. §1.355-5 statement to your "
-                    "return",
+    # No US entry: §354/§355 non-recognition applies by law when the
+    # transaction qualifies, and the Reg. §1.368-3 / §1.355-5 statement
+    # is due only from a significant holder — omitting it does not undo
+    # the deferral. The reminder told every holder "the deferral is only
+    # valid with the paperwork" (audit S073-00, the US mirror of R1-138);
+    # the option text says who files.
 }
+
+# Who attaches the US reorganization statement (Reg. §1.368-3(c),
+# §1.355-5(c)): a holder of at least 5% of a publicly traded company's
+# stock, 1% of a non-public one, or securities with a basis of $1M or
+# more.
+_US_SIGNIFICANT_HOLDER = (
+    "Only a significant holder (at least 5% of a public company's "
+    "stock, 1% of a private one, or a basis of $1 million or more) "
+    "attaches the Reg. §{reg} statement to the return; others file "
+    "nothing.")
 
 # Universal election available alongside every country/event-type rule.
 # Useful for IB's cross-listing replay-noise rows that look like real
@@ -1073,7 +1116,10 @@ _QT_SPINOFF_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b', re.IGNORE
 _QT_PARENT_RE = re.compile(
     r'FROM\s+SEC#\s+(\S+)\s+(.+?)\s+REC\s', re.IGNORECASE,
 )
-_QT_ON_SHS_RE = re.compile(r'\bON\s+([\d.]+)\s+SHS\b', re.IGNORECASE)
+# Thousands commas are part of the number: '[\d.]+' stopped at the comma,
+# missed 'ON 1,500 SHS' and showed a 150-for-1 ratio (audit S073-02).
+_QT_ON_SHS_RE = re.compile(
+    r'\bON\s+(\d{1,3}(?:,\d{3})+(?:\.\d+)?|[\d.]+)\s+SHS\b', re.IGNORECASE)
 _QT_REC_PAY_RE = re.compile(
     r'\bREC\s+(\S+)\s+PAY\s+(\S+)', re.IGNORECASE)
 
@@ -1172,10 +1218,14 @@ def parse_questrade_corporate_actions(
         key = _get_desc_key(row.get('Description') or '')
         if key:
             name_to_symbol.setdefault(key, set()).add((sym, lst))
-        try:
-            q = float((row.get('Quantity') or '0').replace(',', '') or 0)
-        except ValueError:
-            q = 0.0
+        # The parser's strict number (a decimal comma is refused, never
+        # read 100x too large — the S072-17 sibling): this lookup sizes
+        # the parent held on the spin-off date.
+        from taxjson.lib.brokerages.base import parse_strict_number
+        q = parse_strict_number(row.get('Quantity'), field='Quantity',
+                                where=f"Questrade {row.get('Symbol') or ''} "
+                                      f"row of {row.get('Transaction Date')}",
+                                allow_blank=True, blank=0.0)
         moves[(sym, lst)].append(
             (_parse_qt_date(row.get('Transaction Date', '')), q))
 
@@ -1236,7 +1286,7 @@ def parse_questrade_corporate_actions(
         m_shs = _QT_ON_SHS_RE.search(description)
         if m_rp:
             key = ('chain', m_rp.group(1), m_rp.group(2),
-                   m_shs.group(1) if m_shs else '')
+                   m_shs.group(1).replace(',', '') if m_shs else '')
         else:
             key = ('symbol', symbol)
         by_target[key].append({
@@ -1371,7 +1421,7 @@ def parse_questrade_corporate_actions(
         for r in rows:
             m = _QT_ON_SHS_RE.search(r['description'])
             if m:
-                source_qty = float(m.group(1))
+                source_qty = _num_text(m.group(1), where=r['description'])
                 break
 
         currency = rows[0]['currency']
@@ -1478,46 +1528,6 @@ _RBC_NAME_STOP = frozenset((
     'HOLDINGS HOLDING GROUP THE COM COMMON STOCK SHARES SHARE SHS SH NEW NO '
     'PAR CL CLASS SUB SUBORD SUBORDINATE VTG VOTING EXCHANGEABLE EXCHANGBLE '
     'UNIT UNITS TR TRUST ETF ORD DEFAULT OF AND').split())
-
-
-def is_rbc_merger_row(activity: str, description: str) -> bool:
-    """True for an RBC merger removal/receipt row phrase. Kept as a
-    phrase test for callers; the pairing (`pair_rbc_reorganizations`)
-    decides which rows are ONE merger — a "SHRS RECEIVED THRU MERGER"
-    receipt also closes 1-for-1 exchanges and MER reorganizations, which
-    are not elections."""
-    d = (description or '').upper()
-    if 'Reorganization' not in (activity or '') and 'MGR' not in d:
-        return False
-    return ('MERGER TO' in d) or ('RECEIVED THRU MERGER' in d) \
-        or ('SHRS RECEIVED' in d and 'MERGER' in d)
-
-
-_RBC_CIL_WORD_RE = re.compile(r'\bCIL\b')
-
-
-def is_rbc_cil_row(activity: str, description: str) -> bool:
-    """True for an RBC cash-in-lieu-of-fractional-shares row (`CIL - ...
-    CASH IN LIEU OF FRAC SHARES`, and its `ADDITIONAL CIL PAYMENT`
-    follow-up) — the cash settlement of the fractional share a
-    reorganization leaves over, folded into that event.
-
-    Strict: 'CIL' must be a WHOLE WORD on a Reorganization row (the old
-    substring test matched FACILITIES/COUNCIL/CECIL), and outside a
-    Reorganization the row must say CASH IN LIEU *of a FRACTIONAL share*
-    — a "CASH IN LIEU OF DIVIDEND" is income, not a fraction."""
-    d = (description or '').upper()
-    is_reorg = 'Reorganization' in (activity or '')
-    if 'CASH IN LIEU' in d and (is_reorg or re.search(
-            r'CASH\s+IN\s+LIEU\s+(?:OF\s+)?(?:A\s+)?FRAC', d)):
-        # The fraction word must follow CASH IN LIEU: a name starting
-        # FRAC (FRACTYL HEALTH) made a CASH IN LIEU OF DIVIDEND a
-        # fractional-share row (audit S064-05).
-        return True
-    if not is_reorg:
-        return False
-    return bool(_RBC_CIL_WORD_RE.search(d)) and 'MERGER' not in d \
-        and 'RECEIVED' not in d
 
 
 def rbc_is_temp_symbol(symbol: str) -> bool:
@@ -1858,7 +1868,12 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
     unmatched = [r for r in legs if id(r) not in used]
 
     # 3) Cash in lieu of the fractional share, into its event: same
-    #    ticker as the receipt (or the same company), paid within 45 days.
+    #    ticker as the receipt or the removal, or the same company by
+    #    its FULL name (the old ticker, a temporary code), paid within 45
+    #    days. Half the name tokens in common (ALPHA GOLD vs ALPHA
+    #    RESOURCES) folded another security's cash into the wrong
+    #    disposition and silenced its own "NOT booked" warning (audit
+    #    S072-01).
     unmatched_cil = []
     stock_events = [e for e in events if e.kind in ('merger', 'reorg')]
     for c in (r for r in rows if getattr(r, 'cls', '') == 'cil'):
@@ -1873,14 +1888,16 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
                 continue
             if not -3 <= lag <= 45:
                 continue
-            if c.symbol and c.symbol == ev.receipt.symbol:
+            if c.symbol and c.symbol in (ev.receipt.symbol,
+                                         ev.removal.symbol):
                 s = 2.0
             else:
                 cname = c.symdesc or _rbc_body(c.desc)
-                _old, new = _rbc_removal_names(ev.removal)
+                old, new = _rbc_removal_names(ev.removal)
                 s = max(rbc_name_similarity(cname, _rbc_receipt_name(ev.receipt)),
-                        rbc_name_similarity(cname, new) if new else 0.0)
-                if s < 0.5:
+                        rbc_name_similarity(cname, new) if new else 0.0,
+                        rbc_name_similarity(cname, old) if old else 0.0)
+                if s < 1.0:
                     continue
             key = (s, -abs(lag))
             if best is None or key > best[0]:
@@ -1908,6 +1925,7 @@ _RBC_SPINOFF_RE = re.compile(
 def parse_rbc_corporate_actions(
     csv_path: Path, account: str = 'RBC',
     context_files: Optional[List[Path]] = None,
+    renames: Optional[Dict[str, str]] = None,
 ) -> List[CorporateAction]:
     """Extract election events from an RBC Direct Investing activity CSV:
     mergers ("<OLDCO> MERGER TO <NEWCO> <ratio> NEW = <n> OLD" removal +
@@ -1917,7 +1935,11 @@ def parse_rbc_corporate_actions(
     exchanges need no election; the brokerage parser books those.
 
     RBC reports no FMV and no ISIN; FMV comes from the election hint, and
-    the symbols stand in for the ISINs in the event-id hash."""
+    the symbols stand in for the ISINs in the event-id hash.
+
+    `renames` — the project's ticker.map renames (`taxjson run` passes
+    them): a spin-off booked under a temporary code that the map already
+    renames needs no "map it" warning."""
     from taxjson.lib.brokerages.rbc_direct import read_rbc_rows
     rows = read_rbc_rows(Path(csv_path)).rows
 
@@ -2117,11 +2139,15 @@ def parse_rbc_corporate_actions(
         # s.86.1 ACB reduction became a phantom gain (audit S019-05).
         src = parent or (parent_code or '(unknown parent)')
         tgt = _rbc_ca_symbol(r.symbol, r.currency)
-        if rbc_is_temp_symbol(r.symbol):
+        if rbc_is_temp_symbol(r.symbol) and not _renamed(tgt, renames):
+            # Named as the books carry it (C135859.TO): the bare code in
+            # a GLOBAL line matched nothing, and the warning used to stay
+            # after the line was added (audit S072-03).
             print(f"warning: RBC spin-off on {r.date} is booked under the "
-                  f"temporary code {r.symbol} ({r.symdesc or r.desc[:60]!r}) "
-                  f"— map it to the listed ticker with a ticker.map GLOBAL "
-                  f"line once known.", file=sys.stderr)
+                  f"temporary code {tgt} ({r.symdesc or r.desc[:60]!r}) "
+                  f"— once the listed ticker is known, add to ticker.map:  "
+                  f"GLOBAL {tgt} <TICKER>.{tgt.rsplit('.', 1)[-1]}",
+                  file=sys.stderr)
         events.append(CorporateAction(
             date=r.date, time='09:30:00', action_type='spinoff',
             source_symbol=src, source_isin=parent_code or src,
@@ -2138,6 +2164,15 @@ def parse_rbc_corporate_actions(
 
 
 parse_rbc_corporate_actions.accepts_context = True
+parse_rbc_corporate_actions.accepts_renames = True
+
+
+def _renamed(symbol: str, renames: Optional[Dict[str, str]]) -> bool:
+    """Whether the project's ticker.map renames `symbol`."""
+    if not renames:
+        return False
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+    return map_symbol(symbol, renames) != symbol
 
 
 
@@ -2178,6 +2213,21 @@ def hint_value_problem(key: str, value: Any) -> Optional[str]:
     return None
 
 
+class ManifestError(ValueError):
+    """An elections manifest taxjson cannot read: not UTF-8, not JSON,
+    or not the documented shape. Every command that reads one prints it
+    as a one-line error (the file is hand-edited and committed, so a
+    merge conflict or a typo reaches this — audits S072-05, S072-16)."""
+
+
+def election_keys(country: str) -> set:
+    """Every election key the country's rules know (plus `ignore`)."""
+    keys = {IGNORE_ELECTION[0]}
+    for rule in RULES_BY_COUNTRY[_canon(country)].values():
+        keys.update(k for k, _ in rule.options)
+    return keys
+
+
 class Manifest:
     """JSON-backed elections store.
 
@@ -2201,7 +2251,13 @@ class Manifest:
     def load(cls, path: Path) -> "Manifest":
         if not path.exists():
             return cls({})
-        raw = path.read_text(encoding='utf-8').strip()
+        try:
+            raw = path.read_text(encoding='utf-8').strip()
+        except UnicodeDecodeError as exc:
+            raise ManifestError(
+                f"manifest at {path} is not UTF-8 text (byte "
+                f"{exc.start}: {exc.reason}) — re-save it as UTF-8"
+            ) from None
         if not raw:
             # Empty file behaves like a missing one — typical when a
             # previous run created the file before any election was saved.
@@ -2213,24 +2269,44 @@ class Manifest:
             # passed where the manifest belongs). Surface the actual path
             # so the user can fix the invocation instead of staring at a
             # raw Python traceback.
-            raise ValueError(
+            raise ManifestError(
                 f"manifest at {path} is not valid JSON ({exc.msg} at line "
                 f"{exc.lineno} col {exc.colno}). If this file used to be a "
                 f"CSV or other format, point --manifest at the correct path "
                 f"or delete the file to start fresh."
             ) from None
         if not isinstance(data, dict):
-            raise ValueError(
+            raise ManifestError(
                 f"manifest at {path} must be a JSON object with an "
                 f"'elections' key; got top-level {type(data).__name__}"
             )
+        elections = data.get('elections') or {}
+        if not isinstance(elections, dict):
+            raise ManifestError(
+                f"manifest at {path}: 'elections' must be a JSON object "
+                f"keyed by event id; got {type(elections).__name__}")
         records = {}
-        for eid, rec in (data.get('elections') or {}).items():
+        for eid, rec in elections.items():
+            # A bare string (or list) record raised AttributeError from
+            # deep inside the corp-actions stage (audit S072-16).
+            if not isinstance(rec, dict):
+                raise ManifestError(
+                    f"manifest at {path}: election {eid} must be a JSON "
+                    f"object like {{\"election\": \"...\"}}; got "
+                    f"{type(rec).__name__} {rec!r:.40}")
+            if not isinstance(rec.get('election', ''), str):
+                raise ManifestError(
+                    f"manifest at {path}: election {eid}: 'election' must "
+                    f"be a string; got {rec.get('election')!r:.40}")
+            if not isinstance(rec.get('hints') or {}, dict):
+                raise ManifestError(
+                    f"manifest at {path}: election {eid}: 'hints' must be "
+                    f"a JSON object; got {rec.get('hints')!r:.40}")
             for hk, hv in (rec.get('hints') or {}).items():
                 prob = hint_value_problem(hk, hv)
                 if prob:
-                    raise ValueError(f"manifest at {path}: election "
-                                     f"{eid}: hint {prob}")
+                    raise ManifestError(f"manifest at {path}: election "
+                                        f"{eid}: hint {prob}")
             records[eid] = ElectionRecord(
                 event_id=eid,
                 summary=rec.get('summary', ''),
@@ -2684,6 +2760,25 @@ def _canada_merger_rollover(event: CorporateAction, option: str, hints: dict) ->
     )
 
 
+# The latest clock time an event may carry: its emitters add one second
+# to it (a merger's spin-off leg is itself one second after the merger,
+# so a merger source time is held to one second earlier still).
+_LATEST_EVENT_TIME = '23:59:58'
+
+
+def _clamp_time(t: str, latest: str) -> str:
+    """`t` as HH:MM:SS, no later than `latest`; a blank time is the
+    start of the day. An unparseable time is returned unchanged."""
+    if not (t or '').strip():
+        return '00:00:00'
+    try:
+        h, m, sec = (int(x) for x in t.split(':'))
+    except (ValueError, AttributeError):
+        return t
+    norm = f"{h:02d}:{m:02d}:{sec:02d}"
+    return min(norm, latest)
+
+
 def _bump_time(t: str, secs: int) -> str:
     """Add `secs` seconds to an HH:MM:SS string with wraparound clamping
     at 23:59:59. We only need 1-second bumps for sort tie-breaking, so
@@ -2781,6 +2876,20 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             file=sys.stderr,
         )
 
+    if tgt_fmv <= 0 and event.qty_received > 0:
+        # Without the new shares' value the realized gain is understated
+        # (boot - basis), so the §356 gain is capped too low and the
+        # §358 basis understated by the same amount (audit S073-22).
+        print(
+            f"warning: boot merger {event.source_symbol}→"
+            f"{event.target_symbol} on {event.date} has no value for the "
+            f"new shares (fmv_per_share=0 and none reported) — the "
+            f"realized gain counts only the cash, so the recognized gain "
+            f"and the new basis are understated. Re-run `taxjson elect "
+            f"--redo` with the FMV per new share.",
+            file=sys.stderr,
+        )
+
     realized = (max(tgt_fmv, 0.0) + boot) - basis
     recognized = max(0.0, min(realized, boot))   # §356: capped at boot; no losses
     proceeds = basis + recognized
@@ -2831,16 +2940,19 @@ USA_MERGER = RuleSpec(
     options=[
         (
             'taxable_exchange',
-            "Default. Fully taxable exchange (§1001): old shares sold at "
-            "FMV, new shares acquired at FMV. Use when the transaction "
-            "doesn't qualify as a §368(a) reorganization or you aren't "
-            "claiming tax-free treatment.",
+            "Fully taxable exchange (§1001): old shares sold at FMV, new "
+            "shares acquired at FMV. Only when the merger does NOT qualify "
+            "as a §368(a) reorganization (the company's Form 8937 says "
+            "which). A qualifying reorganization is tax-free by law "
+            "(§354), not by choice: picking this for one books a gain or "
+            "loss the Code does not recognize.",
         ),
         (
             'reorg_368',
             "§368(a) tax-free reorganization (all-stock): no gain "
             "recognized; basis carries to the new shares (§358) and the "
-            "holding period tacks (§1223(1)).",
+            "holding period tacks (§1223(1)). "
+            + _US_SIGNIFICANT_HOLDER.format(reg="1.368-3"),
         ),
         (
             'reorg_368_boot',
@@ -2848,7 +2960,8 @@ USA_MERGER = RuleSpec(
             "to the lesser of your realized gain or the cash received; "
             "losses are NOT recognized. New basis = old basis − boot + "
             "gain recognized (§358(a)). You supply the boot and your "
-            "total pre-merger basis. Holding dates reset in this model.",
+            "total pre-merger basis. Holding dates reset in this model. "
+            + _US_SIGNIFICANT_HOLDER.format(reg="1.368-3"),
         ),
     ],
     apply=lambda ev, opt, hints: (
@@ -2874,17 +2987,22 @@ USA_SPINOFF = RuleSpec(
     options=[
         (
             'taxable_distribution_301',
-            "Default. §301 distribution: the spun-off shares are taxable "
-            "income at FMV on receipt (a dividend to the extent of "
-            "earnings & profits — see your 1099-DIV); cost basis of the "
-            "new position = FMV. You supply the per-share FMV.",
+            "§301 distribution: the spun-off shares are taxable income at "
+            "FMV on receipt (a dividend to the extent of earnings & "
+            "profits — see your 1099-DIV); cost basis of the new position "
+            "= FMV. You supply the per-share FMV. Only when the spin-off "
+            "does NOT qualify under §355 (the company's Form 8937 says "
+            "which).",
         ),
         (
             'tax_free_355',
-            "§355 tax-free spinoff: no current income; basis is allocated "
-            "between parent and spin-co in proportion to relative FMV "
+            "§355 tax-free spinoff (applies by law when the spin-off "
+            "qualifies): no current income; basis is allocated between "
+            "parent and spin-co in proportion to relative FMV "
             "(§358(b)-(c)) — the company's Form 8937 publishes the "
-            "allocation. You supply the dollar basis moved to the spin-co.",
+            "allocation. You supply the dollar basis moved to the "
+            "spin-co. "
+            + _US_SIGNIFICANT_HOLDER.format(reg="1.355-5"),
         ),
     ],
     apply=lambda ev, opt, hints: (
@@ -2994,6 +3112,23 @@ def zero_value_merger_rows(rows: List[dict]) -> List[dict]:
             and abs(float(r.get('net_amount') or 0.0)) < 0.005]
 
 
+# The basis-allocating spin-off elections and the hint each one takes.
+ALLOCATED_BASIS_HINT = {'rollover_s_86_1': 'allocated_acb_cad',
+                        'tax_free_355': 'allocated_acb'}
+
+
+def zero_basis_rollover_rows(rows: List[dict]) -> List[dict]:
+    """Spun-off share BUY rows of an s.86.1 / §355 election booked with
+    $0 allocated basis: the parent keeps its whole cost and the gain
+    moves to the spin-off's sale (audits S073-21, S074-04). `taxjson
+    run` keeps it loud on every run, like a $0 spin-off."""
+    return [r for r in rows
+            if r.get('action') == 'BUYSELL'
+            and float(r.get('quantity') or 0.0) > 0
+            and r.get('corp_election') in ALLOCATED_BASIS_HINT
+            and abs(float(r.get('net_amount') or 0.0)) < 0.005]
+
+
 def zero_value_spinoff_rows(rows: List[dict]) -> List[dict]:
     """DIVIDEND rows of taxable spin-off elections booked at $0 — the
     deferred-FMV state `taxjson run` keeps loud on every run."""
@@ -3044,6 +3179,18 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     # position only receives `adjusted_acb` would silently vaporize the
     # fractional basis (frac/qty * allocated_acb). Keeping it in the
     # parent defers it rather than losing it.
+    if abs(allocated_acb) < 0.005 and event.qty_received > 0:
+        # A spin-off with value is never allocated $0 (s.86.1(2) /
+        # §358(b) apportion by relative FMV): the parent kept its whole
+        # cost and the spun-off shares booked at $0, with no word
+        # (audits S073-21, S074-04). Loud; `taxjson run` repeats it.
+        print(f"warning: spin-off {event.source_symbol}→"
+              f"{event.target_symbol} on {event.date}: the basis-allocating "
+              f"election carries an allocated cost of 0 — the spun-off "
+              f"shares get $0 cost and the parent keeps all of it, which "
+              f"moves gain from the parent's sale to the spin-off's. "
+              f"Enter the allocated amount (parent cost x the spin-off's "
+              f"share of the combined FMV).", file=sys.stderr)
     whole_qty, adjusted_acb, frac_qty = _snap_received(event,
         event.qty_received, allocated_acb,
     )
@@ -3078,9 +3225,12 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
 
 
 def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: dict) -> List[dict]:
-    """Canada wrapper: s. 86.1 foreign-spinoff rollover. Only valid if
-    the spinoff is on CRA's eligibility list (Income Tax Folio S4-F8-C1)
-    AND the user files the election with their return."""
+    """Canada wrapper: s. 86.1 foreign-spinoff rollover. Only valid for
+    an "eligible distribution" under ITA s. 86.1(2) — among other
+    conditions the distributing corporation must provide the required
+    information to the Minister; CRA publishes the foreign spin-offs it
+    has accepted on canada.ca — AND when the user elects in writing with
+    their return."""
     if 'allocated_acb_cad' not in hints and (event.currency or 'CAD'
                                              ).upper() != 'CAD':
         print(f"warning: s.86.1 spin-off {event.source_symbol}→"
