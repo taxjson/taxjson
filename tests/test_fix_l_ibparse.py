@@ -1004,5 +1004,47 @@ class TestTransfersViewInBookValue(unittest.TestCase):
         self.assertEqual([r['value'] for r in rows], [16506.95])
 
 
+# -------------------------------------------- schema / generator prompt
+class TestSchemaContract(unittest.TestCase):
+    """S053-13 / S065-10 / S065-13 / S033-20."""
+
+    def _v(self, **kw):
+        from taxjson.lib.brokerages.schema import validate_transactions
+        tx = dict(action='BUYSELL', date='2025-12-31', currency='USD',
+                  quantity=1, net_amount=10.0, price=10.0)
+        tx.update(kw)
+        return validate_transactions([tx])
+
+    def test_negative_futures_price_is_not_an_error(self):
+        errs, _ = self._v(symbol='F:CLK5.US', price=-5.0, net_amount=2.5,
+                          multiplier=1000)
+        self.assertFalse([e for e in errs if 'negative price' in e])
+        errs, _ = self._v(symbol='XYZ.US', price=-5.0)
+        self.assertTrue([e for e in errs if 'negative price' in e])
+
+    def test_validate_cli_negative_futures_price(self):
+        from taxjson.bin.taxjson_validate import validate_transactions as V
+        rows = [{'action': 'BUYSELL', 'date': '2020-04-20',
+                 'symbol': 'F:CLK0.US', 'quantity': 1, 'price': -5.0,
+                 'net_amount': 2.5, 'currency': 'USD'}]
+        flat = str(V(rows))
+        self.assertNotIn('Price is negative', flat)
+
+    def test_crypto_settling_after_its_trade_date_warns(self):
+        _, warns = self._v(symbol='BTC', date_settle='2026-01-01')
+        self.assertTrue([w for w in warns if 'bare (crypto) symbol' in w])
+        _, warns = self._v(symbol='BTC', date_settle='2025-12-31')
+        self.assertFalse([w for w in warns if 'bare (crypto) symbol' in w])
+
+    def test_prompts_state_fee_sign_and_settle_helpers(self):
+        from taxjson.lib.brokerages.schema import render_schema_prompt
+        from taxjson.bin import taxjson_generate_parser as G
+        prompt = render_schema_prompt()
+        self.assertIn('FEE: net_amount POSITIVE = charged', prompt)
+        self.assertIn('settle on the TRADE date', prompt)
+        src = _P(G.__file__).read_text(encoding='utf-8')
+        self.assertIn('equity_settlement_date for EQUITY', src)
+
+
 if __name__ == '__main__':
     unittest.main()
