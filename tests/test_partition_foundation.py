@@ -193,7 +193,7 @@ class TestSettingOwnership(unittest.TestCase):
     """ENGINE-03, INPUTS-02/05, COMMANDS-10, SPEC-08/09: a setting the
     country does not own is refused by every config reader, naming the
     key and the country — it was ignored (s.49, province) or, worse,
-    honoured (foreign_return_of_capital = "dividend", ITA s.90(2))."""
+    honoured (foreign_return_of_capital = "dividend", ITA s.90(1))."""
 
     def test_table_names_every_known_key(self):
         from taxjson.bin.taxjson_run import _SETTINGS_KEYS
@@ -251,7 +251,7 @@ class TestSettingOwnership(unittest.TestCase):
     @rule("CA-ACB-08")
     @rule_absent("CA-ACB-08", country="usa")
     def test_foreign_roc_rule_is_canadian(self):
-        """ITA s.90(2) (IB foreign ROC as a dividend) is Canada's: the
+        """ITA s.90(1) (IB foreign ROC as a dividend) is Canada's: the
         resolver returns "acb" for a US project whatever the table says."""
         from taxjson.bin.taxjson_run import ib_foreign_roc_mode
         self.assertEqual(ib_foreign_roc_mode({"country": "canada"}),

@@ -176,7 +176,10 @@ def validate_transactions(transactions, filename="input",
                 issues[context].append(f"Quantity is 0 for action '{action}'")
 
             price_val = nums["price"]
-            if price_val is not None and price_val < 0:
+            # A futures price can be negative (WTI, April 2020; a
+            # spread) and is booked correctly (audit S053-13).
+            if (price_val is not None and price_val < 0
+                    and not (symbol or "").startswith("F:")):
                 issues[context].append(f"Price is negative: {price_val}")
 
         if (require_prices and action in {"BUYSELL", "DIVIDEND"}

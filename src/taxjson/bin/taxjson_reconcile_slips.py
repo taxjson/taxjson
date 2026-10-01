@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.bin.taxjson_form_export import load_json
+from taxjson.lib.numeric import nonneg_float_arg
 
 _SUFFIX_RE = re.compile(r"\.(US|TO|AX|L|V|CN|NE)$", re.IGNORECASE)
 
@@ -680,7 +681,6 @@ def render(rep: Dict[str, Any], tolerance: float,
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    from taxjson.lib.cli_diag import nonneg_amount
     parser = argparse.ArgumentParser(
         prog="taxjson-reconcile-slips",
         description=__doc__,
@@ -708,7 +708,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="The project's country (wording of the "
                              "slip notes only: T5008 vs 1099-B). The "
                              "`taxjson reconcile-slips` wrapper passes it.")
-    parser.add_argument("--tolerance", type=nonneg_amount, default=1.00,
+    parser.add_argument("--tolerance", type=nonneg_float_arg, default=1.00,
                         help="Absolute per-symbol amount tolerance "
                              "(default: 1.00)")
     parser.add_argument("--json", action="store_true",

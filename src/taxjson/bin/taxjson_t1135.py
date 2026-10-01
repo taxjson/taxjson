@@ -64,6 +64,7 @@ from decimal import Decimal
 from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.futures import is_plain_future
+from taxjson.lib.numeric import positive_float_arg
 from taxjson.lib.report_model import fmt_money, load_report_json
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1048,7 +1049,6 @@ def render_report(rep: Dict[str, Any]) -> str:
 
 @guard_main("taxjson-t1135")
 def main(argv: Optional[List[str]] = None) -> int:
-    from taxjson.lib.cli_diag import nonneg_amount
     _doc = __doc__ or ""
     _cav = _doc[_doc.find("Caveats printed"):_doc.find("Usage:")].rstrip()
     parser = argparse.ArgumentParser(
@@ -1071,10 +1071,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="t1135.map override file (SYMBOL COUNTRY lines)")
     parser.add_argument("--base-currency", default="CAD",
                         help="Label for amounts (default: CAD)")
-    parser.add_argument("--threshold", type=nonneg_amount,
-                        default=FILING_THRESHOLD,
+    parser.add_argument("--threshold", type=positive_float_arg, default=FILING_THRESHOLD,
                         help="Filing threshold (default: 100000)")
-    parser.add_argument("--detailed-threshold", type=nonneg_amount,
+    parser.add_argument("--detailed-threshold", type=positive_float_arg,
                         default=DETAILED_THRESHOLD,
                         help="Detailed-method threshold (default: 250000)")
     parser.add_argument("--json", action="store_true",

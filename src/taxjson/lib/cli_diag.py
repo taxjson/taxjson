@@ -107,20 +107,3 @@ def tax_year(value: str) -> int:
         raise argparse.ArgumentTypeError(
             f"{y} is not a plausible tax year (expected 1900..{hi})")
     return y
-
-
-def nonneg_amount(value: str) -> float:
-    """argparse type for a tolerance or threshold: a finite number >= 0.
-    float() accepted 'nan', 'inf' and negatives (audit S036-00, S052-18):
-    nan made every comparison False — a threshold test that never fires,
-    a tolerance that turns every row into 'MISMATCH off by +0.00'."""
-    import argparse
-    import math
-    try:
-        f = float(str(value).strip())
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{value!r} is not a number")
-    if not math.isfinite(f) or f < 0:
-        raise argparse.ArgumentTypeError(
-            f"{value!r} must be a finite number >= 0")
-    return f

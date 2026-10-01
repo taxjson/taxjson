@@ -20,7 +20,11 @@ usually an amended return or a refreshed snapshot (`close-year
 
 Compared aggregates per taxable account (engine-recomputed, matching
 the filing basis recorded at close time): realized total (non-tainted),
-total disallowed, disposition count, dividend+PIL income, tainted count.
+total disallowed, disposition count, dividend and PIL income, tainted
+count, the engine's net proceeds, ST/LT gain, and the form lines the
+export puts on the return (Schedule 3 line codes, or Form 8949 part
+totals). NOT locked: interest, foreign tax withheld and the FX gain on
+foreign cash (line 15300 / §988) — check-filed says so with every OK.
 """
 
 from taxjson.lib.pipeline import income_dating_flags, option_timing_flags
@@ -37,11 +41,54 @@ PROG = "taxjson-filed"
 _TOL = 0.01
 
 
+# What every OK line says the lock does not cover (S032-11).
+NOT_LOCKED = ("interest, foreign tax withheld and the FX gain on foreign "
+              "cash are not locked")
+
+
+def form_lines(entries: List[Dict[str, Any]], *, crypto: bool = False,
+               year: Optional[int] = None) -> Dict[str, float]:
+    """The amounts the export puts on the return for these disposition
+    entries: Schedule 3 {proceeds/gain line code: amount} (Canadian
+    gains), or Form 8949 part totals {"I_proceeds": ..} (US gains carry
+    a term). The lock records them so a change that moves amounts
+    BETWEEN lines (13199 vs 15199 vs 15200), or changes how proceeds are
+    presented (outlays, short sales), is drift even when the total gain
+    is unchanged (R1-205, R1-281)."""
+    import contextlib
+    import io
+    from taxjson.bin import taxjson_form_export as FE
+    if not entries:
+        return {}
+    with contextlib.redirect_stderr(io.StringIO()):
+        if any(e.get("term") in ("SHORT_TERM", "LONG_TERM")
+               for e in entries):
+            rep = FE.build_8949(entries)
+            return {f"{part}_{k}": float(v)
+                    for part in ("I", "II")
+                    for k, v in (rep.get(f"part_{part}_totals") or {}).items()
+                    if rep.get(f"part_{part}")}
+        rep = FE.build_schedule3(FE.mark_crypto(entries) if crypto
+                                 else entries, year)
+    return {k.split("_", 1)[1]: float(v)
+            for k, v in (rep.get("totals") or {}).items()
+            if k not in ("proceeds_all", "gain_all")}
+
+
 def aggregates_from_gains(doc: Dict[str, Any],
-                          account: Optional[str] = None) -> Dict[str, Any]:
+                          account: Optional[str] = None, *,
+                          crypto: bool = False,
+                          year: Optional[int] = None,
+                          rounded: bool = True) -> Dict[str, Any]:
     """The filing-relevant aggregate set from one gains document —
     optionally restricted to one account's entries (used when the
-    document is a blended combined run)."""
+    document is a blended combined run). `crypto`: the account's
+    dispositions go on the crypto-asset line. `rounded=False` returns
+    the money totals unrounded (close-year sums the accounts and rounds
+    ONCE — S031-20)."""
+    if not isinstance(doc, dict):
+        raise ValueError("not a gains document (expected a JSON object)")
+    entries: List[Dict[str, Any]] = []
     realized = disallowed = income = 0.0
     dividend = pil = 0.0
     proceeds = st_gain = lt_gain = 0.0
@@ -59,6 +106,7 @@ def aggregates_from_gains(doc: Dict[str, Any],
         if e.get("tainted"):
             tainted += 1
             continue
+        entries.append(e)
         realized += float(e.get("gain") or 0.0)
         disallowed += float(e.get("disallowed_amount")
                             or e.get("disallowed") or 0.0)
@@ -77,6 +125,11 @@ def aggregates_from_gains(doc: Dict[str, Any],
             continue
         tainted += 1
     income = dividend + pil
+    if not rounded:
+        return {"realized": realized, "disallowed": disallowed,
+                "income": income, "dividend": dividend, "pil": pil,
+                "proceeds": proceeds, "st_gain": st_gain,
+                "lt_gain": lt_gain}
     return {
         "realized": round(realized, 2),
         "disallowed": round(disallowed, 2),
@@ -89,13 +142,16 @@ def aggregates_from_gains(doc: Dict[str, Any],
         "dividend": round(dividend, 2),
         "pil": round(pil, 2),
         "tainted": tainted,
-        # Round-five audit: gain-total-preserving drift still moves
-        # FILED figures — Schedule 3 line 13199 / 8949 (d) move with
-        # proceeds, and a US ST<->LT term flip changes tax owed with
-        # realized unchanged. Snapshot them so check-filed sees both.
+        # The ENGINE's net proceeds (sell-side costs netted, a short
+        # cover's negated cost) — not a return line; the return's lines
+        # are in form_lines (R1-281). A US ST<->LT term flip changes tax
+        # owed with realized unchanged, so ST/LT are locked too.
         "proceeds": round(proceeds, 2),
         "st_gain": round(st_gain, 2),
         "lt_gain": round(lt_gain, 2),
+        "form_lines": {k: round(v, 2) for k, v in
+                       form_lines(entries, crypto=crypto,
+                                  year=year).items()},
     }
 
 
@@ -107,21 +163,27 @@ def write_snapshot(root: Path, year, country: str, basis: str,
                    accounts: Dict[str, Dict[str, Any]], *,
                    force: bool,
                    option_timing: Optional[Dict[str, Any]] = None,
-                   extra: Optional[Dict[str, Any]] = None) -> Path:
+                   extra: Optional[Dict[str, Any]] = None,
+                   raw: Optional[Dict[str, Dict[str, float]]] = None
+                   ) -> Path:
     """Write filed/<year>.json. `option_timing` records the written-option
     premium timing the return used (Canada), so a later project's
     `option-boundary` can tell a year filed under grant timing from one
-    filed under close timing."""
+    filed under close timing. `raw`: each account's UNROUNDED money
+    aggregates (aggregates_from_gains(rounded=False)) — the totals are
+    their sum rounded once, as wash-sales and the engine round it, not a
+    sum of per-account cents (S031-20)."""
     path = snapshot_path(root, year)
     if path.exists() and not force:
         sys.exit(f"taxjson close-year: {path} already exists — the "
                  f"lock protects a filed year. Re-run with --force to "
                  f"replace it (only if you re-filed/amended).")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _money = ("realized", "disallowed", "income", "dividend", "pil",
+              "proceeds", "st_gain", "lt_gain")
+    src = raw if raw else accounts
     totals = {
-        k: round(sum(a.get(k, 0) for a in accounts.values()), 2)
-        if k in ("realized", "disallowed", "income", "dividend", "pil",
-                 "proceeds", "st_gain", "lt_gain")
+        k: round(sum(a.get(k, 0) for a in src.values()), 2)
+        if k in _money
         else sum(a.get(k, 0) for a in accounts.values())
         for k in ("realized", "disallowed", "dispositions", "income",
                   "dividend", "pil", "tainted", "proceeds", "st_gain",
@@ -146,9 +208,20 @@ def write_snapshot(root: Path, year, country: str, basis: str,
         doc.update(extra)
         doc["schema_version"] = 2
     tmp = path.with_name(path.name + ".part")
-    tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
-                   encoding="utf-8")
-    tmp.replace(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                       encoding="utf-8")
+        tmp.replace(path)
+    except OSError as e:
+        # filed/ is a file, or the project is read-only: one line, not a
+        # traceback (S031-19). Nothing was written.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        sys.exit(f"taxjson close-year: cannot write {path}: {e} — "
+                 f"nothing was written.")
     return path
 
 
@@ -260,13 +333,15 @@ def recompute_accounts(cache: Path, equity_accounts: List[str],
         out.update(_recompute_blended(cache, crypto_accounts, year,
                                       settings, basis, run_gains_cmd,
                                       per_account_basis=False,
-                                      option_timing=option_timing))
+                                      option_timing=option_timing,
+                                      crypto=True))
     else:
         for a in crypto_accounts:
             out[a] = recompute_year(cache, a, year, settings, basis,
                                     run_gains_cmd,
                                     no_wash=crypto_no_wash,
-                                    option_timing=option_timing)
+                                    option_timing=option_timing,
+                                    crypto=True)
     out.update(_recompute_blended(cache, equity_accounts, year, settings,
                                   basis, run_gains_cmd,
                                   option_timing=option_timing))
@@ -277,7 +352,8 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
                        settings: Dict[str, Any], basis: str,
                        run_gains_cmd, *,
                        per_account_basis: Optional[bool] = None,
-                       option_timing: Optional[Dict[str, Any]] = None
+                       option_timing: Optional[Dict[str, Any]] = None,
+                       crypto: bool = False
                        ) -> Dict[str, Optional[Dict[str, Any]]]:
     """ONE combined gains run over `accounts`' base books, split back
     into per-account aggregates (the pipeline's blended pass)."""
@@ -324,7 +400,8 @@ def _recompute_blended(cache: Path, accounts: List[str], year: int,
         run_gains_cmd(cmd, outp)
         doc = json.loads(outp.read_text(encoding="utf-8"))
     for a, _b in present:
-        out[a] = aggregates_from_gains(doc, account=a)
+        out[a] = aggregates_from_gains(doc, account=a, crypto=crypto,
+                                       year=int(year))
     return out
 
 
@@ -332,7 +409,8 @@ def recompute_year(cache: Path, account: str, year: int,
                    settings: Dict[str, Any], basis: str,
                    run_gains_cmd, *,
                    no_wash: bool = False,
-                   option_timing: Optional[Dict[str, Any]] = None
+                   option_timing: Optional[Dict[str, Any]] = None,
+                   crypto: bool = False
                    ) -> Optional[Dict[str, Any]]:
     """Aggregates for `account`/`year` recomputed from the CURRENT base
     book via the gains engine. `run_gains_cmd(cmd_argv, out_path)`
@@ -368,7 +446,7 @@ def recompute_year(cache: Path, account: str, year: int,
         out = Path(td) / "recomputed_gains.json"
         run_gains_cmd(cmd, out)
         doc = json.loads(out.read_text(encoding="utf-8"))
-    return aggregates_from_gains(doc)
+    return aggregates_from_gains(doc, crypto=crypto, year=int(year))
 
 
 def diff_snapshot(snapshot: Dict[str, Any],
@@ -422,6 +500,16 @@ def diff_snapshot(snapshot: Dict[str, Any],
                     f"{acct}: {key} filed {filed[key]:,.2f} -> now "
                     f"{cur[key]:,.2f} (drift "
                     f"{cur[key] - filed[key]:+,.2f})")
+        fl_filed = filed.get("form_lines")
+        fl_cur = cur.get("form_lines")
+        if isinstance(fl_filed, dict) and isinstance(fl_cur, dict):
+            for code in sorted(set(fl_filed) | set(fl_cur)):
+                a = float(fl_filed.get(code) or 0.0)
+                b = float(fl_cur.get(code) or 0.0)
+                if abs(a - b) > _TOL:
+                    lines.append(f"{acct}: form line {code} filed "
+                                 f"{a:,.2f} -> now {b:,.2f} (drift "
+                                 f"{b - a:+,.2f})")
         for key in ("dispositions", "tainted"):
             if key == "tainted" and not snapshot.get(
                     "tainted_counts_manual"):

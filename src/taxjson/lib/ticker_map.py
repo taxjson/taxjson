@@ -121,3 +121,33 @@ def map_ticker(symbol: str, target_currency: str = "CAD") -> str:
     
     new_ext = mapping.get(ext, ext)
     return f"{base}.{new_ext}"
+
+
+def class_share_aliases(symbols) -> dict:
+    """{option-root listing: class share} for an option root that names
+    no share listing among `symbols` but exactly ONE class share of that
+    root on the same exchange: RBC books Rogers' Montreal calls under the
+    root RCI (RCI260320C00055000.TO) while the shares are RCI.B.TO, and
+    the per-underlying reports filed the covered-call gain under a
+    phantom RCI.TO ticker (S040-11). Same rule as buy/sell-check
+    (S047-01)."""
+    import re
+    shares = {str(s).strip().upper() for s in symbols
+              if s and not is_option_symbol(str(s).strip().upper())}
+    by_root: dict = {}
+    for s in shares:
+        m = re.fullmatch(r"(.+)\.([A-Z]{1,2})\.([A-Z]{1,3})", s)
+        if m:
+            by_root.setdefault(f"{m.group(1)}.{m.group(3)}", set()).add(s)
+    return {r: next(iter(cs)) for r, cs in by_root.items()
+            if len(cs) == 1 and r not in shares}
+
+
+def underlying_of(symbol: str, aliases: dict) -> str:
+    """The share listing an option (or a share) groups under: the parsed
+    option underlying, mapped through class_share_aliases."""
+    sym = str(symbol or "")
+    if is_option_symbol(sym):
+        und = parse_option_underlying(sym) or sym
+        return aliases.get(und.upper(), und)
+    return sym

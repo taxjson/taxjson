@@ -49,6 +49,12 @@ def process_data(data, groups, *, direction: str, calls_only: bool):
     """Add the matching rows of one gains document to `groups`
     ({underlying: {'lines': [...], 'total_gain': {CUR: x}}}; the tainted
     count under '_tainted')."""
+    # An RCI...TO call on RCI.B.TO shares groups under the class share,
+    # not a phantom RCI.TO (S040-11).
+    from taxjson.lib.ticker_map import class_share_aliases
+    aliases = class_share_aliases(
+        t.get('symbol') for t in data.get('transactions', []) or []
+        if isinstance(t, dict))
     for tx in data.get('transactions', []) or []:
         if not isinstance(tx, dict):
             continue
@@ -68,11 +74,26 @@ def process_data(data, groups, *, direction: str, calls_only: bool):
         underlying = get_underlying(symbol)
         if not underlying:
             continue
+        underlying = aliases.get(underlying.upper(), underlying)
         g = groups.setdefault(underlying, {'lines': [], 'total_gain': {}})
         g['lines'].append(tx)
         cur = tx.get('currency') or '?'
         g['total_gain'][cur] = (g['total_gain'].get(cur, 0.0)
                                 + float(tx.get('gain', 0.0) or 0.0))
+
+
+def _legs(tx, direction: str):
+    """(first, second) money columns of a row. LONG: (cost, proceeds).
+    SHORT: (premium, buy-back) in real-world orientation, as ccd-sum and
+    Schedule 3 show them — a row with an explicit direction carries the
+    engines' signed legs (cost = -premium, proceeds = -buyback) and
+    printed as a NEGATIVE cost / proceeds; a legacy inferred row carries
+    them swapped and positive (S028-04)."""
+    c = float(tx.get('cost', 0) or 0)
+    p = float(tx.get('proceeds', 0) or 0)
+    if direction != 'SHORT':
+        return c, p
+    return (c, p) if tx.get('direction') is None else (-c, -p)
 
 
 def _z(v: float) -> float:
@@ -159,8 +180,11 @@ def main(*, prog: str, description: str, direction: str, calls_only: bool,
     for und in sorted(groups):
         print(f"{title} — {und}")
         print()
-        headers = ["DATE", "SYMBOL", "QTY", "CUR", "COST/QTY", "PROC/QTY",
-                   "GAIN/QTY", "COST", "PROCEEDS", "GAIN", "DAYS"]
+        headers = (["DATE", "SYMBOL", "QTY", "CUR", "PREM/QTY", "BUYB/QTY",
+                    "GAIN/QTY", "PREMIUM", "BUYBACK", "GAIN", "DAYS"]
+                   if direction == 'SHORT' else
+                   ["DATE", "SYMBOL", "QTY", "CUR", "COST/QTY", "PROC/QTY",
+                    "GAIN/QTY", "COST", "PROCEEDS", "GAIN", "DAYS"])
         print(f"{headers[0]:<12} {headers[1]:<26} {headers[2]:>10} "
               f"{headers[3]:<5} {headers[4]:>15} {headers[5]:>15} "
               f"{headers[6]:>15} {headers[7]:>15} {headers[8]:>15} "
@@ -169,15 +193,20 @@ def main(*, prog: str, description: str, direction: str, calls_only: bool,
         # Per-unit columns (per contract for options) keep 4-decimal
         # precision; the money columns are 2dp with thousands separators.
         for tx in groups[und]['lines']:
+            a, b = _legs(tx, direction)
+            a_u = _per_unit(tx, 'cost_per_share', 'cost')
+            b_u = _per_unit(tx, 'proceeds_per_share', 'proceeds')
+            if direction == 'SHORT' and tx.get('direction') is not None:
+                a_u, b_u = -a_u, -b_u       # same orientation as a, b
             print(f"{tx.get('date'):<12} "
                   f"{tx.get('symbol'):<26} "
                   f"{float(tx.get('qty', 0)):10.4f} "
                   f"{(tx.get('currency') or '?'):<5} "
-                  f"{_z(_per_unit(tx, 'cost_per_share', 'cost')):15.4f} "
-                  f"{_z(_per_unit(tx, 'proceeds_per_share', 'proceeds')):15.4f} "
+                  f"{_z(a_u):15.4f} "
+                  f"{_z(b_u):15.4f} "
                   f"{_z(_per_unit(tx, 'gain_per_share', 'gain')):15.4f} "
-                  f"{_z(float(tx.get('cost', 0) or 0)):15,.2f} "
-                  f"{_z(float(tx.get('proceeds', 0) or 0)):15,.2f} "
+                  f"{_z(a):15,.2f} "
+                  f"{_z(b):15,.2f} "
                   f"{_z(float(tx.get('gain', 0) or 0)):15,.2f} "
                   f"{int(tx.get('days_held', 0) or 0):6}")
         tg = groups[und]['total_gain']

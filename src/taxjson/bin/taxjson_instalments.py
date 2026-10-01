@@ -153,8 +153,17 @@ def required_schedule(*, year: int, basis: str,
         first = second_prior_net_tax / 4.0
         rest = max(0.0, prior_net_tax - 2 * first) / 2.0
         amounts = [first, first, rest, rest]
-    return [{"date": d.isoformat(), "amount": round(a, 2)}
-            for d, a in zip(dates, amounts)]
+    # Round the CUMULATIVE requirement and take differences, so the four
+    # amounts add up to the year's figure to the cent: rounding each
+    # quarter made 10,000.03 require 4 x 2,500.01 = 10,000.04 and an
+    # exact payer MISSED by a cent (S034-14).
+    out, run, prev = [], 0.0, 0.0
+    for d, a in zip(dates, amounts):
+        run += a
+        cum = round(run, 2)
+        out.append({"date": d.isoformat(), "amount": round(cum - prev, 2)})
+        prev = cum
+    return out
 
 
 def normalize_rates(rate) -> List[Tuple[Optional[str], float]]:
@@ -368,6 +377,16 @@ def build(*, year: int, basis: str, current_net_tax: float,
     ip["rate_extrapolated_before"] = (
         rate_source == "published"
         and date(year, 1, 1).isoformat() < PUBLISHED_FROM)
+    if rate_source == "configured":
+        # A configured dated schedule whose first segment starts after
+        # January 1: rate_on carries that first rate BACK over the
+        # earlier days — say so instead of printing a start date the
+        # computation did not use (S034-15).
+        _segs = normalize_rates(annual_rate)
+        _first = _segs[0][0] if _segs else None
+        if _first and _first > date(year, 1, 1).isoformat():
+            ip["rate_assumed_before"] = _first
+            ip["rate_extrapolated_before"] = True
     ip["rate_extrapolated"] = (ip["rate_extrapolated_after"]
                                or ip["rate_extrapolated_before"])
     ip["interest_bases_considered"] = sorted(cands)
@@ -427,6 +446,18 @@ def build(*, year: int, basis: str, current_net_tax: float,
     else:
         prior_test = "unknown"
     governing_total = round(sum(r["amount"] for r in governing), 2)
+    required_at_all = (current_net_tax > THRESHOLD
+                       and prior_test != "not_met")
+    if not required_at_all:
+        # s.156.1(1) waives instalments, and s.161(2) charges instalment
+        # interest only on someone required to pay them: the JSON said
+        # required_at_all=false next to a shortfall and net interest
+        # (R1-222). The schedule stays, for reference.
+        shortfall = remaining_total = 0.0
+        remaining_dates = []
+        for k in ("charge_interest", "credit_interest", "net_interest",
+                  "net_interest_computed", "penalty"):
+            ip[k] = 0.0
     return {
         "year": year, "basis": basis,
         "payments": list(payments),
@@ -447,8 +478,7 @@ def build(*, year: int, basis: str, current_net_tax: float,
         "prior_year_net_tax": prior_net_tax,
         "second_prior_net_tax": second_prior_net_tax,
         "governing_required_total": governing_total,
-        "required_at_all": (current_net_tax > THRESHOLD
-                            and prior_test != "not_met"),
+        "required_at_all": required_at_all,
         **ip,
     }
 
@@ -576,6 +606,10 @@ def render(doc: Dict[str, Any], base: str) -> str:
                    and not doc.get("rate_extrapolated_before")):
             rate_line += (f"; days after {PUBLISHED_THROUGH} assume "
                           f"the last published rate")
+    elif doc.get("rate_assumed_before"):
+        rate_line += (f"; days before {doc['rate_assumed_before']} ASSUME "
+                      f"the first configured rate — add a segment from "
+                      f"{doc['year']}-01-01 to set them")
     lines += ["", f"  INTEREST (offset method, compounded daily, "
                   f"to {doc['as_of']})",
               _wrap_line(rate_line + ".")]

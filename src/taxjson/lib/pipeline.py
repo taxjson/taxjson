@@ -462,7 +462,7 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None,
                         f"{_q:g}  CAD  0.0  0.0  DECLARED\n"
                         f"  TRANSFER  {date_lo}  09:30:00  {symbol}  "
                         f"-{_q:g}  CAD  0.0  0.0  DECLARED\n"
-                        f"— declared legs let the cluster net. If any "
+                        f"  — declared legs let the cluster net. If any "
                         f"leg was a genuine in-kind contribution or "
                         f"withdrawal, record THAT leg as a BUYSELL "
                         f"dated the true event day instead.",

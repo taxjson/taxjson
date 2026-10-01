@@ -200,8 +200,10 @@ class TestOptionGainsReports(_Tmp):
         p = self.write("g.json", doc)
         ccd = _tool("taxjson_ccd_gains", p).stdout
         lg = _tool("taxjson_leaps_gains", p).stdout
-        self.assertIn("COST/QTY", ccd)
-        self.assertRegex(ccd, r"-100\.0000\s+-300\.0000\s+200\.0000")
+        # ccd.rpt shows a short call's legs as PREMIUM / BUYBACK in
+        # real-world orientation (S028-04): cost -100 -> premium 100.
+        self.assertIn("PREM/QTY", ccd)
+        self.assertRegex(ccd, r"100\.0000\s+300\.0000\s+200\.0000")
         self.assertRegex(lg, r"500\.0000\s+800\.0000\s+300\.0000")
         self.assertIn("(amounts in USD)", ccd)
 

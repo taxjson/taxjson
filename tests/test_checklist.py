@@ -39,6 +39,9 @@ def _project(root: Path, *, activity_to="2026-02-02", with_reports=True):
     (root / "work" / "margin_gains_wash.json").write_text(json.dumps({"transactions": [
         {"date": "2025-05-05", "disallowed_amount": 100.0, "permanently_disallowed": 0.0},
         {"date": "2024-05-05", "disallowed_amount": 0.0, "permanently_disallowed": 999.0}]}))
+    # A full run writes a gains file for every taxable account with
+    # inputs; wash-reviewed now blocks on one without (S067-11).
+    (root / "work" / "crypto_gains.json").write_text(json.dumps({"transactions": []}))
     if with_reports:
         (root / "reports").mkdir()
         (root / "reports" / "margin.sum").write_text("DIAGNOSTICS\nvalidation: 0 error(s)\n")
