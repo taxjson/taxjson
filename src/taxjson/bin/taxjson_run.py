@@ -8236,7 +8236,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             from taxjson.lib.phantom_holdings import synthesize_openings
             txs, _log = synthesize_openings(txs, _phantoms)
         for r in straddling(txs, year, timing, since, filed_years,
-                            filed_timing=filed_timing):
+                            filed_timing=filed_timing,
+                            tax_date=_tax_date_basis(settings)):
             r["account"] = r["account"] or name
             rows.append(r)
     if not books:

@@ -554,7 +554,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
         ("Options (s.49)", prem + [
             Rule("CA-OPT-06",
                  "Exercise or assignment: the premium folds into the "
-                 "shares' cost or proceeds (s.49(3), (4))."),
+                 "shares' cost or proceeds (s.49(3) for a call, s.49(3.1) "
+                 "for a put; the grant year is amended under s.49(4))."),
             Rule("CA-OPT-07",
                  "If the premium's year was already filed, `taxjson "
                  "option-boundary` flags the T1-ADJ.", cont=True),

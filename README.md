@@ -972,9 +972,11 @@ output.
 
 Under ITA s.49(1) writing an option is a disposition: the premium is a
 capital gain **in the year the option is written**. A later buy-back is a
-capital loss in its own year (IT-479R para 24); expiry adds nothing; an
+capital loss in its own year (IT-479R para 29 for calls, para 32 for
+puts); expiry adds nothing; an
 exercise or assignment folds the premium into the share leg instead and
-the grant year is amended (s.49(2)–(4)). Contracts written and closed in
+the grant year is amended (s.49(3) for a call, s.49(3.1) for a put;
+s.49(4)). Contracts written and closed in
 the same year give the same total either way — only year-straddling
 contracts differ. Canada projects use this timing by default; `"close"`
 nets at the closing transaction (the US §1234 convention, which the US

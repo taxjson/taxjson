@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **option-boundary cites the right law and sees more missing rows.**
+  An assignment folds the premium under s.49(3) (call) or s.49(3.1)
+  (put), never s.49(2); a buy-back loss cites IT-479R para 29 / 32
+  (README, design note and Webull messages corrected too). A write
+  still open after an expiry that falls inside the books (a January
+  expiry in books that run into February) is ATTENTION, not "open".
+  Writes and closes are dated on the project's `tax_date`, so a
+  trade-basis Dec-31 write that settles in January is reported as the
+  straddle the engine books (audit R1-39, R1-180, S075-00, S075-05).
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the

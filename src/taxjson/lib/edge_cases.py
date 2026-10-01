@@ -699,7 +699,8 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
                 filed.add(int(f.stem))
             except ValueError:
                 pass
-        for r in straddling(txs, book.year, timing, since, filed):
+        for r in straddling(txs, book.year, timing, since, filed,
+                            tax_date=book.basis):
             r["account"] = r.get("account") or name
             written.append(r)
     return {
