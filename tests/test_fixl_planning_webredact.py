@@ -323,12 +323,12 @@ class TestRedactLow(unittest.TestCase):
 
     def test_file_name_keeps_the_content_placeholder(self):   # R1-352 (b)
         from taxjson.bin.taxjson_redact import redacted_name, redact_text
-        _, rep = redact_text("Trades,Header,Account\nTrades,Data,U55512345\n")
-        ph = rep.accounts["U55512345"]
-        for name in ("U55512345_2025.csv", "U55512345.2025.dividends.csv"):
+        _, rep = redact_text("Trades,Header,Account\nTrades,Data,U55512345\n")  # pii-ok
+        ph = rep.accounts["U55512345"]  # pii-ok
+        for name in ("U55512345_2025.csv", "U55512345.2025.dividends.csv"):  # pii-ok
             got = redacted_name(Path(name), rep.accounts)
             self.assertIn(ph, got)
-            self.assertNotIn("U55512345", got)
+            self.assertNotIn("U55512345", got)  # pii-ok
         # A name-only 8-digit id gets its own placeholder, not a renumber
         # of the placeholder digits.
         got = redacted_name(Path("U55512345_55599999.csv"), rep.accounts)
@@ -343,7 +343,7 @@ class TestRedactLow(unittest.TestCase):
         self.assertNotIn("62704", out)
 
     def test_street_does_not_swallow_the_next_field(self):    # S036-15
-        for line in ("AccountInformation,Data,U55500001,Main," + _BAKER + ","
+        for line in ("AccountInformation,Data,U55500001,Main," + _BAKER + ","  # pii-ok
                      "Unit 5,Moose Jaw\n",
                      "2025-01-02," + _ELM + ",Apt 3,100.00\n",
                      "2025-01-02,Unit 5," + _BAKER + ",100.00\n"):
@@ -358,9 +358,9 @@ class TestRedactLow(unittest.TestCase):
 
     def test_broker_account_key(self):                        # S036-23
         text = ('[meta]\nbroker = "questrade"\n'
-                'broker_account = "55576543"\n'
-                '[[holding]]\naccount = "55576544"\nsymbol = "XIU.TO"\n'
-                '{"account_id": "55576545", "note": "x"}\n')
+                'broker_account = "55576543"\n'  # pii-ok
+                '[[holding]]\naccount = "55576544"\nsymbol = "XIU.TO"\n'  # pii-ok
+                '{"account_id": "55576545", "note": "x"}\n')  # pii-ok
         out, rep = self._rt(text)
         for v in ("55576543", "55576544", "55576545"):
             self.assertNotIn(v, out)
@@ -373,7 +373,7 @@ class TestRedactLow(unittest.TestCase):
     def test_flex_account_information_address_columns(self):  # S037-03
         hdr = ("ClientAccountID,AccountAlias,Name,AccountType,Street,Street2,"
                "City,State,Country,PostalCode,PrimaryEmail,Currency\n")
-        row = ("U55500001,margin-1,Zelda Quixote,Individual," + _BAKER + ","
+        row = ("U55500001,margin-1,Zelda Quixote,Individual," + _BAKER + ","  # pii-ok
                "Unit 5,Moose Jaw,SK,Canada," + _POST + ",z@example.com,CAD\n")
         for text in ("AccountInformation,Header," + hdr
                      + "AccountInformation,Data," + row, hdr + row):
