@@ -15,6 +15,9 @@ Synthetic data only.
 """
 import contextlib
 import io
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +94,56 @@ class TestKrakenPyusdGusd(unittest.TestCase):
                 self.assertTrue(cs.is_cash_stablecoin(sym, ex), (sym, ex))
         self.assertFalse(cs.is_cash_stablecoin("ETH", "kraken"))
 
+
+# ----------------------------------------------------------- S065-12
+_QT_H = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
+         'Quantity,Price,Gross Amount,Commission,Net Amount,Currency,'
+         'Account #,Activity Type,Account Type\n')
+
+
+class TestNotionalMismatchIsAttention(unittest.TestCase):
+    """S065-12: a DRIP priced in US dollars on a CAD row (REINV@U$) is a
+    notional mismatch the parser cannot resolve — echoed as ATTENTION."""
+
+    def test_schema_tags_undeclared_mismatch_only(self):
+        from taxjson.lib.brokerages.schema import (ATTENTION_TAG,
+                                                   validate_transactions)
+        row = {"action": "BUYSELL", "date": "2025-06-02", "symbol": "ZZQ.TO",
+               "currency": "CAD", "quantity": 10, "price": 7.0,
+               "net_amount": 105.0}
+        errs, warns = validate_transactions([row])
+        self.assertEqual(errs, [])
+        self.assertEqual(len(warns), 1)
+        self.assertTrue(warns[0].startswith(ATTENTION_TAG), warns[0])
+        # A declared multiplier keeps its ERROR.
+        errs, warns = validate_transactions([dict(row, multiplier=1)])
+        self.assertEqual(len(errs), 1)
+        self.assertFalse(errs[0].startswith(ATTENTION_TAG))
+
+    def test_drip_in_another_currency_reaches_the_console(self):
+        from taxjson.bin.taxjson_run import echo_parse_stats
+        csv = _QT_H + (
+            "2026-05-11 12:00:00 AM,2026-05-11 12:00:00 AM,REI,ZZQ.TO,"
+            "ZZQ CORP REINV@U$7.00000 REC 04/30/26 PAY 05/11/26,11,0,0,0,"
+            "-105.00,CAD,55500001,Dividend reinvestment,Individual margin\n")
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "questrade_activity.csv"
+            src.write_text(csv)
+            out = Path(td) / "qt.json"
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+                 "--brokerage", "questrade", "--strict", str(src)],
+                capture_output=True, text=True,
+                env=dict(os.environ, PYTHONPATH=str(SRC)))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out.write_text(r.stdout)
+            self.assertIn("warning: ATTENTION: schema:", r.stderr)
+            self.assertIn("ZZQ.TO", r.stderr)
+            (Path(td) / "qt.json.diag").write_text(r.stderr)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                echo_parse_stats(out)
+            self.assertIn("ATTENTION: schema:", buf.getvalue())
 
 
 if __name__ == "__main__":

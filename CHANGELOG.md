@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A trade whose money does not match qty x price is an ATTENTION line
+  on the console.** When the parser does not declare the contract
+  multiplier (Webull, RBC, crypto, a Questrade/RBC dividend
+  reinvestment priced `REINV@U$` on a CAD row), the schema's notional
+  warning used to sit only in the .sum DIAGNOSTICS: a 10x Proceeds was
+  booked with rc 0 and nothing on screen. `taxjson run` now prints it
+  as `warning: ATTENTION: schema: ...` (still not an error: the booked
+  money is the row's net amount) (audit S065-12).
+
 - **Kraken: PYUSD and GUSD are US-dollar cash in a Canada project.** As
   on Coinbase and like USDC/USDT/DAI: a PYUSD/USD buy is a currency
   conversion, an ETH/PYUSD fill a purchase for dollars, a PYUSD reward

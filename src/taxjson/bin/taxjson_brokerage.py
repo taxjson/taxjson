@@ -36,6 +36,7 @@ from taxjson.lib.core import (register_brokerage, TaxTransaction,
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          shown_name)
 from taxjson.lib.country import country_arg
+from taxjson.lib.brokerages.schema import ATTENTION_TAG as SCHEMA_ATTENTION_TAG
 from taxjson.lib.brokerages.schema import validate_transactions
 from taxjson.lib.brokerages import ib_extractor
 from taxjson.lib.brokerages import questrade
@@ -639,7 +640,13 @@ Examples:
         [({**t.to_dict(), 'multiplier': m} if m else t.to_dict())
          for t, m in zip(normalized, multipliers)], lint=args.lint)
     for w in schema_warnings:
-        print(f"warning: schema: {w}", file=sys.stderr)
+        if w.startswith(SCHEMA_ATTENTION_TAG):
+            # `taxjson run` echoes ATTENTION lines to the console
+            # (echo_parse_stats); the rest stay in the .sum (S065-12).
+            print(f"warning: ATTENTION: schema: "
+                  f"{w[len(SCHEMA_ATTENTION_TAG):]}", file=sys.stderr)
+        else:
+            print(f"warning: schema: {w}", file=sys.stderr)
     for e in errors:
         print(f"{'error' if (args.strict or args.lint) else 'warning: schema VIOLATION'}: {e}",
               file=sys.stderr)
