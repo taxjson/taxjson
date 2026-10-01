@@ -768,5 +768,122 @@ class TestYearsAndLocks(unittest.TestCase):
                           if "option_grant_timing_since" in p])
 
 
+
+def _days_ago(n):
+    from datetime import date, timedelta
+    return (date.today() - timedelta(days=n)).isoformat()
+
+
+class TestWashAdvice(unittest.TestCase):
+    """S046-10 (US crypto), S047-02 / S047-03 / S047-05 / S047-08 (last
+    loss line), S047-06 (bare coin), S048-19 / S049-15 (still-held)."""
+
+    def _ca_project(self, tmp, margin_tt, crypto_tt=None):
+        from datetime import date
+        y = date.today().year
+        cfg = _CONFIG.replace("2025", str(y))
+        if crypto_tt is not None:
+            cfg += '\n[accounts.kr]\ntype = "taxable"\ncrypto = true\n'
+        root = _tt_project(tmp, tt=margin_tt, config=cfg, run=False)
+        if crypto_tt is not None:
+            (root / "inputs" / "kr").mkdir()
+            (root / "inputs" / "kr" / "rows.tt").write_text(crypto_tt)
+        r = _run_cli(root, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return root
+
+    def test_us_crypto_is_outside_1091_everywhere(self):
+        cfg = ('[settings]\nyear = 2025\ncountry = "usa"\n'
+               'base_currency = "USD"\nsource_currencies = []\n\n'
+               '[accounts.kr1]\ntype = "taxable"\ncrypto = true\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "taxjson.toml").write_text(cfg)
+            (root / "inputs" / "kr1").mkdir(parents=True)
+            (root / "inputs" / "kr1" / "rows.tt").write_text(
+                "BUYSELL 2025-05-01 09:30:00 BTC 1 USD 50000 -50000 0\n"
+                "BUYSELL 2025-06-02 09:30:00 BTC -1 USD 40000 40000 0\n"
+                "BUYSELL 2025-06-10 09:30:00 BTC 1 USD 41000 -41000 0\n")
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            for cmd in (("wash-sales", "--explain", "kr1"),
+                        ("wash-sales", "--explain"),
+                        ("wash-radar", "kr1", "--date", "2025-06-20"),
+                        ("wash-radar", "--date", "2025-06-20")):
+                with self.subTest(cmd=cmd):
+                    r = _run_cli(root, *cmd)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertNotIn("disallowed +", r.stdout)
+                    self.assertNotIn("VIOLATION:", r.stdout)
+                    self.assertIn("§1091", r.stdout)
+
+    def test_last_loss_line_wording_and_day_30(self):
+        from taxjson.bin.taxjson_run import _last_loss_line
+        ll = {"symbol": "XYZ.TO", "date": _days_ago(30), "gain": -500.0,
+              "date_kind": "settled"}
+        line = _last_loss_line(ll)
+        self.assertIn(f"XYZ.TO settled {_days_ago(30)} (30 days ago", line)
+        self.assertIn("INSIDE the 30-day window", line)
+        ll["date"] = _days_ago(31)
+        self.assertIn("outside the 30-day window", _last_loss_line(ll))
+        ll["phantom_basis"] = True
+        self.assertIn("phantom basis", _last_loss_line(ll))
+
+    def test_last_loss_reads_routed_rows_and_warns(self):
+        from taxjson.bin.taxjson_run import _last_loss_by_class
+        with tempfile.TemporaryDirectory() as tmp:
+            g = Path(tmp) / "margin_gains_wash.json"
+            g.write_text(json.dumps({
+                "summary": {"year": 2026},
+                "transactions": [{"symbol": "NOP.TO", "qty": -5,
+                                  "date": "2026-09-01",
+                                  "date_settle": "2026-09-02",
+                                  "gain": -500.0}],
+                "manual_reporting_required": [
+                    {"symbol": "KLM.TO", "qty": -11, "date": "2026-09-21",
+                     "date_settle": "2026-09-22", "raw_gain": -450.0}]}))
+            bad = Path(tmp) / "other_gains.json"
+            bad.write_text('{"transactions": [')
+            from io import StringIO
+            from contextlib import redirect_stderr
+            err = StringIO()
+            with redirect_stderr(err):
+                ll = _last_loss_by_class(
+                    {"margin": g, "other": bad}, lambda s: s, set(),
+                    usa=False)
+            self.assertEqual(ll["KLM.TO"]["date"], "2026-09-22")
+            self.assertTrue(ll["KLM.TO"]["phantom_basis"])
+            self.assertEqual(ll["KLM.TO"]["date_kind"], "settled")
+            self.assertIn("NOP.TO", ll)
+            self.assertIn("other_gains.json", err.getvalue())
+
+    def test_bare_coin_query_and_still_held_wording(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._ca_project(
+                tmp,
+                margin_tt=(
+                    f"BUYSELL {_days_ago(40)} 09:30:00 ETH.TO 100 CAD 10.0 "
+                    f"-1000.0 0\n"
+                    f"BUYSELL {_days_ago(6)} 09:30:00 ETH.TO -100 CAD 8.0 "
+                    f"800.0 0\n"
+                    f"BUYSELL {_days_ago(9)} 09:30:00 XYZ.TO 10 CAD 10.0 "
+                    f"-100.0 0\n"),
+                crypto_tt=(f"BUYSELL {_days_ago(60)} 09:30:00 ETH 1 CAD "
+                           f"3000 -3000 0\n"))
+            coin = _run_cli(root, "buy-check", "ETH")
+            self.assertNotIn("ETH.TO: COOLING", coin.stdout)
+            self.assertIn("ETH: SAFE", coin.stdout)
+            self.assertIn("ETH.TO is a separate listing", coin.stdout)
+            eq = _run_cli(root, "buy-check", "ETH.TO")
+            self.assertEqual(eq.returncode, 1, eq.stdout)
+            self.assertIn("if you still hold the shares 30 days after "
+                          "that sale", " ".join(eq.stdout.split()))
+            self.assertIn("settled", eq.stdout)
+            ex = _run_cli(root, "buy-check", "XYZ.TO")
+            flat = " ".join(ex.stdout.split())
+            self.assertIn("a full exit is not", flat)
+            self.assertNotIn("before ~31 days", flat)
+
+
 if __name__ == "__main__":
     unittest.main()

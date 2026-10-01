@@ -10405,7 +10405,8 @@ def cmd_harvest(args: argparse.Namespace) -> None:
                            for sc in radar_files):
         from taxjson.lib.dispatch import run_cmd as _run_live
         _live = cache / ".harvest_radar.json"
-        _bases = _radar_taxable_bases(root, cache, "taxjson harvest")
+        _bases = _radar_taxable_bases(root, cache, "taxjson harvest",
+                                      empty_ok=True)
         _rcmd = _cmd("taxjson-wash-radar") + [
             "--taxable", *[str(b) for b in _bases],
             "--json-out", str(_live), "--account", "LIVE"]
@@ -11070,10 +11071,13 @@ def _explain_wash_sales(root: Path, cache: Path,
         if not base.exists():
             sys.exit(f"taxjson wash-sales: no {base.name} in {cache} "
                      f"(run `taxjson run` first, or check the name).")
+        _refuse_us_crypto_account(root, account, "taxjson wash-sales")
         bases = [base]
     else:
         names = _taxable_equity_account_names(root)
-        if names:
+        if names is not None and not names:
+            _no_wash_checkable("taxjson wash-sales")
+        if names is not None:
             bases = [cache / f"{n}_base.json" for n in sorted(names)
                      if (cache / f"{n}_base.json").exists()]
         else:
@@ -11117,7 +11121,7 @@ def _explain_wash_sales(root: Path, cache: Path,
     _by_name = {p.name[:-len("_base.json")]: p for p in bases}
     if account and account in _acfg:
         _is_c = bool((_acfg.get(account) or {}).get("crypto"))
-        for n in _taxable_equity_account_names(root):
+        for n in _taxable_equity_account_names(root) or []:
             if (n != account and bool((_acfg.get(n) or {}).get("crypto"))
                     == _is_c and (cache / f"{n}_base.json").exists()):
                 _by_name[n] = cache / f"{n}_base.json"
@@ -11180,23 +11184,53 @@ def _radar_config(root: Path, prog: str = "taxjson") -> Dict[str, Any]:
 
 
 def _taxable_equity_account_names(root: Path,
-                                  prog: str = "taxjson") -> List[str]:
+                                  prog: str = "taxjson"
+                                  ) -> Optional[List[str]]:
     """Wash-checkable taxable account names from taxjson.toml (no hard
     exit when the config is absent; an unreadable one stops — see
     _radar_config). Crypto accounts are excluded only for US projects
     (§1091 does not reach digital assets); Canada's superficial-loss
     rule covers any identical property, so Canadian crypto accounts are
     included — matching _wash_flags and the run pipeline's second pass.
-    Empty list means 'unknown', so the caller falls back to globbing
-    base files."""
+    None means 'no config', so the caller falls back to globbing base
+    files; an EMPTY list is a real answer (a US crypto-only project has
+    nothing wash-checkable) — treating it as 'unknown' globbed the
+    crypto books back in and applied §1091 to them (S046-10)."""
     cfg = _radar_config(root, prog)
-    if not cfg:
-        return []
+    if not cfg or not (cfg.get("accounts") or {}):
+        return None                 # no accounts table: glob work/
     crypto_covered = _country((cfg.get("settings") or {})) \
         not in ("us", "usa")
     return [n for n, c in (cfg.get("accounts") or {}).items()
             if (c or {}).get("type") == "taxable"
             and (crypto_covered or not (c or {}).get("crypto"))]
+
+
+def _refuse_us_crypto_account(root: Path, account: Optional[str],
+                              prog: str) -> None:
+    """A US project's crypto account is outside the wash-sale rule
+    (§1091 does not reach digital assets; the pipeline runs it with
+    --no-wash): the explain and radar entry points said a loss the
+    return allows in full was disallowed, and advised a trade to
+    'rescue' it (S046-10)."""
+    if not account:
+        return
+    cfg = _radar_config(root, prog)
+    if (_country((cfg.get("settings") or {})) in ("us", "usa")
+            and ((cfg.get("accounts") or {}).get(account) or {})
+            .get("crypto")):
+        print(f"{prog}: {account} is a crypto account of a US project — "
+              f"the wash-sale rule (§1091) does not apply to it, so "
+              f"there is nothing to check.")
+        raise SystemExit(0)
+
+
+def _no_wash_checkable(prog: str) -> None:
+    print(f"{prog}: no wash-checkable taxable account in taxjson.toml "
+          f"(sheltered accounts are context only, and a US project's "
+          f"crypto accounts are outside the wash-sale rule, §1091) — "
+          f"nothing to check.")
+    raise SystemExit(0)
 
 
 def cmd_wash_radar(args: argparse.Namespace) -> None:
@@ -11222,6 +11256,7 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
                      f"sheltered account — the radar advises on "
                      f"TAXABLE loss sales (sheltered books are its "
                      f"context, not its subject).")
+        _refuse_us_crypto_account(root, args.account, "taxjson wash-radar")
         bases = [base]
     else:
         bases = _radar_taxable_bases(root, cache, "taxjson wash-radar")
@@ -11263,14 +11298,18 @@ def cmd_wash_radar(args: argparse.Namespace) -> None:
 
 
 def _radar_taxable_bases(root: Path, cache: Path,
-                         prog: str) -> List[Path]:
+                         prog: str, empty_ok: bool = False) -> List[Path]:
     """Taxable base files for a radar-style run. Prefer the config's
     wash-checkable taxable accounts (sheltered accounts are never
     radar'd; crypto is included only where the jurisdiction's wash
     rule covers it — see _taxable_equity_account_names). Fall back to
     globbing base files when there's no readable config."""
     names = _taxable_equity_account_names(root, prog)
-    if names:
+    if names is not None and not names:
+        if empty_ok:
+            return []
+        _no_wash_checkable(prog)
+    if names is not None:
         bases = [cache / f"{n}_base.json" for n in sorted(names)
                  if (cache / f"{n}_base.json").exists()]
         # A configured taxable account without books used to vanish
@@ -12344,6 +12383,11 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             return _class_alias[r]
         return r
 
+    # Suffix-less listings in the books — crypto coins (ETH): a bare
+    # query that names one of them means that listing, never also the
+    # equity sharing its root (ETH.US) (S047-06).
+    canon.bare_listings = {_sy for _sy in _shares if "." not in _sy}
+
     _acct_cfg = _soft_config(root).get("accounts") or {}
     _taxable = {a for a, c in _acct_cfg.items()
                 if (c or {}).get("type") == "taxable"}
@@ -12361,19 +12405,34 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
     TRADE date under §1091 — so the "N days ago / INSIDE the window"
     line agrees with the radar's verdict at the day-30 edge (audit
     S050-00; it used settle dates in US projects too)."""
-    import json as _json
     last_loss: Dict[str, Dict[str, Any]] = {}
     for _a, _p in gains_files.items():
         if taxable and _a not in taxable:
             continue
         try:
-            _doc = _json.loads(Path(_p).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            _doc = _read_work_doc(Path(_p))
+        except (OSError, ValueError) as e:
+            # The context line vanished in silence (S047-03).
+            print(f"taxjson: warning: could not read {Path(_p).name} "
+                  f"({e}) — the 'last loss sale' line leaves out "
+                  f"account {_a}; re-run `taxjson run`.", file=sys.stderr)
             continue
-        for _t in _doc.get("transactions", []):
-            if not _t.get("qty") or "gain" not in _t:
+        # A sale routed to manual reporting (phantom basis) is still a
+        # loss sale for the window: its row has no 'gain', only the
+        # engine's raw_gain (S047-02).
+        _rows = [(t, False) for t in _doc.get("transactions", [])] + [
+            (t, True) for t in _doc.get("manual_reporting_required") or []]
+        for _t, _routed in _rows:
+            if not _t.get("qty"):
                 continue
-            _g = float(_t.get("raw_gain", _t.get("gain")) or 0.0)
+            if _routed:
+                if _t.get("raw_gain") is None:
+                    continue
+                _g = float(_t.get("raw_gain") or 0.0)
+            else:
+                if "gain" not in _t:
+                    continue
+                _g = float(_t.get("raw_gain", _t.get("gain")) or 0.0)
             if _g >= 0:
                 continue
             _c = canon(str(_t.get("symbol") or ""))
@@ -12382,8 +12441,13 @@ def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
             _prev = last_loss.get(_c)
             if _prev is None or _d > _prev["date"]:
                 last_loss[_c] = {"date": _d,
+                                 # The window date's kind, printed with
+                                 # it: the radar labels the same sale by
+                                 # its trade date (S047-05).
+                                 "date_kind": "traded" if usa else "settled",
                                  "symbol": _t.get("symbol"),
                                  "gain": round(_g, 2),
+                                 "phantom_basis": _routed,
                                  "account": _t.get("account") or _a}
     return last_loss
 
@@ -12421,6 +12485,23 @@ def _class_matches(radar: Dict[str, Dict[str, Any]], canon, want: str):
         wroot = canon(q)
         return wroot, {t: r for t, r in radar.items()
                        if canon(t) == wroot}, None
+    _bare = set(getattr(canon, "bare_listings", None) or ())
+    if q in _bare or any(t.strip().upper() == q for t in radar):
+        # The books hold a suffix-less listing of exactly this name (a
+        # coin): that IS the security asked about. `buy-check ETH` gave
+        # ETH.US's verdict too, and nothing could ask about the coin
+        # alone (S047-06); the equity keeps its own spelling.
+        wroot = canon(q)
+        others = sorted({t for t in radar
+                         if t.strip().upper().rpartition(".")[0] == q
+                         and canon(t) != wroot})
+        note = (f"{q}: this is the {q} listing in the books (a coin or "
+                f"other suffix-less symbol); {', '.join(others)} "
+                f"{'is a separate listing' if len(others) == 1 else 'are separate listings'}"
+                f" — query {'it' if len(others) == 1 else 'them'} by "
+                f"name." if others else None)
+        return wroot, {t: r for t, r in radar.items()
+                       if canon(t) == wroot}, note
     # Bare ticker: the listings that carry it — in the books, or as
     # q.<exchange> joined to the books by a ticker.map rule — then their
     # classes. Each listing keeps its own class.
@@ -12478,8 +12559,13 @@ def _last_loss_line(ll) -> Optional[str]:
                   else "outside the 30-day window")
     except ValueError:
         _ago_s, _inout = "?", "window position unknown"
+    _kind = ll.get("date_kind")
     return (f"last loss sale this tax year: {ll['symbol']} "
-            f"{ll['date']} ({_ago_s}, {ll['gain']:,.2f}) — {_inout}.")
+            + (f"{_kind} " if _kind else "")
+            + f"{ll['date']} ({_ago_s}, {ll['gain']:,.2f}"
+            + (", phantom basis — routed to manual reporting"
+               if ll.get("phantom_basis") else "")
+            + f") — {_inout}.")
 
 
 def cmd_buy_check(args: argparse.Namespace) -> None:
@@ -12499,6 +12585,19 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     # The rule's name in the project's law (never "superficial" in a
     # US project, never "wash sale" in a Canadian one).
     _sl_adj = "a wash sale" if _usa else "superficial"
+    # s.54 'superficial loss' (b): the substituted property must still
+    # be held at the END of the 30 days after the sale — a full exit,
+    # or a rebuy sold again before day 30, leaves the loss standing.
+    # §1091 has no such test. The texts below said every in-window
+    # loss sale "would be superficial" and every rebuy "cancels" the
+    # loss (S048-19, S049-15).
+    _future_rule = (
+        f"a PARTIAL loss sale of this name within 30 days of a buy "
+        f"would be {_sl_adj}; selling the full position is not"
+        if _usa else
+        f"a loss sale of this name within 30 days of a buy would be "
+        f"{_sl_adj} if you still hold the bought shares 30 days after "
+        f"the sale — a full exit is not")
     unsafe = 0
     results = []
     for want in args.symbol:
@@ -12542,8 +12641,11 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                         if _rl and _rq and float(_rq) > 1e-9 else "")
                 lines.append(
                     f"{t}: {cat} — a loss sold within the past 30 "
-                    f"days; buying now cancels it{_per} (DEFERRED if "
-                    f"bought taxable, PERMANENT if bought "
+                    f"days; buying now cancels it{_per}"
+                    + ("" if _usa else
+                       " if you still hold the shares 30 days after "
+                       "that sale")
+                    + f" (DEFERRED if bought taxable, PERMANENT if bought "
                     f"{'in an IRA' if _usa else 'sheltered'})."
                     + (f" Safe to buy from {_cd}." if _cd else
                        " Wait until 31 days after the LATEST in-window "
@@ -12571,9 +12673,8 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                     verdict = "SAFE*"
                 lines.append(
                     f"{t}: {cat} — no recent loss sale, buying is "
-                    f"safe TODAY, but it extends the wash window: a "
-                    f"loss sale of this name before ~31 days from "
-                    f"the buy would be {_sl_adj}.")
+                    f"safe TODAY, but it extends the wash window: "
+                    f"{_future_rule}.")
         matches = {t: r for t, r in matches.items()
                    if (r.get("category") or "")}
         if len(lines) == bool(_note) and matches:
@@ -12581,13 +12682,11 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                              for t, r in sorted(matches.items()))
             lines.append(f"{cats}: no loss sale in the past 30 days — "
                          f"safe to buy. (Any buy starts a 30-day "
-                         f"window: selling this name at a loss within "
-                         f"31 days of it would be {_sl_adj}.)")
+                         f"window: {_future_rule}.)")
         elif not lines:
             lines.append(f"{wroot}: no wash exposure on record — safe "
                          f"to buy. (Any buy starts a 30-day window: "
-                         f"selling this name at a loss within 31 days "
-                         f"of it would be {_sl_adj}.)")
+                         f"{_future_rule}.)")
         _ll = _last_loss.get(wroot)
         _lll = _last_loss_line(_ll)
         if _lll:

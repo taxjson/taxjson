@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Wash advice: the still-held test, coins, US crypto.** buy-check no
+  longer says any loss sale within 31 days of a buy "would be
+  superficial" or that a rebuy always cancels a loss: in a Canadian
+  project both hold only if the bought shares are still held 30 days
+  after the sale (s.54 'superficial loss' (b)); a full exit is fine
+  (the radar's BLOCKED legend says the same). `buy-check ETH` means the
+  coin when the books hold one (it mixed in ETH.US's verdict and
+  nothing could ask about the coin alone). The "last loss sale" line
+  says which date it shows (settled / traded), includes a loss routed
+  to manual reporting (phantom basis), and warns when a gains file
+  cannot be read. In a US project, `wash-sales --explain` and
+  `wash-radar` no longer apply §1091 to crypto accounts (the pipeline
+  does not) (audit S048-19, S049-15, S047-06, S047-05, S047-02,
+  S047-03, S046-10; pin S047-08).
+
 - **close-year and option-boundary guard the lock.** close-year refuses
   (without `--force`) a tax year that has not ended and a year with no
   disposition and no income (a typo'd `[settings] year`), and always
