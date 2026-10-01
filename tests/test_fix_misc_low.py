@@ -110,5 +110,18 @@ class TestFeesSum(unittest.TestCase):
                              ["questrade/?"])
 
 
+class TestMerge2DefaultRateWarning(unittest.TestCase):
+    def test_warning_names_the_rate_actually_used(self):
+        # R1-155: the warning printed '--default-rate (None)' while the
+        # rows were converted at 1.35.
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "tx.json"
+            _write_json(p, {"transactions": [_trade(1, "2025-03-03", 1.0)]})
+            r = _run("taxjson.bin.taxjson_merge2", str(p), "--to", "CAD")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("--default-rate (1.35)", r.stderr)
+            self.assertNotIn("(None)", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

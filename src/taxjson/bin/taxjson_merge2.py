@@ -425,7 +425,7 @@ def main():
             print(
                 f"warning: --to {target_currency} given without --rates; "
                 f"every cross-currency row will be converted with the "
-                f"hardcoded --default-rate ({args.default_rate}). Pass "
+                f"hardcoded --default-rate ({resolve_default_rate(args.default_rate)}). Pass "
                 f"--rates rates.csv to use real historical rates.",
                 file=sys.stderr,
             )
