@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **phantoms.json diagnostics:** an entry that did nothing — its rows
+  never go short, or no row has its symbol — is now named once on the
+  run's output (it was only in the gains JSON, so a typo silently booked
+  the phantom sale); another account's entry no longer prints a "no
+  rows" warning in every account's stage; and the "pairs go short" hint
+  still names the pairs the file does not list. The hint and
+  find-missing-history now point at `taxjson find-missing-history
+  --gen-phantoms` (the `taxjson-gains` flags they quoted are not `taxjson
+  run` options). The unmapped cross-listing NOTE suggests the rule in
+  the right direction for a USD unit (`TOBASE DLR.U.TO DLR.TO`) and in a
+  US project.
 - **ACB traces (`*.traces`, `audit`, `explain`):** an option's ACB/Sh,
   Gain/Sh and wash-window acb/sh are per share (they were per contract
   next to a per-share price); a fee the trace derives from the net is

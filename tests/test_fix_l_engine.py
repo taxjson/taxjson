@@ -769,5 +769,72 @@ class TestTraceColumns(unittest.TestCase):
         self.assertEqual(roles[("2025-03-10", "tfsa")], "cover")
 
 
+class TestPhantomFileDiagnostics(unittest.TestCase):
+    """S076-05: a stale or mistyped phantoms.json entry was noted only in
+    the gains JSON, and any phantom file switched the go-short hint off.
+    Also: every stage handed the whole project file printed a 'no rows'
+    warning for every other account's entry."""
+
+    def _books(self):
+        main = [_cx("2025-02-03", "ABC.TO", -10, 100.0),
+                _cx("2025-03-03", "XYZ.TO", 10, 100.0),
+                _cx("2025-04-03", "XYZ.TO", -10, 120.0),
+                _cx("2025-05-03", "DEF.TO", -10, 100.0)]
+        sh = [_cx("2025-02-03", "QQQ.TO", 10, 100.0, account="tfsa")]
+        return main, sh
+
+    def test_notes(self):
+        from taxjson.lib.pipeline import prepare_books
+        main, sh = self._books()
+        with tempfile.TemporaryDirectory() as td:
+            ph = Path(td) / "phantoms.json"
+            ph.write_text(json.dumps([
+                {"symbol": "ABC.TO", "account": "margin"},
+                {"symbol": "XYZ.TO", "account": "margin"},
+                {"symbol": "ABCD.TO", "account": "margin"},
+                {"symbol": "ZZZ.TO", "account": "rrsp"}]))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                prepare_books(main, sh, [], taxable=True,
+                              incomplete_history=ph)
+        e = err.getvalue()
+        self.assertEqual(e.count("ABCD.TO / margin, but no row"), 1)
+        self.assertIn("XYZ.TO / margin, but its rows never go short", e)
+        self.assertNotIn("ZZZ.TO", e)       # another account's entry
+        self.assertNotIn("ABC.TO / margin", e)
+        # The go-short hint still names the pair the file does not list.
+        self.assertIn("go short in this data: DEF.TO/margin", e)
+        self.assertIn("find-missing-history --gen-phantoms", e)
+
+
+class TestJournalNoteDirection(unittest.TestCase):
+    """S076-18: the unmapped cross-listing NOTE picked the rule direction
+    from a '.US' suffix only, so DLR.TO -> DLR.U.TO suggested folding the
+    CAD listing into the USD unit."""
+
+    def _note(self, legs, base):
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from taxjson.lib.core import TaxTransaction
+        rows = [TaxTransaction(action="TRANSFER", date=d, time="10:00:00",
+                               symbol=s, quantity=q, net_amount=1000.0,
+                               currency="CAD", account="rrsp")
+                for d, s, q in legs]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _drop_self_cancelling_transfers(rows, main_transactions=[],
+                                            base_currency=base)
+        return err.getvalue()
+
+    def test_unit_listing(self):
+        for legs in ([("2025-02-03", "DLR.TO", -1000),
+                      ("2025-02-04", "DLR.U.TO", 1000)],
+                     [("2025-02-03", "DLR.U.TO", -1000),
+                      ("2025-02-04", "DLR.TO", 1000)]):
+            self.assertIn("TOBASE DLR.U.TO DLR.TO", self._note(legs, "CAD"))
+        legs = [("2025-02-03", "AEM.TO", -10), ("2025-02-04", "AEM.US", 10)]
+        self.assertIn("TOBASE AEM.TO AEM.US", self._note(legs, "USD"))
+        self.assertIn("TOBASE AEM.US AEM.TO", self._note(legs, "CAD"))
+
+
 if __name__ == "__main__":
     unittest.main()

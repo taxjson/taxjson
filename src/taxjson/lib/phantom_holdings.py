@@ -664,6 +664,35 @@ def detect_corp_action_links(
     return links
 
 
+def report_phantom_log(logs: List[List[Dict[str, Any]]],
+                       accounts: Set[str]) -> None:
+    """One stderr line per phantoms.json entry that did nothing in these
+    books (whose account they belong to): a spelling mismatch (no rows),
+    or a stale entry whose rows never go short — the note used to live
+    only in the gains JSON, so a typo silently booked the phantom sale
+    (audit S076-05). Entries of accounts not in these books are another
+    stage's business and stay quiet."""
+    by_pair: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for log in logs:
+        for e in log or []:
+            by_pair.setdefault((e.get('symbol', ''), e.get('account', '')),
+                               []).append(e)
+    for (symbol, account), es in sorted(by_pair.items()):
+        if account not in accounts or any(e.get('inserted') for e in es):
+            continue
+        notes = [str(e.get('note') or '') for e in es]
+        if any(n.startswith('no opening needed') for n in notes):
+            print(f"note: phantoms.json lists {symbol} / {account}, but "
+                  f"its rows never go short — no opening was needed; "
+                  f"remove the entry if its history is complete.",
+                  file=sys.stderr)
+        elif notes and all(n.startswith('no rows') for n in notes):
+            print(f"warning: phantoms.json lists {symbol} / {account}, but "
+                  f"no row in the data has that symbol and account — "
+                  f"nothing was applied. Check the spelling.",
+                  file=sys.stderr)
+
+
 def format_suggestions(candidates: List[PhantomCandidate]) -> str:
     """Write the candidate JSON to a string. Underscore-prefixed fields are
     notes for human review; the loader ignores them."""
@@ -809,6 +838,7 @@ def detect_superficial_loss_warnings(
 def synthesize_openings(
     transactions: List[TaxTransaction],
     phantoms: Set[Tuple[str, str]],
+    *, warn: bool = False,
 ) -> Tuple[List[TaxTransaction], List[Dict[str, Any]]]:
     """For each (symbol, account) in phantoms, compute the minimum running
     position over the data and prepend an OPENING_BALANCE transaction with
@@ -948,10 +978,15 @@ def synthesize_openings(
             # (audit S075-24 / S076-00).
             entry['note'] = ('no rows for this symbol/account in the data — '
                              'check the spelling in phantoms.json')
-            print(f"warning: phantoms.json lists {symbol} / {account}, but "
-                  f"no row in the data has that symbol and account — "
-                  f"nothing was applied. Check the spelling.",
-                  file=sys.stderr)
+            # Quiet by default: every account's stage is handed the
+            # whole project file, so another account's entry has no rows
+            # here by design. pipeline.prepare_books reports the
+            # project-level result once (report_phantom_log).
+            if warn:
+                print(f"warning: phantoms.json lists {symbol} / {account}, "
+                      f"but no row in the data has that symbol and "
+                      f"account — nothing was applied. Check the "
+                      f"spelling.", file=sys.stderr)
             applied.append(entry)
             continue
         if min_pos >= -1e-6:
