@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **distributions.map is read strictly.** A per-share amount must be a
+  plain decimal (`nan`, `inf`, `1e309` and `1_0` were accepted) and the
+  date a real `YYYY-MM-DD`; a `0` is a placeholder that is no longer
+  reported as an applied return of capital; a symbol and date entered
+  twice are both applied with a warning and each ADJUST gets its own
+  id; `taxjson-apply-distributions --account` refuses a label no row of
+  the book carries (S025-12/14/16/19/23).
+
 - **Canada: crypto rows under a millionth of a unit are booked.**
   Staking rewards below 1e-6 units were dropped by the ACB pool (their
   income was taxed with no matching cost, and the holdings fell short of
