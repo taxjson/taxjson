@@ -204,9 +204,18 @@ def save_state(path: Path, radar: Dict[str, Dict[str, Any]],
     if harvest_now is not None:
         doc["harvest_now"] = round(harvest_now, 2)
     tmp = path.with_name(path.name + ".part")
-    tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
-                   encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                       encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        # No stray .part beside a state that could not be written; the
+        # caller names the path (S046-12).
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def render_report(changes: List[Dict[str, Any]], as_of: str,

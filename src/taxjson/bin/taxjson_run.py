@@ -11438,12 +11438,30 @@ def cmd_watch(args: argparse.Namespace) -> None:
         state_path = Path(args.state)
         if not state_path.is_absolute():
             state_path = root / state_path
-        state_path.parent.mkdir(parents=True, exist_ok=True)
+        # A directory, a path under a file or an unwritable place gave
+        # an 11-line traceback (S046-12) — one line, like
+        # --gen-phantoms.
+        if state_path.is_dir():
+            _die(f"--state {args.state} is a directory — pass a FILE "
+                 f"path, e.g. {state_path / 'watch_state.json'}")
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            _die(f"cannot create the folder for --state {args.state}: "
+                 f"{e} — pass a FILE path in a writable folder.")
     else:
         state_path = cache / ".watch_state.json"
+
+    def _save(harvest_value) -> None:
+        try:
+            _watch.save_state(state_path, cur_radar, harvest_value, as_of)
+        except OSError as e:
+            _die(f"cannot write the watch state {state_path}: {e} — "
+                 f"pass a writable FILE path with --state.")
+
     state = _watch.load_state(state_path)
     if state is None:
-        _watch.save_state(state_path, cur_radar, harvest_now, as_of)
+        _save(harvest_now)
         actionable = sum(1 for r in cur_radar.values()
                          if r.get("category") in _watch._ACTIONABLE)
         if getattr(args, "json", False):
@@ -11470,7 +11488,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
         # `watch --harvest` cron lines re-baselined every time and a
         # harvest change was never reported.
         saved_harvest = state.get("harvest_now")
-    _watch.save_state(state_path, cur_radar, saved_harvest, as_of)
+    _save(saved_harvest)
 
     actionable = sum(1 for r in cur_radar.values()
                      if r.get("category") in _watch._ACTIONABLE)
@@ -11801,6 +11819,15 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
     from taxjson.bin import taxjson_fetch as F
     with path.open(encoding="utf-8", errors="replace") as f:
         rows = list(_csv.reader(f))
+    for i, r in enumerate(rows, 1):
+        if any("\n" in c or "\r" in c for c in r):
+            # An unbalanced quote swallows the following lines into one
+            # record; judged by its first date, the swallowed
+            # out-of-window trades were deleted with it and the count
+            # said 1 (S046-16). Never rewrite such a file.
+            raise ValueError(f"{path.name}: record {i} spans several "
+                             f"lines (an unbalanced quote?) — not "
+                             f"trimmed; fix the file by hand")
     col = _qt_date_col(rows[0] if rows else [])
     keep = [rows[0]] + [r for r in rows[1:]
                         if not (len(r) > col and _row_date_in_window(
@@ -11962,7 +11989,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             start, end = F.qt_window(getattr(args, "days", None),
                                      getattr(args, "from_date", None),
                                      year=_fetch_year)
-            say(f"fetch {a}: questrade #{number} "
+            say(f"fetch {a}: questrade #{F.mask_account_number(number)} "
                 f"{start} -> {end}")
             try:
                 acts = F.qt_activities(qt_session, number, start, end,
@@ -12020,8 +12047,16 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             if overlap and getattr(args, "trim_overlap", False):
                 results[a]["trimmed"] = []
                 for sib, n in overlap:
-                    cut = _qt_trim_file(sib, start.isoformat(),
-                                        end.isoformat())
+                    try:
+                        cut = _qt_trim_file(sib, start.isoformat(),
+                                            end.isoformat())
+                    except ValueError as e:
+                        print(f"taxjson fetch: WARNING: {a}/{e}",
+                              file=sys.stderr)
+                        results[a]["trimmed"].append(
+                            {"file": sib.name, "rows": 0,
+                             "refused": str(e)})
+                        continue
                     results[a]["trimmed"].append(
                         {"file": sib.name, "rows": cut})
                     say(f"  {sib.name}: trimmed {cut} row(s) inside "

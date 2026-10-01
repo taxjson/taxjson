@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **fetch / watch.** `fetch` masks the Questrade account number in its
+  progress line and in API error messages (`questrade #59***`,
+  `/v1/accounts/59***/activities: HTTP 400 ...`); `--trim-overlap`
+  refuses to rewrite a sibling CSV whose record spans several lines (an
+  unbalanced quote swallowed out-of-window trades, which were deleted
+  with it); `watch --state` naming a directory, a path under a file or
+  an unwritable place is a one-line error, not a traceback (audit
+  S046-17, S046-16, S046-12).
+
 - **audit and find-missing-history follow ticker.map and the locks.**
   `audit SYMBOL` also matches the broker's own ticker of a renamed
   security (`audit CCJ.US` found nothing although every block prints
