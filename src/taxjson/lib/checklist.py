@@ -760,9 +760,7 @@ def d_crypto_sends(ctx: Ctx) -> Result:
         if a["undecided"]:
             undecided.append(f"{n}: {a['undecided']}")
         refused += [e["id"] for e in cs.refused_entries(a)]
-        want = {e["id"] for e in a["sends"]
-                if e["decision"] in cs.DISPOSING and not e["stable"]
-                and not e.get("refused")}
+        want = cs.tt_want_ids(a)
         have = cs.tt_ids(Path(a["tt_file"])) or set()
         if want != have:
             stale.append(n)

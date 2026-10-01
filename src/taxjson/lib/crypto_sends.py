@@ -29,6 +29,9 @@ was. This module:
 The network fee a Kraken withdrawal charges in the coin is already
 booked by the parser as its own disposition (`<txid>-fee`); the
 sidecar quantity excludes it, so the lines here never count it again.
+A matched send that arrived short with no fee stated (a Coinbase Send
+carries its network fee inside the quantity) gets a `<send id>-fee`
+line selling the shortfall at fair value (audit R1-26).
 """
 from __future__ import annotations
 
@@ -803,28 +806,13 @@ def build_report(root: Path, cfg: Dict[str, Any],
             sends.append(entry)
         live = {e["id"] for e in sends}
         matched = sum(1 for o, _i in pairs if o["account"] == acct)
-        # A matched send that ARRIVED SHORT lost the difference to the
-        # network fee — coins paid for a service, a disposition the
-        # books do not hold when the sending exchange's export does not
-        # state the fee (a Coinbase Send: the fee is inside the sent
-        # quantity, audit R1-26). Listed, not booked: the owner decides.
-        short = []
-        for o, i in pairs:
-            if o["account"] != acct or o["fee"]:
-                continue
-            if is_cash_stablecoin(o["symbol"], o["exchange"]) \
-                    and country != "usa":
-                continue
-            gap = -o["quantity"] - i["quantity"]
-            if gap > 1e-12:
-                short.append({"summary": _summary(o), "symbol": o["symbol"],
-                              "date": o["date"], "gap": gap})
         out["accounts"][acct] = {
             "sends": sends,
             "matched": matched,
             "undecided": sum(1 for e in sends if not e["decision"]),
             "orphans": sorted(k for k in decisions if k not in live),
-            "unbooked_network_fees": short,
+            "network_fees": network_fees(pairs, acct, rates, usd_price,
+                                         country),
             "manifest": str(man_path),
             "tt_file": str(root / "inputs" / acct / TT_NAME),
         }
@@ -833,15 +821,68 @@ def build_report(root: Path, cfg: Dict[str, Any],
     return out
 
 
+def network_fees(pairs, acct: str, rates: "Rates", usd_price,
+                 country: str) -> List[Dict[str, Any]]:
+    """The network fees hidden in matched sends of `acct`, as sales.
+
+    A matched send that ARRIVED SHORT, from an exchange whose export
+    states no fee, lost the difference to the network fee (a Coinbase
+    Send: the fee is inside the sent quantity, Kraken credits the rest).
+    Those coins paid for a service — a disposition at fair value in both
+    countries, booked like the Kraken parser's own withdrawal fee
+    (`<txid>-fee`; tax-logic CA-CRYPTO-06 / US-CRYPTO-05, audit R1-26,
+    owner decision). A send whose fee the ledger states is already
+    booked by the parser; a stablecoin's fee is US-dollar cash in a
+    Canada project (CA-CRYPTO-02) and property, at par, in a US one."""
+    out: List[Dict[str, Any]] = []
+    for o, i in pairs:
+        if o["account"] != acct or o["fee"]:
+            continue
+        if is_cash_stablecoin(o["symbol"], o["exchange"]) \
+                and country != "usa":
+            continue
+        gap = round(-o["quantity"] - i["quantity"], 12)
+        if gap <= 1e-12:
+            continue
+        fee_send = dict(o, quantity=-gap)
+        fv = fair_value(fee_send, rates, usd_price,
+                        stable_cash=country != "usa")
+        out.append({
+            "id": send_id(o["exchange"], o["date"], o["time"], o["symbol"],
+                          o["quantity"]) + "-fee",
+            "account": acct, "exchange": o["exchange"], "kind": o["kind"],
+            "date": o["date"], "time": o["time"], "symbol": o["symbol"],
+            "quantity": gap, "sent": -o["quantity"],
+            "arrived": i["quantity"],
+            "arrived_on": _EXCH_NAME.get(i["exchange"], i["exchange"]),
+            "summary": _summary(o), "network_fee": True,
+            "fair_value": fv,
+            "tt": tt_line(fee_send, fv, rates.base) if fv else None,
+        })
+    return out
+
+
 # ------------------------------------------------------------- .tt file
 def tt_entries(acct_doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]],
                                                   List[Dict[str, Any]]]:
-    """(entries to write, gift/payment sends that cannot be priced).
-    A decision the country refuses (``refused``) is never written."""
+    """(entries to write, entries that cannot be priced): every
+    gift/payment send and every network fee hidden in a matched send
+    (``network_fees``). A decision the country refuses (``refused``) is
+    never written."""
     todo = [e for e in acct_doc["sends"]
             if e["decision"] in DISPOSING and not e["stable"]
             and not e.get("refused")]
+    todo += list(acct_doc.get("network_fees") or [])
     return ([e for e in todo if e["tt"]], [e for e in todo if not e["tt"]])
+
+
+def tt_want_ids(acct_doc: Dict[str, Any]) -> set:
+    """The ids a current crypto_sends.tt records (the checklist's
+    staleness check; no prices needed)."""
+    return ({e["id"] for e in acct_doc["sends"]
+             if e["decision"] in DISPOSING and not e["stable"]
+             and not e.get("refused")}
+            | {e["id"] for e in acct_doc.get("network_fees") or []})
 
 
 def refused_entries(acct_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -864,12 +905,30 @@ def render_tt(account: str, entries: List[Dict[str, Any]],
                "gift or a payment is a",
                "# disposition at fair market value (a gift: ITA "
                "s.69(1)(b))."]
+    if any(e.get("network_fee") for e in entries):
+        why += ["# A `-fee` line is the network fee hidden in a send that "
+                "arrived short on",
+                "# another of your exchanges: the coins that did not "
+                "arrive paid for a service,",
+                "# a sale at fair value (as a Kraken withdrawal fee "
+                "paid in the coin is)."]
     out = [GENERATED_MARK,
            f"# Source: inputs/{account}/{MANIFEST_NAME} (your decisions) — "
            f"`taxjson crypto-sends {account}` lists them.",
            *why,
            ""]
     for e in sorted(entries, key=lambda e: (e["date"], e["time"], e["id"])):
+        if e.get("network_fee"):
+            ex = _EXCH_NAME.get(e["exchange"], e["exchange"])
+            out.append(f"# {e['id']}: network fee — {ex} {e['kind']} "
+                       f"{e['date']} {e['time']} of {fmt_qty(e['sent'])} "
+                       f"{e['symbol']}, {fmt_qty(e['arrived'])} arrived on "
+                       f"{e['arrived_on']}")
+            out.append(f"#   fair value {fmt_price(e['fair_value']['price'])} "
+                       f"{e['fair_value'].get('currency', '')} per "
+                       f"{e['symbol']}: {e['fair_value']['source']}")
+            out.append(e["tt"])
+            continue
         what = {"gift": "gift", "payment": "payment"}[e["decision"]]
         ex = _EXCH_NAME.get(e["exchange"], e["exchange"])
         out.append(f"# {e['id']}: {what} — {ex} {e['kind']} {e['date']} "

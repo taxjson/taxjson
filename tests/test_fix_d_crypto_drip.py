@@ -15,6 +15,7 @@ Synthetic data only.
 """
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,111 @@ from tax_rules import rule, rule_absent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src"
+
+
+# ------------------------------------------------------------- R1-26
+def _sidecar(root: Path, acct: str, broker: str, rows):
+    (root / "work" / f"{acct}_{broker}_transfers.json").write_text(
+        json.dumps({"metadata": {"kind": "transfer_sidecar",
+                                 "brokerage": broker},
+                    "transactions": rows}))
+
+
+def _send_fee_report(country: str, *, price_ccy: str):
+    """A Coinbase Send of 1.0005 SOL that arrives on Kraken as 1.0 SOL,
+    plus a USDC send that arrives 0.5 short, plus a Kraken withdrawal
+    whose fee the ledger states (already booked by the parser)."""
+    from taxjson.lib.crypto_sends import build_report
+    d = tempfile.mkdtemp()
+    root = Path(d)
+    (root / "work").mkdir()
+    _sidecar(root, "c", "coinbase", [
+        {"action": "TRANSFER", "date": "2025-06-02", "time": "08:00:00",
+         "symbol": "SOL", "quantity": -1.0005, "price": 200.0,
+         "currency": price_ccy, "fee": 0.0, "description": "Send",
+         "id": "cb1"},
+        {"action": "TRANSFER", "date": "2025-06-03", "time": "09:00:00",
+         "symbol": "USDC", "quantity": -100.5, "price": 1.0,
+         "currency": "USD", "fee": 0.0, "description": "Send",
+         "id": "cb2"},
+        {"action": "TRANSFER", "date": "2025-06-05", "time": "09:00:00",
+         "symbol": "ETH", "quantity": 0.5, "price": 0.0,
+         "currency": "USD", "fee": 0.0, "description": "Receive",
+         "id": "cb3"}])
+    _sidecar(root, "c", "kraken", [
+        {"action": "TRANSFER", "date": "2025-06-02", "time": "08:20:00",
+         "symbol": "SOL", "quantity": 1.0, "currency": "USD", "fee": 0.0,
+         "description": "deposit", "id": "kr1"},
+        {"action": "TRANSFER", "date": "2025-06-03", "time": "09:20:00",
+         "symbol": "USDC", "quantity": 100.0, "currency": "USD",
+         "fee": 0.0, "description": "deposit", "id": "kr2"},
+        # Kraken withdrawal: 0.5 ETH sent, 0.001 ETH fee booked by the
+        # parser (named in the description) — never booked again here.
+        {"action": "TRANSFER", "date": "2025-06-05", "time": "08:50:00",
+         "symbol": "ETH", "quantity": -0.5, "currency": "USD", "fee": 0.0,
+         "description": "withdrawal (fee 0.001 ETH)", "id": "kr3"}])
+    cfg = {"settings": {"country": country,
+                        "base_currency": "CAD" if country == "canada"
+                        else "USD"},
+           "accounts": {"c": {"crypto": True}}}
+    rep = build_report(root, cfg, None, None, with_pool=False)
+    return root, rep
+
+
+class TestSendNetworkFeeBooked(unittest.TestCase):
+    """R1-26: the coins a send lost in transit paid the network fee — a
+    disposition at fair value written to crypto_sends.tt."""
+
+    @rule("CA-CRYPTO-06")
+    def test_canada_books_the_shortfall_at_fair_value(self):
+        from taxjson.lib import crypto_sends as cs
+        root, rep = _send_fee_report("canada", price_ccy="CAD")
+        adoc = rep["accounts"]["c"]
+        fees = adoc["network_fees"]
+        # The USDC shortfall is US-dollar cash in a Canada book; the
+        # Kraken ETH withdrawal's fee is already booked by the parser.
+        self.assertEqual([f["symbol"] for f in fees], ["SOL"])
+        f = fees[0]
+        self.assertAlmostEqual(f["quantity"], 0.0005)
+        self.assertEqual(f["id"], "cb-20250602T080000-SOL-1.0005-fee")
+        self.assertIn("Coinbase spot price", f["fair_value"]["source"])
+        self.assertEqual(f["tt"], "BUYSELL 2025-06-02 08:00:00 SOL "
+                                  "-0.0005 CAD 200 0.10 0")
+        entries, unpriced = cs.tt_entries(adoc)
+        self.assertEqual(unpriced, [])
+        self.assertEqual([e["tt"] for e in entries], [f["tt"]])
+        text = cs.render_tt("c", entries, "canada")
+        self.assertIn(f["tt"], text)
+        self.assertIn("network fee", text)
+        # The generated file's ids include the fee: the checklist's
+        # staleness check compares them.
+        p = root / "crypto_sends.tt"
+        p.write_text(text)
+        self.assertEqual(cs.tt_ids(p), {f["id"]})
+
+    @rule("US-CRYPTO-05")
+    def test_us_books_the_shortfall_too_stablecoin_at_par(self):
+        from taxjson.lib import crypto_sends as cs
+        _root, rep = _send_fee_report("usa", price_ccy="USD")
+        fees = {f["symbol"]: f for f in rep["accounts"]["c"]["network_fees"]}
+        self.assertEqual(sorted(fees), ["SOL", "USDC"])
+        self.assertEqual(fees["SOL"]["tt"], "BUYSELL 2025-06-02 08:00:00 "
+                                            "SOL -0.0005 USD 200 0.10 0")
+        # A US stablecoin is property: its shortfall is a sale at par.
+        self.assertEqual(fees["USDC"]["tt"], "BUYSELL 2025-06-03 09:00:00 "
+                                             "USDC -0.5 USD 1 0.50 0")
+        entries, _ = cs.tt_entries(rep["accounts"]["c"])
+        self.assertEqual(len(entries), 2)
+
+    @rule("CA-CRYPTO-06")
+    def test_unpriced_shortfall_is_reported_not_guessed(self):
+        from taxjson.lib import crypto_sends as cs
+        # A CAD project whose send is priced in USD with no USD rate on
+        # file: no fair value, so nothing is written.
+        _root, rep = _send_fee_report("canada", price_ccy="USD")
+        entries, unpriced = cs.tt_entries(rep["accounts"]["c"])
+        self.assertEqual(entries, [])
+        self.assertEqual([e["symbol"] for e in unpriced], ["SOL"])
 
 
 # ----------------------------------------------------------- S060-24

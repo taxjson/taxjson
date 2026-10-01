@@ -651,8 +651,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "gift or a payment in crypto is a sale at fair value."),
             Rule("CA-CRYPTO-06",
                  "A send that arrives on another of your exchanges within "
-                 "3 days, with 90% to 100% of the coins sent (the rest "
-                 "being the network fee), is treated as your own move;",
+                 "3 days, with 90% to 100% of the coins sent, is treated as "
+                 "your own move. When fewer coins arrive and the sending "
+                 "exchange states no fee (a Coinbase Send hides the "
+                 "network fee in the quantity), the coins that did not "
+                 "arrive paid the network fee: a sale of them at fair "
+                 "value, written to crypto_sends.tt, as a Kraken "
+                 "withdrawal fee is (CA-CRYPTO-03; a stablecoin's is cash, "
+                 "CA-CRYPTO-02);",
                  cont=True),
             Rule("CA-CRYPTO-07",
                  "for every other send, `taxjson crypto-sends` records "
@@ -1044,7 +1050,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CRYPTO-05",
                  "A send that arrives on another of your exchanges within "
                  "3 days, with 90% to 100% of the coins sent, is treated as "
-                 "your own move."),
+                 "your own move. When fewer coins arrive and the sending "
+                 "exchange states no fee (a Coinbase Send hides the "
+                 "network fee in the quantity), the coins that did not "
+                 "arrive paid the network fee: a sale of them at fair "
+                 "value (a stablecoin's at its 1.00 USD par), written to "
+                 "crypto_sends.tt, as a Kraken withdrawal fee is "
+                 "(US-CRYPTO-03)."),
         ]),
         ("Crypto sends", [
             Rule("US-SEND-01",

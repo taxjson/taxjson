@@ -450,7 +450,9 @@ user knows gift vs self-custody move; genuine gifts are declared as
 pairs each send with its arrival on another exchange, asks about the
 rest (self / gift / payment, saved in `inputs/<acct>/sends.json`) and
 generates the FMV sells into `inputs/<acct>/crypto_sends.tt`
-(tests/test_fix_sends.py). Limits: pairing reads the crypto accounts'
+(tests/test_fix_sends.py); a matched send that arrived short with no
+fee stated (a Coinbase Send) books the shortfall there as the network
+fee, a sale at fair value (2026-10, audit R1-26). Limits: pairing reads the crypto accounts'
 sidecars only (a send to an equity or `transfers = true` account looks
 unmatched); the stablecoin pool is rebuilt from Kraken ledgers and
 Coinbase exports (a Kraken trades export without its ledger is not

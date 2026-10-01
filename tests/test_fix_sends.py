@@ -280,8 +280,13 @@ class TestCryptoSendsProject(unittest.TestCase):
         lines = [ln for ln in body.splitlines()
                  if ln and not ln.startswith("#")]
         self.assertEqual(lines, [
+            # R1-26: the matched SOL send arrived 0.0001 short — the
+            # network fee, sold at the Coinbase spot price.
+            "BUYSELL 2025-07-13 07:13:27 SOL -0.0001 CAD 222.45 0.02 0",
             "BUYSELL 2025-08-01 08:00:00 BTC -0.001 CAD 150000 150.00 0",
             "BUYSELL 2026-05-04 18:50:14 TAO -0.1 CAD 387.813 38.78 0"])
+        self.assertIn("cb-20250713T071327-SOL-50.0001-fee: network fee",
+                      body)
         self.assertIn(TAO_ID, body)
         self.assertIn("Yahoo TAO22974-USD", body)
         self.assertNotIn("USDC", "\n".join(lines))
@@ -301,6 +306,10 @@ class TestCryptoSendsProject(unittest.TestCase):
                and abs(float(t["quantity"]) + 0.1) < 1e-12]
         self.assertEqual(len(tao), 1)
         self.assertAlmostEqual(float(tao[0]["net_amount"]), 38.78, places=2)
+        sol_fee = [t for t in base if t["symbol"] == "SOL"
+                   and t["action"] == "BUYSELL"
+                   and abs(float(t["quantity"]) + 0.0001) < 1e-12]
+        self.assertEqual(len(sol_fee), 1)
         # Nothing left to classify: the Hybrid Earn sweep is automatic.
         self.assertNotIn("not yet classified", r.stderr + r.stdout)
 
