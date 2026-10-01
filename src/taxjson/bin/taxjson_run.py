@@ -2439,7 +2439,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # The pre-blend baseline: the cross-account passes' notes
             # (written after this file) go in <name>_wash.sum.
             out.write(_diagnostics_banner(cache, name, post_pass=False))
-            out.write(run_capture(_cmd("taxjson-sum-gains") + [str(gains_json)]))
+            out.write(run_capture(_cmd("taxjson-sum-gains")
+                                  + (["--staking"] if is_crypto else [])
+                                  + [str(gains_json)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(year), "--country", country,
             ] + income_dating_flags(settings) + [str(base_json)]))
@@ -2538,7 +2540,11 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
     try:
         with wash_tmp.open("wb") as out:
             out.write(_diagnostics_banner(cache, name))
-            out.write(run_capture(_cmd("taxjson-sum-gains") + [str(wash_gains)]))
+            _is_c = bool(((_soft_config(cache.parent).get("accounts")
+                           or {}).get(name) or {}).get("crypto"))
+            out.write(run_capture(_cmd("taxjson-sum-gains")
+                                  + (["--staking"] if _is_c else [])
+                                  + [str(wash_gains)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(settings["year"]),
                 "--country", _normalize_country(settings["country"]),
@@ -4609,10 +4615,20 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
 
     # Chronological, oldest → latest (date, then time), across all accounts.
     rows.sort(key=lambda r: (r[0], r[1], r[2]))
+    # A crypto account's DIVIDEND rows are staking rewards — ordinary
+    # income, their own total, never under TOTAL DIVIDEND (S023-11).
+    _crypto_accts = {n for n, c in (_soft_config(root).get("accounts")
+                                    or {}).items()
+                     if isinstance(c, dict) and c.get("crypto")}
 
     if getattr(args, "json", False):
+        # Payments in lieu are their own total, as in `sum` and dil-sum
+        # (one "dividend" bucket put them under TOTAL DIVIDEND, and the
+        # PIL-only `dil` view labelled them dividends — S039-19, S041-07).
         jb: Dict[str, Dict[str, float]] = {"buy": {}, "sell": {},
-                                           "dividend": {}}
+                                           "dividend": {},
+                                           "dividend_in_lieu": {},
+                                           "staking": {}}
         for _d, _t, acct, tx in rows:
             cur = tx.get("currency") or "?"
             act = tx.get("action")
@@ -4625,7 +4641,10 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             elif act in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
                 amt = (float(tx.get("gross_amount") or 0.0)
                        or float(tx.get("net_amount") or 0.0))
-                jb["dividend"][cur] = jb["dividend"].get(cur, 0.0) + amt
+                _k = ("dividend_in_lieu" if act != "DIVIDEND"
+                      else "staking" if acct in _crypto_accts
+                      else "dividend")
+                jb[_k][cur] = jb[_k].get(cur, 0.0) + amt
         _json_out({"rows": [dict(tx, account=acct)
                             for _d, _t, acct, tx in rows],
                    "totals": {k: v for k, v in jb.items() if v},
@@ -4646,6 +4665,8 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
     buys: Dict[str, float] = {}
     sells: Dict[str, float] = {}
     divs: Dict[str, float] = {}
+    pils: Dict[str, float] = {}
+    stake: Dict[str, float] = {}
     for _d, _t, acct, tx in rows:
         line = _tx_display_line(tx, settle=settle_dates)
         if line is None:
@@ -4666,7 +4687,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             # against the original posting rather than inflate the total.
             amt = (float(tx.get("gross_amount") or 0.0)
                    or float(tx.get("net_amount") or 0.0))
-            divs[cur] = divs.get(cur, 0.0) + amt
+            _b = (pils if act != "DIVIDEND"
+                  else stake if acct in _crypto_accts else divs)
+            _b[cur] = _b.get(cur, 0.0) + amt
     if not out_lines:
         # roc/dil are the views most often legitimately empty — zero
         # bytes at rc 0 was indistinguishable from a mis-typed window
@@ -4687,11 +4710,14 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         return ", ".join(f"{v:,.2f} {c}" for c, v in sorted(d.items()))
     footer = [(lbl, d) for lbl, d in
               (("TOTAL BUY:", buys), ("TOTAL SELL:", sells),
-               ("TOTAL DIVIDEND:", divs)) if d]
+               ("TOTAL DIVIDEND:", divs),
+               ("TOTAL DIVIDEND IN LIEU:", pils),
+               ("TOTAL STAKING (crypto, ordinary income):", stake)) if d]
     if footer:
         print()
+        _w = max(15, max(len(lbl) for lbl, _d in footer))
         for lbl, d in footer:
-            print(f"{lbl:<15} {_fmt(d)}")
+            print(f"{lbl:<{_w}} {_fmt(d)}")
 
     if skipped:
         print(f"note: skipped {skipped} row(s) with no taxtext representation "
@@ -5416,14 +5442,14 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
                                  expiry=parse_option_expiry(sym))
                             for sym, rec in sorted(agg.items(),
                                                    key=sort_key)],
-                   "total_gain": round(sum(r2["gain"]
-                                           for r2 in agg.values()), 2),
+                   "total_gain": _foot(r2["gain"]
+                                       for r2 in agg.values()),
                    "taxable_gain": _split["taxable"],
                    "sheltered_gain": _split["sheltered"],
                    "currency": base_cur, "basis": basis})
         return
     for sym, rec in sorted(agg.items(), key=sort_key):
-        total += rec["gain"]
+        total += round(rec["gain"], 2)
         out_lines.append(" ".join([
             sym, parse_option_expiry(sym) or "?", f"{rec['qty']:g}",
             money(rec["proceeds"]), money(rec["cost"]),
@@ -5530,8 +5556,13 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             rec = agg.setdefault(und, {"contracts": 0, "qty": 0.0,
                                        "proceeds": 0.0, "cost": 0.0,
                                        "gain": 0.0})
-            rec["contracts"] += 1
-            rec["qty"] += abs(float(t.get("qty") or 0.0))
+            # A grant-timing WRITE record (s.49(1)) recognises the
+            # premium; it is not a close — counting it showed CLOSES 2,
+            # QTY 10 for 5 contracts written and bought back (S024-01,
+            # S040-12).
+            if not t.get("grant"):
+                rec["contracts"] += 1
+                rec["qty"] += abs(float(t.get("qty") or 0.0))
             rec["proceeds"] += premium
             rec["cost"] += buyback
             rec["gain"] += gain
@@ -5545,8 +5576,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
         _json_out({"rows": [dict(rec, underlying=und,
                                  contracts=int(rec["contracts"]))
                             for und, rec in sorted(agg.items())],
-                   "total_gain": round(sum(r["gain"]
-                                           for r in agg.values()), 2),
+                   "total_gain": _foot(r["gain"] for r in agg.values()),
                    "taxable_gain": _scope_split(root, _ccd_pairs)[
                        "taxable"],
                    "sheltered_gain": _scope_split(root, _ccd_pairs)[
@@ -5563,7 +5593,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     out_lines = ["UNDERLYING CLOSES QTY PREMIUM BUYBACK GAIN"]
     total = 0.0
     for und, rec in sorted(agg.items()):
-        total += rec["gain"]
+        total += round(rec["gain"], 2)
         out_lines.append(" ".join([
             und, str(int(rec["contracts"])), f"{rec['qty']:g}",
             money(rec["proceeds"]), money(rec["cost"]),
@@ -5634,9 +5664,18 @@ def cmd_winners(args: argparse.Namespace) -> None:
             und = parse_option_underlying(sym) or sym
             rec = agg.setdefault(und, {"closes": 0, "proceeds": 0.0,
                                        "cost": 0.0, "gain": 0.0})
-            rec["closes"] += 1
-            rec["proceeds"] += float(t.get("proceeds") or 0.0)
-            rec["cost"] += float(t.get("cost") or 0.0)
+            if not t.get("grant"):          # a WRITE is not a close
+                rec["closes"] += 1
+            # Real-world orientation, as ccd-sum and form-export show
+            # it: a SHORT row carries the engine's signed legs (cost =
+            # -premium, proceeds = -buyback), so the columns read
+            # negative and swapped (S040-14).
+            if t.get("direction") == "SHORT":
+                rec["proceeds"] -= float(t.get("cost") or 0.0)
+                rec["cost"] -= float(t.get("proceeds") or 0.0)
+            else:
+                rec["proceeds"] += float(t.get("proceeds") or 0.0)
+                rec["cost"] += float(t.get("cost") or 0.0)
             rec["gain"] += float(t.get("gain") or 0.0)
             _g = groups.get(_acct)
             if _g:
@@ -5653,8 +5692,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
         _json_out({"rows": [dict(rec, ticker=t,
                                  closes=int(rec["closes"]))
                             for t, rec in ranked],
-                   "total_gain": round(sum(r["gain"]
-                                           for _t, r in ranked), 2),
+                   "total_gain": _foot(r["gain"] for _t, r in ranked),
                    "total_gain_taxable": round(grp_gain["taxable"], 2),
                    "total_gain_sheltered": round(grp_gain["sheltered"], 2),
                    "sheltered_included": sorted(shel_accts),
@@ -5694,7 +5732,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
           f"top/bottom {top})")
     print()
     _print_report_table(out_lines)
-    total = sum(r["gain"] for _t, r in ranked)
+    total = _foot(r["gain"] for _t, r in ranked)
     if shel_accts:
         # A registered account's gains are not taxable events; the
         # headline alone overstated the owner's 2025 Schedule 3 gain by
@@ -5918,6 +5956,22 @@ def cmd_fees(args: argparse.Namespace) -> None:
     print(f"\n{len(entries)} fee(s); TOTAL FEES: {tot}")
 
 
+def _foot(values) -> float:
+    """A report total that FOOTS: the sum of the rows as printed
+    (rounded to the cent), not the raw sum rounded once — the printed
+    TOTAL differed from the column by cents (S037-11; `sum` already
+    rounds per row)."""
+    return round(sum(round(float(v or 0.0), 2) for v in values), 2)
+
+
+def _foot_by_currency(pairs) -> Dict[str, float]:
+    """{currency: _foot of that currency's row amounts}."""
+    out: Dict[str, List[float]] = {}
+    for cur, v in pairs:
+        out.setdefault(cur, []).append(v)
+    return {c: _foot(vs) for c, vs in out.items()}
+
+
 def cmd_divs_sum(args: argparse.Namespace) -> None:
     """Dividend summary over a window (default: the tax year): total received
     per ticker, plus a per-currency grand total. `PERIOD` is 30d/6w/3m/1y/all;
@@ -5947,11 +6001,20 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     by_group: Dict[str, Dict[str, float]] = {"taxable": {},
                                              "sheltered": {}}
     shel_accts = set()
+    # A crypto account's DIVIDEND rows are staking rewards: ordinary
+    # income, not dividends — out of the T5 tie-out total (S023-11).
+    _crypto_accts = {n for n, c in (_soft_config(Path(args.dir).resolve())
+                                    .get("accounts") or {}).items()
+                     if isinstance(c, dict) and c.get("crypto")}
+    staking: Dict[str, float] = {}
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         # Signed: reversal rows (negative) net against the original posting.
         amt = (float(tx.get("gross_amount") or 0.0)
                or float(tx.get("net_amount") or 0.0))
+        if acct in _crypto_accts:
+            staking[cur] = staking.get(cur, 0.0) + amt
+            continue
         key = (str(tx.get("symbol") or "?"), cur)
         agg[key] = agg.get(key, 0.0) + amt
         totals[cur] = totals.get(cur, 0.0) + amt
@@ -5961,6 +6024,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
             if g == "sheltered":
                 shel_accts.add(acct)
     _warn_bad_dates(bad)
+    totals = _foot_by_currency((cur, amt) for (_s, cur), amt in agg.items())
     if getattr(args, "json", False):
         _json_out({"rows": [{"symbol": sym, "currency": cur,
                              "dividend": round(amt, 2)}
@@ -5972,10 +6036,20 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
                                         in by_group["sheltered"].items()},
                    "sheltered_included": sorted(shel_accts),
                    "payments_in_lieu_as_dividends": n_pil_div,
+                   "staking": {c: round(v, 2) for c, v in staking.items()},
                    "scope": scope})
         return
+
+    def _stk_line():
+        if staking:
+            print(f"STAKING REWARDS (crypto account(s) "
+                  f"{', '.join(sorted(_crypto_accts))} — ordinary income, "
+                  f"not dividends; not in the total): "
+                  + ", ".join(f"{money(v)} {c}"
+                              for c, v in sorted(staking.items())))
     if not agg:
         print(f"No dividends in {scope}.")
+        _stk_line()
         return
     out_lines = ["SYMBOL CUR DIVIDEND"]
     for (sym, cur), amt in sorted(agg.items()):
@@ -6004,6 +6078,7 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
         print(f"TOTAL DIVIDEND (all accounts): {_tot(totals)}")
     else:
         print(f"TOTAL DIVIDEND: {_tot(totals)}")
+    _stk_line()
 
 
 def cmd_dil_sum(args: argparse.Namespace) -> None:
@@ -6029,6 +6104,11 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
     agg: Dict[Tuple[str, str, str], Dict[str, float]] = {}
     totals: Dict[str, float] = {}
     by_treat: Dict[str, Dict[str, float]] = {"dividend": {}, "ordinary": {}}
+    # A registered account's payment in lieu is not income at all: it
+    # is its own line, never "ordinary income" (S041-09).
+    groups = _account_group_of(Path(args.dir).resolve())
+    sheltered: Dict[str, float] = {}
+    shel_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         # Signed: reversal rows (negative) net against the original posting.
@@ -6041,6 +6121,10 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
         rec["amount"] += amt
         rec["rows"] += 1
         totals[cur] = totals.get(cur, 0.0) + amt
+        if groups.get(acct) == "sheltered":
+            sheltered[cur] = sheltered.get(cur, 0.0) + amt
+            shel_accts.add(acct)
+            continue
         by_treat[treat][cur] = by_treat[treat].get(cur, 0.0) + amt
     _warn_bad_dates(bad)
     if getattr(args, "json", False):
@@ -6055,6 +6139,9 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
                                        in by_treat["ordinary"].items()},
                    "totals_dividend": {c: round(v, 2) for c, v
                                        in by_treat["dividend"].items()},
+                   "totals_sheltered": {c: round(v, 2) for c, v
+                                        in sheltered.items()},
+                   "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
     if not agg:
@@ -6078,11 +6165,17 @@ def cmd_dil_sum(args: argparse.Namespace) -> None:
 
     def _tot(d):
         return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
-    if by_treat["dividend"]:
+    if by_treat["dividend"] or shel_accts:
         print(f"\nORDINARY INCOME: {_tot(by_treat['ordinary']) or '0.00'}")
+    if by_treat["dividend"]:
         print(f"DEEMED DIVIDENDS (s.260, in divs-sum): "
               f"{_tot(by_treat['dividend'])}")
-    print(f"\nTOTAL DIVIDEND IN LIEU: {_tot(totals)}")
+    if shel_accts:
+        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — not taxable "
+              f"income): {_tot(sheltered)}")
+    print(f"\nTOTAL DIVIDEND IN LIEU"
+          + (" (all accounts)" if shel_accts else "")
+          + f": {_tot(totals)}")
 
 
 def cmd_roc_sum(args: argparse.Namespace) -> None:
@@ -6120,8 +6213,21 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
 
     agg: Dict[Tuple[str, str], Dict[str, float]] = {}
     totals: Dict[str, float] = {}
+    # Registered accounts have no ACB to track and get no T3: the total
+    # a user ties to T3 box 42 is the TAXABLE one (S041-10), the same
+    # scope as the checklist's roc-entered step.
+    groups = _account_group_of(_root)
+    by_group: Dict[str, Dict[str, float]] = {"taxable": {},
+                                             "sheltered": {}}
+    shel_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
+        _g = groups.get(acct)
+        if _g:
+            _r = -float(tx.get("net_amount") or 0.0)
+            by_group[_g][cur] = by_group[_g].get(cur, 0.0) + _r
+            if _g == "sheltered":
+                shel_accts.add(acct)
         # ADJUST net_amount is the ACB delta (negative = reduction).
         # Present as capital RETURNED, so a normal ROC posting is
         # positive; negative values are reversals / manual ACB increases.
@@ -6147,6 +6253,11 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                              "dist_rows": int(rec["dist_rows"])}
                             for (sym, cur), rec in sorted(agg.items())],
                    "totals": {c: round(v, 2) for c, v in totals.items()},
+                   "totals_taxable": {c: round(v, 2) for c, v
+                                      in by_group["taxable"].items()},
+                   "totals_sheltered": {c: round(v, 2) for c, v
+                                        in by_group["sheltered"].items()},
+                   "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
     if not agg:
@@ -6162,8 +6273,17 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     print(f"RETURN OF CAPITAL / ACB ADJUSTMENTS — {scope}")
     print()
     _print_report_table(out_lines)
-    tot = ", ".join(f"{money(v)} {c}" for c, v in sorted(totals.items()))
-    print(f"\nTOTAL CAPITAL RETURNED (ACB reduced): {tot}")
+    def _tot(d):
+        return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
+    print()
+    if shel_accts:
+        print(f"TAXABLE (compare with T3 box 42): "
+              f"{_tot(by_group['taxable']) or '0.00'}")
+        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — no ACB to "
+              f"track, no T3): {_tot(by_group['sheltered'])}")
+        print(f"TOTAL CAPITAL RETURNED (all accounts): {_tot(totals)}")
+    else:
+        print(f"TOTAL CAPITAL RETURNED (ACB reduced): {_tot(totals)}")
     print("Positive = ACB reduced (capital returned). Negative rows are "
           "reversals or manual ACB increases (MAP_ROWS: distributions.map "
           "adjustments, a reinvested distribution shows negative). Enter "
@@ -6184,11 +6304,20 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
     tot_bought: Dict[str, float] = {}
     tot_sold: Dict[str, float] = {}
     tot_fees: Dict[str, float] = {}
+    # The SOLD total pooled registered accounts with no word: it is not
+    # the T5008 figure, which covers taxable accounts only (S041-12).
+    groups = _account_group_of(Path(args.dir).resolve())
+    tax_sold: Dict[str, float] = {}
+    shel_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         q = float(tx.get("quantity") or 0.0)
         amt = _trade_total(tx)          # sells signed (S039-11)
         fee = _tx_fee(tx)
+        if groups.get(acct) == "sheltered":
+            shel_accts.add(acct)
+        elif q < 0:
+            tax_sold[cur] = tax_sold.get(cur, 0.0) + amt
         d = agg.setdefault((str(tx.get("symbol") or "?"), cur),
                            {"buys": 0, "sells": 0, "bought": 0.0, "sold": 0.0,
                             "fees": 0.0})
@@ -6203,6 +6332,11 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
         d["fees"] += fee
         tot_fees[cur] = tot_fees.get(cur, 0.0) + fee
     _warn_bad_dates(bad)
+    for _tot_d, _k in ((tot_bought, "bought"), (tot_sold, "sold"),
+                       (tot_fees, "fees")):
+        _tot_d.clear()
+        _tot_d.update(_foot_by_currency((cur, d[_k]) for (_s, cur), d
+                                        in agg.items()))
     if getattr(args, "json", False):
         _json_out({"rows": [dict(d, symbol=sym, currency=cur,
                                  buys=int(d["buys"]), sells=int(d["sells"]))
@@ -6212,6 +6346,9 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
                                   "fees": round(tot_fees.get(c, 0.0), 2)}
                               for c in sorted(set(tot_bought) | set(tot_sold)
                                               | set(tot_fees))},
+                   "sold_taxable": {c: round(v, 2)
+                                    for c, v in tax_sold.items()},
+                   "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
     if not agg:
@@ -6231,6 +6368,12 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
         print(f"TOTAL {c}: bought {money(tot_bought.get(c, 0.0))}, "
               f"sold {money(tot_sold.get(c, 0.0))}, "
               f"fees {money(tot_fees.get(c, 0.0))}")
+    if shel_accts:
+        print(f"(all accounts, including registered "
+              f"{', '.join(sorted(shel_accts))}; sold in taxable accounts "
+              f"only: " + (", ".join(f"{money(v)} {c}" for c, v
+                                     in sorted(tax_sold.items()))
+                           or "0.00") + ")")
 
 
 def _gain_display_line(g: dict) -> str:
@@ -7080,6 +7223,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
                           "pil": round(pil, 2), "fees": round(fees, 2),
                           "total": round(cap + opt + div, 2),
                           "type": acct_types.get(acct, "")})
+        if (cfg.get("accounts", {}).get(acct) or {}).get("crypto"):
+            # Its DIVIDEND column is staking rewards (S023-11).
+            acct_rows[-1]["dividend_is_staking"] = True
 
     def _sum_rows(rows: List[Dict[str, Any]]) -> Dict[str, float]:
         # Summed from the DISPLAYED (2dp-rounded) per-account figures,
@@ -7308,6 +7454,16 @@ def cmd_summary(args: argparse.Namespace) -> None:
         print("ALL ACCOUNTS")
     _print_report_table(_table_lines(acct_rows, "TOTAL"),
                         rule_before_last=True)
+    _stk = [r for r in acct_rows
+            if r.get("dividend_is_staking") and abs(r["dividend"]) >= 0.005]
+    if _stk:
+        # The crypto rows' DIVIDEND is staking rewards: ordinary income
+        # (no gross-up/credit, no withholding), as the estimate treats
+        # it — not a figure for the dividend lines (S023-11).
+        print(f"NOTE: DIVIDEND for crypto account(s) "
+              + ", ".join(f"{r['account']} ({money(r['dividend'])})"
+                          for r in _stk)
+              + " is STAKING rewards — ordinary income, not dividends.")
 
     if filing_rows:
         from taxjson.lib.report_model import render_table as _rt

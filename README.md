@@ -639,7 +639,14 @@ per-currency totals split TAXABLE / SHELTERED when a registered account
 contributes — the TAXABLE line is the figure to compare with the T5/T3 slips.
 Each row counts in its tax year (see "Income dating"), so a Canadian ETF's
 December-record distribution paid in January is in the December year, as on
-the T3. `winners` prints the same taxable/sheltered split under its ranking.
+the T3. A crypto account's DIVIDEND rows are staking rewards (ordinary
+income): `divs-sum` lists them on their own STAKING line, outside the
+total, and `sum` / the views / the crypto `.sum` label them as staking.
+`winners` prints the same taxable/sheltered split under its ranking, and
+`dil-sum` / `roc-sum` / `trades-sum` separate registered accounts the same
+way (the T3 box 42 figure is `roc-sum`'s TAXABLE line; T5008 proceeds are
+`trades-sum`'s taxable "sold" figure). Every summary TOTAL is the sum of
+its printed (cent-rounded) rows.
 
 **Income dating** (`taxjson tax-logic` states each rule with its id):
 
@@ -678,7 +685,9 @@ the T3. `winners` prints the same taxable/sheltered split under its ranking.
   planning numbers and the slip tie-outs agree with them.
 
 **`taxjson trades-sum [PERIOD] [ACCOUNT]`** — per ticker: buy/sell counts, value
-bought/sold, and fees, with per-currency totals.
+bought/sold, and fees, with per-currency totals (all accounts; when a
+registered account contributes, the taxable accounts' "sold" figure is
+printed under them).
 
 **`taxjson fees-sum [PERIOD] [ACCOUNT]`** — trading-fee report by **brokerage**
 (commission/fee totals with per-trade averages, $/share, %notional), converted

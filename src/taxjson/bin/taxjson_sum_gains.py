@@ -81,17 +81,23 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 tick_stats['cap'] += gain
 
-            tick_stats['hold_days'].append(days)
-            tick_stats['trade_count'] += 1
+            # A grant-timing WRITE record (s.49(1)) is the premium's
+            # recognition, not a closed trade: counting it doubled the
+            # TRADES of every written-and-closed contract and skewed the
+            # win rate / average hold (S040-12). Its gain stays in the
+            # totals above.
+            if not tx.get('grant'):
+                tick_stats['hold_days'].append(days)
+                tick_stats['trade_count'] += 1
 
-            # Aggregate for statistics
-            asset_type = 'Options' if is_opt else 'Stocks'
-            if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
-            if currency not in returns_by_asset[asset_type]:
-                returns_by_asset[asset_type][currency] = {'dollars': [], 'days': [], 'fees': [], 'fee_shares': []}
+                # Aggregate for statistics
+                asset_type = 'Options' if is_opt else 'Stocks'
+                if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
+                if currency not in returns_by_asset[asset_type]:
+                    returns_by_asset[asset_type][currency] = {'dollars': [], 'days': [], 'fees': [], 'fee_shares': []}
 
-            returns_by_asset[asset_type][currency]['dollars'].append(gain)
-            returns_by_asset[asset_type][currency]['days'].append(days)
+                returns_by_asset[asset_type][currency]['dollars'].append(gain)
+                returns_by_asset[asset_type][currency]['days'].append(days)
 
             term = tx.get('term')
             if term == 'SHORT_TERM':
@@ -182,7 +188,8 @@ def get_sort_value(ticker: str, currency: str, key: str, ticker_stats: Dict[str,
         return sum(days) / count if count > 0 else 0
     return 0
 
-def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool = False) -> str:
+def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool = False,
+                  staking: bool = False) -> str:
     lines = []
     ticker_stats = data['ticker_stats']
     total_year = data['total_year']
@@ -336,7 +343,12 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         lines.append(f"TOTAL REALIZED OPTION GAIN: {color_val(totals['opt'], is_cost=False)} {currency}")
         lines.append(f"TOTAL REALIZED GAIN:        {color_val(totals['total'], is_cost=False)} {currency}")
         lines.append("-" * 54)
-        lines.append(f"TOTAL REALIZED DIVIDENDS:   {color_val(totals['div'], is_cost=False)} {currency}")
+        if staking:
+            # A crypto account's DIVIDEND rows are staking rewards:
+            # ordinary income, not dividends (S023-11; README).
+            lines.append(f"TOTAL STAKING REWARDS:      {color_val(totals['div'], is_cost=False)} {currency}  (ordinary income, not dividends)")
+        else:
+            lines.append(f"TOTAL REALIZED DIVIDENDS:   {color_val(totals['div'], is_cost=False)} {currency}")
         if abs(totals.get('pil', 0)) > 1e-3:
             lines.append(f"TOTAL PIL (PAY-IN-LIEU):    {color_val(totals['pil'], is_cost=False)} {currency}")
         lines.append("-" * 54)
@@ -423,6 +435,9 @@ def main():
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI color output")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
+    parser.add_argument("--staking", action="store_true",
+                        help="The books are a crypto account's: label its "
+                             "DIVIDEND total as staking rewards")
     parser.add_argument("files", nargs="*", metavar="FILE")
     args = parser.parse_args()
     
@@ -471,7 +486,8 @@ def main():
     if args.json:
         print(json.dumps(report_data, indent=2, sort_keys=True))
         return
-    print(format_report(report_data, args.sort_by, args.no_color))
+    print(format_report(report_data, args.sort_by, args.no_color,
+                        staking=args.staking))
 
 if __name__ == "__main__":
     main()

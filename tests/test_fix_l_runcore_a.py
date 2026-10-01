@@ -709,5 +709,203 @@ class TestFastCache(unittest.TestCase):
             self.assertIn("msft-gains.tt", r.stderr)
 
 
+
+def _write(path, doc):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc))
+
+
+def _row(action, date, symbol, **kw):
+    d = {"action": action, "date": date, "time": "10:00:00",
+         "symbol": symbol, "currency": "CAD"}
+    d.update(kw)
+    return d
+
+
+_MIXED_CFG = _CONFIG + ('[accounts.rrsp]\ntype = "sheltered"\n'
+                        '[accounts.kr]\ntype = "taxable"\n'
+                        'crypto = true\n')
+
+
+class TestReportLabelsAndTotals(unittest.TestCase):
+    """S039-19 / S041-07 (PIL footer), S041-09 / S041-10 / S041-12
+    (sheltered scope), S037-11 (footing), S040-14 (winners signs),
+    S024-01 / S040-12 (grant WRITE is not a close), S028-04 (ccd.rpt
+    orientation), S023-11 (staking is not a dividend)."""
+
+    def _views_project(self, tmp):
+        root = _project(tmp, _MIXED_CFG)
+        work = root / "work"
+        _write(work / "margin_raw.json", {"transactions": [
+            _row("DIVIDEND", "2025-05-01", "AAA.TO", gross_amount=30.0,
+                 net_amount=30.0),
+            _row("DIVIDEND_IN_LIEU", "2025-05-15", "AAA.TO",
+                 gross_amount=10.0, net_amount=10.0),
+            _row("ADJUST", "2025-06-01", "AAA.TO", net_amount=-5.0,
+                 type="roc"),
+            _row("BUYSELL", "2025-07-01", "AAA.TO", quantity=-10,
+                 price=10.0, net_amount=100.0)]})
+        _write(work / "rrsp_raw.json", {"transactions": [
+            _row("DIVIDEND_IN_LIEU", "2025-05-15", "BBB.TO",
+                 gross_amount=900.0, net_amount=900.0),
+            _row("ADJUST", "2025-06-01", "BBB.TO", net_amount=-500.0,
+                 type="roc"),
+            _row("BUYSELL", "2025-07-01", "BBB.TO", quantity=-10,
+                 price=500.0, net_amount=5000.0)]})
+        _write(work / "kr_filled.json", {"transactions": [
+            _row("DIVIDEND", "2025-05-03", "ETH", gross_amount=7.0,
+                 net_amount=7.0)]})
+        return root
+
+    def test_tx_view_footers_keep_pil_and_staking_apart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._views_project(tmp)
+            ev = _run_cli(root, "events")
+            self.assertEqual(ev.returncode, 0, ev.stderr)
+            self.assertRegex(ev.stdout, r"TOTAL DIVIDEND:\s+30\.00 CAD")
+            self.assertRegex(ev.stdout,
+                             r"TOTAL DIVIDEND IN LIEU:\s+910\.00 CAD")
+            self.assertRegex(ev.stdout, r"TOTAL STAKING.*7\.00 CAD")
+            dil = _run_cli(root, "dil")
+            self.assertNotRegex(dil.stdout, r"TOTAL DIVIDEND:")
+            self.assertIn("TOTAL DIVIDEND IN LIEU", dil.stdout)
+            j = json.loads(_run_cli(root, "events", "--json").stdout)
+            self.assertEqual(j["totals"]["dividend"], {"CAD": 30.0})
+            self.assertEqual(j["totals"]["dividend_in_lieu"],
+                             {"CAD": 910.0})
+            self.assertEqual(j["totals"]["staking"], {"CAD": 7.0})
+
+    def test_divs_sum_leaves_staking_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._views_project(tmp)
+            r = _run_cli(root, "divs-sum")
+            self.assertIn("TOTAL DIVIDEND: 30.00 CAD", r.stdout)
+            self.assertIn("STAKING REWARDS", r.stdout)
+            j = json.loads(_run_cli(root, "divs-sum", "--json").stdout)
+            self.assertEqual(j["totals"], {"CAD": 30.0})
+            self.assertEqual(j["staking"], {"CAD": 7.0})
+
+    def test_sheltered_scope_is_split_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._views_project(tmp)
+            dil = _run_cli(root, "dil-sum")
+            self.assertIn("ORDINARY INCOME: 10.00 CAD", dil.stdout)
+            self.assertIn("SHELTERED (rrsp", dil.stdout)
+            j = json.loads(_run_cli(root, "dil-sum", "--json").stdout)
+            self.assertEqual(j["totals_ordinary"], {"CAD": 10.0})
+            self.assertEqual(j["totals_sheltered"], {"CAD": 900.0})
+            roc = _run_cli(root, "roc-sum")
+            self.assertIn("TAXABLE (compare with T3 box 42): 5.00 CAD",
+                          roc.stdout)
+            j = json.loads(_run_cli(root, "roc-sum", "--json").stdout)
+            self.assertEqual(j["totals_taxable"], {"CAD": 5.0})
+            ts = _run_cli(root, "trades-sum")
+            self.assertIn("sold in taxable accounts only: 100.00 CAD",
+                          ts.stdout)
+            j = json.loads(_run_cli(root, "trades-sum", "--json").stdout)
+            self.assertEqual(j["sold_taxable"], {"CAD": 100.0})
+
+    def test_totals_foot_to_the_printed_rows(self):
+        from taxjson.bin.taxjson_run import _foot, _foot_by_currency
+        rows = [0.005, 0.005, 0.005]       # each prints 0.01 (or 0.00)
+        self.assertEqual(_foot(rows), round(sum(round(v, 2)
+                                                 for v in rows), 2))
+        self.assertEqual(_foot([1.004, 2.004]), 3.0)
+        self.assertEqual(_foot_by_currency([("CAD", 1.004),
+                                            ("CAD", 2.004),
+                                            ("USD", 0.336)]),
+                         {"CAD": 3.0, "USD": 0.34})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            _write(root / "work" / "margin_raw.json", {"transactions": [
+                _row("DIVIDEND", "2025-05-01", f"T{i}.TO",
+                     gross_amount=1.004, net_amount=1.004)
+                for i in range(3)]})
+            r = _run_cli(root, "divs-sum")
+            self.assertIn("TOTAL DIVIDEND: 3.00 CAD", r.stdout)
+
+    def _options_project(self, tmp):
+        root = _project(tmp, csv=_QT_HEADER)
+        (root / "inputs" / "margin" / "opts.tt").write_text(
+            "BUYSELL 2025-01-10 09:30:00 MIXCO.TO 100 CAD 10.0 -1000.0 0.0\n"
+            "BUYSELL 2025-02-02 09:30:00 ABC261218C00050000.TO -5 CAD 4.0 "
+            "1995.0 5.0\n"
+            "BUYSELL 2025-03-05 09:30:00 ABC261218C00050000.TO 5 CAD 2.0 "
+            "-1005.0 5.0\n"
+            "BUYSELL 2025-04-01 09:30:00 MIXCO.TO -100 CAD 12.0 1200.0 0.0\n"
+            "BUYSELL 2025-05-01 09:30:00 MIXCO.TO -100 CAD 50.0 5000.0 0.0\n"
+            "BUYSELL 2025-06-01 09:30:00 MIXCO.TO 100 CAD 40.0 -4000.0 0.0\n")
+        (root / "inputs" / "margin" / "questrade_2025.csv").unlink()
+        r = _run_cli(root, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return root
+
+    def test_option_views_under_grant_timing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._options_project(tmp)
+            w = json.loads(_run_cli(root, "winners", "--json").stdout)
+            rows = {r["ticker"]: r for r in w["rows"]}
+            # S040-14: real-world orientation (form-export's).
+            self.assertAlmostEqual(rows["MIXCO.TO"]["proceeds"], 6200.0)
+            self.assertAlmostEqual(rows["MIXCO.TO"]["cost"], 5000.0)
+            self.assertAlmostEqual(rows["ABC.TO"]["proceeds"], 1995.0)
+            self.assertAlmostEqual(rows["ABC.TO"]["cost"], 1005.0)
+            # S040-12: the WRITE record is not a close.
+            self.assertEqual(rows["ABC.TO"]["closes"], 1)
+            c = json.loads(_run_cli(root, "ccd-sum", "--json").stdout)
+            self.assertEqual(c["rows"][0]["contracts"], 1)
+            self.assertEqual(c["rows"][0]["qty"], 5)
+            self.assertAlmostEqual(c["rows"][0]["proceeds"], 1995.0)
+            # S028-04: ccd.rpt shows premium and buy-back positive.
+            rpt = (root / "reports" / "ccd.rpt").read_text()
+            self.assertIn("PREMIUM", rpt)
+            self.assertNotIn("-1,995.00", rpt)
+            self.assertNotIn("-1,005.00   ", rpt.split("GAIN")[0])
+            line = next(ln for ln in rpt.splitlines()
+                        if ln.startswith("2025-03-05"))
+            self.assertIn(" 1,005.00 ", line)
+
+    def test_sum_gains_does_not_count_write_records(self):
+        from taxjson.bin.taxjson_sum_gains import summarize_gains
+        write = {"symbol": "ABC261218C00050000.TO", "date": "2025-02-02",
+                 "qty": 5, "cost": -1995.0, "proceeds": 0.0,
+                 "gain": 1995.0, "days_held": 0, "currency": "CAD",
+                 "direction": "SHORT", "grant": True}
+        close = dict(write, date="2025-03-05", cost=0.0, proceeds=-1005.0,
+                     gain=-1005.0, days_held=31, grant=False)
+        res = summarize_gains({"transactions": [write, close],
+                               "summary": {"year": 2025}})
+        st = res["ticker_stats"]["ABC.TO"]["CAD"]
+        self.assertEqual(st["trade_count"], 1)
+        self.assertAlmostEqual(st["opt"], 990.0)
+
+    def test_staking_labels_in_sum_and_dot_sum(self):
+        from taxjson.bin.taxjson_sum_gains import (format_report,
+                                                    summarize_gains)
+        res = summarize_gains({"transactions": [
+            {"symbol": "ETH", "action": "DIVIDEND", "dividend": 7.0,
+             "date": "2025-05-03", "currency": "CAD"}],
+            "summary": {"year": 2025}})
+        self.assertIn("TOTAL STAKING REWARDS",
+                      format_report(res, no_color=True, staking=True))
+        self.assertIn("TOTAL REALIZED DIVIDENDS",
+                      format_report(res, no_color=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _MIXED_CFG)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            _write(root / "work" / "kr_gains.json", {
+                "transactions": [{"symbol": "ETH", "action": "DIVIDEND",
+                                  "dividend": 7.0, "date": "2025-05-03",
+                                  "currency": "CAD"}],
+                "summary": {"year": 2025}})
+            r = _run_cli(root, "sum")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("is STAKING rewards", r.stdout)
+            j = json.loads(_run_cli(root, "sum", "--json").stdout)
+            kr = [a for a in j["accounts"] if a["account"] == "kr"]
+            self.assertTrue(kr and kr[0].get("dividend_is_staking"))
+
+
 if __name__ == "__main__":
     unittest.main()

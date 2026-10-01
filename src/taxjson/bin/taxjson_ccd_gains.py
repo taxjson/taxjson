@@ -41,6 +41,18 @@ def process_data(data, ccd_by_underlying):
 
         if direction != 'SHORT':
             continue
+        # Real-world orientation, as ccd-sum and Schedule 3 show it:
+        # PREMIUM = proceeds of the sold call, BUYBACK = cost to close.
+        # Rows with an explicit direction carry the engines' signed legs
+        # (cost = -premium, proceeds = -buyback) and printed as a
+        # NEGATIVE cost / proceeds; legacy inferred rows carry them
+        # swapped and positive (S028-04).
+        _c = float(tx.get('cost', 0.0) or 0.0)
+        _p = float(tx.get('proceeds', 0.0) or 0.0)
+        tx = dict(tx)
+        tx['_premium'], tx['_buyback'] = ((_c, _p)
+                                          if tx.get('direction') is None
+                                          else (-_c, -_p))
             
         if tx.get('tainted'):
             # Phantom-basis rows carry a fabricated cost: excluded (and
@@ -105,7 +117,7 @@ def main():
         print(f"COVERED CALLS — {und}")
         print()
 
-        headers = ["DATE", "SYMBOL", "QTY", "CUR", "COST/SH", "PROC/SH", "GAIN/SH", "COST", "PROCEEDS", "GAIN", "DAYS"]
+        headers = ["DATE", "SYMBOL", "QTY", "CUR", "COST/SH", "PROC/SH", "GAIN/SH", "PREMIUM", "BUYBACK", "GAIN", "DAYS"]
         print(f"{headers[0]:<12} {headers[1]:<26} {headers[2]:>10} {headers[3]:<5} {headers[4]:>15} {headers[5]:>15} {headers[6]:>15} {headers[7]:>15} {headers[8]:>15} {headers[9]:>15} {headers[10]:>6}")
         print("-" * 159)   # header rule matches the table width
 
@@ -119,8 +131,8 @@ def main():
                   f"{float(tx.get('cost_per_share', 0)):15.4f} "
                   f"{float(tx.get('proceeds_per_share', 0)):15.4f} "
                   f"{float(tx.get('gain_per_share', 0)):15.4f} "
-                  f"{float(tx.get('cost', 0)):15,.2f} "
-                  f"{float(tx.get('proceeds', 0)):15,.2f} "
+                  f"{tx['_premium'] + 0.0:15,.2f} "
+                  f"{tx['_buyback'] + 0.0:15,.2f} "
                   f"{float(tx.get('gain', 0)):15,.2f} "
                   f"{int(tx.get('days_held', 0)):6}")
 
