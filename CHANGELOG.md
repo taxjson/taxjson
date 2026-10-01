@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **RBC: another company's cash in lieu is no longer folded into a
+  reorganization.** A CIL row joins an event only by the same ticker or
+  the company's full name; half the name in common (ALPHA GOLD vs ALPHA
+  RESOURCES) moved the cash into the wrong sale and hid its "NOT booked"
+  warning (S072-01).
+- **RBC spin-off under a temporary code:** the warning names the symbol
+  as booked (`C135859.TO`) with the exact `GLOBAL` line, and stops once
+  ticker.map renames it (`taxjson run` passes the map to the corp-actions
+  stage) (S072-03).
+
 - **A broken elections manifest is a one-line error everywhere.**
   `taxjson elect` (and every other command) on a manifest that is not
   UTF-8, not JSON, or not the documented shape (a bare-string record, a

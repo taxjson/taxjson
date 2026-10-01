@@ -216,5 +216,90 @@ class TestManifestErrors(unittest.TestCase):
         self.assertNotIn("UNKNOWN", good[0])
 
 
+# ================================================================== RBC
+_RBC_HEAD = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+             '"Price","Settlement Date","Account","Value","Currency",'
+             '"Description"\n')
+
+
+def _rbc(date, act, sym, symdesc, qty, price, val, cur, desc):
+    return (f'"{date}","{act}","{sym}","{symdesc}","{qty}","{price}",'
+            f'"{date}","55500001","{val}","{cur}","{desc}"\n')  # pii-ok
+
+
+class TestRbcLow(unittest.TestCase):
+    def _parse(self, *rows):
+        from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "rbc.csv"
+            p.write_text(_RBC_HEAD + "".join(rows))
+            return _quiet(RbcBrokerage().parse_file, p)
+
+    def _arc_with_other_cil(self, other, osym):
+        return self._parse(
+            _rbc("November 20, 2025", "Reorganization", osym, other, "0", "",
+                 "7", "CAD", f"CIL - {other} CASH IN LIEU OF FRACTIONAL "
+                             f"SHARES"),
+            _rbc("November 10, 2025", "Reorganization", "ARC",
+                 "ALPHA RESOURCES CORP", "0", "", "4", "CAD",
+                 "CIL - ALPHA RESOURCES CORP CASH IN LIEU OF FRACTIONAL "
+                 "SHARES"),
+            _rbc("November 8, 2025", "Reorganization", "ARC",
+                 "ALPHA RESOURCES CORP NEW", "10", "", "0", "CAD",
+                 "REV - ALPHA RESOURCES CORP NEW RESULT OF REVERSE SPLIT"),
+            _rbc("November 8, 2025", "Reorganization", "A012345",
+                 "ALPHA RESOURCES CORP", "-105", "", "0", "CAD",
+                 "REV - ALPHA RESOURCES CORP REVERSE SPLIT 1 FOR 10"),
+            _rbc("January 10, 2025", "Buy", osym, other, "200", "5",
+                 "-1000", "CAD", other),
+            _rbc("January 10, 2025", "Buy", "ARC", "ALPHA RESOURCES CORP",
+                 "105", "2", "-210", "CAD", "ALPHA RESOURCES CORP"))
+
+    def test_s072_01_other_companys_cil_is_not_folded(self):
+        for other, osym in (("ALPHA GOLD CORP", "AGC"),
+                            ("OMEGA GOLD CORP", "OGC")):
+            txs, err = self._arc_with_other_cil(other, osym)
+            frac = [t for t in txs if t["action"] == "BUYSELL"
+                    and t["date"] == "2025-11-10"]
+            self.assertEqual(len(frac), 1, other)
+            self.assertAlmostEqual(frac[0]["net_amount"], 4.0)
+            self.assertIn("cash-in-lieu row with no reorganization", err)
+            self.assertIn(osym, err[err.index("cash-in-lieu row with no"):])
+
+    def test_s072_03_spinoff_temp_code_warning(self):
+        from taxjson.lib.corp_actions import parse_rbc_corporate_actions
+        rows = (_rbc("2023-09-05 00:00:00", "Reorganization", "C135859",
+                     "SPINCO WTS", "10", "", "0", "CAD",
+                     "DIS - SPINCO WTS SPINOFF ON 100 SHS FROM SEC# X1 "
+                     "PARENTCO INC REC 08/25/23 PAY 08/31/23"),
+                _rbc("2023-01-05 00:00:00", "Buy", "PAR", "PARENTCO INC",
+                     "100", "10", "-1000", "CAD", "PARENTCO INC"))
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "rbc.csv"
+            p.write_text(_RBC_HEAD + "".join(rows))
+            evs, err = _quiet(parse_rbc_corporate_actions, p, "margin")
+            self.assertEqual(evs[0].target_symbol, "C135859.TO")
+            # Named as booked, with the exact line to add.
+            self.assertIn("temporary code C135859.TO", err)
+            self.assertIn("GLOBAL C135859.TO <TICKER>.TO", err)
+            # Once ticker.map renames it, no warning.
+            _, err2 = _quiet(parse_rbc_corporate_actions, p, "margin",
+                             renames={"C135859.TO": "SPNC.TO"})
+            self.assertNotIn("temporary code", err2)
+            # Through the CLI flag `taxjson run` passes.
+            tm = Path(tmp) / "ticker.map"
+            tm.write_text("GLOBAL C135859.TO SPNC.TO\n")
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
+                 "--country", "canada", "--brokerage", "rbc", "--list",
+                 "--manifest", str(Path(tmp) / "m.json"),
+                 "--ticker-map", str(tm), str(p)],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("spinoff", r.stdout)
+            self.assertNotIn("temporary code", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

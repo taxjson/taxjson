@@ -1871,8 +1871,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # the corp stage was missed).
             # rates dep: a cross-currency exchange's legs are valued
             # at the event-date rate (one fair value for both legs).
+            # ticker_map dep: a temporary code the map now renames is
+            # no longer warned about (S072-03).
             if force or needs_rebuild(out, *csvs, manifest_path,
-                                      src_manifest, rates):
+                                      src_manifest, rates,
+                                      *([ticker_map] if ticker_map
+                                        else [])):
                 print(f"  corp-actions {broker}")
                 cmd = _cmd("taxjson-corp-actions") + [
                     "--account-name", name,
@@ -1881,7 +1885,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--manifest", str(manifest_path),
                     "--rates", str(rates),
                     "--base-currency", base_currency,
-                ]
+                ] + (["--ticker-map", str(ticker_map)] if ticker_map
+                     else [])
                 # Interactive by default: corp-actions prompts for the tax
                 # election (taxable vs rollover) on stderr and reads the
                 # answer from stdin. Without a TTY (or with --no-input) it

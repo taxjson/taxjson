@@ -1480,46 +1480,6 @@ _RBC_NAME_STOP = frozenset((
     'UNIT UNITS TR TRUST ETF ORD DEFAULT OF AND').split())
 
 
-def is_rbc_merger_row(activity: str, description: str) -> bool:
-    """True for an RBC merger removal/receipt row phrase. Kept as a
-    phrase test for callers; the pairing (`pair_rbc_reorganizations`)
-    decides which rows are ONE merger — a "SHRS RECEIVED THRU MERGER"
-    receipt also closes 1-for-1 exchanges and MER reorganizations, which
-    are not elections."""
-    d = (description or '').upper()
-    if 'Reorganization' not in (activity or '') and 'MGR' not in d:
-        return False
-    return ('MERGER TO' in d) or ('RECEIVED THRU MERGER' in d) \
-        or ('SHRS RECEIVED' in d and 'MERGER' in d)
-
-
-_RBC_CIL_WORD_RE = re.compile(r'\bCIL\b')
-
-
-def is_rbc_cil_row(activity: str, description: str) -> bool:
-    """True for an RBC cash-in-lieu-of-fractional-shares row (`CIL - ...
-    CASH IN LIEU OF FRAC SHARES`, and its `ADDITIONAL CIL PAYMENT`
-    follow-up) — the cash settlement of the fractional share a
-    reorganization leaves over, folded into that event.
-
-    Strict: 'CIL' must be a WHOLE WORD on a Reorganization row (the old
-    substring test matched FACILITIES/COUNCIL/CECIL), and outside a
-    Reorganization the row must say CASH IN LIEU *of a FRACTIONAL share*
-    — a "CASH IN LIEU OF DIVIDEND" is income, not a fraction."""
-    d = (description or '').upper()
-    is_reorg = 'Reorganization' in (activity or '')
-    if 'CASH IN LIEU' in d and (is_reorg or re.search(
-            r'CASH\s+IN\s+LIEU\s+(?:OF\s+)?(?:A\s+)?FRAC', d)):
-        # The fraction word must follow CASH IN LIEU: a name starting
-        # FRAC (FRACTYL HEALTH) made a CASH IN LIEU OF DIVIDEND a
-        # fractional-share row (audit S064-05).
-        return True
-    if not is_reorg:
-        return False
-    return bool(_RBC_CIL_WORD_RE.search(d)) and 'MERGER' not in d \
-        and 'RECEIVED' not in d
-
-
 def rbc_is_temp_symbol(symbol: str) -> bool:
     """RBC temporary reorganization placeholder ('H015283')."""
     return bool(_RBC_TEMP_SYMBOL_RE.match((symbol or '').strip().upper()))
@@ -1858,7 +1818,12 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
     unmatched = [r for r in legs if id(r) not in used]
 
     # 3) Cash in lieu of the fractional share, into its event: same
-    #    ticker as the receipt (or the same company), paid within 45 days.
+    #    ticker as the receipt or the removal, or the same company by
+    #    its FULL name (the old ticker, a temporary code), paid within 45
+    #    days. Half the name tokens in common (ALPHA GOLD vs ALPHA
+    #    RESOURCES) folded another security's cash into the wrong
+    #    disposition and silenced its own "NOT booked" warning (audit
+    #    S072-01).
     unmatched_cil = []
     stock_events = [e for e in events if e.kind in ('merger', 'reorg')]
     for c in (r for r in rows if getattr(r, 'cls', '') == 'cil'):
@@ -1873,14 +1838,16 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
                 continue
             if not -3 <= lag <= 45:
                 continue
-            if c.symbol and c.symbol == ev.receipt.symbol:
+            if c.symbol and c.symbol in (ev.receipt.symbol,
+                                         ev.removal.symbol):
                 s = 2.0
             else:
                 cname = c.symdesc or _rbc_body(c.desc)
-                _old, new = _rbc_removal_names(ev.removal)
+                old, new = _rbc_removal_names(ev.removal)
                 s = max(rbc_name_similarity(cname, _rbc_receipt_name(ev.receipt)),
-                        rbc_name_similarity(cname, new) if new else 0.0)
-                if s < 0.5:
+                        rbc_name_similarity(cname, new) if new else 0.0,
+                        rbc_name_similarity(cname, old) if old else 0.0)
+                if s < 1.0:
                     continue
             key = (s, -abs(lag))
             if best is None or key > best[0]:
@@ -1908,6 +1875,7 @@ _RBC_SPINOFF_RE = re.compile(
 def parse_rbc_corporate_actions(
     csv_path: Path, account: str = 'RBC',
     context_files: Optional[List[Path]] = None,
+    renames: Optional[Dict[str, str]] = None,
 ) -> List[CorporateAction]:
     """Extract election events from an RBC Direct Investing activity CSV:
     mergers ("<OLDCO> MERGER TO <NEWCO> <ratio> NEW = <n> OLD" removal +
@@ -1917,7 +1885,11 @@ def parse_rbc_corporate_actions(
     exchanges need no election; the brokerage parser books those.
 
     RBC reports no FMV and no ISIN; FMV comes from the election hint, and
-    the symbols stand in for the ISINs in the event-id hash."""
+    the symbols stand in for the ISINs in the event-id hash.
+
+    `renames` — the project's ticker.map renames (`taxjson run` passes
+    them): a spin-off booked under a temporary code that the map already
+    renames needs no "map it" warning."""
     from taxjson.lib.brokerages.rbc_direct import read_rbc_rows
     rows = read_rbc_rows(Path(csv_path)).rows
 
@@ -2117,11 +2089,15 @@ def parse_rbc_corporate_actions(
         # s.86.1 ACB reduction became a phantom gain (audit S019-05).
         src = parent or (parent_code or '(unknown parent)')
         tgt = _rbc_ca_symbol(r.symbol, r.currency)
-        if rbc_is_temp_symbol(r.symbol):
+        if rbc_is_temp_symbol(r.symbol) and not _renamed(tgt, renames):
+            # Named as the books carry it (C135859.TO): the bare code in
+            # a GLOBAL line matched nothing, and the warning used to stay
+            # after the line was added (audit S072-03).
             print(f"warning: RBC spin-off on {r.date} is booked under the "
-                  f"temporary code {r.symbol} ({r.symdesc or r.desc[:60]!r}) "
-                  f"— map it to the listed ticker with a ticker.map GLOBAL "
-                  f"line once known.", file=sys.stderr)
+                  f"temporary code {tgt} ({r.symdesc or r.desc[:60]!r}) "
+                  f"— once the listed ticker is known, add to ticker.map:  "
+                  f"GLOBAL {tgt} <TICKER>.{tgt.rsplit('.', 1)[-1]}",
+                  file=sys.stderr)
         events.append(CorporateAction(
             date=r.date, time='09:30:00', action_type='spinoff',
             source_symbol=src, source_isin=parent_code or src,
@@ -2138,6 +2114,15 @@ def parse_rbc_corporate_actions(
 
 
 parse_rbc_corporate_actions.accepts_context = True
+parse_rbc_corporate_actions.accepts_renames = True
+
+
+def _renamed(symbol: str, renames: Optional[Dict[str, str]]) -> bool:
+    """Whether the project's ticker.map renames `symbol`."""
+    if not renames:
+        return False
+    from taxjson.bin.taxjson_ticker_map import map_symbol
+    return map_symbol(symbol, renames) != symbol
 
 
 
