@@ -45,6 +45,26 @@
   book is accepted.
 - **buy-check / sell-check "last loss sale" line** dates the loss on the
   project's window basis (trade date in a US project).
+- **`taxjson-export` fails loudly on an unusable input.** A missing,
+  truncated or wrong-shape gains JSON, `--base-gains`, `--trades` or
+  `--transfer-evidence` file, a JSON with no `inventory`, or a `.toml`
+  with no `[[holding]]` array now stops the tool (exit 2, one line naming
+  the file). Under `run --fast` a corrupt cache used to publish an EMPTY
+  `<acct>_holdings.toml` at exit 0 and list every position as closed;
+  the previous snapshot is now kept and the stage fails.
+- **TradingView exports take `tv_exchange.map` from the project.** The
+  map is looked up next to the input and in its parent (the project root
+  for `work/*_gains.json`) before the current directory, so `taxjson -C
+  <proj> run` from elsewhere keeps the `NYSE:`-style prefixes (new
+  `--tv-map FILE` for explicit use).
+- **Holdings export details.** A small quantity with real cost (0.0009
+  BTC) is no longer dropped as dust; the .sum HOLDINGS REPORT says it
+  is the end-of-data inventory, not year-end positions; an option on a
+  class share names the held listing (`RCI.B.TO`, not `RCI.TO`); the
+  `trades` history follows splits and renames; overseas listings (.L,
+  .AX) are in neither currency-split watchlist; a future is `asset_type
+  = "future"` and a futures option gets no guessed `contract_multiplier
+  = 100` (its report cost is per contract).
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the
