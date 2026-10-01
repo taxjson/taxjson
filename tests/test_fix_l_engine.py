@@ -558,5 +558,136 @@ class TestUsRenameMergeKeepsAcquisitionTime(unittest.TestCase):
         self.assertAlmostEqual(r["summary"]["total_gain"], -500.0, 2)
 
 
+class TestClockTimeNormalisedAtLoad(unittest.TestCase):
+    """S071-13: an unpadded loss time ('9:30:00') sorted after its own
+    superficial-loss bump ('09:30:01'), moving $30 between years; a
+    seconds-less time ('09:30') crashed the engine."""
+
+    def _book(self, loss_time):
+        rows = [
+            {"action": "BUYSELL", "date": "2024-12-02", "time": "10:00:00",
+             "symbol": "XYZ.TO", "quantity": 100, "price": 10.0,
+             "net_amount": 1000.0, "currency": "CAD", "account": "m"},
+            {"action": "BUYSELL", "date": "2024-12-20", "time": loss_time,
+             "symbol": "XYZ.TO", "quantity": -80, "price": 8.0,
+             "net_amount": 640.0, "currency": "CAD", "account": "m"},
+            {"action": "BUYSELL", "date": "2025-01-10", "time": "10:00:00",
+             "symbol": "XYZ.TO", "quantity": 20, "price": 10.0,
+             "net_amount": 200.0, "currency": "CAD", "account": "m"},
+            {"action": "BUYSELL", "date": "2025-03-03", "time": "10:00:00",
+             "symbol": "XYZ.TO", "quantity": -20, "price": 10.0,
+             "net_amount": 200.0, "currency": "CAD", "account": "m"},
+        ]
+        from taxjson.lib.core import coerce_transaction_row
+        return [coerce_transaction_row(r, i, "t") for i, r in
+                enumerate(rows)]
+
+    def _gains(self, loss_time):
+        from taxjson.lib.core import CanadaTaxRules
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = CanadaTaxRules().compute_gains(self._book(loss_time))
+        by_year = {}
+        for g in r["transactions"]:
+            y = g["date"][:4]
+            by_year[y] = round(by_year.get(y, 0.0) + g["gain"], 2)
+        return by_year, r["summary"]["total_disallowed"]
+
+    @rule("CA-SL-09")
+    def test_spellings_agree(self):
+        ref = self._gains("09:30:00")
+        self.assertEqual(self._gains("9:30:00"), ref)
+        self.assertEqual(self._gains("09:30"), ref)
+
+    def test_bad_time_refused(self):
+        from taxjson.lib.core import coerce_transaction_row
+        with self.assertRaisesRegex(ValueError, "clock time"):
+            coerce_transaction_row(
+                {"action": "BUYSELL", "date": "2025-01-02",
+                 "time": "25:00:00", "symbol": "X"}, 0, "t")
+        self.assertEqual(coerce_transaction_row(
+            {"action": "BUYSELL", "date": "2025-01-02", "time": "9:05",
+             "symbol": "X"}, 0, "t").time, "09:05:00")
+
+
+class TestSplitGainsPerAccount(unittest.TestCase):
+    """S050-11, S050-15, S050-19, S050-21, S050-23: taxjson-split-gains."""
+
+    def _combined(self):
+        return {
+            "summary": {"year": "2025", "tax_date_basis": "settle",
+                        "count": 3, "total_gain": 0.0},
+            "transactions": [
+                {"tx_id": "a1", "account": "a", "symbol": "AAA.US",
+                 "date": "2025-03-01", "gain": -100.0, "qty": 10},
+                {"tx_id": "b1", "account": "b", "symbol": "BBB.US",
+                 "date": "2025-03-01", "gain": 50.0, "qty": 10},
+                {"tx_id": "b2", "account": "b", "symbol": "BBB.US",
+                 "date": "2025-04-01", "gain": 50.0, "qty": 10}],
+            "inventory": [
+                {"symbol": "XYZ.TO", "qty": 200.0, "total_cost": 3000.0,
+                 "position_start_date": "2021-03-01",
+                 "last_acq_date": "2025-08-01"},
+                {"symbol": "ETH", "qty": 1.0000004, "total_cost": 4000.0016,
+                 "position_start_date": "2024-01-02",
+                 "last_acq_date": "2025-01-02"}],
+            "option_replacement_warnings": [
+                {"loss_id": "a1", "rule": "call_vs_share_loss"},
+                {"loss_id": "zz", "rule": "call_vs_share_loss"}],
+            "phantom_application_log": [
+                {"account": "a", "symbol": "Q.US", "inserted": False},
+                {"account": "b", "symbol": "R.US", "inserted": False}],
+        }
+
+    def _base(self, *rows):
+        return [dict(action="BUYSELL", date=d, date_settle=d, time="10:00:00",
+                     symbol=s, quantity=q, account="x") for d, s, q in rows]
+
+    def test_slice(self):
+        from taxjson.bin.taxjson_split_gains import split_for_account
+        base_b = self._base(("2025-08-01", "XYZ.TO", 100),
+                            ("2025-01-02", "ETH", 4e-07))
+        out = split_for_account(self._combined(), "b", base_b)
+        inv = {r["symbol"]: r for r in out["inventory"]}
+        self.assertEqual(inv["XYZ.TO"]["position_start_date"], "2025-08-01")
+        self.assertEqual(inv["XYZ.TO"]["last_acq_date"], "2025-08-01")
+        self.assertEqual(inv["ETH"]["qty"], 4e-07)
+        self.assertEqual(out["summary"]["count"], 2)
+        self.assertNotIn("option_replacement_warnings", out)
+        self.assertEqual([e["symbol"] for e in
+                          out["phantom_application_log"]], ["R.US"])
+        base_a = self._base(("2021-03-01", "XYZ.TO", 100))
+        out = split_for_account(self._combined(), "a", base_a)
+        self.assertEqual(out["inventory"][0]["position_start_date"],
+                         "2021-03-01")
+        self.assertEqual(out["summary"]["count"], 1)
+        self.assertEqual([w["loss_id"] for w in
+                          out["option_replacement_warnings"]], ["a1"])
+
+    def test_position_start_after_a_round_trip(self):
+        from taxjson.bin.taxjson_split_gains import _position_starts
+        rows = self._base(("2021-03-01", "XYZ.TO", 100),
+                          ("2023-03-01", "XYZ.TO", -100),
+                          ("2024-05-01", "XYZ.TO", 50))
+        self.assertEqual(_position_starts(rows, "settle"),
+                         {"XYZ.TO": "2024-05-01"})
+
+    def test_bad_or_missing_base_is_fatal(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            comb = td / "c.json"
+            comb.write_text(json.dumps(self._combined()))
+            bad = td / "bad.json"
+            bad.write_text("{not json")
+            for base in (bad, td / "missing.json"):
+                r = subprocess.run(
+                    [sys.executable, "-m", "taxjson.bin.taxjson_split_gains",
+                     str(comb), "--account", "a", "--base", str(base)],
+                    capture_output=True, text=True)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("could not read --base", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

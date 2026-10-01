@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Hand-made JSON books:** a time written `9:30:00` or `09:30` is read
+  as `09:30:00` (it used to sort after its own superficial-loss
+  adjustment, moving part of a denial into the next year, or crash); a
+  time that is not a clock time is refused with the row named.
+- **Blended accounts (`taxjson-split-gains`):** each account's holdings
+  show its own position start date (SINCE) instead of the pool's, keep
+  full-precision quantities (crypto dust no longer becomes 0 units with
+  a cost), carry their option-replacement warnings and phantom log, and
+  a US file's `summary.count` counts its own records. A missing or
+  unreadable `--base` book is an error instead of an empty fee map.
 - Gains JSON keeps full precision for `wash_trigger.trigger_qty` and
   `phantom_application_log[].opening_qty` (a 6.76e-06 AVAX trigger read
   0.0), and `--gen-phantoms` notes keep a crypto short's size;
