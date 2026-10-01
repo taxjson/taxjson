@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Fee statistics:** plain futures fees are their own bucket in the
+  gains summary, the .sum fee stats and `fees-sum` (they were counted as
+  stock fees, and futures contracts as shares in $/share). README and
+  `fees-sum --help` now say that `fees-sum` counts by trade date (as
+  `taxjson fees`) while `sum` FEES follows the project's tax_date.
 - **phantoms.json diagnostics:** an entry that did nothing — its rows
   never go short, or no row has its symbol — is now named once on the
   run's output (it was only in the gains JSON, so a typo silently booked

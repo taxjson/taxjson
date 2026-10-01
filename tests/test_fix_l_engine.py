@@ -836,5 +836,35 @@ class TestJournalNoteDirection(unittest.TestCase):
         self.assertIn("TOBASE AEM.US AEM.TO", self._note(legs, "CAD"))
 
 
+class TestFuturesFeeBucket(unittest.TestCase):
+    """S076-12: futures fees were counted as stock fees (and futures
+    contracts as shares in fees-sum)."""
+
+    def test_pipeline_bucket(self):
+        book = [_cx("2025-03-03", "F:CLZ5", 1, 0.0, price=70.0,
+                    commission=2.5),
+                _cx("2025-03-05", "F:CLZ5", -1, 0.0, price=71.0,
+                    commission=2.5),
+                _cx("2025-03-05", "ABC.TO", 10, 100.0, commission=4.95),
+                _cx("2025-03-05", "ABC250620C00010000.TO", 1, 100.0,
+                    commission=1.25)]
+        r = _one(book, "canada")
+        b = r["summary"]["total_fees_by_currency"]["CAD"]
+        self.assertAlmostEqual(b["stocks"], 4.95, 2)
+        self.assertAlmostEqual(b["options"], 1.25, 2)
+        self.assertAlmostEqual(b.get("futures", 0.0), 5.0, 2)
+        self.assertAlmostEqual(b["total"], 11.2, 2)
+
+    def test_fees_sum_stats(self):
+        from taxjson.bin.taxjson_fees import add_stat, metrics, new_stats
+        st = new_stats()
+        add_stat(st, 2.5, 1, False, 0.0, True)
+        add_stat(st, 4.95, 10, False, 0.0)
+        m = metrics(st)
+        self.assertEqual(m["futures_fee"], 2.5)
+        self.assertEqual(m["stock_fee"], 4.95)
+        self.assertAlmostEqual(m["per_share"], 0.495, 4)
+
+
 if __name__ == "__main__":
     unittest.main()

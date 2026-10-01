@@ -13400,8 +13400,8 @@ def main() -> None:
     p_fsum = sub.add_parser(
         "fees-sum",
         help="Trading-fee report by brokerage (base currency) over a window "
-             "(default: tax year); same report `taxjson run` writes to "
-             "reports/fees.rpt")
+             "(default: tax year; trade dates); the totals `taxjson run` "
+             "writes to reports/fees.rpt, by account by default")
     p_fsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_fsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_fsum.add_argument("--by-account", action=argparse.BooleanOptionalAction,

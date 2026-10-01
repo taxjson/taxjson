@@ -1227,11 +1227,15 @@ def run_gains(transactions, sheltered_transactions=(),
             continue
         curr = tx.currency or '?'
         is_opt = bool(re.search(r'\d{6}[CP]\d+', tx.symbol or ''))
-        asset = 'options' if is_opt else 'stocks'
+        # A plain futures contract is neither a stock nor an option: its
+        # own bucket (audit S076-12 — it inflated the Stocks figure).
+        from taxjson.lib.futures import is_plain_future
+        asset = ('options' if is_opt else
+                 'futures' if is_plain_future(tx.symbol) else 'stocks')
         bucket = fees_by_currency.setdefault(
             curr, {'stocks': 0.0, 'options': 0.0, 'total': 0.0}
         )
-        bucket[asset] += fee
+        bucket[asset] = bucket.get(asset, 0.0) + fee
         bucket['total'] += fee
     results['summary']['total_fees_by_currency'] = fees_by_currency
 

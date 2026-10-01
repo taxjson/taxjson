@@ -5,9 +5,14 @@ taxjson_fees.py
 Trading-fee report, broken down by brokerage, with comparison statistics.
 
 "Trading fees" here means `commission + fee` on BUYSELL / ASSIGN rows only —
-the same definition taxjson-gains uses for `summary.total_fees_by_currency`
+the same rows taxjson-gains counts for `summary.total_fees_by_currency`
 (dividends, transfers, and other non-trade rows are excluded). Rebates
 (negative net fees) ARE included, so a brokerage's true net cost shows.
+The YEAR is the TRADE date's and each fee is converted at its trade
+date's rate (the per-trade `taxjson fees` view's window); `taxjson sum`
+FEES and the .sum use the project's tax_date (settle in Canada) and the
+book's converted amounts, so the two differ by the fees of trades that
+straddle Dec 31 and by a few cents of FX (audit R1-290).
 
 Brokerage attribution is read from each input file's
 `metadata.source_brokerage` (set by taxjson-brokerage at parse time);
@@ -84,11 +89,12 @@ def new_stats() -> Dict[str, Any]:
         "notional_fee": 0.0,    # fees on those same rows (so %notional is honest)
         "fee_stocks": 0.0,
         "fee_options": 0.0,
+        "fee_futures": 0.0,     # plain futures: not shares (S076-12)
     }
 
 
 def add_stat(s: Dict[str, Any], fee: float, qty: float,
-             is_opt: bool, notional: float) -> None:
+             is_opt: bool, notional: float, is_fut: bool = False) -> None:
     s["trades"] += 1
     s["fee"] += fee
     s["fees"].append(fee)
@@ -98,6 +104,8 @@ def add_stat(s: Dict[str, Any], fee: float, qty: float,
     if is_opt:
         s["contracts"] += qty
         s["fee_options"] += fee
+    elif is_fut:
+        s["fee_futures"] = s.get("fee_futures", 0.0) + fee
     else:
         s["shares"] += qty
         s["fee_stocks"] += fee
@@ -170,6 +178,8 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account)
             curr = tx.get("currency") or "?"
             key = f"{broker}/{tx.get('account')}" if by_account else broker
             is_opt = _is_option(tx.get("symbol") or "")
+            from taxjson.lib.futures import is_plain_future
+            is_fut = is_plain_future(tx.get("symbol") or "")
             qty = abs(float(tx.get("quantity") or 0))
             notional = abs(float(tx.get("gross_amount") or tx.get("net_amount") or 0))
             fee_base = to_base(fee, curr, date)
@@ -177,9 +187,10 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account)
 
             bucket = buckets.setdefault(key, {"base": new_stats(), "cur": {}})
             for B in (bucket, grand):
-                add_stat(B["base"], fee_base, qty, is_opt, notional_base)
+                add_stat(B["base"], fee_base, qty, is_opt, notional_base,
+                         is_fut)
                 add_stat(B["cur"].setdefault(curr, new_stats()),
-                         fee, qty, is_opt, notional)
+                         fee, qty, is_opt, notional, is_fut)
 
     zero_fee = sorted(brokers_seen - {k.split("/")[0] for k in buckets})
     info = {
@@ -204,6 +215,7 @@ def metrics(s: Dict[str, Any]) -> Dict[str, float]:
         "per_contract": s["fee_options"] / s["contracts"] if s["contracts"] else 0.0,
         "stock_fee": s["fee_stocks"],
         "option_fee": s["fee_options"],
+        "futures_fee": s.get("fee_futures", 0.0),
     }
 
 

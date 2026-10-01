@@ -106,7 +106,9 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         if fee != 0:
             total_fees[currency] = total_fees.get(currency, 0.0) + fee
             is_opt = is_option_ticker(symbol)
-            asset_type = 'Options' if is_opt else 'Stocks'
+            from taxjson.lib.futures import is_plain_future
+            asset_type = ('Options' if is_opt else
+                          'Futures' if is_plain_future(symbol) else 'Stocks')
             
             if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
             if currency not in returns_by_asset[asset_type]: 
@@ -457,8 +459,9 @@ def main():
             wash_converged = wash_converged and summary.get('wash_solver_converged', True)
             for curr, bucket in (summary.get('total_fees_by_currency') or {}).items():
                 m = merged_fees.setdefault(curr, {'stocks': 0.0, 'options': 0.0, 'total': 0.0})
-                for k in ('stocks', 'options', 'total'):
-                    m[k] += float(bucket.get(k, 0.0) or 0.0)
+                for k in ('stocks', 'options', 'total') + (
+                        ('futures',) if 'futures' in bucket else ()):
+                    m[k] = m.get(k, 0.0) + float(bucket.get(k, 0.0) or 0.0)
         merged_data = {
             'by_ticker': all_by_ticker,
             'transactions': all_txs,

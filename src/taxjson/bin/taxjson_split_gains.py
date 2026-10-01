@@ -198,9 +198,13 @@ def split_for_account(combined: Dict[str, Any], account: str,
             continue
         curr = btx.get("currency") or "?"
         is_opt = bool(_re.search(r"\d{6}[CP]\d+", btx.get("symbol") or ""))
+        from taxjson.lib.futures import is_plain_future
+        asset = ("options" if is_opt else
+                 "futures" if is_plain_future(btx.get("symbol") or "")
+                 else "stocks")
         bucket = fees.setdefault(
             curr, {"stocks": 0.0, "options": 0.0, "total": 0.0})
-        bucket["options" if is_opt else "stocks"] += fee
+        bucket[asset] = bucket.get(asset, 0.0) + fee
         bucket["total"] += fee
     summary["total_fees_by_currency"] = fees
 
