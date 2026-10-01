@@ -328,5 +328,168 @@ class TestIbOpenAccrualWarning(unittest.TestCase):
         self.assertIn('accrued but not yet booked', lone)
 
 
+# --------------------------------------------- corporate actions (IB)
+_CIL = ('QZX(US0000000QX1) Cash in Lieu of Fractional Shares (QZX, QZX '
+        'CORP, US0000000QX1)')
+
+
+def _split_desc(new, old):
+    return (f'QZX(US0000000QX1) Split {new} for {old} (QZX, QZX CORP, '
+            f'US0000000QX1)')
+
+
+def _ratios(txs):
+    return [(t['date'], round(t['quantity'], 7)) for t in txs
+            if t['action'] == 'SPLIT']
+
+
+class TestIbCashInLieu(unittest.TestCase):
+
+    def test_zero_proceeds_books_no_cash(self):
+        # S058-17: Proceeds 0 used to be replaced by Value (market value).
+        _, txs, err = _parse_ib(HEAD + CA_H + _ca(
+            _CIL, -0.5, value=11.8, proceeds=0,
+            when='2026-03-02, 20:25:00'))
+        cil = [t for t in txs if t['action'] == 'BUYSELL']
+        self.assertEqual(cil[0]['net_amount'], 0.0)
+        self.assertIn('Proceeds 0', err)
+
+    def test_unrelated_fraction_is_not_folded_into_a_later_split(self):
+        # S058-18 case A: a CIL in March, an unrelated 2-for-1 in
+        # September: the September ratio comes from its own legs.
+        _, txs, err = _parse_ib(HEAD + CA_H
+                                + _ca(_CIL, -0.5, proceeds=5,
+                                      when='2026-03-02, 20:25:00')
+                                + _ca(_split_desc(2, 1), -999.5,
+                                      when='2026-09-15, 20:25:00')
+                                + _ca(_split_desc(2, 1), 1999,
+                                      when='2026-09-15, 20:25:00'))
+        self.assertEqual(_ratios(txs), [('2026-09-15', 2.0)])
+        self.assertIn('matched no split', err)
+
+    def test_fraction_joins_its_own_split_in_either_order(self):
+        # S058-18 case B / S060-14: a January split, then the October
+        # 1-for-3 whose CIL (dated the day before its legs) may come
+        # first or last.
+        jan = (_ca(_split_desc(2, 1), -1000, when='2026-01-15, 20:25:00')
+               + _ca(_split_desc(2, 1), 2000, when='2026-01-15, 20:25:00'))
+        cil = _ca(_CIL, -0.6667, proceeds=6, when='2026-10-01, 20:25:00')
+        octl = (_ca(_split_desc(1, 3), -2000, when='2026-10-02, 20:25:00')
+                + _ca(_split_desc(1, 3), 666, when='2026-10-02, 20:25:00'))
+        got = []
+        for body in (jan + cil + octl, jan + octl + cil):
+            _, txs, _ = _parse_ib(HEAD + CA_H + body)
+            got.append(_ratios(txs))
+        self.assertEqual(got[0], got[1])
+        self.assertEqual(got[0][0], ('2026-01-15', 2.0))
+        # 2000 x ratio - 0.6667 sold = 666 whole shares.
+        self.assertAlmostEqual(2000 * got[0][1][1] - 0.6667, 666.0, places=3)
+
+
+class TestIbSplitOnAShortPosition(unittest.TestCase):
+
+    def test_short_legs_give_the_text_ratio(self):
+        # S058-20: short 1000, 'Split 102 for 100': legs +1000 / -1020.
+        _, txs, _ = _parse_ib(HEAD + CA_H
+                              + _ca(_split_desc(102, 100), 1000,
+                                    when='2026-05-01, 20:25:00')
+                              + _ca(_split_desc(102, 100), -1020,
+                                    when='2026-05-01, 20:25:00'))
+        self.assertEqual(_ratios(txs), [('2026-05-01', 1.02)])
+
+    def test_long_legs_are_unchanged(self):
+        _, txs, _ = _parse_ib(HEAD + CA_H
+                              + _ca(_split_desc(102, 100), -1000,
+                                    when='2026-05-01, 20:25:00')
+                              + _ca(_split_desc(102, 100), 1020,
+                                    when='2026-05-01, 20:25:00'))
+        self.assertEqual(_ratios(txs), [('2026-05-01', 1.02)])
+
+
+def _tender(root, isin, qty, kind, when, proceeds=0):
+    if kind == 'out':
+        d = (f'{root}({isin}) Tendered to 99999997 1 FOR 1 ({root}.TEN, '
+             f'{root} CORP - TENDER, {isin})')
+    elif kind == 'in':
+        d = (f'{root}.TEN({isin}) Tendered to 99999997 1 FOR 1 '
+             f'({root}.TEN, {root} CORP - TENDER, {isin})')
+    elif kind == 'back':
+        d = (f'{root}.TEN(99999997) Merged(Voluntary Offer Allocation) '
+             f'WITH {isin} 1 for 1 ({root}, {root} CORP, {isin})')
+    else:
+        d = (f'{root}.TEN(99999997) Merged(Voluntary Offer Allocation) '
+             f'WITH {isin} 1 for 1 ({root}.TEN, {root} CORP - TENDER, '
+             f'{isin})')
+    return _ca(d, qty, proceeds=proceeds, cur='CAD', when=when)
+
+
+class TestIbTender(unittest.TestCase):
+
+    def test_cash_tender_note_gives_followable_advice(self):
+        # S059-05: no corp-actions election exists for a tender.
+        _, txs, err = _parse_ib(HEAD + CA_H + _tender(
+            'QZT', 'CA9990000031', -500, 'out', '2026-02-02, 20:25:00',
+            proceeds=5250))
+        self.assertIn('booked as a sale', err)
+        self.assertNotIn('taxjson-corp-actions election', err)
+        self.assertIn('.tt file', err)
+
+    def test_tender_resolved_in_the_next_statement_is_quiet(self):
+        # S059-06: parked in 2025, journaled back in 2026.
+        from test_fix_ibparse import _parse_account
+        y25 = HEAD + CA_H + (
+            _tender('QZT', 'CA9990000031', -100, 'out',
+                    '2025-12-22, 20:25:00')
+            + _tender('QZT', 'CA9990000031', 100, 'in',
+                      '2025-12-22, 20:25:00'))
+        y26 = HEAD + CA_H + (
+            _tender('QZT', 'CA9990000031', 100, 'back',
+                    '2026-01-09, 20:25:00')
+            + _tender('QZT', 'CA9990000031', -100, 'park',
+                      '2026-01-09, 20:25:00'))
+        txs, err = _parse_account({'ib_2025.csv': y25, 'ib_2026.csv': y26})
+        self.assertEqual(txs, [])
+        self.assertNotIn('still sit on the tender placeholder', err)
+        self.assertIn("account's other statement completes", err)
+        # One statement alone still warns.
+        _, _, lone = _parse_ib(y25)
+        self.assertIn('still sit on the tender placeholder', lone)
+
+
+class TestIbCancelledUnhandledRowCount(unittest.TestCase):
+
+    def test_skip_line_agrees_with_the_unbooked_tally(self):
+        # R1-329: a cancelled untranslated row left the skip count high.
+        desc = 'QZM(US0000000QM1) Name Change WITH US0000000QN1 1 for 1'
+        _, _, err = _parse_ib(HEAD + CA_H
+                              + _ca(desc, -10, when='2026-04-01, 20:25:00')
+                              + _ca(desc, 10, when='2026-04-01, 20:25:00',
+                                    code='Ca')
+                              + _ca(desc, -10, when='2026-04-02, 20:25:00'))
+        self.assertIn('1 unhandled Corporate Action row(s)', err)
+        self.assertIn('Corporate Actions row not translated (see UNBOOKED '
+                      'warning): 1', err)
+
+
+class TestIbCurrencyTaggedSymbol(unittest.TestCase):
+
+    def test_currency_tag_is_said_in_every_section(self):
+        # R1-59 / S059-00: RGLD.CAD-style lines are their own pool.
+        cil = ('QZG.CAD(US0000000QG1) Cash in Lieu of Fractional Shares '
+               '(QZG.CAD, QZG CORP, US0000000QG1)')
+        for body in (TRADES_H + _trade('QZG.CAD', '2026-03-02, 10:00:00',
+                                       -1, 25, 25, cur='CAD', code='C'),
+                     XFER_H + _xfer('QZG.CAD', '2026-03-02', 50, 1250,
+                                    cur='CAD'),
+                     CA_H + _ca(cil, -0.0026, proceeds=0.64, cur='CAD')):
+            with self.subTest(section=body.split(',')[0]):
+                _, txs, err = _parse_ib(HEAD + body)
+                self.assertIn("IB symbol 'QZG.CAD' ends in the "
+                              "currency/venue tag .CAD", err)
+        _, _, err = _parse_ib(HEAD + TRADES_H + _trade(
+            'QZB B', '2026-03-02, 10:00:00', 1, 25, -25, cur='CAD'))
+        self.assertNotIn('currency/venue tag', err)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **IB corporate actions.** A cash-in-lieu row with Proceeds 0 books no
+  cash (it used to book IB's market Value as proceeds) and warns; a
+  fraction folds into the split of its symbol nearest its date within a
+  week, in either row order (an unrelated earlier fraction no longer
+  skews a later split). A two-leg split on a SHORT position gets the
+  text ratio, not its reciprocal (102-for-100 was 0.98). A tender parked
+  in one statement and resolved in the account's next one is a quiet
+  no-op instead of two warnings, and the cash-tender NOTE no longer
+  points at a corp-actions election that cannot exist. A cancelled
+  untranslated row no longer stays in the skip count. A symbol with a
+  currency tag (RGLD.CAD) is warned about in every section — it is a
+  pool of its own.
 - **IB: payment-in-lieu share counts and the open-accrual warning.** A
   PIL's share count/rate comes from the accrual of the listing that
   paid it (the posting's currency first, a pay date within a week, the
