@@ -317,5 +317,191 @@ class TestSameDayOrdering(unittest.TestCase):
                          rows["ORD.TO"]["advisory"])
 
 
+# ------------------------------------------------------------- harvest
+def _harvest(argv, fetchers=None):
+    import io
+    from contextlib import redirect_stderr, redirect_stdout
+    from taxjson.bin.taxjson_harvest import main as harvest_main
+    from test_harvest import _fake_fetcher
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        try:
+            rc = harvest_main(argv, fetchers=fetchers or [_fake_fetcher])
+        except SystemExit as e:
+            rc = e.code
+    return rc, out.getvalue(), err.getvalue()
+
+
+def _inv(*rows):
+    return {"summary": {"year": 2026}, "transactions": [],
+            "inventory": [dict(symbol=s, qty=q, total_cost=c,
+                               position_start_date="2026-01-15",
+                               last_acq_date="2026-01-15", **kw)
+                          for s, q, c, kw in rows]}
+
+
+class TestHarvestInputs(unittest.TestCase):
+    """S033-22, S034-08, S051-11/S079-11 (harvest): an unreadable named
+    input stops the tool; S034-12: a native-currency book is refused."""
+
+    def _write(self, td, name, content):
+        p = Path(td) / name
+        p.write_text(content if isinstance(content, str)
+                     else json.dumps(content))
+        return p
+
+    def test_missing_gains_file_is_an_error_not_no_positions(self):
+        with tempfile.TemporaryDirectory() as td:
+            rc, out, err = _harvest([str(Path(td) / "margin_gains.json"),
+                                     "--no-ibkr", "--country", "canada"])
+        self.assertEqual(rc, 2)
+        self.assertNotIn("No open positions", out)
+        self.assertIn("margin_gains.json", err)
+
+    def test_truncated_sheltered_file_is_an_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            g = self._write(td, "margin_gains_wash.json",
+                            _inv(("AAA.TO", 100, 1240.0, {})))
+            sh = self._write(td, "tfsa_gains_wash.json", '{"inventory": [')
+            rc, out, err = _harvest([str(g), "--sheltered", str(sh),
+                                     "--no-ibkr", "--country", "canada"])
+        self.assertEqual(rc, 2)
+        self.assertIn("tfsa_gains_wash.json", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_wrong_shape_and_bare_array_are_one_line(self):
+        with tempfile.TemporaryDirectory() as td:
+            for content in ('[{"date": 5}]', '{"inventory": 5}',
+                            b"\xe9".decode("latin-1")):
+                g = self._write(td, "margin_gains.json", content)
+                rc, _out, err = _harvest([str(g), "--no-ibkr",
+                                          "--country", "canada"])
+                self.assertEqual(rc, 2, content)
+                self.assertNotIn("Traceback", err)
+
+    def test_native_currency_book_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            g = self._write(td, "margin_raw_gains.json",
+                            _inv(("BBB.US", 10, 1500.0,
+                                  {"currency": "USD"})))
+            rc, out, err = _harvest([str(g), "--no-ibkr",
+                                     "--country", "canada"])
+        self.assertEqual(rc, 2)
+        self.assertIn("USD", err)
+        self.assertNotIn("GAIN", out)
+
+    def test_base_currency_rows_are_fine(self):
+        with tempfile.TemporaryDirectory() as td:
+            g = self._write(td, "margin_gains_wash.json",
+                            _inv(("AAA.TO", 100, 1240.0,
+                                  {"currency": "CAD"})))
+            rc, out, err = _harvest([str(g), "--no-ibkr",
+                                     "--country", "canada"])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("AAA.TO", out)
+
+
+class TestHarvestTotalsAndMap(unittest.TestCase):
+    def test_total_pct_uses_gross_capital(self):   # S034-05
+        prices = {"HOLD.TO": 18.0, "OPENSH.TO": 33.0}
+
+        def fetch(rem):
+            return {s: (prices[s], "fake") for s in rem if s in prices}
+        with tempfile.TemporaryDirectory() as td:
+            g = Path(td) / "margin_gains_wash.json"
+            g.write_text(json.dumps(_inv(("HOLD.TO", 100, 2000.0, {}),
+                                         ("OPENSH.TO", -100, -3000.0, {}))))
+            rc, out, err = _harvest([str(g), "--no-ibkr",
+                                     "--country", "canada"], [fetch])
+            rcj, outj, _ = _harvest([str(g), "--no-ibkr", "--json",
+                                     "--country", "canada"], [fetch])
+        self.assertEqual(rc, 0, err)
+        total = next(ln for ln in out.splitlines()
+                     if ln.startswith("TOTAL"))
+        self.assertIn("-10.0%", total)
+        self.assertNotIn("-50.0%", total)
+        self.assertEqual(json.loads(outj)["totals"]["gross_cost"], 5000.0)
+
+    def test_project_yf_map_found_from_another_cwd(self):   # R1-246
+        asked = []
+
+        def fetch(rem):
+            asked.extend(rem.values())
+            return {s: (1.0, "fake") for s in rem}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "work").mkdir()
+            (root / "yf_ticker.map").write_text("PNG.TO PNG.V\n")
+            g = root / "work" / "margin_gains_wash.json"
+            g.write_text(json.dumps(_inv(("PNG.TO", 100, 200.0, {}))))
+            rc, _out, err = _harvest([str(g), "--no-ibkr",
+                                      "--country", "canada"], [fetch])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("PNG.V", asked)
+
+
+class TestHarvestEdges(unittest.TestCase):
+    """S033-23: the 7/14/30-day buckets are inclusive and a lock that
+    clears today reads 'cleared'; S034-06: the RISK line is printed."""
+
+    def test_buckets_at_exactly_7_14_30_days(self):
+        from taxjson.bin.taxjson_harvest import _recovery_schedule
+        t = date(2026, 9, 1)
+
+        def row(days):
+            return {"verdict": "LOSS", "unrealized": -100.0,
+                    "radar": {"category": "COOLING",
+                              "clears_at": (t + timedelta(days=days))
+                              .isoformat()}}
+        for days, bucket, nxt in ((7, "7d", "now"), (14, "14d", "7d"),
+                                  (30, "30d", "14d"), (31, "later", "30d")):
+            sch = _recovery_schedule([row(days)], today=t)
+            self.assertEqual(sch[bucket], 100.0, (days, sch))
+            self.assertEqual(sch[nxt], 0.0, (days, sch))
+
+    def test_lock_clearing_today_reads_cleared(self):
+        from taxjson.bin.taxjson_harvest import _advisory_display
+        t = date(2026, 9, 1)
+        rec = {"category": "LOCKED", "clears_at": t.isoformat()}
+        self.assertEqual(_advisory_display(rec, today=t),
+                         "LOCKED(cleared:2026-09-01)")
+
+    def test_risk_line_is_printed_and_country_worded(self):
+        with tempfile.TemporaryDirectory() as td:
+            g = Path(td) / "margin_gains_wash.json"
+            g.write_text(json.dumps(_inv(("AAA.TO", 100, 1240.0, {}))))
+            r = Path(td) / "wash_radar_margin.json"
+            r.write_text(json.dumps({"sections": [{"rows": [{
+                "ticker": "AAA.TO", "category": "RISK",
+                "advisory": "RISK: ...", "clears_at": None}]}]}))
+            rc, out, err = _harvest([str(g), "--radar", str(r),
+                                     "--no-ibkr", "--country", "canada"])
+        self.assertEqual(rc, 0, err)
+        self.assertIn("RISK rows (155.00) count as claimable now", out)
+        self.assertIn("pause DRIPs/sheltered adds", out)
+        self.assertIn("s.251.1", out)
+
+
+class TestRadarExitableShelteredCount(unittest.TestCase):
+    """S034-06: the EXITABLE note's pre-window sheltered share count."""
+
+    def test_sheltered_count_is_the_holding(self):
+        tax = [_row("2026-01-05", "EXS.TO", 100, 2000.0),
+               _row("2026-09-20", "EXS.TO", 10, 200.0)]
+        tfsa = [_row("2026-01-05", "EXS.TO", 10, 200.0, account="tfsa")]
+        r = _rows(tax, "2026-09-29", sheltered=tfsa)["EXS.TO"]
+        self.assertEqual(r["category"], "EXITABLE")
+        self.assertIn("Sheltered accounts hold 10 sh bought before the "
+                      "window", r["advisory"])
+
+
+class TestHarvestCountry(unittest.TestCase):
+    def test_unknown_country_is_refused(self):   # S034-01 (already fixed)
+        rc, _out, err = _harvest(["x_gains.json", "--country",
+                                  "united states"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--country must be", err)
+
+
 if __name__ == "__main__":
     unittest.main()

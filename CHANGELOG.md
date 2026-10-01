@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **harvest: an input it cannot read stops it.** A missing or truncated
+  gains, `--sheltered` or `--radar` file now exits 2 naming the file. It
+  used to print "No open positions." or show SH_QTY/SH_ADD as '-' (the
+  columns that warn of a permanent denial) at exit 0. A native-currency
+  `_raw_gains.json` is refused: its USD cost read as CAD showed the FX
+  factor as a gain.
+- **harvest TOTAL PCT** divides by the gross capital at stake; a short's
+  credited proceeds no longer net against long cost (every row -10% used
+  to total -50%). JSON `totals.gross_cost` is new.
+- **taxjson-harvest finds the project's yf_ticker.map** next to the
+  inputs or in the project root above work/, not only in the current
+  directory.
 - **Wash radar, sell-check, buy-check and safe-to-sell say what they
   cannot see.** Their verdicts cover the project's own accounts only; a
   purchase by a spouse or common-law partner or a controlled corporation
