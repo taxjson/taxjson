@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Canada: a coin residue under a millionth stays a holding.** The
+  pool walk emptied any position under 1e-6 units after a sale, so
+  9e-7 BTC left after selling 1 BTC vanished from the holdings and its
+  cost moved onto the next purchase. A crypto pool now only drains
+  float noise (under 1e-11 of the position): the residue keeps its
+  units and its own cost, and a sale that overshoots the pool by a few
+  satoshis is no longer dropped. Share pools keep the millionth-of-a-
+  share tolerance. A new coin-book fuzzer (units, cost and wash
+  conservation) pins it (audit S069-13, tax-logic CA-CRYPTO-09).
+
 - **T1135: a superficial loss denied in an earlier year is in the
   replacement's cost.** The cost walk added only the project year's
   denials, so a 2025 denial on shares still held in 2026 was missing

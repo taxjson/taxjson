@@ -649,6 +649,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
                  "value."),
+            Rule("CA-CRYPTO-09",
+                 "Any amount of a coin is property: a residue left after a "
+                 "sale, however small, stays in the holdings with its "
+                 "share of the cost (only arithmetic noise, under a "
+                 "hundred-billionth of the position, counts as zero). A "
+                 "share position under a millionth of a share counts as "
+                 "zero.", cont=True),
             Rule("CA-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "

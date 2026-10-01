@@ -270,10 +270,10 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `base.py` (`BaseBrokerage.CURRENCY_EXT_MAP`), `corp_actions.py` (`_CURRENCY_SUFFIX`), `ib_extractor.py` (`_IB_CURRENCY_EXT`, plus the ISIN-country map `_ISIN_EXT`) and a partial copy in `webull.py` (`CURRENCY_EXT_MAP`) each hardcode `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `bin/taxjson_t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
 - **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. An explicit `.TO` in a Questrade or generic export is kept whatever the row currency (`DLR.U.TO` bought in USD), so the known USD-on-TSX case no longer depends on the map. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
 
-### Sub-micro quantity tolerances (crypto dust)
-- **Where:** `lib/core.py` — the Canada pool walk empties a pool whose quantity falls below 1e-6 units after a sale (its remaining cost stays in the pool and goes to the next purchase); the US engine books no row or lot below 1e-8 units.
-- **Current behavior:** a residue of less than a millionth of a coin left after a sale disappears from the holdings (its cost, a few cents at most, moves onto the next purchase); a US row under 1e-8 units is left out and named in a warning. Rows of any size are now booked by the Canada engine (staking rewards under 1e-6 units used to be dropped).
-- **Why deferred:** both tolerances also absorb float noise in every share count; a relative tolerance needs its own audit across both engines. Effect: cents.
+### Sub-micro quantity tolerance in the US engine (crypto dust)
+- **Where:** `lib/core.py` (US engine) — no row or lot below 1e-8 units is booked.
+- **Current behavior:** a US row under 1e-8 units is left out and named in a warning. (The Canada pool walk keeps a coin residue of any size with its cost — only float noise, under 1e-11 of the position, drains; share pools keep the 1e-6 tolerance: tax-logic CA-CRYPTO-09.)
+- **Why deferred:** the US lot epsilon also absorbs float noise in every FIFO lot split; a per-asset tolerance there needs its own fuzz audit. Effect: cents.
 
 ## Test coverage gaps (tracked; lower priority)
 

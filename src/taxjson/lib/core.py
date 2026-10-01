@@ -1,3 +1,4 @@
+import functools
 import json
 import re
 import hashlib
@@ -1153,6 +1154,34 @@ def _make_assign_underlying_resolver(transactions, date_of):
     return resolve
 
 
+# Canada pool quantity tolerance (S069-13). A share pool treats less
+# than a millionth of a share as zero: broker exports round share
+# counts, and that absorbs the rounding and float noise. A coin is
+# divisible far below that — a real residue of 9e-7 BTC is property
+# with its own cost — so a crypto pool (a symbol with no market suffix)
+# only absorbs float-arithmetic noise: a residue under 1e-11 of the
+# larger of the position and the trade.
+_SHARE_QTY_EPS = 1e-6
+_COIN_QTY_REL_EPS = 1e-11
+_COIN_QTY_ABS_EPS = 1e-15
+
+
+@functools.lru_cache(maxsize=None)
+def _is_coin_symbol(symbol: str) -> bool:
+    from taxjson.lib.price_chain import is_crypto_symbol
+    return is_crypto_symbol(symbol or '')
+
+
+def pool_qty_eps(symbol: str, *scales: float) -> float:
+    """The quantity under which a Canada pool position (or a leftover)
+    is zero: 1e-6 for shares and options; for a coin, float noise
+    relative to `scales` (the position and the trade quantities)."""
+    if not _is_coin_symbol(symbol):
+        return _SHARE_QTY_EPS
+    scale = max((abs(float(x)) for x in scales), default=0.0)
+    return max(_COIN_QTY_ABS_EPS, _COIN_QTY_REL_EPS * scale)
+
+
 def _place_wash_adjusts(stream):
     """Move each pre-loss superficial-loss ADJUST (marked `_wash_after`
     = the loss row's id) to immediately after its loss row. s.53(1)(f)
@@ -1390,7 +1419,8 @@ def _warn_stranded_basis(pools) -> None:
         if id(pool) in seen_objs:
             continue                    # rename aliases share one object
         seen_objs.add(id(pool))
-        if abs(pool['qty']) <= 1e-6 and abs(float(pool['total_cost'])) > 0.02:
+        if (abs(pool['qty']) <= pool_qty_eps(sym)
+                and abs(float(pool['total_cost'])) > 0.02):
             print(
                 f"warning: conservation: {sym} pool is EMPTY but carries "
                 f"{float(pool['total_cost']):.2f} of stranded basis — "
@@ -2107,6 +2137,7 @@ class CanadaTaxRules(TaxRules):
                     # the position entry date.
                     global_pools[symbol] = {'qty': 0.0, 'total_cost': Decimal(0), 'last_acq_date': '1970-01-01', 'currency': '', 'tainted': False, 'position_start_date': None, 'deferred_wash': 0.0, 'grants': []}
                 pool = global_pools[symbol]
+                _pre_qty = pool['qty']      # the drain tolerance's scale
 
                 # Currency-mix guard: a single ACB pool must be
                 # denominated in one currency. Gated on the taxable
@@ -2558,9 +2589,12 @@ class CanadaTaxRules(TaxRules):
                     # income was booked lost their units and cost, and
                     # the pool fell short of the wash walk's balance.
                     if qty == 0: continue
-                    is_opening = (pool['qty'] > 1e-6 and qty > 0) or \
-                                 (pool['qty'] < -1e-6 and qty < 0) or \
-                                 (abs(pool['qty']) <= 1e-6)
+                    # A coin pool's residue is real property (S069-13):
+                    # per-asset tolerance (pool_qty_eps).
+                    _qeps = pool_qty_eps(symbol, pool['qty'], qty)
+                    is_opening = (pool['qty'] > _qeps and qty > 0) or \
+                                 (pool['qty'] < -_qeps and qty < 0) or \
+                                 (abs(pool['qty']) <= _qeps)
 
                     if is_other_scope:
                         # Sheltered (RRSP/TFSA/LIRA/RESP) and affiliated
@@ -2611,7 +2645,7 @@ class CanadaTaxRules(TaxRules):
                                 symbol_acb_traces[symbol].append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Cost_Added: {effective_cost:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
                         else:
                             # SELL (or Short covering) — divide in exact arithmetic.
-                            if abs(pool['qty']) > 1e-6:
+                            if abs(pool['qty']) > _qeps:
                                 # SIGNED per-unit basis: total/|qty|,
                                 # not abs(total/qty) (FUZZ #F11). A
                                 # short pool whose opening proceeds
@@ -2777,7 +2811,7 @@ class CanadaTaxRules(TaxRules):
                             # same proportion (a full drain releases
                             # all — they were recovered in this gain).
                             _pre_abs = abs(pool['qty'])
-                            if _pre_abs > 1e-6:
+                            if _pre_abs > _qeps:
                                 pool['deferred_wash'] = (
                                     pool.get('deferred_wash', 0.0)
                                     * max(0.0, 1.0 - closing_qty
@@ -2799,7 +2833,7 @@ class CanadaTaxRules(TaxRules):
                             # tt_gains.pl:325-330 which apportions chunk_adj per
                             # chunk's qty share.
                             leftover = abs(qty) - closing_qty
-                            if leftover > 1e-6:
+                            if leftover > _qeps:
                                 leftover_ratio = leftover / abs(qty)
                                 leftover_adj = internal_adj * leftover_ratio
                                 eff_cost_leftover = (
@@ -2843,7 +2877,7 @@ class CanadaTaxRules(TaxRules):
                     trace_line = f"# {account:<26} | {note:<12} | {tx.date} {tx.time} | {symbol:<26} | {action:<8} | {qty:10.4f} | {tx.price:10.4f} | {fee_sh:10.4f} | {price_fee:10.4f} | {tx.net_amount:10.2f} | {adjustment_shown:10.2f} | {pool['qty']:11.4f} | {pool_cost_f:10.2f} | {acb_sh:10.4f} | {realized_pl_str} | {disallowed_amt_str} | {trigger_info}"
                     iteration_trace.append(trace_line)
 
-                if abs(pool['qty']) < 1e-6:
+                if abs(pool['qty']) < pool_qty_eps(symbol, _pre_qty, qty):
                     pool['qty'] = 0.0
                     # Pool drained — clear position_start_date so the
                     # next open seeds a fresh start. Critical for the
@@ -4066,7 +4100,8 @@ class CanadaTaxRules(TaxRules):
                     # against the buy-back value (2026-09 audit R1-230).
                     **_recognised_premium(p),
                 }
-                for s, p in final_global_pools.items() if abs(p['qty']) > 1e-6
+                for s, p in final_global_pools.items()
+                if abs(p['qty']) > pool_qty_eps(s)
             ],
             'summary': {
                 'total_gain': sum_taxable,
