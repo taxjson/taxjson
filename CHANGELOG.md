@@ -2282,6 +2282,19 @@
   the per-file parse counts are echoed for file names with spaces and
   for TRANSFER-only files; the crypto validation line names the file,
   not its absolute path (which carried the OS user name).
+- **Views say what they leave out.** `estimate` keeps the 15% foreign-tax
+  fallback for an account whose base book cannot be read (and warns);
+  `estimate --verbose` prints the 2025 rate as 14.5% and names the FTC's
+  source; `carryover` no longer warns about an account the last run
+  skipped for having no inputs; `gains` names the crypto account it does
+  not show; `wash-sales --explain` traces the tax year's wash sales only;
+  a currency-less row prints `?`, not `CAD`; the merged `audit --json`
+  keeps every `reconciliation_failures` reason; the all-accounts views
+  read an account whose only native book is `_sorted.json`; a non-UTF-8
+  work file is a one-line error, not a traceback; `transfers` refuses an
+  unknown account, shows each row's FEE and warns when a base book cannot
+  be read; `leaps` / `leaps-sum` count LEAPS closes routed to manual
+  reporting instead of reporting none.
 
 ## v0.16.0 (2026-09-25)
 

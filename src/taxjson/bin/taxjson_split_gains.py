@@ -176,7 +176,7 @@ def main(argv=None) -> int:
     try:
         combined = json.loads(args.combined_json.read_text(
             encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, ValueError) as e:
         cli_diag.error(PROG, f"could not read {args.combined_json}: {e}")
         return 2
     base_txs = None
@@ -184,7 +184,7 @@ def main(argv=None) -> int:
         try:
             base_txs = json.loads(args.base.read_text(
                 encoding="utf-8")).get("transactions", [])
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
             cli_diag.warn(PROG, f"could not read {args.base}: {e} — "
                                 f"blended inventory rows omitted")
 

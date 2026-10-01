@@ -355,7 +355,7 @@ def main(argv=None) -> int:
         return 2
     try:
         doc = json.loads(args.base_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, ValueError) as e:
         cli_diag.error(PROG, f"could not read {args.base_json}: {e}")
         return 2
 

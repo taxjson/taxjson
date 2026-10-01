@@ -252,7 +252,7 @@ def load_radar(paths: List[Path]) -> Dict[str, Dict[str, Any]]:
     for p in paths:
         try:
             doc = json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
             warn(PROG, f"could not read radar sidecar {p}: {e}")
             continue
         for sec in doc.get("sections") or []:

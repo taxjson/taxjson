@@ -445,5 +445,210 @@ class TestDiagnosticsBanner(unittest.TestCase):
             self.assertTrue(_PARSE_COUNT_RE.match(ln), ln)
 
 
+
+def _qt_row(d, s, act, q, p, sym="XEI.TO", acct="55500001"):
+    g = abs(q) * p
+    net = -g if act == "Buy" else g
+    return (f"{d} 09:30:00 AM,{s} 12:00:00 AM,{act},{sym},DESC,{q},"
+            f"{p:.2f},{g:.2f},0,{net:.2f},CAD,{acct},Trades,Individual\n")
+
+
+# A wash sale in 2024 AND one in 2025.
+_TWO_YEAR_WASH = _QT_HEADER + "".join([
+    _qt_row("2024-03-01", "2024-03-04", "Buy", 100, 10),
+    _qt_row("2024-06-03", "2024-06-04", "Sell", -100, 8),
+    _qt_row("2024-06-10", "2024-06-11", "Buy", 100, 8),
+    _qt_row("2025-03-03", "2025-03-04", "Sell", -100, 6),
+    _qt_row("2025-03-10", "2025-03-11", "Buy", 100, 6),
+    _qt_row("2025-09-02", "2025-09-03", "Sell", -100, 7)])
+
+
+class TestViewsSayWhatTheySkip(unittest.TestCase):
+    """R1-223, R1-224, R1-264, R1-274, R1-284, R1-287, R1-288,
+    S039-07, S039-17, S039-20/21/22, S040-06."""
+
+    def test_unreadable_base_book_keeps_its_withholding_fallback(self):
+        from taxjson.bin.taxjson_run import _actual_withholding
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            (cache / "x_base.json").write_text(json.dumps({
+                "transactions": [{"action": "TAX", "date": "2025-03-01",
+                                  "net_amount": 150.0}]}))
+            for state in ("missing", "truncated"):
+                if state == "truncated":
+                    (cache / "y_base.json").write_text("{ trunc")
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    got = _actual_withholding(
+                        cache, ["x", "y"], 2025,
+                        foreign_by_account={"x": 1000.0, "y": 2000.0})
+                self.assertAlmostEqual(got, 450.0, places=2, msg=state)
+                self.assertIn("y_base.json", err.getvalue())
+
+    def test_estimate_trace_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "estimate", "--verbose", "--province", "ON")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("@ 14.5%)", r.stdout)
+            self.assertNotIn("@ 14%)", r.stdout)
+
+    def test_carryover_is_quiet_about_a_skipped_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _CONFIG + '[accounts.crypto]\ntype = '
+                            '"taxable"\ncrypto = true\n')
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "carryover")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("no base file", r.stderr)
+
+    def test_gains_names_the_crypto_account_it_leaves_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _CONFIG + '[accounts.kr]\ntype = '
+                            '"taxable"\ncrypto = true\n')
+            (root / "inputs" / "kr").mkdir()
+            (root / "inputs" / "kr" / "kr_trades.csv").write_text(_KR2)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "gains")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("crypto account 'kr' is not shown", r.stderr)
+
+    def test_wash_sales_explain_is_year_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, csv=_TWO_YEAR_WASH)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            r = _run_cli(root, "wash-sales", "--explain")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            heads = [ln for ln in r.stdout.splitlines()
+                     if ln.startswith("# XEI.TO ")]
+            self.assertEqual(len(heads), 1, heads)
+            self.assertIn("2025-03-03", heads[0])
+
+    def test_missing_currency_is_not_labelled_cad(self):
+        from taxjson.bin.taxjson_run import _tx_display_line
+        line = _tx_display_line({"action": "BUYSELL", "date": "2026-03-02",
+                                 "symbol": "AAA", "quantity": 100,
+                                 "price": 10, "net_amount": -1002.0,
+                                 "fee": 2.0})
+        self.assertNotIn(" CAD ", line)
+        self.assertIn(" ? ", line)
+
+    def test_merged_audit_json_keeps_failure_reasons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _CONFIG + '[accounts.kr]\ntype = '
+                            '"taxable"\ncrypto = true\n')
+            (root / "inputs" / "kr").mkdir()
+            (root / "inputs" / "kr" / "kr_trades.csv").write_text(
+                _KR_HDR + "TXB1,OB1,BTC/CAD,2025-01-16 10:00:00.1234,buy,"
+                "limit,90000,90000,0,1.0,,,\nTXB2,OB2,BTC/CAD,2025-02-16 "
+                "10:00:00.1234,sell,limit,95000,95000,0,1.0,,,\n")
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            # Drop margin's disposition from its saved books.
+            for f in (root / "work").glob("margin_gains*.json"):
+                d = json.loads(f.read_text())
+                d["transactions"] = [t for t in d["transactions"]
+                                     if "gain" not in t]
+                f.write_text(json.dumps(d))
+            r = _run_cli(root, "audit", "--json")
+            self.assertNotEqual(r.returncode, 0)
+            doc = json.loads(r.stdout)
+            self.assertTrue(doc["failed"])
+            self.assertTrue(any("MISSING" in f for f in
+                                doc.get("reconciliation_failures", [])),
+                            doc.get("reconciliation_failures"))
+
+    def test_all_accounts_views_read_a_sorted_only_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _CONFIG + '[accounts.kr]\ntype = '
+                            '"taxable"\ncrypto = true\n')
+            work = root / "work"
+            work.mkdir()
+            row = {"action": "BUYSELL", "date": "2025-02-01",
+                   "time": "10:00:00", "symbol": "BTC", "quantity": 1.0,
+                   "price": 100.0, "net_amount": -100.0,
+                   "currency": "CAD", "account": "kr"}
+            (work / "kr_sorted.json").write_text(json.dumps(
+                {"transactions": [row]}))
+            (work / "margin_raw.json").write_text(json.dumps(
+                {"transactions": [dict(row, symbol="XEI.TO",
+                                       account="margin")]}))
+            r = _run_cli(root, "trades", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("BTC", r.stdout)
+
+    def test_non_utf8_work_file_is_a_one_line_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            for f in ("margin_gains_wash.json", "margin_gains.json",
+                      "margin_raw.json", "margin_base.json"):
+                p = root / "work" / f
+                if p.exists():
+                    p.write_bytes(b'{"transactions": [], "x": "caf\xe9"}')
+            for cmd in ("trades", "winners", "gains", "transfers", "list"):
+                r = _run_cli(root, cmd)
+                self.assertNotIn("Traceback", r.stderr, cmd)
+
+    def test_transfers_view(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, _CONFIG + '[accounts.rrsp]\ntype = '
+                            '"sheltered"\ntransfers = true\n')
+            work = root / "work"
+            work.mkdir()
+            (work / "margin_kraken_transfers.json").write_text(json.dumps({
+                "metadata": {"kind": "transfer_sidecar",
+                             "account": "margin"},
+                "transactions": [{"action": "TRANSFER", "date":
+                                  "2025-03-01", "symbol": "TAO",
+                                  "quantity": -0.1, "fee": 0.002,
+                                  "description": "withdrawal",
+                                  "currency": "USD"}]}))
+            (work / "rrsp_base.json").write_text("{ trunc")
+            r = _run_cli(root, "transfers", "margn")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("margn", r.stderr)
+            r = _run_cli(root, "transfers", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            rows = json.loads(r.stdout)["transfers"]
+            self.assertEqual(rows[0]["fee"], 0.002)
+            self.assertIn("rrsp_base.json", r.stderr)
+            r = _run_cli(root, "transfers")
+            self.assertIn("FEE", r.stdout)
+            self.assertIn("0.002", r.stdout)
+
+    def test_leaps_sum_counts_phantom_basis_closes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            work = root / "work"
+            work.mkdir()
+            sym = "GHI260618C00050000.TO"
+            (work / "margin_raw.json").write_text(json.dumps({
+                "transactions": [
+                    {"action": "BUYSELL", "date": "2025-01-10",
+                     "time": "10:00:00", "symbol": sym, "quantity": 1,
+                     "price": 5.0, "net_amount": -500.0,
+                     "currency": "CAD"},
+                    {"action": "BUYSELL", "date": "2025-06-10",
+                     "time": "10:00:00", "symbol": sym, "quantity": -2,
+                     "price": 8.0, "net_amount": 1600.0,
+                     "currency": "CAD"}]}))
+            (work / "margin_gains.json").write_text(json.dumps({
+                "transactions": [],
+                "manual_reporting_required": [
+                    {"symbol": sym, "date": "2025-06-10",
+                     "date_settle": "2025-06-11", "qty": 2,
+                     "proceeds": 1600.0, "cost": 500.0,
+                     "gain": 1100.0}]}))
+            r = _run_cli(root, "leaps-sum")
+            self.assertIn("MANUAL reporting", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

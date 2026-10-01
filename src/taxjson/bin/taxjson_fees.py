@@ -127,7 +127,7 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account)
     for fp in files:
         try:
             text = fp.read_text(encoding="utf-8")
-        except OSError as e:
+        except (OSError, ValueError) as e:
             print(f"warning: skipping {fp}: {e}", file=sys.stderr)
             continue
         try:

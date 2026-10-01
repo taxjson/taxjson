@@ -124,7 +124,7 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     for p in evidence_paths:
         try:
             doc = _json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, _json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
             print(f"warning: could not read transfer evidence {p}: {e}",
                   file=sys.stderr)
             continue
@@ -461,7 +461,7 @@ def _load_trade_events(paths, mapping=None, drops=None,
     for p in paths:
         try:
             data = load_report_json(p)
-        except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
+        except (ValueError, OSError) as e:
             print(f"Error loading trades {p}: {e}", file=sys.stderr)
             continue
         for tx in data.get("transactions", []):
@@ -810,7 +810,7 @@ def main():
                 continue
             try:
                 dispatch(load_report_json(input_path))
-            except (json.JSONDecodeError, FileNotFoundError) as e:
+            except (ValueError, OSError) as e:
                 print(f"Error loading {input_path}: {e}", file=sys.stderr)
 
     if args.platform == "report":
@@ -827,7 +827,7 @@ def main():
             try:
                 process_data_report(load_report_json(bp), args, base_agg,
                                     holdings_map, holdings_drops)
-            except (json.JSONDecodeError, FileNotFoundError) as e:
+            except (ValueError, OSError) as e:
                 print(f"Error loading base-gains {bp}: {e}", file=sys.stderr)
         # Per-symbol acquisition/sell events (optional), in native currency,
         # from the pre-gains transaction file(s). Mapped/dropped the same way

@@ -4312,8 +4312,11 @@ def _native_tx_file(cache: Path, account: str) -> Optional[Path]:
 
 
 def _discover_tx_accounts(cache: Path) -> List[str]:
+    # The same suffixes the single-account form reads (_native_tx_file):
+    # after a failed fill-crypto stage only <acct>_sorted.json exists,
+    # and the all-accounts views dropped the account silently (S039-07).
     names = set()
-    for suf in ("_raw.json", "_filled.json"):
+    for suf in _NATIVE_TX_SUFFIXES:
         for p in cache.glob(f"*{suf}"):
             # pathlib's `*` matches leading dots — keep dot-prefixed
             # pipeline intermediates from masquerading as accounts.
@@ -4352,7 +4355,10 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
         date = tx["date_settle"]
     time = tx.get("time", "09:30:00")
     sym = tx.get("symbol", "")
-    cur = tx.get("currency") or "CAD"
+    # "?" like every other view (trades-sum, fees): a CAD label on a
+    # currency-less row misstated it in a non-CAD project, and the line
+    # is re-importable .tt (R1-287).
+    cur = tx.get("currency") or "?"
     qty, price = tx.get("quantity"), tx.get("price")
     net = float(tx.get("net_amount") or 0.0)
     gross = float(tx.get("gross_amount") or 0.0) or net
@@ -4654,11 +4660,22 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     root = Path(args.dir).resolve()
     cache = root / "work"
     want = (args.account or "").strip() or None
+    cfg = _soft_config(root)
+    if want and cfg and want not in (cfg.get("accounts") or {}):
+        # A typo read "no transfer rows ... the broker reported none"
+        # with rc 0, as if the account existed (S039-20).
+        _die(f"no [accounts.{want}] in taxjson.toml — check the name.")
+
+    def _fee(t: Dict[str, Any]) -> float:
+        # A custody move's fee (a crypto withdrawal's network fee) is
+        # in the sidecar; the view dropped it (S039-21).
+        return float(t.get("fee") or 0) + float(t.get("commission") or 0)
+
     rows: List[Dict[str, Any]] = []
     for p in sorted(cache.glob("*_transfers.json")):
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
             print(f"taxjson: warning: could not read {p.name}: {e}",
                   file=sys.stderr)
             continue
@@ -4675,16 +4692,21 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          # "BOOK VALUE nnn" rides along as evidence.
                          "value": float(t.get("net_amount")
                                         or t.get("book_value") or 0),
+                         "fee": _fee(t),
                          "currency": t.get("currency") or "",
                          "where": "sidecar"})
-    cfg = _soft_config(root)
     for name in (cfg.get("accounts") or {}):
         p = cache / f"{name}_base.json"
         if not p.exists():
             continue
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError) as e:
+            # Same warning as the sidecar loop: the account's in-book
+            # rows vanished with no word (S039-22).
+            print(f"taxjson: warning: could not read {p.name}: {e} — "
+                  f"its in-book TRANSFER rows are not shown.",
+                  file=sys.stderr)
             continue
         for t in (doc.get("transactions") if isinstance(doc, dict)
                   else doc) or []:
@@ -4696,6 +4718,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "quantity": float(t.get("quantity") or 0),
                          "type": t.get("description") or "",
                          "value": float(t.get("net_amount") or 0),
+                         "fee": _fee(t),
                          "currency": t.get("currency") or "",
                          "where": "book"})
     if want:
@@ -4714,7 +4737,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
               + " — re-run `taxjson run` after enabling the sidecar, "
                 "or the broker reported none.")
         return
-    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE CUR WHERE"]
+    out_lines = ["DATE ACCOUNT SYMBOL QTY TYPE VALUE FEE CUR WHERE"]
     for r in rows:
         # Type column: the transfer KIND (InterDepot/Internal/ATON…);
         # some brokers put a whole sentence here — cap it, the --json
@@ -4725,7 +4748,9 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         out_lines.append(" ".join([
             r["date"], r["account"], r["symbol"],
             fmt_qty(r["quantity"]), _ty,
-            fmt_money(r["value"]), r["currency"], r["where"]]))
+            fmt_money(r["value"]),
+            (f"{r['fee']:g}" if r["fee"] else "-"),
+            r["currency"], r["where"]]))
     _print_report_table(out_lines)
     print(f"\n{len(rows)} transfer row(s).")
 
@@ -5232,15 +5257,31 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
     found = False
     resolved = resolve_gains_files(cache, account or None)
     basis = gains_basis_label(resolved)
+    tainted = 0
     for acct, path in resolved.items():
         data = _load_json_or_die(path)
         found = True
         _settle = _settle_basis(root, data)
+        # Phantom-basis LEAPS closes routed to manual reporting (or
+        # flagged in-line) vanished with no word, and the view said
+        # "No closed LEAPS positions" (S040-06): count them.
+        for e in data.get("manual_reporting_required") or []:
+            d = _gains_row_date(e, keep, _settle)
+            if ((e.get("symbol") or "") in leaps
+                    and _ISO_DATE_RE.match(d) and keep(d)):
+                tainted += 1
         for e in data.get("transactions", []):
             sym = e.get("symbol") or ""
             if sym not in leaps:
                 continue
             if e.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
+                continue
+            if (e.get("tainted") and "gain" in e
+                    and e.get("direction") != "SHORT"
+                    and not e.get("grant")):
+                d = _gains_row_date(e, keep, _settle)
+                if _ISO_DATE_RE.match(d) and keep(d):
+                    tainted += 1
                 continue
             if "gain" not in e or "qty" not in e or e.get("tainted"):
                 continue
@@ -5254,6 +5295,10 @@ def _leaps_closed(root: Path, account: Optional[str], leaps,
             if not _ISO_DATE_RE.match(d) or not keep(d):
                 continue
             entries.append((acct, e))
+    if tainted:
+        print(f"taxjson: warning: {tainted} LEAPS disposition(s) in this "
+              f"window have phantom cost basis and need MANUAL reporting "
+              f"— not shown here (see `taxjson sum`).", file=sys.stderr)
     return entries, found, basis
 
 
@@ -6187,7 +6232,16 @@ def cmd_gains(args: argparse.Namespace) -> None:
         # while `sum` counts it (2026-09 audit S037-23).
         for _n, _c in sorted((_soft_config(root).get("accounts")
                               or {}).items()):
-            if (isinstance(_c, dict) and not _c.get("crypto")
+            if (isinstance(_c, dict) and _c.get("crypto")
+                    and _n not in accounts
+                    and (cache / f"{_n}_base.json").exists()):
+                # The all-accounts view left the crypto account out
+                # with no word while `sum` counted it (R1-274).
+                print(f"taxjson gains: note: crypto account {_n!r} is "
+                      f"not shown (crypto has no native-currency gains); "
+                      f"its gains are in `taxjson sum` / `taxjson "
+                      f"winners`.", file=sys.stderr)
+            elif (isinstance(_c, dict) and not _c.get("crypto")
                     and _n not in accounts
                     and (cache / f"{_n}_base.json").exists()):
                 print(f"taxjson gains: note: account {_n!r} has no native "
@@ -6545,7 +6599,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             for _p in _audit_source_files(cache, _acct):
                 try:
                     _doc = json.loads(_p.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                except (OSError, ValueError):
                     continue
                 for _t in (_doc.get("transactions", _doc)
                            if isinstance(_doc, dict) else _doc) or []:
@@ -6911,12 +6965,12 @@ def cmd_summary(args: argparse.Namespace) -> None:
                           f"only. Run a full `taxjson run` to refresh "
                           f"the wash-adjusted aggregates.",
                           file=sys.stderr)
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 res = None
         if res is None:
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
+            except (OSError, ValueError) as e:
                 if acct in taxable_accounts:
                     # A taxable account's books left out of the filing
                     # block, the estimate and instalments with rc 0
@@ -7589,8 +7643,18 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
         p = Path(cache) / f"{acct}_base.json"
         try:
             data = _json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+            if not isinstance(data, dict):
+                raise ValueError("not a JSON object")
+        except (OSError, ValueError) as e:
+            # Skipping the account dropped its withholding AND its 15%
+            # fallback while its foreign dividends were still taxed
+            # (R1-223): fall back for it, and say so.
+            if foreign_by_account.get(acct):
+                print(f"taxjson: warning: could not read {p.name} "
+                      f"({e}) — assuming {CA_FOREIGN_WITHHOLDING:.0%} "
+                      f"withholding on {acct}'s foreign dividends; "
+                      f"re-run `taxjson run`.", file=sys.stderr)
+            data = {}
         acct_total = 0.0
         acct_seen = False
         for t in data.get("transactions", []):
@@ -7798,11 +7862,16 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                 money)
             _print_trace_table([
                 (f"BPA credit ({CA_FED_BPA:,.0f} max @ "
-                 f"{CA_FED_BRACKETS[0][1] * 100:.0f}%)",
+                 f"{CA_FED_BRACKETS[0][1] * 100:g}%)",
                  -tb["fed_bpa"], -tw["fed_bpa"]),
                 (f"DTC 15.0198% x {money(r['grossed_eligible'])}",
                  -tb["fed_dtc"], -tw["fed_dtc"]),
-                (f"FTC 15% x {money(est['div_foreign'])}",
+                # The credit's source, as the summary line says: the
+                # actual TAX rows capped at 15%, or the 15% assumption
+                # (a fixed "15% x" label contradicted it, R1-224).
+                (("FTC TAX rows, max 15% x " if str(r.get(
+                    "ftc_source", "")).startswith("actual")
+                  else "FTC 15% x ") + money(est['div_foreign']),
                  -tb["fed_ftc"], -tw["fed_ftc"]),
                 ("= FEDERAL", r["tax_base"]["federal"],
                  r["tax_with"]["federal"]),
@@ -8605,7 +8674,7 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     for acct, f in resolved.items():
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+        except (OSError, ValueError) as e:
             print(f"taxjson: warning: could not read {f}: {e}",
                   file=sys.stderr)
             continue
@@ -9303,7 +9372,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     for _acct, f in files:
         try:
             _d2 = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue
         for h in _d2.get("inventory") or []:
             embedded += float(h.get("deferred_wash", 0) or 0)
@@ -9480,6 +9549,11 @@ def cmd_carryover(args: argparse.Namespace) -> None:
             crypto_argv += ["--crypto", str(base)]
         else:
             base_argv.append(str(base))
+    # An account the last run skipped for having no inputs has no books
+    # to miss — the warning fired for the scaffold's empty `crypto`
+    # account on every carryover (R1-264), unlike t1135 and the rest.
+    missing = [n for n in missing
+               if n not in _accounts_skipped_for_no_inputs(root)]
     if missing:
         print(f"taxjson: warning: no base file for taxable account(s) "
               f"{', '.join(missing)} — run `taxjson run` first; those "
@@ -10367,6 +10441,10 @@ def _explain_wash_sales(root: Path, cache: Path,
     common += ["--country", _country(settings)]
     if settings.get("tax_date"):
         common += ["--tax-date", settings["tax_date"]]
+    # The table lists the tax year's wash sales; the trace printed every
+    # year's under it (R1-284).
+    if isinstance(settings.get("year"), int):
+        common += ["--year", str(settings["year"])]
     # Sheltered history makes the ±30-day affiliated-balance window accurate
     # (a registered-account repurchase can trigger/permanently-deny a loss).
     sheltered_base = cache / "sheltered_base.json"
@@ -12263,6 +12341,11 @@ def cmd_audit(args: argparse.Namespace) -> None:
                    "total_disallowed": round(
                        sum(d.get("total_disallowed") or 0.0
                            for d in json_docs), 2),
+                   # Each invocation's reasons: the merged document said
+                   # failed=true without saying why (R1-288).
+                   "reconciliation_failures": [
+                       f for d in json_docs
+                       for f in d.get("reconciliation_failures") or []],
                    "failed": any(d.get("failed") for d in json_docs)}
         _json_out(doc)
     if _uncovered and not _acct:
