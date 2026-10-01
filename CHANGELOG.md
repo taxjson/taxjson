@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Questrade / RBC: a settlement date before the trade date is
+  refused.** A garbled Settlement Date cell moved a sale into the prior
+  tax year silently. tax-logic CA-DATE-03 / US-DATE-04.
+- **Questrade / RBC: numbers inside descriptions take thousands commas
+  only.** A decimal comma ('STK SPLIT ON 1,5 SHS', 'ADJUSTMENT TO BOOK
+  COST $1,16', 'BOOK VALUE 1234,56') is refused instead of read 10x-100x
+  too large; a DRIP price 'REINV@C$1,234.56' reads 1234.56 (was 1).
+- **Questrade:** the ADR custody fee binds to its ticker ('500 SHARES
+  XPEV'); a row whose cell spans a line break (an unescaped quote) or
+  has extra cells is refused; a cash dividend mentioning STOCK SPLIT
+  stays a dividend; an REI row with units and no cash is refused (its
+  units were dropped); the internal-code warning says it is moot once
+  ticker.map maps the code.
+- **RBC:** an in-kind option transfer uses the contract's OCC symbol; a
+  Holdings export is refused by name; a split row with no Quantity says
+  so; the spin-off and merger notes no longer cite Canadian law or ask
+  for a .tt entry the corp-actions stage already books.
+
 - **Canada: a Canadian trust's distribution counts in its record-date
   year.** A "DIST ON ... REC 12/30/24 PAY 01/06/25" row (Questrade, RBC)
   on a Canadian issuer is 2024 income (s.104(13)) in `divs-sum`, the
