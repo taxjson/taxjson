@@ -287,18 +287,33 @@ def collect_diagnostics(cache: Path, account: str) -> str:
                     if a != account and a.startswith(f"{account}_")]
     except (Exception, SystemExit):
         pass
+    # The gains stage and the blend stage both persist the engine's
+    # stderr, so every engine line reached a _wash.sum twice (audit
+    # R1-181): a block (marker line + continuations) already kept is
+    # not repeated.
+    seen: set = set()
     for diag in sorted(cache.glob(f"{account}_*.diag")):
         if any(diag.name.startswith(f"{s}_") for s in siblings):
             continue
-        kept_prev = False
+        blocks: List[List[str]] = []
         for line in diag.read_text(errors="replace").splitlines():
             is_marker = bool(_DIAG_MARKER_RE.match(line.strip()))
-            is_cont = kept_prev and line[:1].isspace() and bool(line.strip())
-            if is_marker or is_cont:
-                out.append(line.rstrip())
-                kept_prev = True
-            else:
-                kept_prev = False
+            is_cont = bool(blocks) and blocks[-1] is not None and \
+                line[:1].isspace() and bool(line.strip())
+            if is_marker:
+                blocks.append([line.rstrip()])
+            elif is_cont:
+                blocks[-1].append(line.rstrip())
+            elif blocks and blocks[-1] is not None:
+                blocks.append(None)
+        for b in blocks:
+            if b is None:
+                continue
+            key = "\n".join(b)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.extend(b)
     return "\n".join(out)
 
 
@@ -13456,8 +13471,8 @@ def main() -> None:
     p_fsum = sub.add_parser(
         "fees-sum",
         help="Trading-fee report by brokerage (base currency) over a window "
-             "(default: tax year); same report `taxjson run` writes to "
-             "reports/fees.rpt")
+             "(default: tax year; trade dates); the totals `taxjson run` "
+             "writes to reports/fees.rpt, by account by default")
     p_fsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_fsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_fsum.add_argument("--by-account", action=argparse.BooleanOptionalAction,

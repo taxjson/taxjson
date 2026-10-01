@@ -167,7 +167,8 @@ def _main_trade_dates(main_transactions):
     return out
 
 
-def _drop_self_cancelling_transfers(transactions, main_transactions=None):
+def _drop_self_cancelling_transfers(transactions, main_transactions=None,
+                                    base_currency=None):
     """Drop TRANSFER groups that net to zero WITHIN ONE TIME CLUSTER and
     have no intervening trade or split.
 
@@ -527,11 +528,22 @@ def _drop_self_cancelling_transfers(transactions, main_transactions=None):
                 if key in _warned:
                     continue
                 _warned.add(key)
-                # Suggest the conventional direction: the non-base
-                # listing (.US) maps to the base one.
-                _frm, _to = ((b.symbol, a.symbol)
-                             if b.symbol.endswith('.US')
-                             else (a.symbol, b.symbol))
+                # Suggest the conventional direction: the listing in
+                # another currency maps onto the base-currency one. The
+                # listing's currency comes from its spelling (DLR.U.TO
+                # is the USD unit — audit S076-18: an ".US"-only test
+                # suggested folding DLR.TO into DLR.U.TO); without a
+                # known base, the .US leg is taken as the foreign one.
+                from taxjson.lib.price_chain import quote_currency
+                _ca, _cb = quote_currency(a.symbol), quote_currency(b.symbol)
+                if base_currency and _ca != _cb and base_currency in (_ca, _cb):
+                    _frm, _to = ((b.symbol, a.symbol)
+                                 if _ca == base_currency
+                                 else (a.symbol, b.symbol))
+                else:
+                    _frm, _to = ((b.symbol, a.symbol)
+                                 if b.symbol.endswith('.US')
+                                 else (a.symbol, b.symbol))
                 print(f"NOTE: possible unmapped cross-listing journal "
                       f"in {a.account}: {a.symbol} out "
                       f"{a.quantity:g} ({a.date}) pairs with "
@@ -668,7 +680,8 @@ class TransferValidationError(ValueError):
     and exit 1 with the message on stderr."""
 
 
-def _handle_transfers(transactions, sheltered_transactions, *, taxable):
+def _handle_transfers(transactions, sheltered_transactions, *, taxable,
+                      base_currency=None):
     """Pre-process TRANSFER rows before they reach the gains engine.
 
     The --sheltered file is for cross-account wash-sale context only. Its
@@ -714,7 +727,8 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable):
     # custody moves near own-sales are normal; the taxable book has the
     # TransferValidationError hard-error path instead).
     sheltered_transactions, _sh_pairs = _drop_self_cancelling_transfers(
-        sheltered_transactions, main_transactions=transactions)
+        sheltered_transactions, main_transactions=transactions,
+        base_currency=base_currency)
     _own_moves: list = []
     sheltered_transactions = _net_cross_account_transfers(
         sheltered_transactions, main_transactions=transactions,
@@ -802,8 +816,9 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable):
         rewritten.append(t)
     msg = (
         f"NOTE: rewrote {n_main} TRANSFER row(s) → BUYSELL for ACB pooling "
-        f"(sheltered-account approximation). Pass --taxable to reject "
-        f"TRANSFER rows instead."
+        f"(sheltered-account approximation). (Standalone "
+        f"`taxjson-gains`: pass --taxable to reject TRANSFER rows "
+        f"instead.)"
     )
     if n_sh_stripped:
         msg += (f" Also netted out {n_sh_stripped} custody-move "
@@ -815,7 +830,8 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable):
 def prepare_books(transactions, sheltered_transactions=(),
                   affiliated_transactions=(), *, taxable: bool,
                   incomplete_history: Optional[Path] = None,
-                  phantom_hint: bool = True):
+                  phantom_hint: bool = True,
+                  base_currency: Optional[str] = None):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then phantom opening
     synthesis. Returns (transactions, sheltered, affiliated, phantom_log).
@@ -830,6 +846,7 @@ def prepare_books(transactions, sheltered_transactions=(),
 
     transactions, sheltered_transactions = _handle_transfers(
         transactions, sheltered_transactions, taxable=taxable,
+        base_currency=base_currency,
     )
 
     phantom_application_log: list = []
@@ -853,15 +870,23 @@ def prepare_books(transactions, sheltered_transactions=(),
                 if _e.get('inserted'):
                     _ctx[(_e['symbol'], _e['account'])] = dict(
                         _e, context=_label)
+        from taxjson.lib.phantom_holdings import report_phantom_log
+        report_phantom_log(
+            [phantom_application_log, _sh_log, _af_log],
+            {t.account for t in (transactions + sheltered_transactions
+                                 + affiliated_transactions)})
         phantom_application_log = [
             _ctx.get((_e['symbol'], _e['account']), _e)
             if not _e.get('inserted') else _e
             for _e in phantom_application_log]
-    elif phantom_hint:
-        # No phantom file supplied — but if the data has positions that go
-        # negative, the user may have truncated history they haven't told
-        # us about. Emit a one-time hint so they notice. Options are
-        # filtered out (sell-to-open is normal, not phantom).
+    if phantom_hint:
+        # If the data has positions that go negative, the user may have
+        # truncated history they haven't told us about. Emit a one-time
+        # hint so they notice. Options are filtered out (sell-to-open is
+        # normal, not phantom). With a phantom file, its listed pairs no
+        # longer go short (their openings are in the books now), so the
+        # hint names only the pairs the file does NOT cover (audit
+        # S076-05: any phantom file switched the hint off).
         # Registered status from the books' roles, not the labels
         # (audit S076-08): the --sheltered context is registered, and so
         # is a main book that is not --taxable.
@@ -880,7 +905,10 @@ def prepare_books(transactions, sheltered_transactions=(),
                 f"NOTE: {len(candidates)} (symbol, account) pair(s) go short in this data: "
                 f"{preview}{more}. {n_reg} are in registered accounts. "
                 f"If any of these are from truncated history rather than real short trades, "
-                f"run with --suggest-phantoms FILE to generate a candidate list.",
+                f"list them in phantoms.json: `taxjson find-missing-history "
+                f"--gen-phantoms phantoms.json` in a project (`taxjson run` "
+                f"picks the file up), or `taxjson-gains --suggest-phantoms "
+                f"FILE` standalone.",
                 file=sys.stderr,
             )
     return (transactions, sheltered_transactions, affiliated_transactions,
@@ -982,11 +1010,13 @@ def run_gains(transactions, sheltered_transactions=(),
     if books_prepared:
         phantom_application_log = []
     else:
+        from taxjson.lib.country import HOME_CURRENCY
         (transactions, sheltered_transactions, affiliated_transactions,
          phantom_application_log) = prepare_books(
             transactions, sheltered_transactions, affiliated_transactions,
             taxable=req.taxable, incomplete_history=req.incomplete_history,
-            phantom_hint=req.phantom_hint)
+            phantom_hint=req.phantom_hint,
+            base_currency=HOME_CURRENCY.get(req.country))
 
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()
@@ -1025,6 +1055,10 @@ def run_gains(transactions, sheltered_transactions=(),
         _extra['option_grant_since'] = req.option_grant_since
         _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
         _extra['option_grant_basis'] = tax_date
+    # The engine's option/right-replacement warnings are printed below,
+    # after the year filter: printed by the engine they put a prior
+    # year's warning in this year's .sum DIAGNOSTICS (audit S070-04).
+    rules.emit_replacement_stderr = False
     results = rules.compute_gains(
         transactions,
         sheltered_transactions=sheltered_transactions,
@@ -1203,13 +1237,24 @@ def run_gains(transactions, sheltered_transactions=(),
             continue
         curr = tx.currency or '?'
         is_opt = bool(re.search(r'\d{6}[CP]\d+', tx.symbol or ''))
-        asset = 'options' if is_opt else 'stocks'
+        # A plain futures contract is neither a stock nor an option: its
+        # own bucket (audit S076-12 — it inflated the Stocks figure).
+        from taxjson.lib.futures import is_plain_future
+        asset = ('options' if is_opt else
+                 'futures' if is_plain_future(tx.symbol) else 'stocks')
         bucket = fees_by_currency.setdefault(
             curr, {'stocks': 0.0, 'options': 0.0, 'total': 0.0}
         )
-        bucket[asset] += fee
+        bucket[asset] = bucket.get(asset, 0.0) + fee
         bucket['total'] += fee
     results['summary']['total_fees_by_currency'] = fees_by_currency
+
+    # The engine's option/right-replacement warnings, printed here after
+    # the year filter above (audit S070-04).
+    if results.get('option_replacement_warnings'):
+        from taxjson.lib.core import _emit_option_replacement_stderr
+        _emit_option_replacement_stderr(
+            results['option_replacement_warnings'], country=req.country)
 
     # Split tainted dispositions (those drawing from a phantom pool OR a
     # TRANSFER opening) into a separate "manual_reporting_required"
@@ -1243,6 +1288,10 @@ def run_gains(transactions, sheltered_transactions=(),
     # Recompute total_gain from clean transactions only.
     if 'summary' in results and (tainted_txs or req.incomplete_history):
         results['summary']['total_gain'] = _trade_gain_total(clean_txs)
+    # The US engine's count is taken before the year filter and the
+    # tainted split (audit S070-22): it counts the records in this file.
+    if 'count' in results.get('summary', {}):
+        results['summary']['count'] = len(clean_txs)
 
     # Traces after the split (audit R1-165): the trace file's header and
     # per-symbol totals then match the gains JSON, and phantom-basis

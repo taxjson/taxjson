@@ -121,6 +121,9 @@ def _flows(tx: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+FX_MAX_RATE_AGE_DAYS = 5      # the converter's lookback (CA-FX-02 / US-FX-02)
+
+
 def build_ledger(transactions: List[Dict[str, Any]], base: str,
                  fx_history: Dict[str, Dict], year: int,
                  rate_of=None, country: Optional[str] = None
@@ -136,7 +139,13 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
     def _rate(cur: str, on: str) -> Optional[float]:
         if rate_of is not None:
             return rate_of(cur, on)
-        r, _d = latest_rate(fx_history, cur, on)
+        # Bounded lookback (audit R1-151): the rates file fills every
+        # calendar day, so a rate older than a week means the rates
+        # stop before the event — count it unrated (and say so) rather
+        # than price it at a months-old rate, the same 5-day lookback
+        # the converter applies.
+        r, _d = latest_rate(fx_history, cur, on,
+                            max_age_days=FX_MAX_RATE_AGE_DAYS)
         return r
 
     pools: Dict[str, List[float]] = {}       # cur -> [units, cost_base]

@@ -20,6 +20,7 @@ Every quote carries its source so reports can say where a number came
 from instead of implying freshness.
 """
 
+import math
 import json
 import os
 import sys
@@ -133,15 +134,24 @@ def load_yf_map(search_dirs) -> Dict[str, Tuple[str, float]]:
                 if not line:
                     continue
                 parts = line.split()
-                if len(parts) >= 2:
-                    ratio = 1.0
-                    if len(parts) >= 3:
-                        try:
-                            ratio = float(parts[2])
-                        except ValueError:
-                            print(f"warning: bad ratio in {map_file}: "
-                                  f"{line!r}", file=sys.stderr)
-                    mapping[parts[0]] = (parts[1], ratio)
+                if len(parts) < 2:
+                    # Sibling loaders (t1135.map, ticker.map,
+                    # crypto_ticker.map) warn on a short line; this one
+                    # used to drop it silently (audit S077-07).
+                    print(f"warning: {map_file}: expected `SYMBOL "
+                          f"YF_SYMBOL [QTY_RATIO]`, got {line!r} — line "
+                          f"ignored", file=sys.stderr)
+                    continue
+                ratio = 1.0
+                if len(parts) >= 3:
+                    try:
+                        ratio = float(parts[2])
+                    except ValueError:
+                        print(f"warning: bad ratio in {map_file}: "
+                              f"{line!r}", file=sys.stderr)
+                # Keys are taxjson symbols, which are upper case: a
+                # lower-case line was never matched (audit S076-24).
+                mapping[parts[0].upper()] = (parts[1], ratio)
         except OSError as e:
             print(f"warning: could not read {map_file}: {e}",
                   file=sys.stderr)
@@ -199,16 +209,28 @@ def load_fx_history(rates_path, base: str) -> Dict[str, Dict]:
 
 
 def latest_rate(history: Dict[str, Dict], cur: str,
-                on: str) -> Tuple[Optional[float], Optional[str]]:
+                on: str, max_age_days: Optional[int] = None
+                ) -> Tuple[Optional[float], Optional[str]]:
     """(rate, date) of the most recent rate on/before `on` — rates end at
     the last `taxjson run`, so 'today' usually isn't in the file; a
     slightly aged rate labeled as such beats a silent fallback constant.
-    (None, None) when the currency has no usable rate."""
+    (None, None) when the currency has no usable rate, or when
+    `max_age_days` is given and the newest usable rate is older than
+    that (a dated event must not be priced at a rate from months
+    before — audit R1-151; the converter's own lookback is 5 days)."""
     dates = history.get(cur) or {}
     usable = [d for d in dates if d <= on]
     if not usable:
         return None, None
     d = max(usable)
+    if max_age_days is not None:
+        try:
+            age = (datetime.strptime(on[:10], "%Y-%m-%d")
+                   - datetime.strptime(d[:10], "%Y-%m-%d")).days
+        except ValueError:
+            return None, None
+        if age > max_age_days:
+            return None, None
     return float(dates[d]), d
 
 
@@ -537,9 +559,25 @@ def _yfinance_fetcher(pairs: Dict[str, str], *,
 
 def _load_cache(path: Path) -> Dict[str, dict]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # ValueError covers JSONDecodeError and a non-UTF-8 byte
+        # (UnicodeDecodeError): a corrupt cache degrades to a refetch,
+        # never a traceback (audit S055-04).
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _cached_price(rec) -> Optional[float]:
+    """A cache entry's price, or None when it is not a finite number
+    above 0 — a missing, null, zero, negative, NaN or text price in a
+    hand-edited or damaged cache is a cache MISS, never a 0.0 quote
+    (audit R1-156 / R1-244: harvest showed a -100% LOSS)."""
+    try:
+        p = float(rec.get("price"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return p if math.isfinite(p) and p > 0 else None
 
 
 def _save_cache(path: Path, cache: Dict[str, dict]) -> None:
@@ -623,7 +661,13 @@ def fetch_prices(pairs: Dict[str, str], *,
         stale: List[str] = []
         for sym in list(remaining):
             rec = cache.get(sym)
-            if not rec:
+            if not isinstance(rec, dict):
+                continue
+            price = _cached_price(rec)
+            if price is None:
+                print(f"warning: price cache entry for {sym} has no "
+                      f"usable price ({rec.get('price')!r}) — ignored",
+                      file=sys.stderr)
                 continue
             asof = str(rec.get("asof") or "")
             try:
@@ -631,7 +675,7 @@ def fetch_prices(pairs: Dict[str, str], *,
                        - datetime.strptime(asof, "%Y-%m-%d").date()).days
             except ValueError:
                 continue
-            quotes[sym] = PriceQuote(price=float(rec.get("price") or 0.0),
+            quotes[sym] = PriceQuote(price=price,
                                      source=f"cache:{age}d", asof=asof,
                                      currency=rec.get("currency"))
             remaining.pop(sym)

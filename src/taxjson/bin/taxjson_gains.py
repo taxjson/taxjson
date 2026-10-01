@@ -21,6 +21,7 @@ import json
 import sys
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import load_transactions
 from taxjson.lib.phantom_holdings import detect_phantoms, format_suggestions
@@ -68,7 +69,7 @@ def _parse_args():
             "only when you have visibility into the affiliated person's data."
         ),
     )
-    parser.add_argument("--year", type=int, help="Tax year to calculate (optional)")
+    parser.add_argument("--year", type=tax_year, help="Tax year to calculate (optional)")
     parser.add_argument(
         "--as-of", metavar="YYYY-MM-DD", default=None,
         help="Drop transactions dated after this date before computing "
@@ -307,6 +308,7 @@ def _request(args) -> GainsRequest:
     )
 
 
+@guard_main("taxjson-gains")
 def main():
     from taxjson.lib.core import AmbiguousTransferDateError
     try:

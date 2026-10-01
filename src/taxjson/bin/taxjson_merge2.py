@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import (
     TaxTransaction, coerce_transaction_row, strip_json_comments,
 )
@@ -46,7 +47,7 @@ from taxjson.bin.taxjson_convert_currency import (
     abort_if_currency_uncovered, emit_fallback_summary,
     emit_source_summary, fallback_validation_issues, load_rate_sources,
     load_exchange_rates, process_transactions as convert_transactions,
-    reset_fallback_tally, resolve_default_rate,
+    positive_rate, reset_fallback_tally, resolve_default_rate,
 )
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
 from taxjson.lib.corporate_timeline import normalize_symbol_new
@@ -270,6 +271,7 @@ def _to_tax_transactions(items):
             for i, item in enumerate(items)]
 
 
+@guard_main("taxjson-merge2")
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -325,7 +327,7 @@ def main():
              "country's lot rule: average cost in Canada, FIFO in the US).",
     )
     parser.add_argument(
-        '--default-rate', type=float, default=None,
+        '--default-rate', type=positive_rate, default=None,
         help="Fallback rate when the rates file is missing a date "
              "(default: 1.35). Passing it explicitly also allows a "
              "currency that is entirely absent from --rates to convert "

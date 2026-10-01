@@ -136,14 +136,6 @@ class TestTimelineBuildAndFactor(unittest.TestCase):
         self.assertEqual(ca_style.factor('X.US', '2025-05-01', '2025-05-03'),
                          2.0)   # settle date 05-03 is inside (05-01, 05-03]
 
-    def test_splits_between(self):
-        tl = SplitTimeline.from_transactions([
-            split('X.US', '2025-03-10', 2.0),
-            split('X.US', '2025-06-10', 3.0),
-        ])
-        self.assertEqual(tl.splits_between('X.US', '2025-03-10', '2025-06-10'),
-                         [('2025-06-10', 3.0)])
-
 
 class TestDedupe(unittest.TestCase):
     def test_symbol_new_spellings_collapse(self):

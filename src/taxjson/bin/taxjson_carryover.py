@@ -49,6 +49,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
 from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
@@ -434,6 +435,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     return "\n".join(lines)
 
 
+@guard_main("taxjson-carryover", value_errors=True)
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Multi-year capital-loss carryforward/carryback ledger "

@@ -313,9 +313,12 @@ def main(argv=None):
                 or any(r.affects_year for r in zero_rows))):
         # (registered rows included: their phantoms still feed the
         # cross-account loss walk)
-        print(f"\nTo fix truncated history: taxjson-gains --year {yr} "
-              "--suggest-phantoms phantoms.json <base.json>, review/prune, then "
-              "re-run with --incomplete-history phantoms.json.\nTo fix a $0-cost "
+        print(f"\nTo fix truncated history: `taxjson find-missing-history "
+              "--gen-phantoms phantoms.json` in the project, review/prune "
+              "it, then `taxjson run` (it picks phantoms.json up). "
+              f"Standalone: taxjson-gains --year {yr} --suggest-phantoms "
+              "phantoms.json <base.json>, then --incomplete-history "
+              "phantoms.json.\nTo fix a $0-cost "
               "corp action: declare it (merger/spinoff basis) so the received "
               "shares carry the correct ACB.")
     return _incomplete(0)

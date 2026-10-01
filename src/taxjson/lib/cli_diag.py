@@ -27,3 +27,83 @@ def error(prog: str, msg: str) -> None:
 def note(prog: str, msg: str) -> None:
     print(f"{prog}: note: {msg}", file=sys.stderr)
 
+
+
+# ---------------------------------------------------------------------------
+# Unreadable inputs and engine refusals: one line, exit 2 (audit S070-23 /
+# S079-10 / S029-20). A missing path, a directory, a non-UTF-8 file or bad
+# JSON used to surface as a traceback (exit 1) in a dozen tools while their
+# siblings printed `no such file` and exited 2.
+
+class InputReadError(OSError):
+    """An input file that exists but cannot be read as text (not UTF-8).
+    An OSError, not a ValueError: the tools' data-error handlers (exit 1)
+    must not swallow it — it is an environment error, exit 2."""
+
+
+def describe_input_error(exc: BaseException) -> str:
+    """The one-line text for an input a tool could not read."""
+    import json
+    fn = getattr(exc, "filename", None)
+    if isinstance(exc, InputReadError):
+        return str(exc)
+    if isinstance(exc, FileNotFoundError):
+        return f"no such file: {fn}"
+    if isinstance(exc, IsADirectoryError):
+        return f"cannot read {fn}: is a directory"
+    if isinstance(exc, NotADirectoryError):
+        return f"no such file: {fn}"
+    if isinstance(exc, PermissionError):
+        return f"permission denied: {fn}"
+    if isinstance(exc, UnicodeDecodeError):
+        return (f"cannot read input: not UTF-8 text (byte "
+                f"0x{exc.object[exc.start]:02x} at offset {exc.start})")
+    if isinstance(exc, json.JSONDecodeError):
+        return f"cannot read input: not valid JSON ({exc})"
+    return str(exc)
+
+
+_INPUT_ERRORS = (InputReadError, FileNotFoundError, IsADirectoryError, NotADirectoryError,
+                 PermissionError, UnicodeDecodeError)
+
+
+def guard_main(prog: str, *, value_errors: bool = False):
+    """Decorator for a bin tool's main(): an unreadable input (and, with
+    `value_errors`, any engine/loader ValueError — the refusals
+    taxjson-gains already reports this way) becomes
+    ``<prog>: error: <one line>`` with exit 2 instead of a traceback."""
+    import functools
+    import json
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **kw):
+            try:
+                return fn(*a, **kw)
+            except _INPUT_ERRORS + (json.JSONDecodeError,) as e:
+                error(prog, describe_input_error(e))
+                raise SystemExit(2)
+            except ValueError as e:
+                if not value_errors:
+                    raise
+                error(prog, str(e))
+                raise SystemExit(2)
+        return wrapper
+    return deco
+
+
+def tax_year(value: str) -> int:
+    """argparse type for --year: an integer in 1900..next year, the range
+    `taxjson init` and [settings] year enforce (audit S033-16: 0 meant
+    'all history' and a 2-digit year silently matched nothing)."""
+    import argparse
+    from datetime import date
+    try:
+        y = int(str(value).strip())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a year")
+    hi = date.today().year + 1
+    if not 1900 <= y <= hi:
+        raise argparse.ArgumentTypeError(
+            f"{y} is not a plausible tax year (expected 1900..{hi})")
+    return y

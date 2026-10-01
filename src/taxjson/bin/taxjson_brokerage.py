@@ -30,6 +30,7 @@ import argparse
 import re
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import (register_brokerage, TaxTransaction,
                               load_brokerage, is_option_symbol)
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
@@ -196,6 +197,7 @@ def _dedup_evidence(per_file) -> list:
     return [t for key in order for t in best[key]]
 
 
+@guard_main("taxjson-brokerage")
 def main():
     parser = argparse.ArgumentParser(
         description="Convert brokerage CSV to taxjson format",

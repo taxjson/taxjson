@@ -24,13 +24,47 @@ PY = os.path.join(REPO, "venv/bin/python3")
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPORT = os.path.join(HERE, "..", "mutation_report.txt")
 
-TARGETS = [
-    # (path, lo_line, hi_line) — wash walk + ADJUST application (CA),
-    # US wash replacement matching, transfer pre-processing.
-    (os.path.join(REPO, "src/taxjson/lib/core.py"), 900, 1810),
-    (os.path.join(REPO, "src/taxjson/lib/core.py"), 2510, 2620),
-    (os.path.join(REPO, "src/taxjson/lib/pipeline.py"), 60, 320),
+# The regions to mutate, by FUNCTION NAME (audit S025-02: hand-entered
+# line ranges went stale — the "US wash replacement" range had drifted
+# into the Canadian engine, and the superficial-loss window and the
+# whole US engine were never mutated). Resolved to line ranges with the
+# AST at start-up; a name that no longer exists stops the harness.
+TARGET_FUNCS = [
+    # Canada: ACB pool walk, superficial-loss window/solver, ADJUST
+    # application (all inside compute_gains).
+    ("src/taxjson/lib/core.py", "CanadaTaxRules.compute_gains"),
+    # US: FIFO lots and §1091 replacement matching.
+    ("src/taxjson/lib/core.py", "USATaxRules.compute_gains"),
+    # Transfer pre-processing.
+    ("src/taxjson/lib/pipeline.py", "_drop_self_cancelling_transfers"),
+    ("src/taxjson/lib/pipeline.py", "_net_cross_account_transfers"),
+    ("src/taxjson/lib/pipeline.py", "_handle_transfers"),
 ]
+
+
+def resolve_targets(funcs=TARGET_FUNCS):
+    """[(abs path, first line, last line)] for each (path, qualname)."""
+    out = []
+    for rel, qual in funcs:
+        path = os.path.join(REPO, rel)
+        with open(path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        node, found = tree, None
+        for part in qual.split("."):
+            found = next((n for n in ast.iter_child_nodes(node)
+                          if isinstance(n, (ast.FunctionDef,
+                                            ast.AsyncFunctionDef,
+                                            ast.ClassDef))
+                          and n.name == part), None)
+            if found is None:
+                raise SystemExit(f"mutation_audit: {qual} not found in "
+                                 f"{rel} — update TARGET_FUNCS")
+            node = found
+        out.append((path, found.lineno, found.end_lineno))
+    return out
+
+
+TARGETS = resolve_targets()
 
 TEST_CMD = [PY, "-m", "unittest", "-q",
             "test_engine_invariants", "test_audit_2026_09_fixes",

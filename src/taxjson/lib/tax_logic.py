@@ -396,7 +396,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "before; a longer gap converts the row at a placeholder "
                  "rate and is a validation ERROR (the .sum DIAGNOSTICS, "
                  "`taxjson checklist`; `run --strict` stops), and a "
-                 "currency with no rates at all stops the run.",
+                 "currency with no rates at all stops the run. `taxjson "
+                 "fx-cash` counts a cash event with no rate in those 5 "
+                 "days as unrated (named in its report).",
                  cont=True),
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
@@ -553,15 +555,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Purchases at the same moment go to your taxable accounts "
                  "first, then sheltered, then affiliated."),
             (Rule("CA-SL-12",
-                  "A loss on buying back a written option is superficial "
-                  "when the same option is bought, and still held at day "
-                  "30, within the window (option_buyback_loss_superficial "
-                  "= true).", keys=("option_buyback_loss_superficial",))
+                  "A loss on buying back a written option (or, under "
+                  "grant timing, on a write whose commission exceeds its "
+                  "premium) is superficial when the same option is "
+                  "bought, and still held at day 30, within the window "
+                  "(option_buyback_loss_superficial = true).",
+                  keys=("option_buyback_loss_superficial",))
              if buyback else
              Rule("CA-SL-11",
-                  "A loss on buying back a written option is exempt from "
-                  "the rule under either premium timing "
-                  "(option_buyback_loss_superficial = false).",
+                  "A loss on buying back a written option (or, under "
+                  "grant timing, on a write whose commission exceeds its "
+                  "premium) is exempt from the rule under either premium "
+                  "timing (option_buyback_loss_superficial = false).",
                   keys=("option_buyback_loss_superficial",))),
             Rule("CA-SL-13",
                  "Crypto follows the same rule, pooled across exchanges "
@@ -848,7 +853,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "the latest rate of the 5 days before; a longer gap "
                  "converts the row at a placeholder rate and is a "
                  "validation ERROR (`run --strict` stops), and a currency "
-                 "with no rates at all stops the run.", cont=True),
+                 "with no rates at all stops the run. `taxjson fx-cash` "
+                 "counts a cash event with no rate in those 5 days as "
+                 "unrated (named in its report).", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
@@ -960,7 +967,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
-                 "engine)."),
+                 "engine), sized at 100 shares per contract, each contract "
+                 "flagged against one loss's shares only; a buy that "
+                 "closes a written call is not an acquisition."),
             Rule("US-WASH-14",
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),

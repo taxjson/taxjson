@@ -7,6 +7,7 @@ Ported from tt_ccd_gains.pl. The body is shared with taxjson-leaps-gains
 (bin/_option_gains_report.py).
 """
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.bin._option_gains_report import main as _main, process_data as _process
 
 PROG = "taxjson-ccd-gains"
@@ -17,6 +18,7 @@ def process_data(data, ccd_by_underlying):
     _process(data, ccd_by_underlying, direction='SHORT', calls_only=True)
 
 
+@guard_main("taxjson-ccd-gains")
 def main():
     _main(prog=PROG,
           description="Summarize Covered Call (Short Option) gains.",

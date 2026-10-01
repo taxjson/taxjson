@@ -158,7 +158,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 
 ### §1256 (60/40 mark-to-market) is not implemented
-- **Where:** `src/taxjson/lib/core.py` — documented out-of-scope in the US engine's docstring, alongside §1233(b)(1)/(2) anti-conversion rules and §1259 constructive sales.
+- **Where:** `src/taxjson/lib/core.py` — documented out-of-scope in the US engine's docstring, alongside the §1233(b)(1)/(2) (long held ≤1 year) and §1233(d) (long held >1 year) short-sale rules and §1259 constructive sales.
 - **Current behavior:** futures and broad-based index options (SPX, NDX, futures) are run through the ordinary FIFO ST/LT engine — no year-end mark-to-market, no 60/40 split.
 - **Why deferred:** needs a contract-classification table (which symbols are §1256 contracts) plus a mark-to-market pass; no user data currently exercises it.
 - **Workaround:** report §1256 contracts from your broker's 1099-B (they're reported mark-to-market there) and exclude them from the tool's totals.
@@ -228,7 +228,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### `days_held` uses trade dates
 - **Where:** `lib/core.py` closing branch.
-- **Current behavior:** the days-held figure in traces counts from trade dates while every other Canadian date is settlement-basis. Cosmetic — Canada has no holding-period rule.
+- **Current behavior:** the days-held figure counts from trade dates while every other Canadian date is settlement-basis. Canada has no holding-period rule, but the figure also gives the year of acquisition `form-export` prints on Schedule 3 (disposition date minus days held), so a lot bought on a late-December trade date that settled in January shows the earlier year.
 
 ### Non-eligible dividends are estimated as eligible
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
@@ -247,6 +247,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ### Currency⇒exchange suffix map is duplicated in ~6 places
 - **Where:** `base.py` (`BaseBrokerage.CURRENCY_EXT_MAP`), `corp_actions.py` (`_CURRENCY_SUFFIX`), `ib_extractor.py` (`_IB_CURRENCY_EXT`, plus the ISIN-country map `_ISIN_EXT`) and a partial copy in `webull.py` (`CURRENCY_EXT_MAP`) each hardcode `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `bin/taxjson_t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
 - **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. An explicit `.TO` in a Questrade or generic export is kept whatever the row currency (`DLR.U.TO` bought in USD), so the known USD-on-TSX case no longer depends on the map. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
+
+### Sub-micro quantity tolerances (crypto dust)
+- **Where:** `lib/core.py` — the Canada pool walk empties a pool whose quantity falls below 1e-6 units after a sale (its remaining cost stays in the pool and goes to the next purchase); the US engine books no row or lot below 1e-8 units.
+- **Current behavior:** a residue of less than a millionth of a coin left after a sale disappears from the holdings (its cost, a few cents at most, moves onto the next purchase); a US row under 1e-8 units is left out and named in a warning. Rows of any size are now booked by the Canada engine (staking rewards under 1e-6 units used to be dropped).
+- **Why deferred:** both tolerances also absorb float noise in every share count; a relative tolerance needs its own audit across both engines. Effect: cents.
 
 ## Test coverage gaps (tracked; lower priority)
 
@@ -296,14 +301,6 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 ## Known engine corner cases (latent — not on the standard `taxjson run` path)
 
 These are real bugs in code paths the standard `taxjson run` flow never exercises. They're documented so anyone repurposing the engine knows.
-
-### `_drop_self_cancelling_transfers` intervening-event check is BUYSELL-only
-- **Where:** `src/taxjson/lib/pipeline.py:_drop_self_cancelling_transfers` (moved from taxjson_gains.py in the pipeline consolidation).
-- **Current behavior:** A pair of TRANSFER rows on the same symbol+account that net to zero is auto-dropped UNLESS a `BUYSELL` of the same symbol falls between them. The check excludes `ASSIGN` and `SPLIT` events — if an option ASSIGN or a corp-action SPLIT happens between the two TRANSFERs, the auto-drop fires anyway and the pair is removed, but the position the SPLIT/ASSIGN operated on is now misaligned with the actual brokerage record.
-- **Why deferred:** cross-listing journals (the motivating case for the auto-drop) don't normally straddle corp actions or option assignments on the same security. No observed mis-fire on real data.
-- **Fix template:** extend the intervening-event check to include `ASSIGN` and `SPLIT` actions, not just `BUYSELL`.
-
----
 
 ### `taxjson audit` reports phantom-backed dispositions as "not found"
 

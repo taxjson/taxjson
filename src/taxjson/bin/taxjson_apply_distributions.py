@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib import cli_diag
 from taxjson.lib.country import country_arg
 
@@ -322,6 +323,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
     return doc, applied
 
 
+@guard_main("taxjson-apply-distributions")
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("base_json", type=Path)
