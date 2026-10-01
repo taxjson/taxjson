@@ -143,62 +143,114 @@ class TestRbcParser(unittest.TestCase):
             os.remove(fname)
 
 
+def _rbc_row(activity, desc, symbol='QZL', qty=0.0):
+    """A row as read_rbc_rows builds it, for the live classifier."""
+    from types import SimpleNamespace
+    from taxjson.lib.brokerages.rbc_direct import _RBC_CODE_RE
+    m = _RBC_CODE_RE.match(desc)
+    return SimpleNamespace(activity=activity, desc=desc, symbol=symbol,
+                           qty=qty, code=m.group(1).upper() if m else '')
+
+
 class TestRbcDividendClassifier(unittest.TestCase):
-    """`_is_dividend` keys on the Activity label or on RBC's code/verb part
-    of the description ("DIV - ", "CASH DIV ON", "DIST ON") — never on a
-    word anywhere in the text. Re-premised (parse audit 2026-09): the
-    whole-description word match ("Dividend"/"Distribution"/"Dist.")
-    turned in-kind transfers of "DIVIDEND 15 SPLIT CORP" / "... HIGH
-    DIVIDEND INDEX ETF" into $0 dividends and dropped their shares."""
+    """Income is recognised by the Activity label, or — for an Activity
+    label the parser has never seen — by RBC's code/verb part of the
+    description ("DIV - ", "CASH DIV ON", "DIST ON"); never by a word in
+    the security name. Pinned on the LIVE classifier (classify_rbc_row):
+    these tests used to call a dead `_is_dividend` helper that disagreed
+    with it (audit R1-319)."""
 
     def test_recognizes_activity_and_code_verbs(self):
-        rbc = RbcBrokerage()
-        self.assertTrue(rbc._is_dividend('Dividends', 'anything'))
-        self.assertTrue(rbc._is_dividend('Distribution', 'anything'))
-        self.assertTrue(rbc._is_dividend(
-            'Other', 'DIV - LABRADOR IRON ORE CASH DIV  ON 500 SHS'))
-        self.assertTrue(rbc._is_dividend('Other', 'CASH DIVIDEND ON 100 SHS'))
-        self.assertTrue(rbc._is_dividend(
-            'Other', 'COMMERCE SPLIT CORP COM DIST      ON       1 SHS'))
+        from taxjson.lib.brokerages.rbc_direct import classify_rbc_row as c
+        self.assertEqual(c(_rbc_row('Dividends', 'anything')), 'dividend')
+        self.assertEqual(c(_rbc_row('Distribution', 'anything')), 'dividend')
+        # An unknown Activity label falls back to the code / verb part.
+        self.assertEqual(c(_rbc_row(
+            'Payment', 'DIV - LABRADOR IRON ORE CASH DIV  ON 500 SHS')),
+            'dividend')
+        self.assertEqual(c(_rbc_row('Payment', 'CASH DIVIDEND ON 100 SHS')),
+                         'dividend')
+        self.assertEqual(c(_rbc_row(
+            'Payment', 'COMMERCE SPLIT CORP COM DIST      ON       1 SHS')),
+            'dividend')
+
+    def test_other_activity_with_an_income_verb_is_unclassified(self):
+        """Activity 'Other' carries RBC's option / retraction / journal
+        codes, never income in any real export: an income verb there is
+        a shape the parser does not know — a loud UNBOOKED warning, not
+        a guessed dividend."""
+        from taxjson.lib.brokerages.rbc_direct import classify_rbc_row as c
+        for desc in ('DIV - LABRADOR IRON ORE CASH DIV ON 500 SHS',
+                     'CASH DIVIDEND ON 100 SHS',
+                     'COMMERCE SPLIT CORP COM DIST ON 1 SHS'):
+            with self.subTest(desc=desc):
+                self.assertEqual(c(_rbc_row('Other', desc)), 'unknown')
+        body = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+                '"Price","Settlement Date","Value","Currency","Description"\n'
+                '"June 2, 2025","Other","QZL","QZL CORP","","","June 2, 2025",'
+                '"500.00","CAD","DIV - QZL CORP CASH DIV ON 500 SHS"\n')
+        import contextlib, io
+        with tempfile.NamedTemporaryFile('w', suffix='.csv',
+                                         delete=False) as f:
+            f.write(body)
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                txs = RbcBrokerage().parse_file(Path(f.name))
+        finally:
+            os.remove(f.name)
+        self.assertEqual(txs, [])
+        self.assertIn('UNBOOKED', err.getvalue())
 
     def test_rejects_words_in_security_names(self):
-        rbc = RbcBrokerage()
-        self.assertFalse(rbc._is_dividend(
+        from taxjson.lib.brokerages.rbc_direct import classify_rbc_row as c
+        self.assertEqual(c(_rbc_row(
             'Transfers', 'TFI - DIVIDEND 15 SPLIT CORP CL-A SHS ACCOUNT '
-                         'TRANSFER BOOK VALUE 16506.95'))
-        self.assertFalse(rbc._is_dividend(
+                         'TRANSFER BOOK VALUE 16506.95', qty=100)),
+            'transfer')
+        self.assertEqual(c(_rbc_row(
             'Transfers', 'TFO - ISHARES S&P/TSX COMPOSITE HIGH DIVIDEND '
-                         'INDEX ETF ACCOUNT TRANSFER'))
-        self.assertFalse(rbc._is_dividend('Other', 'ETF DISTRIBUTION REINVESTED'))
-        self.assertFalse(rbc._is_dividend('Other', 'Year-end Dist. payment'))
-
-    def test_rejects_redistribution(self):
-        rbc = RbcBrokerage()
-        self.assertFalse(rbc._is_dividend('Other', 'Redistribution of units'))
-        self.assertFalse(rbc._is_dividend('Other', 'Misdistributed entry'))
-        self.assertFalse(rbc._is_dividend('Other', 'Interest accrual entry'))
+                         'INDEX ETF ACCOUNT TRANSFER', qty=-50)), 'transfer')
+        for desc in ('ETF DISTRIBUTION REINVESTED', 'Year-end Dist. payment',
+                     'Redistribution of units', 'Misdistributed entry',
+                     'Interest accrual entry'):
+            with self.subTest(desc=desc):
+                self.assertEqual(c(_rbc_row('Payment', desc)), 'unknown')
 
 
-class TestRbcDateHelpers(unittest.TestCase):
-    """Module-level `parse_rbc_date` used to silently return
-    `datetime.now()` on unparseable input, which caused fee/dividend
-    rows with malformed dates to land in whatever tax year the
-    pipeline happened to be run in. It now raises ValueError so the
-    user sees the row that needs fixing rather than chasing a
-    mysterious total later."""
+class TestRbcRowDates(unittest.TestCase):
+    """A malformed row date is refused by the live reader (read_rbc_rows
+    picks ONE format per column for the file) — never stamped with
+    today's date. These tests used to pin a dead module helper,
+    parse_rbc_date, the parser never called (audit S063-18)."""
 
-    def test_parse_rbc_date_raises_on_garbage(self):
-        from taxjson.lib.brokerages.rbc_direct import parse_rbc_date
-        with self.assertRaises(ValueError) as cm:
-            parse_rbc_date('not a date')
+    HDR = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+           '"Price","Settlement Date","Value","Currency","Description"\n')
+
+    def _read(self, date, settle):
+        from taxjson.lib.brokerages.rbc_direct import read_rbc_rows
+        body = self.HDR + (f'"{date}","Buy","QZL","QZL CORP","10","5",'
+                           f'"{settle}","-59.95","CAD","QZL CORP"\n')
+        with tempfile.NamedTemporaryFile('w', suffix='.csv',
+                                         delete=False) as f:
+            f.write(body)
+        try:
+            return read_rbc_rows(Path(f.name))
+        finally:
+            os.remove(f.name)
+
+    def test_garbage_date_is_refused(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        with self.assertRaises(RbcFormatError) as cm:
+            self._read('not a date', 'January 31, 2025')
         self.assertIn('not a date', str(cm.exception))
 
-    def test_parse_rbc_date_accepts_known_formats(self):
-        from taxjson.lib.brokerages.rbc_direct import parse_rbc_date
-        d1 = parse_rbc_date('January 30, 2025')
-        self.assertEqual((d1.year, d1.month, d1.day), (2025, 1, 30))
-        d2 = parse_rbc_date('1/30/2025')
-        self.assertEqual((d2.year, d2.month, d2.day), (2025, 1, 30))
+    def test_known_formats(self):
+        exp = self._read('January 30, 2025', 'January 31, 2025')
+        self.assertEqual((exp.rows[0].date, exp.rows[0].settle),
+                         ('2025-01-30', '2025-01-31'))
+        exp = self._read('1/30/2025', '1/31/2025')
+        self.assertEqual(exp.rows[0].date, '2025-01-30')
 
 
 class TestRbcIsoDatetimeDates(unittest.TestCase):

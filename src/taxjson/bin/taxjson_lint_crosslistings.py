@@ -29,11 +29,9 @@ Usage:
 """
 
 import argparse
-import json
 import re
 import sys
 
-from taxjson.lib.report_model import load_report_json
 from typing import Any, Dict, List
 
 OPT_RE = re.compile(r"\d{6}[CP]\d{6,}")  # OCC option symbol
@@ -45,11 +43,14 @@ def _is_option(sym: str) -> bool:
 
 def _load_txs(paths: List[str]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
+    from taxjson.lib.json_input import load_json_doc_or_exit, rows_or_exit
     for p in paths:
-        try:
-            out.extend(load_report_json(p).get("transactions", []))
-        except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
-            print(f"warning: skipping {p}: {e}", file=sys.stderr)
+        # An unreadable book stops the lint: skipping it printed
+        # '(Clean.)' at exit 0, even under --strict (audit S035-13,
+        # S028-09); a bare-array book is accepted (S079-11).
+        doc = load_json_doc_or_exit("taxjson-lint-crosslistings", p)
+        out.extend(rows_or_exit("taxjson-lint-crosslistings", doc, p,
+                                "transactions"))
     return out
 
 

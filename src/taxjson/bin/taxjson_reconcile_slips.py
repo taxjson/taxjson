@@ -689,7 +689,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     except AmbiguousHeader as e:
         print(e.code, file=sys.stderr)
         return 2
-    computed = load_computed(args.gains, args.year, args.date_basis)
+    from taxjson.lib.json_input import InputFileError
+    try:
+        computed = load_computed(args.gains, args.year, args.date_basis)
+    except InputFileError as e:
+        # One line naming the gains file, not a traceback (S079-11).
+        print(f"taxjson-reconcile-slips: error: {e}", file=sys.stderr)
+        return 2
     rep = reconcile(slip, computed, args.tolerance)
     if dropped_rows:
         # Unreadable rows mean the slip was NOT fully reconciled —

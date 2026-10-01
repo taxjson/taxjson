@@ -43,10 +43,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# A number inside broker description text: valid thousands groups only,
-# never a decimal comma (audit S055-20).
-from taxjson.lib.brokerages.base import DESC_NUMBER
-
 
 # --- Event schema ----------------------------------------------------------
 
@@ -236,7 +232,7 @@ _IB_WITH_PAIR_RE = re.compile(
 # as a sale (ib_extractor, Corporate Actions branch); no election.
 _IB_CASH_MERGER_RE = re.compile(
     rf'^\s*({_IB_TICKER})\s*\(([^)]*)\)\s+Merged\([^)]*\)\s+FOR\s+'
-    rf'([A-Z]{{3}})\s+({DESC_NUMBER})\s+PER\s+SHARE\b', re.IGNORECASE)
+    rf'([A-Z]{{3}})\s+([\d,]*\.?\d+)\s+PER\s+SHARE\b', re.IGNORECASE)
 
 # Any other merger-shaped row (a stock + cash offer 'WITH <id> 1 for 2
 # AND USD 5.00', an unfamiliar layout): neither booked by the parser nor
@@ -1905,7 +1901,7 @@ def _rbc_ca_symbol(symbol: str, currency: str) -> str:
 
 
 _RBC_SPINOFF_RE = re.compile(
-    r'\bSPIN\s?OFF\s+ON\s+(' + DESC_NUMBER + r')\s+SH(?:S|ARES?)?\s+FROM\s+SEC#\s*'
+    r'\bSPIN\s?OFF\s+ON\s+([\d,]*\.?\d+)\s+SH(?:S|ARES?)?\s+FROM\s+SEC#\s*'
     r'(\S+)\s+(.+?)(?:\s+REC\s+\d\d/|\s*$)', re.I)
 
 

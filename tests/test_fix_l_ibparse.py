@@ -832,20 +832,18 @@ class TestDescriptionNumbers(unittest.TestCase):
         self.assertEqual(_parse_div_qty_rate('CASH DIV ON 1,000 SHS', 50.0),
                          (1000.0, 0.05))
 
-    def test_sibling_parser_patterns(self):
-        from taxjson.lib.brokerages import rbc_direct as R, questrade as Q
+    def test_sibling_sites_refuse_a_decimal_comma(self):
+        # RBC/Questrade validate the captured text (desc_number); the
+        # corp-action spin-off parent count too (_num_text).
+        from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                                 desc_number)
         from taxjson.lib import corp_actions as CA
-        self.assertIsNone(R._RBC_BOOK_COST_RE.search(
-            'RETURN OF CAPITAL ADJUSTMENT TO BOOK COST $1,16'))
-        self.assertIsNone(R._RBC_BOOK_VALUE_RE.search('BOOK VALUE $1234,56'))
-        self.assertEqual(R._RBC_BOOK_VALUE_RE.search(
-            'TFI QZD BOOK VALUE 16,506.95').group(1), '16,506.95')
-        self.assertIsNone(R._RBC_SPLIT_ON_SHS_RE.search('SPLIT ON 12,5 SHS'))
-        self.assertIsNone(Q._SPLIT_ON_SHS_RE.search('SPLIT ON 12,5 SHS'))
-        self.assertIsNone(CA._RBC_SPINOFF_RE.search(
-            'SPIN OFF ON 12,5 SHS FROM SEC# 123 QZS CORP'))
-        self.assertEqual(Q._BOOK_VALUE_RE.search(
-            'TRANSFER BOOK VALUE 5,293.06, PAY').group(1), '5,293.06')
+        with self.assertRaises(BrokerageParseError):
+            desc_number('1234,56')
+        m = CA._RBC_SPINOFF_RE.search(
+            'SPIN OFF ON 12,5 SHS FROM SEC# 123 QZS CORP')
+        with self.assertRaises(BrokerageParseError):
+            CA._num_text(m.group(1))
 
 
 class TestSettleToTradeAtTheCutover(unittest.TestCase):
