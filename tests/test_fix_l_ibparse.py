@@ -208,5 +208,125 @@ class TestIbCorporateActionCancellationOrder(unittest.TestCase):
                 self.assertEqual(splits, [('2026-03-03', 2.0)])
 
 
+# --------------------------- PIL back-fill and the open-accrual check
+_ACC_H = ('Change in Dividend Accruals,Header,Asset Category,Currency,'
+          'Account,Symbol,Date,Ex Date,Pay Date,Quantity,Tax,Fee,'
+          'Gross Rate,Gross Amount,Net Amount,Code\n')
+_DIV_H = 'Dividends,Header,Currency,Account,Date,Description,Amount\n'
+_PERIOD = 'Statement,Data,Period,"January 1, 2025 - December 31, 2025"\n'
+
+
+def _acc(sym, date, ex, pay, qty, rate, gross, code, cur='USD'):
+    return (f'Change in Dividend Accruals,Data,Stocks,{cur},U5550001,'  # pii-ok
+            f'{sym},{date},{ex},{pay},{qty},0,0,{rate},{gross},{gross},'
+            f'{code}\n')
+
+
+def _div(sym, isin, date, amount, cur='USD', pil=False, rate=None):
+    what = ('Payment in Lieu of Dividend' if pil else
+            f'Cash Dividend {cur} {rate} per Share')
+    return (f'Dividends,Data,{cur},U5550001,{date},'  # pii-ok
+            f'"{sym}({isin}) {what}",{amount}\n')
+
+
+def _pil(txs):
+    return [(t['symbol'], t['quantity'], t['price']) for t in txs
+            if t['action'] == 'DIVIDEND_IN_LIEU']
+
+
+class TestIbPaymentInLieuBackfill(unittest.TestCase):
+
+    def _parse(self, *rows):
+        return _parse_ib(HEAD + _PERIOD + _ACC_H + ''.join(
+            r for r in rows if r.startswith('Change'))
+            + _DIV_H + ''.join(r for r in rows if r.startswith('Div')))
+
+    def test_rate_of_the_paying_listing(self):
+        # S057-22: same-root accruals in CAD (0.0375) and USD (0.50) on one
+        # pay date; a USD PIL of 21.00 is 42 shares at 0.50.
+        _, txs, _ = self._parse(
+            _acc('QZE', '2025-08-20', '2025-08-20', '2025-09-15', 1000,
+                 0.0375, 37.5, 'Po', cur='CAD'),
+            _acc('QZE', '2025-08-20', '2025-08-20', '2025-09-15', 42, 0.5,
+                 21, 'Po'),
+            _div('QZE', 'US0000000QE1', '2025-09-15', 21, pil=True))
+        self.assertEqual(_pil(txs), [('QZE.US', 42.0, 0.5)])
+
+    def test_cad_pil_takes_the_cad_rate(self):
+        # S058-05 (2): USD 0.25 and CAD 0.05 accruals, CAD PIL of 30.
+        _, txs, _ = self._parse(
+            _acc('QZQ', '2025-06-01', '2025-06-01', '2025-06-15', 100, 0.25,
+                 25, 'Po'),
+            _acc('QZQ', '2025-06-01', '2025-06-01', '2025-06-15', 600, 0.05,
+                 30, 'Po', cur='CAD'),
+            _div('QZQ', 'CA0000000QQ1', '2025-06-15', 30, cur='CAD',
+                 pil=True))
+        self.assertEqual(_pil(txs), [('QZQ.TO', 600.0, 0.05)])
+
+    def test_pil_posted_after_the_pay_date(self):
+        # S058-12: accrued pay 03-01, PIL cash posted 03-04.
+        _, txs, _ = self._parse(
+            _acc('QZX', '2025-02-20', '2025-02-20', '2025-03-01', 100, 0.5,
+                 50, 'Po'),
+            _acc('QZX', '2025-03-04', '2025-02-20', '2025-03-01', 100, 0.5,
+                 -50, 'Re'),
+            _div('QZX', 'US0000000QX1', '2025-03-04', 50, pil=True))
+        self.assertEqual(_pil(txs), [('QZX.US', 100.0, 0.5)])
+
+    def test_accrual_in_another_currency_uses_its_share_count(self):
+        # S060-13 / G3-0: USD accrual (Po 0.0125 on 9000; Re at the CAD
+        # rate), PIL paid in CAD. Either row order: 9000 shares.
+        po = _acc('QZV', '2025-09-30', '2025-09-30', '2025-10-14', 9000,
+                  0.0125, 112.5, 'Po')
+        re_ = _acc('QZV', '2025-10-14', '2025-09-30', '2025-10-14', 9000,
+                   0.01740125, -112.5, 'Re')
+        pil = _div('QZV', 'CA0000000QV1', '2025-10-14', 156.61, cur='CAD',
+                   pil=True)
+        for rows in ((po, re_, pil), (re_, po, pil)):
+            with self.subTest(first=rows[0][-3:-1]):
+                _, txs, _ = self._parse(*rows)
+                (sym, q, price), = _pil(txs)
+                self.assertEqual(q, 9000.0)
+                self.assertAlmostEqual(price, 156.61 / 9000, places=8)
+
+
+class TestIbOpenAccrualWarning(unittest.TestCase):
+
+    def test_other_weeks_dividend_does_not_hide_an_open_accrual(self):
+        # S059-08: weekly payer; the 12-24 week is posted (Po, Re and
+        # the Dividends row), the 12-31 week only accrued.
+        text = (HEAD + _PERIOD + _ACC_H
+                + _acc('QZW', '2025-12-17', '2025-12-17', '2025-12-24', 1000,
+                       0.31, 310, 'Po')
+                + _acc('QZW', '2025-12-24', '2025-12-17', '2025-12-24', 1000,
+                       0.31, -310, 'Re')
+                + _acc('QZW', '2025-12-29', '2025-12-29', '2025-12-31', 1000,
+                       0.31, 310, 'Po')
+                + _DIV_H + _div('QZW', 'US0000000QW1', '2025-12-24', 310,
+                                rate=0.31))
+        _, _, err = _parse_ib(text)
+        self.assertIn('accrued but not yet booked', err)
+        self.assertIn('QZW pay:2025-12-31', err)
+
+    def test_posting_in_the_next_statement_counts(self):
+        # R1-327: the 2025 statement accrues (Po), the 2026 statement
+        # posts the cash dated 2025-12-31 and reverses the accrual.
+        from test_fix_ibparse import _parse_account
+        y25 = (HEAD + _PERIOD + _ACC_H
+               + _acc('QZT', '2025-12-15', '2025-12-15', '2025-12-31', 1000,
+                      0.35, 350, 'Po', cur='CAD'))
+        y26 = (HEAD + 'Statement,Data,Period,"January 1, 2026 - '
+               'January 31, 2026"\n' + _ACC_H
+               + _acc('QZT', '2025-12-31', '2025-12-15', '2025-12-31', 1000,
+                      0.35, -350, 'Re', cur='CAD')
+               + _DIV_H + _div('QZT', 'CA0000000QT1', '2025-12-31', 350,
+                               cur='CAD', rate=0.35))
+        _, err = _parse_account({'ib_2025.csv': y25, 'ib_2026.csv': y26})
+        self.assertNotIn('accrued but not yet booked', err)
+        # A lone parse of the 2025 statement still warns.
+        _, _, lone = _parse_ib(y25)
+        self.assertIn('accrued but not yet booked', lone)
+
+
 if __name__ == '__main__':
     unittest.main()

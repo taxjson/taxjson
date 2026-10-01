@@ -3,7 +3,7 @@ import io
 import re
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
 
@@ -412,6 +412,50 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
     return date, time, ''
 
 
+_IB_INCOME_TICKER_RE = re.compile(
+    r'^([A-Z.\d\-]+(?:\s+[A-Z.\d\-]+)*)\s*\(([^)]+)\)')
+
+
+def _ib_income_ticker(description: str):
+    """(ticker, ISIN) of a Dividends / Withholding Tax row: the leading
+    `TICKER(ISIN)` token (space-form class tickers 'BRK B' dotted), else
+    the first ticker-like word and no ISIN."""
+    ticker, isin = 'UNKNOWN', ''
+    m = _IB_INCOME_TICKER_RE.search(description or '')
+    if m:
+        ticker, isin = m.groups()
+    else:
+        m = re.search(r'([A-Z.\d\-]+)', description or '')
+        if m:
+            ticker = m.group(1)
+    return ticker.replace(' ', '.'), isin
+
+
+def _ib_posted_dividends(rows) -> List[tuple]:
+    """(ticker, pay date) of every posted Dividends row of a statement
+    (subtotals skipped) — the account-wide evidence that an accrual in
+    another statement was paid (audit R1-327)."""
+    out: List[tuple] = []
+    hm: Dict[str, int] = {}
+    for row in rows:
+        if len(row) < 2 or row[0] != 'Dividends':
+            continue
+        if row[1] == 'Header':
+            hm = {c: i for i, c in enumerate(row)}
+            continue
+        if row[1] != 'Data' or not hm:
+            continue
+
+        def g(col, _row=row):
+            i = hm.get(col)
+            return _row[i].strip() if i is not None and i < len(_row) else ''
+        if not g('Currency') or 'Total' in g('Currency'):
+            continue
+        if _IB_DATE_RE.match(g('Date')):
+            out.append((_ib_income_ticker(g('Description'))[0], g('Date')))
+    return out
+
+
 def _ib_require_date(raw: str, where: str, field: str = 'Date') -> str:
     d = (raw or '').strip()
     if not _IB_DATE_RE.match(d):
@@ -690,7 +734,7 @@ class IbBrokerage(BaseBrokerage):
         ctx: Dict[str, Any] = {
             'periods': [], 'occ_by_conid': {}, 'contract_conids': {},
             'opt_underlying': {}, 'stock_conid_syms': {},
-            'stock_isins': {}, 'held': set()}
+            'stock_isins': {}, 'held': set(), 'posted_dividends': []}
         for path in paths:
             name = Path(path).name
             try:
@@ -723,6 +767,8 @@ class IbBrokerage(BaseBrokerage):
                 ctx['stock_isins'].setdefault(root, set()).update(ids)
             for sym, cat, cur in pre['held_rows']:
                 ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
+            ctx['posted_dividends'].extend(
+                (name, t, d) for t, d in _ib_posted_dividends(rows))
         _warn_coverage_gaps(ctx['periods'])
         _warn_stock_aliases(ctx['stock_conid_syms'],
                             'the account\'s IB statements')
@@ -1074,16 +1120,12 @@ class IbBrokerage(BaseBrokerage):
         # a more recent statement before filing.
         accrual_net: Dict[tuple, float] = {}
         accrual_meta: Dict[tuple, Dict[str, str]] = {}
-        # (symbol, pay_date) -> per-share Gross Rate from the accruals section.
-        # Payment-in-Lieu rows carry no rate in their own description, but the
-        # accrual for the same dividend does — used to back-fill PIL qty/price.
-        accrual_rate: Dict[tuple, float] = {}
         # (symbol, pay_date) -> ex date, from the same section.
         accrual_ex: Dict[tuple, str] = {}
         # (ticker, date) of every posted Dividends row in this file, used
         # to suppress an accrual warning when the cash dividend is already
         # present. The Dividends row's Date is the dividend's pay date.
-        posted_dividend_keys = set()
+        posted_dividend_keys: List[tuple] = []
         # Statement period end (ISO). An accrual whose pay date is after
         # the period end is just a normal pending dividend, not a missed
         # one — only accruals payable *within* the period are surprising.
@@ -1668,22 +1710,11 @@ class IbBrokerage(BaseBrokerage):
                     self._cell(row, header_map, 'Amount'), field='Amount',
                     where=where)
 
-                # Ticker extraction logic from ib_dividends.pl
-                ticker = 'UNKNOWN'
-                isin = ''
-                # Try to find Ticker (ISIN) format
-                match = re.search(r'^([A-Z.\d\-]+(?:\s+[A-Z.\d\-]+)*)\s*\(([^)]+)\)', description)  # space-form class tickers ('BRK B') match; spaces dotted below
-                if match:
-                    ticker, isin = match.groups()
-                else:
-                    match = re.search(r'([A-Z.\d\-]+)', description)
-                    if match: ticker = match.group(1)
-                    
-                ticker = ticker.replace(' ', '.')
+                ticker, isin = _ib_income_ticker(description)
                 # Record (ticker, pay date) so the accrual diagnostic
                 # below can tell whether this dividend's cash has
                 # already been booked in this file.
-                posted_dividend_keys.add((ticker, date))
+                posted_dividend_keys.append((ticker, date))
                 ext = _isin_ext(isin, ticker, isin_fallback)
 
                 # IB's PIL marker is "Payment in Lieu of Dividend" (note
@@ -1911,19 +1942,27 @@ class IbBrokerage(BaseBrokerage):
                 if pay_date:
                     _meta['pay_date'] = pay_date
                     _meta['pay_dates'].add(pay_date)
-                # Capture the per-share rate (same for the Po and Re
-                # rows of a dividend) keyed by (symbol, pay date), so a
-                # Payment-in-Lieu row — which has no rate in its own
-                # description — can be reconciled to shares below.
-                rate_idx = header_map.get('Gross Rate')
-                if rate_idx is not None and rate_idx < len(row):
-                    try:
-                        r = parse_strict_number(row[rate_idx],
-                                                field='Gross Rate')
-                    except (ValueError, IndexError):
-                        r = 0.0
-                    if r and (symbol, pay_date) not in accrual_rate:
-                        accrual_rate[(symbol, pay_date)] = r
+                # The per-share rate and share count of the dividend, so
+                # a Payment-in-Lieu row — which has neither in its own
+                # description — can be reconciled to shares below. Taken
+                # from the Po (posting) row, in the accrual's currency:
+                # IB's Re row may carry a rate in the PAYMENT currency
+                # (a USD accrual reversed at the CAD rate), so the first
+                # row seen made the result depend on row order (audit
+                # S060-13 / G3-0).
+                if code == 'Po':
+                    for _col, _fld in (('Gross Rate', 'po_rate'),
+                                       ('Quantity', 'po_qty')):
+                        _ci = header_map.get(_col)
+                        if _ci is None or _ci >= len(row):
+                            continue
+                        try:
+                            _v = abs(parse_strict_number(row[_ci],
+                                                         field=_col))
+                        except (ValueError, IndexError):
+                            _v = 0.0
+                        if _v:
+                            _meta[_fld] = _v
                 # The ex-dividend date of the dividend paid on pay_date
                 # (a neutral fact on the posted Dividends row below; a
                 # US project reads it for §852(b)(7), lib/income_dating).
@@ -1964,15 +2003,7 @@ class IbBrokerage(BaseBrokerage):
                 # from non-US dividends on the same security, so the
                 # foreign-tax-credit pairing broke for any non-US
                 # holding.
-                ticker = 'UNKNOWN'
-                isin = ''
-                m = re.search(r'^([A-Z.\d\-]+(?:\s+[A-Z.\d\-]+)*)\s*\(([^)]+)\)', description)  # space-form class tickers ('BRK B') match; spaces dotted below
-                if m:
-                    ticker, isin = m.groups()
-                else:
-                    m = re.search(r'([A-Z.\d\-]+)', description)
-                    if m: ticker = m.group(1)
-                ticker = ticker.replace(' ', '.')
+                ticker, isin = _ib_income_ticker(description)
 
                 ext = _isin_ext(isin, ticker, isin_fallback)
 
@@ -2849,6 +2880,34 @@ class IbBrokerage(BaseBrokerage):
         # (same dividend, keyed by symbol + pay date), so shares = amount /
         # rate — reconciling a PIL exactly like a normal dividend. Only qty and
         # price are set; net_amount (the income) is untouched.
+        def _days_apart(a: str, b: str) -> Optional[int]:
+            try:
+                return abs((datetime.strptime(a, "%Y-%m-%d")
+                            - datetime.strptime(b, "%Y-%m-%d")).days)
+            except (TypeError, ValueError):
+                return None
+
+        def _accrual_for(ticker: str, date: str, currency: str):
+            """The accrual of the dividend a posting on `date` pays: same
+            ticker, a pay date within a week (the exact date first), the
+            posting's currency first — two listings of one ticker can pay
+            on the same day (audit S057-22 / S058-05), and IB posts some
+            dividends a day or more after the accrued pay date
+            (S058-12)."""
+            best = None
+            for meta in accrual_meta.values():
+                if meta['symbol'] != ticker:
+                    continue
+                dists = [d for d in (_days_apart(pd, date) for pd in
+                                     (meta['pay_dates'] or {meta['pay_date']}))
+                         if d is not None]
+                if not dists or min(dists) > 7:
+                    continue
+                rank = (min(dists), meta['currency'] != currency)
+                if best is None or rank < best[0]:
+                    best = (rank, meta)
+            return best[1] if best else None
+
         for tx in transactions:
             if tx.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
                 continue
@@ -2859,12 +2918,16 @@ class IbBrokerage(BaseBrokerage):
             if tx.get('price'):          # description already gave a rate
                 continue
             ticker = (tx.get('symbol') or '').rsplit('.', 1)[0]
-            rate = accrual_rate.get((ticker, tx.get('date')))
             # SIGNED amount: a reversal row back-computes a NEGATIVE share
             # count, matching _parse_div_qty_rate's convention (qty carries
             # the row's sign; the positive per-share rate stays positive).
             amt = float(tx.get('net_amount') or 0.0)
-            if rate and rate > 0 and amt:
+            meta = _accrual_for(ticker, tx.get('date') or '',
+                                tx.get('currency') or '')
+            if meta is None or not amt:
+                continue
+            rate = meta.get('po_rate') or 0.0
+            if meta['currency'] == tx.get('currency') and rate > 0:
                 tx['price'] = rate
                 q = round(amt / rate, 8)
                 # Same cent-rounding snap as _parse_div_qty_rate: the
@@ -2874,6 +2937,18 @@ class IbBrokerage(BaseBrokerage):
                 if nearest != 0 and abs(abs(amt) - abs(nearest) * rate) <= 0.005 + 1e-9:
                     q = float(nearest)
                 tx['quantity'] = q
+            elif meta.get('po_qty') and not any(
+                    o is not tx and o.get('action') == 'DIVIDEND'
+                    and o.get('symbol') == tx.get('symbol')
+                    and o.get('date') == tx.get('date')
+                    for o in transactions):
+                # The accrual is in another currency than the cash (IB
+                # accrues a CAD-paid dividend in USD): its rate does not
+                # apply, but its share count does when this row is the
+                # whole payment (no ordinary dividend beside it).
+                q = meta['po_qty'] if amt > 0 else -meta['po_qty']
+                tx['quantity'] = q
+                tx['price'] = round(abs(amt) / meta['po_qty'], 8)
 
         for _ct in cash_takeovers:
             print(f"NOTE: cash takeover booked as a sale: {_ct} "
@@ -2920,36 +2995,51 @@ class IbBrokerage(BaseBrokerage):
         # and whose pay date falls on or before the statement period end
         # (a future-dated accrual is a normal pending dividend, not a
         # missed one). When the period end is unknown, don't filter on it.
-        def _posted_near(sym: str, pay: str) -> bool:
-            if (sym, pay) in posted_dividend_keys:
-                return True
-            try:
-                _pd = datetime.strptime(pay, "%Y-%m-%d")
-            except (TypeError, ValueError):
+        # Each posted dividend pays ONE accrual: exact pay-date matches
+        # first (every accrual, reversed or not), then a posting within a
+        # week for the accruals left — so another week's dividend of a
+        # weekly payer no longer hides an unpaid one (audit S059-08).
+        # Postings in the account's OTHER statements count too: a
+        # December accrual is often paid in the next year's statement
+        # (R1-327).
+        postings = list(posted_dividend_keys) + [
+            (_s, _d) for _n, _s, _d in
+            ((ctx or {}).get('posted_dividends') or ())
+            if _n != path.name]
+        used = [False] * len(postings)
+
+        def _claim(meta, window: int) -> bool:
+            pds = meta['pay_dates'] or {meta['pay_date']}
+            best = None
+            for _i, (_s, _d) in enumerate(postings):
+                if used[_i] or _s != meta['symbol']:
+                    continue
+                dists = [x for x in (_days_apart(_d, pd) for pd in pds)
+                         if x is not None]
+                if dists and min(dists) <= window and (
+                        best is None or min(dists) < best[0]):
+                    best = (min(dists), _i)
+            if best is None:
                 return False
-            for _sym, _d in posted_dividend_keys:
-                if _sym != sym:
+            used[best[1]] = True
+            return True
+
+        paid = set()
+        for key, meta in accrual_meta.items():
+            if _claim(meta, 0):
+                paid.add(key)
+        for want_open in (False, True):
+            for key, meta in accrual_meta.items():
+                if key in paid or (accrual_net[key] > 0.01) != want_open:
                     continue
-                try:
-                    if abs((datetime.strptime(_d, "%Y-%m-%d")
-                            - _pd).days) <= 7:
-                        return True
-                except ValueError:
-                    continue
-            return False
+                if _claim(meta, 7):
+                    paid.add(key)
 
         open_accruals = []
         for key, net in accrual_net.items():
-            if net <= 0.01:
+            if net <= 0.01 or key in paid:
                 continue
             meta = accrual_meta[key]
-            # Posted within a week of ANY pay date the accrual carried
-            # (revised pay dates; the cash may post in another currency
-            # — an accrual in USD for a dividend IB pays in CAD — so the
-            # match is on ticker + date only).
-            if any(_posted_near(meta['symbol'], pd)
-                   for pd in (meta['pay_dates'] or {meta['pay_date']})):
-                continue
             if (statement_period_end and meta['pay_date']
                     and meta['pay_date'] > statement_period_end):
                 continue

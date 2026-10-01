@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **IB: payment-in-lieu share counts and the open-accrual warning.** A
+  PIL's share count/rate comes from the accrual of the listing that
+  paid it (the posting's currency first, a pay date within a week, the
+  Po row's rate — no longer the first accrual row seen); an accrual in
+  another currency than the cash gives its share count instead of a
+  wrong rate. The "accrued but not yet booked" warning pairs each
+  posted dividend with ONE accrual (exact pay date first), so another
+  week's dividend no longer hides an unpaid one, and a posting in the
+  account's other IB statement (the next year's) now counts.
 - **IB: overnight-session and ASX fills are dated by the exchange's
   trade date.** IB stamps US Eastern clock time: a US stock or ETF
   filled in the overnight session (20:00 ET onward, Sunday to Thursday
