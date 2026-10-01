@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+- **US estimate (experimental): NIIT and the loss carryforward.** The
+  up-to-$3,000 capital loss deduction now reduces net investment income
+  (Form 8960 line 5a; NIIT was up to $114 too high), and the
+  carryforward shown counts as used only what taxable income absorbs
+  (Capital Loss Carryover Worksheet line 4: zero other income carries
+  the whole loss). The US `--claimed` guidance says the same. tax-logic
+  US-EST-NIIT-LOSS, US-EST-CARRY-TI (audit S077-24, S078-01, S078-02).
+- **Canada estimate: what it does not model is stated** — credits
+  other than the BPA, the OAS recovery tax, and AMT adjustments outside
+  the books (README, KNOWN_ISSUES, the printed assumptions) (audit
+  S077-15, S077-17, S077-20; S077-22: the README now says the US
+  estimate gives no foreign tax credit).
+- **fx-cash: a sale whose commission exceeds its proceeds pays
+  currency** (it was counted as received, leaving phantom currency in
+  the pool) (audit S033-09).
+- **instalments.** When instalments are not required (s.156.1(1))
+  the JSON carries no shortfall, interest or penalty (it said
+  required_at_all=false next to them); the four quarters add up to the
+  year's figure to the cent, so paying exactly the net tax is not
+  "behind by 0.01"; a configured `prescribed_rates` schedule that
+  starts after January 1 says the earlier days assume its first rate
+  (audit R1-222, S034-14, S034-15).
+- **carryover: claimed_losses.txt and rounding.** A BOM is read, a
+  claimed year outside 1900..next year is refused by name instead of
+  becoming a phantom ledger row, a directory is a one-line error, and
+  every ignored line is listed in the report and JSON and turns the
+  checklist's carryover step to attention. A claim equal to the filed
+  (per-row-rounded) Schedule 3 loss no longer leaves a cents
+  carryforward or an "exceeds the losses" warning. A book whose rows
+  are not in `--base-currency` is refused (audit S001-04, S027-10,
+  S027-18, S027-19, S027-23, S028-00, S028-02).
+- **Filed-year lock.** close-year also locks the amounts the export
+  puts on each return line (Schedule 3 codes / Form 8949 part totals),
+  so check-filed reports a move between lines or an outlay folded into
+  a price; the lock's `proceeds` is documented as the engine's net
+  proceeds; totals are rounded once over the accounts; filed/ being a
+  file, a read-only project or a gains file that is not a JSON object
+  is a one-line error; every OK names what the lock does not cover
+  (interest, withholding, FX on cash) (audit R1-205, R1-281, S031-19,
+  S031-20, S032-11).
+- **checklist: no verdict from part of the books.** wash-reviewed is
+  blocked when a taxable gains file is unreadable, missing for an
+  account with inputs, or built for another year, and attention when
+  the wash pass is stale; audit and form-export say "rebuild" for
+  other-year or stale books instead of blaming phantoms; roc-entered,
+  inputs-frozen and run-clean name an unreadable base book or .sum;
+  missing-history counts every AFFECTS row (BRK/B, `?` currency); the
+  form-export check compares the unrounded rows with the .sum, so many
+  rows of rounding no longer read as a mismatch; a US project checks
+  for option positions left open past expiry; `sanity` names an
+  unreadable book instead of "not an account"; `watch` ignores a state
+  file that is not an object. Guidance: missing basis can understate
+  or overstate; split-share corps report on a T5 (box 18 -> line
+  17400) (audit R1-210, R1-338, S023-08, S066-15, S066-19, S067-04,
+  S067-10, S067-11, S067-12, S068-06, S068-11, S068-16).
+- **option-boundary cites the right law and sees more missing rows.**
+  An assignment folds the premium under s.49(3) (call) or s.49(3.1)
+  (put), never s.49(2); a buy-back loss cites IT-479R para 29 / 32
+  (README, design note and Webull messages corrected too). A write
+  still open after an expiry that falls inside the books (a January
+  expiry in books that run into February) is ATTENTION, not "open".
+  Writes and closes are dated on the project's `tax_date`, so a
+  trade-basis Dec-31 write that settles in January is reported as the
+  straddle the engine books (audit R1-39, R1-180, S075-00, S075-05).
 - **Broker detection and `taxjson-brokerage`.** An IB file is routed by
   its section,Header shape (a Trades-first Flex download, a statement
   without the BrokerName row or with a Title row first), and `taxjson

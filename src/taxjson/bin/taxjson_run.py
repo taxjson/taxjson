@@ -8292,7 +8292,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             from taxjson.lib.phantom_holdings import synthesize_openings
             txs, _log = synthesize_openings(txs, _phantoms)
         for r in straddling(txs, year, timing, since, filed_years,
-                            filed_timing=filed_timing):
+                            filed_timing=filed_timing,
+                            tax_date=_tax_date_basis(settings)):
             r["account"] = r["account"] or name
             rows.append(r)
     if not books:
@@ -8550,12 +8551,16 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                  f"(run `taxjson run` first).")
     basis = gains_basis_label(resolved)
     tax: Dict[str, Dict[str, float]] = {}
+    unreadable: Dict[str, str] = {}
     for acct, f in resolved.items():
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+            if not isinstance(data, dict):
+                raise ValueError("not a gains document")
+        except (OSError, ValueError) as e:
             print(f"taxjson: warning: could not read {f}: {e}",
                   file=sys.stderr)
+            unreadable[acct] = f"work/{f.name}: {e}"
             continue
         book: Dict[str, float] = {}
         for h in (data.get("inventory") or []):
@@ -8574,6 +8579,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     def _account(name: str, ctx: str) -> str:
         if name in tax:
             return name
+        if name in unreadable:
+            # Its book exists but is corrupt: say so, not "not an
+            # account" (R1-338 — that sent the user to the config).
+            sys.exit(f"taxjson sanity: {ctx}: the books of {name!r} "
+                     f"cannot be read ({unreadable[name]}) — re-run "
+                     f"`taxjson run` to rebuild them.")
         sys.exit(f"taxjson sanity: {ctx}: {name!r} is not an account "
                  f"(have: {', '.join(sorted(tax))})")
 
@@ -9936,15 +9947,23 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  f"skipped the cross-account wash pass) — run a full "
                  f"`taxjson run` first. Nothing was written.")
     accounts = {}
+    raw_aggs = {}
     import json as _json
     for acct, pth in sorted(files.items()):
+        _crypto = bool((cfg.get("accounts", {}).get(acct) or {})
+                       .get("crypto"))
         try:
             doc = _json.loads(Path(pth).read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
+            accounts[acct] = taxjson_filed.aggregates_from_gains(
+                doc, crypto=_crypto, year=int(year))
+            raw_aggs[acct] = taxjson_filed.aggregates_from_gains(
+                doc, rounded=False)
+        except (OSError, ValueError, UnicodeDecodeError) as e:
+            # Unreadable, not JSON, or JSON of the wrong shape (a list):
+            # one line, never a traceback (S031-19).
             sys.exit(f"taxjson close-year: could not read {pth}: {e} — "
                      f"re-run `taxjson run` to rebuild it. Nothing was "
                      f"written.")
-        accounts[acct] = taxjson_filed.aggregates_from_gains(doc)
     basis = gains_basis_label(files)
     from taxjson.lib.pipeline import option_timing_from_settings
     from taxjson.lib import handoff as _handoff
@@ -9969,7 +9988,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         root, year, _normalize_country(settings["country"]), basis,
         accounts, force=args.force,
         option_timing=option_timing_from_settings(settings) or None,
-        extra=extra)
+        extra=extra, raw=raw_aggs)
     tot = _json.loads(path.read_text())["totals"]
     print(f"closed {year} ({basis}): realized {tot['realized']:,.2f}, "
           f"disallowed {tot['disallowed']:,.2f}, income "
@@ -10176,7 +10195,8 @@ def _check_filed_years(root: Path, cache: Path,
                   f"refresh the lock (`taxjson close-year --force` "
                   f"with [settings].year = {year}).", file=sys.stderr)
         else:
-            print(f"  filed {year}: OK (matches {path.name})")
+            print(f"  filed {year}: OK (matches {path.name}; "
+                  f"{taxjson_filed.NOT_LOCKED})")
     if (unreadable or mismatched) and strict:
         sys.exit(f"taxjson run --strict: {unreadable + mismatched} "
                  f"filed-year lock(s) could not be checked"

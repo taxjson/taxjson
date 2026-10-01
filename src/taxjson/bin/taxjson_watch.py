@@ -170,7 +170,10 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if doc.get("schema_version") != STATE_VERSION:
+    # Valid JSON of the wrong shape (a list) is no baseline either — it
+    # crashed `taxjson watch` with an AttributeError (S068-11).
+    if not isinstance(doc, dict) \
+            or doc.get("schema_version") != STATE_VERSION:
         # Older/newer state: treat as no baseline rather than diffing
         # across incompatible shapes.
         return None
