@@ -742,7 +742,9 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                  "PROCEEDS − ACB − OUTLAYS = GAIN(LOSS); where a "
                  "superficial loss was denied the ACB shown is reduced "
                  "by the denied amount, which is added to the ACB of "
-                 "the replacement property instead (noted per row).")
+                 "the replacement property instead — except a denial "
+                 "caused by a registered-account acquisition, which is "
+                 "lost for good with no ACB addition (noted per row).")
     lines.append("  - Apply the inclusion rate on Schedule 3 itself; these "
                  "are 100% amounts.")
     lines.append("  - PROCEEDS re-adds sell-side commissions so OUTLAYS can "

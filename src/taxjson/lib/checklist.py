@@ -656,6 +656,12 @@ def d_sanity(ctx: Ctx) -> Result:
         # never compared: exit 0 covers the other groups only (2026-09
         # audit R1-324).
         return Result("sanity", "attention", incomplete[0])
+    unchecked = [ln for ln in out.splitlines()
+                 if ln.startswith("UNCHECKED")]
+    if code == 0 and unchecked:
+        # An account with positions and no holdings file at all was
+        # never tied either (S044-19).
+        return Result("sanity", "attention", unchecked[0])
     if code == 0:
         return Result("sanity", "done", "positions tie to the holdings files")
     return Result("sanity", "attention", _last_line(out) or _last_line(err) or f"exit {code}")
@@ -915,15 +921,21 @@ def d_wash_reviewed(ctx: Ctx) -> Result:
                       f"the wash-adjusted books of {', '.join(stale)} are "
                       f"older than their inputs (a `run --account` skipped "
                       f"the cross-account pass) — run `taxjson run`")
+    # US projects in §1091's words, never CRA's (S049-14).
+    _us = is_us(ctx.settings.get("country"))
     if perm > 0.005:
         return Result("wash-reviewed", "manual",
-                      f"{perm:,.2f} permanently denied (registered-account or "
-                      f"affiliated-person repurchase) "
+                      f"{perm:,.2f} permanently denied ("
+                      f"{'IRA' if _us else 'registered-account or affiliated-person'}"
+                      f" repurchase) "
                       f"— confirm each with `taxjson wash-sales`")
     if denied > 0.005:
         return Result("wash-reviewed", "done",
-                      f"{denied:,.2f} denied, all recoverable (added to ACB)")
-    return Result("wash-reviewed", "done", "no superficial losses")
+                      f"{denied:,.2f} denied, all recoverable "
+                      + ("(added to the replacement's basis)" if _us
+                         else "(added to ACB)"))
+    return Result("wash-reviewed", "done",
+                  "no wash sales" if _us else "no superficial losses")
 
 
 def _us_expired_options(ctx: Ctx) -> Result:

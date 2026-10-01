@@ -589,8 +589,10 @@ class TestFuzzE_ShortConventionCanonical(unittest.TestCase):
                 self.assertAlmostEqual(row["gain"], 60.0, places=2)
 
     def test_list_cost_and_cost_per_share_convention(self):
-        # Short row: COST -100 (credit) with COST/SH +100 — signed
-        # division, matching the holdings export convention.
+        # Short row: COST -100 (credit) with COST/SH positive — signed
+        # division, matching the holdings export convention. COST/SH of
+        # an equity option is per SHARE (100 a contract), like harvest
+        # and the holdings report (S045-03): 1 contract, 100 -> 1.00.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(
                 tmp, "canada", _gains("canada", self._open_close()[:1]))
@@ -601,7 +603,7 @@ class TestFuzzE_ShortConventionCanonical(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         row = json.loads(r.stdout)["rows"][0]
         self.assertAlmostEqual(row["cost"], -100.0, places=2)
-        self.assertAlmostEqual(row["cost_per_share"], 100.0, places=2)
+        self.assertAlmostEqual(row["cost_per_share"], 1.0, places=2)
 
 
 if __name__ == "__main__":

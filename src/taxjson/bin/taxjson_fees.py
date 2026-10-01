@@ -40,7 +40,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from taxjson.lib.report_model import fmt_money
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.bin.taxjson_convert_currency import positive_rate
 from typing import Any, Dict, List, Optional
 
@@ -427,7 +427,7 @@ def main():
                         "Files without metadata.source_brokerage are skipped.")
     p.add_argument("--cache", metavar="DIR",
                    help="Add every *.json in DIR (non-broker files are skipped).")
-    p.add_argument("--year", type=int, metavar="YYYY",
+    p.add_argument("--year", type=tax_year, metavar="YYYY",
                    help="Only count fees whose TRADE date is in this year "
                         "(the settlement date only when a row has no trade "
                         "date). Default: all years.")

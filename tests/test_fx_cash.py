@@ -196,7 +196,8 @@ class TestFxCashCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = self._project(tmp)
             r = _cli(root, "fx-cash", "--events")
-        self.assertIn("2026-02-10 margin USD 10000", r.stdout)
+        # Units to the cent, like GAIN (S046-21: :g printed 6 digits).
+        self.assertIn("2026-02-10 margin USD 10,000.00", r.stdout)
 
     def test_toggle_gates_the_run_hook(self):
         # The command itself always works; the end-of-run report only

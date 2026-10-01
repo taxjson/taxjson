@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.country import country_arg, refuse_foreign_flags
 from taxjson.lib.income_dating import IncomeRules, parse_ric_entries
 from taxjson.lib import cli_diag
@@ -300,7 +300,7 @@ def main():
     )
     parser.add_argument(
         "--year", "-y",
-        type=int,
+        type=tax_year,
         metavar="YYYY",
         help="Tax year to summarize (default: all years)"
     )

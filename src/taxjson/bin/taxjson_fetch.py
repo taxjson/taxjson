@@ -155,6 +155,22 @@ def qt_api_server_ok(url: str) -> bool:
             and (host == "questrade.com" or host.endswith(".questrade.com")))
 
 
+def mask_account_number(number: Any) -> str:
+    """A broker account number as it may appear in output: first 2
+    characters + *** (the IB extractor's rule) — progress lines and
+    API errors printed the full Questrade number (S046-17)."""
+    n = str(number or "")
+    return (n[:2] + "***") if n else "?"
+
+
+def _masked_path(path: str) -> str:
+    """An API path with its /accounts/<number>/ segment masked."""
+    import re as _re
+    return _re.sub(r"(/accounts/)([^/?]+)",
+                   lambda m: m.group(1) + mask_account_number(m.group(2)),
+                   path)
+
+
 def _qt_get(api_server: str, access_token: str, path: str,
             http_get: Callable[[str], bytes]) -> Any:
     if not qt_api_server_ok(api_server):
@@ -174,14 +190,15 @@ def _qt_get(api_server: str, access_token: str, path: str,
     try:
         raw = getter(url)
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"{path.split('?')[0]}: "
+        raise RuntimeError(f"{_masked_path(path.split('?')[0])}: "
                            f"{_http_error_detail(e)}") from e
     except (urllib.error.URLError, OSError) as e:
         raise RuntimeError(f"request failed: {e}") from e
     try:
         return json.loads(raw.decode("utf-8"))
     except ValueError as e:
-        raise RuntimeError(f"non-JSON response from {path}: {e}") from e
+        raise RuntimeError(f"non-JSON response from "
+                           f"{_masked_path(path.split('?')[0])}: {e}") from e
 
 
 def qt_activities(session: Dict[str, str], number: str,

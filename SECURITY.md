@@ -49,10 +49,11 @@ rates only, and a transaction whose date has no cached rate is a
 validation error at the conversion stage. The same switch covers the
 current-price chain behind `harvest`, `watch --harvest` and the GUI's
 Harvest tab (IBKR gateway / Yahoo Finance): they serve
-`work/.price_cache.json` only and refuse the lookup on a miss.
-Everything else that touches the network is opt-in by command: `fetch`
-(your broker's API, with your credentials; `fetch --positions` reads
-live Questrade positions), `scan --online` (Yahoo Finance names), and
+`work/.price_cache.json` only and refuse the lookup on a miss, and
+`scan --online` skips its Yahoo Finance name probe with a note (the
+offline checks still run). Everything else that touches the network is
+opt-in by command: `fetch` (your broker's API, with your credentials;
+`fetch --positions` reads live Questrade positions), and
 `taxjson-generate-parser`, which sends the first `--sample-lines`
 (default 30) lines of the sample CSV you hand it to an LLM API. Those
 lines are where broker exports keep the holder's name, account number

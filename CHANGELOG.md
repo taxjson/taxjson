@@ -2,6 +2,126 @@
 
 ## Unreleased
 
+- **fetch / watch.** `fetch` masks the Questrade account number in its
+  progress line and in API error messages (`questrade #59***`,
+  `/v1/accounts/59***/activities: HTTP 400 ...`); `--trim-overlap`
+  refuses to rewrite a sibling CSV whose record spans several lines (an
+  unbalanced quote swallowed out-of-window trades, which were deleted
+  with it); `watch --state` naming a directory, a path under a file or
+  an unwritable place is a one-line error, not a traceback (audit
+  S046-17, S046-16, S046-12).
+
+- **audit and find-missing-history follow ticker.map and the locks.**
+  `audit SYMBOL` also matches the broker's own ticker of a renamed
+  security (`audit CCJ.US` found nothing although every block prints
+  `SELL ... CCJ.US` and its MAPPING); `audit --year <locked year>`
+  recomputes with the option timing the lock recorded, and says so;
+  the merged `audit --json` total is summed over the events and
+  rounded once (it was a cent off wash-sales). find-missing-history
+  names the broker's ticker of a renamed symbol (K.TO <- KGC.US: a
+  missing buy belongs under the broker's symbol and currency), and
+  `--gen-phantoms phantoms.json` from the project root says `taxjson
+  run` auto-detects it (audit S048-17, S048-18, S047-17, S049-01,
+  S047-19).
+
+- **Wash advice: the still-held test, coins, US crypto.** buy-check no
+  longer says any loss sale within 31 days of a buy "would be
+  superficial" or that a rebuy always cancels a loss: in a Canadian
+  project both hold only if the bought shares are still held 30 days
+  after the sale (s.54 'superficial loss' (b)); a full exit is fine
+  (the radar's BLOCKED legend says the same). `buy-check ETH` means the
+  coin when the books hold one (it mixed in ETH.US's verdict and
+  nothing could ask about the coin alone). The "last loss sale" line
+  says which date it shows (settled / traded), includes a loss routed
+  to manual reporting (phantom basis), and warns when a gains file
+  cannot be read. In a US project, `wash-sales --explain` and
+  `wash-radar` no longer apply §1091 to crypto accounts (the pipeline
+  does not) (audit S048-19, S049-15, S047-06, S047-05, S047-02,
+  S047-03, S046-10; pin S047-08).
+
+- **close-year and option-boundary guard the lock.** close-year refuses
+  (without `--force`) a tax year that has not ended and a year with no
+  disposition and no income (a typo'd `[settings] year`), and always
+  refuses books built with another option timing than taxjson.toml now
+  says (the lock stamped the edited setting next to grant-timed
+  totals). option-boundary requires `[settings] year` (it printed "tax
+  year 0" and suggested `option_grant_timing_since = None`) and warns
+  when a `filed/<year>.json` cannot be read instead of silently giving
+  the opposite T1-ADJ advice (audit S045-23, S045-24, S046-02, S044-07,
+  S044-06, S044-08).
+- **Every `--year` is a plausible tax year** (1900..next year): `audit`,
+  `close-year`, `find-missing-history`, `taxjson-fees`,
+  `taxjson-missing-history`, `taxjson-reconcile-slips`,
+  `taxjson-sum-income` (`audit --year 2204` printed an all-checkmark
+  reconciliation of nothing; `--year 0` meant all years).
+  `option_grant_timing_since` accepts 1900.. like `init --year` (audit
+  S047-14, S047-20).
+
+- **Query views say what they show.** `shares` is labelled as of the
+  books' latest date (it said "tax year 2025" over 2026 positions; JSON
+  `as_of`) and leaves futures out; `list` COST/SH is per share for an
+  equity option (it was per contract, 100x harvest's); `gains` and
+  `wash-sales` show a short row's proceeds/cost the real-world way, as
+  winners, ccd-sum and form-export do; `winners margin` / `ccd-sum
+  margin` no longer warn that the window 'margin' may exceed the year;
+  `divs-sum`'s compare-with-slips line leaves crypto staking out (JSON
+  `totals_slips`); `fx-cash --events` prints units to the cent;
+  `wash-sales`, `divs-sum` (and the other period views), `winners` and
+  `ccd-sum` warn naming a configured account with inputs but no books;
+  US projects get §1091 wording in `list` and the checklist (audit
+  S044-05, S044-04, S045-03, S048-10, S048-22, S048-24, S046-21,
+  S045-09, S049-14; pin S045-13).
+
+- **sanity: no silent gaps, no ids.** A holdings row with a quantity
+  but no symbol, or with a missing/blank quantity, is refused (it was
+  dropped and the check said OK); accounts with open positions but no
+  `holdings` file print `UNCHECKED: ...` and the checklist's sanity
+  step is attention instead of done; an unreadable taxjson.toml is
+  named as such (it said no account declares `holdings`); the missing-
+  file note and `--json` `file_account` mask broker ids (audit S044-18,
+  S044-19, S049-08, S044-03, S044-16).
+
+- **A corrupt work/ file is a one-line error everywhere.** A truncated,
+  non-UTF-8 or wrong-shape (`[1,2,3]`, `{"transactions": 5}`) gains,
+  base, raw or report file printed a traceback from about 17 read
+  commands (sum, estimate, winners, shares, wash-sales, list, leaps,
+  close-year, audit, t1135, form-export, wash-radar, buy-/sell-check,
+  option-boundary, transfers, roc-sum, fx-cash ...); they now name the
+  file and stop, or skip it with a warning where they already did
+  (`lib/json_input.read_work_doc`; `load_transactions` refuses a
+  non-list `transactions`) (audit S042-18).
+
+- **sum: rows foot and TOTAL counts PIL.** NON-OPT + OPTION = REALIZED
+  on every row as printed (REALIZED is rounded once; OPTION takes the
+  cent), and TOTAL = REALIZED + DIVIDEND + PIL, the same figure as the
+  `.sum` GRAND TOTAL (a payment in lieu was printed but left out). The
+  FOR THE RETURN footer no longer says every DENIED amount goes onto a
+  replacement's ACB: it names the permanently denied part (a
+  registered-account acquisition, s.40(2)(g)(i)) and the JSON carries
+  `permanently_denied`; form-export's general note says the same
+  (audit S042-21, S042-22, S043-02, S048-04).
+- **estimate / instalments say what they leave out**: the FX result on
+  foreign cash (line 15300; US §988) and slip capital gains, and for
+  instalments CPP/EI on self-employment earnings (`NOT MODELLED`
+  notes, JSON `not_modelled`). `[instalments]` amounts must be TOML
+  numbers (`"5_000"` was read as 5000). The withholding credit is
+  summed in a stable order (audit S048-12, S043-15, S043-05, S043-20;
+  test pins S042-20, S043-04, G1-3, G1-11).
+
+- **scan: no false all-clear, no egress while offline.** An unreadable
+  holdings report stops the scan (it warned, then printed "No findings
+  — clean scan." with exit 0); the unused-ticker.map-rule note is
+  skipped with a warning when a parsed source cannot be read (it listed
+  live rules as unused); `scan --online` honours `TAXJSON_OFFLINE=1`
+  (skips the Yahoo probe with a note — SECURITY.md now says so); the
+  online findings come in a stable order (audit S049-10, S042-10,
+  S042-12, S048-00, S042-13).
+- **audit: provenance.** The crypto ticker.map stage's `_mapped.json`
+  is a derived book, not a second source (every crypto block claimed a
+  false 2-file dedup and lost its MAPPING line), and account `margin`
+  no longer picks up a sibling `margin_us`'s parses (audit S047-12,
+  S047-13).
+
 - **PII gate (`scripts/check-pii.sh`, pre-push, release).** The text
   inside binary files is scanned (PDF /Author, DOCX creator, PNG text,
   spreadsheet cells — tree, ad hoc and the binaries a push adds); an

@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.bin.taxjson_form_export import load_json
+from taxjson.lib.cli_diag import tax_year
 from taxjson.lib.numeric import nonneg_float_arg
 
 _SUFFIX_RE = re.compile(r"\.(US|TO|AX|L|V|CN|NE)$", re.IGNORECASE)
@@ -694,7 +695,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         required=True,
                         help="Year-scoped <account>_gains.json (repeatable; "
                              "prefer the wash-adjusted variants)")
-    parser.add_argument("--year", type=int, default=None,
+    parser.add_argument("--year", type=tax_year, default=None,
                         help="Defensive year filter")
     parser.add_argument("--date-basis", choices=("settle", "trade"),
                         default="settle",

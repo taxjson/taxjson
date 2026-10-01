@@ -65,7 +65,7 @@ from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, read_text_utf8, tax_year
 from taxjson.lib.futures import is_plain_future
 from taxjson.lib.numeric import positive_float_arg
-from taxjson.lib.report_model import fmt_money, load_report_json
+from taxjson.lib.report_model import fmt_money
 from typing import Any, Dict, List, Optional, Tuple
 
 # Filing threshold: ITA 233.3(1) "reporting entity" — SFP total cost more
@@ -136,7 +136,10 @@ CRYPTO = "CRYPTO"
 # Thin alias so existing importers (tests, taxjson_reconcile_slips)
 # keep working; the implementation is the shared report-layer loader.
 def load_json(path: Path) -> Any:
-    return load_report_json(path)
+    # The shared work/ contract (lib/json_input): a wrong-shape book or
+    # gains file is a ValueError naming it, not a traceback (S042-18).
+    from taxjson.lib.json_input import read_work_doc
+    return read_work_doc(path)
 
 
 def load_transactions(paths: List[Path],
@@ -154,11 +157,18 @@ def load_transactions(paths: List[Path],
         from taxjson.lib.phantom_holdings import load_phantoms
         ph = load_phantoms(phantoms)
     for p in paths:
-        raw = load_json(p)
-        if isinstance(raw, dict) and "transactions" not in raw:
-            # Read as an empty book: 'no T1135 required' (S033-01).
-            raise ValueError(f"{p}: no 'transactions' list — not a "
-                             f"taxjson base book")
+        try:
+            raw = load_json(p)
+            if isinstance(raw, dict) and "transactions" not in raw:
+                # Read as an empty book: 'no T1135 required' (S033-01).
+                raise ValueError(f"{p}: no 'transactions' list — not a "
+                                 f"taxjson base book")
+        except ValueError as e:
+            # A truncated / wrong-shape base book: one line, not a
+            # traceback (S042-18). OSError keeps guard_main's message.
+            from taxjson.lib.cli_diag import error as _error
+            _error("taxjson-t1135", str(e))
+            raise SystemExit(2)
         rows = raw.get("transactions", []) if isinstance(raw, dict) else raw
         rows = [t for t in rows if isinstance(t, dict)]
         if ph:
@@ -685,7 +695,7 @@ def wash_adjustments(gains_paths: List[Path],
     for p in gains_paths:
         try:
             data = load_json(p)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue                    # join_income_gains warns
         if not isinstance(data, dict):
             continue
@@ -727,7 +737,7 @@ def _deferred_wash(gains_paths: List[Path],
     for p in gains_paths:
         try:
             data = load_json(p)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue
         for h in data.get("inventory") or []:
             sym = h.get("symbol") or ""
