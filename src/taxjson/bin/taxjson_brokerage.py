@@ -23,6 +23,7 @@ Options:
 """
 
 import csv
+import hashlib
 import inspect
 import json
 import sys
@@ -494,8 +495,29 @@ Examples:
         BaseBrokerage.clamp_settlement_across(
             [t for _, _, _txs in parsed_files for t in _txs], _all_expiries)
 
+    # Provenance for cross-file dedup (bin/taxjson_sort.plan_dedup,
+    # audit R1-296): each row's input file (its masked shown name, made
+    # unique within this parse) and, per file, the broker accounts the
+    # export names — hashed, account ids never reach work/ files.
+    _source_names: dict = {}
+    source_accounts: dict = {}
+    for input_path, extractor, _txs in parsed_files:
+        _nm = shown_name(input_path)
+        _base, _k = _nm, 1
+        while _nm in _source_names.values():
+            _k += 1
+            _nm = f"{_base}#{_k}"
+        _source_names[id(extractor)] = _nm
+        _accts = extractor.statement_accounts() \
+            if hasattr(extractor, 'statement_accounts') else set()
+        if _accts:
+            source_accounts[_nm] = sorted(
+                hashlib.sha256(str(a).encode()).hexdigest()[:10]
+                for a in _accts)
+
     for input_path, extractor, transactions in parsed_files:
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
+        _source = _source_names[id(extractor)]
 
         # Correct mislabeled tickers FIRST — before the TRANSFER rows
         # are set aside (the sidecar used to keep the un-overridden
@@ -624,6 +646,7 @@ Examples:
             # forgot the flag.
             if args.account_name is not None:
                 clean['account'] = args.account_name
+            clean['source'] = _source
             normalized.append(TaxTransaction(**clean))
             multipliers.append(t.get('multiplier'))
 
@@ -664,6 +687,8 @@ Examples:
             "format_version": "1.0",
             "source_brokerage": brokerage_id,
             "input_files": [str(p) for p in input_paths],
+            **({"source_accounts": source_accounts}
+               if source_accounts else {}),
         }
     }
     if args.transfers_out and not args.transfers:

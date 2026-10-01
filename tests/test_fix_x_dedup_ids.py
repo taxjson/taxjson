@@ -144,5 +144,229 @@ class TestElectionIdsSurviveRename(unittest.TestCase):
             self.assertEqual(list(saved), [ev.event_id])
 
 
+# ---------------------------------------------------------- R1-296 / S031-02
+
+from taxjson.bin.taxjson_sort import deduplicate, plan_dedup  # noqa: E402
+from taxjson.lib.core import TaxTransaction  # noqa: E402
+
+
+def _tx(date, qty, source, desc="", **kw):
+    return TaxTransaction(action="BUYSELL", date=date, symbol="XYZ.TO",
+                          quantity=qty, price=10.0, net_amount=-10.0 * qty,
+                          currency="CAD", account="margin",
+                          description=desc, source=source, **kw)
+
+
+class TestDedupPlan(unittest.TestCase):
+    """The one dedup rule shared by the books and the fee report."""
+
+    def test_same_file_repeat_collapses(self):
+        rows = [_tx("2025-03-03", 100, "a.csv"), _tx("2025-03-03", 100, "a.csv")]
+        self.assertEqual(len(deduplicate(rows)), 1)
+
+    def test_rows_without_source_keep_the_id_rule(self):
+        rows = [_tx("2025-03-03", 100, ""), _tx("2025-03-03", 100, "")]
+        self.assertEqual(len(deduplicate(rows)), 1)
+
+    def test_identical_lines_in_two_tt_files_are_both_booked(self):
+        rows = [_tx("2025-03-04", 100, "m1.tt"), _tx("2025-03-04", 100, "m2.tt")]
+        plan = plan_dedup(rows)
+        self.assertEqual(plan.keep, [0, 1])
+        self.assertEqual(plan.relabel, {1: rows[0].id + "~2"})
+        self.assertEqual(len(plan.attention), 1)
+        self.assertIn("m1.tt and m2.tt", plan.attention[0])
+        kept = deduplicate(rows)
+        self.assertEqual(len({t.id for t in kept}), 2)
+
+    def test_statements_of_different_broker_accounts_are_both_booked(self):
+        rows = [_tx("2025-03-03", 100, "ib_a.csv"), _tx("2025-03-03", 100, "ib_b.csv")]
+        plan = plan_dedup(rows, {"ib_a.csv": ["h1"], "ib_b.csv": ["h2"]})
+        self.assertEqual(plan.keep, [0, 1])
+        self.assertEqual(plan.attention, [])
+        self.assertEqual(len(plan.notes), 1)
+        # A consolidated statement covering both accounts overlaps each.
+        plan = plan_dedup(rows, {"ib_a.csv": ["h1", "h2"], "ib_b.csv": ["h2"]})
+        self.assertEqual(plan.keep, [0])
+
+    def test_overlapping_re_export_collapses_quietly(self):
+        a = [_tx("2025-12-1%d" % d, 10 + d, "q_2025.csv") for d in range(5, 10)]
+        b = [_tx("2025-12-1%d" % d, 10 + d, "q_2026.csv") for d in range(5, 10)]
+        b.append(_tx("2026-01-05", 7, "q_2026.csv"))
+        a.insert(0, _tx("2025-06-01", 3, "q_2025.csv"))
+        plan = plan_dedup(a + b)
+        self.assertEqual(len(plan.keep), 7)
+        self.assertEqual(len(plan.drop), 5)
+        self.assertEqual(plan.attention, [])
+
+    def test_partial_last_day_is_still_a_copy(self):
+        """The earlier export was downloaded mid-day: its last day holds
+        a subset of the later export's rows."""
+        a = [_tx("2025-12-30", 1, "a.csv"), _tx("2025-12-31", 2, "a.csv")]
+        b = [_tx("2025-12-30", 1, "b.csv"), _tx("2025-12-31", 2, "b.csv"),
+             _tx("2025-12-31", 3, "b.csv"), _tx("2026-01-02", 4, "b.csv")]
+        plan = plan_dedup(a + b)
+        self.assertEqual(len(plan.drop), 2)
+        self.assertEqual(plan.attention, [])
+
+    def test_thin_overlap_is_collapsed_with_attention(self):
+        """One identical row is all the two exports share: read as a
+        re-export (exports cannot split a day), but said loudly."""
+        a = [_tx("2025-03-03", 100, "qa.csv"), _tx("2025-06-02", -200, "qa.csv")]
+        b = [_tx("2025-03-03", 100, "qb.csv")]
+        plan = plan_dedup(a + b)
+        self.assertEqual(plan.drop, [2])
+        self.assertEqual(len(plan.attention), 1)
+        self.assertIn("qa.csv and qb.csv", plan.attention[0])
+        self.assertIn("Booked ONCE", plan.attention[0])
+
+    def test_tt_line_equal_to_an_exported_row_is_collapsed_with_attention(self):
+        rows = [_tx("2025-03-03", 100, "q.csv"), _tx("2025-03-03", 100, "hist.tt")]
+        plan = plan_dedup(rows)
+        self.assertEqual(plan.drop, [1])
+        self.assertEqual(len(plan.attention), 1)
+
+    def test_dict_rows_without_id_never_collapse(self):
+        rows = [{"action": "BUYSELL", "source": "a.csv"},
+                {"action": "BUYSELL", "source": "b.csv"}]
+        self.assertEqual(plan_dedup(rows).keep, [0, 1])
+
+
+_TOML = """[settings]
+year = 2025
+country = "canada"
+province = "ON"
+base_currency = "CAD"
+source_currencies = []
+tax_date = "settle"
+option_grant_timing_since = 2025
+
+[accounts.margin]
+type = "taxable"
+"""
+_QH = ("Transaction Date,Settlement Date,Action,Symbol,Description,Quantity,"
+       "Price,Gross Amount,Commission,Net Amount,Currency,Account #,"
+       "Activity Type,Account Type")
+_QF = ("2025-03-03 12:00:00 AM,2025-03-04 12:00:00 AM,Buy,XYZ.TO,XYZ TEST "
+       "CORP,100,10,-1000,-4.95,-1004.95,CAD,55500001,Trades,"  # pii-ok
+       "Individual margin")
+_QS = ("2025-06-02 12:00:00 AM,2025-06-03 12:00:00 AM,Sell,XYZ.TO,XYZ TEST "
+       "CORP,-200,11,2200,-4.95,2195.05,CAD,55500001,Trades,"  # pii-ok
+       "Individual margin")
+_TTF = "BUYSELL  2025-03-04  09:30:00  XYZ.TO  100  CAD  10.00  1000.00  0\n"
+_TTS = "BUYSELL  2025-06-03  09:30:00  XYZ.TO  -200  CAD  11.00  2200.00  0\n"
+
+
+def _ib(acct, rows):
+    return ("Statement,Header,Field Name,Field Value\n"
+            "Statement,Data,BrokerName,Interactive Brokers\n"
+            "Statement,Data,Title,Activity Statement\n"
+            "Statement,Data,Period,\"January 1, 2025 - December 31, 2025\"\n"
+            "Account Information,Header,Field Name,Field Value\n"
+            "Account Information,Data,Name,Synth\n"
+            f"Account Information,Data,Account,{acct}\n"
+            "Account Information,Data,Base Currency,CAD\n"
+            "Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,"
+            "Date/Time,Quantity,T. Price,C. Price,Proceeds,Comm/Fee,Basis,"
+            "Realized P/L,MTM P/L,Code\n" + "".join(rows))
+
+
+_IBF = ('Trades,Data,Order,Stocks,CAD,XYZ,"2025-03-03, 10:00:00",100,10.00,'
+        '10.00,-1000.00,0,1000.00,0,0,O\n')
+_IBS = ('Trades,Data,Order,Stocks,CAD,XYZ,"2025-06-02, 10:00:00",-200,11.00,'
+        '11.00,2200.00,0,-2000.00,200,0,C\n')
+
+
+def _run_project(files):
+    td = tempfile.mkdtemp()
+    root = Path(td)
+    (root / "inputs" / "margin").mkdir(parents=True)
+    (root / "taxjson.toml").write_text(_TOML)
+    for fn, body in files.items():
+        (root / "inputs" / "margin" / fn).write_text(body)
+    r = subprocess.run(
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+         "run", "--no-input"], stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, env=_env())
+    g = json.loads((root / "work" / "margin_gains.json").read_text())
+    return root, r, g
+
+
+class TestCrossFileDedupEndToEnd(unittest.TestCase):
+    """Every case books 2 x 100 XYZ bought at 10 and one 200-share sale
+    at 11 (the audit's repro, R1-296)."""
+
+    def _check(self, files, gain, flat=True):
+        import shutil
+        root, r, g = _run_project(files)
+        try:
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertAlmostEqual(g["summary"]["total_gain"], gain, places=2)
+            if flat:
+                self.assertEqual(
+                    [i for i in g["inventory"] if abs(i["qty"]) > 1e-9], [])
+            return r.stdout + r.stderr, root
+        finally:
+            self._root = root
+            self.addCleanup(shutil.rmtree, root, True)
+
+    def test_identical_line_in_two_tt_files_books_both(self):
+        out, _ = self._check({"m1.tt": _TTF + _TTS, "m2.tt": _TTF}, 200.0)
+        self.assertIn("ATTENTION: dedup: m1.tt and m2.tt", out)
+
+    def test_two_ib_statements_of_different_accounts_book_both(self):
+        self._check({"ib_a.csv": _ib("U5550001", [_IBF, _IBS]),  # pii-ok
+                     "ib_b.csv": _ib("U5550002", [_IBF])}, 200.0)  # pii-ok
+
+    def test_split_questrade_export_is_loud(self):
+        """A hand-split export: the two files share one row and nothing
+        else — read as a re-export (gain 100, short 100), but the
+        console names both files and the row."""
+        root, r, g = _run_project({
+            "questrade_a.csv": "\n".join([_QH, _QF, _QS]) + "\n",
+            "questrade_b.csv": "\n".join([_QH, _QF]) + "\n"})
+        import shutil
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ATTENTION: dedup: questrade_a.csv and questrade_b.csv",
+                      r.stdout)
+        # The fee report applies the same rule: it agrees with the books.
+        fr = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_fees", "--cache",
+             str(root / "work"), "--year", "2025", "--json"],
+            capture_output=True, text=True, env=_env())
+        self.assertEqual(fr.returncode, 0, fr.stderr)
+        doc = json.loads(fr.stdout)
+        self.assertEqual(doc["total"]["trades"], 2)
+        self.assertEqual(doc["meta"]["dups_collapsed"], 1)
+        self.assertIn("ATTENTION: dedup:", fr.stderr)
+
+    def test_fee_report_counts_both_tt_lines(self):
+        """S031-02: the fee report must count what the books book —
+        identical commissions in two .tt files are two trades."""
+        ttf = "BUYSELL  2025-03-04  09:30:00  XYZ.TO  100  CAD  10.00  1004.95  4.95\n"
+        tts = "BUYSELL  2025-06-03  09:30:00  XYZ.TO  -200  CAD  11.00  2195.05  4.95\n"
+        root, r, g = _run_project({"m1.tt": ttf + tts, "m2.tt": ttf})
+        import shutil
+        self.addCleanup(shutil.rmtree, root, True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        fr = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_fees", "--cache",
+             str(root / "work"), "--year", "2025", "--json"],
+            capture_output=True, text=True, env=_env())
+        doc = json.loads(fr.stdout)
+        self.assertEqual(doc["total"]["trades"], 3)
+        self.assertAlmostEqual(doc["total"]["total"], 14.85, places=2)
+        self.assertEqual(doc["meta"]["dups_collapsed"], 0)
+
+    def test_overlapping_questrade_exports_collapse_quietly(self):
+        q2 = ("2025-06-05 12:00:00 AM,2025-06-06 12:00:00 AM,Buy,ABC.TO,ABC "
+              "CORP,10,5,-50,0,-50,CAD,55500001,Trades,Individual margin")  # pii-ok
+        out, _ = self._check({
+            "questrade_a.csv": "\n".join([_QH, _QF, _QF, _QS, q2]) + "\n",
+            "questrade_b.csv": "\n".join([_QH, _QS, q2]) + "\n"},
+            200.0 - 3 * 4.95, flat=False)
+        self.assertNotIn("ATTENTION: dedup", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -252,6 +252,19 @@ UNBOOKED_PREFIX = "warning: UNBOOKED:"
 ATTENTION_PREFIX = "warning: ATTENTION:"
 
 
+def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
+    """Print the ATTENTION lines of a stage's persisted .diag (only
+    those whose text starts with `prefix`) on the console."""
+    diag_path = out_path.with_name(out_path.name + ".diag")
+    try:
+        lines = diag_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        if line.startswith(ATTENTION_PREFIX + " " + prefix):
+            print(f"  {line}")
+
+
 def unbooked_lines(out_path: Path) -> List[str]:
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
@@ -2337,6 +2350,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                       f"be wrong. Details: reports/{name}.sum "
                       f"DIAGNOSTICS (or {_diag.name}).",
                       file=sys.stderr)
+
+    # Cross-file dedup ambiguities (bin/taxjson_sort.plan_dedup, audit
+    # R1-296): echoed from the persisted .diag on EVERY run, cached or
+    # not — a row booked once (or twice) on a guess must not scroll by.
+    echo_attention_lines(cache / f"{name}_sorted.json" if is_crypto
+                         else base_json, prefix="dedup: ")
 
     # 5. gains
     gains_json = cache / f"{name}_gains.json"

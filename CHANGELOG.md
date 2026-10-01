@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Cross-file dedup no longer deletes separate trades.** Every parsed
+  row now records its input file. Identical rows in two `.tt` files, or
+  in IB statements of two different broker accounts, are both booked;
+  before, the second was dropped as a duplicate, which left a phantom
+  short and a wrong gain. The same row in two overlapping exports is
+  still booked once. When the files' overlap is too thin to tell, the
+  row is booked once and an `ATTENTION: dedup` line names both files.
+  `fees-sum` applies the same rule, so its trade count and commissions
+  agree with the books (audit R1-296, S031-02).
+
 - **Renaming an account keeps its corporate-action elections.** An
   election's event id no longer includes the taxjson account name (the
   elections manifest is already stored per account). A manifest written

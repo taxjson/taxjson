@@ -343,6 +343,14 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
 
     # --- source rows (nominal) --------------------------------------
     hits = source_index.get(gid) or []
+    if not hits and "~" in str(gid or ""):
+        # A row the dedup kept as a separate record although another
+        # file holds the same content (`<id>~<n>`, bin/taxjson_sort.
+        # plan_dedup): its source row carries the plain id — pick the
+        # file the book row came from.
+        _src = (base_index.get(gid) or {}).get("source")
+        hits = [h for h in source_index.get(str(gid).split("~")[0]) or []
+                if not _src or h["row"].get("source") == _src]
     ev["sources"] = [{"file": h["label"], "row": h["row"]} for h in hits]
     if not hits:
         ev["warnings"].append(

@@ -1372,6 +1372,24 @@ account, pure taxtext) does the same on a settle-basis project. Two identical
 `ACQUIRED` lots arriving the same day are two arrival legs (their counter
 transfers are combined, not de-duplicated away).
 
+**Duplicate rows across files.** Overlapping exports of one account (a
+re-download, a 2025 export that runs into January next to the 2026 one) hold
+the same rows twice, and the books keep each row once. The rule, which the
+fees report uses too:
+- two identical rows in ONE file are one row, unless the parser marked them
+  as separate fills (`[fill #2]`);
+- the same row in two exports is one row when the files overlap as copies:
+  on the dates both files cover, one file's rows are a subset of the
+  other's, and they share at least two rows;
+- identical lines in two `.tt` files are separate records, so both are
+  booked; identical rows in IB statements of two different broker accounts
+  are both booked as well;
+- anything else (the files share only that one row, the files disagree on
+  the dates they both cover, or a `.tt` line equals an exported row) is booked
+  once, and `taxjson run` prints `warning: ATTENTION: dedup: ...` with both
+  file names. If they really are two trades, enter the second one as a `.tt`
+  line. If a `.tt` line was typed into two files, delete one copy.
+
 ### When you can't get the real cost basis
 
 For positions where no confirmation is recoverable, mark the missing opening as

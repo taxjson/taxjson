@@ -98,6 +98,13 @@ class TaxTransaction:
     # a CDR or another company from an interlisting (audit S057-24).
     # Evidence only: NOT part of compute_id, omitted when empty.
     security_name: str = ''
+    # The input file the row was read from ("questrade_2025.csv",
+    # "history.tt"), stamped by taxjson-brokerage / convert-tt. Cross-
+    # file dedup tells an overlapping re-export (one row, two files)
+    # from separate records that happen to look alike (bin/taxjson_sort
+    # .plan_dedup, audit R1-296). NOT part of compute_id, omitted when
+    # empty.
+    source: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -139,7 +146,8 @@ class TaxTransaction:
 
     def to_dict(self):
         d = asdict(self)
-        for k in INCOME_FACT_FIELDS + ('broker_time', 'security_name'):
+        for k in INCOME_FACT_FIELDS + ('broker_time', 'security_name',
+                                       'source'):
             if not d.get(k):
                 d.pop(k, None)
         return d
