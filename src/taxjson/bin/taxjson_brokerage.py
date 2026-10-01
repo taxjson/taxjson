@@ -323,6 +323,16 @@ Examples:
             "run` passes it from the account's `type`."
         ),
     )
+    parser.add_argument(
+        "--tax-year", dest="tax_year", type=int, default=None,
+        metavar="YYYY",
+        help=(
+            "The tax year the books are for. Parsers whose exports carry "
+            "their own timestamp check it against the year (RBC: an "
+            "export taken before the year ended cannot hold the rest of "
+            "it). `taxjson run` passes the project year."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -386,6 +396,12 @@ Examples:
             print(f"taxjson-brokerage: error: {_refusal(e)}",
                   file=sys.stderr)
             sys.exit(1)
+        # Per-statement coverage against the tax year (RBC "as of"
+        # timestamps, audit S063-22).
+        _cov = getattr(extractor_class, 'coverage_messages', None)
+        if _cov is not None and args.tax_year and shared_context is not None:
+            for _m in _cov(shared_context, args.tax_year):
+                print(_m, file=sys.stderr)
 
     # s.90(1) is Canadian law: never the default without a country
     # (partition INPUTS-03), and refused for a US filer.

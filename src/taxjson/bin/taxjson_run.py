@@ -1933,6 +1933,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "acb" if _froc_acb else "dividend"]
             if _fut_next:
                 cmd += ["--futures-settle", "next_day"]
+            if isinstance(year, int):
+                # An export's own timestamp vs the year (RBC "as of",
+                # S063-22).
+                cmd += ["--tax-year", str(year)]
             _sidecar = out.with_name(out.stem + "_transfers.json")
             if include_transfers:
                 cmd.append("--transfers")

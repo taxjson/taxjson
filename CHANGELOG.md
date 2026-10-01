@@ -20,6 +20,13 @@
   the web what-if prices a futures option with it (still refused when no
   row declares one), and a `.tt` line may end in `x1000` so its total is
   checked at the real size (audit S026-22).
+- **RBC "as of" stamp checked against the year.** An RBC export taken
+  before the tax year ended is an ATTENTION on the console (it cannot
+  hold the rest of the year), `checklist` inputs-frozen judges each
+  account's latest RBC export instead of the latest row of any broker,
+  and a note says when the year's back-dated Dec-31 book-cost
+  adjustments may not be posted yet (audit S063-22).
+
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent

@@ -400,6 +400,28 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
         latest_d = date.fromisoformat(latest[:10]) if latest else None
     except ValueError:
         latest_d = None
+    # Per statement, not across every source (audit S063-22): an RBC
+    # export carries the date it was taken ("Activity Export as of
+    # ..."), and an account whose latest export predates the cutoff
+    # cannot hold the rest of the year — another broker's later rows
+    # used to certify it.
+    from taxjson.lib.brokerages.rbc_direct import rbc_export_as_of
+    early = []
+    for n in _accounts_of(ctx, "taxable"):
+        _asof = [a for a in (rbc_export_as_of(p) for p in
+                             _data_files(ctx.root / "inputs" / n)
+                             if p.suffix.lower() == ".csv") if a]
+        if _asof and max(_asof) < cutoff.isoformat():
+            early.append(f"{n} (RBC export as of {max(_asof)})")
+    if early:
+        if ctx.today <= cutoff:
+            return Result("inputs-frozen", "todo",
+                          f"year still open — {', '.join(early)}; "
+                          f"re-export after {cutoff.isoformat()}")
+        return Result("inputs-frozen", "attention",
+                      f"{', '.join(early)} was taken before "
+                      f"{cutoff.isoformat()} — activity after it is not in "
+                      f"the books; re-export the account")
     if latest_d and latest_d >= cutoff:
         return Result("inputs-frozen", "done", f"latest activity {latest[:10]}")
     if ctx.today <= cutoff:

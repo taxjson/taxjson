@@ -180,6 +180,11 @@ class RbcExport:
     settle_fmt: str
     newest_first: Optional[bool]
     notes: List[str] = field(default_factory=list)
+    # The export's own timestamp ("Activity Export as of Jan 5, 2026 at
+    # 8:59:00 am ET"), ISO; '' when the preamble has none. RBC does not
+    # write the date range chosen in the UI, so this is an upper bound
+    # on what the file can contain (audit S063-22).
+    as_of: str = ''
 
 
 def _err(path: Path, line: int, msg: str) -> RbcFormatError:
@@ -231,6 +236,51 @@ def rbc_number(raw: Optional[str], *, path: Path, line: int,
 
 def _canon(cell: str) -> Optional[str]:
     return _CANON.get((cell or '').replace('﻿', '').strip().lower())
+
+
+# The export's preamble line: "Activity Export as of Jan 5, 2026 at
+# 8:59:00 am ET" (older exports: "Activity Export as of Date Jan 5, 2026").
+_RBC_AS_OF_RE = re.compile(
+    r'\bActivity\s+Export\s+as\s+of\s+(?:Date\s+)?'
+    r'([A-Za-z]{3,9})\.?\s+(\d{1,2}),\s*(\d{4})', re.I)
+
+
+def _export_as_of(records, hpos: int) -> str:
+    """The ISO date of the "Activity Export as of <date>" preamble above
+    the header row, or '' when there is none (or it does not parse)."""
+    for _line, cells in records[:hpos]:
+        m = _RBC_AS_OF_RE.search(' '.join(c for c in cells if c))
+        if not m:
+            continue
+        for fmt in ('%b %d %Y', '%B %d %Y'):
+            try:
+                return datetime.strptime(
+                    f"{m.group(1)[:3] if fmt == '%b %d %Y' else m.group(1)}"
+                    f" {m.group(2)} {m.group(3)}", fmt).strftime('%Y-%m-%d')
+            except ValueError:
+                continue
+    return ''
+
+
+def rbc_export_as_of(path) -> str:
+    """The "Activity Export as of" date (ISO) of an RBC activity export
+    read from its first lines only, or '' when the file is not one (or
+    cannot be read) — for checks that do not parse the whole file
+    (`taxjson checklist` inputs-frozen, audit S063-22)."""
+    try:
+        with open(path, 'rb') as fh:
+            head = fh.read(4096)
+    except OSError:
+        return ''
+    try:
+        text = (head.decode('utf-16', errors='ignore')
+                if head[:2] in (b'\xff\xfe', b'\xfe\xff')
+                else head.decode('utf-8-sig', errors='ignore'))
+    except (UnicodeDecodeError, LookupError):
+        return ''
+    lines = text.splitlines()[:5]
+    return _export_as_of([(i, [ln]) for i, ln in enumerate(lines)],
+                         len(lines))
 
 
 def _find_header(records, path: Path):
@@ -509,7 +559,72 @@ def read_rbc_rows(path: Path) -> RbcExport:
     return RbcExport(path=path, rows=rows, n_footers=n_footers,
                      columns=[c for c in canon if c], date_fmt=date_fmt,
                      settle_fmt=settle_fmt, newest_first=newest_first,
-                     notes=notes)
+                     notes=notes, as_of=_export_as_of(records, hpos))
+
+
+# RBC posts year-end book-cost adjustments (a notional distribution, a
+# year-end return of capital) dated Dec 31 but only after the fund's
+# tax slips are out, in the following spring (2026-09 audit R1-85): an
+# export taken before this day of the next year cannot hold them.
+RBC_YEAR_END_POSTING = (6, 30)
+
+
+def rbc_coverage_messages(exports, year: int, listings=None,
+                          today=None) -> List[str]:
+    """Coverage findings for tax year `year` from the exports' "as of"
+    timestamps (audit S063-22), one message each:
+
+      * ATTENTION when every export of the account was taken on or
+        before Dec 31 of `year` (a finished year): activity after the
+        latest as-of date (a late-December sale) cannot be in any file
+        — the RBC sibling of IB's statement-period check;
+      * a note when the exports holding `year`'s rows were all taken
+        before RBC posts the year's back-dated Dec-31 book-cost
+        adjustments (by June 30 of the next year) while the account
+        held a position at the year end — they may be missing (R1-85).
+
+    `exports`: [(file name, as_of ISO, [row ISO dates])]; `listings`:
+    the account context's position timelines (symbol -> currency ->
+    _Listing), or None to skip the holding test. Files without an as-of
+    line are not judged."""
+    from datetime import date as _date
+    today = today or _date.today()
+    y = int(year)
+    year_end = f"{y}-12-31"
+    dated = [(n, a, d) for n, a, d in exports if a]
+    out: List[str] = []
+    if not dated or today.isoformat() <= year_end:
+        return out                      # no timestamps / the year is open
+    name, last = max(((n, a) for n, a, _ in dated), key=lambda x: x[1])
+    if last <= year_end:
+        nxt = (datetime.strptime(last, '%Y-%m-%d').date()
+               + timedelta(days=1)).isoformat()
+        out.append(
+            f"warning: ATTENTION: {name}: the account's latest RBC export "
+            f"was taken as of {last} — any trade or income from {nxt} to "
+            f"{year_end} cannot be in it and is missing from the {y} "
+            f"books. Export the account's activity again (after Jan 31, "
+            f"{y + 1}, so the settlements are in) and add the file.")
+        return out
+    posted = _date(y + 1, *RBC_YEAR_END_POSTING).isoformat()
+    cover = max((a for _, a, ds in dated
+                 if any(x and x <= year_end for x in ds)), default='')
+    if not cover or cover >= posted:
+        return out
+    if listings is not None and not any(
+            abs(li.position_on(year_end)) > 1e-9
+            for per in listings.values() for li in per.values()):
+        return out
+    out.append(
+        f"note: the account's RBC exports that hold {y} rows were taken "
+        f"by {cover}; RBC posts {y}'s year-end book-cost adjustments "
+        f"(notional distributions, a year-end return of capital — dated "
+        f"{year_end}) only in the spring of {y + 1}, and an export "
+        f"starting Jan 1, {y + 1} never holds them. Re-export {y} after "
+        f"{posted} (keep both files: overlapping downloads are "
+        f"de-duplicated) or check the ACB against the funds' {y} T3 "
+        f"slips.")
+    return out
 
 
 def rbc_time(k: int) -> str:
@@ -1046,6 +1161,17 @@ class RbcBrokerage(BaseBrokerage):
         ctx = build_rbc_account_context(list(paths), helper=cls())
         ctx.emit()
         return ctx
+
+    @staticmethod
+    def coverage_messages(ctx: 'RbcAccountContext', year: int,
+                          today=None) -> List[str]:
+        """The account's coverage findings for tax year `year` (see
+        rbc_coverage_messages); taxjson-brokerage prints them when
+        `taxjson run` passes the project year (--tax-year)."""
+        return rbc_coverage_messages(
+            [(ctx.exports[k].path.name, ctx.exports[k].as_of,
+              [r.date for r in ctx.exports[k].rows]) for k in ctx.files],
+            year, ctx.listings, today=today)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         path = Path(path)
