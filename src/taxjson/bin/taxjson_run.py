@@ -3675,15 +3675,24 @@ def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
     return _resolve_manifest(acct_dir, cache, name, create=False)
 
 
-def _print_elections(name: str, manifest_path: Path) -> int:
-    from taxjson.lib.corp_actions import Manifest
+def _print_elections(name: str, manifest_path: Path,
+                     country: Optional[str] = None) -> int:
+    from taxjson.lib.corp_actions import Manifest, election_keys
     man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
     if not man.records:
         print(f"  {name}: no elections recorded.")
         return 0
+    known = election_keys(country) if country else None
     print(f"  {name}  ({manifest_path}):")
     for eid, r in sorted(man.records.items()):
-        print(f"    [{eid}] {r.election or '(none)'}")
+        # A hand-typed key no rule knows: `taxjson run` refuses it, so
+        # say so here too (audit S072-16 — it was listed as if valid).
+        bad = (f"   <- UNKNOWN election for {country}: `taxjson run` "
+               f"refuses it; fix with `taxjson elect {name} --redo "
+               f"--event {eid}`"
+               if known is not None and r.election
+               and r.election not in known else "")
+        print(f"    [{eid}] {r.election or '(none)'}{bad}")
         if r.summary:
             print(f"        {r.summary}")
         if r.hints:
@@ -3823,7 +3832,8 @@ def cmd_elect(args: argparse.Namespace) -> None:
             return
         print("Corporate-action elections:")
         for name in accounts:
-            _print_elections(name, _manifest_path_for(inputs_dir / name, cache, name))
+            _print_elections(name, _manifest_path_for(inputs_dir / name,
+                                                      cache, name), country)
         print("\nRedo one: `taxjson elect <account> --redo` "
               "(add --event <id> for just one event).")
         return
@@ -4003,7 +4013,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
 
     if not (args.redo or args.reset):
         print("Corporate-action elections:")
-        _print_elections(name, manifest_path)
+        _print_elections(name, manifest_path, country)
         print(f"\nRedo all: `taxjson elect {name} --redo`  |  "
               f"one: add `--event <id>`  |  just clear: `--reset`")
         return
@@ -13541,6 +13551,7 @@ def main() -> None:
                       f"run the commands separately if that was the "
                       f"intent.", file=sys.stderr)
     global _CURRENT_CMD
+    from taxjson.lib.corp_actions import ManifestError
     for seg in segments:
         args = p.parse_args(seg)
         _CURRENT_CMD = next((t for t in seg if t in commands), "")
@@ -13559,6 +13570,10 @@ def main() -> None:
             # next command run.
             if e.code not in (None, 0):
                 raise
+        except ManifestError as e:
+            # A hand-edited elections manifest that does not load: one
+            # line naming the file, never a traceback (audit S072-05).
+            sys.exit(f"taxjson {args.cmd}: error: {e}")
         except subprocess.CalledProcessError as e:
             # A pipeline stage failed. The child's own stderr already
             # explained WHY (run_to_file echoes it) — re-raising the

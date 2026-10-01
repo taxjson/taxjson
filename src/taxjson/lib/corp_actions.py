@@ -2178,6 +2178,21 @@ def hint_value_problem(key: str, value: Any) -> Optional[str]:
     return None
 
 
+class ManifestError(ValueError):
+    """An elections manifest taxjson cannot read: not UTF-8, not JSON,
+    or not the documented shape. Every command that reads one prints it
+    as a one-line error (the file is hand-edited and committed, so a
+    merge conflict or a typo reaches this — audits S072-05, S072-16)."""
+
+
+def election_keys(country: str) -> set:
+    """Every election key the country's rules know (plus `ignore`)."""
+    keys = {IGNORE_ELECTION[0]}
+    for rule in RULES_BY_COUNTRY[_canon(country)].values():
+        keys.update(k for k, _ in rule.options)
+    return keys
+
+
 class Manifest:
     """JSON-backed elections store.
 
@@ -2201,7 +2216,13 @@ class Manifest:
     def load(cls, path: Path) -> "Manifest":
         if not path.exists():
             return cls({})
-        raw = path.read_text(encoding='utf-8').strip()
+        try:
+            raw = path.read_text(encoding='utf-8').strip()
+        except UnicodeDecodeError as exc:
+            raise ManifestError(
+                f"manifest at {path} is not UTF-8 text (byte "
+                f"{exc.start}: {exc.reason}) — re-save it as UTF-8"
+            ) from None
         if not raw:
             # Empty file behaves like a missing one — typical when a
             # previous run created the file before any election was saved.
@@ -2213,24 +2234,44 @@ class Manifest:
             # passed where the manifest belongs). Surface the actual path
             # so the user can fix the invocation instead of staring at a
             # raw Python traceback.
-            raise ValueError(
+            raise ManifestError(
                 f"manifest at {path} is not valid JSON ({exc.msg} at line "
                 f"{exc.lineno} col {exc.colno}). If this file used to be a "
                 f"CSV or other format, point --manifest at the correct path "
                 f"or delete the file to start fresh."
             ) from None
         if not isinstance(data, dict):
-            raise ValueError(
+            raise ManifestError(
                 f"manifest at {path} must be a JSON object with an "
                 f"'elections' key; got top-level {type(data).__name__}"
             )
+        elections = data.get('elections') or {}
+        if not isinstance(elections, dict):
+            raise ManifestError(
+                f"manifest at {path}: 'elections' must be a JSON object "
+                f"keyed by event id; got {type(elections).__name__}")
         records = {}
-        for eid, rec in (data.get('elections') or {}).items():
+        for eid, rec in elections.items():
+            # A bare string (or list) record raised AttributeError from
+            # deep inside the corp-actions stage (audit S072-16).
+            if not isinstance(rec, dict):
+                raise ManifestError(
+                    f"manifest at {path}: election {eid} must be a JSON "
+                    f"object like {{\"election\": \"...\"}}; got "
+                    f"{type(rec).__name__} {rec!r:.40}")
+            if not isinstance(rec.get('election', ''), str):
+                raise ManifestError(
+                    f"manifest at {path}: election {eid}: 'election' must "
+                    f"be a string; got {rec.get('election')!r:.40}")
+            if not isinstance(rec.get('hints') or {}, dict):
+                raise ManifestError(
+                    f"manifest at {path}: election {eid}: 'hints' must be "
+                    f"a JSON object; got {rec.get('hints')!r:.40}")
             for hk, hv in (rec.get('hints') or {}).items():
                 prob = hint_value_problem(hk, hv)
                 if prob:
-                    raise ValueError(f"manifest at {path}: election "
-                                     f"{eid}: hint {prob}")
+                    raise ManifestError(f"manifest at {path}: election "
+                                        f"{eid}: hint {prob}")
             records[eid] = ElectionRecord(
                 event_id=eid,
                 summary=rec.get('summary', ''),

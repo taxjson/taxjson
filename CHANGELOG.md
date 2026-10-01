@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A broken elections manifest is a one-line error everywhere.**
+  `taxjson elect` (and every other command) on a manifest that is not
+  UTF-8, not JSON, or not the documented shape (a bare-string record, a
+  list of hints) printed a traceback; `taxjson elect <account>` now marks
+  an election key no rule knows as UNKNOWN (S072-05, S072-16).
+
 - **distributions.map is read strictly.** A per-share amount must be a
   plain decimal (`nan`, `inf`, `1e309` and `1_0` were accepted) and the
   date a real `YYYY-MM-DD`; a `0` is a placeholder that is no longer
