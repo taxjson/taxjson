@@ -80,6 +80,9 @@ web = [
 # 2026-07b audit found the web layer had zero effective coverage in
 # every environment). Full suite: pip install -e ".[all,dev]".
 dev = [
+    # The ci.sh / workflow lint stage (critical tier); a missing linter
+    # fails the gate.
+    "ruff>=0.4",
     "httpx>=0.24",
     # Newer starlette's TestClient imports httpx2; without it the web
     # TestClient tests ERROR (not skip) on an up-to-date venv.

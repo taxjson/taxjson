@@ -331,7 +331,7 @@ class TestRedactLow(unittest.TestCase):
             self.assertNotIn("U55512345", got)  # pii-ok
         # A name-only 8-digit id gets its own placeholder, not a renumber
         # of the placeholder digits.
-        got = redacted_name(Path("U55512345_55599999.csv"), rep.accounts)
+        got = redacted_name(Path("U55512345_55599999.csv"), rep.accounts)  # pii-ok (synthetic)
         self.assertIn(ph, got)
         self.assertNotIn("55599999", got)
 

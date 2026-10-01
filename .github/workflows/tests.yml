@@ -1,8 +1,12 @@
 name: tests
 
-# NOTE: the authoritative gate is scripts/ci.sh (tests plus the PII scan),
-# run locally before every push; this workflow repeats the tests for
-# pull requests. macOS runners are excluded to keep the matrix fast.
+# NOTE: the authoritative gate is scripts/ci.sh, run locally before every
+# push; this workflow mirrors its stages (lint, consistency, tax-rules,
+# PII, suite, fuzz) for pull requests on the public repo. The PII stage
+# here has no private denylist, so it applies the generic patterns
+# (account-id shapes, home paths, e-mails, credentials) — enough to stop
+# a PR that carries a real-looking id before it is merged. macOS runners
+# are excluded to keep the matrix fast.
 on:
   push:
     branches: [main]
@@ -30,6 +34,21 @@ jobs:
           python-version: "3.12"
       - run: pip install ruff
       - run: ruff check --select E9,F63,F7,F82 src/ tests/
+
+  gates:
+    # The ci.sh stages besides lint and the suite: release consistency,
+    # the tax-logic spec gate, and the PII scan of the whole tree.
+    name: consistency / tax-rules / pii
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: bash scripts/check-consistency.sh
+      - run: python scripts/check_tax_rules.py
+      - run: bash scripts/check-pii.sh
 
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Installed into .git/hooks/pre-push by scripts/dev-setup.sh. On a public
-# repository a push IS publication, so this is the last check: scan the
-# net diff the push would add (merge resolutions included), the commit
-# messages, annotated-tag messages, and the author / committer / tagger
-# identities of the NEW commits and tags, against the generic patterns and
-# your private denylist. Refuses on any hit or scanner error — except an
-# identity that equals this repo's configured user.name <user.email>: that
-# one is only WARNED about (history already carries it, and blocking it
-# would block every push; switch to a pseudonym to stop publishing it).
+# Installed into .git/hooks/pre-push by scripts/dev-setup.sh (and run by
+# scripts/release.sh itself). On a public repository a push IS
+# publication, so this is the last check: scan the net diff the push
+# would add (merge resolutions included), the text inside any binary file
+# it adds, the branch / tag NAMES it publishes, the commit messages,
+# annotated-tag messages, and the author / committer / tagger identities
+# of the NEW commits and tags — identities against your private denylist
+# and the e-mail allowlist, everything else against the generic patterns
+# too. Refuses on any hit or scanner error — except an identity that
+# equals this repo's configured user.name <user.email>: that one is only
+# WARNED about (history already carries it, and blocking it would block
+# every push; switch to a pseudonym to stop publishing it).
 # Bypass knowingly: git push --no-verify
 set -uo pipefail
 root="$(git rev-parse --show-toplevel)"
@@ -18,17 +21,41 @@ me="$(git config user.name || true) <$(git config user.email || true)>"
 refuse() { echo "pre-push: refusing to publish $1 — $2" >&2; exit 1; }
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$z" ] && continue                  # branch delete
+  # The ref NAME is published too (a branch named after the holder or an
+  # account id): S024-24.
+  if ! printf '%s\n%s\n' "$local_ref" "$remote_ref" | "$check" --text >/dev/null; then
+    printf '%s\n%s\n' "$local_ref" "$remote_ref" | "$check" --text | grep -v '^check-pii' >&2
+    refuse "a ref" "the branch or tag NAME hit the scan."
+  fi
   if [ "$remote_sha" != "$z" ] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
     diff_cmd=(git diff "$remote_sha" "$local_sha" --)
+    num_cmd=(git diff --numstat --no-renames "$remote_sha" "$local_sha" --)
     log_range=("$remote_sha..$local_sha")
   else
     # New branch/tag, or a remote tip we do not have: everything not
     # already on that remote.
     diff_cmd=(git log -p --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
+    num_cmd=(git log --numstat --no-renames --format='' --diff-merges=first-parent "$local_sha" --not --remotes="$remote/*" --)
     log_range=("$local_sha" --not --remotes="$remote/*")
   fi
   if ! "${diff_cmd[@]}" | "$check" --diff; then
     refuse "$local_ref" "see above."
+  fi
+  # A diff shows a binary only as 'Binary files ... differ': scan the
+  # text inside each binary the push adds (PDF /Author, DOCX creator, a
+  # spreadsheet's cells) as published at $local_sha (S024-04).
+  bins="$("${num_cmd[@]}" | awk -F'\t' '$1 == "-" && $2 == "-" { print $3 }' | sort -u)"
+  if [ -n "$bins" ]; then
+    bt="$(mktemp -d)"
+    while IFS= read -r p; do
+      git cat-file -e "$local_sha:$p" 2>/dev/null || continue   # deleted since
+      mkdir -p "$bt/blobs/$(dirname "$p")"
+      git cat-file blob "$local_sha:$p" > "$bt/blobs/$p"
+    done <<< "$bins"
+    if [ -n "$(find "$bt/blobs" -type f 2>/dev/null)" ] && ! "$check" "$bt/blobs"; then
+      rm -rf "$bt"; refuse "$local_ref" "a BINARY file's embedded text hit the scan."
+    fi
+    rm -rf "$bt"
   fi
   if ! git log --format=%B "${log_range[@]}" | "$check" --text; then
     refuse "$local_ref" "a commit MESSAGE hit the scan."
@@ -51,7 +78,8 @@ $(printf '%s\n' "$tagobj" | sed -nE 's/^tagger (.*) <([^>]*)> [0-9]+ [+-][0-9]{4
   fi
   if [ -n "$mine" ] && ! printf '%s\n' "$mine" | "$check" --identity >/dev/null; then
     echo "pre-push: WARNING: your configured git identity (user.name /" \
-         "user.email) matches the private denylist and is published in every" \
+         "user.email) hits the scan (private denylist, or an e-mail not on the" \
+         "allowlist) and is published in every" \
          "commit and tag you push. Not blocking (it is this repo's configured" \
          "user); set a pseudonym to stop: git config user.name <pseudonym>;" \
          "git config user.email <id>+<login>@users.noreply.github.com" >&2

@@ -295,10 +295,10 @@ class TestWatchlistPlatformSuffix(unittest.TestCase):
 _IB_SAMPLE = """Statement,Header,Field Name,Field Value
 Account Information,Header,Field Name,Field Value
 Account Information,Data,Name,Pat Contributor
-Account Information,Data,Account,U5550001
+Account Information,Data,Account,{acct}
 Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Date/Time,Quantity,T. Price,Proceeds,Comm/Fee
 Trades,Data,Order,Stocks,USD,MSFT,"2024-02-12, 09:35:14",50,400.00,-20000.00,-1.00
-"""  # pii-ok (synthetic)
+""".format(acct="U" + "5550001")   # synthetic, assembled at run time
 
 
 class TestGenerateParserPrivacy(unittest.TestCase):

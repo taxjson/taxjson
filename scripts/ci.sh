@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Local CI — the same gates as .github/workflows/tests.yml, runnable
-# anywhere (GitHub Actions is billing-gated on this private repo).
+# Local CI — the authoritative gate. .github/workflows/tests.yml runs the
+# same lint, consistency, PII (generic patterns: no private denylist on a
+# hosted runner) and suite stages for pull requests on the public repo.
 #
 #   scripts/ci.sh            lint + full suite + fuzzers at CI depth
 #   scripts/ci.sh --nightly  ...fuzzers at nightly depth (minutes)
@@ -39,10 +40,14 @@ stage() {   # stage NAME cmd...
 
 # 1. Lint, critical tier only (syntax errors, undefined names,
 #    misused comparisons) — the class of defect audits kept finding.
+#    A missing linter FAILS the stage (it used to print 'skipped' and
+#    the gate stayed green; release.sh tags on that). The [dev] extra
+#    installs ruff (S024-23).
 if "$PY" -m ruff --version >/dev/null 2>&1; then
   stage lint "$PY" -m ruff check --select E9,F63,F7,F82 src/ tests/
 else
-  echo "== lint == skipped (pip install ruff into the venv to enable)"
+  printf '\n== lint ==\n   lint: FAILED (ruff is not installed: pip install -e ".[dev]")\n'
+  FAILED+=("lint")
 fi
 
 # 2. Release consistency, then the full unit suite.
