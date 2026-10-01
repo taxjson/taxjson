@@ -66,16 +66,15 @@ TIE = 0.005 + 1e-9
 # ---------------------------------------------------------------------------
 
 def _load_doc(path: Path) -> Dict[str, Any]:
+    # Bare transaction lists are legal input to every other tool
+    # (load_transactions accepts them) and are normalized; any other
+    # shape — {"transactions": 5}, rows that are not objects — is a
+    # one-line refusal, not a traceback (audit S042-18).
+    from taxjson.lib.json_input import read_work_doc
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        return read_work_doc(path)
     except (OSError, ValueError) as e:
         sys.exit(f"taxjson-audit: cannot read {path}: {e}")
-    if isinstance(doc, list):
-        # Bare transaction lists are legal input to every other tool
-        # (load_transactions accepts them) — normalize instead of
-        # AttributeError-ing on .get (2026-09 audit).
-        return {"transactions": doc}
-    return doc
 
 
 def _source_label(path: Path, meta: Dict[str, Any]) -> str:

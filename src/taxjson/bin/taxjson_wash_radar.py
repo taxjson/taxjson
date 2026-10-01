@@ -96,7 +96,10 @@ class _EngineLosses:
         self = cls()
         for p in paths or []:
             try:
-                doc = json.loads(Path(p).read_text(encoding='utf-8'))
+                # A wrong-shape file (a list, a scalar summary) was an
+                # AttributeError traceback (audit S042-18).
+                from taxjson.lib.json_input import read_work_doc
+                doc = read_work_doc(p)
             except (OSError, ValueError) as e:
                 sys.exit(f"taxjson-wash-radar: --gains {p}: {e}")
             summ = doc.get('summary') or {}

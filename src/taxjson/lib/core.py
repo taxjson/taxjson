@@ -718,6 +718,12 @@ def load_transactions(path: Path) -> List[TaxTransaction]:
                                    e.pos) from None
 
     txs = data.get("transactions", []) if isinstance(data, dict) else data
+    if not isinstance(txs, list):
+        # {"transactions": 5} or a bare scalar was a TypeError traceback
+        # in every tool that loads a book (audit S042-18).
+        raise ValueError(f"{path}: expected a JSON object with a "
+                         f"\"transactions\" list (or a bare list of "
+                         f"rows), got {type(txs).__name__}")
     return [coerce_transaction_row(t, i, f"load_transactions({path})")
             for i, t in enumerate(txs)]
 

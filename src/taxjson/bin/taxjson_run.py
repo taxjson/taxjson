@@ -4779,7 +4779,9 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     rows: List[Dict[str, Any]] = []
     for p in sorted(cache.glob("*_transfers.json")):
         try:
-            doc = json.loads(p.read_text(encoding="utf-8"))
+            doc = _read_work_doc(p)
+            if not isinstance(doc.get("metadata") or {}, dict):
+                raise ValueError('"metadata" must be a JSON object')
         except (OSError, ValueError) as e:
             print(f"taxjson: warning: could not read {p.name}: {e}",
                   file=sys.stderr)
@@ -4805,7 +4807,7 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         if not p.exists():
             continue
         try:
-            doc = json.loads(p.read_text(encoding="utf-8"))
+            doc = _read_work_doc(p)
         except (OSError, ValueError) as e:
             # Same warning as the sidecar loop: the account's in-book
             # rows vanished with no word (S039-22).
@@ -5127,8 +5129,8 @@ def _warn_gains_artifact_scope(files, period_token,
     years = set()
     for p in (files or {}).values():
         try:
-            y = str((_json.loads(p.read_text(encoding="utf-8"))
-                     .get("summary") or {}).get("year") or "")
+            y = str((_read_work_doc(p).get("summary") or {})
+                    .get("year") or "")
         except (OSError, ValueError):
             continue
         if y and y != "all":
@@ -5958,12 +5960,20 @@ def _load_json_or_die(path: Path) -> Any:
     views used to warn and skip the file, then print a partial report —
     a smaller total, a missing account, 'No findings — clean scan.' —
     with exit 0 (audit S045-01, S042-05)."""
-    import json as _json
     try:
-        return _json.loads(Path(path).read_text(encoding="utf-8"))
+        return _read_work_doc(path)
     except (OSError, ValueError) as e:
         _die(f"could not read {path}: {e} — rerun `taxjson run` (this "
              f"view would otherwise leave that file's rows out).")
+
+
+def _read_work_doc(path: Path) -> Dict[str, Any]:
+    """A work/ artifact as a JSON object whose row lists are lists of
+    objects (lib/json_input.read_work_doc). Raises OSError/ValueError
+    — the views' existing handlers — never an AttributeError or a
+    UnicodeDecodeError traceback for a corrupt file (S042-18)."""
+    from taxjson.lib.json_input import read_work_doc
+    return read_work_doc(path)
 
 
 def _warn_bad_dates(bad: int) -> None:
@@ -7263,7 +7273,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             p_basis = ("wash-adjusted" if p.name.endswith("_gains_wash.json")
                        else "pre-wash")
             try:
-                rep = json.loads(report_p.read_text(encoding="utf-8"))
+                rep = _read_work_doc(report_p)
                 if (rep.get("schema_version") == 1 and "gains" in rep
                         and rep.get("basis") == p_basis):
                     res = rep["gains"]
@@ -7284,7 +7294,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 res = None
         if res is None:
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                data = _read_work_doc(p)
             except (OSError, ValueError) as e:
                 if acct in taxable_accounts:
                     # A taxable account's books left out of the filing
@@ -8033,9 +8043,7 @@ def _actual_withholding(cache: Path, taxable_accounts, year,
     for acct in sorted(taxable_accounts):
         p = Path(cache) / f"{acct}_base.json"
         try:
-            data = _json.loads(p.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError("not a JSON object")
+            data = _read_work_doc(p)
         except (OSError, ValueError) as e:
             # Skipping the account dropped its withholding AND its 15%
             # fallback while its foreign dividends were still taxed
@@ -8791,7 +8799,9 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
                   file=sys.stderr)
             continue
         books += 1
-        doc = json.loads(base.read_text(encoding="utf-8"))
+        # A truncated, non-UTF-8 or wrong-shape book was a traceback
+        # here (S042-18).
+        doc = _load_json_or_die(base)
         txs = []
         for r in (doc.get("transactions", doc) if isinstance(doc, dict) else doc):
             try:
@@ -9695,8 +9705,8 @@ def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
     last = None
     for a in accounts:
         try:
-            txs = _json.loads((cache / f"{a}_base.json").read_text(
-                encoding="utf-8")).get("transactions", [])
+            txs = _read_work_doc(cache / f"{a}_base.json").get(
+                "transactions", [])
         except (OSError, ValueError, AttributeError):
             continue
         for t in txs:
@@ -9798,7 +9808,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     embedded = 0.0
     for _acct, f in files:
         try:
-            _d2 = json.loads(f.read_text(encoding="utf-8"))
+            _d2 = _read_work_doc(f)
         except (OSError, ValueError):
             continue
         for h in _d2.get("inventory") or []:
@@ -10314,7 +10324,7 @@ def _artifact_year_mismatch(files: Dict[str, Path],
         return out
     for acct, pth in files.items():
         try:
-            doc = _json.loads(Path(pth).read_text(encoding="utf-8"))
+            doc = _read_work_doc(Path(pth))
         except (OSError, ValueError):
             continue
         yr = ((doc.get("summary") or {}).get("year")
@@ -10495,7 +10505,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         _crypto = bool((cfg.get("accounts", {}).get(acct) or {})
                        .get("crypto"))
         try:
-            doc = _json.loads(Path(pth).read_text(encoding="utf-8"))
+            doc = _read_work_doc(Path(pth))
             accounts[acct] = taxjson_filed.aggregates_from_gains(
                 doc, crypto=_crypto, year=int(year))
             raw_aggs[acct] = taxjson_filed.aggregates_from_gains(
@@ -11926,7 +11936,7 @@ def _fx_cash_doc(root: Path, cache: Path):
                          f"partial.")
             continue
         try:
-            doc = _json.loads(f.read_text(encoding="utf-8"))
+            doc = _read_work_doc(f)
         except (OSError, ValueError) as e:
             sys.exit(f"taxjson fx-cash: could not read {f}: {e} — "
                      f"re-run `taxjson run` to rebuild it; a ledger "

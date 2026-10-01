@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A corrupt work/ file is a one-line error everywhere.** A truncated,
+  non-UTF-8 or wrong-shape (`[1,2,3]`, `{"transactions": 5}`) gains,
+  base, raw or report file printed a traceback from about 17 read
+  commands (sum, estimate, winners, shares, wash-sales, list, leaps,
+  close-year, audit, t1135, form-export, wash-radar, buy-/sell-check,
+  option-boundary, transfers, roc-sum, fx-cash ...); they now name the
+  file and stop, or skip it with a warning where they already did
+  (`lib/json_input.read_work_doc`; `load_transactions` refuses a
+  non-list `transactions`) (audit S042-18).
+
 - **sum: rows foot and TOTAL counts PIL.** NON-OPT + OPTION = REALIZED
   on every row as printed (REALIZED is rounded once; OPTION takes the
   cent), and TOTAL = REALIZED + DIVIDEND + PIL, the same figure as the

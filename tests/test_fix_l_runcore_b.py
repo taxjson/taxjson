@@ -359,5 +359,47 @@ class TestInstalmentInputs(unittest.TestCase):
             self.assertIn("line 15300", " ".join(e.stdout.split()))
 
 
+
+class TestCorruptWorkFiles(unittest.TestCase):
+    """S042-18: a truncated, non-UTF-8 or wrong-shape work/ artifact is
+    a one-line error (or a named skip), never a traceback."""
+
+    _CMDS = {
+        "margin_gains_wash.json": [
+            ("sum",), ("winners",), ("shares",), ("wash-sales",), ("list",),
+            ("close-year",), ("audit", "--summary"), ("t1135",),
+            ("wash-radar",), ("buy-check", "XEI")],
+        "margin_base.json": [
+            ("option-boundary",), ("transfers",), ("roc-sum",),
+            ("find-missing-history",), ("estimate", "--province", "ON")],
+        "margin_raw.json": [("divs-sum",), ("fx-cash",), ("trades",),
+                            ("leaps-sum",)],
+        "margin_report.json": [("sum",)],
+    }
+
+    def test_no_tracebacks(self):
+        bad = {"trunc": lambda b: b[:len(b) // 2],
+               "nonutf8": lambda b: b"\xff\xfe" + b,
+               "list": lambda b: b"[1, 2, 3]",
+               "scalars": lambda b: b'{"transactions": 5, "summary": 3}'}
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "base").mkdir()
+            base = _project(Path(tmp) / "base")
+            self.assertEqual(_run_cli(base, "run", "--no-input")
+                             .returncode, 0)
+            for fname, cmds in self._CMDS.items():
+                for vname, mangle in bad.items():
+                    root = Path(tmp) / f"{fname}-{vname}"
+                    shutil.copytree(base, root)
+                    f = root / "work" / fname
+                    f.write_bytes(mangle(f.read_bytes()))
+                    for cmd in cmds:
+                        with self.subTest(file=fname, how=vname, cmd=cmd):
+                            r = _run_cli(root, *cmd)
+                            self.assertNotIn("Traceback", r.stderr)
+                    shutil.rmtree(root)
+
+
 if __name__ == "__main__":
     unittest.main()

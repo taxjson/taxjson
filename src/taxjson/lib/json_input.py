@@ -65,6 +65,12 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
     if list_key and list_key in doc and not isinstance(doc[list_key], list):
         raise InputFileError(f'{p}: "{list_key}" must be a list, got '
                              f"{type(doc[list_key]).__name__}")
+    if list_key and any(not isinstance(r, dict)
+                        for r in doc.get(list_key) or []):
+        # [1, 2, 3] passed as a transaction list and died later on
+        # row.get (audit S042-18).
+        raise InputFileError(f'{p}: "{list_key}" must be a list of JSON '
+                             f"objects")
     if require_key and require_key not in doc:
         raise InputFileError(f'{p}: no "{require_key}" key (keys: '
                              f"{', '.join(sorted(map(str, doc))) or 'none'})")
@@ -111,3 +117,30 @@ def load_transactions_or_exit(prog: str, path, *, exit_code: int = 2):
         msg = text if str(p) in text else f"{p}: {text}"
     cli_diag.error(prog, msg)
     sys.exit(exit_code)
+
+
+# The row lists and the summary a pipeline artifact in work/ may carry.
+_WORK_ROW_LISTS = ("transactions", "inventory", "manual_reporting_required")
+
+
+def read_work_doc(path) -> Dict[str, Any]:
+    """A pipeline artifact from work/ (<acct>_base/_raw/_gains*.json,
+    _report.json): :func:`read_json_doc`, plus its row lists must be
+    lists of objects and `summary` an object. A truncated, non-UTF-8 or
+    wrong-shape file is an InputFileError naming the file — the read
+    views printed a traceback, or an AttributeError on `.get`, for
+    each of those (audit S042-18)."""
+    doc = read_json_doc(path, list_key="transactions")
+    p = Path(path)
+    for key in _WORK_ROW_LISTS:
+        rows = doc.get(key)
+        if rows is None:
+            continue
+        if not isinstance(rows, list) or any(not isinstance(r, dict)
+                                             for r in rows):
+            raise InputFileError(f'{p}: "{key}" must be a list of JSON '
+                                 f"objects")
+    if doc.get("summary") is not None and not isinstance(doc["summary"],
+                                                         dict):
+        raise InputFileError(f'{p}: "summary" must be a JSON object')
+    return doc
