@@ -10,6 +10,7 @@ is the one home for that check, so the run, every read-only command
 and the web UI refuse the same configs with the same message.
 """
 import difflib
+import re
 from typing import Any, Dict, List
 
 ACCOUNT_TYPES = ("taxable", "sheltered")
@@ -24,6 +25,11 @@ RESERVED_NAME_SUFFIXES = ("_raw", "_base", "_gains", "_wash", "_merged",
                           "_sorted", "_filled", "_mapped", "_report",
                           "_tt", "_manifest", "_sources")
 RESERVED_NAMES = ("sheltered",)
+# Account names build file and directory names (inputs/<name>,
+# work/<name>_*, reports/<name>_holdings.toml) and sub-tool argv: a
+# "../x" name reads or writes outside the project, a "-x" name parses
+# as a flag. load_config refused these, the web loader did not (R1-349).
+ACCOUNT_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 
 
 def account_name_problem(name: str) -> str:
@@ -31,6 +37,15 @@ def account_name_problem(name: str) -> str:
     name, else ''."""
     n = str(name)
     low = n.lower()
+    if not ACCOUNT_NAME_RE.fullmatch(n):
+        return (f"[accounts.{n!r}] is not a valid account name — use "
+                f"letters, digits, '_', '-' or '.' (must start with a "
+                f"letter, digit or '_'); it becomes file and directory "
+                f"names.")
+    if n.upper() == "COMBINED":
+        return (f"[accounts.{n}]: the name COMBINED is reserved for the "
+                f"cross-account wash radar — rename the account (and its "
+                f"inputs/{n}/ folder).")
     if low in RESERVED_NAMES:
         return (f"[accounts.{n}]: {n!r} is reserved (work/{n}_base.json "
                 f"is the combined registered-account book) — rename the "

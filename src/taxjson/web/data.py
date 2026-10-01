@@ -53,7 +53,16 @@ def load_holdings(ctx: ProjectContext, account: str) -> List[Dict[str, Any]]:
         raise ReportArtifactError(
             f"{path.name} could not be read ({e}) — re-run `taxjson run` "
             f"or fix/delete the file") from e
-    return doc.get("holding", [])
+    rows = doc.get("holding", [])
+    if not isinstance(rows, list) or any(not isinstance(h, dict)
+                                         for h in rows):
+        # `holding = 5` used to reach the dashboard's len() and 500 the
+        # page (S078-18): the same banner as an undecodable file.
+        raise ReportArtifactError(
+            f"{path.name} has no [[holding]] table array (holding = "
+            f"{type(rows).__name__}) — re-run `taxjson run` or fix/delete "
+            f"the file")
+    return rows
 
 
 def holdings_accounts(ctx: ProjectContext) -> List[str]:
@@ -63,8 +72,15 @@ def holdings_accounts(ctx: ProjectContext) -> List[str]:
 
 def find_holding(ctx: ProjectContext, account: str, symbol: str
                  ) -> Optional[Dict[str, Any]]:
-    return next((h for h in load_holdings(ctx, account)
-                 if h.get("symbol") == symbol), None)
+    """The holding for `symbol` — an exact match, else a case-insensitive
+    one (a hand-typed `abc.to` read as not held — S079-04)."""
+    rows = load_holdings(ctx, account)
+    hit = next((h for h in rows if h.get("symbol") == symbol), None)
+    if hit is None:
+        want = (symbol or "").strip().upper()
+        hit = next((h for h in rows
+                    if str(h.get("symbol") or "").upper() == want), None)
+    return hit
 
 
 # -------------------------------------------------------------- wash radar
@@ -137,13 +153,30 @@ def wash_radar_sections(ctx: ProjectContext, account: str = "margin",
                  "live view) before trading on it]"
                  if radar_staleness(ctx, account) else "")
     if json_path.exists():
+        # A sidecar that exists but cannot be used is an ERROR banner.
+        # It used to fall back to the generation-time .rpt in silence —
+        # stale countdowns, and "No wash-radar report yet" when the .rpt
+        # was gone too (S078-17); a wrong-shape document 500'd the page
+        # (S078-18).
+        def _bad(why):
+            return ReportArtifactError(
+                f"{json_path.name} could not be read ({why}) — re-run "
+                f"`taxjson run` or fix/delete the file")
         try:
             doc = _json.loads(json_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            doc = None
+        except (OSError, ValueError) as e:
+            raise _bad(e) from e
+        secs = doc.get("sections", []) if isinstance(doc, dict) else None
+        if not isinstance(secs, list) or any(
+                not isinstance(sec, dict)
+                or not isinstance(sec.get("rows", []), list)
+                or any(not isinstance(r, dict) for r in sec.get("rows", []))
+                for sec in secs):
+            raise _bad("not a radar document: expected {\"sections\": "
+                       "[{\"title\", \"rows\": [{...}]}]}")
         if doc:
             sections: List[Dict[str, Any]] = []
-            for sec in doc.get("sections", []):
+            for sec in secs:
                 def _row(r):
                     ci = _clears_in_display(r.get("clears_at"), today)
                     adv = r.get("advisory", "")
@@ -331,6 +364,10 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     """
     _require_account(ctx, account)
     import math
+    # Book symbols are upper-case; a hand-typed `abc.to` found no
+    # position and was reported as "closed" (S079-04). The CLI's
+    # buy-check/sell-check upper-case the same way.
+    symbol = (symbol or "").strip().upper()
     # Reject before anything touches the engine: qty/price of nan/inf
     # bubbled a non-JSON-compliant float into the response and 500'd
     # the route (REVIEW #30); a negative price produced internally
@@ -704,10 +741,18 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         "country": ctx.country,
         "rule_name": ("Wash sale (§1091)" if is_usa
                       else "Superficial loss (s.54)"),
+        # A "no" covers this project's accounts only (CA-PLAN-04 /
+        # US-PLAN-04, audit S054-22).
+        "scope_note": _scope_note(ctx.country),
         "term": _term_label(entries),
         "days_held": entry.get("days_held"),
         "currency": ctx.base_currency,
     }
+
+
+def _scope_note(country):
+    from taxjson.lib.wash_scope import scope_note
+    return scope_note(country)
 
 
 def _term_label(entries):

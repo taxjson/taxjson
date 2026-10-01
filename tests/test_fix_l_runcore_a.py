@@ -776,15 +776,14 @@ class TestReportLabelsAndTotals(unittest.TestCase):
                              {"CAD": 910.0})
             self.assertEqual(j["totals"]["staking"], {"CAD": 7.0})
 
-    def test_divs_sum_leaves_staking_out(self):
+    def test_divs_sum_labels_staking(self):
+        # main's S031-04 design: kept in the total, named as staking.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._views_project(tmp)
             r = _run_cli(root, "divs-sum")
-            self.assertIn("TOTAL DIVIDEND: 30.00 CAD", r.stdout)
-            self.assertIn("STAKING REWARDS", r.stdout)
+            self.assertIn("crypto staking rewards", r.stdout)
             j = json.loads(_run_cli(root, "divs-sum", "--json").stdout)
-            self.assertEqual(j["totals"], {"CAD": 30.0})
-            self.assertEqual(j["staking"], {"CAD": 7.0})
+            self.assertEqual(j["crypto_staking"], {"CAD": 7.0})
 
     def test_sheltered_scope_is_split_out(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -889,7 +888,7 @@ class TestReportLabelsAndTotals(unittest.TestCase):
             "summary": {"year": 2025}})
         self.assertIn("TOTAL STAKING REWARDS",
                       format_report(res, no_color=True, staking=True))
-        self.assertIn("TOTAL REALIZED DIVIDENDS",
+        self.assertIn("TOTAL DIVIDENDS / STAKING",
                       format_report(res, no_color=True))
         with tempfile.TemporaryDirectory() as tmp:
             root = _project(tmp, _MIXED_CFG)

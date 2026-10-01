@@ -627,7 +627,11 @@ def d_missing_history(ctx: Ctx) -> Result:
         if ln.startswith("AFFECTS"):
             in_affects = True
             continue
-        if ln.startswith(("NOT relevant", "To fix", "COVERED")):
+        if ln.startswith(("NOT relevant", "To fix", "SHELTERED", "##",
+                          "COVERED")):
+            # Registered-account rows have no reportable gain: never
+            # counted as affecting the year (audit S035-08); pairs
+            # phantoms.json covers are not work to do (R1-339).
             in_affects = False
         m = re.match(r"^([A-Z0-9.\-]+)\s+(\S+)\s+[A-Z]{3}\s", ln)
         if in_affects and m:

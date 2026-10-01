@@ -173,19 +173,18 @@ def main(argv=None) -> int:
                          "blended account-less inventory rows)")
     args = ap.parse_args(argv)
 
+    from taxjson.lib.json_input import InputFileError, read_json_doc
     try:
-        combined = json.loads(args.combined_json.read_text(
-            encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        cli_diag.error(PROG, f"could not read {args.combined_json}: {e}")
+        combined = read_json_doc(args.combined_json)
+    except InputFileError as e:
+        cli_diag.error(PROG, f"could not read {e}")
         return 2
     base_txs = None
     if args.base and args.base.exists():
         try:
-            base_txs = json.loads(args.base.read_text(
-                encoding="utf-8")).get("transactions", [])
-        except (OSError, ValueError) as e:
-            cli_diag.warn(PROG, f"could not read {args.base}: {e} — "
+            base_txs = read_json_doc(args.base).get("transactions", [])
+        except InputFileError as e:
+            cli_diag.warn(PROG, f"could not read {e} — "
                                 f"blended inventory rows omitted")
 
     out = split_for_account(combined, args.account, base_txs)

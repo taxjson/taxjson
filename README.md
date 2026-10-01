@@ -279,7 +279,7 @@ machines), resolve each with `taxjson elect <account> --set
 - `crosslistings.rpt` — flags cross-listed (`.TO`/`.US`) tickers the radar may not consolidate
 - `fees.rpt` — trading fees by brokerage, with comparison stats
 - `ccd.rpt`, `leaps.rpt` — cross-account covered-call / long-option views (`leaps.rpt` lists every long option close of any tenor; `taxjson leaps-sum` is the LEAPS-only figure; phantom-basis rows are excluded and counted, as in `ccd-sum`)
-- `<account>_holdings.toml` — machine-readable positions (native + base-currency cost, and the per-position acquisition/sell `trades` history). `cost_per_share` is `total_cost / quantity`, so for an option it is per contract; divide by `contract_multiplier` for the per-share price the `trades` show
+- `<account>_holdings.toml` — machine-readable positions (native + base-currency cost, and the per-position acquisition/sell `trades` history). `cost_per_share` is `total_cost / quantity`, so for an option it is per contract; divide by `contract_multiplier` for the per-share price the `trades` show (a futures option carries no `contract_multiplier` — its multiplier is the future's, not 100 — and a plain future is `asset_type = "future"`)
 - `exports/` — SeekingAlpha / FastGraph / TradingView watchlist CSVs
 
 When the year is over, [`docs/filing.md`](./docs/filing.md) is the
@@ -541,7 +541,7 @@ numbers match each `reports/<account>.sum`. `--json` carries a per-account
 ```
 $ taxjson sum
 TAXABLE ACCOUNTS
-ACCOUNT    STOCK        OPTION       REALIZED     DIVIDEND    PIL        FEES       TOTAL
+ACCOUNT    NON-OPT      OPTION       REALIZED     DIVIDEND    PIL        FEES       TOTAL
 ------------------------------------------------------------------------------------------
 margin     24,310.55    -1,204.10    23,106.45    1,842.30    0.00       318.60     24,948.75
 ...
@@ -555,7 +555,9 @@ ALL ACCOUNTS
 TOTAL      31,905.20    -2,617.35    29,287.85    2,611.05    0.00       447.15     31,898.90
 ```
 
-`TOTAL` = REALIZED + DIVIDEND.
+`TOTAL` = REALIZED + DIVIDEND. NON-OPT is every non-option disposition
+(shares, units, futures and crypto); the Schedule 3 / Form 8949 line
+split is the FOR THE RETURN block and `taxjson form-export`.
 
 **Tax estimate** — **`taxjson estimate`** (the front door; also
 `taxjson sum --other-income ...` to see it under the account table)
@@ -731,7 +733,7 @@ Defaults to every taxable account (sheltered accounts are never `--taxable`
 targets); pass an account to scope to one. The combined `sheltered_base.json` is
 included automatically for cross-account detection when present. `--verbose` for
 more detail; `--all` to also list CLEAR (no-risk) positions. Sections group by
-advisory in fixed order (VIOLATION, BLOCKED, LOCKED, EXITABLE — loss OK only with a FULL exit, CAUTION — sheltered leg exited so a full-exit loss stands unless re-bought within 30 days, COOLING, RISK, CLEAR). The
+advisory in fixed order (VIOLATION, BLOCKED, LOCKED, EXITABLE — loss OK only with a FULL exit, CAUTION — sheltered leg exited so a loss sale of any size stands unless re-bought within 30 days, COOLING, RISK, CLEAR). The
 same reports are written to `reports/wash_radar_<account>.rpt` during `taxjson
 run`. A trade is counted from its **trade date** (a sale made today settles
 tomorrow but is already in the books), while the ±30-day windows run on
@@ -747,8 +749,14 @@ account held before the window never do, and in Canada a new short sale or
 written option is not an acquisition (`country = "usa"` keeps §1091's re-short
 rule, and an IRA purchase in the window locks the loss even after the IRA sold).
 A VIOLATION names who must sell what to rescue the loss; a LOCKED row states how
-many of your taxable shares' loss a sale today would lose. `buy-check`,
-`sell-check`, `watch` and `harvest`'s ADVISORY column read the same radar.
+many of your taxable shares' loss a sale today would lose. A rebuy denies the
+loss only on as many shares as it buys (BLOCKED and `buy-check` print the amount
+per unit). A crypto VIOLATION's last day is the settle bound itself (a coin
+settles on its trade date). `buy-check`, `sell-check`, `watch` and `harvest`'s
+ADVISORY column read the same radar. Every verdict covers **this project's
+accounts only** and says so: a purchase by your spouse or common-law partner or a
+corporation you control (Canada: affiliated persons, s.251.1; US: IRS Pub. 550)
+also denies a loss (tax-logic CA-PLAN-04 / US-PLAN-04).
 
 In a **US project** the radar applies §1091, not s.54 (tax-logic US-PLAN-01):
 windows run on **trade** dates, and each recent loss's verdict is the **US
@@ -1156,7 +1164,9 @@ FX-converted, with its source marked (`^` IBKR live, `+` yfinance,
 losses by when the radar says they become claimable: `now` (no lock),
 then cumulatively within 7/14/30 days from the clear dates — estimates
 at today's prices, and any new buy on either side pushes a clear date
-out. `RISK` losses count as claimable **now** — the superficial-loss rule
+out. The TOTAL row's `PCT` is the total unrealized over the gross cost of the
+listed positions (a short's credited proceeds do not net against long cost).
+An input harvest cannot read stops it (exit 2). `RISK` losses count as claimable **now** — the superficial-loss rule
 needs an acquisition inside the ±30-day window, not mere sheltered
 ownership — but carry a forward caveat: an affiliated buy (a DRIP is
 the classic) within 30 days *after* the sale denies the loss

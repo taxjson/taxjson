@@ -14,6 +14,10 @@ from typing import Dict, Any
 
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib.ticker_map import get_underlying as get_base_ticker, is_option_ticker
+from taxjson.lib import cli_diag
+from taxjson.lib.json_input import load_json_doc_or_exit
+
+PROG = "taxjson-sum-gains"
 
 def load_gains_data(file_path: Path = None) -> Dict[str, Any]:
     # '#' comment lines (e.g. from --full-traces) are stripped by the
@@ -345,20 +349,32 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
                      "negated — for Schedule 3 proceeds and ACB use "
                      "`taxjson form-export`)")
         lines.append("-" * 54)
-        lines.append(f"TOTAL REALIZED STOCK GAIN:  {color_val(totals['cap'], is_cost=False)} {currency}")
+        # 'cap' is every NON-option disposition: shares and units, but
+        # also plain futures and crypto (Schedule 3 lines 6/7) — the
+        # old "STOCK" label read as line 4 and disagreed with it by the
+        # futures/crypto gains (audit R1-211, S051-01, S031-04).
+        lines.append(f"TOTAL REALIZED NON-OPTION GAIN:{color_val(totals['cap'], '14,.2f')} {currency}")
+        lines.append("  (shares, units, futures and crypto — Schedule 3 "
+                     "lines: `taxjson form-export`)")
         lines.append(f"TOTAL REALIZED OPTION GAIN: {color_val(totals['opt'], is_cost=False)} {currency}")
         lines.append(f"TOTAL REALIZED GAIN:        {color_val(totals['total'], is_cost=False)} {currency}")
         lines.append("-" * 54)
         if staking:
-            # A crypto account's DIVIDEND rows are staking rewards:
-            # ordinary income, not dividends (S023-11; README).
+            # `--staking` (a crypto account's books, passed by `taxjson
+            # run`): its DIVIDEND rows are staking rewards — ordinary
+            # income, not dividends (S023-11).
             lines.append(f"TOTAL STAKING REWARDS:      {color_val(totals['div'], is_cost=False)} {currency}  (ordinary income, not dividends)")
         else:
-            lines.append(f"TOTAL REALIZED DIVIDENDS:   {color_val(totals['div'], is_cost=False)} {currency}")
+            # DIVIDEND rows: for a crypto account they are staking rewards
+            # (other income, not dividends) — the label says so (S031-04).
+            lines.append(f"TOTAL DIVIDENDS / STAKING:  {color_val(totals['div'], is_cost=False)} {currency}")
         if abs(totals.get('pil', 0)) > 1e-3:
             lines.append(f"TOTAL PIL (PAY-IN-LIEU):    {color_val(totals['pil'], is_cost=False)} {currency}")
         lines.append("-" * 54)
-        lines.append(f"GRAND TOTAL REALIZED GAIN:  {color_val(totals['all'], is_cost=False)} {currency}")
+        # Gain + dividends + PIL: an investment return, not a realized
+        # gain (it overstated the capital gain by all income, S051-00).
+        # `taxjson sum`'s TOTAL leaves PIL out; this line keeps it.
+        lines.append(f"GRAND TOTAL (GAIN+DIV+PIL): {color_val(totals['all'], is_cost=False)} {currency}")
         
         total_fee = data['total_fees'].get(currency, 0.0)
         opt_fee = data['option_fees'].get(currency, 0.0)
@@ -409,7 +425,8 @@ def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], yea
 
     lines = []
     lines.append("")
-    lines.append(f"{BOLD}ASSET: {asset_type:<8} | CURRENCY: {currency:<5} | TRADES: {count} | YEAR: {year}{RESET}")
+    shown_type = 'Non-option' if asset_type == 'Stocks' else asset_type
+    lines.append(f"{BOLD}ASSET: {shown_type:<10} | CURRENCY: {currency:<5} | TRADES: {count} | YEAR: {year}{RESET}")
     lines.append("")
     lines.append(f"Total Realized Gain:     {color}{total_gain:17,.2f}{RESET} {currency}")
     lines.append(f"Average Holding Period:   {avg_hold:17,.1f} Days")
@@ -449,7 +466,16 @@ def main():
     
     file_paths = [Path(f) for f in args.files]
     if not file_paths:
-        raw = load_report_json(None)
+        try:
+            raw = load_report_json(None)
+        except (UnicodeDecodeError, ValueError) as e:
+            cli_diag.error(PROG, f"<stdin>: not valid JSON ({e})")
+            sys.exit(2)
+        if isinstance(raw, list):
+            raw = {'transactions': raw}
+        if not isinstance(raw, dict):
+            cli_diag.error(PROG, "<stdin>: expected a JSON object")
+            sys.exit(2)
         report_data = summarize_gains(raw)
     else:
         all_by_ticker = {}
@@ -465,8 +491,9 @@ def main():
         # Convergence is AND-ed across files: if ANY input's solver failed
         # to converge, the merged report must warn.
         wash_converged = True
+        wash_iters = None
         for fp in file_paths:
-            data = load_gains_data(fp)
+            data = load_json_doc_or_exit(PROG, fp)
             if 'by_ticker' in data:
                 all_by_ticker.update(data['by_ticker'])
             if 'transactions' in data:
@@ -476,6 +503,11 @@ def main():
             if summary.get('year'):
                 total_year = summary['year']
             wash_converged = wash_converged and summary.get('wash_solver_converged', True)
+            # Carried like stdin carries it (the file path dropped it,
+            # audit S051-02): the most iterations any input needed.
+            if summary.get('wash_solver_iterations') is not None:
+                wash_iters = max(wash_iters or 0,
+                                 summary['wash_solver_iterations'])
             for curr, bucket in (summary.get('total_fees_by_currency') or {}).items():
                 m = merged_fees.setdefault(curr, {'stocks': 0.0, 'options': 0.0, 'total': 0.0})
                 for k in ('stocks', 'options', 'total'):
@@ -485,7 +517,8 @@ def main():
             'transactions': all_txs,
             'manual_reporting_required': all_manual,
             'summary': {'year': total_year, 'total_fees_by_currency': merged_fees,
-                        'wash_solver_converged': wash_converged}
+                        'wash_solver_converged': wash_converged,
+                        'wash_solver_iterations': wash_iters}
         }
         report_data = summarize_gains(merged_data)
 
