@@ -123,5 +123,71 @@ class TestMerge2DefaultRateWarning(unittest.TestCase):
             self.assertNotIn("(None)", r.stderr)
 
 
+def _row(sym, qty, date, action="BUYSELL", **kw):
+    r = {"action": action, "symbol": sym, "quantity": qty, "date": date,
+         "time": "10:00:00", "currency": "CAD" if sym.endswith(".TO") else "USD",
+         "description": kw.pop("description", sym)}
+    r.update(kw)
+    return r
+
+
+class TestLintCrosslistings(unittest.TestCase):
+    MOD = "taxjson.bin.taxjson_lint_crosslistings"
+
+    def _lint(self, d, rows, map_text=None, *extra):
+        t = Path(d) / "t.json"
+        _write_json(t, {"transactions": rows})
+        args = ["--taxable", str(t), "--strict", *extra]
+        if map_text is not None:
+            m = Path(d) / "ticker.map"
+            m.write_text(map_text, encoding="utf-8")
+            args += ["--map", str(m)]
+        return _run(self.MOD, *args)
+
+    def test_distinct_and_lowercase_keywords_honoured(self):
+        # R1-144: DISTINCT pairs and lower-case `tobase` were ignored.
+        rows = [_row("ZZQ.TO", 10, "2025-01-02"), _row("ZZQ.US", 10, "2025-01-03"),
+                _row("YYQ.TO", 10, "2025-01-02"), _row("YYQ.US", 10, "2025-01-03")]
+        with tempfile.TemporaryDirectory() as d:
+            r = self._lint(d, rows, "DISTINCT ZZQ.US ZZQ.TO\ntobase YYQ.US YYQ.TO\n")
+            self.assertIn("[OK] ZZQ", r.stdout)
+            self.assertIn("DISTINCT", r.stdout)
+            self.assertIn("[WARN ‼] YYQ", r.stdout)
+            self.assertNotIn("[REVIEW", r.stdout)
+
+    def test_unreadable_map_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            t = Path(d) / "t.json"
+            _write_json(t, {"transactions": [_row("ZZQ.TO", 1, "2025-01-02")]})
+            r = _run(self.MOD, "--taxable", str(t), "--map",
+                     str(Path(d) / "missing.map"))
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("cannot read map", r.stderr)
+            self.assertNotIn("Clean", r.stdout)
+
+    def test_split_position_nets_to_zero(self):
+        # S035-02: buy 100, 2:1 split, sell 200 read as taxable=-100.
+        rows = [_row("ZZ.TO", 100, "2025-01-02"),
+                _row("ZZ.TO", 2, "2025-02-03", action="SPLIT"),
+                _row("ZZ.TO", -200, "2025-03-03"),
+                _row("ZZ.US", 10, "2025-01-02"), _row("ZZ.US", -10, "2025-01-05")]
+        with tempfile.TemporaryDirectory() as d:
+            r = self._lint(d, rows)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn(".TO  taxable=+0", r.stdout)
+            self.assertNotIn("‼", r.stdout.split("----")[0])
+
+    def test_options_only_listing_is_surfaced(self):
+        # S035-03: AAQ.TO shares + AAQ.US calls read as '(Clean.)'.
+        rows = [_row("AAQ.TO", 100, "2025-01-02"),
+                _row("AAQ250620C00010000.US", 2, "2025-01-03")]
+        with tempfile.TemporaryDirectory() as d:
+            r = self._lint(d, rows)
+            self.assertNotIn("Clean", r.stdout)
+            self.assertIn("[REVIEW ‼] AAQ", r.stdout)
+            self.assertIn("options: taxable=+2", r.stdout)
+            self.assertEqual(r.returncode, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

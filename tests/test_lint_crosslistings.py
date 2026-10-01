@@ -72,10 +72,14 @@ class TestLintCrosslistings(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("No cross-listed roots", r.stdout)
 
-    def test_options_ignored(self):
-        # An option on .US plus equity on .TO must NOT count as a cross-listing.
+    def test_options_count_toward_their_listing(self):
+        # An option on .US plus equity on .TO IS a cross-listing to
+        # review: an option is substituted property for the
+        # superficial-loss rule (s.54). This used to pin '(Clean.)' —
+        # the blind spot of audit S035-03.
         r = _run([_buy("XYZ250321C00100000.US", 1)], [_buy("XYZ.TO", 100)])
-        self.assertIn("No cross-listed roots", r.stdout)
+        self.assertNotIn("No cross-listed roots", r.stdout)
+        self.assertIn("[REVIEW ‼] XYZ", r.stdout)
 
 
 if __name__ == "__main__":
