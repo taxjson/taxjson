@@ -614,6 +614,21 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
             raise ValueError(
                 f"{_ctx}: required field {_fld} is missing — fix the "
                 f"input data.")
+    # The engines order same-day rows by the time STRING: '9:30:00'
+    # sorted after its own '09:30:01' superficial-loss bump, and '09:30'
+    # crashed the bump's clock arithmetic (audit S071-13). An unpadded
+    # or seconds-less clock time is written HH:MM:SS; anything else is
+    # refused.
+    _tm = clean_t.get('time')
+    if _tm:
+        _m = re.fullmatch(r'(\d{1,2}):(\d{2})(?::(\d{2}))?', _tm.strip())
+        if not _m or int(_m.group(1)) > 23 or int(_m.group(2)) > 59 \
+                or int(_m.group(3) or 0) > 59:
+            raise ValueError(
+                f"{_ctx}: time={_tm!r} is not a clock time HH:MM:SS — "
+                f"fix the input data.")
+        clean_t['time'] = (f"{int(_m.group(1)):02d}:{_m.group(2)}:"
+                           f"{_m.group(3) or '00'}")
     # A trade row without its quantity or money gets the dataclass
     # default 0.0 — a buy at $0 cost (the whole sale becomes gain) or a
     # sale at $0 proceeds (audit R1-162). The loader serves many tools
