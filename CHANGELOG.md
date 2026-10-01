@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **instalments.** When instalments are not required (s.156.1(1))
+  the JSON carries no shortfall, interest or penalty (it said
+  required_at_all=false next to them); the four quarters add up to the
+  year's figure to the cent, so paying exactly the net tax is not
+  "behind by 0.01"; a configured `prescribed_rates` schedule that
+  starts after January 1 says the earlier days assume its first rate
+  (audit R1-222, S034-14, S034-15).
 - **carryover: claimed_losses.txt and rounding.** A BOM is read, a
   claimed year outside 1900..next year is refused by name instead of
   becoming a phantom ledger row, a directory is a one-line error, and
