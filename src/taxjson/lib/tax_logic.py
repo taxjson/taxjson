@@ -119,6 +119,7 @@ PARTITION_RULES = frozenset({
     "CA-INC-03",       # s.260 payment in lieu as a dividend (D3)
     "CA-INC-DATE-ROC-TRUST",  # trust ROC on the record date (D4)
     "CA-INC-DATE-TRUST",      # trust distribution by record date (D5)
+    "CA-INC-06",       # T5 box 18 capital-gains dividends (map; R1-62)
     # United States
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
@@ -179,6 +180,7 @@ def _ownership(country: str) -> List[Rule]:
     cfg = sorted(_C.owners(_C.CONFIG_COUNTRY, other))
     cmds = sorted(_C.owners(_C.COMMAND_COUNTRY, other))
     flags = sorted(_C.owners(_C.FLAG_COUNTRY, other))
+    files = sorted(_C.owners(_C.PROJECT_FILE_COUNTRY, other))
 
     def _cmd(c: str) -> str:
         name, _, var = c.partition(":")
@@ -198,6 +200,10 @@ def _ownership(country: str) -> List[Rule]:
     if flags:
         parts.append("the flag" + ("s " if len(flags) > 1 else " ")
                      + ", ".join(flags))
+    if files:
+        parts.append(f"the {other_name}-only project file"
+                     + ("s " if len(files) > 1 else " ")
+                     + ", ".join(files))
     cur = _C.HOME_CURRENCY[country]
     return [
         Rule(f"{p}-CTRY-01",
@@ -643,6 +649,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-INC-05",
                  "Dividends are booked gross; withholding tax is its own "
                  "TAX row."),
+            Rule("CA-INC-06",
+                 "A capital-gains dividend (T5 box 18, line 17400: a split-"
+                 "share or mutual-fund corporation's, ITA s.130.1(4)/"
+                 "s.131(1)) is a capital gain, not a dividend. No export "
+                 "labels it, so the books carry it as a dividend; list it "
+                 "in capital_gains_dividends.map (symbol, year or pay "
+                 "date, amount or `all`) and divs-sum shows it apart while "
+                 "the estimate taxes it as a capital gain (50% inclusion, "
+                 "no gross-up or credit). ACB is unchanged."),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",
@@ -707,7 +722,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "only.", keys=("province",)),
             Rule("CA-RPT-04",
                  "Canadian dividends are treated as eligible (38% gross-up "
-                 "and credit),", cont=True),
+                 "and credit; a capital-gains dividend in "
+                 "capital_gains_dividends.map as a capital gain),",
+                 cont=True),
             Rule("CA-RPT-05",
                  "foreign dividends as ordinary income with withholding "
                  "credited up to 15%;", cont=True),

@@ -252,12 +252,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `lib/core.py` closing branch.
 - **Current behavior:** the days-held figure counts from trade dates while every other Canadian date is settlement-basis. Canada has no holding-period rule, but the figure also gives the year of acquisition `form-export` prints on Schedule 3 (disposition date minus days held), so a lot bought on a late-December trade date that settled in January shows the earlier year.
 
-### Non-eligible dividends and capital-gains dividends are estimated as eligible
+### Non-eligible dividends are estimated as eligible
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
-- **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Non-eligible dividends (small-business corporations, some REIT/LP distributions: 15% gross-up, smaller credit) are taxed HIGHER than that, so the estimate understates them. Split-share and mutual-fund corporations report on a T5 whose dividends are usually eligible; their gap is T5 box 18 capital-gains dividends, which belong on line 17400 at the 50% inclusion rate but are booked as eligible dividends, so the estimate overstates them (audit S023-08). T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
+- **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Non-eligible dividends (small-business corporations, some REIT/LP distributions: 15% gross-up, smaller credit) are taxed HIGHER than that, so the estimate understates them. T5 box 18 capital-gains dividends (split-share and mutual-fund corporations) are no longer part of this: name them in `capital_gains_dividends.map` (README) and the estimate taxes them as capital gains (audit R1-62, S023-08). T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
 - **Why deferred:** brokers' activity exports do not carry the T5 box; the split is only known from the slip.
 - **Workaround:** the estimate is disclosed as an estimate; use the T5/T3 slips for the return. (`taxjson reconcile-slips` reads only T5008 / 1099-B disposition slips; it does not check dividend slips.)
-- **Capital-gains dividends (T5 box 18).** A split-share or mutual-fund corporation's capital-gains dividend is a 50%-inclusion capital gain, not a dividend; IB ("(Ordinary Dividend)"), RBC and Questrade label it as an ordinary dividend, so it is estimated with the eligible gross-up and credit (the estimate is overstated by a few percent of those amounts). Only the slip (or IBKR's own dividends report, "T5: Capital Gains") says which payments are box 18; the filed return takes line 17400 from the slip. No ACB is affected.
 
 ### reconcile-slips cannot read per-type-code T5008s or scope a slip to one broker
 - **Where:** `src/taxjson/bin/taxjson_reconcile_slips.py`.

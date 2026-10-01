@@ -36,6 +36,8 @@ Ownership tables (who a setting, a CLI flag or a command belongs to):
   (``form-export:8949``, ``crypto-sends:gift``), that belong to one
   country. ``taxjson``'s dispatch refuses the other country's commands
   before they run.
+- ``PROJECT_FILE_COUNTRY``: project-root input files that belong to one
+  country (``capital_gains_dividends.map``: Canada).
 
 Checks built on the tables (each returns messages; the caller dies):
 
@@ -43,6 +45,7 @@ Checks built on the tables (each returns messages; the caller dies):
   country, and a base currency that is not the country's.
 - ``flag_country_problems(country, given, tool=...)``.
 - ``command_country_problem(command, country, variant=None)``.
+- ``project_file_problems(root, country)``.
 
 When a Phase-B fix adds a one-country setting, flag or command, add it
 to the table here (with a ``*_WHY`` reason and, in tax-logic, the rule
@@ -311,6 +314,33 @@ COMMAND_WHY: Dict[str, str] = {
                          "Canada (ITA s.69(1)(b)); for a US donor it is "
                          "not a sale — record it as `self`",
 }
+
+
+# Project-root input files owned by one country. The views that read
+# one refuse it in a project of the other country.
+PROJECT_FILE_COUNTRY: Dict[str, str] = {
+    "capital_gains_dividends.map": CANADA,
+}
+
+PROJECT_FILE_WHY: Dict[str, str] = {
+    "capital_gains_dividends.map": "T5 box 18 capital-gains dividends "
+                                   "(ITA s.130.1(4)/s.131(1), line "
+                                   "17400); a US fund's capital-gain "
+                                   "distributions (1099-DIV box 2a) are "
+                                   "not modelled",
+}
+
+
+def project_file_problems(root: Any, country: str) -> List[str]:
+    """One message per project-root file in `root` that `country` does
+    not own (PROJECT_FILE_COUNTRY)."""
+    from pathlib import Path
+    out: List[str] = []
+    for name, owner in PROJECT_FILE_COUNTRY.items():
+        if owner not in (BOTH, country) and (Path(root) / name).is_file():
+            out.append(_owner_problem(owner, country, name,
+                                      PROJECT_FILE_WHY.get(name, "")))
+    return out
 
 
 def _owner_problem(owner: str, country: str, thing: str, why: str) -> str:
