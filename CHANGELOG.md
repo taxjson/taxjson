@@ -23,7 +23,7 @@
   purchase by a spouse or common-law partner or a controlled corporation
   (Canada: affiliated persons, s.251.1; US: IRS Pub. 550) also denies a
   loss. Each report now says so in one line. tax-logic CA-PLAN-04 /
-  US-PLAN-04.
+  US-PLAN-04. The web what-if shows the same line under its verdict.
 - **Wash radar: a sale whose commission exceeds its gross is a loss.**
   Its proceeds are negative, as the engine books them. The radar used
   abs() and called the loss a gain, so a superficial loss had no

@@ -741,10 +741,18 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         "country": ctx.country,
         "rule_name": ("Wash sale (§1091)" if is_usa
                       else "Superficial loss (s.54)"),
+        # A "no" covers this project's accounts only (CA-PLAN-04 /
+        # US-PLAN-04, audit S054-22).
+        "scope_note": _scope_note(ctx.country),
         "term": _term_label(entries),
         "days_held": entry.get("days_held"),
         "currency": ctx.base_currency,
     }
+
+
+def _scope_note(country):
+    from taxjson.lib.wash_scope import scope_note
+    return scope_note(country)
 
 
 def _term_label(entries):
