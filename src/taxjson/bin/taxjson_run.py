@@ -8495,12 +8495,16 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                  f"(run `taxjson run` first).")
     basis = gains_basis_label(resolved)
     tax: Dict[str, Dict[str, float]] = {}
+    unreadable: Dict[str, str] = {}
     for acct, f in resolved.items():
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+            if not isinstance(data, dict):
+                raise ValueError("not a gains document")
+        except (OSError, ValueError) as e:
             print(f"taxjson: warning: could not read {f}: {e}",
                   file=sys.stderr)
+            unreadable[acct] = f"work/{f.name}: {e}"
             continue
         book: Dict[str, float] = {}
         for h in (data.get("inventory") or []):
@@ -8519,6 +8523,12 @@ def cmd_sanity(args: argparse.Namespace) -> None:
     def _account(name: str, ctx: str) -> str:
         if name in tax:
             return name
+        if name in unreadable:
+            # Its book exists but is corrupt: say so, not "not an
+            # account" (R1-338 — that sent the user to the config).
+            sys.exit(f"taxjson sanity: {ctx}: the books of {name!r} "
+                     f"cannot be read ({unreadable[name]}) — re-run "
+                     f"`taxjson run` to rebuild them.")
         sys.exit(f"taxjson sanity: {ctx}: {name!r} is not an account "
                  f"(have: {', '.join(sorted(tax))})")
 

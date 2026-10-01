@@ -230,9 +230,9 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `lib/core.py` closing branch.
 - **Current behavior:** the days-held figure in traces counts from trade dates while every other Canadian date is settlement-basis. Cosmetic — Canada has no holding-period rule.
 
-### Non-eligible dividends are estimated as eligible
+### Non-eligible dividends and capital-gains dividends are estimated as eligible
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
-- **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Split-share corporations, some REIT/LP distributions and small-business dividends are non-eligible (15% gross-up, smaller credit) and are overstated in the estimate; T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
+- **Current behavior:** every Canadian-source dividend gets the eligible gross-up (38%) and credit. Non-eligible dividends (small-business corporations, some REIT/LP distributions: 15% gross-up, smaller credit) are taxed HIGHER than that, so the estimate understates them. Split-share and mutual-fund corporations report on a T5 whose dividends are usually eligible; their gap is T5 box 18 capital-gains dividends, which belong on line 17400 at the 50% inclusion rate but are booked as eligible dividends, so the estimate overstates them (audit S023-08). T3 trust allocations (interest, ROC, capital gains) are not split by type at all.
 - **Why deferred:** brokers' activity exports do not carry the T5 box; the split is only known from the slip.
 - **Workaround:** the estimate is disclosed as an estimate; use the T5/T3 slips for the return. (`taxjson reconcile-slips` reads only T5008 / 1099-B disposition slips; it does not check dividend slips.)
 

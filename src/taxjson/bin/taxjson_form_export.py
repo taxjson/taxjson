@@ -553,8 +553,14 @@ def build_schedule3(entries: List[Dict[str, Any]],
     totals.setdefault("gain_13200", 0.0)
     totals["proceeds_all"] = round(sum(r["proceeds"] for r in rows), 2)
     totals["gain_all"] = round(sum(r["gain"] for r in rows), 2)
+    # The same rows' gain summed BEFORE the per-row rounding: what the
+    # engine (and the .sum) totals. The rows must add up to the line, so
+    # the form rounds per row; a checker comparing with the engine uses
+    # this instead of a tolerance that has to grow with the row count
+    # (R1-210: 100 rows of 100.004 export 10,000.00 against 10,000.40).
     return {"form": "schedule3", "year": year, "rows": rows,
-            "lines": lines, "totals": totals}
+            "lines": lines, "totals": totals,
+            "gain_unrounded": sum(r["gain"] for r in recs.values())}
 
 
 def filing_lines(entries: List[Dict[str, Any]],

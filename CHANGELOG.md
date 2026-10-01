@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **checklist: no verdict from part of the books.** wash-reviewed is
+  blocked when a taxable gains file is unreadable, missing for an
+  account with inputs, or built for another year, and attention when
+  the wash pass is stale; audit and form-export say "rebuild" for
+  other-year or stale books instead of blaming phantoms; roc-entered,
+  inputs-frozen and run-clean name an unreadable base book or .sum;
+  missing-history counts every AFFECTS row (BRK/B, `?` currency); the
+  form-export check compares the unrounded rows with the .sum, so many
+  rows of rounding no longer read as a mismatch; a US project checks
+  for option positions left open past expiry; `sanity` names an
+  unreadable book instead of "not an account"; `watch` ignores a state
+  file that is not an object. Guidance: missing basis can understate
+  or overstate; split-share corps report on a T5 (box 18 -> line
+  17400) (audit R1-210, R1-338, S023-08, S066-15, S066-19, S067-04,
+  S067-10, S067-11, S067-12, S068-06, S068-11, S068-16).
 - **option-boundary cites the right law and sees more missing rows.**
   An assignment folds the premium under s.49(3) (call) or s.49(3.1)
   (put), never s.49(2); a buy-back loss cites IT-479R para 29 / 32

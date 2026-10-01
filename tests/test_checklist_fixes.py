@@ -120,8 +120,12 @@ class TestCountryAndScope(unittest.TestCase):
             cfg = {"settings": {"year": 2025, "country": "usa"},
                    "accounts": {"margin": {"type": "taxable"}}}
             res = {r.id: r for r in cl.evaluate(_ctx(Path(td), {}, cfg), quick=True)}
-            for sid in ("option-boundary", "t1135", "noa"):
+            for sid in ("t1135", "noa"):
                 self.assertEqual(res[sid].status, "n/a", sid)
+            # option-boundary is no longer n/a in a US project: the
+            # s.49 boundary does not apply, but the options-open-past-
+            # expiry check does (S066-15); --quick skips it.
+            self.assertEqual(res["option-boundary"].status, "todo")
             text = cl.render(list(res.values()), 2025, "usa", quick=True)
             self.assertIn("1099-B slips reconcile", text)
             self.assertIn("Form 8949 rows exported", text)
