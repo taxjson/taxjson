@@ -340,7 +340,11 @@ class TestTtEmitterDates(unittest.TestCase):
         back = parse_tt_line(lines[0])
         self.assertEqual(back["date_settle"], "2026-01-02")
         self.assertIn("1 row(s)", err)          # trade != settle note
-        self.assertIn("multiplier", err)
+        # The futures row's contract size now rides along as `x1000`
+        # (S026-22) instead of the "cannot hold" warning.
+        self.assertTrue(lines[1].endswith(" x1000"), lines[1])
+        self.assertEqual(parse_tt_line(lines[1])["multiplier"], 1000.0)
+        self.assertNotIn("multiplier", err)
 
     def test_events_view_single_account_uses_settle_date(self):
         from taxjson.bin.taxjson_run import _tx_display_line

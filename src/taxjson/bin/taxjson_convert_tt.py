@@ -182,10 +182,10 @@ def parse_tt_line(line: str, account_name: str = 'default',
                         parts = parts[:-1]
                     if len(parts) > 9:
                         raise ValueError(
-                            f"{_where(source)}{action} row has an "
-                            f"unexpected token {parts[9]!r} after the fee "
+                            f"{_where(source)}{action} row has 1 "
+                            f"unexpected trailing token(s) {parts[9:]} "
                             f"(only a contract size like `x1000` may "
-                            f"follow it) — put notes after `#`: "
+                            f"follow the fee) — put notes after `#`: "
                             f"{line.strip()!r}")
                 tx['quantity'] = _tt_num(parts[4])
                 tx['currency'] = parts[5].upper()
