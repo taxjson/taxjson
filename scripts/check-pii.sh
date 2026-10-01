@@ -42,7 +42,7 @@ set -uo pipefail
 PWD0="$PWD"
 cd "$(dirname "$0")/.."
 DENY="${TAXJSON_PII_DENYLIST:-$HOME/.config/taxjson/pii-denylist}"
-ALLOW_EMAILS='noreply@anthropic\.com|users\.noreply\.github\.com|@example\.(com|org|net)|ckscijdtest@gmail\.com'
+ALLOW_EMAILS='noreply@anthropic\.com|noreply@github\.com|users\.noreply\.github\.com|@example\.(com|org|net)|ckscijdtest@gmail\.com'
 # Real binaries: the only files the scan may skip. Everything else is
 # scanned as text (grep -a, so a stray Latin-1 byte cannot make grep call
 # the file "binary" and skip it), and a NUL byte in it — a UTF-16 export
