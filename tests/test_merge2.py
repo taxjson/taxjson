@@ -124,7 +124,7 @@ class TestMerge2TickerDrop(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             syms = [t['symbol'] for t in json.loads(result.stdout)['transactions']]
             self.assertEqual(syms, ['NVDA.US'])
-            self.assertIn('DROP removed 1 RGLD.CAD.TO', result.stderr)
+            self.assertIn('DELETE removed 1 RGLD.CAD.TO', result.stderr)
 
 
 class TestMerge2StageOrder(unittest.TestCase):
