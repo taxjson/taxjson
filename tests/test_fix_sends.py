@@ -234,10 +234,30 @@ class TestCryptoSendsProject(unittest.TestCase):
         self.assertIn("Coinbase", btc["fair_value"]["source"])
         self.assertEqual(btc["tt"], "BUYSELL 2025-08-01 08:00:00 BTC "
                                     "-0.001 CAD 150000 150.00 0")
-        # Nothing private in the listing: no txids, no refids.
+        # Nothing private in the listing: no txids, no refids. Checked
+        # on the listing's own values — the project paths (`manifest`,
+        # `tt_file`, the tmp dir in the text) are random and may
+        # contain any short string such as "c6".
+        def leaves(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k not in ("manifest", "tt_file"):
+                        yield from leaves(v)
+            elif isinstance(node, list):
+                for v in node:
+                    yield from leaves(v)
+            elif isinstance(node, str):
+                yield node
+        values = list(leaves(doc))
+        self.assertIn("LG***", values)
         text = _cli(self.root, self.home, "crypto-sends").stdout
+        for p in sorted({str(self.root), str(self.home),
+                         str(self.root.resolve()),
+                         str(self.home.resolve())}, key=len, reverse=True):
+            text = text.replace(p, "<tmp>")
         for secret in ("LG1GGG", "RG1", "LC1CCC", "c6"):
-            self.assertNotIn(secret, json.dumps(doc))
+            for v in values:
+                self.assertNotIn(secret, v)
             self.assertNotIn(f" {secret}", text)
 
     @rule("CA-CRYPTO-08")
