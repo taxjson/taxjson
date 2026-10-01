@@ -179,6 +179,8 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         doc, why = None, f"unreadable ({e})"
+    # Valid JSON of the wrong shape (a list) is no baseline either — it
+    # crashed `taxjson watch` with an AttributeError (S068-11, R1-242).
     if doc is not None and not isinstance(doc, dict):
         doc, why = None, "not a JSON object"
     if doc is not None and doc.get("schema_version") != STATE_VERSION:

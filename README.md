@@ -422,7 +422,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson run --strict` | Promote per-account validation ERRORs (oversold positions, malformed rows) and an input file that parsed to 0 transactions to fatal instead of publishing reports with a DIAGNOSTICS banner. Recommended for CI/cron. |
 | `taxjson run sum` (chaining) | Subcommands chain in one invocation, each with its own flags: `taxjson run close-year check-filed`. Note a chained `--json` command's stdout follows the earlier commands' progress output — pipe consumers should run the JSON command standalone. A failing command stops the chain and its exit code propagates. Option values that collide with command names are handled (`--account sum`); for the rare ambiguous positional, separate with `--`. |
 | `taxjson close-year [--filed-dispositions CSV]` | Snapshot the current tax year's filing aggregates to `filed/<year>.json` — the filed-year lock. Commit it with your records. It also records what the next year needs for `taxjson handoff`: every sale, the positions and cost at Dec 31 (superficial-loss deferrals included), and the trades that settle in January. When the return was prepared with another tool, `--filed-dispositions` stores the sales it actually reported (CSV: `symbol,date,qty,proceeds,cost,gain`, optional `account`). |
-| `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks; exit 1 on drift. A taxable account the books have but the lock does not (with activity in that year), or a locked account the books no longer have, is drift too; a locked account that is no longer a taxable account in `taxjson.toml` is reported, never recomputed from its old `work/` book. Each year is recomputed with the written-option timing its lock recorded. Dividends and payments in lieu are compared separately. An unreadable lock is named and counts as a failure. A lock closed under the other country (every lock records its `country`) is refused by name and never recomputed under this project's law; a lock is recomputed on the date basis it recorded. Every full run also auto-checks (`taxjson run --strict` aborts on drift or an unreadable lock). |
+| `taxjson check-filed` | Recompute every filed year from the current books and report drift vs the locks; exit 1 on drift. A taxable account the books have but the lock does not (with activity in that year), or a locked account the books no longer have, is drift too; a locked account that is no longer a taxable account in `taxjson.toml` is reported, never recomputed from its old `work/` book. Each year is recomputed with the written-option timing its lock recorded. Dividends and payments in lieu are compared separately, and so are the amounts the export puts on each return line (Schedule 3 line codes, Form 8949 part totals), so a change that moves an amount between lines is drift even when the gain is unchanged; interest, foreign tax withheld and the FX gain on foreign cash are not locked (every OK says so). An unreadable lock is named and counts as a failure. A lock closed under the other country (every lock records its `country`) is refused by name and never recomputed under this project's law; a lock is recomputed on the date basis it recorded. Every full run also auto-checks (`taxjson run --strict` aborts on drift or an unreadable lock). |
 | `taxjson events` / `divs` / `dil` / `trades` / `gains` / `fees` / `roc` / `leaps` | Per-transaction views over a look-back window — see below. |
 | `taxjson transfers [ACCOUNT]` | Custody-transfer **evidence** view: depot flips, listing journals, broker migrations, and crypto withdrawals/sends (a send that arrived on another of your exchanges is a self-custody move; the rest are gift/payment candidates — see `taxjson crypto-sends`) — the TRANSFER rows the books deliberately exclude (basis comes from buy/sell history). Reads the parse-stage sidecars (`work/<acct>_<broker>_transfers.json`) plus in-book TRANSFERs from `transfers = true` accounts, with the broker's transfer type (InterDepot / Internal / ATON). `--json` for machines. |
 | `taxjson crypto-sends [ACCOUNT] [--json]` | Every crypto withdrawal/send that did **not** arrive on another of your exchanges (a send is paired with an arrival of the same coin on another exchange within 3 days, losing at most 10% to the network fee), with your decision — `self` (your own wallet: no tax event), `gift` or `payment` (a disposition at fair market value; a gift under ITA s.69(1)(b)) — or PENDING. For each: the fair value per coin and in CAD with its source (the exchange's spot price when the row carries one — Coinbase; otherwise the Yahoo daily close `fill-crypto` uses, at the send date, times the Bank of Canada rate), and the ready line `BUYSELL <date> <local time> <COIN> -<qty> CAD <price> <proceeds> 0`. A Kraken network fee taken in the coin is already booked by the parser and is not in the quantity. Stablecoins (USDC/USDT/DAI; PYUSD/GUSD on Coinbase) are US-dollar cash in the books, so a gift/payment of one gets no sale line: the command shows the **currency gain** instead — value at the send-date Bank of Canada rate minus the average CAD cost of the USD-cash/stablecoin pool rebuilt from the ledgers — flagged when likely superficial (USD/stablecoins acquired within 30 days and still held), with the year's total. `--set ID=self\|gift\|payment [--note TEXT] [--price P]` records a decision (repeatable; `--price` when the price lookup fails), `--write` regenerates `inputs/<acct>/crypto_sends.tt` (idempotent; it warns when another `.tt` already sells the same coin, date and quantity). `taxjson run` asks at a terminal (self / gift / payment / skip) after the crypto parse and refreshes the file; headless it prints one note. Ids carry exchange, local date/time, coin and quantity — never a txid or address; refs are masked (`LG***`). A `checklist` step. |
@@ -614,15 +614,23 @@ the earliest table also says the post-2024 AMT shown did not apply).
   to provincial tax x foreign income / net income). The estimate is
   signed: eligible dividends at a low bracket can show a negative
   figure — a saving on the tax of the other income. Not modelled: QC,
-  low-income reductions, non-eligible dividends, and a prior-year
+  low-income reductions, non-eligible dividends, a prior-year
   minimum tax carryover (T691 Part 8, line 40427, ITA s.120.2) — when
   AMT does not bind, a NOTE names the headroom such a carryover could
-  use.
+  use — non-refundable credits other than the basic personal amount
+  (CPP/EI, Canada employment, age, pension, donations ...), the OAS
+  recovery tax (s.180.2) and AMT adjustments outside the books (the
+  s.110(1)(d) stock-option deduction, donated securities): see
+  KNOWN_ISSUES.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
   brackets; losses net ST first, then LT, then up to $3,000 of ordinary
-  income (a net-loss year shows a negative estimate — a saving); NIIT
-  3.8% above $200k MAGI; no state tax.
+  income (a net-loss year shows a negative estimate — a saving), and
+  that deduction also reduces net investment income; the carryforward
+  shown counts as used only what taxable income absorbs (Capital Loss
+  Carryover Worksheet line 4); NIIT 3.8% above $200k MAGI; no foreign
+  tax credit (the withholding in the books is not credited) and no
+  state tax.
 
 Add `--verbose` (`-v`) for the **CALCULATION TRACE** — every bracket
 slice, credit and surtax tier, side by side for the base and
@@ -976,8 +984,14 @@ supports; record what you actually claimed on filed returns in a
 — auto-detected, or pass `--claimed FILE`) and it's folded into the running
 balance. **Units:** Canada — the 100% capital loss applied that year, i.e.
 the line 25300 amount divided by the inclusion rate (x2 at 50%); US — the
-Schedule D line 21 deduction against ordinary income (not the line 6/14
-carryover coming in). `1,234.56` and `$1,234.56` are accepted. A claim
+Schedule D line 21 deduction against ordinary income as far as taxable
+income absorbed it (line 4 of the next year's Capital Loss Carryover
+Worksheet — 0 in a year with negative taxable income; not the line 6/14
+carryover coming in). `1,234.56` and `$1,234.56` are accepted, and so is a
+UTF-8 BOM; a line that cannot be read (or whose year is not a plausible
+tax year) is named, left out, and makes the checklist's carryover step
+need attention. A claim equal to the filed (per-row-rounded) Schedule 3
+loss consumes the ledger's unrounded loss exactly. A claim
 recorded for a year the books show no loss for waits for a later loss, but
 only one of the next 3 years (the T1A carryback reach, ITA 111(1)(b));
 past that it is reported as unmatched. If the history's first year has
@@ -994,9 +1008,11 @@ output.
 
 Under ITA s.49(1) writing an option is a disposition: the premium is a
 capital gain **in the year the option is written**. A later buy-back is a
-capital loss in its own year (IT-479R para 24); expiry adds nothing; an
+capital loss in its own year (IT-479R para 29 for calls, para 32 for
+puts); expiry adds nothing; an
 exercise or assignment folds the premium into the share leg instead and
-the grant year is amended (s.49(2)–(4)). Contracts written and closed in
+the grant year is amended (s.49(3) for a call, s.49(3.1) for a put;
+s.49(4)). Contracts written and closed in
 the same year give the same total either way — only year-straddling
 contracts differ. Canada projects use this timing by default; `"close"`
 nets at the closing transaction (the US §1234 convention, which the US
