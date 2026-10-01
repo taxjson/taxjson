@@ -6721,8 +6721,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
             holdings[name] = (tomllib.loads(f.read_text(encoding="utf-8"))
                               .get("holding", []))
         except Exception as e:
-            print(f"taxjson: warning: could not read {f.name}: {e}",
-                  file=sys.stderr)
+            # A warning, then "No findings — clean scan." and exit 0
+            # turned an unreadable report into a false all-clear: the
+            # findings on that account's positions vanished (S049-10).
+            _die(f"could not read {f}: {e} — re-run `taxjson run` to "
+                 f"rebuild it (the scan would otherwise leave that "
+                 f"account's positions out).")
     _equity_accts = [n for n, c in accounts.items()
                      if not (c or {}).get("crypto")]
     if not holdings and _equity_accts:
@@ -6879,11 +6883,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
         from taxjson.lib.core import (is_option_symbol,
                                       parse_option_underlying)
         _seen_syms: set = set()
+        _unread: List[str] = []
         for _acct in accounts:
-            for _p in _audit_source_files(cache, _acct):
+            for _p in _audit_source_files(cache, _acct,
+                                          list(accounts)):
                 try:
                     _doc = json.loads(_p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                except (OSError, ValueError) as e:
+                    # Skipping it silently listed live rules as unused
+                    # (S042-10) — and pruning on that note once split
+                    # option identity classes.
+                    _unread.append(f"{_p.name} ({e})")
                     continue
                 for _t in (_doc.get("transactions", _doc)
                            if isinstance(_doc, dict) else _doc) or []:
@@ -6920,8 +6930,22 @@ def cmd_scan(args: argparse.Namespace) -> None:
                          f"matches exactly — write the suffixed form, "
                          f"e.g. {sorted(_suffixed[_fu])[0]})")
             map_unused.append(f"{_frm} -> {_to}{_hint}")
+        if _unread:
+            print(f"taxjson scan: warning: could not read "
+                  f"{'; '.join(_unread)} — the unused-ticker.map-rule "
+                  f"check is skipped (its symbols are unknown); re-run "
+                  f"`taxjson run`.", file=sys.stderr)
+            map_unused = []
 
-    if getattr(args, "online", False):
+    from taxjson.lib.offline import offline_enabled as _offline
+    if getattr(args, "online", False) and _offline():
+        # The documented kill switch covers this probe too: it sends
+        # every held and dividend ticker to Yahoo (S042-12, S048-00).
+        print("taxjson scan: note: TAXJSON_OFFLINE is set — the --online "
+              "Yahoo Finance probe is skipped (MAP-GAP?/MAP-BAD?/"
+              "CDR-PAIR are not checked); the offline checks below "
+              "still ran.", file=sys.stderr)
+    elif getattr(args, "online", False):
         try:
             import yfinance as yf
         except ImportError:
@@ -7045,9 +7069,11 @@ def cmd_scan(args: argparse.Namespace) -> None:
             for key, syms in sorted(_by_name.items()):
                 if not key or len(syms) < 2:
                     continue
-                us = [s for s in syms
+                # sorted: `syms` is a set, and its iteration order
+                # numbered the findings differently on every run (S042-13).
+                us = [s for s in sorted(syms)
                       if _scan_symbol_root(s)[1] == "US"]
-                ca = [s for s in syms
+                ca = [s for s in sorted(syms)
                       if _scan_symbol_root(s)[1] in _CA_SUFS]
                 for u in us:
                     for c in ca:
@@ -12502,18 +12528,30 @@ _AUDIT_DERIVED_SUFFIXES = (
     "_base.json", "_gains.json", "_gains_wash.json", "_raw.json",
     "_raw_base.json", "_raw_gains.json", "_raw_base_gains.json",
     "_merged.json", "_sorted.json", "_filled.json", "_report.json",
+    # The crypto ticker.map stage's output: a renamed copy of the
+    # parse, read as a second source it claimed a false 2-file dedup
+    # and hid the rename (S047-12).
+    "_mapped.json", "_manifest.json",
     "_pending_elections.json", "_validate.diag",
 )
 
 
-def _audit_source_files(cache: Path, name: str) -> List[Path]:
+def _audit_source_files(cache: Path, name: str,
+                        accounts=None) -> List[Path]:
     """The parsed-source JSONs for one account: everything the pipeline
     wrote as `{name}_*.json` that is not a derived book. These are the
     per-brokerage parses, converted .tt files, and corp-action rows —
-    the nominal-currency provenance the audit joins dispositions to."""
+    the nominal-currency provenance the audit joins dispositions to.
+    `accounts` (the configured names) keeps a longer-named sibling's
+    files out: `margin_*.json` also matches margin_us's parses, which
+    the audit then listed twice (S047-13)."""
+    siblings = [a for a in (accounts or [])
+                if a != name and str(a).startswith(f"{name}_")]
     out = []
     for p in sorted(cache.glob(f"{name}_*.json")):
         if any(p.name.endswith(sfx) for sfx in _AUDIT_DERIVED_SUFFIXES):
+            continue
+        if any(p.name.startswith(f"{sib}_") for sib in siblings):
             continue
         out.append(p)
     return out
@@ -12663,7 +12701,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         if country in ("us", "usa") and not is_crypto:
             fl.append("--per-account-basis")
         for n in names:
-            for src in _audit_source_files(cache, n):
+            for src in _audit_source_files(cache, n, list(acfgs)):
                 fl += ["--source", str(src)]
             if (cache / f"{n}_filled.json").exists():
                 fl += ["--filled", str(cache / f"{n}_filled.json")]
@@ -12694,7 +12732,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             fl.append("--no-wash")
         elif sheltered_base.exists():
             fl += ["--sheltered", str(sheltered_base)]
-        for src in _audit_source_files(cache, n):
+        for src in _audit_source_files(cache, n, list(acfgs)):
             fl += ["--source", str(src)]
         if (cache / f"{n}_filled.json").exists():
             # Crypto rows priced by fill-crypto-prices (R1-271).

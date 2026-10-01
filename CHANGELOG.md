@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **scan: no false all-clear, no egress while offline.** An unreadable
+  holdings report stops the scan (it warned, then printed "No findings
+  — clean scan." with exit 0); the unused-ticker.map-rule note is
+  skipped with a warning when a parsed source cannot be read (it listed
+  live rules as unused); `scan --online` honours `TAXJSON_OFFLINE=1`
+  (skips the Yahoo probe with a note — SECURITY.md now says so); the
+  online findings come in a stable order (audit S049-10, S042-10,
+  S042-12, S048-00, S042-13).
+- **audit: provenance.** The crypto ticker.map stage's `_mapped.json`
+  is a derived book, not a second source (every crypto block claimed a
+  false 2-file dedup and lost its MAPPING line), and account `margin`
+  no longer picks up a sibling `margin_us`'s parses (audit S047-12,
+  S047-13).
+
 - **US estimate (experimental): NIIT and the loss carryforward.** The
   up-to-$3,000 capital loss deduction now reduces net investment income
   (Form 8960 line 5a; NIIT was up to $114 too high), and the
