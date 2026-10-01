@@ -155,9 +155,9 @@ class TestIbRoc(unittest.TestCase):
 
     @rule("CA-ACB-08")
     def test_foreign_issuer_roc_is_a_dividend_s90_2(self):
-        # A US corporation's "(Return of Capital)" distribution: ITA
-        # s.90(2) deems it a dividend for Canadian purposes (s.90(3) is
-        # for foreign affiliates only) — foreign dividend income, no ACB
+        # A US corporation's "(Return of Capital)" distribution on a
+        # portfolio share: a foreign dividend (ITA s.90(1); s.90(2)/(3)
+        # are the foreign-affiliate rules, audit S058-07) — no ACB
         # reduction. Reversal rows stay signed.
         body = (self.DIV_HDR +
                 'Dividends,Data,USD,U1,2026-06-30,'
@@ -175,7 +175,8 @@ class TestIbRoc(unittest.TestCase):
         self.assertAlmostEqual(divs[0]['net_amount'], 24.00, places=2)
         self.assertAlmostEqual(sum(t['net_amount'] for t in divs), 0.0)
         self.assertIn("IB-designated return of capital, treated as a "
-                      "dividend under ITA s.90(2)", divs[0]['description'])
+                      "foreign dividend (ITA s.90(1))", divs[0]['description'])
+        self.assertNotIn("90(2)", divs[0]['description'])
         # The per-share rate still reconciles the row.
         self.assertAlmostEqual(divs[0]['price'], 0.12)
 
@@ -202,7 +203,7 @@ class TestIbRoc(unittest.TestCase):
         # position was lent out. The PIL leg is paid by the share
         # BORROWER — it can never reduce ACB: DIVIDEND_IN_LIEU income.
         # The issuer's leg is a US corporation's distribution → foreign
-        # dividend (s.90(2)). Nothing becomes an ADJUST.
+        # dividend (s.90(1)). Nothing becomes an ADJUST.
         body = (self.DIV_HDR +
                 'Dividends,Data,USD,U1,2026-06-30,'
                 'QZRX(US0000000017) Cash Dividend USD 0.50 per Share '
@@ -217,7 +218,7 @@ class TestIbRoc(unittest.TestCase):
             self.assertEqual(pil[0]['type'], 'dividend_in_lieu')
             self.assertAlmostEqual(pil[0]['net_amount'], 400.00, places=2)
             self.assertIn("share borrower", pil[0]['description'])
-        # s.90(2) mode (a Canada project's default): the issuer leg is a
+        # s.90(1) mode (a Canada project's default): the issuer leg is a
         # dividend, no ADJUST at all.
         txs = self._parse(body, foreign_roc='dividend')
         self.assertFalse([t for t in txs if t['action'] == 'ADJUST'])

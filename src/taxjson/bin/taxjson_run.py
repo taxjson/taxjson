@@ -1500,7 +1500,7 @@ def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
     """How the IB parser books an issuer-designated '(Return of
     Capital)' from a non-Canadian issuer: lib/country.foreign_roc_mode
     (the one resolver `run` and tax-logic share). Canada: [settings]
-    foreign_return_of_capital, default "dividend" (ITA s.90(2)). USA:
+    foreign_return_of_capital, default "dividend" (ITA s.90(1)). USA:
     always "acb" (IRC s.301(c)(2); the key is Canada-only and refused
     in a US project — audit S013-01, partition INPUTS-02)."""
     from taxjson.lib.country import CountryError, foreign_roc_mode
@@ -1745,7 +1745,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                                                "taxable" if is_taxable
                                                else "sheltered"]
             # Always explicit: the parser's own default is the neutral
-            # cost reduction; s.90(2) is the Canadian project's choice
+            # cost reduction; s.90(1) is the Canadian project's choice
             # (partition INPUTS-03).
             cmd += ["--country", country, "--foreign-roc",
                     "acb" if _froc_acb else "dividend"]

@@ -105,7 +105,7 @@ PARTITION_RULES = frozenset({
     "CA-SL-05",        # a long call replaces the shares (enforced)
     "CA-ACB-01",       # s.47 average cost across accounts
     "CA-ACB-07",       # s.40(3) deemed gain on ROC beyond ACB
-    "CA-ACB-08",       # s.90(2) foreign ROC as a dividend (IB)
+    "CA-ACB-08",       # s.90(1) foreign ROC as a dividend (IB)
     "CA-OPT-01",       # s.49(1) grant timing
     "CA-RPT-01",       # T1135
     "CA-FX-07",        # fx-cash s.39(1.1) $200 exemption
@@ -464,7 +464,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "capital gain and the ACB is nil (s.40(3)).", cont=True),
             (Rule("CA-ACB-08",
                   "For IB only, a foreign issuer's return of capital (by "
-                  "ISIN) is a dividend (s.90(2); foreign_return_of_capital "
+                  "ISIN) is a dividend (s.90(1); foreign_return_of_capital "
                   "= \"dividend\"). Other brokers always lower the ACB.",
                   keys=("foreign_return_of_capital",))
              if froc == "dividend" else

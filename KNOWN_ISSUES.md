@@ -324,7 +324,7 @@ reported manually" instead of counting them as missing.
 - **Current behaviour:** conservative — an RESP purchase inside the window that is still held at its end denies the loss (permanently, as for any registered account). A filer who takes the other position has to adjust by hand; the 2026-09 audit found one such case on real books.
 
 ### Foreign return of capital is only reclassified for IBKR (Canada projects)
-- **Where:** in a Canada project, `lib/brokerages/ib_extractor.py` treats a "(Return of Capital)" distribution from a non-Canadian ISIN as a dividend (ITA s.90(2)) and a payment in lieu as income; a US project (and `taxjson-brokerage` without `--country canada`) keeps every return of capital as a basis reduction. Questrade and RBC exports carry no ISIN, and a `.US` listing does not prove a foreign issuer, so their ROC rows stay ACB reductions — check US-issuer ROC on those brokers by hand.
+- **Where:** in a Canada project, `lib/brokerages/ib_extractor.py` treats a "(Return of Capital)" distribution from a non-Canadian ISIN as a dividend (ITA s.90(1)) and a payment in lieu as income; a US project (and `taxjson-brokerage` without `--country canada`) keeps every return of capital as a basis reduction. Questrade and RBC exports carry no ISIN, and a `.US` listing does not prove a foreign issuer, so their ROC rows stay ACB reductions — check US-issuer ROC on those brokers by hand.
 
 ### A merger's per-account empirical ratios are blended
 - **Where:** `lib/core.py` folds one merger's rename SPLITs with different per-account ratios into a single holdings-weighted ratio (2026-09). Totals and the shared ACB pool are right; each account's wash-walk balance can be a fraction of a share off.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The foreign return-of-capital citation is ITA s.90(1), not
+  s.90(2).** s.90(2) is the foreign-affiliate rule; a portfolio
+  holder's foreign dividend is included by s.90(1), and a real
+  reduction of paid-up capital lowers the ACB (s.53(2)(b)(ii)). The IB
+  row note, `taxjson-brokerage --help`, tax-logic CA-ACB-08 and the docs
+  say so; nothing is computed differently.
 - **IB corporate actions.** A cash-in-lieu row with Proceeds 0 books no
   cash (it used to book IB's market Value as proceeds) and warns; a
   fraction folds into the split of its symbol nearest its date within a

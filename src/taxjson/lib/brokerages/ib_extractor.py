@@ -792,9 +792,11 @@ class IbBrokerage(BaseBrokerage):
     # How an IB "(Return of Capital)" distribution from a NON-Canadian
     # issuer (ISIN country != CA) is booked: "acb" (default — the
     # issuer's own designation, a basis reduction: the neutral fact) or
-    # "dividend" (ITA s.90(2) deems a non-resident corporation's pro-rata
-    # distribution a dividend — Canadian law, so only a Canada project
-    # asks for it). Set by taxjson-brokerage --foreign-roc / --country,
+    # "dividend" (ITA s.90(1): a non-resident corporation's distribution
+    # is a dividend unless it really reduces paid-up capital, which a US
+    # "return of capital" — a distribution beyond E&P — need not; s.90(2)
+    # is the foreign-AFFILIATE rule and does not apply to a portfolio
+    # holding. Canadian law, so only a Canada project asks for it). Set by taxjson-brokerage --foreign-roc / --country,
     # which `taxjson run` passes from the project (lib/country
     # .foreign_roc_mode; partition INPUTS-03).
     foreign_return_of_capital = 'acb'
@@ -1853,14 +1855,16 @@ class IbBrokerage(BaseBrokerage):
                     #    borrower, not the issuer: it can never reduce
                     #    ACB, whatever the underlying distribution was
                     #    — income (falls through to the PIL branch).
-                    #  * A non-resident corporation's pro-rata
-                    #    distribution is deemed a DIVIDEND by ITA
-                    #    s.90(2); a US "return of capital" (no E&P)
-                    #    doesn't make it a PUC reduction (the s.90(3)
-                    #    qualifying-return-of-capital exception is for
-                    #    foreign affiliates only). Default: foreign
-                    #    dividend; [settings] foreign_return_of_capital
-                    #    = "acb" restores the ACB treatment.
+                    #  * A non-resident corporation's distribution on
+                    #    a portfolio share is a foreign DIVIDEND (ITA
+                    #    s.90(1)); a US "return of capital" (no E&P)
+                    #    is a cost reduction only when the issuer
+                    #    really reduced its paid-up capital
+                    #    (s.53(2)(b)(ii)) — s.90(2)/(3) are the
+                    #    foreign-affiliate rules (audit S058-07).
+                    #    Canada default: foreign dividend; [settings]
+                    #    foreign_return_of_capital = "acb" books the
+                    #    cost reduction.
                     #  * Canadian issuer (T3 box 42 style): ACB
                     #    reduction, as before.
                     # No ISIN → issuer unknown → kept as ADJUST.
@@ -1876,8 +1880,10 @@ class IbBrokerage(BaseBrokerage):
                           != 'acb'):
                         description = (
                             f"{description} [IB-designated return of "
-                            f"capital, treated as a dividend under ITA "
-                            f"s.90(2)]")
+                            f"capital, treated as a foreign dividend (ITA "
+                            f"s.90(1)); a cost reduction only if the "
+                            f"issuer reduced its paid-up capital, "
+                            f"s.53(2)(b)(ii)]")
                     else:
                         # `amount` stays signed so IB's negative
                         # reversal rows net out (they become positive

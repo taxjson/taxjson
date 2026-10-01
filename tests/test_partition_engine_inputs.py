@@ -3,7 +3,7 @@
 Each test runs the SAME synthetic book (or project) under both countries
 and asserts the rule fires in its own country and not in the other
 (tests/tax_rules: @rule / @rule_absent). Findings: ENGINE-02 (futures),
-INPUTS-01 (stock dividends), INPUTS-03 (taxjson-brokerage s.90(2)),
+INPUTS-01 (stock dividends), INPUTS-03 (taxjson-brokerage s.90(1)),
 SPEC-01/INPUTS-04 (a saved crypto gift), stablecoins, the shared-helper
 leaks, US return of capital.
 
@@ -291,7 +291,7 @@ class TestStockDividend(unittest.TestCase):
 # ------------------------------------------------------------ INPUTS-03
 class TestStandaloneBrokerageRoc(unittest.TestCase):
     """INPUTS-03 / SPEC-35: standalone taxjson-brokerage no longer
-    applies ITA s.90(2) without a country."""
+    applies ITA s.90(1) without a country."""
 
     BODY = ('Statement,Header,Field Name,Field Value\n'
             'Statement,Data,BrokerName,Interactive Brokers\n'
@@ -333,11 +333,11 @@ class TestStandaloneBrokerageRoc(unittest.TestCase):
         r, acts = self._brokerage()
         self.assertEqual((r.returncode, acts), (0, ["ADJUST"]), r.stderr)
         self.assertIn("--country canada", r.stderr)
-        # s.90(2) asked for with --country usa: refused.
+        # s.90(1) asked for with --country usa: refused.
         r, _ = self._brokerage("--country", "usa", "--foreign-roc",
                                "dividend")
         self.assertEqual(r.returncode, 2)
-        self.assertIn("s.90(2)", r.stderr)
+        self.assertIn("s.90(1)", r.stderr)
 
 
 # ------------------------------------------------------ SPEC-01 / INPUTS-04

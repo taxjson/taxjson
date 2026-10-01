@@ -260,7 +260,7 @@ Examples:
         metavar="{canada,ca,usa,us}",
         help=(
             "Whose rules the one country-specific parse choice follows "
-            "(IB --foreign-roc): canada -> 'dividend' (ITA s.90(2)), "
+            "(IB --foreign-roc): canada -> 'dividend' (ITA s.90(1)), "
             "usa -> 'acb' (a nondividend distribution lowers basis, "
             "§301(c)(2)). Without it (and without --foreign-roc) a "
             "foreign issuer's return of capital lowers the cost, and a "
@@ -272,9 +272,9 @@ Examples:
         default=None,
         help=(
             "IB only: how a '(Return of Capital)' distribution from a "
-            "NON-Canadian issuer is booked — 'dividend' (ITA s.90(2) "
-            "deems a non-resident corporation's distribution a dividend; "
-            "Canada only) or 'acb' (a cost reduction). Default: from "
+            "NON-Canadian issuer is booked — 'dividend' (ITA s.90(1): a "
+            "non-resident corporation's distribution is a dividend unless "
+            "it reduces paid-up capital; Canada only) or 'acb' (a cost reduction). Default: from "
             "--country (canada: dividend, usa: acb), else acb. "
             "Canadian-issuer ROC is always a cost reduction; a payment in "
             "lieu is always income."
@@ -355,12 +355,12 @@ Examples:
             print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # s.90(2) is Canadian law: never the default without a country
+    # s.90(1) is Canadian law: never the default without a country
     # (partition INPUTS-03), and refused for a US filer.
     foreign_roc = args.foreign_roc
     if args.country == "usa" and foreign_roc == "dividend":
         print("taxjson-brokerage: error: --foreign-roc dividend is ITA "
-              "s.90(2), Canadian law; it does not apply with --country "
+              "s.90(1), Canadian law; it does not apply with --country "
               "usa (a nondividend distribution lowers basis, §301(c)(2))",
               file=sys.stderr)
         sys.exit(2)
@@ -420,7 +420,7 @@ Examples:
                       f"{len(_froc)} return(s) of capital from a "
                       f"non-Canadian issuer booked as a cost reduction "
                       f"(no --country given); a Canadian filer passes "
-                      f"--country canada (ITA s.90(2): a dividend).",
+                      f"--country canada (ITA s.90(1): a dividend).",
                       file=sys.stderr)
 
     # A Corporate Actions `Ca` cancellation whose original sits in
