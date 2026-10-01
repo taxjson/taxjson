@@ -650,5 +650,64 @@ class TestViewsSayWhatTheySkip(unittest.TestCase):
             self.assertIn("MANUAL reporting", r.stderr)
 
 
+
+_TT_A = ("BUYSELL 2025-02-03 09:30:00 ABC.TO 50 CAD 10.0 -500.0 0.0\n")
+_TT_B = ("BUYSELL 2025-02-04 09:30:00 DEF.TO 70 CAD 10.0 -700.0 0.0\n")
+
+
+class TestFastCache(unittest.TestCase):
+    """S037-22 (raw holdings after a .tt is deleted), S039-03 (code key
+    by content), S037-15 (.tt stem ending in a reserved suffix)."""
+
+    def _tt_project(self, tmp, files):
+        root = Path(tmp)
+        (root / "taxjson.toml").write_text(_CONFIG)
+        d = root / "inputs" / "margin"
+        d.mkdir(parents=True, exist_ok=True)
+        for n, body in files.items():
+            (d / n).write_text(body)
+        return root
+
+    def test_deleted_tt_leaves_the_raw_holdings_under_fast(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._tt_project(tmp, {"a.tt": _TT_A, "b.tt": _TT_B})
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            (root / "inputs" / "margin" / "b.tt").unlink()
+            r = _run_cli(root, "run", "--fast", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            h = (root / "reports" / "margin_holdings.toml").read_text()
+            self.assertIn("ABC.TO", h)
+            self.assertNotIn("DEF.TO", h)
+
+    def test_code_fingerprint_forces_a_full_rebuild(self):
+        from taxjson.bin import taxjson_run as R
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            stamp = root / "work" / R._CODE_STAMP
+            self.assertEqual(stamp.read_text().strip(),
+                             R._package_fingerprint())
+            r = _run_cli(root, "run", "--fast", "--no-input")
+            self.assertNotIn("code changed", r.stdout)
+            # A different stamp = different code: --fast rebuilds.
+            stamp.write_text("0" * 64 + "\n")
+            r = _run_cli(root, "run", "--fast", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("code changed", r.stdout)
+            self.assertIn("parse questrade", r.stdout)
+
+    def test_tt_stem_with_reserved_suffix_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            (root / "inputs" / "margin" / "msft_gains.tt").write_text(
+                _TT_A)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("msft_gains.tt", r.stderr)
+            self.assertIn("msft-gains.tt", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -404,6 +404,29 @@ def _package_mtime() -> float:
     return latest
 
 
+def _package_fingerprint() -> str:
+    """A CONTENT fingerprint of the installed taxjson package's .py
+    sources (relative path + bytes). The mtime key above misses a code
+    change whose files keep an older mtime (cp -p, rsync -a, tar x,
+    touch -r) and a deleted module, so `run --fast` served output from
+    the old code (S039-03); `run` compares this with the stamp the last
+    complete run left in work/ and rebuilds everything on a mismatch."""
+    import taxjson
+    pkg_root = Path(taxjson.__file__).parent
+    h = hashlib.sha256()
+    for p in sorted(pkg_root.rglob("*.py")):
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        h.update(p.relative_to(pkg_root).as_posix().encode() + b"\0")
+        h.update(hashlib.sha256(data).digest())
+    return h.hexdigest()
+
+
+_CODE_STAMP = ".code_fingerprint"
+
+
 def needs_rebuild(out: Path, *inputs: Path) -> bool:
     """Mtime-based rebuild check — consulted only by `run --fast` (the
     default run passes force=True everywhere). Cached output is stale
@@ -1969,7 +1992,20 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # silently dropping every CSV trade) and with pipeline
     # intermediates like <acct>_base.json (R1-116).
     tt_jsons: List[Path] = []
+    from taxjson.lib.config_check import RESERVED_NAME_SUFFIXES
     for tt in input_files(acct_dir, ".tt"):
+        _stem = tt.stem.lower()
+        _clash = next((x for x in RESERVED_NAME_SUFFIXES
+                       if _stem.endswith(x)), None)
+        if _clash:
+            # work/<acct>_tt_msft_gains.json read as the gains book of a
+            # phantom account "<acct>_tt_msft" in `sum`, its fees counted
+            # twice (S037-15): the artifact roles come from file names.
+            _die(f"inputs/{name}/{tt.name}: a .tt file name may not end "
+                 f"in {_clash!r} — its converted JSON would read as a "
+                 f"pipeline artifact (a phantom account in the reports). "
+                 f"Rename it, e.g. "
+                 f"{tt.stem[:-len(_clash)] + _clash.replace('_', '-')}.tt")
         out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt, src_manifest):
             print(f"  convert-tt {tt.name}")
@@ -2271,7 +2307,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # Emitted as a TOML holdings handoff. Skipped for crypto.
     if not is_crypto:
         raw_json = cache / f"{name}_raw.json"
-        raw_deps = list(sources) + ([ticker_map] if ticker_map else [])
+        # src_manifest: deleting a .tt from a .tt-only account (no CSV
+        # group left to cascade the change) kept its positions in the
+        # raw holdings under --fast (S037-22) — the same dep merge2 has.
+        raw_deps = (list(sources) + [src_manifest]
+                    + ([ticker_map] if ticker_map else []))
         if force or needs_rebuild(raw_json, *raw_deps):
             print(f"  raw merge (sort, dedup"
                   f"{', ticker.map' if ticker_map else ''})")
@@ -2985,6 +3025,23 @@ def cmd_run(args: argparse.Namespace) -> None:
         import os as _os_mod
         if not _os_mod.access(_d, _os_mod.W_OK | _os_mod.X_OK):
             _die(f"cannot write to {_d} — nothing was run.")
+    # --fast trusts cached stages only when they were built by THIS code
+    # (content, not mtimes — S039-03). The stamp is removed now and
+    # rewritten when the run completes, so a run that stops half-way
+    # never vouches for stages it did not rebuild.
+    _code_stamp = cache / _CODE_STAMP
+    _code_fp = _package_fingerprint()
+    if not args.force:
+        try:
+            _old_fp = _code_stamp.read_text(encoding="utf-8").strip()
+        except OSError:
+            _old_fp = ""
+        if _old_fp != _code_fp:
+            print("==> taxjson's code changed since the cached stages were "
+                  "built (or no complete run recorded it) — rebuilding "
+                  "everything; --fast applies from the next run")
+            args.force = True
+    _code_stamp.unlink(missing_ok=True)
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -3491,6 +3548,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     except Exception:
         pass                          # reminder must never break a run
 
+    if not args.account:
+        _code_stamp.write_text(_code_fp + "\n", encoding="utf-8")
     print(f"\nDone. Reports in {reports_dir}/")
 
     # Broker-positions cross-check, when taxjson.toml declares any

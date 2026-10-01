@@ -2295,6 +2295,13 @@
   unknown account, shows each row's FEE and warns when a base book cannot
   be read; `leaps` / `leaps-sum` count LEAPS closes routed to manual
   reporting instead of reporting none.
+- **`run --fast` notices a code change by content**: a taxjson upgrade
+  whose files kept older mtimes (`cp -p`, `rsync -a`, `tar x`) or that
+  deleted a module rebuilt nothing; the last complete run's code
+  fingerprint is now kept in `work/` and a mismatch rebuilds everything.
+- **A `.tt` file whose name ends in a pipeline suffix is refused**
+  (`msft_gains.tt` created a phantom account in `sum` and counted its fees
+  twice); rename it, e.g. `msft-gains.tt`.
 
 ## v0.16.0 (2026-09-25)
 
