@@ -511,6 +511,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-DISP-05",
                  "Cash-settled options (no stock leg) realize their gain "
                  "or loss on the option itself.", cont=True),
+            Rule("CA-DISP-06",
+                 "A written option's premium recognised at the write "
+                 "(grant timing) is shown gross as proceeds, with its "
+                 "commission as an outlay, as for a sale (the gain is the "
+                 "same)."),
         ]),
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",

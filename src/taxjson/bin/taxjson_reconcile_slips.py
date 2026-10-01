@@ -452,7 +452,15 @@ def load_computed(gains_paths: List[Path],
                 # the COVER COST, a false MISMATCH equal to the gain
                 # (2026-09 audit).
                 proceeds, cost = abs(cost), abs(proceeds)
-                outlays = 0.0
+                if e.get("grant") and -float(e.get("cost") or 0.0) \
+                        + outlays >= 0:
+                    # A grant-timing WRITE: the row's commission is the
+                    # write's own, so the gross premium is the net plus
+                    # it (form-export's Schedule 3 shows the same gross,
+                    # R1-40). A buy-back's fee is a cost, never proceeds.
+                    proceeds = -float(e.get("cost") or 0.0)
+                else:
+                    outlays = 0.0
             q = abs(float(e.get("qty") or 0.0))
             # Grant timing books a written option twice — the WRITE
             # record and its buy-back/expiry — while the slip reports

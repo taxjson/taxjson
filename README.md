@@ -957,15 +957,19 @@ FILE` writes importable rows, `--json` the raw report.
   broker's T5008 shows it — a gain as proceeds with ACB 0, a loss as ACB
   with proceeds 0, no separate outlays.
   Sell-side commissions on long sales are re-split into the outlays
-  column (gain unchanged); a written option's premium (and a short sale's
-  proceeds) is shown NET of the opening commission with no outlay — same
-  gain, slightly lower proceeds than a broker slip. Every row foots — proceeds − ACB − outlays = the allowed
+  column (gain unchanged), and so is a written option's commission under
+  grant timing: the premium is shown GROSS as proceeds with the write
+  commission as an outlay. Under close timing a write's commission, and a
+  short sale's opening commission, stay netted into the proceeds with no
+  outlay (the closing row does not carry them) — same gain, slightly
+  lower proceeds than a broker slip. Every row foots — proceeds − ACB − outlays = the allowed
   gain: a superficial loss denied on the row shows as an ACB reduced by the
   denial, noted per row (the denied amount goes onto the replacement
   property's ACB; a registered-account or affiliated-person denial is noted
   as permanent for this return). A short sale shows what it brought in as
-  proceeds and the cover as ACB (a write for a net debit: no proceeds, the
-  debit as an outlay). Units are the contracts or shares disposed of, at
+  proceeds and the cover as ACB (a close-timing write for a net debit: no
+  proceeds, the debit as an outlay; under grant timing it shows its premium
+  and its commission). Units are the contracts or shares disposed of, at
   full precision: under grant timing a written option and its buy-back
   count once.
 

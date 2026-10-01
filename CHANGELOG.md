@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Schedule 3: a written option's premium is shown gross.** Under grant
+  timing, form-export and `sum`'s FOR THE RETURN block show a written
+  option's premium GROSS as proceeds with its write commission as an
+  outlay, as for a sale; the gain is unchanged. Line 6 proceeds and
+  outlays each rise by the year's write commissions. reconcile-slips'
+  gross proceeds match (audit R1-40; tax-logic CA-DISP-06). A year
+  locked by `taxjson filed` reports the moved line 6 proceeds as drift.
+
 - **Adjusted-series and futures calls are flagged as possible
   replacement property.** A call on an adjusted option series (root +
   digit, e.g. `XYZ1`) or on the loss's futures contract by its family
