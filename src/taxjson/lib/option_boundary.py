@@ -7,18 +7,21 @@ whose close (buy-back, expiry or assignment) falls in a later year than
 the write, or that is still open at the end of the project year. Each
 row says where the premium and any later amount land under the timing
 in force, and what — if anything — the filer has to do about a year
-that was already filed (ITA s.49(1)–(4),
+that was already filed (ITA s.49(1), (3), (3.1), (4),
 https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-49.html;
-IT-479R paras 21–27).
+IT-479R paras 23–32 — the writer's grant-year gain and later buy-back
+loss: para 29 for calls, para 32 for puts).
 
 Two findings are ATTENTION rather than information (`attention: True`):
   * a lot written in a year that is LOCKED (filed/<year>.json) but that
     this project keeps on transition close timing (written before
     `option_grant_timing_since`) — if that year was filed under grant
     timing the premium is taxed twice, once there and again at the close;
-  * a lot still open although its expiry date passed within the year
-    (and before today — an expiry later than the run date is simply
-    open) — the export is missing the expiry/assignment row;
+  * a lot still open although its expiry date has passed — within the
+    year, or after it but on or before the last date the books cover
+    (S075-00: a January expiry in books that run into February) — and
+    before today (an expiry later than the run date is simply open):
+    the export is missing the expiry/assignment row;
   * a lot this project puts on grant timing although the write year's
     lock records CLOSE timing — that return never reported the premium
     and this project does not report it either.
@@ -35,7 +38,44 @@ from taxjson.lib.corporate_timeline import event_sort_key
 
 
 def _sort_date(t: TaxTransaction) -> str:
+    """The settlement date (Canada's default tax-year basis)."""
     return t.date_settle if getattr(t, "date_settle", "") else t.date
+
+
+def _trade_date(t: TaxTransaction) -> str:
+    return t.date or getattr(t, "date_settle", "") or ""
+
+
+def date_basis_of(tax_date: Optional[str]):
+    """The row date a write or close is dated by: the project's
+    [settings] tax_date, as the gains engine dates it (S075-05: a
+    trade-basis project's Dec-31 write settling in January straddles
+    2025/2026 in the engine but read as a 2026 write here)."""
+    return _trade_date if str(tax_date or "settle").lower() == "trade" \
+        else _sort_date
+
+
+def _assignment_cite(symbol: str) -> str:
+    """s.49(3) for an exercised call (premium into the writer's
+    proceeds), s.49(3.1) for an exercised put (premium out of the
+    writer's cost) — R1-39/R1-180: s.49(2) is the expiry rule for a
+    corporation's options on its own shares."""
+    from taxjson.lib.core import parse_option_right
+    right = parse_option_right(symbol)
+    if right == "P":
+        return "s.49(3.1)"
+    if right == "C":
+        return "s.49(3)"
+    return "s.49(3)/(3.1)"
+
+
+def _buyback_cite(symbol: str) -> str:
+    """IT-479R para 29 (calls) / para 32 (puts): the writer's grant-year
+    gain and the later closing purchase's loss."""
+    from taxjson.lib.core import parse_option_right
+    right = parse_option_right(symbol)
+    return {"C": "IT-479R para 29", "P": "IT-479R para 32"}.get(
+        right, "IT-479R paras 29/32")
 
 
 @dataclass
@@ -62,7 +102,8 @@ class WriteLot:
         return self.premium / self.units if self.units else 0.0
 
 
-def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
+def write_lots(transactions: List[TaxTransaction],
+               tax_date: Optional[str] = None) -> List[WriteLot]:
     """FIFO walk of the option rows, per symbol. Follows the engine
     (lib/core.py) on two points it used to miss (R1-179, S075-09):
       * a SPLIT on an option symbol re-denominates the open position
@@ -72,7 +113,9 @@ def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
       * an ASSIGN whose underlying never trades as stock for that account
         is CASH-SETTLED (index options): no share leg, no s.49(3) fold.
     Premiums and buy-back costs keep their sign (a write whose commission
-    exceeds the premium nets a loss)."""
+    exceeds the premium nets a loss). Writes and closes are dated on
+    `tax_date` (settle, the default, or trade)."""
+    _date_of = date_basis_of(tax_date)
     # (account, underlying) pairs that trade as STOCK — the engine's
     # taxable_stock_symbols test for a physically settled assignment.
     stock = {(t.account, t.symbol) for t in transactions
@@ -82,7 +125,7 @@ def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
                    if t.action in ("BUYSELL", "ASSIGN", "SPLIT",
                                    "OPENING_BALANCE")
                    and is_option_symbol(t.symbol or "")),
-                  key=lambda x: event_sort_key(x, profile="ca_main", date_of=_sort_date))
+                  key=lambda x: event_sort_key(x, profile="ca_main", date_of=_date_of))
     pos: Dict[str, float] = {}
     lots: Dict[str, List[WriteLot]] = {}
     out: List[WriteLot] = []
@@ -118,8 +161,8 @@ def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
                 # Base books store net magnitudes with the direction on
                 # the quantity: a SELL's net is the premium received, and
                 # a negative net (commission > premium) is a loss — kept.
-                lot = WriteLot(symbol=sym, account=t.account or "", write_date=_sort_date(t),
-                               write_year=int(_sort_date(t)[:4]), units=opening,
+                lot = WriteLot(symbol=sym, account=t.account or "", write_date=_date_of(t),
+                               write_year=int(_date_of(t)[:4]), units=opening,
                                premium=net * (opening / -q),
                                open_units=opening)
                 lots.setdefault(sym, []).append(lot); out.append(lot)
@@ -139,7 +182,7 @@ def write_lots(transactions: List[TaxTransaction]) -> List[WriteLot]:
                     break
                 take = min(rem, lot.open_units)
                 if take > 1e-9:
-                    lot.closes.append(Close(date=_sort_date(t), kind=kind, units=take,
+                    lot.closes.append(Close(date=_date_of(t), kind=kind, units=take,
                                             paid=(per_paid * take
                                                   if kind in ("buy-back", "cash-settled")
                                                   else 0.0)))
@@ -165,22 +208,31 @@ def _filed_on_close(wy: int, filed_timing: Optional[Dict[int, Dict[str, Any]]]) 
 def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                since: Optional[int], filed_years: Optional[set] = None,
                filed_timing: Optional[Dict[int, Dict[str, Any]]] = None,
-               today: Optional[date] = None
+               today: Optional[date] = None,
+               tax_date: Optional[str] = None
                ) -> List[Dict[str, Any]]:
     """Rows for `taxjson option-boundary`: every write lot with a close in a
     later year than the write, or still open at the end of `year`.
     `filed_timing` maps a locked year to the option timing its lock
     recorded (`option_premium_timing`, `option_grant_since`). `today`
     (default: the run date) bounds the missing-expiry check: during the
-    year a contract expiring after today is open, not missing a row."""
+    year a contract expiring after today is open, not missing a row.
+    `tax_date` is the project's date basis (settle|trade)."""
     filed_years = set(filed_years or set()) | set((filed_timing or {}).keys())
     grant_mode = (timing or "close").lower() == "grant"
     # The missing-expiry cutoff is the EARLIER of the year end and today
     # (R1-36/R1-174/R1-190: comparing with Dec 31 alone flagged every
     # open write expiring later in the current year as a missing row).
-    year_end = min(f"{year}-12-31", (today or date.today()).isoformat())
+    # S075-00: the books may run past Dec 31 (January of the next year
+    # is part of a frozen year's inputs) — a contract that expired by
+    # the LAST date the books cover cannot still be open either.
+    _date_of = date_basis_of(tax_date)
+    last = max((_date_of(t) for t in transactions if _date_of(t)),
+               default="")
+    year_end = min(max(f"{year}-12-31", last[:10]),
+                   (today or date.today()).isoformat())
     rows: List[Dict[str, Any]] = []
-    for lot in write_lots(transactions):
+    for lot in write_lots(transactions, tax_date=tax_date):
         later = [c for c in lot.closes if int(c.date[:4]) > lot.write_year]
         still_open = lot.open_units > 1e-9 and lot.write_year <= year
         if not later and not still_open:
@@ -244,11 +296,11 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
             cy = int(c.date[:4])
             if c.kind == "assignment":
                 if grant and missed:
-                    where = f"folded into the share leg in {cy} (s.49(2)-(3)); the books show no {wy} gain"
+                    where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"no amendment — filed/{wy}.json records close timing, so the {wy} "
                               f"return never reported the {prem:,.2f} premium; the fold in {cy} is right")
                 elif grant:
-                    where = f"folded into the share leg in {cy} (s.49(2)-(3)); the books show no {wy} gain"
+                    where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
                     action = (f"T1-ADJ {wy}: remove the {prem:,.2f} premium reported for {wy} (s.49(4)) — the {wy} return was filed with it"
                               if wy in filed_years else
                               f"if {wy} was filed with the {prem:,.2f} premium as a gain, amend {wy} to remove it (s.49(4)); otherwise nothing")
@@ -276,7 +328,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                 if grant:
                     where = f"premium {prem:,.2f} in {wy}; {what} loss {c.paid:,.2f} in {cy}"
                     action = (_missed_text(f"{prem:,.2f}") if missed
-                              else "no amendment (IT-479R para 24)")
+                              else f"no amendment ({_buyback_cite(lot.symbol)})")
                 else:
                     where = f"net {prem - c.paid:,.2f} in {cy} (close timing)"
                     action = (_double_text(f"{prem:,.2f}", cy) if double else
@@ -319,3 +371,48 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                          "attention": action.startswith("ATTENTION")})
     rows.sort(key=lambda r: (r["write_year"], r["symbol"], r["written"]))
     return rows
+
+
+def expired_open(transactions: List[TaxTransaction], year: int,
+                 today: Optional[date] = None,
+                 tax_date: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Option positions — LONG or written — still open in the books
+    although the contract's expiry has passed (by the year end, or by
+    the last date the books cover, and before `today`): the export is
+    missing the expiry, exercise or assignment row. A data check, not a
+    tax rule: in either country the missing row keeps a written
+    premium or a long option's cost out of the year it belongs to
+    (S066-15 — a US project had no such check at all)."""
+    _date_of = date_basis_of(tax_date)
+    rows = sorted((t for t in transactions
+                   if t.action in ("BUYSELL", "ASSIGN", "SPLIT",
+                                   "OPENING_BALANCE")
+                   and is_option_symbol(t.symbol or "")),
+                  key=lambda x: event_sort_key(x, profile="ca_main",
+                                               date_of=_date_of))
+    pos: Dict[Any, float] = {}
+    for t in rows:
+        key = (t.account or "", t.symbol)
+        q = float(t.quantity or 0.0)
+        if t.action == "SPLIT":
+            ratio = q if q > 0 else 1.0
+            new = (getattr(t, "symbol_new", "") or "").strip() or t.symbol
+            p = pos.pop(key, 0.0) * ratio
+            nk = (t.account or "", new)
+            pos[nk] = pos.get(nk, 0.0) + p
+            continue
+        pos[key] = pos.get(key, 0.0) + q
+    last = max((_date_of(t) for t in transactions if _date_of(t)),
+               default="")
+    cutoff = min(max(f"{year}-12-31", last[:10]),
+                 (today or date.today()).isoformat())
+    out = []
+    for (acct, sym), q in sorted(pos.items()):
+        if abs(q) < 1e-9:
+            continue
+        expiry = parse_option_expiry(sym)
+        if expiry and expiry <= cutoff:
+            out.append({"account": acct, "symbol": sym, "quantity": q,
+                        "expiry": expiry,
+                        "side": "written" if q < 0 else "long"})
+    return out

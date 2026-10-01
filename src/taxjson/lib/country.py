@@ -166,7 +166,7 @@ def settings_tax_date(settings: Mapping[str, Any]) -> str:
 
 def foreign_roc_mode(settings: Mapping[str, Any]) -> str:
     """How an issuer-designated return of capital from a non-Canadian
-    issuer is booked by the IB parser: "dividend" (ITA s.90(2), the
+    issuer is booked by the IB parser: "dividend" (ITA s.90(1), the
     Canadian default) or "acb". Always "acb" in a US project — a US
     filer's nondividend distribution reduces basis (§301(c)(2)); the
     key is Canada-only and refused there by the config readers."""
@@ -202,7 +202,7 @@ def futures_settle_mode(settings: Mapping[str, Any]) -> str:
 # means the same thing in either country. A key owned by one country is
 # refused in a project of the other (it would be silently ignored, or
 # worse, honoured: foreign_return_of_capital = "dividend" is ITA
-# s.90(2), which a US filer must never get).
+# s.90(1), which a US filer must never get).
 SETTING_COUNTRY: Dict[str, str] = {
     "year": BOTH,
     "country": BOTH,
@@ -231,7 +231,7 @@ SETTING_WHY: Dict[str, str] = {
                                  "are taxed at the close (§1234)",
     "option_buyback_loss_superficial": "the ITA s.54 superficial-loss "
                                        "rule; the US has §1091",
-    "foreign_return_of_capital": "ITA s.90(2) (a foreign issuer's return "
+    "foreign_return_of_capital": "ITA s.90(1) (a foreign issuer's return "
                                  "of capital is a dividend); in the US "
                                  "it reduces basis (§301(c)(2))",
     "corporate_distributions": "ITA s.104(13): which Canadian "

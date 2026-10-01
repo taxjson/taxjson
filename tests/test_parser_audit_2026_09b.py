@@ -6,7 +6,7 @@ invented tickers, fake account ids, invented quantities and prices.
 2. Kraken ledger fees are in coin units: rewards/instant trades book
    the coins that actually moved (amount − fee).
 3. IB "(Return of Capital)": payment in lieu → income; non-Canadian
-   issuer → dividend (ITA s.90(2)) unless foreign_return_of_capital=acb.
+   issuer → dividend (ITA s.90(1)) unless foreign_return_of_capital=acb.
 4. .tt option lines check net against qty*price*100.
 5. IB accruals: a revised pay date no longer splits a Po/Re pair;
    futures shorts are not "truncated history" candidates.

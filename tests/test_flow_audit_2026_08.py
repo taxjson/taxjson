@@ -58,25 +58,29 @@ class TestSettingsKeyWhitelist(unittest.TestCase):
         self.assertTrue([w for w in warnings if "sectors_file" in w],
                         "removed setting should warn as unknown")
 
-    def test_literal_year_resolves_with_root(self):
-        from datetime import date
-        from taxjson.bin.taxjson_run import _tx_period_cutoff
+    # The year tokens resolve through _period_keep — THE calendar year
+    # (what `taxjson events 2025` runs); the old _tx_period_cutoff(...,
+    # root) lower-bound reading was dead code these tests pinned
+    # (S039-04).
+    def test_literal_year_is_that_calendar_year(self):
+        from taxjson.bin.taxjson_run import _period_keep
         with tempfile.TemporaryDirectory() as td:
-            root = _project(td)
-            self.assertEqual(_tx_period_cutoff("2025", root),
-                             date(2025, 1, 1))
+            keep, label = _period_keep("2025", _project(td))
+            self.assertTrue(keep("2025-06-01"))
+            self.assertFalse(keep("2026-03-01"))
+            self.assertFalse(keep("2024-12-31"))
+            self.assertEqual(label, "tax year 2025")
 
     def test_tax_year_resolves_from_config(self):
-        from datetime import date
-        from taxjson.bin.taxjson_run import _tx_period_cutoff
+        from taxjson.bin.taxjson_run import _period_keep
         with tempfile.TemporaryDirectory() as td:
             root = _project(td)          # [settings] year = 2026
-            self.assertEqual(_tx_period_cutoff("tax_year", root),
-                             date(2026, 1, 1))
-            self.assertEqual(_tx_period_cutoff("ty", root),
-                             date(2026, 1, 1))
+            for tok in ("tax_year", "ty"):
+                keep, _label = _period_keep(tok, root)
+                self.assertTrue(keep("2026-02-01"))
+                self.assertFalse(keep("2027-02-01"))
 
-    def test_without_root_year_tokens_still_reject(self):
+    def test_year_tokens_are_not_look_backs(self):
         from taxjson.bin.taxjson_run import _tx_period_cutoff
         with self.assertRaises(SystemExit) as cm:
             _tx_period_cutoff("2025")

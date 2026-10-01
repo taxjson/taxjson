@@ -9,7 +9,7 @@ parses cleanly downstream, and writes the result to a file or stdout.
 
 Typical flow:
     taxjson-xlsx-to-csv broker_statement.xlsx -o broker_statement.csv
-    taxjson-brokerage --brokerage <id> --account-name <name> broker_statement.csv > broker.json
+    taxjson-brokerage --brokerage <id> --account <name> broker_statement.csv > broker.json
 """
 import argparse
 import os

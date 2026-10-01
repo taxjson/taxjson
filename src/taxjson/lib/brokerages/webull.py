@@ -395,7 +395,8 @@ class WebullBrokerage(BaseBrokerage):
         EXERCISED (long). Webull's Trading Summary shows both only as a
         $0 option close plus an ordinary stock trade at the strike.
         Booking it as an expiry realizes the premium as its own gain or
-        loss instead of folding it into the shares' cost (ITA s.49(3);
+        loss instead of folding it into the shares' cost (ITA s.49(3)
+        for a call, s.49(3.1) for a put;
         a holder's exercise adds the option cost to the shares). Mark both
         legs ASSIGN — the engine's two-row convention.
 
@@ -467,7 +468,7 @@ class WebullBrokerage(BaseBrokerage):
                       f"settling {stock['date_settle']} (fee "
                       f"{float(stock.get('fee') or 0):.2f}); both legs "
                       f"booked ASSIGN (the premium folds into the shares, "
-                      f"s.49(3)). Check it against the statement.",
+                      f"s.49(3)/(3.1)). Check it against the statement.",
                       file=sys.stderr)
             # The shares are acquired/delivered ON the exercise, so the
             # stock leg's trade date is the option leg's date, stamped
@@ -491,7 +492,7 @@ class WebullBrokerage(BaseBrokerage):
                   f"assignment charge, so exercise/assignment was NOT "
                   f"inferred: booked as an expiry plus a separate trade. "
                   f"If the statement shows an exercise/assignment, the "
-                  f"premium belongs in the shares' cost (s.49(3)) — see "
+                  f"premium belongs in the shares' cost (s.49(3)/(3.1)) — see "
                   f"KNOWN_ISSUES 'Webull exercise/assignment inference'.",
                   file=sys.stderr)
 

@@ -762,7 +762,7 @@ class TestExpiryClampAcrossFiles(unittest.TestCase):
 
 class TestUsProjectReturnOfCapital(unittest.TestCase):
     """S013-01: a US project booked a US issuer's return of capital as
-    a dividend under Canada's s.90(2) default. Partition INPUTS-02 /
+    a dividend under Canada's s.90(1) default. Partition INPUTS-02 /
     SPEC-08: an explicit foreign_return_of_capital = "dividend" was then
     still honoured in a US project (and this test pinned it); the key is
     Canada-only now — refused by every config reader — and the resolver

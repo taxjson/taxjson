@@ -169,10 +169,18 @@ class TestFlex(unittest.TestCase):
         self.assertIn("Token expired", str(cm.exception))
 
     def test_statement_shape_detector(self):
+        # The same shape broker detection routes as IB (audit R1-57):
+        # a statement that names IB, or a Trades-first Flex download
+        # with IB's Trades columns.
         self.assertTrue(looks_like_ib_statement(
-            'Statement,Header,Field Name,Field Value\n'))
+            'Statement,Header,Field Name,Field Value\n'
+            'Statement,Data,BrokerName,Interactive Brokers LLC\n'))
         self.assertTrue(looks_like_ib_statement(
-            '"Trades","Header","DataDiscriminator"\n'))
+            '"Trades","Header","DataDiscriminator","Asset Category",'
+            '"Currency","Symbol"\n'))
+        self.assertFalse(looks_like_ib_statement(
+            'Statement,Header,Field Name,Field Value\n'
+            'Statement,Data,Notes,LIBOR Rate Source\n'))
         self.assertFalse(looks_like_ib_statement(
             "ClientAccountID,CurrencyPrimary\nU1,USD\n"))
 
