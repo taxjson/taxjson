@@ -797,7 +797,11 @@ engine applies them only when it is given them (`taxjson-gains
 `type = "sheltered"`: their purchases then deny your loss, for good (the
 ACB addition belongs to the affiliated holder, s.53(1)(f)), but the account
 also shows in the SHELTERED tables and the radar as if it were your
-registered plan — read it as theirs (KNOWN_ISSUES; tax-logic CA-SL-04).
+registered plan — read it as theirs (KNOWN_ISSUES; tax-logic CA-SL-04). The
+US engine does the same: §1091(d) adds the disallowed loss to the basis of
+the affiliated holder's replacement shares, so in your books it is reported
+as permanently disallowed (give them the amount for their basis; tax-logic
+US-WASH-16).
 
 In a **US project** the radar applies §1091, not s.54 (tax-logic US-PLAN-01):
 windows run on **trade** dates, and each recent loss's verdict is the **US
@@ -908,9 +912,13 @@ counts at its premium. An assigned written put's premium is deducted from the
 shares' cost and an exercised call's cost added to them (s.49(3)/(3.1)), rows
 sharing a timestamp follow the engine's order, a split inside a trade's settle
 lag re-denominates it like the engine, and the gain column and year-end
-position follow the project's `tax_date`. Denied superficial losses still in a
-position's ACB (s.53(1)(f)) are NOT added to the cost columns yet — the report
-names them and says when they could flip the filing verdict. A configured
+position follow the project's `tax_date`. A superficial loss denied in ANY
+year is in its replacement's cost (s.53(1)(f)), exactly where the engine put
+it: `t1135` runs the engine once over the full history (with the registered
+accounts as wash context and the project's option timing, as `carryover`
+does) and replays each denial's addition (`--year-wash-only` skips that
+pass, adds only the project year's denials and names what that leaves
+out). A configured
 taxable account with inputs but no books is refused, and books built for
 another year are warned about. `--json` for machine-readable output.
 

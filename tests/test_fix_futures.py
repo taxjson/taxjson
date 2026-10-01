@@ -218,7 +218,11 @@ class TestT1135Phantoms(unittest.TestCase):
                                    phantoms=phantoms)
         row0 = {r["symbol"]: r for r in without["properties"]}["AAA.US"]
         row1 = {r["symbol"]: r for r in with_ph["properties"]}["AAA.US"]
-        self.assertAlmostEqual(row0["max_cost"], 500.0, places=2)  # the bug
+        # The bug: without the phantom the 2024 buy covers a fake short
+        # and only 50 shares stay (their 500, plus the 50 the engine
+        # denies on the short cover and adds back — S008-07: the walk
+        # carries the engine's s.53(1)(f) additions).
+        self.assertAlmostEqual(row0["max_cost"], 550.0, places=2)
         self.assertAlmostEqual(row1["max_cost"], 1500.0, places=2)
         self.assertAlmostEqual(row1["year_end_cost"], 1500.0, places=2)
         self.assertFalse(row1["unknown_acb"])     # the phantom drained

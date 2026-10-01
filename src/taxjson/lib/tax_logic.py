@@ -664,6 +664,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
                  "value."),
+            Rule("CA-CRYPTO-09",
+                 "Any amount of a coin is property: a residue left after a "
+                 "sale, however small, stays in the holdings with its "
+                 "share of the cost (only arithmetic noise, under a "
+                 "hundred-billionth of the position, counts as zero). A "
+                 "share position under a millionth of a share counts as "
+                 "zero.", cont=True),
             Rule("CA-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
@@ -716,6 +723,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Country comes from the listing suffix (t1135.map "
                  "overrides); crypto held on an exchange counts.",
                  cont=True),
+            Rule("CA-RPT-12",
+                 "A property's cost amount is its adjusted cost base as "
+                 "the gains engine computes it, day by day over the full "
+                 "history: a superficial loss denied in any year is added "
+                 "to the replacement's cost (s.53(1)(f)), an option's "
+                 "premium follows the shares on exercise or assignment "
+                 "(s.49(3)), and a futures contract has no cost amount."),
             Rule("CA-RPT-03",
                  "`taxjson estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "
@@ -1001,6 +1015,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-11",
                  "A replacement bought in an IRA makes it permanent.",
                  cont=True),
+            Rule("US-WASH-16",
+                 "A purchase by your spouse or a corporation you control "
+                 "in the window disallows the loss too, when their trades "
+                 "are given (`taxjson-gains --affiliated`; in a project, "
+                 "declare their account type = \"sheltered\", which also "
+                 "lists it as if it were your IRA). §1091(d) adds the "
+                 "loss to the basis of THEIR replacement shares, so in "
+                 "your books it is reported as permanently disallowed: "
+                 "give them the amount for their basis."),
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "

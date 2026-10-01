@@ -10449,6 +10449,13 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     phantoms = root / "phantoms.json"
     if phantoms.exists():
         argv += ["--incomplete-history", str(phantoms)]
+    # The full-history superficial-loss pass (S008-07) sees what the
+    # pipeline's wash pass sees: the registered accounts as context and
+    # the project's written-option timing.
+    sheltered_base = cache / "sheltered_base.json"
+    if sheltered_base.exists():
+        argv += ["--sheltered", str(sheltered_base)]
+    argv += option_timing_flags(settings)
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_t1135.main(argv))

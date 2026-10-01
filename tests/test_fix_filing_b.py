@@ -700,8 +700,12 @@ class TestT1135Report(unittest.TestCase):
             gains.write_text(json.dumps(doc))
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
+                # The note is the year-only mode's (--year-wash-only);
+                # the default full-history pass carries every addition
+                # (S008-07, tests/test_fix_x_engine_t1135).
                 rep = build_report([base], [gains], 2025,
-                                   {"NOPE.US": "USA"}, "CAD")
+                                   {"NOPE.US": "USA"}, "CAD",
+                                   full_history=False)
         self.assertEqual(rep["unused_overrides"], ["NOPE.US"])
         self.assertIn("NOPE.US", err.getvalue())
         self.assertEqual(rep["deferred_wash_not_in_cost"],

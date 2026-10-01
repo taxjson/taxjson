@@ -965,8 +965,10 @@ class GainsRequest:
     # Blended multi-account mode: US FIFO pools keyed per
     # (account, symbol) while §1091 matching stays cross-account.
     # Canada needs no flag — its symbol-global pools already blend
-    # (ITA s.47), so this is forwarded to the US engine only.
-    per_account_basis: bool = False
+    # (ITA s.47), so this is forwarded to the US engine only. None →
+    # the US default, True: FIFO is per account (tax-logic US-BASIS-01)
+    # on any merged book, not only inside `taxjson run` (SPEC-30).
+    per_account_basis: Optional[bool] = None
     # Income dating overrides (lib/income_dating): Canada — symbols
     # whose "distribution" is a corporation's payout (dated when paid);
     # USA — January RIC/REIT dividends received on Dec 31 of the prior
@@ -979,6 +981,8 @@ class GainsRequest:
         from taxjson.lib.country import canonical_country
         self.country = canonical_country(self.country,
                                          what="GainsRequest.country")
+        if self.per_account_basis is None:
+            self.per_account_basis = (self.country == 'usa')
         self.income_rules()             # refuse a foreign override now
 
     def income_rules(self):

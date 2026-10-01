@@ -115,10 +115,11 @@ def _parse_args():
     parser.add_argument("--cross-asset", action="store_true",
                         help=argparse.SUPPRESS)
     parser.add_argument(
-        "--per-account-basis", action="store_true",
+        "--per-account-basis", action="store_true", default=None,
         help="Blended multi-account mode (combined taxable input): US "
              "FIFO basis pools are kept per account while wash-sale "
-             "matching spans all accounts. No effect for Canada — its "
+             "matching spans all accounts. The US default (FIFO is per "
+             "account); kept for old scripts. No effect for Canada — its "
              "ACB pools already blend per ITA s.47.")
     parser.add_argument(
         "--no-wash",

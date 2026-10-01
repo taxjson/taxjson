@@ -269,10 +269,10 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `base.py` (`BaseBrokerage.CURRENCY_EXT_MAP`), `corp_actions.py` (`_CURRENCY_SUFFIX`), `ib_extractor.py` (`_IB_CURRENCY_EXT`, plus the ISIN-country map `_ISIN_EXT`) and a partial copy in `webull.py` (`CURRENCY_EXT_MAP`) each hardcode `{'CAD':'TO','USD':'US','AUD':'AX','GBP':'L'}`; `price_chain.py` and `bin/taxjson_t1135.py` carry reverse/extended variants (suffix→currency, suffix→country).
 - **Risk:** a non-G4-currency listing (EUR/CHF/JPY/…) or a USD security on a non-US exchange gets the wrong suffix, splitting/merging ACB pools; and the copies can drift when one is changed. The IB `IE→L` item above is one instance of this broader pattern. An explicit `.TO` in a Questrade or generic export is kept whatever the row currency (`DLR.U.TO` bought in USD), so the known USD-on-TSX case no longer depends on the map. Fix: centralize the map in one helper. (Note: `ticker_map.map_ticker`'s blanket US→TO remap is only used in `generate_summary`, a diagnostic — **not** the live `apply_mapping` transaction path — so it does not silently merge real pools.)
 
-### Sub-micro quantity tolerances (crypto dust)
-- **Where:** `lib/core.py` — the Canada pool walk empties a pool whose quantity falls below 1e-6 units after a sale (its remaining cost stays in the pool and goes to the next purchase); the US engine books no row or lot below 1e-8 units.
-- **Current behavior:** a residue of less than a millionth of a coin left after a sale disappears from the holdings (its cost, a few cents at most, moves onto the next purchase); a US row under 1e-8 units is left out and named in a warning. Rows of any size are now booked by the Canada engine (staking rewards under 1e-6 units used to be dropped).
-- **Why deferred:** both tolerances also absorb float noise in every share count; a relative tolerance needs its own audit across both engines. Effect: cents.
+### Sub-micro quantity tolerance in the US engine (crypto dust)
+- **Where:** `lib/core.py` (US engine) — no row or lot below 1e-8 units is booked.
+- **Current behavior:** a US row under 1e-8 units is left out and named in a warning. (The Canada pool walk keeps a coin residue of any size with its cost — only float noise, under 1e-11 of the position, drains; share pools keep the 1e-6 tolerance: tax-logic CA-CRYPTO-09.)
+- **Why deferred:** the US lot epsilon also absorbs float noise in every FIFO lot split; a per-asset tolerance there needs its own fuzz audit. Effect: cents.
 
 ## Test coverage gaps (tracked; lower priority)
 
@@ -298,11 +298,6 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`TRANSFER` in `_NON_CAPITAL`; taxable books post-sidecar contain no TRANSFER rows at all).
 - **Current behavior:** a position established by a custody transfer-in contributes to the T1135 cost-amount threshold only through whatever acquisition history the books carry (imported buys, `start_pos`/backdated `.tt` declarations). A transferred-in foreign position with lost history listed in `phantoms.json` shows as a phantom opening (`taxjson t1135` applies the project's phantoms.json the way the gains stage does, and flags a still-held phantom "cost understated") — the threshold test can understate until the true history is declared.
 - **Why this is the design:** T1135 cost amount IS adjusted cost base; the tool refuses to invent one from a transfer's arrival market value. Declare the real history (the same `custody_fixes.tt` pattern the wash engine prescribes) and the threshold is right.
-
-### T1135 cost carries superficial losses denied in the project year only
-- **Where:** `src/taxjson/bin/taxjson_t1135.py` (`wash_adjustments`, `_deferred_wash`).
-- **Current behavior:** the cost walk adds each s.53(1)(f) amount the engine denied in the project year (the gains files' `wash_sales`) to the replacement's cost, at the later of the losing sale and the replacement purchase. A loss denied in an EARLIER year onto a position still held is not in the year-scoped gains files, so the walk carries it only if the project's own rows do (a hand-off `margin_start.tt` needs the `ADJUST` line — see the hand-off check); the report names what the engine's inventory still defers beyond the year's additions and says when it could lift the maximum over the threshold.
-- **Why deferred:** replaying every earlier year's wash pass (with its registered-account context) inside `t1135` re-runs the engine. Sketch: one full-history `run_gains` pass in `cmd_t1135` (as `carryover` does), feeding each earlier year's `wash_sales` through the same `wash_adjustments`.
 
 ### T1135 sees only the brokerage books
 - **Where:** `src/taxjson/bin/taxjson_t1135.py` (`build_report`, `render_report`).

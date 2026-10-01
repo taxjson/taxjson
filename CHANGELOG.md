@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- **US: a spouse's replacement purchase is a permanent denial in your
+  books.** With affiliated trades given (`taxjson-gains --affiliated`),
+  a loss whose replacement your spouse or controlled corporation bought
+  was reported as a deferral (permanently_disallowed 0) that no lot in
+  your books carried, so it never came back and the wash conservation
+  did not foot. §1091(d) puts the basis adjustment on THEIR shares: the
+  loss is now permanently disallowed here, as for an IRA replacement,
+  and the trace says the basis goes to the affiliated holder. tax-logic
+  states the rule (US-WASH-16) (partition SPEC-30, ENGINE-I1).
+- **US: FIFO is per account on any merged book.** `taxjson-gains
+  --country usa` (and the library's GainsRequest) now keeps FIFO lots
+  per account by default, as `taxjson run`'s blended pass always did;
+  a direct run on a merged book used to pool the accounts' lots
+  (tax-logic US-BASIS-01, partition SPEC-30). `--per-account-basis` is
+  still accepted.
+
+- **Canada: a coin residue under a millionth stays a holding.** The
+  pool walk emptied any position under 1e-6 units after a sale, so
+  9e-7 BTC left after selling 1 BTC vanished from the holdings and its
+  cost moved onto the next purchase. A crypto pool now only drains
+  float noise (under 1e-11 of the position): the residue keeps its
+  units and its own cost, and a sale that overshoots the pool by a few
+  satoshis is no longer dropped. Share pools keep the millionth-of-a-
+  share tolerance. A new coin-book fuzzer (units, cost and wash
+  conservation) pins it (audit S069-13, tax-logic CA-CRYPTO-09).
+
+- **T1135: a superficial loss denied in an earlier year is in the
+  replacement's cost.** The cost walk added only the project year's
+  denials, so a 2025 denial on shares still held in 2026 was missing
+  from the 2026 maximum and Dec-31 cost columns (buy 120,000, sell at
+  90,000, rebuy within 30 days: the 2026 report said "no T1135
+  required" at 90,000). `taxjson t1135` now runs the engine once over
+  the full history (registered accounts as wash context, the project's
+  option timing) and replays every s.53(1)(f) addition where the engine
+  applied it; the gains files' `wash_sales` records carry those
+  landings (`adjusts`). The cost columns now equal the engine's ACB.
+  `--year-wash-only` keeps the old year-only mode with its note
+  (audit S008-07, S009-01, S051-21).
+
 - **IB open/close codes reach the missing-history checks.** IB's Trades
   `Code` (O opening, C closing, C;O both) is kept on each trade. A short
   IB declares (a sale coded O, or C;O that closed the long and opened the
