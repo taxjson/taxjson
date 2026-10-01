@@ -2442,8 +2442,8 @@
 - **Report views label and total what they show.** Payments in lieu
   have their own footer total in `events` / `dil` (not TOTAL DIVIDEND);
   a crypto account's DIVIDEND rows are labelled staking rewards (ordinary
-  income) in `sum`, the views, `divs-sum` (outside its total) and the
-  crypto `.sum`; `dil-sum`, `roc-sum` and `trades-sum` split out
+  income) in `sum`, the `events` / `divs` footers and the crypto
+  `.sum`; `dil-sum`, `roc-sum` and `trades-sum` split out
   registered accounts (no income, no T3, not T5008 proceeds); summary
   TOTALs equal the sum of their printed rows; `winners` shows a short or
   written option's PROCEEDS/COST the way `ccd-sum` and form-export do;

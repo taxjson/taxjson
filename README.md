@@ -642,8 +642,8 @@ contributes — the TAXABLE line is the figure to compare with the T5/T3 slips.
 Each row counts in its tax year (see "Income dating"), so a Canadian ETF's
 December-record distribution paid in January is in the December year, as on
 the T3. A crypto account's DIVIDEND rows are staking rewards (ordinary
-income): `divs-sum` lists them on their own STAKING line, outside the
-total, and `sum` / the views / the crypto `.sum` label them as staking.
+income): `divs-sum` names them on an "of which crypto staking" line, and
+`sum` / the views / the crypto `.sum` label them as staking.
 `winners` prints the same taxable/sheltered split under its ranking, and
 `dil-sum` / `roc-sum` / `trades-sum` separate registered accounts the same
 way (the T3 box 42 figure is `roc-sum`'s TAXABLE line; T5008 proceeds are
