@@ -1,7 +1,9 @@
 """Mutation pins for lib/country.py (audit G1-0): the small helpers the
 suite never asserted directly."""
 import argparse
+import os
 import unittest
+from unittest import mock
 
 from taxjson.lib import country as C
 
@@ -34,6 +36,16 @@ class TestHelpers(unittest.TestCase):
         p = argparse.ArgumentParser()
         C.add_country_argument(p, help="mine")
         self.assertIn("mine", p.format_help())
+
+
+    def test_engine_guard_ignores_an_unknown_value(self):
+        # m1616: only "canada"/"usa" restrict the engines.
+        with mock.patch.dict(os.environ, {C.ENGINE_GUARD_ENV: "bogus"}):
+            C.check_engine_allowed("canada")
+            C.check_engine_allowed("usa")
+        with mock.patch.dict(os.environ, {C.ENGINE_GUARD_ENV: "usa"}):
+            with self.assertRaises(AssertionError):
+                C.check_engine_allowed("canada")
 
 
 if __name__ == "__main__":
