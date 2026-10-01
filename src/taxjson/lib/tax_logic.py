@@ -701,6 +701,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Country comes from the listing suffix (t1135.map "
                  "overrides); crypto held on an exchange counts.",
                  cont=True),
+            Rule("CA-RPT-12",
+                 "A property's cost amount is its adjusted cost base as "
+                 "the gains engine computes it, day by day over the full "
+                 "history: a superficial loss denied in any year is added "
+                 "to the replacement's cost (s.53(1)(f)), an option's "
+                 "premium follows the shares on exercise or assignment "
+                 "(s.49(3)), and a futures contract has no cost amount."),
             Rule("CA-RPT-03",
                  "`taxjson estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "

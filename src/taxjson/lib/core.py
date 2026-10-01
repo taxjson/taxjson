@@ -3734,6 +3734,22 @@ class CanadaTaxRules(TaxRules):
                             'disallowed_qty': v.quantity,
                             'disallow_cmd': disallow_cmd,
                             'adjust_cmd': adjust_cmd,
+                            # Where each s.53(1)(f) addition lands (one
+                            # per taxable replacement; a multi-trigger
+                            # allocation can name several symbols): the
+                            # pool symbol as of the stamp, and `after` =
+                            # the loss row when the bump is applied
+                            # right after it (_place_wash_adjusts). The
+                            # T1135 cost walk replays these (S008-07).
+                            'adjusts': [
+                                {'id': a.id, 'symbol': a.symbol,
+                                 'date': a.date,
+                                 'date_settle': a.date_settle or a.date,
+                                 'time': a.time,
+                                 'amount': a.net_amount,
+                                 'account': a.account,
+                                 'after': getattr(a, '_wash_after', None)}
+                                for a in _adjs],
                             'trace': wash_trace if trace else []
                         })
                 solver_converged = True

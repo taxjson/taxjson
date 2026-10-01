@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **T1135: a superficial loss denied in an earlier year is in the
+  replacement's cost.** The cost walk added only the project year's
+  denials, so a 2025 denial on shares still held in 2026 was missing
+  from the 2026 maximum and Dec-31 cost columns (buy 120,000, sell at
+  90,000, rebuy within 30 days: the 2026 report said "no T1135
+  required" at 90,000). `taxjson t1135` now runs the engine once over
+  the full history (registered accounts as wash context, the project's
+  option timing) and replays every s.53(1)(f) addition where the engine
+  applied it; the gains files' `wash_sales` records carry those
+  landings (`adjusts`). The cost columns now equal the engine's ACB.
+  `--year-wash-only` keeps the old year-only mode with its note
+  (audit S008-07, S009-01, S051-21).
+
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent

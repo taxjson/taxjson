@@ -21,7 +21,12 @@ Answers the two questions every Canadian filer with foreign securities has:
 Inputs are the pipeline's TAXABLE `<account>_base.json` files (full history,
 already converted to base currency) and, for the income / gain columns, the
 year-scoped `<account>_gains.json` (or `_gains_wash.json`) files. Registered
-accounts (RRSP/TFSA/...) are excluded from SFP by law — do not pass them.
+accounts (RRSP/TFSA/...) are excluded from SFP by law — do not pass them as
+FILEs; `--sheltered` gives them as superficial-loss context only.
+
+Cost amount is the ACB the gains engine computes: one full-history engine
+pass finds every superficial loss denied in any year, and its s.53(1)(f)
+addition joins the walk where the engine applied it.
 
 Domicile classification is by market suffix (.US → USA, .L → GBR,
 .AX → AUS; .TO/.V/.CN/.NE → Canadian, i.e. not SFP), overridable per symbol
@@ -51,12 +56,15 @@ Caveats printed with every report (also see --help):
 Usage:
     taxjson-t1135 --year 2025 margin_base.json crypto_base.json \\
         --gains margin_gains.json --gains crypto_gains.json \\
+        [--sheltered sheltered_base.json] [--option-premium-timing grant] \\
         [--map t1135.map] [--threshold 100000] [--json]
 
 Or through the project wrapper (recommended):  `taxjson t1135`
 """
 
 import argparse
+import contextlib
+import io
 import json
 import re
 import sys
@@ -296,6 +304,32 @@ def _sort_key(tx: Dict[str, Any], tax_date: str = "settle") -> Tuple:
     return event_sort_key(_Ev(tx), profile="ca_main")
 
 
+def _place_after(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Move each ADJUST carrying `wash_after` (a superficial-loss
+    addition the engine applies right after the losing sale — its
+    replacement was bought before the sale) to immediately after that
+    sale's row, as core._place_wash_adjusts does: every later row,
+    including another fill at the same second, sees it."""
+    moved = [t for t in rows if t.get("wash_after")]
+    if not moved:
+        return rows
+    ids = {str(t.get("id")) for t in rows if t.get("id") is not None}
+    after: Dict[str, List[Dict[str, Any]]] = {}
+    for t in moved:
+        if t["wash_after"] in ids:
+            after.setdefault(t["wash_after"], []).append(t)
+    placed = {id(t) for lst in after.values() for t in lst}
+    out: List[Dict[str, Any]] = []
+    for t in rows:
+        if id(t) in placed:
+            continue
+        out.append(t)
+        tid = str(t.get("id")) if t.get("id") is not None else None
+        if tid in after and not t.get("wash_after"):
+            out.extend(after.pop(tid))
+    return out
+
+
 def walk_costs(transactions: List[Dict[str, Any]], year: int,
                overrides: Dict[str, Optional[str]],
                tax_date: str = "settle",
@@ -354,7 +388,8 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     from taxjson.lib.corporate_timeline import split_seen
     seen_splits: set = set()
     last_date = ""
-    for tx in sorted(transactions, key=lambda t: _sort_key(t, tax_date)):
+    for tx in _place_after(sorted(transactions,
+                                  key=lambda t: _sort_key(t, tax_date))):
         date = _tx_date(tx, tax_date)
         if date > year_end:
             break
@@ -670,60 +705,125 @@ def join_income_gains(gains_paths: List[Path], year: int,
     return out
 
 
-def wash_adjustments(gains_paths: List[Path],
+def _read_wash_sales(gains_paths: List[Path]) -> List[Dict[str, Any]]:
+    """The `wash_sales` records of the (year-scoped) gains files."""
+    out: List[Dict[str, Any]] = []
+    for p in gains_paths:
+        try:
+            data = load_json(p)
+        except (OSError, ValueError):
+            continue                    # join_income_gains warns
+        if isinstance(data, dict):
+            out.extend(w for w in data.get("wash_sales") or []
+                       if isinstance(w, dict))
+    return out
+
+
+def full_history_wash_sales(base_paths: List[Path],
+                            sheltered_paths: List[Path] = (),
+                            phantoms: Optional[Path] = None,
+                            tax_date: str = "settle",
+                            option_timing: Optional[Dict[str, Any]] = None
+                            ) -> List[Dict[str, Any]]:
+    """Every superficial loss the Canada engine denies over the books'
+    FULL history: one `run_gains` pass (year=None) over the taxable
+    books together — ITA s.47 pools are symbol-global, as in the
+    pipeline's blended pass — with the registered accounts as wash
+    context and the project's phantoms and option timing, the way
+    `taxjson carryover` runs it. A loss denied in an earlier year whose
+    replacement is still held is in the year's ACB (s.53(1)(f)), but not
+    in the year-scoped gains files (S008-07, S009-01, S051-21)."""
+    from taxjson.lib.json_input import load_transactions_or_exit
+    from taxjson.lib.pipeline import GainsRequest, run_gains
+    txs: List[Any] = []
+    for p in base_paths:
+        txs.extend(load_transactions_or_exit("taxjson-t1135", p))
+    sheltered: List[Any] = []
+    for p in sheltered_paths or ():
+        sheltered.extend(load_transactions_or_exit("taxjson-t1135", p))
+    req = GainsRequest(country="canada", year=None, taxable=True,
+                       tax_date=tax_date, incomplete_history=phantoms,
+                       phantom_hint=False, **(option_timing or {}))
+    # The engine's diagnostics belong to `taxjson run` (they would repeat
+    # here); this pass only reads where each denial's addition lands. A
+    # solver that did not converge is still said.
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = run_gains(txs, sheltered, (), req)
+    for line in err.getvalue().splitlines():
+        if "did not converge" in line:
+            print(line, file=sys.stderr)
+    return list(res.get("wash_sales") or [])
+
+
+def wash_adjustments(wash_sales: List[Dict[str, Any]],
                      transactions: List[Dict[str, Any]],
                      tax_date: str = "settle") -> List[Dict[str, Any]]:
     """The engine's s.53(1)(f) additions as ADJUST rows for the cost walk.
 
     A superficial loss the engine denies (s.54) is added to the ACB of
     the substituted property; the T1135 cost amount of capital property
-    is its ACB (s.248(1)), so the walk must carry the same addition
-    (audit G7-0: the walk replayed base rows only and understated every
-    replacement's cost by the denied loss). Each gains file's
-    `wash_sales` entry becomes an ADJUST on the replacement lot's symbol
-    — only when the lot is one of the walked (taxable) rows; a
-    replacement bought in a registered or affiliated account is not the
-    filer's foreign property. The row is stamped at the LATER of the
-    losing sale and the replacement purchase (a replacement bought
-    before the losing sale must not have part of the addition averaged
-    out by that sale); an ADJUST sorts after the trades at its stamp.
-    The gains files are year-scoped: a loss denied in an EARLIER year is
-    not listed (see `_deferred_wash`)."""
+    is its ACB (s.248(1)), so the walk carries the same addition (audit
+    G7-0, S008-07). Each record's `adjusts` (the engine's own landings:
+    pool symbol, stamp, amount — the poolable share only; a replacement
+    in a registered or affiliated account makes the loss permanently
+    denied and adds nothing) becomes one ADJUST row. A landing the
+    engine applies right after the losing sale carries `wash_after` =
+    that sale's id, and the walk places it there.
+
+    Records without `adjusts` (gains files written before it existed)
+    fall back to the trigger lot: the row is stamped at the LATER of the
+    losing sale and the replacement purchase."""
     by_id = {str(t.get("id")): t for t in transactions if t.get("id") not in (None, "")}
     out: List[Dict[str, Any]] = []
     seen = set()
-    for p in gains_paths:
-        try:
-            data = load_json(p)
-        except (OSError, ValueError):
-            continue                    # join_income_gains warns
-        if not isinstance(data, dict):
+    for w in wash_sales:
+        if isinstance(w.get("adjusts"), list):
+            for a in w["adjusts"]:
+                try:
+                    amt = float(a.get("amount") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                aid = str(a.get("id") or "")
+                if not a.get("symbol") or abs(amt) < 1e-9 or aid in seen:
+                    continue
+                seen.add(aid)
+                row = {"id": aid or f"wash:{w.get('loss_tx_id')}",
+                       "action": "ADJUST", "symbol": a["symbol"],
+                       "date": a.get("date") or "",
+                       "date_settle": (a.get("date_settle")
+                                       or a.get("date") or ""),
+                       "time": a.get("time") or "00:00:00",
+                       "quantity": 0.0, "net_amount": amt,
+                       "account": a.get("account") or ""}
+                if a.get("after") and str(a["after"]) in by_id:
+                    row["wash_after"] = str(a["after"])
+                out.append(row)
             continue
-        for w in data.get("wash_sales") or []:
-            lot = by_id.get(str(w.get("trigger_lot_id") or ""))
-            if lot is None:
-                continue
-            parts = str(w.get("adjust_cmd") or "").split()
-            sym = parts[3] if len(parts) >= 6 else (lot.get("symbol") or "")
-            try:
-                amt = float(w.get("amount", parts[5] if len(parts) >= 6 else 0.0))
-            except (TypeError, ValueError):
-                continue
-            key = (str(w.get("loss_tx_id")), str(w.get("trigger_lot_id")), sym, round(amt, 6))
-            if not sym or abs(amt) < 1e-9 or key in seen:
-                continue
-            seen.add(key)
-            at = lot
-            loss = by_id.get(str(w.get("loss_tx_id") or ""))
-            if loss is not None and _sort_key(loss, tax_date) > _sort_key(lot, tax_date):
-                at = loss
-            out.append({"id": f"wash:{w.get('loss_tx_id')}:{w.get('trigger_lot_id')}",
-                        "action": "ADJUST", "symbol": sym,
-                        "date": at.get("date") or "",
-                        "date_settle": at.get("date_settle") or at.get("date") or "",
-                        "time": at.get("time") or "00:00:00",
-                        "quantity": 0.0, "net_amount": amt,
-                        "account": lot.get("account") or ""})
+        lot = by_id.get(str(w.get("trigger_lot_id") or ""))
+        if lot is None:
+            continue
+        parts = str(w.get("adjust_cmd") or "").split()
+        sym = parts[3] if len(parts) >= 6 else (lot.get("symbol") or "")
+        try:
+            amt = float(parts[5] if len(parts) >= 6 else w.get("amount", 0.0))
+        except (TypeError, ValueError):
+            continue
+        key = (str(w.get("loss_tx_id")), str(w.get("trigger_lot_id")), sym, round(amt, 6))
+        if not sym or abs(amt) < 1e-9 or key in seen:
+            continue
+        seen.add(key)
+        at = lot
+        loss = by_id.get(str(w.get("loss_tx_id") or ""))
+        if loss is not None and _sort_key(loss, tax_date) > _sort_key(lot, tax_date):
+            at = loss
+        out.append({"id": f"wash:{w.get('loss_tx_id')}:{w.get('trigger_lot_id')}",
+                    "action": "ADJUST", "symbol": sym,
+                    "date": at.get("date") or "",
+                    "date_settle": at.get("date_settle") or at.get("date") or "",
+                    "time": at.get("time") or "00:00:00",
+                    "quantity": 0.0, "net_amount": amt,
+                    "account": lot.get("account") or ""})
     return out
 
 
@@ -759,20 +859,37 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  detailed_threshold: float = DETAILED_THRESHOLD,
                  phantoms: Optional[Path] = None,
                  tax_date: str = "settle",
-                 today: Optional[str] = None) -> Dict[str, Any]:
+                 today: Optional[str] = None,
+                 sheltered_paths: List[Path] = (),
+                 option_timing: Optional[Dict[str, Any]] = None,
+                 full_history: bool = True) -> Dict[str, Any]:
     """The T1135 report model. `today` (ISO date, default the real
     date) decides whether the year is complete: before Dec 31 the
     figures run to the last date in the books and a negative verdict is
-    provisional (S051-22, S052-15)."""
+    provisional (S051-22, S052-15).
+
+    `full_history` (the default) runs the engine once over the whole
+    history (`full_history_wash_sales`, with `sheltered_paths` as wash
+    context and the project's `option_timing`) so a superficial loss
+    denied in ANY year is in the replacement's cost; off, only the
+    gains files' (year-scoped) denials are."""
     from datetime import date as _date
     today = today or _date.today().isoformat()
     check_currency(list(base_paths) + list(gains_paths), base_currency)
     txs = load_transactions(base_paths, phantoms)
     user_keys = set(overrides)
     overrides = dict(overrides)         # the walk adds rename targets
-    # The year's denied superficial losses join the walk as ADJUST rows
-    # (G7-0); the sort puts each after the trades at its stamp.
-    wash = wash_adjustments(gains_paths, txs, tax_date)
+    # Every denied superficial loss joins the walk as ADJUST rows where
+    # the engine put it (G7-0, S008-07): the full-history pass covers
+    # losses denied before the project year.
+    if full_history:
+        wash_sales = full_history_wash_sales(
+            base_paths, sheltered_paths, phantoms, tax_date, option_timing)
+    else:
+        wash_sales = _read_wash_sales(gains_paths)
+    year_end_key = f"{year}-12-31"
+    wash = [w for w in wash_adjustments(wash_sales, txs, tax_date)
+            if _tx_date(w, tax_date) <= year_end_key]
     txs = txs + wash
     walk = walk_costs(txs, year, overrides, tax_date, today=today)
     inc = join_income_gains(gains_paths, year, overrides, tax_date)
@@ -785,15 +902,21 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         print(f"warning: t1135.map: {k!r} matches no symbol in the books "
               f"(renamed, consolidated by ticker.map, or a typo?) — the "
               f"override is not applied.", file=sys.stderr)
-    deferred = _deferred_wash(gains_paths, overrides)
-    # What the walk already carries is not "excluded": only a deferral
-    # beyond the year's own additions (a loss denied in an earlier year)
-    # is left for the note.
-    added: Dict[str, float] = {}
-    for w in wash:
-        added[w["symbol"]] = added.get(w["symbol"], 0.0) + float(w["net_amount"])
-    deferred = {k: round(v - added.get(k, 0.0), 2) for k, v in deferred.items()
-                if v - added.get(k, 0.0) > 0.005}
+    deferred: Dict[str, float] = {}
+    if not full_history:
+        # Year-only mode: a loss denied in an earlier year whose
+        # replacement is still held is not in the walk. The gains files'
+        # inventory deferral beyond the year's own additions bounds it
+        # (that inventory is as of the books' last row, so it can also
+        # carry a later year's deferral — an upper bound).
+        added: Dict[str, float] = {}
+        for w in wash:
+            added[w["symbol"]] = (added.get(w["symbol"], 0.0)
+                                  + float(w["net_amount"]))
+        deferred = {k: round(v - added.get(k, 0.0), 2)
+                    for k, v in _deferred_wash(gains_paths,
+                                               overrides).items()
+                    if v - added.get(k, 0.0) > 0.005}
     futures = set(walk.get("futures_symbols") or ())
 
     rows = []
@@ -878,11 +1001,13 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "futures_symbols": sorted(futures),
         "phantoms_applied": phantoms is not None,
         "unused_overrides": unused_overrides,
-        # Superficial losses still in open positions' ACB (s.53(1)(f))
-        # beyond those the year's gains files list (added to the walk):
-        # a loss denied in an earlier year — the cost columns are low
-        # by up to this (KNOWN_ISSUES).
+        # Only with the full-history pass off (--year-wash-only):
+        # superficial losses the engine's inventory still defers
+        # (s.53(1)(f)) beyond the year's own additions — the cost
+        # columns are low by up to this. Empty otherwise: the walk
+        # carries every addition where the engine applied it.
         "deferred_wash_not_in_cost": deferred,
+        "full_history_wash": bool(full_history),
         "tax_date_basis": tax_date,
         "year_complete": year_complete,
         "as_of": as_of,
@@ -939,8 +1064,8 @@ def render_report(rep: Dict[str, Any]) -> str:
     _dw = sum((rep.get("deferred_wash_not_in_cost") or {}).values())
     if _dw:
         lines.append(f"  !! cost amounts EXCLUDE {_money(_dw)} {cur} of "
-                     f"denied superficial losses added to the ACB of "
-                     f"shares still held (s.53(1)(f)): "
+                     f"denied superficial losses the engine added to the "
+                     f"ACB of property still held (s.53(1)(f)): "
                      + ", ".join(f"{k} {_money(v)}" for k, v in sorted(
                          rep["deferred_wash_not_in_cost"].items())[:6])
                      + " — the true cost amounts are higher by up to "
@@ -1099,9 +1224,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="phantoms.json: add the same phantom "
                              "openings the gains stage adds (the project "
                              "wrapper passes the project's file)")
+    # The full-history superficial-loss pass (S008-07) needs the same
+    # inputs the filing pipeline's wash pass has; the wrapper passes the
+    # project's.
+    parser.add_argument("--sheltered", action="append", type=Path,
+                        default=[], metavar="FILE",
+                        help="Registered accounts' base book (wash-sale "
+                             "context only — never counted as foreign "
+                             "property); repeatable")
+    parser.add_argument("--option-premium-timing", choices=["grant", "close"],
+                        default="close",
+                        help="Written-option premium timing the gains "
+                             "files use (default close)")
+    parser.add_argument("--option-grant-since", type=int, default=None,
+                        metavar="YEAR",
+                        help="With grant timing: contracts written before "
+                             "YEAR keep close timing")
+    parser.add_argument("--option-buyback-wash", action="store_true",
+                        help="Grant timing: a written option's buy-back "
+                             "loss can be superficial")
+    parser.add_argument("--year-wash-only", action="store_true",
+                        help="Skip the full-history engine pass: only the "
+                             "gains files' (project-year) denied losses "
+                             "are added to cost, and the report names "
+                             "what that leaves out")
     args = parser.parse_args(argv)
 
     extra = [args.incomplete_history] if args.incomplete_history else []
+    extra += list(args.sheltered)
     for p in args.files + args.gains + extra:
         if not p.exists():
             print(f"taxjson-t1135: no such file: {p}", file=sys.stderr)
@@ -1124,7 +1274,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                            threshold=args.threshold,
                            detailed_threshold=args.detailed_threshold,
                            phantoms=args.incomplete_history,
-                           tax_date=args.tax_date)
+                           tax_date=args.tax_date,
+                           sheltered_paths=args.sheltered,
+                           option_timing=dict(
+                               option_premium_timing=(
+                                   args.option_premium_timing),
+                               option_grant_since=args.option_grant_since,
+                               option_buyback_loss_superficial=(
+                                   args.option_buyback_wash)),
+                           full_history=not args.year_wash_only)
     except (UnreadableGains, CurrencyMismatch) as e:
         print(e.code, file=sys.stderr)
         return 2

@@ -901,9 +901,13 @@ counts at its premium. An assigned written put's premium is deducted from the
 shares' cost and an exercised call's cost added to them (s.49(3)/(3.1)), rows
 sharing a timestamp follow the engine's order, a split inside a trade's settle
 lag re-denominates it like the engine, and the gain column and year-end
-position follow the project's `tax_date`. Denied superficial losses still in a
-position's ACB (s.53(1)(f)) are NOT added to the cost columns yet — the report
-names them and says when they could flip the filing verdict. A configured
+position follow the project's `tax_date`. A superficial loss denied in ANY
+year is in its replacement's cost (s.53(1)(f)), exactly where the engine put
+it: `t1135` runs the engine once over the full history (with the registered
+accounts as wash context and the project's option timing, as `carryover`
+does) and replays each denial's addition (`--year-wash-only` skips that
+pass, adds only the project year's denials and names what that leaves
+out). A configured
 taxable account with inputs but no books is refused, and books built for
 another year are warned about. `--json` for machine-readable output.
 
