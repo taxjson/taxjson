@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Shared broker helpers.** The back-computed fee (Webull, RBC) is
+  signed by the trade's direction — rounding noise is no longer turned
+  into a charge — and a flat commission on a cheap option fill is kept
+  (it was zeroed above 25% of net); fees.rpt only. "NOT A RETURN OF
+  CAPITAL", "RETURN OF CAPITAL GAINS" and a fund named "... RET OF
+  CAPITAL ETF" are dividends, not ACB reductions. Strict number cells
+  refuse non-ASCII digits and overflow; a lower-case currency is the
+  same currency (Questrade, the shared suffix helper); a decimal comma
+  inside description text ("ON 12,5 SHS", "BOOK VALUE $1234,56",
+  "$1,250.00 PER SHARE") is never read 10-100x off (the field stays
+  unknown, or the grouped number is read whole). Webull's settle-to-
+  trade walk-back is right on the T+1 cutover days themselves.
 - **IB: a commission refund lowers the trade's cost.** A Commission
   Adjustments row naming its trade ("Refund (KWEB, 400, 2026-05-13)")
   is folded into that trade — a refunded purchase commission comes off

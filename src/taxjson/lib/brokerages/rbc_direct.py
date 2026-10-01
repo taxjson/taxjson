@@ -30,7 +30,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
                                          income_facts_from_description,
-                                         is_roc_description)
+                                         is_roc_description, DESC_NUMBER)
 from taxjson.lib.corp_actions import (
     RBC_REORG_CODES, RbcReorgPairing, pair_rbc_reorganizations,
     rbc_norm_company,
@@ -72,8 +72,8 @@ _RBC_CODE_RE = re.compile(r'^\s*([A-Z]{2,4})\s*-(?=\s|$)')
 _RBC_INCOME_VERB_RE = re.compile(
     r'^\s*DIV\s*-|\bCASH\s+DIV(?:IDEND)?\s+ON\b|\bDIST\s+ON\b', re.I)
 _RBC_BOOK_COST_RE = re.compile(
-    r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\s+\$?\s*([\d,]*\.?\d+)', re.I)
-_RBC_BOOK_VALUE_RE = re.compile(r'\bBOOK\s+VALUE\s+\$?\s*(-?[\d,]*\.?\d+)',
+    r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\s+\$?\s*(' + DESC_NUMBER + ')', re.I)
+_RBC_BOOK_VALUE_RE = re.compile(r'\bBOOK\s+VALUE\s+\$?\s*(-?' + DESC_NUMBER + ')',
                                 re.I)
 _RBC_REINV_PRICE_RE = re.compile(r'\bREINV\s*@\s*[A-Z]{0,2}\$?\s*([\d.]+)',
                                  re.I)
@@ -88,7 +88,7 @@ _RBC_RETRACTION_RE = re.compile(
 #   "DIS - VANGUARD ... GROWTH ETF STK SPLIT ON 14 SHS REC 04/17/26 ..."
 _RBC_STK_SPLIT_RE = re.compile(r'\b(?:STK|STOCK|FORWARD|REVERSE)\s+SPLIT\b',
                                re.I)
-_RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SHS\b', re.I)
+_RBC_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+(' + DESC_NUMBER + r')\s+SHS\b', re.I)
 # Legacy description tokens for rows whose Activity label is unknown.
 _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell)\b')
 
@@ -202,10 +202,11 @@ def _err(path: Path, line: int, msg: str) -> RbcFormatError:
     return RbcFormatError(f"{path.name}:{line}: {msg}")
 
 
-_NUM_RE = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)')
+_NUM_RE = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)', re.ASCII)
 # A first group of 0 is a decimal comma ('0,125'), never thousands
 # (audit S055-08).
-_THOUSANDS_RE = re.compile(r'[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?')
+_THOUSANDS_RE = re.compile(r'[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?',
+                           re.ASCII)
 
 
 def rbc_number(raw: Optional[str], *, path: Path, line: int,
@@ -232,6 +233,10 @@ def rbc_number(raw: Optional[str], *, path: Path, line: int,
                    f"parser can read safely (expected e.g. 1234.5, "
                    f"1,234.50 or (12.50)) — refusing to guess")
     v = float(s)
+    if v in (float('inf'), float('-inf')):
+        # A 400-digit run overflows (audit S055-09).
+        raise _err(path, line, f"{column} {raw!r} is out of range — "
+                   f"refusing it")
     if neg:
         if v < 0:
             raise _err(path, line, f"{column} {raw!r}: a parenthesised "

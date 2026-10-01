@@ -11,6 +11,7 @@ subclass that delegates to these helpers instead of re-implementing them.
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+import math
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,12 +47,22 @@ def option_strike_text(raw: str) -> str:
 # can't drift per broker. ROC is NOT dividend income: it reduces the
 # position's ACB (emitted as an ADJUST row with negative net_amount via
 # `BaseBrokerage.tx_roc_adjust`). Word-boundary so e.g. "RETURNED CAPITAL
-# GAINS DISTRIBUTION" phrasing doesn't false-positive.
-ROC_DESC_RE = re.compile(r'\bRET(?:URN)?\s+OF\s+CAPITAL\b', re.IGNORECASE)
+# GAINS DISTRIBUTION" phrasing doesn't false-positive; "RETURN OF CAPITAL
+# GAINS" and a fund NAME ("... RET OF CAPITAL ETF CASH DIV") are not a
+# return of capital, nor is one the text negates ("NOT A RETURN OF
+# CAPITAL") — each became an ACB reduction instead of a dividend (audit
+# R1-76).
+ROC_DESC_RE = re.compile(
+    r'\bRET(?:URN)?\s+OF\s+CAPITAL\b(?!\s+(?:GAINS?|ETF|FUND|INCOME)\b)',
+    re.IGNORECASE)
+_ROC_NEGATED_RE = re.compile(r'\bNOT\s+(?:AN?\s+)?$', re.IGNORECASE)
 
 
 def is_roc_description(desc: Optional[str]) -> bool:
-    return bool(ROC_DESC_RE.search(desc or ''))
+    for m in ROC_DESC_RE.finditer(desc or ''):
+        if not _ROC_NEGATED_RE.search((desc or '')[:m.start()]):
+            return True
+    return False
 
 
 # The record date Questrade and RBC print in an income row's description
@@ -90,15 +101,32 @@ def income_facts_from_description(desc: Optional[str],
 # `price` on the emitted DIVIDEND record so it self-describes (qty held
 # at record date × per-share rate ≈ amount). Falls back to None when
 # the pattern doesn't match so the caller can default to zeros.
+# A number inside a broker's DESCRIPTION text: digits with VALID
+# thousands groups only ("1,000", "5,293.06"), never a decimal comma —
+# "ON 12,5 SHS" used to read as 125 and "$1,250.00 PER SHARE" as 250
+# (audit S055-20 / S055-23). A token that is not a well-formed number
+# does not match at all (the field stays unknown) rather than being
+# read wrong. `(?!\d|,\d)` stops "12,5" matching as "12" (a comma
+# that is punctuation, "5,293.06, PAY ...", is fine).
+DESC_NUMBER = (r'(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)'
+               r'(?!\d|,\d)')
+
+
+def desc_number(text: str) -> float:
+    """A DESC_NUMBER match as a float (thousands separators dropped)."""
+    return float(text.replace(',', ''))
+
+
 _DIV_QTY_ON_SHS_RE = re.compile(
-    r'\bON\s+([\d,]+(?:\.\d+)?)\s+SH(?:S|RS|ARES)?\b',
+    r'\bON\s+(' + DESC_NUMBER + r')\s+SH(?:S|RS|ARES)?\b',
     re.IGNORECASE,
 )
 _DIV_PER_SHARE_RE = re.compile(
     # "USD 0.24 per Share" / "$0.50 PER SHR" / "0.09 per share" — the
     # currency prefix is optional because we don't actually need it
     # here (the row already carries currency).
-    r'(?:[A-Z]{3}\s+|\$)?([\d.]+)\s*PER\s*SH(?:R|ARE)?\b',
+    r'(?:[A-Z]{3}\s+|\$)?(?<![\d.,])(' + DESC_NUMBER
+    + r')\s*PER\s*SH(?:R|ARE)?\b',
     re.IGNORECASE,
 )
 _DIV_CASH_DIVIDEND_RE = re.compile(
@@ -107,7 +135,7 @@ _DIV_CASH_DIVIDEND_RE = re.compile(
     # always sits right after "Cash Dividend <CCY>", so anchor on that
     # phrase — matching a bare "<CCY> <number>" anywhere would catch the
     # ISIN or other stray digits.
-    r'\bCash\s+Dividend\s+(?:[A-Z]{3}\s+|\$)([\d.]+)',
+    r'\bCash\s+Dividend\s+(?:[A-Z]{3}\s+|\$)(' + DESC_NUMBER + r')',
     re.IGNORECASE,
 )
 
@@ -127,24 +155,15 @@ def _parse_div_qty_rate(description: str, amount: float):
     rate = 0.0
     m_qty = _DIV_QTY_ON_SHS_RE.search(description or '')
     if m_qty:
-        try:
-            qty = float(m_qty.group(1).replace(',', ''))
-        except ValueError:
-            qty = 0.0
+        qty = desc_number(m_qty.group(1))
     m_rate = _DIV_PER_SHARE_RE.search(description or '')
     if m_rate:
-        try:
-            rate = float(m_rate.group(1))
-        except ValueError:
-            rate = 0.0
+        rate = desc_number(m_rate.group(1))
     if rate == 0.0:
         # IB "Cash Dividend CAD 0.97" form — a rate without "per Share".
         m_cash = _DIV_CASH_DIVIDEND_RE.search(description or '')
         if m_cash:
-            try:
-                rate = float(m_cash.group(1))
-            except ValueError:
-                rate = 0.0
+            rate = desc_number(m_cash.group(1))
     # Derive missing field from the other when we have one + amount.
     if qty > 0 and rate == 0 and amount:
         rate = round(amount / qty, 8)
@@ -218,7 +237,7 @@ _STRICT_NUM_RE = re.compile(
     r'^(?P<sign>[+-]?)'
     r'(?P<int>[1-9]\d{0,2}(?:,\d{3})+|\d*)'
     r'(?P<frac>\.\d*)?'
-    r'(?P<exp>[eE][+-]?\d+)?$')
+    r'(?P<exp>[eE][+-]?\d+)?$', re.ASCII)   # ASCII digits only (S055-09)
 # A comma is only ever a THOUSANDS separator: digit groups of exactly
 # three after a 1-3 digit lead that does not start with 0 ("0,125" is a
 # decimal comma, never 125 -- audit S055-08), optionally followed by a
@@ -297,6 +316,10 @@ def parse_strict_number(raw, *, field: str = 'value', where: str = '',
             f"(decimal commas, space-grouped digits and text are refused "
             f"rather than guessed)")
     val = float(t.replace(',', ''))
+    if not math.isfinite(val):
+        # 1e400 or a 400-digit run overflows to inf (audit S055-09).
+        raise BrokerageParseError(
+            f"{loc}{field} {s!r} is out of range — refusing it")
     return -val if neg else val
 
 
@@ -369,7 +392,7 @@ class BaseBrokerage:
     CURRENCY_EXT_FALLBACK: Optional[str] = None
 
     # Default account label used when the source CSV doesn't name an account.
-    # The taxjson-brokerage CLI overrides this via --account-name regardless.
+    # The taxjson-brokerage CLI overrides this with --account <name>.
     DEFAULT_ACCOUNT: str = "Unknown"
 
     def __init__(self) -> None:
@@ -511,6 +534,9 @@ class BaseBrokerage:
             if ca is not None:
                 return ca
         sym = self._CURRENCY_SUFFIX_RE.sub('', sym)
+        # A currency code is case-blind: 'usd' made the suffix '.usd'
+        # and split the pool from XYZ.US (audit S055-17).
+        currency = (currency or '').strip().upper()
         ext = self.CURRENCY_EXT_MAP.get(currency, self.CURRENCY_EXT_FALLBACK or currency)
         if ext == 'TO':
             # FTN.PRA -> FTN.PR.A (audit S014-07).
@@ -624,23 +650,38 @@ class BaseBrokerage:
         self, qty: float, price: float, net_amount: float, is_option: bool,
         *, min_fee: float = 0.005, sanity_ratio: float = 0.25,
     ) -> float:
-        """For brokerages whose CSV doesn't break out fees, infer the fee from
-        |qty * price * multiplier - net|.
+        """For brokerages whose CSV doesn't break out fees, infer the fee
+        from the gross (qty * price * multiplier) and the net, SIGNED by
+        the trade's direction (quantity sign): a buy's fee is what the
+        net costs beyond the gross, a sale's what it falls short of it.
 
-        Two guards: sub-cent residuals are noise and become 0; residuals
-        larger than `sanity_ratio` of |net| are almost certainly a
-        units/parsing artifact (e.g. wrong contract multiplier) and also
-        become 0 rather than emit a fictitious number."""
+        Display only (fees.rpt and the .sum fee lines; gains use the
+        net). Guards: a residual under `min_fee` — or on the wrong side
+        (a buy that cost LESS than qty x a rounded price) — is rounding
+        noise, not a fee: 0, never sign-flipped into a charge by abs()
+        (audit R1-22). A residual beyond `sanity_ratio` of |net| PLUS a
+        commission allowance (10 + 2 per option contract) is a units
+        artifact (a wrong contract multiplier) and becomes 0; the ratio
+        alone zeroed real flat commissions on cheap option fills (a
+        1.99 fee on a 6.01 sale, RBC's 11.95 on a 43.95 buy — audit
+        R1-22 / R1-88)."""
         multiplier = self.OPTION_MULTIPLIER if is_option else 1
         theoretical_gross = abs(qty) * price * multiplier
-        implicit = abs(theoretical_gross - abs(net_amount))
+        if qty > 0:
+            implicit = abs(net_amount) - theoretical_gross
+        elif qty < 0:
+            implicit = theoretical_gross - net_amount
+        else:
+            implicit = abs(theoretical_gross - abs(net_amount))
         if implicit < min_fee:
             return 0.0
         # net == 0 is exempt on purpose: a real RBC sale of 30 contracts
         # at 0.01 nets $0 because the commission ate the whole $30 gross.
         # A $0 net that is a MISSING cell (audit R1-91) must be refused
         # by the parser before it gets here (Webull does).
-        if abs(net_amount) > 1e-9 and implicit > sanity_ratio * abs(net_amount):
+        allowance = 10.0 + (2.0 * abs(qty) if is_option else 0.0)
+        if (abs(net_amount) > 1e-9
+                and implicit > sanity_ratio * abs(net_amount) + allowance):
             return 0.0
         return round(implicit, 4)
 
@@ -821,14 +862,22 @@ class BaseBrokerage:
         equities T+2 before the T+1 cutover (US 2024-05-28 / CA 2024-05-27),
         T+1 after (T+3 before 2017-09-05). Walks back through weekends and
         the market's settlement holidays to the latest trading day that
-        settles on that date (lib/market_calendar). Era selection keys off
-        the settle date — ambiguous only around a cutover."""
+        settles on that date (lib/market_calendar); the era is the trade
+        date's, so the cutover days round-trip."""
         dt = self.parse_date(settle_str, *formats) if formats else None
         if dt is None:
             return settle_str
-        from taxjson.lib.dates import settlement_lag_days
+        from taxjson.lib.dates import (last_trade_date_settling_by,
+                                       settlement_date, settlement_lag_days)
         from taxjson.lib.market_calendar import sub_settlement_days
         iso = dt.strftime("%Y-%m-%d")
+        # The latest trading day that settles ON this date. The era is a
+        # TRADE-date rule: keying it on the settle date gave a T+1 walk
+        # back for the T+2 settles of the cutover days themselves (CAD
+        # 2024-05-27, USD 2024-05-28 — audit S056-01).
+        trade = last_trade_date_settling_by(iso, currency, is_option)
+        if settlement_date(trade, currency, is_option) == iso:
+            return trade
         days = settlement_lag_days(iso, currency, is_option)
         return sub_settlement_days(iso, days, currency).isoformat()
 

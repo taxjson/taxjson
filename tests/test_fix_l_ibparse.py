@@ -731,5 +731,137 @@ class TestIbSignsAsExported(unittest.TestCase):
         self.assertAlmostEqual(t['net_amount'], 27650.0)
 
 
+# --------------------------------------------- shared broker helpers
+class TestBackComputedFee(unittest.TestCase):
+    """R1-22 / R1-88: signed residual; flat commissions survive."""
+
+    def setUp(self):
+        from taxjson.lib.brokerages.base import BaseBrokerage
+        self.b = BaseBrokerage()
+
+    def test_flat_commission_on_a_cheap_option_sale_is_kept(self):
+        # 2 contracts @0.04 (gross 8.00) netting 6.01: fee 1.99.
+        self.assertAlmostEqual(
+            self.b.back_compute_fee(-2, 0.04, 6.01, True), 1.99)
+
+    def test_rbc_option_buy_commission_is_kept(self):
+        # RBC passes the signed Value (-43.95) for a buy of 4 @0.08.
+        self.assertAlmostEqual(
+            self.b.back_compute_fee(4, 0.08, -43.95, True), 11.95)
+
+    def test_rounding_noise_is_not_a_charge(self):
+        # A buy that cost 0.05 LESS than qty x the rounded price.
+        self.assertEqual(
+            self.b.back_compute_fee(500, 10.41, 5204.95, False), 0.0)
+
+    def test_units_artifact_is_still_zeroed(self):
+        # Net quoted per share (6.00) against a x100 gross (600): no fee.
+        self.assertEqual(
+            self.b.back_compute_fee(-1, 6.0, 6.0, True), 0.0)
+
+
+class TestReturnOfCapitalWording(unittest.TestCase):
+    """R1-76."""
+
+    def test_only_a_real_return_of_capital_matches(self):
+        from taxjson.lib.brokerages.base import is_roc_description
+        for desc, want in (
+                ('RETURN OF CAPITAL ON 100 SHS', True),
+                ('QZRX(US0000000017) Cash Dividend USD 0.12 per Share '
+                 '(Return of Capital)', True),
+                ('RETURN OF CAPITAL ADJUSTMENT TO BOOK COST $5.00', True),
+                ('CASH DIV ON 100 SHS NOT A RETURN OF CAPITAL', False),
+                ('QZE ENHANCED RET OF CAPITAL ETF CASH DIV ON 100 SHS',
+                 False),
+                ('DIST ON 100 SHS RETURN OF CAPITAL GAINS', False),
+                ('CASH DIV ON 100 SHS', False)):
+            with self.subTest(desc=desc):
+                self.assertEqual(is_roc_description(desc), want)
+
+
+class TestStrictNumbers(unittest.TestCase):
+    """S055-09."""
+
+    def test_non_ascii_digits_and_overflow_are_refused(self):
+        from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                                 parse_strict_number)
+        for raw in ('1e400', '9' * 400, '\u0661\u0662\u0663',
+                    '\uff11\uff12\uff13'):
+            with self.subTest(raw=raw[:8]):
+                with self.assertRaises(BrokerageParseError):
+                    parse_strict_number(raw)
+        self.assertEqual(parse_strict_number('1,234.5'), 1234.5)
+
+    def test_rbc_number_too(self):
+        from pathlib import Path
+        from taxjson.lib.brokerages.rbc_direct import rbc_number
+        for raw in ('9' * 400, '\u0661\u0662\u0663'):
+            with self.subTest(raw=raw[:8]):
+                with self.assertRaises(ValueError):
+                    rbc_number(raw, path=Path('x.csv'), line=2,
+                               column='Amount')
+
+
+class TestCurrencyCase(unittest.TestCase):
+    """S055-17: a lower-case currency is the same currency."""
+
+    def test_apply_currency_suffix(self):
+        from taxjson.lib.brokerages.base import BaseBrokerage
+        self.assertEqual(BaseBrokerage().apply_currency_suffix('XYZ', 'usd'),
+                         'XYZ.US')
+
+    def test_questrade_row(self):
+        from test_questrade_parse_hardening import H, row, _parse
+        _, txs, _ = _parse(H + row(cur='usd'))
+        t = [t for t in txs if t['action'] == 'BUYSELL'][0]
+        self.assertEqual((t['symbol'], t['currency']), ('QZA.US', 'USD'))
+
+
+class TestDescriptionNumbers(unittest.TestCase):
+    """S055-20 / S055-23: valid thousands groups, never a decimal comma."""
+
+    def test_dividend_rate_and_count(self):
+        from taxjson.lib.brokerages.base import _parse_div_qty_rate
+        self.assertEqual(_parse_div_qty_rate(
+            'SPECIAL CASH DIV $1,250.00 PER SHARE', 2500.0), (2.0, 1250.0))
+        self.assertEqual(_parse_div_qty_rate(
+            'QZX(US0000000QX1) Cash Dividend USD 1,250.00 (Ordinary '
+            'Dividend)', 2500.0), (2.0, 1250.0))
+        self.assertEqual(_parse_div_qty_rate('CASH DIV ON 12,5 SHS', 10.0),
+                         (0.0, 0.0))
+        self.assertEqual(_parse_div_qty_rate('CASH DIV ON 1,000 SHS', 50.0),
+                         (1000.0, 0.05))
+
+    def test_sibling_parser_patterns(self):
+        from taxjson.lib.brokerages import rbc_direct as R, questrade as Q
+        from taxjson.lib import corp_actions as CA
+        self.assertIsNone(R._RBC_BOOK_COST_RE.search(
+            'RETURN OF CAPITAL ADJUSTMENT TO BOOK COST $1,16'))
+        self.assertIsNone(R._RBC_BOOK_VALUE_RE.search('BOOK VALUE $1234,56'))
+        self.assertEqual(R._RBC_BOOK_VALUE_RE.search(
+            'TFI QZD BOOK VALUE 16,506.95').group(1), '16,506.95')
+        self.assertIsNone(R._RBC_SPLIT_ON_SHS_RE.search('SPLIT ON 12,5 SHS'))
+        self.assertIsNone(Q._SPLIT_ON_SHS_RE.search('SPLIT ON 12,5 SHS'))
+        self.assertIsNone(CA._RBC_SPINOFF_RE.search(
+            'SPIN OFF ON 12,5 SHS FROM SEC# 123 QZS CORP'))
+        self.assertEqual(Q._BOOK_VALUE_RE.search(
+            'TRANSFER BOOK VALUE 5,293.06, PAY').group(1), '5,293.06')
+
+
+class TestSettleToTradeAtTheCutover(unittest.TestCase):
+    """S056-01: the T+2 settles ON the cutover day round-trip."""
+
+    def test_cutover_days(self):
+        from taxjson.lib.brokerages.base import BaseBrokerage
+        from taxjson.lib.dates import settlement_date
+        b = BaseBrokerage()
+        for settle, cur in (('2024-05-27', 'CAD'), ('2024-05-28', 'USD')):
+            with self.subTest(cur=cur):
+                t = b.trade_date_from_settlement(settle, cur, False,
+                                                 '%Y-%m-%d')
+                self.assertEqual(t, '2024-05-23')
+                self.assertEqual(settlement_date(t, cur), settle)
+
+
 if __name__ == '__main__':
     unittest.main()

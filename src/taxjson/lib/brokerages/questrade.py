@@ -13,7 +13,7 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          canonical_ca_listing,
                                          income_facts_from_description,
                                          is_roc_description,
-                                         parse_strict_number)
+                                         parse_strict_number, DESC_NUMBER)
 
 
 _DATE_FMT = "%Y-%m-%d %I:%M:%S %p"
@@ -40,7 +40,7 @@ _QT_REGISTERED_RE = re.compile(
 
 # A stock-split distribution (Action DIS) reports the NEW shares in Quantity
 # and the held count as "... ON <held> SHS ...". Used to recover the ratio.
-_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+([\d,]+(?:\.\d+)?)\s+SH', re.IGNORECASE)
+_SPLIT_ON_SHS_RE = re.compile(r'\bON\s+(' + DESC_NUMBER + r')\s+SH', re.IGNORECASE)
 
 # A STOCK DIVIDEND row (split-share corps like TDb pay non-cash share
 # distributions): DIS / 'Dividends' with 'STK DIV' in the description
@@ -111,7 +111,7 @@ _SPINOFF_PARENT_RE = re.compile(
 # description — "TRANSFER BOOK VALUE <amount>" — no numeric column holds
 # it. Extract it so a parsed transfer establishes the right pool size.
 _BOOK_VALUE_RE = re.compile(
-    r'BOOK\s+VALUE\s+([\d,]+(?:\.\d+)?)', re.IGNORECASE
+    r'BOOK\s+VALUE\s+(' + DESC_NUMBER + ')', re.IGNORECASE
 )
 # FCH fee rows name the security only in the description:
 #   "ADR CUSTODY FEE # SHARES TKR RECORD DATE 06/15/25"
@@ -124,7 +124,7 @@ _QT_CA_LEG_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b',
 # A BRW listing journal's book value: "... JOURNAL POSITION FROM CAD BOOK
 # VALUE: $3039.64 CNV@ 1.4138" (carried as evidence, like RBC's).
 _BRW_BOOK_VALUE_RE = re.compile(
-    r'BOOK\s+VALUE:?\s*\$?\s*([\d,]+(?:\.\d+)?)', re.IGNORECASE)
+    r'BOOK\s+VALUE:?\s*\$?\s*(' + DESC_NUMBER + ')', re.IGNORECASE)
 _BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE)
 # A dividend Questrade posts NET of non-resident withholding.
 _NONRES_NET_RE = re.compile(r'NON-?RES\w*\.?\s+TAX\s+WITH', re.IGNORECASE)
@@ -343,7 +343,9 @@ class QuestradeBrokerage(BaseBrokerage):
             raise BrokerageParseError(
                 f"{self._where(lineno)}: blank Currency — the suffix and "
                 f"the FX rate both depend on it; refusing to assume USD")
-        return cur
+        # A currency code is case-blind: 'usd' became the suffix .usd,
+        # a pool apart from XYZ.US (audit S055-17).
+        return cur.upper()
 
     def _is_taxable(self) -> Optional[bool]:
         if self.account_taxable is not None:
