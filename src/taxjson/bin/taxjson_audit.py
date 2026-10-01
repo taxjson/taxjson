@@ -81,7 +81,10 @@ def _load_doc(path: Path) -> Dict[str, Any]:
 def _source_label(path: Path, meta: Dict[str, Any]) -> str:
     """Human name for a parsed-source file: the original input files
     when the parser recorded them, else the work-file name."""
-    files = meta.get("input_files") or []
+    # convert-tt records its .tt as `source_file` (S029-09: a
+    # hand-entered row was labelled with the work file only).
+    files = meta.get("input_files") or (
+        [meta["source_file"]] if meta.get("source_file") else [])
     names = ", ".join(Path(f).name for f in files[:4])
     if len(files) > 4:
         names += f", +{len(files) - 4} more"
