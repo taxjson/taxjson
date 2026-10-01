@@ -1232,6 +1232,12 @@ class IbBrokerage(BaseBrokerage):
                 f"dropped, doubled or mis-signed; refusing to emit a book "
                 f"that disagrees with the broker.")
 
+    def statement_accounts(self) -> set:
+        """Account ids named by the last parsed statement (Account
+        Information / Accounts Included / the per-row Account column)."""
+        pre = getattr(self, '_ib_pre', None) or {}
+        return set(pre.get('accounts') or ())
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions = []
         # Corporate Actions rows that aren't SPLIT or Spinoff (e.g.
@@ -1848,6 +1854,31 @@ class IbBrokerage(BaseBrokerage):
                 }
                 if broker_time:
                     _trade_tx['broker_time'] = broker_time
+                # IB's open/close marker (O = opening, C = closing; a
+                # sale coded `C;O` closed a long and opened a short in
+                # one fill), in IB's order. The engine books by sign;
+                # the missing-history checks read this to tell a real
+                # short (O) from a sale of a position bought before the
+                # data (C) — audit S013-00 / S058-02 / S060-12. A `Ca`
+                # cancellation row reverses another fill: its marker
+                # says nothing about this account's position.
+                _oc = [c for c in code_tokens if c in ('O', 'C')]
+                if _oc and 'Ca' not in code_tokens:
+                    _trade_tx['open_close'] = ';'.join(_oc)
+                    if _oc == ['C'] and 'Basis' in header_map:
+                        # IB's cost of what the closing trade closed —
+                        # evidence for the missing-history report, in
+                        # the trade's own currency (never booked).
+                        _braw = self._cell(row, header_map, 'Basis')
+                        try:
+                            _bv = parse_strict_number(
+                                _braw, field='Basis', where=where) \
+                                if _braw.strip() else None
+                        except (BrokerageParseError, ValueError):
+                            _bv = None
+                        if _bv is not None and abs(_bv) > 1e-9:
+                            _trade_tx['broker_basis'] = (
+                                f"{abs(_bv):,.2f} {currency}")
                 _name = self._security_name(asset_cat, description, fii)
                 if _name:
                     _trade_tx['security_name'] = _name

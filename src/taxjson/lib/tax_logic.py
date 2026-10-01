@@ -119,6 +119,7 @@ PARTITION_RULES = frozenset({
     "CA-INC-03",       # s.260 payment in lieu as a dividend (D3)
     "CA-INC-DATE-ROC-TRUST",  # trust ROC on the record date (D4)
     "CA-INC-DATE-TRUST",      # trust distribution by record date (D5)
+    "CA-INC-06",       # T5 box 18 capital-gains dividends (map; R1-62)
     # United States
     "US-WASH-01",      # §1091 window on trade dates
     "US-WASH-06",      # no still-held test
@@ -179,6 +180,7 @@ def _ownership(country: str) -> List[Rule]:
     cfg = sorted(_C.owners(_C.CONFIG_COUNTRY, other))
     cmds = sorted(_C.owners(_C.COMMAND_COUNTRY, other))
     flags = sorted(_C.owners(_C.FLAG_COUNTRY, other))
+    files = sorted(_C.owners(_C.PROJECT_FILE_COUNTRY, other))
 
     def _cmd(c: str) -> str:
         name, _, var = c.partition(":")
@@ -198,6 +200,10 @@ def _ownership(country: str) -> List[Rule]:
     if flags:
         parts.append("the flag" + ("s " if len(flags) > 1 else " ")
                      + ", ".join(flags))
+    if files:
+        parts.append(f"the {other_name}-only project file"
+                     + ("s " if len(files) > 1 else " ")
+                     + ", ".join(files))
     cur = _C.HOME_CURRENCY[country]
     return [
         Rule(f"{p}-CTRY-01",
@@ -643,12 +649,28 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-INC-05",
                  "Dividends are booked gross; withholding tax is its own "
                  "TAX row."),
+            Rule("CA-INC-06",
+                 "A capital-gains dividend (T5 box 18, line 17400: a split-"
+                 "share or mutual-fund corporation's, ITA s.130.1(4)/"
+                 "s.131(1)) is a capital gain, not a dividend. No export "
+                 "labels it, so the books carry it as a dividend; list it "
+                 "in capital_gains_dividends.map (symbol, year or pay "
+                 "date, amount or `all`) and divs-sum shows it apart while "
+                 "the estimate taxes it as a capital gain (50% inclusion, "
+                 "no gross-up or credit). ACB is unchanged."),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
                  "value."),
+            Rule("CA-CRYPTO-09",
+                 "Any amount of a coin is property: a residue left after a "
+                 "sale, however small, stays in the holdings with its "
+                 "share of the cost (only arithmetic noise, under a "
+                 "hundred-billionth of the position, counts as zero). A "
+                 "share position under a millionth of a share counts as "
+                 "zero.", cont=True),
             Rule("CA-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
@@ -701,13 +723,22 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Country comes from the listing suffix (t1135.map "
                  "overrides); crypto held on an exchange counts.",
                  cont=True),
+            Rule("CA-RPT-12",
+                 "A property's cost amount is its adjusted cost base as "
+                 "the gains engine computes it, day by day over the full "
+                 "history: a superficial loss denied in any year is added "
+                 "to the replacement's cost (s.53(1)(f)), an option's "
+                 "premium follows the shares on exercise or assignment "
+                 "(s.49(3)), and a futures contract has no cost amount."),
             Rule("CA-RPT-03",
                  "`taxjson estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "
                  "only.", keys=("province",)),
             Rule("CA-RPT-04",
                  "Canadian dividends are treated as eligible (38% gross-up "
-                 "and credit),", cont=True),
+                 "and credit; a capital-gains dividend in "
+                 "capital_gains_dividends.map as a capital gain),",
+                 cont=True),
             Rule("CA-RPT-05",
                  "foreign dividends as ordinary income with withholding "
                  "credited up to 15%;", cont=True),
@@ -984,6 +1015,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-11",
                  "A replacement bought in an IRA makes it permanent.",
                  cont=True),
+            Rule("US-WASH-16",
+                 "A purchase by your spouse or a corporation you control "
+                 "in the window disallows the loss too, when their trades "
+                 "are given (`taxjson-gains --affiliated`; in a project, "
+                 "declare their account type = \"sheltered\", which also "
+                 "lists it as if it were your IRA). §1091(d) adds the "
+                 "loss to the basis of THEIR replacement shares, so in "
+                 "your books it is reported as permanently disallowed: "
+                 "give them the amount for their basis."),
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "

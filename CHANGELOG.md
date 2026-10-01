@@ -2,6 +2,104 @@
 
 ## Unreleased
 
+- **US: a spouse's replacement purchase is a permanent denial in your
+  books.** With affiliated trades given (`taxjson-gains --affiliated`),
+  a loss whose replacement your spouse or controlled corporation bought
+  was reported as a deferral (permanently_disallowed 0) that no lot in
+  your books carried, so it never came back and the wash conservation
+  did not foot. §1091(d) puts the basis adjustment on THEIR shares: the
+  loss is now permanently disallowed here, as for an IRA replacement,
+  and the trace says the basis goes to the affiliated holder. tax-logic
+  states the rule (US-WASH-16) (partition SPEC-30, ENGINE-I1).
+- **US: FIFO is per account on any merged book.** `taxjson-gains
+  --country usa` (and the library's GainsRequest) now keeps FIFO lots
+  per account by default, as `taxjson run`'s blended pass always did;
+  a direct run on a merged book used to pool the accounts' lots
+  (tax-logic US-BASIS-01, partition SPEC-30). `--per-account-basis` is
+  still accepted.
+
+- **Canada: a coin residue under a millionth stays a holding.** The
+  pool walk emptied any position under 1e-6 units after a sale, so
+  9e-7 BTC left after selling 1 BTC vanished from the holdings and its
+  cost moved onto the next purchase. A crypto pool now only drains
+  float noise (under 1e-11 of the position): the residue keeps its
+  units and its own cost, and a sale that overshoots the pool by a few
+  satoshis is no longer dropped. Share pools keep the millionth-of-a-
+  share tolerance. A new coin-book fuzzer (units, cost and wash
+  conservation) pins it (audit S069-13, tax-logic CA-CRYPTO-09).
+
+- **T1135: a superficial loss denied in an earlier year is in the
+  replacement's cost.** The cost walk added only the project year's
+  denials, so a 2025 denial on shares still held in 2026 was missing
+  from the 2026 maximum and Dec-31 cost columns (buy 120,000, sell at
+  90,000, rebuy within 30 days: the 2026 report said "no T1135
+  required" at 90,000). `taxjson t1135` now runs the engine once over
+  the full history (registered accounts as wash context, the project's
+  option timing) and replays every s.53(1)(f) addition where the engine
+  applied it; the gains files' `wash_sales` records carry those
+  landings (`adjusts`). The cost columns now equal the engine's ACB.
+  `--year-wash-only` keeps the old year-only mode with its note
+  (audit S008-07, S009-01, S051-21).
+
+- **IB open/close codes reach the missing-history checks.** IB's Trades
+  `Code` (O opening, C closing, C;O both) is kept on each trade. A short
+  IB declares (a sale coded O, or C;O that closed the long and opened the
+  short) is listed as a real short, not "missing a buy — fix before
+  filing", and is never offered as a phantom (the owner's 2025 AMZN short
+  no longer blocks the checklist). A sale coded C with no position in the
+  data — a long option bought before the statements — is always flagged
+  (options and futures included) with IB's Basis, and `option-boundary`
+  and the expired-option warning ask for the missing purchase instead of
+  an expiry row. Order-level codes are read per order, not per fill
+  (audit S013-00, S058-02, S060-12).
+- **A futures option keeps its contract size.** The size IB's instrument
+  list declares (CL 1000, ES 50, micro 0.1) is kept on option and futures
+  rows and on the year-end inventory: the holdings export writes it as
+  `contract_multiplier` and divides COST/SHARE by it, `taxjson list` too,
+  the web what-if prices a futures option with it (still refused when no
+  row declares one), and a `.tt` line may end in `x1000` so its total is
+  checked at the real size (audit S026-22).
+- **RBC "as of" stamp checked against the year.** An RBC export taken
+  before the tax year ended is an ATTENTION on the console (it cannot
+  hold the rest of the year), `checklist` inputs-frozen judges each
+  account's latest RBC export instead of the latest row of any broker,
+  and a note says when the year's back-dated Dec-31 book-cost
+  adjustments may not be posted yet (audit S063-22).
+
+- **Generic importer: name the real broker.** A mapping can set
+  `[broker] name = "wealthsimple"`. `taxjson run` then parses each named
+  broker's generic files on their own and records them as
+  `generic:<name>`, so `fees-sum` gives each broker its own row. A
+  broker whose fees come in only through a named generic file is no
+  longer listed as having "NO fees". One `taxjson-brokerage` call
+  refuses files whose mappings name different brokers (audit S027-05).
+
+- **Cross-file dedup no longer deletes separate trades.** Every parsed
+  row now records its input file. Identical rows in two `.tt` files, or
+  in IB statements of two different broker accounts, are both booked;
+  before, the second was dropped as a duplicate, which left a phantom
+  short and a wrong gain. The same row in two overlapping exports is
+  still booked once. When the files' overlap is too thin to tell, the
+  row is booked once and an `ATTENTION: dedup` line names both files.
+  `fees-sum` applies the same rule, so its trade count and commissions
+  agree with the books (audit R1-296, S031-02).
+
+- **Renaming an account keeps its corporate-action elections.** An
+  election's event id no longer includes the taxjson account name (the
+  elections manifest is already stored per account). A manifest written
+  by the old scheme is rekeyed on the next run, and so is one whose
+  account was renamed first: the single saved election with the event's
+  date and symbols is carried over, with a note. Before, every election
+  went back to pending (exit 3) after a rename (audit R1-301).
+
+- **Canada: T5 box 18 capital-gains dividends can be named.** A new
+  project-root `capital_gains_dividends.map` (`SYMBOL YEAR-or-DATE
+  all-or-AMOUNT [ACCOUNT]`) lists the split-share / mutual-fund
+  dividends the slip reports in box 18. `divs-sum` shows them apart as
+  CAPITAL-GAINS DIVIDENDS (line 17400) and the Canadian estimate taxes
+  them as a capital gain instead of a grossed-up eligible dividend. The
+  ledger and ACB are unchanged; a US project refuses the file
+  (tax-logic CA-INC-06; audit R1-62).
 - **crypto: the network fee hidden in a Coinbase Send is booked.** A
   send matched to its arrival on another exchange that arrived SHORT,
   with no fee stated (Coinbase puts the network fee inside the sent

@@ -267,10 +267,20 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
         all_perm = perm > 0.001 and abs(perm - dis) < 0.01
         side_label = "short" if is_short else ""
         if all_perm:
+            if all(r.get('is_affiliated') for r in reps):
+                why = ("§1091(d): the basis adjustment goes to the "
+                       "affiliated holder's replacement shares, outside "
+                       "these books")
+            elif any(r.get('is_affiliated') for r in reps):
+                why = ("sheltered replacement (Rev. Rul. 2008-5) and an "
+                       "affiliated holder's replacement (§1091(d) basis "
+                       "goes to their shares)")
+            else:
+                why = "Rev. Rul. 2008-5: sheltered replacement"
             out.append(f"# --- WASH SALE (IRC §1091 {side_label}, permanent disallowance) ---")
             out.append(
                 f"#   raw loss {_fmt_signed_money(raw)} -> {_fmt_money(dis)} "
-                f"permanently disallowed (Rev. Rul. 2008-5: sheltered replacement)"
+                f"permanently disallowed ({why})"
             )
         else:
             out.append(f"# --- WASH SALE (IRC §1091{(' '+side_label) if side_label else ''}) ---")

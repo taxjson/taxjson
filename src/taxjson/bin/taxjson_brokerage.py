@@ -23,6 +23,7 @@ Options:
 """
 
 import csv
+import hashlib
 import inspect
 import json
 import sys
@@ -323,6 +324,16 @@ Examples:
             "run` passes it from the account's `type`."
         ),
     )
+    parser.add_argument(
+        "--tax-year", dest="tax_year", type=int, default=None,
+        metavar="YYYY",
+        help=(
+            "The tax year the books are for. Parsers whose exports carry "
+            "their own timestamp check it against the year (RBC: an "
+            "export taken before the year ended cannot hold the rest of "
+            "it). `taxjson run` passes the project year."
+        ),
+    )
     args = parser.parse_args()
 
     brokerage_id = args.brokerage_id.lower()
@@ -358,9 +369,10 @@ Examples:
     override_renamed: dict = {}
     override_kept: set = set()
     normalized = []
-    # Parser-declared contract multipliers, parallel to `normalized`
-    # (not a TaxTransaction field — they feed only the schema notional
-    # check below, which is an ERROR for rows that declare one).
+    # Parser-declared contract multipliers, parallel to `normalized`:
+    # they feed the schema notional check below (an ERROR for rows that
+    # declare one). Option and futures rows also keep theirs on the
+    # TaxTransaction (`multiplier`); a share's 1 is checked here only.
     multipliers = []
     dropped_keys = {}
     lint_problems = 0
@@ -385,6 +397,12 @@ Examples:
             print(f"taxjson-brokerage: error: {_refusal(e)}",
                   file=sys.stderr)
             sys.exit(1)
+        # Per-statement coverage against the tax year (RBC "as of"
+        # timestamps, audit S063-22).
+        _cov = getattr(extractor_class, 'coverage_messages', None)
+        if _cov is not None and args.tax_year and shared_context is not None:
+            for _m in _cov(shared_context, args.tax_year):
+                print(_m, file=sys.stderr)
 
     # s.90(1) is Canadian law: never the default without a country
     # (partition INPUTS-03), and refused for a US filer.
@@ -494,8 +512,48 @@ Examples:
         BaseBrokerage.clamp_settlement_across(
             [t for _, _, _txs in parsed_files for t in _txs], _all_expiries)
 
+    # The generic importer's mappings may name the real broker
+    # ([broker].name): the source is then recorded as generic:<name>,
+    # so the fees report attributes it (audit S027-05). One parse holds
+    # one broker — `taxjson run` splits the generic files by name.
+    source_label = brokerage_id
+    if brokerage_id == 'generic':
+        _names = {getattr(ex, 'broker_name', None)
+                  for _p, ex, _t in parsed_files}
+        if len(_names) > 1:
+            _shown = ", ".join(sorted(n or "(none)" for n in _names))
+            print(f"taxjson-brokerage: error: the generic files' mappings "
+                  f"name different brokers ([broker].name: {_shown}) — "
+                  f"parse each broker's files in a separate call "
+                  f"(`taxjson run` does this).", file=sys.stderr)
+            sys.exit(2)
+        _nm = next(iter(_names), None) if _names else None
+        if _nm:
+            source_label = f"generic:{_nm}"
+
+    # Provenance for cross-file dedup (bin/taxjson_sort.plan_dedup,
+    # audit R1-296): each row's input file (its masked shown name, made
+    # unique within this parse) and, per file, the broker accounts the
+    # export names — hashed, account ids never reach work/ files.
+    _source_names: dict = {}
+    source_accounts: dict = {}
+    for input_path, extractor, _txs in parsed_files:
+        _nm = shown_name(input_path)
+        _base, _k = _nm, 1
+        while _nm in _source_names.values():
+            _k += 1
+            _nm = f"{_base}#{_k}"
+        _source_names[id(extractor)] = _nm
+        _accts = extractor.statement_accounts() \
+            if hasattr(extractor, 'statement_accounts') else set()
+        if _accts:
+            source_accounts[_nm] = sorted(
+                hashlib.sha256(str(a).encode()).hexdigest()[:10]
+                for a in _accts)
+
     for input_path, extractor, transactions in parsed_files:
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
+        _source = _source_names[id(extractor)]
 
         # Correct mislabeled tickers FIRST — before the TRANSFER rows
         # are set aside (the sidecar used to keep the un-overridden
@@ -617,6 +675,18 @@ Examples:
                         and k not in ('qty', 'multiplier'):
                     dropped_keys[k] = dropped_keys.get(k, 0) + 1
             clean = {k: v for k, v in t.items() if k in valid_keys}
+            # The declared contract size is kept on option and futures
+            # rows (the holdings export, the .tt check and the what-if
+            # read it — audit S026-22); a share's 1 is not news.
+            _sym = str(clean.get('symbol') or '')
+            if not (is_option_symbol(_sym)
+                    or _sym.startswith(('F:', '/', '\\'))):
+                clean.pop('multiplier', None)
+            elif clean.get('multiplier') is not None:
+                try:
+                    clean['multiplier'] = float(clean['multiplier'])
+                except (TypeError, ValueError):
+                    clean.pop('multiplier', None)
             # Only override the parser's account label when --account
             # was explicitly given. Defaulting to the literal "default"
             # (the old behaviour) silently erased the per-parser
@@ -624,6 +694,7 @@ Examples:
             # forgot the flag.
             if args.account_name is not None:
                 clean['account'] = args.account_name
+            clean['source'] = _source
             normalized.append(TaxTransaction(**clean))
             multipliers.append(t.get('multiplier'))
 
@@ -662,8 +733,10 @@ Examples:
         "transactions": [t.to_dict() for t in normalized],
         "metadata": {
             "format_version": "1.0",
-            "source_brokerage": brokerage_id,
+            "source_brokerage": source_label,
             "input_files": [str(p) for p in input_paths],
+            **({"source_accounts": source_accounts}
+               if source_accounts else {}),
         }
     }
     if args.transfers_out and not args.transfers:

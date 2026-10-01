@@ -1,3 +1,4 @@
+import functools
 import json
 import re
 import hashlib
@@ -98,6 +99,32 @@ class TaxTransaction:
     # a CDR or another company from an interlisting (audit S057-24).
     # Evidence only: NOT part of compute_id, omitted when empty.
     security_name: str = ''
+    # The broker's own open/close marker on a trade (IB Trades `Code`:
+    # "O" opening, "C" closing, "C;O" a sale that closed a long and
+    # opened a short in one fill). Evidence for the missing-history
+    # checks (find-missing-history, option-boundary): a sale coded "O"
+    # is a broker-declared short, a sale coded only "C" closed a
+    # position bought before the data. NOT part of compute_id, omitted
+    # from to_dict() when empty (audit S013-00, S058-02, S060-12).
+    open_close: str = ''
+    # The broker's own cost basis of the position a closing trade
+    # closed, as "<amount> <currency>" (IB Trades `Basis` on a row coded
+    # "C") — shown next to a closing sale that has no position in the
+    # data. Evidence only, never booked.
+    broker_basis: str = ''
+    # Contract size the parser read from the export (IB Financial
+    # Instrument Information Multiplier: 100 per equity option, 1000 per
+    # CL future or futures option, 0.1 per micro-crypto future) — kept
+    # on option and futures rows only; 0 = not declared (audit S026-22).
+    # NOT part of compute_id, omitted from to_dict() when 0.
+    multiplier: float = 0.0
+    # The input file the row was read from ("questrade_2025.csv",
+    # "history.tt"), stamped by taxjson-brokerage / convert-tt. Cross-
+    # file dedup tells an overlapping re-export (one row, two files)
+    # from separate records that happen to look alike (bin/taxjson_sort
+    # .plan_dedup, audit R1-296). NOT part of compute_id, omitted when
+    # empty.
+    source: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -139,7 +166,7 @@ class TaxTransaction:
 
     def to_dict(self):
         d = asdict(self)
-        for k in INCOME_FACT_FIELDS + ('broker_time', 'security_name'):
+        for k in INCOME_FACT_FIELDS + EVIDENCE_FIELDS:
             if not d.get(k):
                 d.pop(k, None)
         return d
@@ -149,6 +176,9 @@ class TaxTransaction:
 # from to_dict() when empty so every other row keeps its shape.
 INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
                       'dealer_country', 'issuer_country')
+# The other optional evidence fields, omitted from to_dict() when empty.
+EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
+                   'broker_basis', 'multiplier', 'source')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or
@@ -690,7 +720,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
     # phantom walk's arithmetic, and `"symbol": 0` crashed the engines
     # — none of them caught by the tools' ValueError handlers.
     for _fld in ('quantity', 'price', 'proceeds', 'commission', 'fee',
-                 'net_amount', 'gross_amount'):
+                 'net_amount', 'gross_amount', 'multiplier'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -715,7 +745,7 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'symbol_new', 'corp_event_id', 'corp_election', 'id',
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
-                 'security_name'):
+                 'security_name', 'open_close', 'broker_basis'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -887,8 +917,11 @@ def _effective_fee_for_trace(tx) -> float:
     net = float(tx.net_amount)
     if qty < 1e-9 or price < 1e-9:
         return 0.0
-    is_option = is_option_symbol(tx.symbol or '')
-    multiplier = 100 if is_option else 1
+    # The contract size the parser declared (a futures option: CL 1000,
+    # ES 50 — audit S026-22), else 100 per equity option, 1 per share.
+    multiplier = float(getattr(tx, 'multiplier', 0.0) or 0.0)
+    if multiplier <= 0:
+        multiplier = 100 if is_option_symbol(tx.symbol or '') else 1
     theoretical = qty * price * multiplier
     # The SIGNED residual (audit S070-24 / S071-00): a buy pays gross +
     # fee, a sale receives gross - fee (a cheap option's fee can exceed
@@ -1153,6 +1186,34 @@ def _make_assign_underlying_resolver(transactions, date_of):
     return resolve
 
 
+# Canada pool quantity tolerance (S069-13). A share pool treats less
+# than a millionth of a share as zero: broker exports round share
+# counts, and that absorbs the rounding and float noise. A coin is
+# divisible far below that — a real residue of 9e-7 BTC is property
+# with its own cost — so a crypto pool (a symbol with no market suffix)
+# only absorbs float-arithmetic noise: a residue under 1e-11 of the
+# larger of the position and the trade.
+_SHARE_QTY_EPS = 1e-6
+_COIN_QTY_REL_EPS = 1e-11
+_COIN_QTY_ABS_EPS = 1e-15
+
+
+@functools.lru_cache(maxsize=None)
+def _is_coin_symbol(symbol: str) -> bool:
+    from taxjson.lib.price_chain import is_crypto_symbol
+    return is_crypto_symbol(symbol or '')
+
+
+def pool_qty_eps(symbol: str, *scales: float) -> float:
+    """The quantity under which a Canada pool position (or a leftover)
+    is zero: 1e-6 for shares and options; for a coin, float noise
+    relative to `scales` (the position and the trade quantities)."""
+    if not _is_coin_symbol(symbol):
+        return _SHARE_QTY_EPS
+    scale = max((abs(float(x)) for x in scales), default=0.0)
+    return max(_COIN_QTY_ABS_EPS, _COIN_QTY_REL_EPS * scale)
+
+
 def _place_wash_adjusts(stream):
     """Move each pre-loss superficial-loss ADJUST (marked `_wash_after`
     = the loss row's id) to immediately after its loss row. s.53(1)(f)
@@ -1390,7 +1451,8 @@ def _warn_stranded_basis(pools) -> None:
         if id(pool) in seen_objs:
             continue                    # rename aliases share one object
         seen_objs.add(id(pool))
-        if abs(pool['qty']) <= 1e-6 and abs(float(pool['total_cost'])) > 0.02:
+        if (abs(pool['qty']) <= pool_qty_eps(sym)
+                and abs(float(pool['total_cost'])) > 0.02):
             print(
                 f"warning: conservation: {sym} pool is EMPTY but carries "
                 f"{float(pool['total_cost']):.2f} of stranded basis — "
@@ -2107,6 +2169,7 @@ class CanadaTaxRules(TaxRules):
                     # the position entry date.
                     global_pools[symbol] = {'qty': 0.0, 'total_cost': Decimal(0), 'last_acq_date': '1970-01-01', 'currency': '', 'tainted': False, 'position_start_date': None, 'deferred_wash': 0.0, 'grants': []}
                 pool = global_pools[symbol]
+                _pre_qty = pool['qty']      # the drain tolerance's scale
 
                 # Currency-mix guard: a single ACB pool must be
                 # denominated in one currency. Gated on the taxable
@@ -2558,9 +2621,12 @@ class CanadaTaxRules(TaxRules):
                     # income was booked lost their units and cost, and
                     # the pool fell short of the wash walk's balance.
                     if qty == 0: continue
-                    is_opening = (pool['qty'] > 1e-6 and qty > 0) or \
-                                 (pool['qty'] < -1e-6 and qty < 0) or \
-                                 (abs(pool['qty']) <= 1e-6)
+                    # A coin pool's residue is real property (S069-13):
+                    # per-asset tolerance (pool_qty_eps).
+                    _qeps = pool_qty_eps(symbol, pool['qty'], qty)
+                    is_opening = (pool['qty'] > _qeps and qty > 0) or \
+                                 (pool['qty'] < -_qeps and qty < 0) or \
+                                 (abs(pool['qty']) <= _qeps)
 
                     if is_other_scope:
                         # Sheltered (RRSP/TFSA/LIRA/RESP) and affiliated
@@ -2611,7 +2677,7 @@ class CanadaTaxRules(TaxRules):
                                 symbol_acb_traces[symbol].append(f"# {tx.date} {tx.action} {qty:10.4f} @ {tx.price:7.4f} | Fee: {fee_amt:6.4f} | Cost_Added: {effective_cost:10.4f} | Pool_Qty: {pool['qty']:10.4f} | Pool_ACB: {pool_cost_f:10.4f} | ACB/Sh: {acb_sh:7.4f}")
                         else:
                             # SELL (or Short covering) — divide in exact arithmetic.
-                            if abs(pool['qty']) > 1e-6:
+                            if abs(pool['qty']) > _qeps:
                                 # SIGNED per-unit basis: total/|qty|,
                                 # not abs(total/qty) (FUZZ #F11). A
                                 # short pool whose opening proceeds
@@ -2777,7 +2843,7 @@ class CanadaTaxRules(TaxRules):
                             # same proportion (a full drain releases
                             # all — they were recovered in this gain).
                             _pre_abs = abs(pool['qty'])
-                            if _pre_abs > 1e-6:
+                            if _pre_abs > _qeps:
                                 pool['deferred_wash'] = (
                                     pool.get('deferred_wash', 0.0)
                                     * max(0.0, 1.0 - closing_qty
@@ -2799,7 +2865,7 @@ class CanadaTaxRules(TaxRules):
                             # tt_gains.pl:325-330 which apportions chunk_adj per
                             # chunk's qty share.
                             leftover = abs(qty) - closing_qty
-                            if leftover > 1e-6:
+                            if leftover > _qeps:
                                 leftover_ratio = leftover / abs(qty)
                                 leftover_adj = internal_adj * leftover_ratio
                                 eff_cost_leftover = (
@@ -2843,7 +2909,7 @@ class CanadaTaxRules(TaxRules):
                     trace_line = f"# {account:<26} | {note:<12} | {tx.date} {tx.time} | {symbol:<26} | {action:<8} | {qty:10.4f} | {tx.price:10.4f} | {fee_sh:10.4f} | {price_fee:10.4f} | {tx.net_amount:10.2f} | {adjustment_shown:10.2f} | {pool['qty']:11.4f} | {pool_cost_f:10.2f} | {acb_sh:10.4f} | {realized_pl_str} | {disallowed_amt_str} | {trigger_info}"
                     iteration_trace.append(trace_line)
 
-                if abs(pool['qty']) < 1e-6:
+                if abs(pool['qty']) < pool_qty_eps(symbol, _pre_qty, qty):
                     pool['qty'] = 0.0
                     # Pool drained — clear position_start_date so the
                     # next open seeds a fresh start. Critical for the
@@ -3734,6 +3800,22 @@ class CanadaTaxRules(TaxRules):
                             'disallowed_qty': v.quantity,
                             'disallow_cmd': disallow_cmd,
                             'adjust_cmd': adjust_cmd,
+                            # Where each s.53(1)(f) addition lands (one
+                            # per taxable replacement; a multi-trigger
+                            # allocation can name several symbols): the
+                            # pool symbol as of the stamp, and `after` =
+                            # the loss row when the bump is applied
+                            # right after it (_place_wash_adjusts). The
+                            # T1135 cost walk replays these (S008-07).
+                            'adjusts': [
+                                {'id': a.id, 'symbol': a.symbol,
+                                 'date': a.date,
+                                 'date_settle': a.date_settle or a.date,
+                                 'time': a.time,
+                                 'amount': a.net_amount,
+                                 'account': a.account,
+                                 'after': getattr(a, '_wash_after', None)}
+                                for a in _adjs],
                             'trace': wash_trace if trace else []
                         })
                 solver_converged = True
@@ -4050,7 +4132,8 @@ class CanadaTaxRules(TaxRules):
                     # against the buy-back value (2026-09 audit R1-230).
                     **_recognised_premium(p),
                 }
-                for s, p in final_global_pools.items() if abs(p['qty']) > 1e-6
+                for s, p in final_global_pools.items()
+                if abs(p['qty']) > pool_qty_eps(s)
             ],
             'summary': {
                 'total_gain': sum_taxable,
@@ -5116,7 +5199,11 @@ class USATaxRules(TaxRules):
                             rep['remaining_qty'] -= match_qty / _uf
                             remaining_loss_qty -= match_qty
 
-                            if rep['is_sheltered']:
+                            if rep['is_sheltered'] or rep.get('is_affiliated'):
+                                # IRA (Rev. Rul. 2008-5) or a spouse /
+                                # controlled corporation: the §1091(d)
+                                # adjustment belongs to THEIR position,
+                                # never to a lot in these books (ENGINE-I1).
                                 permanently_disallowed_amt += match_disallowed
                             elif rep.get('fully_consumed'):
                                 # Replacement short was already opened AND
@@ -5491,7 +5578,15 @@ class USATaxRules(TaxRules):
                                 < _tack_lot['effective_acq_date']):
                             _tack_lot['effective_acq_date'] = _tacked_eff
 
-                        if rep['is_sheltered']:
+                        if rep['is_sheltered'] or rep.get('is_affiliated'):
+                            # IRA (Rev. Rul. 2008-5: no basis transfer)
+                            # or a spouse / controlled corporation
+                            # (§1091(d) adds the loss to THEIR
+                            # replacement's basis): no lot in these
+                            # books carries it, so it is not a deferral
+                            # here — reporting it as one left a
+                            # deferred amount nothing recovers
+                            # (partition ENGINE-I1, tax-logic US-WASH-16).
                             permanently_disallowed_amt += match_disallowed
                         elif rep.get('fully_consumed'):
                             # Replacement lot was already sold before this

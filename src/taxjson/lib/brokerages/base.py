@@ -510,6 +510,14 @@ class BaseBrokerage:
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
+    def statement_accounts(self) -> set:
+        """The broker account ids the last parsed file covers, when the
+        export names them (an IB statement's Account Information);
+        empty when it does not. taxjson-brokerage records them HASHED
+        per file, so cross-file dedup can tell statements of two
+        different broker accounts apart (audit R1-296)."""
+        return set()
+
     # ---------------------------------------------------------------- options
 
     # The two regex shapes the brokerages produce:
