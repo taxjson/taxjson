@@ -38,6 +38,9 @@ def main():
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            if not isinstance(data, dict) or "transactions" not in data:
+                # Read as an empty book at exit 0 (audit S033-01).
+                raise ValueError("no 'transactions' list")
             txs = data.get("transactions", [])
             if not isinstance(txs, list):
                 raise ValueError("'transactions' is not a list")

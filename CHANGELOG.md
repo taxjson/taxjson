@@ -53,6 +53,71 @@
   id; `taxjson-apply-distributions --account` refuses a label no row of
   the book carries (S025-12/14/16/19/23).
 
+- **Schedule 3 / Form 8949 export:** under grant timing a written option
+  and its buy-back count their contracts once in the units column (5
+  contracts showed 10); crypto unit counts keep full precision (a
+  0.00003 BTC sale showed 0 units); a write for a net debit shows no
+  proceeds and the debit as an outlay (it showed the debit as proceeds
+  and an invented ACB of twice it); a permanently denied superficial loss
+  is worded for an affiliated person's purchase too; the 2025 crypto-line
+  note follows the line routing itself. Form 8949 rows foot — (h) = (d)
+  − (e) + (g) on the rounded cells — so part totals, the printed 8949 and
+  the TXF agree to the cent. The stand-alone `taxjson-form-export`
+  refuses gains rows in another currency (the native `*_raw_gains.json`
+  summed USD and CAD under a CAD label), and `--csv` no longer leaves a
+  truncated file after a failed write. `taxjson sum` FOR THE RETURN says
+  when its cent-rounded rows differ from the gains files' unrounded
+  total.
+- **Stand-alone report tools refuse a non-gains file:** form-export,
+  sum-gains, ccd-gains, leaps-gains and t1135 refuse a JSON with no
+  `transactions` list or a pre-gains stage file (it rendered a $0
+  Schedule 3 / GRAND TOTAL 0.00 at exit 0); `taxjson-gains` (stdin) and
+  `taxjson-merge` refuse a document without the list.
+- **`taxjson audit`:** a grant-timing write is headed WRITE with its
+  premium as proceeds (it read "COVER ... (short)" with proceeds 0.00 and
+  a negative cost); a short's proceeds and cost are shown as filed (the
+  short sale and the cover, not the engine's negated legs); an option's
+  per-share note is "N contracts × 100 sh @ price" (it divided by the
+  contract count); a denial that is partly deferred and partly permanent
+  names both amounts and destinations (the deferred part read as lost);
+  a cross-zero option fill's long close and its grant write are two
+  events (they were summed into one meaningless SELL); a US sale over
+  long- and short-term lots is MIXED with the per-term gains; a `--check`
+  file named twice is read once (every tie-out failed); a saved
+  disposition with no id fails the reconciliation (it was skipped). The
+  totals say they are unrounded engine sums (Schedule 3 rows round to the
+  cent first), and the multi-book `--json` keeps the reconciliation
+  failures.
+- **T1135:** before Dec 31 a "below the threshold" verdict says "so far
+  (books through DATE)" and the checklist keeps the step open (it read
+  "no T1135 required this year" with a green [x] in September); the
+  year-end column is headed with the books' last date while the year is
+  open. Books in another currency than `--base-currency` (a native
+  `_raw.json`, a USD-base book) are refused instead of tested against
+  CAD 100,000 as if they were CAD; a non-CAD `--base-currency` warns.
+  `--threshold` / `--detailed-threshold` must be finite numbers >= 0.
+  `t1135.map` symbols match case-insensitively, and a COUNTRY word that
+  is not an ISO-3 code or CA/EXCLUDE (EXCLUDED, CDN) is ignored with a
+  did-you-mean warning instead of becoming a "country". Crypto rows
+  under 1e-6 units add their cost (as the engine books them). A long
+  option still held after its expiry is named. The report says the
+  test covers the brokerage books only (foreign bank accounts and other
+  property outside them must be added by hand), attributes the $250,000
+  Part A/B line to the T1135 instructions, and `--help` carries the
+  caveats.
+- **reconcile-slips:** a slip whose currency column (T5008 Box 13) names
+  another currency than the books is refused with a message naming Box
+  13 (a USD Webull T5008 gave one MISMATCH per symbol, every amount off
+  by the FX rate); an unreadable cost cell (`50000,00`, `nan`, `1 500.00
+  CAD`) fails the check like an unreadable proceeds or quantity cell
+  (the cost note vanished or came from a partial sum); a directory or a
+  CSV with bytes cp1252 cannot decode is one error line, not a
+  traceback; `--tolerance` must be a finite number >= 0 (nan or a
+  negative turned every symbol into "off by +0.00", and the `taxjson`
+  wrapper forwarded `-inf` as a separate token); `--help` lists the
+  accepted column spellings; a tainted count reads "1", not "1.0". The
+  checklist's T5/T3 step says the slip check is by hand and lists the
+  known reasons divs-sum differs from the slips.
 - **US estimate (experimental): NIIT and the loss carryforward.** The
   up-to-$3,000 capital loss deduction now reduces net investment income
   (Form 8960 line 5a; NIIT was up to $114 too high), and the
