@@ -42,6 +42,10 @@ return reports). Column conventions:
          net + outlays, outlays column = commission + fee, leaving the gain
          identical. Short-position rows show absolute amounts with a SHORT
          marker (gain is exact; the column split is presentational).
+         A written option's premium (grant timing) is shown GROSS, its
+         write commission in outlays; a close-timing write's commission
+         and a short sale's opening commission stay netted (the closing
+         row does not carry them).
          Every row foots — proceeds − ACB − outlays = the allowed gain —
          so a denied superficial loss shows as an ACB REDUCED by the
          denial (the denied amount goes onto the replacement's ACB).
@@ -474,7 +478,16 @@ def build_schedule3(entries: List[Dict[str, Any]],
             # as they un-negate (the ACB itself is derived below).
             rec["short"] = True
             _sold = -cost           # what the short sale brought in (net)
-            if _sold >= 0:
+            if e.get("grant") and _sold + outlays >= 0:
+                # A WRITE under grant timing (s.49(1)): the row's
+                # commission/fee is the write's own, netted into the
+                # premium. Show the premium GROSS with the commission
+                # as an outlay, as for a sale (audit R1-40, CA-DISP-06;
+                # gain unchanged). A buy-back row's fee is a cost of
+                # acquiring the cover and stays in the ACB.
+                rec["proceeds"] += _sold + outlays
+                rec["outlays"] += outlays
+            elif _sold >= 0:
                 rec["proceeds"] += _sold
             else:
                 # A write for a net DEBIT (commission above the premium):

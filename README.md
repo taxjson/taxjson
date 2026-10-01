@@ -678,7 +678,11 @@ its printed (cent-rounded) rows.
   ENS, FFN, FTN, LBS, LFE, PDV, SBC, XMF, YCM) also say "Distribution" but
   are corporations: dated when paid, like any symbol you list in
   `[settings] corporate_distributions`. A foreign fund, and a row with no
-  record date (IB), keeps its pay date.
+  record date, keeps its pay date. That includes every IB row: IB prints
+  only the pay date and calls a trust's distribution a dividend, so a
+  trust cannot be told from a corporation (the ex date of IB's accruals is
+  not used); a December-record trust distribution IB pays in January
+  stays in the pay year — compare with the T3.
 - Canada: a **Canadian trust's return of capital** (T3 box 42) lowers the
   ACB when it becomes payable (s.53(2)(h)): on its printed record date, so
   a sale between the record date and a January pay date is on the reduced
@@ -779,6 +783,15 @@ accounts only** and says so: a purchase by your spouse or common-law partner or 
 corporation you control (Canada: affiliated persons, s.251.1; US: IRS Pub. 550)
 also denies a loss (tax-logic CA-PLAN-04 / US-PLAN-04).
 
+**An affiliated person's trades** (spouse or common-law partner, a
+corporation you control) are not an account type of `taxjson run`: the
+engine applies them only when it is given them (`taxjson-gains
+--affiliated`). In a project, declare that person's account as
+`type = "sheltered"`: their purchases then deny your loss, for good (the
+ACB addition belongs to the affiliated holder, s.53(1)(f)), but the account
+also shows in the SHELTERED tables and the radar as if it were your
+registered plan — read it as theirs (KNOWN_ISSUES; tax-logic CA-SL-04).
+
 In a **US project** the radar applies §1091, not s.54 (tax-logic US-PLAN-01):
 windows run on **trade** dates, and each recent loss's verdict is the **US
 engine's own**, run on the same books as of the date — purchases in every
@@ -852,6 +865,17 @@ for shares, and not for a loss on covering a short (a new short sale
 acquires nothing either). The experimental US engine does not enforce the
 call rule yet; it prints a warning for each case (§1091 "option to
 acquire"). The old `cross_asset` setting is retired and ignored.
+
+Some rights to acquire are only **flagged** for a manual check, in both
+countries (warn-only, the numbers do not change): a warrant or
+subscription right on the loss shares (`right_vs_share_loss`), a call on an
+**adjusted** option series (root + digit, e.g. `XYZ1` after a corporate
+action on XYZ: its deliverable is not 100 shares; `adjusted_option_vs_loss`),
+and a call on the loss's **futures** contract named by its family root
+(`F:CL` after a loss on `F:CLG6`) or another prefix spelling
+(`futures_option_vs_loss`; in a US project the note adds that a commodity
+future is usually outside §1091). What these convert into is not in the
+books, so the engine cannot size a denial.
 
 **`taxjson t1135`** — CRA **Form T1135** (Foreign Income Verification Statement)
 helper, for Canadian filers holding foreign securities. Answers the filing
@@ -946,15 +970,19 @@ FILE` writes importable rows, `--json` the raw report.
   broker's T5008 shows it — a gain as proceeds with ACB 0, a loss as ACB
   with proceeds 0, no separate outlays.
   Sell-side commissions on long sales are re-split into the outlays
-  column (gain unchanged); a written option's premium (and a short sale's
-  proceeds) is shown NET of the opening commission with no outlay — same
-  gain, slightly lower proceeds than a broker slip. Every row foots — proceeds − ACB − outlays = the allowed
+  column (gain unchanged), and so is a written option's commission under
+  grant timing: the premium is shown GROSS as proceeds with the write
+  commission as an outlay. Under close timing a write's commission, and a
+  short sale's opening commission, stay netted into the proceeds with no
+  outlay (the closing row does not carry them) — same gain, slightly
+  lower proceeds than a broker slip. Every row foots — proceeds − ACB − outlays = the allowed
   gain: a superficial loss denied on the row shows as an ACB reduced by the
   denial, noted per row (the denied amount goes onto the replacement
   property's ACB; a registered-account or affiliated-person denial is noted
   as permanent for this return). A short sale shows what it brought in as
-  proceeds and the cover as ACB (a write for a net debit: no proceeds, the
-  debit as an outlay). Units are the contracts or shares disposed of, at
+  proceeds and the cover as ACB (a close-timing write for a net debit: no
+  proceeds, the debit as an outlay; under grant timing it shows its premium
+  and its commission). Units are the contracts or shares disposed of, at
   full precision: under grant timing a written option and its buy-back
   count once.
 

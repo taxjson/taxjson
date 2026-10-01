@@ -368,9 +368,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  + ", ".join(sorted(_split_share_roots())) + ", and the "
                  "symbols in corporate_distributions"
                  + (f" ({', '.join(_corp_list(s))})" if _corp_list(s)
-                    else "") + ". A foreign fund, and a row with no record "
-                 "date (IB), keep the pay date. The T3 slip is "
-                 "authoritative.", keys=("corporate_distributions",)),
+                    else "") + ". A foreign fund keeps the pay date, and so does an IB "
+                 "row: IB prints no record date and calls a trust's "
+                 "distribution a dividend, so a trust cannot be told from "
+                 "a corporation (the ex date IB's accruals give is not "
+                 "used). The T3 slip is authoritative.",
+                 keys=("corporate_distributions",)),
             Rule("CA-DATE-12",
                  f"Crypto is dated in local time: {tz} ([settings] "
                  f"local_timezone; outside a project TAXJSON_LOCAL_TZ). "
@@ -511,6 +514,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-DISP-05",
                  "Cash-settled options (no stock leg) realize their gain "
                  "or loss on the option itself.", cont=True),
+            Rule("CA-DISP-06",
+                 "A written option's premium recognised at the write "
+                 "(grant timing) is shown gross as proceeds, with its "
+                 "commission as an outlay, as for a sale (the gain is the "
+                 "same)."),
         ]),
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",
@@ -521,8 +529,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SL-03", "in your taxable or sheltered accounts.",
                  cont=True),
             Rule("CA-SL-04",
-                 "(A spouse's trades count only through `taxjson-gains "
-                 "--affiliated`.)", cont=True),
+                 "(A spouse's or controlled corporation's trades count only "
+                 "when given: `taxjson-gains --affiliated`, or in a project "
+                 "their account declared type = \"sheltered\", which "
+                 "denies the loss for good and lists that account as if it "
+                 "were your registered plan.)", cont=True),
             Rule("CA-SL-05",
                  "A long call on the shares is identical property to them "
                  "(a right to acquire, s.54 para (i)), at 100 shares per "
@@ -535,6 +546,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A warrant or right bought in the window is flagged for a "
                  "manual superficial-loss check only (the shares it "
                  "converts into are not in the books).", cont=True),
+            Rule("CA-SL-15",
+                 "So is a call on an adjusted option series (root + digit, "
+                 "e.g. XYZ1) or a futures option on the loss's futures "
+                 "contract.", cont=True),
             Rule("CA-SL-07",
                  "Only purchases count: writing an option or shorting "
                  "again never replaces, including after a loss on covering "
@@ -978,6 +993,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-14",
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),
+            Rule("US-WASH-15",
+                 "So is a call on an adjusted option series (root + digit, "
+                 "e.g. XYZ1) or a futures option on the loss's futures "
+                 "contract (a commodity future is usually outside §1091).",
+                 cont=True),
             Rule("US-WASH-13",
                  "Accounts marked crypto are not subject to the wash-sale "
                  "rule."),

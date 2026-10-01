@@ -28,6 +28,29 @@
   dollar income at 1.00 — no PYUSD pool that never closes, no Yahoo
   lookup; `crypto-sends` gives a Kraken PYUSD gift the currency gain.
   A US project keeps every stablecoin as property (audit S060-24).
+- **Docs: IB trust distributions and affiliated persons.** tax-logic
+  CA-INC-DATE-TRUST, README and KNOWN_ISSUES say why an IB row keeps
+  its pay date in a Canada project (IB prints no record date and calls
+  a trust's distribution a dividend; the accrual ex date is not used),
+  and CA-SL-04 and README document declaring a spouse's or controlled
+  corporation's account `sheltered` so its purchases deny your loss
+  (audit S057-23, S004-08).
+
+- **Schedule 3: a written option's premium is shown gross.** Under grant
+  timing, form-export and `sum`'s FOR THE RETURN block show a written
+  option's premium GROSS as proceeds with its write commission as an
+  outlay, as for a sale; the gain is unchanged. Line 6 proceeds and
+  outlays each rise by the year's write commissions. reconcile-slips'
+  gross proceeds match (audit R1-40; tax-logic CA-DISP-06). A year
+  locked by `taxjson filed` reports the moved line 6 proceeds as drift.
+
+- **Adjusted-series and futures calls are flagged as possible
+  replacement property.** A call on an adjusted option series (root +
+  digit, e.g. `XYZ1`) or on the loss's futures contract by its family
+  root (`F:CL` after a loss on `F:CLG6`) bought inside a loss's window
+  is named for a manual superficial-loss / wash-sale check, the way a
+  warrant is, in both countries; warn-only, the numbers do not change
+  (audit S069-23; tax-logic CA-SL-15, US-WASH-15).
 
 - **fetch / watch.** `fetch` masks the Questrade account number in its
   progress line and in API error messages (`questrade #59***`,
