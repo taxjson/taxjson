@@ -1116,6 +1116,17 @@ def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
     for csv in input_files(account_dir, ".csv"):
         broker = detect_broker(csv)
         if not broker:
+            # Content detection cannot read a cp1252 re-save: the
+            # rename advice below pointed at the wrong fix (S024-03).
+            try:
+                _raw = csv.read_bytes()
+                if _raw[:2] not in (b"\xff\xfe", b"\xfe\xff"):
+                    _raw.decode("utf-8-sig")
+            except UnicodeDecodeError as e:
+                from taxjson.lib.cli_diag import not_utf8
+                _die(str(not_utf8(csv, e)))
+            except OSError:
+                pass
             _die(f"cannot detect broker for {csv}. "
                      f"Rename to start with one of: cb_, kr_ (for crypto), "
                      f"generic_ (any other broker, with a TOML column "
@@ -2920,7 +2931,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         # gain; its warning used to reach only reports/*.sum while the
         # run (even --strict) exited 0 (S009-03). Refuse up front.
         from taxjson.bin.taxjson_ticker_map import map_file_problems
-        _tm_problems = map_file_problems(ticker_map)
+        try:
+            _tm_problems = map_file_problems(ticker_map)
+        except OSError as e:        # not UTF-8 (S053-06)
+            _die(str(e))
         if _tm_problems:
             _die(f"{len(_tm_problems)} ticker.map problem(s) — a "
                  f"malformed line's rule would be silently dropped, and "

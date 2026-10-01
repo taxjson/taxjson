@@ -63,7 +63,7 @@ def load_map(path: Path) -> List[Tuple[str, str, float]]:
     # first symbol, so that row was skipped as "no \ufeffXYZ.TO shares
     # held" with the BOM invisible in the note (audit S000-06).
     for lineno, raw in enumerate(
-            path.read_text(encoding="utf-8-sig").splitlines(), 1):
+            cli_diag.read_text_utf8(path).splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue

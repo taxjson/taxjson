@@ -304,7 +304,7 @@ class WebullBrokerage(BaseBrokerage):
         if len(transactions) != data_rows:
             # Row accounting: every dated BUY/SELL data row becomes one
             # transaction. A mismatch means a row was dropped or split.
-            raise ValueError(
+            raise BrokerageParseError(
                 f"{path}: Webull row accounting failed — {data_rows} "
                 f"BUY/SELL rows but {len(transactions)} transactions")
         return transactions, expiries, skipped_actions
@@ -364,7 +364,7 @@ class WebullBrokerage(BaseBrokerage):
                 # First-match used to win: an inserted 'Gross Proceeds'
                 # or 'Price Currency' column silently became the amount
                 # or the price (audit R1-98).
-                raise ValueError(
+                raise BrokerageParseError(
                     f"{path}: ambiguous Webull export layout — "
                     f"{len(hits)} header labels contain {needle!r}: "
                     f"{[header[j] for j in hits]!r}. Refusing to guess "
@@ -373,7 +373,7 @@ class WebullBrokerage(BaseBrokerage):
                 cols[key] = hits[0]
         missing = [k for k in cls._REQUIRED if k not in cols]
         if missing:
-            raise ValueError(
+            raise BrokerageParseError(
                 f"{path}: unrecognised Webull export layout — could not "
                 f"find column(s) {', '.join(missing)} in the header "
                 f"{header!r}. Refusing to guess column positions.")

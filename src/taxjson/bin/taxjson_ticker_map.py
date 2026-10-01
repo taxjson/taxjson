@@ -77,7 +77,10 @@ def _parse_map_file(file_path: Path):
     # from -> (target, where, line) of its first rename rule
     first_rule: Dict[str, tuple] = {}
     distinct_where: Dict[frozenset, tuple] = {}
-    with file_path.open("r", encoding="utf-8-sig") as f:
+    from io import StringIO
+    from taxjson.lib.cli_diag import read_text_utf8
+    # A non-UTF-8 map is a one-line error naming it (S053-06).
+    with StringIO(read_text_utf8(file_path)) as f:
         for lineno, raw in enumerate(f, 1):
             line = raw.split('#', 1)[0].strip()
             if not line:

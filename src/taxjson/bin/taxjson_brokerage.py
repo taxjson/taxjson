@@ -101,7 +101,8 @@ def load_security_overrides(path: Path):
     Returns a list of (desc_substring_lower, CURRENCY, symbol) tuples.
     """
     overrides = []
-    text = path.read_text(encoding='utf-8-sig')
+    from taxjson.lib.cli_diag import read_text_utf8
+    text = read_text_utf8(path)   # names a non-UTF-8 file (S053-06)
     for n, raw in enumerate(text.splitlines(), 1):
         line = raw.strip().lstrip('\ufeff')
         if not line or line.startswith('#'):
