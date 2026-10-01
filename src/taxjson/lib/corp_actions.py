@@ -107,6 +107,12 @@ class CorporateAction:
     broker_account: str = ''
 
     def __post_init__(self):
+        # The emitters date a second leg one second AFTER the event
+        # (`_bump_time`): an event at 23:59:59 (or with no time) put
+        # both legs on one second, so a same-symbol exchange's new BUY
+        # could pool before the SELL of the old shares (audit S074-02).
+        # Leave room for the bump. Not part of the event id.
+        self.time = _clamp_time(self.time, _LATEST_EVENT_TIME)
         if not self.event_id:
             self.event_id = self._compute_id()
 
@@ -754,7 +760,9 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
             _CURRENCY_SUFFIX.get(cont['currency'], cont['currency']))
         date_part, _, time_part = mb['date_time'].partition(',')
         date = date_part.strip()
-        time = (time_part.strip() or '20:25:00')
+        # One second below the event clamp: the spin-off legs below sit
+        # one second after this merger (S074-02).
+        time = _clamp_time(time_part.strip() or '20:25:00', '23:59:57')
         cn, co = _pair_for(cont)
         events.append(CorporateAction(
             date=date, time=time, action_type='merger',
@@ -2750,6 +2758,25 @@ def _canada_merger_rollover(event: CorporateAction, option: str, hints: dict) ->
         statute_note="s. 85.1 rollover (automatic; no gain reported)",
         cil_note="s. 85.1 rollover",
     )
+
+
+# The latest clock time an event may carry: its emitters add one second
+# to it (a merger's spin-off leg is itself one second after the merger,
+# so a merger source time is held to one second earlier still).
+_LATEST_EVENT_TIME = '23:59:58'
+
+
+def _clamp_time(t: str, latest: str) -> str:
+    """`t` as HH:MM:SS, no later than `latest`; a blank time is the
+    start of the day. An unparseable time is returned unchanged."""
+    if not (t or '').strip():
+        return '00:00:00'
+    try:
+        h, m, sec = (int(x) for x in t.split(':'))
+    except (ValueError, AttributeError):
+        return t
+    norm = f"{h:02d}:{m:02d}:{sec:02d}"
+    return min(norm, latest)
 
 
 def _bump_time(t: str, secs: int) -> str:

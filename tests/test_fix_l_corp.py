@@ -463,5 +463,128 @@ class TestElectionsLow(unittest.TestCase):
         self.assertIn("does NOT qualify", sp['taxable_distribution_301'])
 
 
+# ====================================================== leg ordering
+class TestLegTimesLow(unittest.TestCase):
+    def test_s074_02_same_symbol_exchange_at_end_of_day(self):
+        from dataclasses import fields
+        from taxjson.lib.core import CanadaTaxRules, TaxTransaction as T
+        from taxjson.lib.corp_actions import resolve_event
+        names = {f.name for f in fields(T)}
+        for tm in ('10:00:00', '23:59:59', ''):
+            ev = _merger(time=tm, source_symbol='ABC.US',
+                         target_symbol='ABC.US', qty_disposed=100,
+                         qty_received=100, fmv=2000.0, target_fmv=2000.0)
+            rows, _ = _quiet(resolve_event, ev, 'taxable_disposition',
+                             country='canada')
+            sell, buy = rows[0], rows[1]
+            self.assertLess(sell['quantity'], 0)
+            self.assertLess(sell['time'], buy['time'], tm)
+            # Even fed to the engine in the WRONG order, the old shares'
+            # disposition uses their own cost.
+            book = [T(action='BUYSELL', date='2024-01-10', time='10:00:00',
+                      symbol='ABC.US', quantity=100, currency='USD',
+                      net_amount=-1000.0, date_settle='2024-01-10',
+                      account='margin')]
+            book += [T(**{k: v for k, v in r.items() if k in names})
+                     for r in (buy, sell)]
+            res, _ = _quiet(CanadaTaxRules().compute_gains, book,
+                            sheltered_transactions=[],
+                            detect_wash_sales=False)
+            g = [x for x in res['transactions']
+                 if x.get('action') is None and 'gain' in x]
+            self.assertEqual([(round(x['cost'], 2), round(x['gain'], 2))
+                              for x in g], [(1000.0, 1000.0)], tm)
+
+    def test_s074_02_split_up_spinoff_after_merger(self):
+        from taxjson.lib.corp_actions import parse_ib_corporate_actions
+        mrg = ('ABC(US0000000001) Merged(Acquisition) WITH US0000000001 '
+               '1 for 1, US0000000003 1 for 2 ({t}, {n}, {i})')
+        cols = ('Asset Category,Currency,Report Date,Date/Time,Description,'
+                'Quantity,Proceeds,Value,Realized P/L,Code').split(',')
+        rows = [f'Corporate Actions,Data,Stocks,USD,2025-06-02,'
+                f'"2025-06-02, 23:59:59","{d}",{q},0,{v},0,\n'
+                for d, q, v in (
+                    (mrg.format(t='ABC', n='ABC INC', i='US0000000001'),
+                     -40, -4000),
+                    (mrg.format(t='ABC', n='ABC INC', i='US0000000001'),
+                     40, 3000),
+                    (mrg.format(t='ABCS', n='ABC SPINCO',
+                                i='US0000000003'), 20, 1000))]
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _quiet(parse_ib_corporate_actions,
+                              _ib_file(tmp, cols, rows), "m")
+        kinds = {e.action_type: e.time for e in evs}
+        self.assertEqual(set(kinds), {'merger', 'spinoff'}, err)
+        self.assertLess(kinds['merger'], kinds['spinoff'])
+
+
+# ================================================ pinned constants
+class TestEmittedRowConstantsLow(unittest.TestCase):
+    """G1-14: the corp rows' fee and money constants were unpinned — a
+    +1 fee or a +1 value on an IB merger leg survived the suite."""
+
+    CASES = [
+        ('canada', 'taxable_disposition', _merger, {}),
+        ('canada', 'rollover_s_85_1_5', _merger, {}),
+        ('canada', 'taxable_deemed_dividend', _spin,
+         {'fmv_per_share': 7.0}),
+        ('canada', 'rollover_s_86_1', _spin, {'allocated_acb_cad': 300.0}),
+        ('usa', 'taxable_exchange', _merger, {}),
+        ('usa', 'reorg_368_boot', _merger,
+         {'cash_boot': 500.0, 'source_basis_total': 1000.0}),
+        ('usa', 'taxable_distribution_301', _spin, {'fmv_per_share': 7.0}),
+        ('usa', 'tax_free_355', _spin, {'allocated_acb': 300.0}),
+    ]
+
+    def test_g1_14_every_emitted_trade_row_has_zero_fee(self):
+        from taxjson.lib.corp_actions import resolve_event
+        for country, el, make, hints in self.CASES:
+            ev = make(fmv=2000.0, target_fmv=2000.0)
+            rows, _ = _quiet(resolve_event, ev, el, country=country,
+                             hints=hints)
+            self.assertTrue(rows, el)
+            for r in rows:
+                if r['action'] == 'BUYSELL':
+                    self.assertEqual(r['fee'], 0.0, (el, r))
+
+    def test_g1_14_taxable_exchange_money_exact(self):
+        from taxjson.lib.corp_actions import resolve_event
+        ev = _merger(fmv=2000.0, target_fmv=1900.0)
+        rows, _ = _quiet(resolve_event, ev, 'taxable_disposition',
+                         country='canada')
+        sell = next(r for r in rows if r['quantity'] < 0)
+        buy = next(r for r in rows if r['quantity'] > 0)
+        # One fair value for both legs: the consideration received.
+        self.assertEqual((sell['net_amount'], sell['fee']), (1900.0, 0.0))
+        self.assertEqual((buy['net_amount'], buy['fee']), (1900.0, 0.0))
+
+    def test_g1_14_ib_merger_and_split_up_values_exact(self):
+        from taxjson.lib.corp_actions import parse_ib_corporate_actions
+        cols = ('Asset Category,Currency,Report Date,Date/Time,Description,'
+                'Quantity,Proceeds,Value,Realized P/L,Code').split(',')
+
+        def r(d, q, v, cur='USD'):
+            return (f'Corporate Actions,Data,Stocks,{cur},2025-06-02,'
+                    f'"2025-06-02, 20:25:00","{d}",{q},0,{v},0,\n')
+        mrg = ('ABC(US0000000001) Merged(Acquisition) WITH US0000000001 '
+               '1 for 1, US0000000003 1 for 2 ({t}, {n}, {i})')
+        with tempfile.TemporaryDirectory() as tmp:
+            (ev,), _ = _quiet(parse_ib_corporate_actions, _ib_file(
+                tmp, cols, [r(_IB_OUT, -1600, -25920.5, 'CAD'),
+                            r(_IB_IN, 100, 25840.25)]), "m")
+            self.assertEqual((ev.fmv, ev.target_fmv), (25920.5, 25840.25))
+            evs, _ = _quiet(parse_ib_corporate_actions, _ib_file(
+                tmp, cols, [
+                    r(mrg.format(t='ABC', n='ABC INC', i='US0000000001'),
+                      -40, -4000.5),
+                    r(mrg.format(t='ABC', n='ABC INC', i='US0000000001'),
+                      40, 3000.25),
+                    r(mrg.format(t='ABCS', n='ABC SPINCO',
+                                 i='US0000000003'), 20, 1000.75)]), "m")
+        got = {e.action_type: (e.fmv, e.target_fmv) for e in evs}
+        self.assertEqual(got['merger'], (4000.5, 3000.25))
+        self.assertEqual(got['spinoff'][0], 1000.75)
+
+
 if __name__ == "__main__":
     unittest.main()

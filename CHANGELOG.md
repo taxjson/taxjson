@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Corporate-action legs never share a second.** An event stamped
+  23:59:59 (or with no time) put both legs of a taxable exchange on one
+  second, so a same-symbol exchange could pool the new shares before
+  selling the old; event times now leave room for the one-second leg
+  bump (S074-02).
+
 - **A spin-off rollover allocated $0 is loud.** An s.86.1 (Canada) or
   §355 (US) election with `allocated_acb_cad` / `allocated_acb` = 0 booked
   the spun-off shares at $0 with the parent keeping its whole cost and no
