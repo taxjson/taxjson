@@ -2271,6 +2271,17 @@
   `watch --threshold 0` now means "any move" (it read as 100), and an
   unreadable or other-version `.watch_state.json` is warned about before
   the new baseline is recorded.
+- **The .sum DIAGNOSTICS banners are fresh and whole.** `<acct>.sum`
+  (the pre-blend baseline) no longer repeats the previous run's
+  cross-account notes (they are in `<acct>_wash.sum`); a note about a
+  problem already fixed no longer survives in either banner after an
+  account leaves the blended or crypto wash pass; the transfer-cluster
+  attestation note keeps its closing sentence; notes whose events all
+  fall after the tax year (and its 30-day window) are listed last under
+  their own heading instead of asking for action in this year's report;
+  the per-file parse counts are echoed for file names with spaces and
+  for TRANSFER-only files; the crypto validation line names the file,
+  not its absolute path (which carried the OS user name).
 
 ## v0.16.0 (2026-09-25)
 

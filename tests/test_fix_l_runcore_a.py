@@ -294,5 +294,156 @@ class TestNumericFlags(unittest.TestCase):
             self.assertEqual(err.getvalue(), "")
 
 
+_KR_HDR = ("txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,"
+           "margin,misc,ledgers\n")
+_KR1_SHORT = _KR_HDR + (
+    "TXA1,OA1,BTC/CAD,2025-01-15 10:00:00.1234,buy,limit,50000,50000,0,"
+    "1.0,,,\nTXA2,OA2,BTC/CAD,2025-06-02 14:30:00.5678,sell,limit,60000,"
+    "60000,0,1.0,,,\nTXA3,OA3,ETH/CAD,2025-07-02 14:30:00.5678,sell,"
+    "limit,3000,3000,0,1.0,,,\n")
+_KR2 = _KR_HDR + ("TXB1,OB1,BTC/CAD,2025-01-16 10:00:00.1234,buy,limit,"
+                  "90000,90000,0,1.0,,,\n")
+_CRYPTO_CFG = ('[settings]\nyear = 2025\ncountry = "canada"\n'
+               'base_currency = "CAD"\nsource_currencies = []\n')
+
+
+def _crypto_project(root, accounts, tfsa=True):
+    """accounts: {name: kraken trades csv}; plus a sheltered tfsa."""
+    root = Path(root)
+    cfg = _CRYPTO_CFG
+    for n, body in accounts.items():
+        cfg += f'[accounts.{n}]\ntype = "taxable"\ncrypto = true\n'
+        (root / "inputs" / n).mkdir(parents=True, exist_ok=True)
+        (root / "inputs" / n / "kr_trades.csv").write_text(body)
+    if tfsa:
+        cfg += '[accounts.tfsa]\ntype = "sheltered"\n'
+        (root / "inputs" / "tfsa").mkdir(parents=True, exist_ok=True)
+        (root / "inputs" / "tfsa" / "questrade_2025.csv").write_text(
+            _MARGIN_CSV)
+    (root / "taxjson.toml").write_text(cfg)
+    return root
+
+
+def _count(path, text):
+    return path.read_text().count(text) if path.exists() else 0
+
+
+class TestDiagnosticsBanner(unittest.TestCase):
+    """R1-259 (baseline .sum one run stale), S038-08 / S038-20 (orphaned
+    post-pass sidecars), R1-330 (unindented continuation dropped),
+    S038-05 (later-year notes), S037-18 (absolute path in crypto .sum)."""
+
+    def test_baseline_sum_is_fresh_and_fixed_notes_go(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _crypto_project(tmp, {"kr1": _KR1_SHORT})
+            rep = root / "reports"
+            for _ in range(2):
+                r = _run_cli(root, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                # Once, not once per run (R1-259).
+                self.assertEqual(_count(rep / "kr1.sum", "go short"), 1)
+            # S037-18: no absolute path in the report.
+            self.assertNotIn(str(Path(tmp).resolve()),
+                             (rep / "kr1.sum").read_text())
+            self.assertIn("OK: kr1_base.json", (rep / "kr1.sum").read_text())
+            # Fix the short and drop the sheltered account: kr1 gets no
+            # wash pass any more; its old wash diag must go (S038-20 A).
+            (root / "inputs" / "kr1" / "kr_trades.csv").write_text(
+                "".join(ln for ln in _KR1_SHORT.splitlines(True)
+                        if "ETH" not in ln))
+            _crypto_project(root, {"kr1": (root / "inputs" / "kr1" /
+                                           "kr_trades.csv").read_text()},
+                            tfsa=False)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(_count(rep / "kr1.sum", "go short"), 0)
+            self.assertFalse((root / "work" /
+                              "kr1_gains_wash.json.diag").exists())
+
+    def test_account_moving_into_and_out_of_the_crypto_blend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _crypto_project(tmp, {"kr1": _KR1_SHORT})
+            rep, work = root / "reports", root / "work"
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            self.assertGreater(_count(rep / "kr1_wash.sum", "go short"), 0)
+            fixed = "".join(ln for ln in _KR1_SHORT.splitlines(True)
+                            if "ETH" not in ln)
+            # S038-20 B: kr2 joins, kr1 moves to the blended pass.
+            _crypto_project(root, {"kr1": fixed, "kr2": _KR2})
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("crypto pass", r.stdout)
+            self.assertEqual(_count(rep / "kr1_wash.sum", "go short"), 0)
+            # S038-08: short again inside the blend, then kr2 leaves.
+            _crypto_project(root, {"kr1": _KR1_SHORT, "kr2": _KR2})
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            self.assertTrue((work / "kr1_cryptoblend.diag").exists())
+            import shutil
+            shutil.rmtree(root / "inputs" / "kr2")
+            _crypto_project(root, {"kr1": fixed})
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse((work / "kr1_cryptoblend.diag").exists())
+            self.assertEqual(_count(rep / "kr1_wash.sum", "go short"), 0)
+            self.assertEqual(_count(rep / "kr1.sum", "go short"), 0)
+
+    def test_attestation_note_is_kept_whole(self):
+        from taxjson.bin.taxjson_run import collect_diagnostics
+        from taxjson.lib.pipeline import _drop_self_cancelling_transfers
+        from test_transfer_handling import _tx
+        shel = [_tx('TRANSFER', '2025-06-15', 'Q.TO', +100, net=8000.0,
+                    account='RRSP'),
+                _tx('TRANSFER', '2025-06-15', 'Q.TO', -100, net=8000.0,
+                    account='RRSP')]
+        main = [_tx('BUYSELL', '2025-06-10', 'Q.TO', -100, net=800.0,
+                    account='Margin')]
+        err = io.StringIO()
+        with redirect_stderr(err):
+            _drop_self_cancelling_transfers(shel, main_transactions=main)
+        note = err.getvalue()
+        self.assertIn("declared legs let the cluster net", note)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "work"
+            cache.mkdir()
+            (cache / "rrsp_blend.diag").write_text(note)
+            got = collect_diagnostics(cache, "rrsp")
+        self.assertIn("declared legs let the cluster net", got)
+        self.assertIn("record THAT leg as a BUYSELL", got)
+
+    def test_notes_about_later_years_are_set_apart(self):
+        from taxjson.bin.taxjson_run import collect_diagnostics
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "taxjson.toml").write_text(_CONFIG)
+            cache = root / "work"
+            cache.mkdir()
+            (cache / "margin_gains.json.diag").write_text(
+                "NOTE: FFN.TO: re-denominated a trade executed 2026-07-02\n"
+                "NOTE: ABC.TO: something on 2025-12-20\n"
+                "NOTE: XYZ.TO: rebuy 2026-01-15 inside the window\n"
+                "warning: no date here\n"
+                "error: bad row 2026-08-01\n")
+            got = collect_diagnostics(cache, "margin").splitlines()
+        head = got.index(next(ln for ln in got
+                              if ln.startswith("-- notes about events "
+                                               "after 2025")))
+        self.assertEqual(got[head + 1:],
+                         ["NOTE: FFN.TO: re-denominated a trade executed "
+                          "2026-07-02"])
+        self.assertIn("NOTE: XYZ.TO: rebuy 2026-01-15 inside the window",
+                      got[:head])
+        self.assertIn("error: bad row 2026-08-01", got[:head])
+
+    def test_parse_count_echo_matches_spaces_and_transfer_form(self):
+        from taxjson.bin.taxjson_run import _PARSE_COUNT_RE
+        for ln in ("  kr_trades.csv: 2 tax objects",
+                   "  kr_trades 2025 export.csv: 2 tax objects",
+                   "  kr_ledgers.csv: 0 tax objects (1 TRANSFER row(s) "
+                   "kept aside)"):
+            self.assertTrue(_PARSE_COUNT_RE.match(ln), ln)
+
+
 if __name__ == "__main__":
     unittest.main()

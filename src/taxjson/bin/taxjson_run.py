@@ -136,7 +136,7 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
 # stage_account to echo the counts into the wrapper's console output
 # so a keen eye can spot a 0-object parse of a non-empty file before
 # downstream stages silently propagate the empty data.
-_PARSE_COUNT_RE = re.compile(r'^\s+\S+: \d+ tax objects$')
+_PARSE_COUNT_RE = re.compile(r'^\s+.+: \d+ tax objects\b')
 # taxjson-brokerage's zero-row warning (captured in the parse .diag).
 _ZERO_TX_RE = re.compile(r'^warning: (.+?) parsed to 0 transactions\b')
 
@@ -269,11 +269,28 @@ _DIAG_MARKER_RE = re.compile(
     re.IGNORECASE)
 
 
-def collect_diagnostics(cache: Path, account: str) -> str:
+# Sidecars written by the cross-account passes AFTER <acct>.sum: the
+# blended pass's per-account mirror and the single-account crypto wash
+# pass's stderr. They belong to <acct>_wash.sum only — read into the
+# baseline <acct>.sum they were one run stale (R1-259).
+_POST_PASS_DIAG_SUFFIXES = ("_blend.diag", "_cryptoblend.diag",
+                            "_gains_wash.json.diag")
+_DIAG_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+
+
+def collect_diagnostics(cache: Path, account: str, *,
+                        post_pass: bool = True) -> str:
     """Concatenate persisted stderr diagnostics across an account's
     pipeline stages, keeping ok/warning/note/error lines — bare or
     prog-prefixed (`taxjson-fill-crypto: warning: …`) — plus their
-    indented continuation lines."""
+    indented continuation lines. post_pass=False leaves out the
+    cross-account passes' sidecars (_POST_PASS_DIAG_SUFFIXES).
+
+    The engine runs over the whole history, so a year's banner used to
+    ask for action on events of a LATER year (declare 2026 transfer
+    legs in the 2025 report, S038-05). A note whose dates all fall
+    after the tax year's 30-day superficial-loss tail is listed last,
+    under its own heading."""
     out: List[str] = []
     # Sibling-prefix guard (mirrors cmd_fees_sum): the glob for account
     # 'margin' also matches 'margin_us_*.diag', so account margin's
@@ -282,24 +299,55 @@ def collect_diagnostics(cache: Path, account: str) -> str:
     # the config is one level up; on any load problem fall back to the
     # unfiltered glob (a false extra line beats a crash here).
     siblings: List[str] = []
+    year: Optional[int] = None
     try:
-        accounts_cfg = (load_config(cache.parent).get("accounts") or {})
+        _cfg = load_config(cache.parent)
+        accounts_cfg = (_cfg.get("accounts") or {})
         siblings = [a for a in accounts_cfg
                     if a != account and a.startswith(f"{account}_")]
+        _y = (_cfg.get("settings") or {}).get("year")
+        year = _y if isinstance(_y, int) else None
     except (Exception, SystemExit):
         pass
+    blocks: List[List[str]] = []
     for diag in sorted(cache.glob(f"{account}_*.diag")):
         if any(diag.name.startswith(f"{s}_") for s in siblings):
+            continue
+        if not post_pass and diag.name.endswith(_POST_PASS_DIAG_SUFFIXES):
             continue
         kept_prev = False
         for line in diag.read_text(errors="replace").splitlines():
             is_marker = bool(_DIAG_MARKER_RE.match(line.strip()))
             is_cont = kept_prev and line[:1].isspace() and bool(line.strip())
-            if is_marker or is_cont:
-                out.append(line.rstrip())
+            if is_marker:
+                blocks.append([line.rstrip()])
                 kept_prev = True
+            elif is_cont:
+                blocks[-1].append(line.rstrip())
             else:
                 kept_prev = False
+    later: List[List[str]] = []
+    if year is not None:
+        # Past the year's end AND its 30-day window (a January rebuy
+        # still denies a December loss).
+        cutoff = f"{year + 1}-01-30"
+        now: List[List[str]] = []
+        for b in blocks:
+            dates = ["-".join(m) for ln in b
+                     for m in _DIAG_DATE_RE.findall(ln)]
+            # Errors stay where they are, whatever their dates.
+            is_err = re.search(r"\b(?:error|validation):", b[0], re.I)
+            (later if dates and not is_err and min(dates) > cutoff
+             else now).append(b)
+        blocks = now
+    for b in blocks:
+        out.extend(b)
+    if later:
+        out.append(f"-- notes about events after {year} (they do not "
+                   f"affect the {year} figures; act on them in that "
+                   f"year's project):")
+        for b in later:
+            out.extend(b)
     return "\n".join(out)
 
 
@@ -2047,9 +2095,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         from taxjson.lib.dispatch import run_cmd as _run_cmd
         # --require-prices: a row fill-crypto could not price is an
         # ERROR here (R1-105), not a silent $0 income/cost.
+        # Run from work/ on the bare file name: the report is copied into
+        # reports/<name>.sum, and an absolute path put the user's home
+        # directory (their OS user name) in every crypto report (S037-18).
         vres = _run_cmd(_cmd("taxjson-validate") + ["--require-prices",
-                                                    str(base_json)],
-                        capture_output=True)
+                                                    base_json.name],
+                        capture_output=True, cwd=str(base_json.parent))
         report = (vres.stdout or "") + (vres.stderr or "")
         if report.strip():
             validate_diag.write_text(report, encoding="utf-8")
@@ -2345,7 +2396,9 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     sum_tmp = sum_path.with_name(sum_path.name + ".part")
     try:
         with sum_tmp.open("wb") as out:
-            out.write(_diagnostics_banner(cache, name))
+            # The pre-blend baseline: the cross-account passes' notes
+            # (written after this file) go in <name>_wash.sum.
+            out.write(_diagnostics_banner(cache, name, post_pass=False))
             out.write(run_capture(_cmd("taxjson-sum-gains") + [str(gains_json)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(year), "--country", country,
@@ -2391,10 +2444,11 @@ def _json_dumps_report(payload) -> str:
     return _json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
-def _diagnostics_banner(cache: Path, account: str) -> bytes:
+def _diagnostics_banner(cache: Path, account: str, *,
+                        post_pass: bool = True) -> bytes:
     """A DIAGNOSTICS section for the top of a .sum file, or empty bytes
     when the account's pipeline stages produced no warnings/notes."""
-    diag = collect_diagnostics(cache, account)
+    diag = collect_diagnostics(cache, account, post_pass=post_pass)
     if not diag:
         return b""
     rule = "=" * 70
@@ -2548,6 +2602,10 @@ def stage_blended_wash_pass(names: List[str],
             _mirror.unlink(missing_ok=True)
     for name in names:
         wash_gains = cache / f"{name}_gains_wash.json"
+        # The split writes no .diag: a single-account wash pass's old
+        # one would otherwise stay in this account's banner (S038-20).
+        wash_gains.with_name(wash_gains.name + ".diag").unlink(
+            missing_ok=True)
         run_to_file(_cmd("taxjson-split-gains") + [
             str(combined_wash), "--account", name,
             "--base", str(cache / f"{name}_base.json"),
@@ -3134,6 +3192,21 @@ def cmd_run(args: argparse.Namespace) -> None:
         not in ("us", "usa")
         and sum(1 for _c in accounts.values()
                 if _c.get("type") == "taxable" and _c.get("crypto")) >= 2)
+    if not args.account:
+        # A per-account blend mirror is rewritten only for accounts IN
+        # this run's blend: one that left it (re-typed, the other
+        # crypto account removed) kept its old mirror, and its fixed
+        # problem was re-reported in every later banner (S038-08).
+        for _n, _c in accounts.items():
+            _c = _c or {}
+            _taxable = _c.get("type") == "taxable"
+            for _tag, _in_blend in (
+                    ("blend", _taxable and not _c.get("crypto")),
+                    ("cryptoblend", _taxable and bool(_c.get("crypto"))
+                     and _crypto_blend)):
+                _m = cache / f"{_n}_{_tag}.diag"
+                if not _in_blend and _m.exists():
+                    _m.unlink()
     for name, acfg in taxable_items:
         try:
             out = stage_account(name, acfg, settings, inputs_dir, cache,
@@ -3181,6 +3254,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             # --account and pending-election deferrals — transient.)
             for _stale in (cache / f"{name}_gains_wash.json",
                            cache / f"{name}_gains_wash.traces",
+                           cache / f"{name}_gains_wash.json.diag",
                            reports_dir / f"{name}_wash.sum"):
                 _stale.unlink(missing_ok=True)
 
