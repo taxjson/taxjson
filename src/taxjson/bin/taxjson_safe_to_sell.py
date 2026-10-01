@@ -132,6 +132,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("To fully avoid "
           + ("a wash sale" if usa else "superficial loss")
           + ", you must also NOT REPURCHASE for 30 days AFTER selling.")
+    # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
+    from taxjson.lib.wash_scope import scope_note
+    print(scope_note(args.country))
     return 0
 
 

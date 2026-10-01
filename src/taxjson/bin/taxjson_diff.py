@@ -15,7 +15,9 @@ different parse." The default match key is:
     action, date, time, symbol, quantity, price, account
 
 If multiple records share that key on either side (true duplicates), the
-unmatched surplus is reported as ADDED or REMOVED.
+identical ones are paired first, then the rest in a stable order; the
+unmatched surplus is reported as ADDED or REMOVED. A pure re-ordering of
+the same book reports no change.
 
 Examples:
     taxjson-diff before.json after.json
@@ -56,6 +58,7 @@ def load_json(path: Path) -> Dict[str, Any]:
 
 
 _MANUAL = 'manual_reporting_required'
+_DEFAULT_BY = "action,date,time,symbol,quantity,price,account"
 
 
 def extract_records(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -75,6 +78,16 @@ def extract_records(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return recs
 
 
+def _key_float(v: float) -> float:
+    """Float noise off a key value: 6 decimals for ordinary magnitudes,
+    7 significant digits below 1 — a sub-micro crypto quantity
+    (9.4e-7 vs 5.6e-7) rounded to 6 dp collapsed to 0.000001 and a real
+    change read as 'unchanged' (audit S029-18)."""
+    if v != 0 and abs(v) < 1:
+        return float(f"{v:.7g}")
+    return round(v, 6)
+
+
 def make_key(rec: Dict[str, Any], fields: List[str]) -> Tuple:
     """Composite match key. Floats get rounded so 100.00000001 == 100.00.
     The record's section (transactions vs manual_reporting_required)
@@ -83,18 +96,23 @@ def make_key(rec: Dict[str, Any], fields: List[str]) -> Tuple:
     for f in fields:
         v = rec.get(f)
         if isinstance(v, float):
-            parts.append(round(v, 6))
+            parts.append(_key_float(v))
         else:
             parts.append(v)
     return tuple(parts)
 
 
 def values_equal(a: Any, b: Any, tol: float = 1e-6) -> bool:
+    """Floats are equal when they differ by less than `tol` absolute AND
+    relative — the absolute floor alone called 9.4e-7 and 5.6e-7 equal
+    (S029-18)."""
     if isinstance(a, float) or isinstance(b, float):
         try:
-            return abs(float(a or 0) - float(b or 0)) < tol
+            fa, fb = float(a or 0), float(b or 0)
         except (TypeError, ValueError):
             return a == b
+        d = abs(fa - fb)
+        return d < tol and d <= tol * max(abs(fa), abs(fb), 1e-9)
     # Treat None and '' as equal (common when one parser sets a default).
     if (a is None or a == '') and (b is None or b == ''):
         return True
@@ -144,8 +162,9 @@ def parse_args():
     parser.add_argument("new", help="Path to the NEW file (right side of diff)")
     parser.add_argument(
         "--by",
-        default="action,date,time,symbol,quantity,price,account",
-        help="Comma-separated fields to use as the match key.",
+        default=None,
+        help="Comma-separated fields to use as the match key (default: "
+             f"{_DEFAULT_BY}). A field no record carries is refused.",
     )
     parser.add_argument(
         "--ignore",
@@ -169,23 +188,37 @@ def parse_args():
 
 def main():
     args = parse_args()
-    match_fields = [f.strip() for f in args.by.split(',') if f.strip()]
+    explicit_by = args.by is not None
+    match_fields = [f.strip() for f in (args.by or _DEFAULT_BY).split(',')
+                    if f.strip()]
     ignore_fields = {f.strip() for f in args.ignore.split(',') if f.strip()}
 
     # A missing/unreadable/malformed input is a usage error, not a
     # traceback: name the file and exit 2 (the usage-error code every
     # sibling tool uses).
+    from taxjson.lib.json_input import InputFileError, read_json_doc
     try:
-        old_doc = load_json(Path(args.old))
-        new_doc = load_json(Path(args.new))
-    except (OSError, json.JSONDecodeError) as e:
-        bad = getattr(e, "filename", None) or ""
-        which = f" {bad}" if bad else ""
-        print(f"taxjson-diff: cannot read input{which}: {e}",
-              file=sys.stderr)
+        old_doc = read_json_doc(args.old)
+        new_doc = read_json_doc(args.new)
+    except InputFileError as e:
+        print(f"taxjson-diff: cannot read input {e}", file=sys.stderr)
         sys.exit(2)
     old_recs = extract_records(old_doc)
     new_recs = extract_records(new_doc)
+
+    # A --by field no record on either side carries keys every record
+    # as None and pairs rows by list order: 'modified' noise for a typo
+    # like --by symbl (audit R1-265).
+    present = set()
+    for r in old_recs + new_recs:
+        if isinstance(r, dict):
+            present.update(r.keys())
+    unknown = [f for f in match_fields if f not in present]
+    if explicit_by and unknown and (old_recs or new_recs):
+        print(f"taxjson-diff: error: --by field(s) {', '.join(unknown)} "
+              f"appear in no record of either file (fields present: "
+              f"{', '.join(sorted(present))})", file=sys.stderr)
+        sys.exit(2)
 
     # Bucket records by composite key (lists, to handle true duplicates).
     old_buckets: Dict[Tuple, List[Dict[str, Any]]] = {}
@@ -199,18 +232,31 @@ def main():
     removed: List[Dict[str, Any]] = []
     matched: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []  # (old, new)
 
-    all_keys = set(old_buckets) | set(new_buckets)
+    # Sorted keys (by their repr: keys mix str/None/float) so the
+    # listing and a --limit subset are the same on every run — set order
+    # varied with PYTHONHASHSEED (audit S029-15).
+    all_keys = sorted(set(old_buckets) | set(new_buckets), key=repr)
     for k in all_keys:
-        olds = old_buckets.get(k, [])
-        news = new_buckets.get(k, [])
-        n_match = min(len(olds), len(news))
+        olds = list(old_buckets.get(k, []))
+        news = list(new_buckets.get(k, []))
+        # Records sharing a key: pair the IDENTICAL ones first, so a
+        # pure re-ordering of same-key rows (two INTEREST rows on one
+        # day) is no change — positional pairing reported them as each
+        # other's modification (audit G7-1).
+        rest_new = []
+        for n in news:
+            hit = next((i for i, o in enumerate(olds)
+                        if not field_diffs(o, n, ignore_fields)), None)
+            if hit is None:
+                rest_new.append(n)
+            else:
+                matched.append((olds.pop(hit), n))
+        n_match = min(len(olds), len(rest_new))
         for i in range(n_match):
-            matched.append((olds[i], news[i]))
+            matched.append((olds[i], rest_new[i]))
         # Surplus on either side.
-        for r in olds[n_match:]:
-            removed.append(r)
-        for r in news[n_match:]:
-            added.append(r)
+        removed.extend(olds[n_match:])
+        added.extend(rest_new[n_match:])
 
     # Split matched into modified vs unchanged.
     modified: List[Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[str, Any, Any]]]] = []
@@ -229,10 +275,14 @@ def main():
     # some records (TAX, INTEREST, FEE on a CASH symbol) may have None for
     # symbol or other key fields, and Python 3 won't compare str < None.
     def sort_key(r):
-        return (r.get('date') or '', r.get('symbol') or '', r.get('action') or '')
+        # The full match key breaks ties so same-day rows keep one order.
+        return (r.get('date') or '', r.get('symbol') or '',
+                r.get('action') or '', repr(make_key(r, match_fields)),
+                json.dumps(r, sort_keys=True, default=str))
     added.sort(key=sort_key)
     removed.sort(key=sort_key)
     modified.sort(key=lambda t: sort_key(t[0]))
+    unchanged_samples.sort(key=sort_key)
 
     use_color = (
         sys.stdout.isatty()

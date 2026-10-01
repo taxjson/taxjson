@@ -151,6 +151,12 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
             holding, error, status = None, str(e), 404
         except ReportArtifactError as e:
             holding, error = None, str(e)
+        if holding is None and error is None:
+            # The page says "No open position for X" — a not-found
+            # page, so a 404 like an unknown account (R1-266).
+            status = 404
+        elif holding is not None:
+            symbol = holding.get("symbol") or symbol
         from taxjson.lib.core import is_option_symbol
         return page("holding_detail.html", request, status_code=status,
                     account=account, symbol=symbol, holding=holding,
@@ -242,6 +248,11 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
         try:
             return data.what_if_sell(cur(), account, symbol, qty, price,
                                      price_currency=price_currency)
+        except UnknownAccountError as e:
+            # The same 404 as /api/holdings for a name not in
+            # taxjson.toml (R1-266).
+            return JSONResponse({"ok": False, "reason": str(e)},
+                                status_code=404)
         except Exception as e:  # surface as JSON, don't 500 (fresh project
             return {"ok": False, "reason": str(e)}  # has no _base.json yet)
 
@@ -249,7 +260,12 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
     def healthz():
         # No filesystem path: it names the user (home dir) and the
         # project, and a health probe has no need for either.
-        return {"ok": True,
-                "accounts": [a.name for a in cur().accounts]}
+        # A taxjson.toml edit that no longer loads is reported: the
+        # probe said ok while every page used the last good config
+        # (R1-266).
+        accounts = [a.name for a in cur().accounts]
+        err = getattr(app.state, "cfg_error", None)
+        return {"ok": err is None, "accounts": accounts,
+                "config_error": err}
 
     return app

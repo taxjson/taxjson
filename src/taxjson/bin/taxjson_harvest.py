@@ -70,8 +70,35 @@ def _account_of(path: Path) -> str:
 from taxjson.lib.report_model import fmt_qty as _qfmt  # noqa: E402
 
 
+def _read_input(p: Path, what: str) -> Dict[str, Any]:
+    """A named input this tool cannot read stops it with one line (exit
+    2). It used to warn and carry on: a missing gains file printed 'No
+    open positions.', a truncated --sheltered file turned SH_QTY/SH_ADD
+    into '-' — the cells that warn of a PERMANENT denial — all at exit 0
+    (audit S033-22, S034-08, S051-11, S079-11)."""
+    from taxjson.lib.json_input import InputFileError, read_json_doc
+    try:
+        return read_json_doc(p, list_key=None)
+    except InputFileError as e:
+        from taxjson.lib.cli_diag import error
+        error(PROG, f"{what} {e} — re-run `taxjson run`")
+        sys.exit(2)
+
+
+def _inventory(doc: Dict[str, Any], p: Path) -> List[Dict[str, Any]]:
+    inv = doc.get("inventory") or []
+    if not isinstance(inv, list) or any(not isinstance(h, dict)
+                                         for h in inv):
+        from taxjson.lib.cli_diag import error
+        error(PROG, f'{p}: "inventory" must be a list of JSON objects')
+        sys.exit(2)
+    return inv
+
+
 def load_positions(files: List[Path],
-                   include_options: bool = False) -> List[Dict[str, Any]]:
+                   include_options: bool = False,
+                   base_currency: Optional[str] = None
+                   ) -> List[Dict[str, Any]]:
     """Open positions from each gains file's `inventory`: one dict per
     (account, symbol) with qty, base-currency book cost and start date.
     CASH rows are always skipped. OCC option rows are skipped unless
@@ -79,20 +106,29 @@ def load_positions(files: List[Path],
     and futures options stay out either way — no live tier serves
     them."""
     out: List[Dict[str, Any]] = []
+    base = (base_currency or "").strip().upper()
     for p in files:
-        try:
-            data = load_report_json(p)
-        except Exception as e:
-            warn(PROG, f"could not read {p}: {e}")
-            continue
+        data = _read_input(Path(p), "gains file")
         acct = _account_of(p)
-        for h in data.get("inventory") or []:
+        for h in _inventory(data, Path(p)):
             sym = str(h.get("symbol") or "")
             qty = float(h.get("qty", 0) or 0)
             if not sym or qty == 0:
                 continue
             if sym.startswith("CASH.") or is_future_ticker(sym):
                 continue
+            cur = str(h.get("currency") or "").strip().upper()
+            if base and cur and cur != base:
+                # A native-currency book (work/<acct>_raw_gains.json
+                # matches the _gains.json suffix too): its USD cost read
+                # as CAD showed the whole FX factor as a GAIN and hid
+                # real losses (audit S034-12).
+                from taxjson.lib.cli_diag import error
+                error(PROG, f"{p}: {sym}'s book cost is in {cur}, not the "
+                            f"base currency {base} — pass the canonical "
+                            f"work/<acct>_gains_wash.json (or _gains.json), "
+                            f"not a native-currency (_raw) file.")
+                sys.exit(2)
             is_opt = is_option_symbol(sym)
             if is_opt and not include_options:
                 continue
@@ -129,13 +165,9 @@ def load_inventory_agg(files: List[Path],
     out: Dict[str, Dict[str, Any]] = {}
     stale: List[str] = []
     for p in files:
-        try:
-            data = load_report_json(p)
-        except Exception as e:
-            warn(PROG, f"could not read {p}: {e}")
-            continue
+        data = _read_input(Path(p), f"{column} input")
         file_has_field = False
-        for h in data.get("inventory") or []:
+        for h in _inventory(data, Path(p)):
             sym = str(h.get("symbol") or "")
             qty = float(h.get("qty", 0) or 0)
             if not sym or qty == 0:
@@ -250,13 +282,13 @@ def load_radar(paths: List[Path]) -> Dict[str, Dict[str, Any]]:
     sidecars (the pipeline writes one per taxable equity account)."""
     out: Dict[str, Dict[str, Any]] = {}
     for p in paths:
-        try:
-            doc = json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            warn(PROG, f"could not read radar sidecar {p}: {e}")
-            continue
+        doc = _read_input(Path(p), "radar sidecar")
         for sec in doc.get("sections") or []:
+            if not isinstance(sec, dict):
+                continue
             for r in sec.get("rows") or []:
+                if not isinstance(r, dict):
+                    continue
                 t = r.get("ticker")
                 if t and t not in out:
                     out[t] = {"category": r.get("category") or "",
@@ -534,7 +566,8 @@ def main(argv: Optional[List[str]] = None,
     is_usa = args.country == "usa"
 
     files = [Path(f) for f in args.files]
-    positions = load_positions(files, include_options=args.options)
+    positions = load_positions(files, include_options=args.options,
+                               base_currency=args.base_currency)
     if args.symbol:
         want = {s.upper() for s in args.symbol}
         positions = [r for r in positions if r["symbol"].upper() in want]
@@ -567,7 +600,15 @@ def main(argv: Optional[List[str]] = None,
           f"{'; options: IBKR -> cache' if option_tickers else ''})...",
           file=sys.stderr if args.json else sys.stdout)
 
-    external_map = load_yf_map([Path(".")] + [f.parent for f in files])
+    # The project's yf_ticker.map: next to the inputs, then the project
+    # root above work/ — the cwd only last. Looking in the cwd first
+    # lost the map whenever the tool ran from elsewhere (audit R1-246).
+    _dirs: List[Path] = []
+    for f in files:
+        for d in (f.resolve().parent, f.resolve().parent.parent):
+            if d not in _dirs:
+                _dirs.append(d)
+    external_map = load_yf_map(_dirs + [Path(".")])
     yf_map: Dict[str, str] = {}
     for t in tickers:
         if t in external_map:
@@ -624,6 +665,10 @@ def main(argv: Optional[List[str]] = None,
 
     rows: List[Dict[str, Any]] = []
     tot_cost = tot_value = 0.0
+    # The TOTAL row's PCT divides by the GROSS capital at stake: a
+    # short's (negative) credited proceeds netted against long cost made
+    # every-row -10% read -50%, or flip sign (audit S034-05).
+    tot_gross = 0.0
     for r in positions:
         q = quotes.get(r["symbol"])
         if q is None:
@@ -725,12 +770,14 @@ def main(argv: Optional[List[str]] = None,
             "radar": radar.get(r["symbol"]),
         })
         tot_cost += cost_basis
+        tot_gross += abs(cost_basis)
         tot_value += value
     rows.sort(key=lambda x: x["unrealized"])    # harvestable losses first
 
     schedule = _recovery_schedule(rows)
     totals = {
         "cost": round(tot_cost, 2),
+        "gross_cost": round(tot_gross, 2),
         "value": round(tot_value, 2),
         "unrealized": round(tot_value - tot_cost, 2),
         "currency": args.base_currency,
@@ -809,8 +856,8 @@ def main(argv: Optional[List[str]] = None,
         body.append([str(c) for c in cells])
     total_cells = ["TOTAL", "-", "-", "-", "-", "-",
                    fmt_money(tot_value - tot_cost),
-                   (f"{(tot_value - tot_cost) / abs(tot_cost) * 100:.1f}%"
-                    if tot_cost else "0.0%"), "-"]
+                   (f"{(tot_value - tot_cost) / tot_gross * 100:.1f}%"
+                    if tot_gross > 1e-9 else "0.0%"), "-"]
     if show_sheltered:
         total_cells.insert(3, "-")
     if show_options:
@@ -853,9 +900,11 @@ def main(argv: Optional[List[str]] = None,
                         and ((r.get("radar") or {}).get("category")
                              == "RISK"))
         if _risk_now > 0.005:
+            _pause = ("IRA buys and dividend reinvestment" if is_usa
+                      else "DRIPs/sheltered adds")
             print(f"RISK rows ({fmt_money(_risk_now)}) count as "
                   f"claimable now — no buys inside the past 30 days; "
-                  f"pause DRIPs/sheltered adds for 30 days AFTER "
+                  f"pause {_pause} for 30 days AFTER "
                   f"selling or the denial is permanent.")
         _blocked_now = sum(abs(float(r.get("unrealized") or 0.0))
                            for r in rows
@@ -906,6 +955,9 @@ def main(argv: Optional[List[str]] = None,
                       f"prior DENIED losses — UNREALIZED on those rows "
                       f"includes recycled loss, not only new loss "
                       f"(per-row amounts in --json / `taxjson list`).")
+    # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
+    from taxjson.lib.wash_scope import scope_note
+    legend.append(scope_note(args.country))
     print("\n" + "\n".join(legend))
     if is_usa:
         print("\nLT_IN approximates from the position start date; per-lot "

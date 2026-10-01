@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from taxjson.lib.report_model import fmt_money, parse_report_json
+from taxjson.lib.report_model import fmt_money
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.core import convert_currency
@@ -43,6 +43,9 @@ from taxjson.bin.taxjson_convert_currency import (
     reset_fallback_tally, emit_fallback_summary,
 )
 from taxjson.lib.ticker_map import is_option_ticker
+from taxjson.lib.json_input import load_json_doc_or_exit
+
+PROG = "taxjson-fees-sum"
 
 TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 
@@ -125,16 +128,10 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account)
                                 {(curr, to_curr): rate}, default_rate)
 
     for fp in files:
-        try:
-            text = fp.read_text(encoding="utf-8")
-        except OSError as e:
-            print(f"warning: skipping {fp}: {e}", file=sys.stderr)
-            continue
-        try:
-            data = parse_report_json(text)
-        except json.JSONDecodeError as e:
-            print(f"warning: skipping {fp}: {e}", file=sys.stderr)
-            continue
+        # A named (or --cache) book that cannot be read stops the
+        # report: skipping it dropped a whole broker's fees from the
+        # TOTAL at exit 0 (audit S028-09, S035-13).
+        data = load_json_doc_or_exit(PROG, fp)
         broker = (data.get("metadata") or {}).get("source_brokerage")
         if not broker:
             skipped_no_broker.append(fp.name)
@@ -213,7 +210,7 @@ _money = fmt_money                  # shared report-layer formatter
 
 
 _COLS = (f"{'BROKERAGE':<24} {'CUR':<4} {'TRADES':>7} {'TOTAL':>14} "
-         f"{'MEAN':>9} {'MEDIAN':>9} {'%NOTNL':>8} {'$/SHARE':>9} "
+         f"{'MEAN':>9} {'MEDIAN':>9} {'%NOTNL':>8} {'$/UNIT':>9} "
          f"{'$/CONTR':>9}")
 
 
@@ -250,10 +247,12 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
         out.append(_row("TOTAL", grand["base"], to_curr))
         # Stock vs option split (absolute), and native composition.
         out.append("")
-        out.append("Stock vs option fees:")
+        # Non-option = shares, units, futures and crypto (a coin
+        # exchange's fees were labelled 'stocks', audit S031-04).
+        out.append("Non-option vs option fees:")
         for name, b in rows:
             m = metrics(b["base"])
-            out.append(f"  {name:<22} stocks {_money(m['stock_fee'])}  "
+            out.append(f"  {name:<22} non-option {_money(m['stock_fee'])}  "
                        f"options {_money(m['option_fee'])}")
         mixed = [(n, b) for n, b in rows
                  if any(c != to_curr for c in b["cur"])]
@@ -308,7 +307,8 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
     out.append("Definitions: TRADES = BUYSELL/ASSIGN rows with a non-zero fee "
                "(rebates included); MEAN/MEDIAN are per-trade fee; %NOTNL = "
                "fees as a percent of gross trade value (rows with notional > 0); "
-               "$/SHARE is stock fee per share, $/CONTR is option fee per "
+               "$/UNIT is non-option fee per unit (share, coin, "
+               "contract of a future), $/CONTR is option fee per "
                "contract.")
     return out
 

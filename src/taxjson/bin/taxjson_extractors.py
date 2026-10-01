@@ -5,11 +5,19 @@ Diagnostic tool — shows which brokerage IDs are registered and which
 parser class handles each one.
 """
 
+import argparse
+
 from taxjson.lib.core import _BROKERAGES
 import taxjson.bin.taxjson_brokerage  # noqa: F401  -- triggers registry population
 
 
-def main():
+def main(argv=None):
+    # argv was never parsed: --help and a typo'd flag both printed the
+    # registry with rc 0 (audit R1-265).
+    argparse.ArgumentParser(
+        prog="taxjson-extractors",
+        description="List the registered brokerage parser ids and the "
+                    "parser class that handles each.").parse_args(argv)
     # Group IDs by their parser class so 'questrade' and 'qt' show on one row.
     by_class = {}
     for bid, cls in _BROKERAGES.items():
