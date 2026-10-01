@@ -316,7 +316,15 @@ def build_account_report(gains_data, account: str,
     washes = gains_data.get("wash_sales") or []
 
     def _amt(w):
-        return float(w.get("amount") or (w.get("loss_tx") or {}).get("amount", 0) or 0)
+        # 'disallowed_amount' is the field BOTH engines emit on a wash
+        # record; the US engine emits nothing else, so reading only
+        # 'amount' reported total_disallowed 0 for every US project
+        # (audit S077-14). The old keys stay as a fallback.
+        v = w.get("disallowed_amount")
+        if v is None:
+            v = (w.get("amount")
+                 or (w.get("loss_tx") or {}).get("amount", 0))
+        return float(v or 0)
 
     return {
         "schema_version": 1,
