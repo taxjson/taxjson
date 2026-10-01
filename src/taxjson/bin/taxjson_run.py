@@ -2333,7 +2333,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             maybe_print_holdings_diff(prev_holdings, holdings_toml)
 
     # 6. summary — assembled in a .part sidecar and renamed on success, so a
-    # failing sub-report can't leave a truncated .sum that `taxjson show`
+    # failing sub-report can't leave a truncated .sum that `taxjson sum`
     # then serves (same atomicity contract as run_to_file).
     sum_path = reports_dir / f"{name}.sum"
     sum_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -2356,7 +2356,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         sum_tmp.unlink(missing_ok=True)
 
     # Machine twin of the text reports (ADDITIVE — the .sum bytes above are
-    # untouched): the structured aggregates `taxjson summary` and future
+    # untouched): the structured aggregates `taxjson sum` and future
     # consumers read instead of re-deriving them from the gains JSON.
     try:
         from taxjson.lib.report_model import (build_account_report,
@@ -2625,9 +2625,9 @@ def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
     fan-out computes legally wrong numbers — Canada's ACB must blend
     across all non-registered accounts (ITA s. 47), and US §1091 wash
     matching between two taxable accounts is not performed. This was
-    entirely silent before; the run now names the overlapping symbols
-    and the documented workaround. Detection only — the blended
-    computation itself is the deferred fix."""
+    entirely silent before; the run now names the overlapping symbols.
+    This function only detects the overlap; the blended pass (the
+    per-kind blended wash run) computes the blended numbers."""
     import json as _json
     if len(taxable_bases) < 2:
         return
@@ -4206,7 +4206,7 @@ def _period_keep(period: str, root: Path):
 # Native (pre-base) per-account transaction file, in preference order: the raw
 # equity merge, then the crypto native (post fill-crypto-prices), then sorted.
 # These carry NATIVE currency with NO TOBASE / currency-to-base mapping —
-# exactly what `taxjson transactions` shows.
+# exactly what `taxjson events` shows.
 _NATIVE_TX_SUFFIXES = ("_raw.json", "_filled.json", "_sorted.json")
 
 
@@ -4230,7 +4230,7 @@ def _discover_tx_accounts(cache: Path) -> List[str]:
 
 
 def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
-    """Human-readable line for `taxjson transactions`. Money amounts (total,
+    """Human-readable line for `taxjson events`. Money amounts (total,
     fee, dividend/tax/interest/adjust amount) are shown to 2 decimals; quantity
     and per-share price keep their significant digits (a 0.0375 dividend rate
     or a 0.25178314 crypto qty must not be rounded away). Mirrors the .tt field
@@ -5333,8 +5333,12 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             rec = agg.setdefault(und, {"contracts": 0, "qty": 0.0,
                                        "proceeds": 0.0, "cost": 0.0,
                                        "gain": 0.0})
-            rec["contracts"] += 1
-            rec["qty"] += abs(float(t.get("qty") or 0.0))
+            # A grant-timing record recognises the premium at the
+            # WRITE (s.49(1)); it is not a close. CLOSES/QTY count the
+            # closing records only (audit S028-07).
+            if not t.get("grant"):
+                rec["contracts"] += 1
+                rec["qty"] += abs(float(t.get("qty") or 0.0))
             rec["proceeds"] += premium
             rec["cost"] += buyback
             rec["gain"] += gain
@@ -5379,7 +5383,9 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     _print_scope_split(_scope_split(root, _ccd_pairs), base_cur)
     print("PREMIUM = proceeds of the sold calls; BUYBACK = cost to "
           "close (0 for expiries); assignments' share gains are NOT "
-          "here — they land in the stock's own rows.")
+          "here — they land in the stock's own rows. CLOSES/QTY count "
+          "closing records (a premium recognised at the write is not a "
+          "close).")
 
 
 def cmd_winners(args: argparse.Namespace) -> None:
@@ -5750,6 +5756,14 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     by_group: Dict[str, Dict[str, float]] = {"taxable": {},
                                              "sheltered": {}}
     shel_accts = set()
+    # A crypto account's DIVIDEND rows are staking rewards — other
+    # income, never on a T5/T3 — so they are totalled apart instead of
+    # blending into the dividend total unmarked (audit S031-04).
+    _crypto_accts = {n for n, a in ((_soft_config(Path(args.dir).resolve())
+                                     .get("accounts") or {}).items())
+                     if (a or {}).get("crypto") is True}
+    staking: Dict[str, float] = {}
+    staking_accts = set()
     for acct, tx in rows:
         cur = tx.get("currency") or "?"
         # Signed: reversal rows (negative) net against the original posting.
@@ -5758,6 +5772,9 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
         key = (str(tx.get("symbol") or "?"), cur)
         agg[key] = agg.get(key, 0.0) + amt
         totals[cur] = totals.get(cur, 0.0) + amt
+        if acct in _crypto_accts:
+            staking[cur] = staking.get(cur, 0.0) + amt
+            staking_accts.add(acct)
         g = groups.get(acct)
         if g:
             by_group[g][cur] = by_group[g].get(cur, 0.0) + amt
@@ -5774,6 +5791,8 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
                    "totals_sheltered": {c: round(v, 2) for c, v
                                         in by_group["sheltered"].items()},
                    "sheltered_included": sorted(shel_accts),
+                   "crypto_staking": {c: round(v, 2) for c, v
+                                      in staking.items()},
                    "payments_in_lieu_as_dividends": n_pil_div,
                    "scope": scope})
         return
@@ -5807,6 +5826,10 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
         print(f"TOTAL DIVIDEND (all accounts): {_tot(totals)}")
     else:
         print(f"TOTAL DIVIDEND: {_tot(totals)}")
+    if staking_accts:
+        print(f"  of which crypto staking rewards "
+              f"({', '.join(sorted(staking_accts))} — other income, not "
+              f"dividends; no T5/T3 slip): {_tot(staking)}")
 
 
 def cmd_dil_sum(args: argparse.Namespace) -> None:
@@ -6690,7 +6713,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
     cross-account pass (matching `reports/<account>_wash.sum`, carryover,
     t1135 and form-export), plain gains otherwise. The banner names the
     basis. Reuses `summarize_gains` so the aggregation itself matches
-    `taxjson show <account>`."""
+    `reports/<account>.sum`."""
     import json
     from taxjson.bin.taxjson_sum_gains import summarize_gains
     from taxjson.lib.report_model import (gains_basis_label,
@@ -6775,7 +6798,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _warn_artifact_year(files, (cfg.get("settings") or {}).get("year"))
         _run_state = _warn_run_state(root, cfg)
 
-    header = ["ACCOUNT", "STOCK", "OPTION", "REALIZED", "DIVIDEND", "PIL",
+    # NON-OPT: every non-option disposition (shares, units, futures,
+    # crypto) — it was headed STOCK and read as Schedule 3 line 4
+    # (audit R1-211, S051-01).
+    header = ["ACCOUNT", "NON-OPT", "OPTION", "REALIZED", "DIVIDEND", "PIL",
               "FEES", "TOTAL"]
     acct_types = {n: str(c.get("type") or "")
                   for n, c in cfg.get("accounts", {}).items()}
@@ -7083,7 +7109,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
 
     print(f"REALIZED-GAINS SUMMARY — {base}, tax year {year}, "
           f"basis: {basis}  "
-          f"(REALIZED = STOCK + OPTION capital gain; "
+          f"(REALIZED = NON-OPT + OPTION capital gain; NON-OPT = "
+          f"shares, units, futures and crypto; "
           f"TOTAL = REALIZED + DIVIDEND)")
     if sheltered_included:
         _filing = ("carryover/form-export"
@@ -11494,12 +11521,27 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     _acct_cfg = _soft_config(root).get("accounts") or {}
     _taxable = {a for a, c in _acct_cfg.items()
                 if (c or {}).get("type") == "taxable"}
+    last_loss = _last_loss_by_class(
+        resolve_gains_files(cache), canon, _taxable,
+        usa=_radar_country_is_usa(root))
+    return radar, canon, last_loss
+
+
+def _last_loss_by_class(gains_files, canon, taxable, *, usa: bool
+                        ) -> Dict[str, Dict[str, Any]]:
+    """Each symbol class's most recent LOSING disposition in the taxable
+    gains files (economic raw_gain, so a denied loss still shows), dated
+    on the country's window basis — the SETTLE date under s.54, the
+    TRADE date under §1091 — so the "N days ago / INSIDE the window"
+    line agrees with the radar's verdict at the day-30 edge (audit
+    S050-00; it used settle dates in US projects too)."""
+    import json as _json
     last_loss: Dict[str, Dict[str, Any]] = {}
-    for _a, _p in resolve_gains_files(cache).items():
-        if _taxable and _a not in _taxable:
+    for _a, _p in gains_files.items():
+        if taxable and _a not in taxable:
             continue
         try:
-            _doc = _json.loads(_p.read_text(encoding="utf-8"))
+            _doc = _json.loads(Path(_p).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         for _t in _doc.get("transactions", []):
@@ -11509,17 +11551,15 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
             if _g >= 0:
                 continue
             _c = canon(str(_t.get("symbol") or ""))
-            # Settlement basis: the radar's ±30-day windows are
-            # settle-based, so a trade-date age contradicted the
-            # verdict for anything traded 31-32 days ago.
-            _d = str(_t.get("date_settle") or _t.get("date") or "")
+            _d = str((_t.get("date") or _t.get("date_settle")) if usa
+                     else (_t.get("date_settle") or _t.get("date")) or "")
             _prev = last_loss.get(_c)
             if _prev is None or _d > _prev["date"]:
                 last_loss[_c] = {"date": _d,
                                  "symbol": _t.get("symbol"),
                                  "gain": round(_g, 2),
                                  "account": _t.get("account") or _a}
-    return radar, canon, last_loss
+    return last_loss
 
 
 def _fold_class_separator(symbol: str) -> str:
@@ -11602,9 +11642,9 @@ def _last_loss_line(ll) -> Optional[str]:
     from datetime import date as _date
     try:
         _ago = (_date.today() - _date.fromisoformat(ll["date"])).days
-        # `date` is the settle date: a sale made today settles later
-        # (T+1), so a negative age means "not settled yet", not
-        # "-1 days ago".
+        # `date` is the country's window date (settle for Canada): a
+        # sale made today settles later (T+1), so a negative age means
+        # "not settled yet", not "-1 days ago".
         _ago_s = (f"{_ago} days ago" if _ago >= 0 else
                   f"traded, settles in {-_ago} day"
                   f"{'s' if _ago < -1 else ''}")
@@ -11667,10 +11707,17 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                        else None)
                 if _cd:
                     clears = max(clears, _cd) if clears else _cd
+                # Only the rebought units' share of the loss is denied
+                # (audit S054-07): state it per unit when the radar
+                # carries the loss and the units sold at it.
+                _rl, _rq = r.get("recent_loss"), r.get("recent_loss_qty")
+                _per = (f" on as many units as you buy (about "
+                        f"${float(_rl) / float(_rq):,.2f} of it per unit)"
+                        if _rl and _rq and float(_rq) > 1e-9 else "")
                 lines.append(
                     f"{t}: {cat} — a loss sold within the past 30 "
-                    f"days; buying now cancels it (DEFERRED if bought "
-                    f"taxable, PERMANENT if bought "
+                    f"days; buying now cancels it{_per} (DEFERRED if "
+                    f"bought taxable, PERMANENT if bought "
                     f"{'in an IRA' if _usa else 'sheltered'})."
                     + (f" Safe to buy from {_cd}." if _cd else
                        " Wait until 31 days after the LATEST in-window "
@@ -11726,13 +11773,18 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                         "clears_at": clears, "detail": lines,
                         "last_loss": _ll})
 
+    # SAFE is "as far as this project's accounts show" (CA-PLAN-04 /
+    # US-PLAN-04, audit S054-22).
+    from taxjson.lib.wash_scope import scope_note as _scope_note
+    _scope = _scope_note("usa" if _usa else "canada")
     if getattr(args, "json", False):
-        _json_out({"results": results})
+        _json_out({"results": results, "scope_note": _scope})
     else:
         for r in results:
             print(f"{r['symbol']}: {r['verdict']}")
             for ln in r["detail"]:
                 print(f"  {ln}")
+        print(_scope)
     if unsafe:
         raise SystemExit(1)
 
@@ -11887,13 +11939,18 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                         "clears_at": clears,
                         "act_by": act_by, "detail": lines,
                         "last_loss": _last_loss.get(wroot)})
+    # SAFE is "as far as this project's accounts show" (CA-PLAN-04 /
+    # US-PLAN-04, audit S054-22).
+    from taxjson.lib.wash_scope import scope_note as _scope_note
+    _scope = _scope_note("usa" if _usa else "canada")
     if getattr(args, "json", False):
-        _json_out({"results": results})
+        _json_out({"results": results, "scope_note": _scope})
     else:
         for r in results:
             print(f"{r['symbol']}: {r['verdict']}")
             for ln in r["detail"]:
                 print(f"  {ln}")
+        print(_scope)
     if unsafe:
         raise SystemExit(1)
 

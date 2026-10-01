@@ -7,7 +7,6 @@
 CA-ACB-03       ok              The single pool needs a full `taxjson run` (not --account, no elections pending)
 CA-ACB-05       ok              Sheltered accounts tracked but out of filing totals; affiliated holders for s.54
 CA-CORP-05      ok              Cash for fractional shares is handled; other cash in a merger is not modelled.
-CA-DATE-03      ok              Settle dates come from the broker when printed
 CA-DISP-02      ok              taxjson reports full (100%) gains; the 50% inclusion is applied by the filer on 
 CA-DISP-04      ok              A short sale gain/loss is realized when covered
 CA-INC-01       imprecise       Dividends on Canadian listings (.TO, .V, .CN, .NE) count as Canadian, all others

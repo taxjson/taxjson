@@ -56,7 +56,11 @@ def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                           # a loss sale today would lose (at_risk_qty).
                           "rescue": r.get("rescue"),
                           "denied_qty": r.get("denied_qty"),
-                          "at_risk_qty": r.get("at_risk_qty")}
+                          "at_risk_qty": r.get("at_risk_qty"),
+                          # BLOCKED/COOLING: the in-window loss and its
+                          # units (buy-check's per-unit denial).
+                          "recent_loss": r.get("recent_loss"),
+                          "recent_loss_qty": r.get("recent_loss_qty")}
     return out
 
 

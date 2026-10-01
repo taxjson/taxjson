@@ -20,8 +20,26 @@ from pathlib import Path
 from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib import cli_diag
+from taxjson.lib.json_input import InputFileError, read_json_doc
 
 PROG = "taxjson-export"
+
+
+def _die(msg: str) -> None:
+    """A named input that cannot be used stops the tool: exit 2 means
+    `taxjson run`'s run_to_file keeps the previous output (its .part
+    rename never happens) and fails the stage, instead of publishing an
+    empty or partial snapshot at exit 0 (audit R1-291, S030-19)."""
+    cli_diag.error(PROG, msg)
+    sys.exit(2)
+
+
+def _read_json(path, **kw):
+    kw.setdefault("list_key", None)
+    try:
+        return read_json_doc(path, **kw)
+    except InputFileError as e:
+        _die(str(e))
 from typing import Any, Dict, List
 
 from taxjson.lib.tomlcompat import tomllib
@@ -58,22 +76,55 @@ def _passes_filters(item: Dict[str, Any], args) -> bool:
     # and NEO (.NE) are CAD listings too — matching only .TO let them
     # pass BOTH --no-cad and --no-usd and land in every currency-split
     # export.
-    if ext in ('TO', 'V', 'CN', 'NE') and args.no_cad:
+    is_cad = ext in ('TO', 'V', 'CN', 'NE')
+    if is_cad and args.no_cad:
         return False
     if ext == 'US' and args.no_usd:
         return False
+    # A currency split (--no-cad = the US file, --no-usd = the Canadian
+    # file) holds only its own listings: an overseas listing (.L, .AX)
+    # passed both filters and landed in BOTH splits (audit S030-06).
+    if (args.no_cad or args.no_usd) and not is_cad and ext != 'US':
+        return False
     return True
+
+
+def _find_tv_map(inputs):
+    """tv_exchange.map for a stand-alone --tradingview run: next to an
+    input, then in the input's parent (the project root for
+    work/<acct>_gains.json), then the current directory. The cwd used
+    to be searched FIRST and the project root never, so `taxjson -C
+    <proj> run` from another directory lost the project's prefixes, or
+    picked up a different project's map (audit R1-246, R1-285)."""
+    dirs = []
+    for p in inputs:
+        d = Path(p).resolve().parent
+        dirs += [d, d.parent]
+    dirs.append(Path.cwd())
+    for d in dirs:
+        f = d / "tv_exchange.map"
+        if f.is_file():
+            return f
+    return None
+
+
+def _is_dust(qty: float, total_cost: float, threshold: float) -> bool:
+    """A sub-fractional residue: tiny quantity AND no material cost.
+    Keying on quantity alone hid real crypto lots — 0.0009 BTC is about
+    $120 (audit S030-00)."""
+    if abs(qty) >= threshold:
+        return False
+    # Nothing held (a netted JOURNAL pair's leftover cost is FX salad,
+    # not a position) — or a residue with no material cost.
+    return abs(qty) < 1e-9 or abs(total_cost) < _DUST_COST
+
+
+_DUST_COST = 1.0
 
 
 def process_data_platform(data, args, seen, results, tv_map):
     """Existing behavior: emit platform-formatted ticker strings."""
     inventory = data.get("inventory", [])
-    if not inventory:
-        if "inventory" not in data:
-            if len(args.inputs) <= 1:
-                cli_diag.error(PROG, "no 'inventory' section found in input JSON")
-            return
-
     for item in inventory:
         if not _passes_filters(item, args):
             continue
@@ -123,12 +174,10 @@ def _apply_transfer_evidence(agg: Dict[str, Dict[str, Any]],
     _fold = dict(tmap.journal)
     net: Dict[str, float] = {}
     for p in evidence_paths:
-        try:
-            doc = _json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, _json.JSONDecodeError) as e:
-            print(f"warning: could not read transfer evidence {p}: {e}",
-                  file=sys.stderr)
-            continue
+        # An unreadable sidecar used to be skipped with a warning: the
+        # evidenced flip was silently not applied and the snapshot split
+        # one position across two listings at exit 0 (audit S030-19).
+        doc = _read_json(p)
         if (doc.get("metadata") or {}).get("kind") != "transfer_sidecar":
             continue
         for t in doc.get("transactions") or []:
@@ -273,10 +322,6 @@ def process_data_report(data, args, agg: Dict[str, Dict[str, Any]],
     if drops is None:
         drops = set()
     inventory = data.get("inventory", [])
-    if not inventory and "inventory" not in data:
-        if len(args.inputs) <= 1:
-            cli_diag.error(PROG, "no 'inventory' section found in input JSON")
-        return
     for item in inventory:
         if not _passes_filters(item, args):
             continue
@@ -325,7 +370,8 @@ _OPTION_CONTRACT_MULTIPLIER = 100
 
 
 def render_report(agg: Dict[str, Dict[str, Any]],
-                   dust_threshold: float = 1e-9) -> List[str]:
+                   dust_threshold: float = 1e-9,
+                   year: Any = None) -> List[str]:
     """Format the aggregated holdings as a fixed-width text table.
 
     Rows are sorted alphabetically by symbol. Cost/share for stocks is
@@ -335,21 +381,27 @@ def render_report(agg: Dict[str, Dict[str, Any]],
     Shorts naturally produce positive cost/share since total_cost flips
     sign with qty.
 
-    Positions with |quantity| below `dust_threshold` are dropped — a
-    sub-fractional residue (e.g. -3.3e-05 shares left by a corp-action
-    ratio) is float noise, not a real holding.
+    Positions with |quantity| below `dust_threshold` and no material
+    cost are dropped — a sub-fractional residue (e.g. -3.3e-05 shares
+    left by a corp-action ratio) is float noise, not a real holding.
+
+    A futures option's cost/share is per contract: its multiplier is
+    not the equity 100 and is not known here (audit S030-09).
+
+    The inventory is the END of the data, not a tax-year end; the title
+    says so (`year` names the report's tax year — audit S030-01).
     """
     rows = []
     for sym in sorted(agg.keys()):
         b = agg[sym]
         qty = b['qty']
         total = b['total_cost']
-        if abs(qty) < dust_threshold:
+        if _is_dust(qty, total, dust_threshold):
             continue
         # A fully-netted JOURNAL pair leaves a qty-0 inventory row;
         # --dust-threshold 0 keeps it, so guard the division.
         cps = total / qty if abs(qty) > 1e-12 else 0.0
-        if is_option_ticker(sym):
+        if is_option_ticker(sym) and not is_future_ticker(sym):
             cps /= _OPTION_CONTRACT_MULTIPLIER
         rows.append((sym, qty, cps, total,
                      "MIXED" if b.get('mixed_currency')
@@ -381,7 +433,10 @@ def render_report(agg: Dict[str, Dict[str, Any]],
     out = [
         "",
         "=" * banner_w,
-        " HOLDINGS REPORT - Sorted by: ticker",
+        (" HOLDINGS REPORT - open positions at the end of the data"
+         + (f" (not {year}-12-31 positions; `taxjson list --date` gives "
+            f"a date)" if year else "")
+         + " - Sorted by: ticker"),
         "=" * banner_w,
         header,
         sep,
@@ -433,6 +488,25 @@ def _parse_option(symbol: str):
     }
 
 
+def _resolve_underlying(root_sym: str, held_stock) -> str:
+    """The listing an option's ROOT names. Montreal/OCC roots drop the
+    share class (RCI for RCI.B.TO), so `f"{root}.{ext}"` can name a
+    listing that does not exist (audit S030-02). When exactly one held
+    stock line matches the root (same rule the engine's assignment
+    resolver uses), that line is the underlying; otherwise the root
+    spelling stays."""
+    from taxjson.lib.core import _root_matches_stock, _split_underlying
+    if root_sym in held_stock:
+        return root_sym
+    root_base, ext = _split_underlying(root_sym)
+    hits = []
+    for s in held_stock:
+        s_base, s_ext = _split_underlying(s)
+        if s_ext == ext and _root_matches_stock(root_base, s_base):
+            hits.append(s)
+    return hits[0] if len(hits) == 1 else root_sym
+
+
 def _toml_str(value: Any) -> str:
     """Render a value as a TOML basic (quoted) string."""
     s = str(value).replace('\\', '\\\\').replace('"', '\\"')
@@ -447,7 +521,8 @@ def _load_trade_events(paths, mapping=None, drops=None,
 
     `mapping`/`drops` (the holdings --map) are applied to the symbol so events
     attach to the same key the aggregated holding uses. Quantity sign
-    determines action (positive → BUY, negative → SELL).
+    determines action (positive → BUY, negative → SELL). SPLIT rows scale
+    the running balance and carry the events across a rename.
 
     With `current_position_only` (the default), only the events that make up
     the CURRENT position are kept: events are trimmed to those after the last
@@ -458,48 +533,70 @@ def _load_trade_events(paths, mapping=None, drops=None,
     but each event keeps its trade `date` for charting."""
     mapping = mapping or {}
     drops = drops or set()
-    raw: Dict[str, List[Dict[str, Any]]] = {}
+    from taxjson.lib.corporate_timeline import (normalize_symbol_new,
+                                                split_seen)
+    rows: List[Any] = []
     for p in paths:
-        try:
-            data = load_report_json(p)
-        except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
-            print(f"Error loading trades {p}: {e}", file=sys.stderr)
-            continue
+        data = _read_json(p, list_key="transactions")
         for tx in data.get("transactions", []):
-            if tx.get("action") not in ("BUYSELL", "ASSIGN"):
+            if not isinstance(tx, dict):
                 continue
-            qty = float(tx.get("quantity") or 0)
-            if qty == 0:
-                continue
+            act = tx.get("action")
             sym = tx.get("symbol")
-            if not sym:
+            if act not in ("BUYSELL", "ASSIGN", "SPLIT") or not sym:
                 continue
-            sym = mapping.get(sym, sym)
-            if sym in drops:
-                continue
-            raw.setdefault(sym, []).append({
-                "sort_key": (tx.get("date_settle") or tx.get("date") or "",
-                             tx.get("time") or ""),
-                "date": tx.get("date"),
-                "qty": qty,  # signed
-                "price": float(tx.get("price") or 0.0),
-            })
-    by_symbol: Dict[str, List[Dict[str, Any]]] = {}
-    for sym, evs in raw.items():
-        evs.sort(key=lambda e: e["sort_key"])
-        if current_position_only:
-            run, start = 0.0, 0
-            for i, e in enumerate(evs):
-                run += e["qty"]
-                if abs(run) < 1e-6:      # position flat → current round starts after
-                    start = i + 1
-            evs = evs[start:]
-        by_symbol[sym] = [{
-            "date": e["date"],
-            "action": "BUY" if e["qty"] > 0 else "SELL",
-            "qty": abs(e["qty"]),
-            "price": e["price"],
-        } for e in evs]
+            rows.append(((tx.get("date_settle") or tx.get("date") or "",
+                          tx.get("time") or "",
+                          # a split applies before the day's trades
+                          0 if act == "SPLIT" else 1), len(rows), tx))
+    # Stable: tied trades keep the file's row order, as the engines
+    # replay them (CA-DATE-14 / US-DATE-13; audit S030-05).
+    rows.sort(key=lambda r: (r[0], r[1]))
+
+    events: Dict[str, List[Dict[str, Any]]] = {}
+    balance: Dict[str, float] = {}
+    seen: set = set()
+    for _key, _i, tx in rows:
+        sym = mapping.get(tx["symbol"], tx["symbol"])
+        if tx.get("action") == "SPLIT":
+            # SPLIT rows scale the running balance and follow renames:
+            # a split-blind walk kept closed rounds of a split symbol
+            # and lost a renamed position's acquisitions (audit S030-04).
+            new = normalize_symbol_new(tx["symbol"], tx.get("symbol_new"))
+            if split_seen(seen, tx["symbol"], tx.get("date") or "",
+                          tx.get("quantity"), new,
+                          account=tx.get("account")) is not None:
+                continue                       # duplicate split row
+            try:
+                ratio = float(tx.get("quantity") or 0) or 1.0
+            except (TypeError, ValueError):
+                ratio = 1.0
+            if sym in balance:
+                balance[sym] *= ratio
+            new = mapping.get(new, new) if new else ""
+            if new and new != sym:
+                if sym in balance:
+                    balance[new] = balance.get(new, 0.0) + balance.pop(sym)
+                if sym in events:
+                    events.setdefault(new, []).extend(events.pop(sym))
+            continue
+        try:
+            qty = float(tx.get("quantity") or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty == 0 or sym in drops:
+            continue
+        events.setdefault(sym, []).append({
+            "date": tx.get("date"),
+            "action": "BUY" if qty > 0 else "SELL",
+            "qty": abs(qty),
+            "price": float(tx.get("price") or 0.0),
+        })
+        balance[sym] = balance.get(sym, 0.0) + qty
+        if current_position_only and abs(balance[sym]) < 1e-6:
+            # position flat -> the current round starts after this row
+            events[sym] = []
+    by_symbol = {s: evs for s, evs in events.items() if evs}
     return by_symbol
 
 
@@ -524,7 +621,7 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
     rows = []
     for sym in sorted(agg):
         b = agg[sym]
-        if abs(b['qty']) < dust:
+        if _is_dust(b['qty'], b['total_cost'], dust):
             continue
         rows.append((sym, b['qty'], b['total_cost'], b['currency'],
                      b.get('position_start_date'), b))
@@ -558,15 +655,22 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                      '(the filing ACB is `taxjson list`)"')
     lines.append("")
 
+    held_stock = [s for s in agg
+                  if not _parse_option(s) and not is_future_ticker(s)]
     for sym, qty, total_cost, currency, position_start_date, b in rows:
         opt = _parse_option(sym)
+        if opt:
+            opt['underlying'] = _resolve_underlying(opt['underlying'],
+                                                    held_stock)
+        is_fut = is_future_ticker(sym)
         mixed = bool(b.get('mixed_currency'))
         cps = total_cost / qty if qty else 0.0
         lines.append("[[holding]]")
         lines.append(f"symbol = {_toml_str(sym)}")
         if args.account_name:
             lines.append(f"account = {_toml_str(args.account_name)}")
-        lines.append(f"asset_type = {_toml_str('option' if opt else 'equity')}")
+        lines.append(f"asset_type = "
+                     f"{_toml_str('option' if opt else 'future' if is_fut else 'equity')}")
         if opt:
             lines.append(f"underlying = {_toml_str(opt['underlying'])}")
             lines.append(f"right = {_toml_str(opt['right'])}")
@@ -574,12 +678,20 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
             if opt['expiry']:
                 # TOML local date — bare, unquoted.
                 lines.append(f"expiry = {opt['expiry']}")
-            lines.append("contract_multiplier = 100")
-            # Unit reminder next to the figure a reader is most likely
-            # to misread (2026-09 audit S030-08): the trades' prices
-            # are per share, cost_per_share is per contract.
-            lines.append("# cost_per_share below is per CONTRACT; "
-                         "trades[].price is per share")
+            if not is_fut:
+                lines.append("contract_multiplier = 100")
+                # Unit reminder next to the figure a reader is most
+                # likely to misread (2026-09 audit S030-08): the
+                # trades' prices are per share, cost_per_share is per
+                # contract.
+                lines.append("# cost_per_share below is per CONTRACT; "
+                             "trades[].price is per share")
+            else:
+                # A futures option's multiplier is the future's (CL
+                # 1000, micro contracts 0.1 ...), not the equity 100:
+                # omitted rather than guessed (audit S030-09).
+                lines.append("# futures option: contract_multiplier "
+                             "unknown here (not the equity 100)")
         lines.append(f"quantity = {float(qty)!r}")
         if mixed:
             # A JOURNAL-folded cross-currency bucket: summing native
@@ -634,15 +746,31 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
     return lines
 
 
-def _holdings_toml_to_inventory(doc: Dict[str, Any]) -> Dict[str, Any]:
+def _holdings_toml_to_inventory(doc: Dict[str, Any],
+                                path: Any = "<toml>") -> Dict[str, Any]:
     """Adapt a taxjson holdings TOML document (`[[holding]]` tables) to
     the `inventory`-shaped dict the rest of this tool consumes: `quantity`
     maps to `qty`; symbol / total_cost / currency / position_start_date
     pass through. The TOML [meta] table and derived `cost_per_share`
     are ignored. TOML parses a bare YYYY-MM-DD as a date object, so the
     adapter stringifies it for downstream consistency."""
+    holdings = doc.get("holding")
+    if holdings is None:
+        # An empty taxjson snapshot has no [[holding]] entries but has
+        # its [meta] table; anything else (a [[holdings]] typo, another
+        # tool's file) used to export NOTHING at exit 0 while `taxjson
+        # sanity` refused the same file (audit S030-10).
+        if "meta" in doc and "schema_version" in doc:
+            holdings = []
+        else:
+            _die(f"{path}: no [[holding]] array (a taxjson holdings "
+                 f"snapshot is expected); tables found: "
+                 f"{', '.join(sorted(doc)) or 'none'}")
+    if not isinstance(holdings, list) or any(
+            not isinstance(h, dict) for h in holdings):
+        _die(f"{path}: 'holding' must be an array of tables ([[holding]])")
     inventory = []
-    for h in doc.get("holding", []):
+    for h in holdings:
         psd = h.get("position_start_date")
         if psd is not None and not isinstance(psd, str):
             psd = psd.isoformat()
@@ -691,6 +819,12 @@ def main():
              "for live-pricing / trading tools.",
     )
     parser.add_argument(
+        "--tv-map", metavar="FILE", default=None,
+        help="tv_exchange.map for --tradingview (`taxjson run` passes the "
+             "project's). Default: the first tv_exchange.map found next "
+             "to an input or in its parent directory (the project root "
+             "for work/*_gains.json), then in the current directory.")
+    parser.add_argument(
         "--account-name", default=None,
         help="Account name to stamp into the --holdings-toml output.",
     )
@@ -714,9 +848,11 @@ def main():
     parser.add_argument(
         "--dust-threshold", type=float, default=1e-3, metavar="QTY",
         help="Drop --report / --holdings-toml positions whose absolute "
-             "quantity is below this (default: 0.001). Filters out "
-             "sub-fractional residue left by corp-action ratios and "
-             "float arithmetic. Pass 0 to keep every position.",
+             "quantity is below this (default: 0.001) AND whose absolute "
+             "total cost is below 1.00 — sub-fractional residue left by "
+             "corp-action ratios and float arithmetic. A small quantity "
+             "that cost something (0.0009 BTC) is a holding and is kept. "
+             "Pass 0 to keep every position.",
     )
     parser.add_argument(
         "--base-gains", action="append", default=[], metavar="FILE",
@@ -758,27 +894,26 @@ def main():
 
     # Load TradingView map if needed
     if args.platform == "tradingview":
-        search_dirs = [Path(".")]
-        for input_path in args.inputs:
-            search_dirs.append(Path(input_path).parent)
-        for d in search_dirs:
-            map_file = d / "tv_exchange.map"
-            if map_file.exists():
-                with open(map_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith('#'):
-                            continue
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            tv_map[parts[0]] = parts[1]
-                        else:
-                            # Warn like the sibling map loaders do
-                            # (audit S077-07: silently dropped).
-                            print(f"warning: {map_file}: expected "
-                                  f"`SYMBOL EXCHANGE`, got {line!r} — "
-                                  f"line ignored", file=sys.stderr)
-                break
+        map_file = (Path(args.tv_map) if args.tv_map
+                    else _find_tv_map(args.inputs))
+        if map_file is not None:
+            try:
+                text = map_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                _die(f"{map_file}: cannot read ({e})")
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    tv_map[parts[0]] = parts[1]
+                else:
+                    # Warn like the sibling map loaders do (audit
+                    # S077-07: silently dropped).
+                    print(f"warning: {map_file}: expected `SYMBOL "
+                          f"EXCHANGE`, got {line!r} — line ignored",
+                          file=sys.stderr)
 
     # The holdings aggregation applies JOURNAL renames — they net
     # offsetting cross-currency legs (Norbert's Gambit) here, post-gains,
@@ -797,32 +932,43 @@ def main():
         else:
             process_data_platform(data, args, seen, results, tv_map)
 
+    # Every named input must load: a missing, truncated or wrong-shape
+    # file used to print one stderr line and carry on, so the tool wrote
+    # a valid EMPTY (or partial) holdings snapshot at exit 0 and the run
+    # reported every position as closed (audit R1-291, S030-19, S030-14).
+    year = None
     if not args.inputs:
         try:
-            dispatch(load_report_json(None))
-        except json.JSONDecodeError as e:
-            print(f"Error loading stdin: {e}", file=sys.stderr)
+            data = load_report_json(None)
+        except (ValueError, OSError) as e:
+            _die(f"<stdin>: not valid JSON ({e})")
+        if not isinstance(data, dict) or "inventory" not in data:
+            _die("<stdin>: no 'inventory' section (a taxjson-gains JSON "
+                 "is expected)")
+        year = (data.get("summary") or {}).get("year")
+        dispatch(data)
     else:
         for input_path in args.inputs:
             if str(input_path).lower().endswith(".toml"):
                 if tomllib is None:
-                    print(f"Error loading {input_path}: reading TOML holdings "
-                          f"needs Python 3.11+ or the `tomli` package",
-                          file=sys.stderr)
-                    continue
+                    _die(f"{input_path}: reading TOML holdings needs "
+                         f"Python 3.11+ or the `tomli` package")
                 try:
                     with open(input_path, 'rb') as f:
-                        dispatch(_holdings_toml_to_inventory(tomllib.load(f)))
-                except (tomllib.TOMLDecodeError, OSError) as e:
-                    print(f"Error loading {input_path}: {e}", file=sys.stderr)
+                        doc = tomllib.load(f)
+                except (tomllib.TOMLDecodeError, OSError,
+                        UnicodeDecodeError) as e:
+                    _die(f"{input_path}: not a readable TOML file ({e})")
+                dispatch(_holdings_toml_to_inventory(doc, input_path))
                 continue
-            try:
-                dispatch(load_report_json(input_path))
-            except (json.JSONDecodeError, FileNotFoundError) as e:
-                print(f"Error loading {input_path}: {e}", file=sys.stderr)
+            data = _read_json(input_path, require_key="inventory")
+            if not isinstance(data["inventory"], list):
+                _die(f"{input_path}: 'inventory' must be a list")
+            year = year or (data.get("summary") or {}).get("year")
+            dispatch(data)
 
     if args.platform == "report":
-        for line in render_report(agg, args.dust_threshold):
+        for line in render_report(agg, args.dust_threshold, year=year):
             print(line)
         return
 
@@ -832,11 +978,8 @@ def main():
         # up; values are in the base currency for downstream gain/loss checks.
         base_agg: Dict[str, Dict[str, Any]] = {}
         for bp in args.base_gains:
-            try:
-                process_data_report(load_report_json(bp), args, base_agg,
-                                    holdings_map, holdings_drops)
-            except (json.JSONDecodeError, FileNotFoundError) as e:
-                print(f"Error loading base-gains {bp}: {e}", file=sys.stderr)
+            process_data_report(_read_json(bp, require_key="inventory"),
+                                args, base_agg, holdings_map, holdings_drops)
         # Per-symbol acquisition/sell events (optional), in native currency,
         # from the pre-gains transaction file(s). Mapped/dropped the same way
         # as the holdings so events attach to the right (netted) symbol key.

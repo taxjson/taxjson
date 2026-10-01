@@ -51,7 +51,6 @@ from typing import Any, Dict, List, Optional
 
 from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import add_country_argument, refuse_foreign_flags
-from taxjson.lib.core import load_transactions
 from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
                                   run_gains)
@@ -517,17 +516,18 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
 
+    from taxjson.lib.json_input import load_transactions_or_exit as _ltx
     transactions = []
     for p in args.files:
-        transactions.extend(load_transactions(p))
+        transactions.extend(_ltx("taxjson-carryover", p))
     sheltered = []
     for p in args.sheltered:
-        sheltered.extend(load_transactions(p))
+        sheltered.extend(_ltx("taxjson-carryover", p))
 
     country = args.country
     crypto_txs = []
     for cp in args.crypto:
-        crypto_txs.extend(load_transactions(cp))
+        crypto_txs.extend(_ltx("taxjson-carryover", cp))
     if country == 'canada' and crypto_txs:
         # Symbol-global ACB pools: crypto symbols don't collide with
         # equity ones, so one blended run is equivalent to the

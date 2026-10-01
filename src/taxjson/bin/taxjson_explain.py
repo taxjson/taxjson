@@ -36,7 +36,8 @@ import sys
 from pathlib import Path
 
 from taxjson.lib.cli_diag import guard_main, tax_year
-from taxjson.lib.core import get_tax_rules, load_transactions
+from taxjson.lib.core import get_tax_rules
+from taxjson.lib.json_input import load_transactions_or_exit
 from taxjson.lib.country import (add_country_argument, default_tax_date,
                                  refuse_foreign_flags)
 from taxjson.lib.pipeline import load_stdin_transactions, prepare_books
@@ -138,8 +139,11 @@ def parse_args():
 
 def load_input(args):
     if args.input:
-        return load_transactions(Path(args.input))
-    return load_stdin_transactions()
+        return load_transactions_or_exit("taxjson-explain", args.input)
+    try:
+        return load_stdin_transactions()
+    except (ValueError, TypeError, AttributeError) as e:
+        sys.exit(f"taxjson-explain: error: <stdin>: {e}")
 
 
 def gain_matches(g, args) -> bool:
@@ -260,8 +264,11 @@ def main():
     if args.tax_date is None:
         args.tax_date = default_tax_date(args.country)
     transactions = load_input(args)
-    sheltered = load_transactions(Path(args.sheltered)) if args.sheltered else []
-    affiliated = load_transactions(Path(args.affiliated)) if args.affiliated else []
+    sheltered = (load_transactions_or_exit("taxjson-explain", args.sheltered)
+                 if args.sheltered else [])
+    affiliated = (load_transactions_or_exit("taxjson-explain",
+                                            args.affiliated)
+                  if args.affiliated else [])
 
     # SHARED preprocessing (lib/pipeline.prepare_books) so a trace can't
     # contradict the .sum it explains: phantom opening balances

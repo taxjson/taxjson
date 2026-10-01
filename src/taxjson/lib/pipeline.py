@@ -38,6 +38,16 @@ from taxjson.lib.phantom_holdings import (
 )
 
 
+_INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU')
+
+
+def _trade_gain_total(rows) -> float:
+    """summary.total_gain: the dispositions' gains only. Income rows
+    (DIVIDEND / DIVIDEND_IN_LIEU) carry gain 0.0 today; they are left out
+    by action so the total can never absorb income (audit R1-313)."""
+    return sum(float(t.get('gain', 0.0) or 0.0) for t in rows
+               if t.get('action') not in _INCOME_ACTIONS)
+
 def load_stdin_transactions(stream=None) -> List[TaxTransaction]:
     """The CLIs' stdin loader (naive line-based '#' comment stripping),
     shared so taxjson-gains and taxjson-explain can't drift. Kept
@@ -1130,7 +1140,7 @@ def run_gains(transactions, sheltered_transactions=(),
             results['summary']['option_premium_timing'] = req.option_premium_timing or 'close'
             results['summary']['option_grant_since'] = req.option_grant_since
             results['summary']['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
-        results['summary']['total_gain'] = sum(t.get('gain', 0.0) for t in results['transactions'])
+        results['summary']['total_gain'] = _trade_gain_total(results['transactions'])
         if 'wash_sales' in results:
             # Wash record shape diverges by engine. Canada builds
             # `{'loss_tx': v.to_dict(), ...}` — the date lives nested.
@@ -1277,7 +1287,7 @@ def run_gains(transactions, sheltered_transactions=(),
         results['phantom_application_log'] = phantom_application_log
     # Recompute total_gain from clean transactions only.
     if 'summary' in results and (tainted_txs or req.incomplete_history):
-        results['summary']['total_gain'] = sum(t.get('gain', 0.0) for t in clean_txs)
+        results['summary']['total_gain'] = _trade_gain_total(clean_txs)
     # The US engine's count is taken before the year filter and the
     # tainted split (audit S070-22): it counts the records in this file.
     if 'count' in results.get('summary', {}):

@@ -39,12 +39,17 @@ def serve(root=".", host: str = "127.0.0.1", port: int = 8765) -> int:
     except FileNotFoundError as e:
         print(f"taxjson serve: {e}", file=sys.stderr)
         return 1
-    except tomllib.TOMLDecodeError as e:
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         # Same wording as every other command (load_config) instead of
-        # a raw tomllib traceback.
+        # a raw tomllib traceback — a non-UTF-8 file too (S079-09).
         from pathlib import Path
         print(f"taxjson serve: {Path(root).resolve() / 'taxjson.toml'} "
               f"is not valid TOML: {e}", file=sys.stderr)
+        return 1
+    except (ValueError, OSError) as e:
+        # A config `taxjson run` refuses (account type/name, settings)
+        # or an unreadable file: one line, like run (S079-09).
+        print(f"taxjson serve: {e}", file=sys.stderr)
         return 1
     # The bound host must also be an accepted Host header (create_app's
     # TrustedHostMiddleware refuses everything else). Binding a

@@ -253,11 +253,11 @@ def main(argv=None) -> int:
                          "blended account-less inventory rows)")
     args = ap.parse_args(argv)
 
+    from taxjson.lib.json_input import InputFileError, read_json_doc
     try:
-        combined = json.loads(args.combined_json.read_text(
-            encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        cli_diag.error(PROG, f"could not read {args.combined_json}: {e}")
+        combined = read_json_doc(args.combined_json)
+    except InputFileError as e:
+        cli_diag.error(PROG, f"could not read {e}")
         return 2
     base_txs = None
     if args.base:
@@ -265,11 +265,9 @@ def main(argv=None) -> int:
         # an unreadable combined file is (audit S050-15: it emptied the
         # account's fee map and dropped its blended holdings, exit 0).
         try:
-            base_txs = json.loads(args.base.read_text(
-                encoding="utf-8")).get("transactions", [])
-        except (OSError, ValueError, AttributeError) as e:
-            cli_diag.error(PROG, f"could not read --base {args.base}: "
-                                 f"{e}")
+            base_txs = read_json_doc(args.base).get("transactions", [])
+        except (InputFileError, AttributeError) as e:
+            cli_diag.error(PROG, f"could not read --base {e}")
             return 2
 
     out = split_for_account(combined, args.account, base_txs)
