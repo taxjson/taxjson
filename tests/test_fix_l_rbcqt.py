@@ -2,12 +2,19 @@
 round (area rbcqt). Every fixture is SYNTHETIC: fake account ids
 (55500001), invented tickers and codes.
 """
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from taxjson.lib.brokerages.base import (BrokerageParseError,
                                          _parse_div_qty_rate)
 from tax_rules import rule
-from test_fix_rbcqt import q, qdiv, qt_parse, rrow, rbc_parse, of
+from test_fix_rbcqt import q, qdiv, qt_parse, rrow, rbc_parse, of, RH
+
+REPO = Path(__file__).resolve().parent.parent
 
 
 # ------------------------------------------- numbers in description text
@@ -265,6 +272,186 @@ class TestRbcRowsLow(unittest.TestCase):
         self.assertEqual(syms['TRANSFER'], 'QZT270115C00022000.US')
         self.assertEqual(of(txs, action='TRANSFER')[0]['multiplier'], 100.0)
         self.assertNotIn('internal code', err)
+
+
+# ------------------------------------------- coverage pins (tests only)
+
+def rbc_cli(body, *extra):
+    """taxjson-brokerage --brokerage rbc_direct on one file: (rc, err)."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / 'rbc.csv'
+        p.write_text(RH + body, encoding='utf-8')
+        r = subprocess.run(
+            [sys.executable, '-m', 'taxjson.bin.taxjson_brokerage',
+             '--brokerage', 'rbc_direct', '--account', 'margin', *extra,
+             str(p)], capture_output=True, text=True,
+            env={**os.environ, 'PYTHONPATH': str(REPO / 'src')})
+    return r.returncode, r.stderr
+
+
+REV_SPLIT = (
+    rrow("November 20, 2024", "Reorganization", "QZE", "QZE MINI TR ETF",
+         "70", "", "0", "USD", "REV - QZE MINI TR ETF AS OF 11/20/24")
+    + rrow("November 20, 2024", "Reorganization", "G012345", "", "-700", "",
+           "0", "USD", "REV - QZE MINI TR ETF SHARES REV SPLIT TO QZE MINI "
+           "TR ETF; 1 FOR 10")
+    + rrow("November 1, 2024", "Buy", "QZE", "QZE MINI TR ETF", "700", "3",
+           "-2109.95", "USD", "QZE MINI TR ETF UNSOLICITED DA"))
+
+
+class TestRbcLint(unittest.TestCase):
+    """R1-316: --lint row accounting on a clean reorganization statement,
+    with and without a skipped (non-event) row."""
+
+    def test_clean_reorg_statement_is_lint_clean(self):
+        rc, err = rbc_cli(REV_SPLIT, '--lint')
+        self.assertEqual(rc, 0, err)
+        self.assertIn('rows=3 consumed=3 skipped=0 unaccounted=0', err)
+        self.assertNotIn('internal code', err)
+
+    def test_skipped_rows_are_accounted(self):
+        cash = rrow("November 25, 2024", "Deposits & Contributions", "", "",
+                    "", "", "500.00", "USD", "CONTRIBUTION")
+        rc, err = rbc_cli(cash + REV_SPLIT, '--lint')
+        self.assertEqual(rc, 0, err)
+        self.assertIn('rows=4 consumed=3 skipped=1 unaccounted=0', err)
+
+
+class TestRbcGuardsBothSides(unittest.TestCase):
+    """S064-01 / S064-18 / S064-06 / S064-02: refusals and warnings
+    pinned on both operands and both signs."""
+
+    def test_no_currency_with_shares_only_or_cash_only_is_refused(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        for qty, value in (("100", "0"), ("", "-250.00")):
+            with self.subTest(qty=qty, value=value):
+                with self.assertRaises(RbcFormatError):
+                    rbc_parse(rrow("June 2, 2025", "Buy", "QZX", "QZX CORP",
+                                   qty, "", value, "", "QZX CORP"))
+
+    def test_income_row_with_either_sign_of_quantity_is_refused(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        for qty in ("5", "-5"):
+            with self.subTest(qty=qty):
+                with self.assertRaises(RbcFormatError):
+                    rbc_parse(rrow("June 2, 2025", "Dividends", "QZX",
+                                   "QZX CORP", qty, "", "12.00", "CAD",
+                                   "DIV - QZX CORP CASH DIV ON 100 SHS"))
+
+    def test_reinvestment_without_units_or_without_cash_is_refused(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        for qty, value in (("2", "0"), ("0", "-5.20")):
+            with self.subTest(qty=qty, value=value):
+                with self.assertRaises(RbcFormatError):
+                    rbc_parse(rrow("June 2, 2025", "Dividends", "QZX",
+                                   "QZX CORP", qty, "", value, "CAD",
+                                   "REI - QZX CORP REINV@C$2.60"))
+
+    def test_unclassified_rows_that_remove_shares_or_debit_cash_warn(self):
+        for qty, value in (("10", "0"), ("-10", "0"), ("", "-40.00")):
+            with self.subTest(qty=qty, value=value):
+                txs, err, pars = rbc_parse(rrow(
+                    "June 2, 2025", "Mystery", "QZX", "QZX CORP", qty, "",
+                    value, "CAD", "QZX CORP SOMETHING NEW"))
+                self.assertEqual(txs, [])
+                self.assertEqual(err.count('UNCLASSIFIED row'), 1, err)
+                self.assertEqual(len(pars[0].lint_findings), 1)
+
+    def test_transfer_out_with_rbc_negative_quantity(self):
+        """RBC exports TFO/TFR quantities negative (fixtures had them
+        positive only)."""
+        txs, _, _ = rbc_parse(rrow(
+            "June 2, 2025", "Transfers", "QZX", "QZX CORP", "-300", "", "0",
+            "CAD", "TFO - QZX CORP ACCOUNT TRANSFER BOOK VALUE 3000.00"))
+        self.assertEqual([(t['action'], t['quantity']) for t in txs],
+                         [('TRANSFER', -300.0)])
+
+    def test_rejoined_row_count_is_reported(self):
+        body = (RH.rstrip('\n') + '\n'
+                + rrow("June 2, 2025", "Buy", "QZX", "QZX CORP", "10", "5",
+                       "-59.95", "CAD", "QZX CORP").rstrip('\n')[:-1]
+                + ' BAL",31,498-\n')
+        body = body.replace('"QZX CORP BAL",31,498-',
+                            '"QZX CORP BAL   31",498-')
+        txs, err, _ = rbc_parse(body, raw=True)
+        self.assertEqual(len(txs), 1)
+        self.assertIn('1 row(s) had an unquoted comma inside the '
+                      'Description', err)
+
+
+class TestExpiryAndAssignmentOrder(unittest.TestCase):
+    """S062-23 / S063-14 / S064-03: intra-day stamps the engine orders
+    by."""
+
+    def test_questrade_same_day_write_then_expiry(self):
+        write = q(td='2025-03-21', sd='2025-03-24', action='Sell', sym='',
+                  desc='CALL QZA 03/21/25 10 QZA CORP', qty='-1',
+                  price='2.95', gross='295', comm='-4.95', net='290.05')
+        write = write.replace('2025-03-21 12:00:00 AM',
+                              '2025-03-21 10:15:00 AM', 1)
+        exp = q(td='2025-03-24', sd='', action='EXP', sym='',
+                desc='CALL QZA 03/21/25 10 QZA CORP OPTION EXPIRATION - '
+                     'EXPIRED', qty='1', price='0', gross='0', comm='0',
+                net='0')
+        txs, _, _ = qt_parse(write + exp)
+        w, e = sorted(txs, key=lambda t: t['quantity'])
+        self.assertEqual((w['date'], w['time']), ('2025-03-21', '10:15:00'))
+        self.assertEqual((e['date'], e['time']), ('2025-03-21', '16:00:00'))
+
+    def test_rbc_same_day_write_then_expiry(self):
+        body = (rrow("March 24, 2025", "Reorganization", "8QZQQQ2", "", "1",
+                     "", "0", "USD", "EXP - CALL .QZA 03/21/25 10 QZA CORP "
+                     "OPTION EXPIRATION - EXPIRED", settle="")
+                + rrow("March 21, 2025", "Sell", "8QZQQQ2",
+                       "CALL .QZA 03/21/25 10 QZA CORP", "-1", "1.90",
+                       "178.80", "USD", "CALL .QZA 03/21/25 10 QZA CORP",
+                       settle="March 24, 2025"))
+        txs, _, _ = rbc_parse(body)
+        w, e = sorted(txs, key=lambda t: t['quantity'])
+        self.assertEqual(e['date'], w['date'])
+        self.assertEqual(e['time'], '16:00:00')
+        self.assertLess(w['time'], e['time'])
+
+    def test_rbc_assignment_group_keeps_the_stock_legs_slot(self):
+        """Newest first: the ASN row, a same-day buy, then the stock
+        leg. The group takes the stock leg's (earliest) slot, so the buy
+        is pooled AFTER the assigned sale."""
+        body = (rrow("May 16, 2025", "Other", "8QZQQQ3", "", "1", "", "0",
+                     "CAD", "ASN - CALL .QZA 05/16/25 197.50 QZA CORP",
+                     settle="May 20, 2025")
+                + rrow("May 16, 2025", "Buy", "QZA", "QZA CORP", "100",
+                       "200", "-20009.95", "CAD", "QZA CORP UNSOLICITED",
+                       settle="May 20, 2025")
+                + rrow("May 16, 2025", "Sell", "QZA", "QZA CORP", "-100",
+                       "197.50", "19740.05", "CAD", "QZA CORP ASSIGNMENT "
+                       "OF OPTION AS OF 05/16/25", settle="May 20, 2025"))
+        txs, err, _ = rbc_parse(body)
+        asn = of(txs, action='ASSIGN')
+        buy = [t for t in txs if t['action'] == 'BUYSELL'
+               and t['quantity'] > 0]
+        sale = [t for t in txs if t['symbol'] == 'QZA.TO'
+                and t['quantity'] < 0]
+        self.assertEqual(len(buy), 1, err)
+        self.assertEqual(len(sale), 1, err)
+        self.assertTrue(asn, err)
+        self.assertEqual(asn[0]['time'], sale[0]['time'])
+        self.assertLess(sale[0]['time'], buy[0]['time'])
+
+
+class TestQtMoneyIdentity(unittest.TestCase):
+    """S063-05: Net differing from Gross by LESS than the Commission
+    (net == gross with a commission: a Net column mapped onto Gross) is
+    refused too."""
+
+    def test_gap_smaller_than_the_commission_is_refused(self):
+        for net in ('-1004', '-1000'):
+            with self.subTest(net=net):
+                with self.assertRaises(BrokerageParseError):
+                    qt_parse(q(qty='100', price='10', gross='-1000',
+                               comm='-9.95', net=net))
+        txs, _, _ = qt_parse(q(qty='100', price='10', gross='-1000',
+                               comm='-9.95', net='-1009.95'))
+        self.assertAlmostEqual(txs[0]['net_amount'], 1009.95)
 
 
 if __name__ == '__main__':
