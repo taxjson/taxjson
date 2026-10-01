@@ -1547,13 +1547,20 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
     entries, unpriced = CS.tt_entries(adoc)
     refused = CS.refused_entries(adoc)
     if unpriced:
+        _fee_only = all(e.get("network_fee") for e in unpriced)
         raise ValueError(
             "no fair value for " + ", ".join(e["id"] for e in unpriced)
             + " (the price lookup failed or TAXJSON_OFFLINE is set and "
-              "the price is not cached) — re-run online, or give the "
-              f"value per coin in {report['base_currency']}: `taxjson "
-              f"crypto-sends {acct} --set ID=gift|payment --price P`. "
-              f"crypto_sends.tt was not changed.")
+              "the price is not cached) — re-run online"
+            + ("" if _fee_only else
+               f", or give the value per coin in "
+               f"{report['base_currency']}: `taxjson crypto-sends {acct} "
+               f"--set ID=gift|payment --price P`")
+            + (" (a `-fee` id is the network fee hidden in a send that "
+               "arrived short: priced from the send row or the Yahoo "
+               "close)" if any(e.get("network_fee") for e in unpriced)
+               else "")
+            + ". crypto_sends.tt was not changed.")
     status = CS.write_tt(Path(adoc["tt_file"]),
                          CS.render_tt(acct, entries, report["country"]))
     if refused:
@@ -1574,6 +1581,15 @@ def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
         when = (d["timestamp"] if d["same_time"]
                 else f"{d['timestamp'][:10]} (the hand-written line has "
                      f"another time)")
+        if d["id"].endswith("-fee"):
+            out.append(
+                f"{d['file']} line {d['line']} and inputs/{acct}/"
+                f"{CS.TT_NAME} both sell {CS.fmt_qty(d['quantity'])} "
+                f"{d['symbol']} on {when} (the network fee {d['id']}, "
+                f"booked from the send that arrived short) — that "
+                f"disposition is counted twice. Delete the hand-written "
+                f"line.")
+            continue
         out.append(
             f"{d['file']} line {d['line']} and inputs/{acct}/{CS.TT_NAME} "
             f"both sell {CS.fmt_qty(d['quantity'])} {d['symbol']} on "
@@ -5049,17 +5065,20 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         print(f"\n== {acct}: {len(sends)} unmatched send(s), "
               f"{adoc['undecided']} undecided; {adoc['matched']} matched "
               f"to an arrival (self-custody moves, `taxjson transfers`)")
-        _short = adoc.get("unbooked_network_fees") or []
+        _short = adoc.get("network_fees") or []
         if _short:
             # R1-26: the coins lost in transit paid the network fee — a
-            # disposition at fair value the books do not hold.
+            # disposition at fair value, written to crypto_sends.tt.
             print(f"  {len(_short)} matched send(s) arrived SHORT — the "
                   f"difference is the network fee paid in the coin, a "
-                  f"disposition at fair value that is NOT booked (enter "
-                  f"it as a .tt sale if it matters):")
+                  f"sale at fair value booked in {CS.TT_NAME}:")
             for _s in _short:
-                print(f"    {_s['summary']}: "
-                      f"{CS.fmt_qty(_s['gap'])} {_s['symbol']} short")
+                _fv = _s["fair_value"]
+                _val = (f"{_fv['value']:,.2f} {base}  [{_fv['source']}]"
+                        if _fv else "UNPRICED (lookup failed or offline)")
+                print(f"    {_s['id']}: {_s['summary']}, "
+                      f"{CS.fmt_qty(_s['quantity'])} {_s['symbol']} short "
+                      f"= {_val}")
         for e in sends:
             dec = (e["decision"] or "PENDING").upper()
             ref = f"   ref {e['ref']}" if e["ref"] else ""
@@ -5126,7 +5145,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         elif want == have:
             print(f"inputs/{acct}/{CS.TT_NAME}: up to date "
                   f"({len(entries)} line(s))." if have else
-                  "No gift/payment needs a sale line.")
+                  "No gift/payment or network fee needs a sale line.")
         else:
             print(f"inputs/{acct}/{CS.TT_NAME}: OUT OF DATE — run "
                   f"`taxjson crypto-sends {acct} --write` (or `taxjson "

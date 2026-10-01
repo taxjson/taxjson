@@ -141,8 +141,8 @@ class TestStakingValue(unittest.TestCase):
 
 class TestSendNetworkFeeListed(unittest.TestCase):
     """R1-26: a Coinbase Send carries its network fee inside the sent
-    quantity; the arrival on Kraken is short by it. Not booked (an owner
-    decision) — but crypto-sends lists it instead of nothing."""
+    quantity; the arrival on Kraken is short by it. crypto-sends lists it
+    (and, since the owner decision, books it: test_fix_d_crypto_drip)."""
 
     def _report(self, country):
         import json
@@ -182,14 +182,14 @@ class TestSendNetworkFeeListed(unittest.TestCase):
 
     def test_short_arrival_is_listed(self):
         rep = self._report("canada")
-        short = rep["accounts"]["c"]["unbooked_network_fees"]
+        short = rep["accounts"]["c"]["network_fees"]
         # The USDC send is US-dollar cash in a Canada book: not a coin.
         self.assertEqual([s["symbol"] for s in short], ["SOL"])
-        self.assertAlmostEqual(short[0]["gap"], 0.0001)
+        self.assertAlmostEqual(short[0]["quantity"], 0.0001)
 
     def test_us_project_lists_the_stablecoin_too(self):
         rep = self._report("usa")
-        short = rep["accounts"]["c"]["unbooked_network_fees"]
+        short = rep["accounts"]["c"]["network_fees"]
         self.assertEqual(sorted(s["symbol"] for s in short),
                          ["SOL", "USDC"])
 

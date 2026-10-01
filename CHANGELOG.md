@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **crypto: the network fee hidden in a Coinbase Send is booked.** A
+  send matched to its arrival on another exchange that arrived SHORT,
+  with no fee stated (Coinbase puts the network fee inside the sent
+  quantity), now writes a `<send id>-fee` sale of the shortfall at fair
+  value (the send row's spot price, else the Yahoo close) to
+  `crypto_sends.tt`, in both countries — the way the Kraken withdrawal
+  fee paid in the coin is booked. The fee coins no longer stay in the
+  pool as phantom units (which also fed the superficial-loss still-held
+  test). A Canada stablecoin's shortfall is US-dollar cash and gets no
+  line. `crypto-sends` lists each with its value (audit R1-26).
+
+- **A trade whose money does not match qty x price is an ATTENTION line
+  on the console.** When the parser does not declare the contract
+  multiplier (Webull, RBC, crypto, a Questrade/RBC dividend
+  reinvestment priced `REINV@U$` on a CAD row), the schema's notional
+  warning used to sit only in the .sum DIAGNOSTICS: a 10x Proceeds was
+  booked with rc 0 and nothing on screen. `taxjson run` now prints it
+  as `warning: ATTENTION: schema: ...` (still not an error: the booked
+  money is the row's net amount) (audit S065-12).
+
+- **Kraken: PYUSD and GUSD are US-dollar cash in a Canada project.** As
+  on Coinbase and like USDC/USDT/DAI: a PYUSD/USD buy is a currency
+  conversion, an ETH/PYUSD fill a purchase for dollars, a PYUSD reward
+  dollar income at 1.00 — no PYUSD pool that never closes, no Yahoo
+  lookup; `crypto-sends` gives a Kraken PYUSD gift the currency gain.
+  A US project keeps every stablecoin as property (audit S060-24).
+
 - **fetch / watch.** `fetch` masks the Questrade account number in its
   progress line and in API error messages (`questrade #59***`,
   `/v1/accounts/59***/activities: HTTP 400 ...`); `--trim-overlap`

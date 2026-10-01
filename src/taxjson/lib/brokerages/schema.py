@@ -95,6 +95,16 @@ _QTY_EPS = 1e-9
 _MONEY_EPS = 0.005
 
 
+# Leading tag of a WARNING the caller must put on the console (the run's
+# ATTENTION channel, `warning: ATTENTION:`), not only in the .sum: a
+# notional gap on a row whose multiplier the parser did not declare is
+# either a reinvestment priced in another currency (Questrade/RBC
+# `REINV@U$` on a CAD row) or wrong money booked with rc 0 (a 10x
+# Proceeds on Webull/RBC) — audit S065-12, owner decision: ATTENTION,
+# not an error (the futures guess of 1 or 100 made it unfit for one).
+ATTENTION_TAG = "ATTENTION: "
+
+
 def _who(tx: Dict[str, Any], i: int) -> str:
     return (f"tx[{i}] {tx.get('action', '?')} {tx.get('symbol', '?')} "
             f"{tx.get('date', '?')}")
@@ -195,11 +205,20 @@ def validate_transactions(txs: List[Dict[str, Any]],
                         + abs(float(tx.get('fee') or 0.0)))
                 gap = abs(expected - abs(net))
                 if gap > fees + max(5.0, 0.02 * expected):
-                    (errors if declared > 0 else warnings).append(
-                        f"{_who(tx, i)}: net_amount {net:,.2f} is far from "
-                        f"qty*price{f'*{mult:g}' if mult != 1 else ''} = "
-                        f"{expected:,.2f} (±fees {fees:,.2f}) — possible "
-                        f"data typo; silent wrong money if real")
+                    msg = (f"{_who(tx, i)}: net_amount {net:,.2f} is far "
+                           f"from qty*price"
+                           f"{f'*{mult:g}' if mult != 1 else ''} = "
+                           f"{expected:,.2f} (±fees {fees:,.2f})")
+                    if declared > 0:
+                        errors.append(f"{msg} — possible data typo; "
+                                      f"silent wrong money if real")
+                    else:
+                        warnings.append(
+                            f"{ATTENTION_TAG}{msg} — the booked cost or "
+                            f"proceeds is net_amount: check the row (a "
+                            f"price in another currency, e.g. a DRIP "
+                            f"REINV@U$ on a CAD row, is harmless; a "
+                            f"wrong Proceeds/Value column is wrong money)")
 
         elif action == 'SPLIT':
             if qty <= 0:

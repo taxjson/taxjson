@@ -9,13 +9,14 @@ from taxjson.lib.brokerages._crypto_common import (strict_money, utc_to_local,
                                                    warn_depeg)
 
 
-_FIAT_ASSETS = ('USD', 'CAD', 'EUR', 'GBP', 'USDC', 'USDT', 'DAI')
+_FIAT_ASSETS = ('USD', 'CAD', 'EUR', 'GBP', 'USDC', 'USDT', 'DAI', 'PYUSD',
+                'GUSD')
 # Appended to every row-level refusal that tells the user to use a .tt
 # file: the refusal aborts the whole file, so entering the .tt alone
 # never unblocks the run (audit S061-04).
 _TT_REMOVE = (' and remove the row from the export (the file is refused until '
       'it is gone)')
-# Post-fold fiat currencies (USDC/USDT/DAI have become USD by the time
+# Post-fold fiat currencies (the stablecoins have become USD by the time
 # a leg is compared against this). A fill or instant trade whose BOTH
 # sides are in here is a currency conversion — cash moving between
 # denominations — not a disposition of property. It used to emit a
@@ -25,8 +26,16 @@ _TT_REMOVE = (' and remove the row from the export (the file is refused until '
 _FIAT_CURRENCIES = ('USD', 'CAD', 'EUR', 'GBP')
 # USD-pegged stablecoins: a staking reward in one is worth 1.0/unit by
 # definition, so the parser prices it directly instead of shipping a
-# $0 row for taxjson-fill-crypto to look up.
+# $0 row for taxjson-fill-crypto to look up. In PROPERTY mode (a US
+# project) these three are the ones valued at their 1.00 USD par.
 _STABLECOINS = ('USDC', 'USDT', 'DAI')
+# The stablecoins a CASH-mode book (Canada, tax-logic CA-CRYPTO-02)
+# folds into US dollars: the same set as the Coinbase parser — PYUSD
+# and GUSD were coins here and cash there, so a Kraken PYUSD balance
+# opened a pool that never closed (audit S060-24, owner decision). A
+# property-mode (US) book is unchanged: PYUSD/GUSD stay coins valued by
+# the fill like any coin.
+_CASH_STABLECOINS = _STABLECOINS + ('PYUSD', 'GUSD')
 
 
 # Kraken's wallet-flavour suffixes on ledger asset codes: `.S` staked,
@@ -93,7 +102,7 @@ def _normalize_asset(asset: str, fold_stable: bool = True) -> str:
     # row resolves consistently — otherwise DAI would be flagged as
     # fiat (via `_FIAT_ASSETS`) but pass through to the gain engine
     # as a non-USD currency that downstream FX conversion can't anchor.
-    if fold_stable and asset in ('USDC', 'USDT', 'DAI'):
+    if fold_stable and asset in _CASH_STABLECOINS:
         asset = 'USD'
     return asset
 
@@ -231,7 +240,7 @@ def _fee_ccy(row: Dict[str, Any], asset_name: str) -> str:
 
 class KrakenBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "Kraken"
-    # USD stablecoins (USDC/USDT/DAI): US-dollar CASH (True — the
+    # USD stablecoins (USDC/USDT/DAI/PYUSD/GUSD): US-dollar CASH (True — the
     # default, Canada's stated approximation, tax-logic CA-CRYPTO-02) or
     # PROPERTY like any coin (False — a US project: the IRS treats them
     # as digital assets, US-CRYPTO-02). taxjson-brokerage sets it from
@@ -484,11 +493,11 @@ class KrakenBrokerage(BaseBrokerage):
                 _rq = _normalize_asset(quote, fold_stable=False)
                 if not self.stablecoins_as_cash:
                     pass            # property: the fill books the price
-                elif _rb in _STABLECOINS and _rq == 'USD':
+                elif _rb in _CASH_STABLECOINS and _rq == 'USD':
                     warn_depeg(_rb, price, abs(vol),
                                dt.strftime('%Y-%m-%d'),
                                f"Kraken trades {path.name}")
-                elif _rq in _STABLECOINS and _rb == 'USD' and price:
+                elif _rq in _CASH_STABLECOINS and _rb == 'USD' and price:
                     warn_depeg(_rq, 1.0 / price, abs(cost),
                                dt.strftime('%Y-%m-%d'),
                                f"Kraken trades {path.name}")
@@ -1183,9 +1192,10 @@ class KrakenBrokerage(BaseBrokerage):
                 leg['net_amount'] = inc
                 leg['gross_amount'] = inc
             return [div, buy]
-        if asset in _STABLECOINS or asset in _FIAT_CURRENCIES:
+        if ((self.stablecoins_as_cash and asset in _CASH_STABLECOINS)
+                or asset in _FIAT_CURRENCIES):
             # Worth 1.0/unit by definition: income = qty, priced here.
-            # NO acquisition leg: the trade books fold USDC/USDT/DAI to
+            # NO acquisition leg: the trade books fold the stablecoins to
             # USD (the coin is later SPENT as a fiat quote, never sold
             # as an asset), so a USDC position would sit in the book
             # forever as a phantom long that nothing ever closes. Fiat
