@@ -59,11 +59,16 @@ class WebullBrokerage(BaseBrokerage):
         self.disambiguate_split_fills(transactions)
         if skipped_actions:
             detail = ", ".join(f"{n}× {a}" for a, n in sorted(skipped_actions.items()))
+            # Expiry and exercise/assignment ARE booked (from the $0
+            # BUY/SELL rows); only these other action codes are not
+            # (audit S065-22).
             print(
-                f"warning: Webull parser only books BUY/SELL — skipped "
-                f"{sum(skipped_actions.values())} row(s) with unhandled "
-                f"actions ({detail}). Dividends/option assignment/expiry are "
-                f"NOT booked; verify no open position is left phantom.",
+                f"warning: Webull parser books only BUY/SELL rows — "
+                f"skipped {sum(skipped_actions.values())} row(s) with "
+                f"other action codes ({detail}); those events (a "
+                f"dividend, a transfer) are NOT booked. Enter any that "
+                f"matter via a .tt file, and check no position is left "
+                f"phantom.",
                 file=sys.stderr,
             )
         self._warn_ticker_changes(transactions, path.name)
@@ -114,6 +119,7 @@ class WebullBrokerage(BaseBrokerage):
         current_symbol = ""
         current_is_under = False
         current_description = ""
+        current_type = ""
         # Webull's parser only books BUY/SELL. Blank continuation rows are
         # expected and harmless, but a row with a REAL non-trade action
         # (dividend, option assignment/expiry, transfer) would be dropped
@@ -203,12 +209,18 @@ class WebullBrokerage(BaseBrokerage):
                     # row would re-parse as that option (KNOWN_ISSUES
                     # "Webull blank-Description carry-over").
                     current_description = ""
+                    current_type = ""
                 current_symbol = _new_symbol
                 # `@ROOT` is how Webull names an option row's
                 # underlying; any other Symbol cell is not one.
                 current_is_under = symbol_raw.startswith('@')
             if description_raw:
                 current_description = description_raw
+            # Type Code (OPC option / SHS shares), carried over blank
+            # continuation rows like the description.
+            type_raw = cell(row, 'type').upper()
+            if type_raw:
+                current_type = type_raw
 
             dt = self.parse_date(date_raw, "%d-%m-%Y")
             date_str = dt.strftime("%Y-%m-%d") if dt else date_raw
@@ -230,15 +242,44 @@ class WebullBrokerage(BaseBrokerage):
                     f"blank Proceeds cell — a priced trade must carry its "
                     f"cash; refusing to book it at $0.")
             # Webull prints a buy's proceeds in accounting parentheses
-            # ("(1,352.97)"); read as NEGATIVE, and the trade convention
-            # wants the magnitude (direction lives in the quantity
-            # sign), so take abs() here.
-            net_amount = abs(parse_strict_number(
+            # ("(1,234.56)"), read as NEGATIVE: cash out. The trade
+            # convention wants a buy's cost as a magnitude (direction
+            # lives in the quantity sign). A SALE keeps its sign: a
+            # debit there is a close whose commission exceeded the
+            # gross (a $0.00 option close with a fee) — negative
+            # proceeds, which abs() used to book as cash RECEIVED
+            # (audit R1-100). A buy that brings cash IN has no reading.
+            _signed = parse_strict_number(
                 proceeds_raw, field='Proceeds', where=where,
-                allow_blank=True, blank=0.0))
+                allow_blank=True, blank=0.0)
+            if action_raw == 'BUY' and _signed > 1e-9:
+                raise BrokerageParseError(
+                    f"{where}: BUY {qty_raw} @ {price_raw} has a positive "
+                    f"(credit) Proceeds {proceeds_raw!r} — a purchase "
+                    f"pays cash out, shown in parentheses; refusing to "
+                    f"guess its sign.")
+            net_amount = abs(_signed) if action_raw == 'BUY' else _signed
             qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'SELL'))
 
             opt = self.parse_option_from_description(current_description)
+            # The row's Type Code decides the security type when it is
+            # there (audit S065-17): an OPC row whose description is not
+            # a readable contract was booked as 1 SHARE of the
+            # underlying, and an SHS row whose description happened to
+            # parse as a contract as 100 x the shares.
+            if current_type == 'OPC' and not opt:
+                raise BrokerageParseError(
+                    f"{where}: {action_raw} row has Type Code OPC (an "
+                    f"option) but its Security Description "
+                    f"{current_description!r} is not a readable contract "
+                    f"(CALL/PUT ROOT MM/DD/YY STRIKE) — refusing to book "
+                    f"it as shares.")
+            if current_type == 'SHS' and opt:
+                raise BrokerageParseError(
+                    f"{where}: {action_raw} row has Type Code SHS "
+                    f"(shares) but its Security Description "
+                    f"{current_description!r} reads as an option "
+                    f"contract — refusing to guess which it is.")
             under_sym = ''
             if opt:
                 symbol = self.format_occ_symbol(opt['right'], opt['base'], opt['expiry'], opt['strike'])
@@ -395,9 +436,10 @@ class WebullBrokerage(BaseBrokerage):
         EXERCISED (long). Webull's Trading Summary shows both only as a
         $0 option close plus an ordinary stock trade at the strike.
         Booking it as an expiry realizes the premium as its own gain or
-        loss instead of folding it into the shares' cost (ITA s.49(3);
-        a holder's exercise adds the option cost to the shares). Mark both
-        legs ASSIGN — the engine's two-row convention.
+        loss instead of folding it into the shares' cost or proceeds
+        (ITA s.49(3) for a call, s.49(3.1) for a put; a holder's exercise
+        adds the option cost to the shares). Mark both legs ASSIGN — the
+        engine's two-row convention.
 
         The pairing is an inference, so every pair is named on stderr,
         and a trade at the strike carrying an ordinary commission is
@@ -421,7 +463,7 @@ class WebullBrokerage(BaseBrokerage):
                 continue
             under = opt.get('_under') or f"{m.group(1)}.{m.group(5)}"
             right, strike = m.group(3), int(m.group(4)) / 1000.0
-            meta.append(strike)
+            meta.append((strike, 's.49(3)' if right == 'C' else 's.49(3.1)'))
             contracts = abs(float(opt['quantity']))
             closed_short = float(opt['quantity']) > 0   # BUY at 0 closes a write
             # Short put / long call -> shares arrive (BUY);
@@ -463,11 +505,11 @@ class WebullBrokerage(BaseBrokerage):
                 print(f"note: Webull {source}: inferred an exercise/"
                       f"assignment — {opt['symbol']} closed at $0 on "
                       f"{opt['date']} + {abs(float(stock['quantity'])):g} "
-                      f"{stock['symbol']} at the strike {meta[oi]:g} "
+                      f"{stock['symbol']} at the strike {meta[oi][0]:g} "
                       f"settling {stock['date_settle']} (fee "
                       f"{float(stock.get('fee') or 0):.2f}); both legs "
                       f"booked ASSIGN (the premium folds into the shares, "
-                      f"s.49(3)). Check it against the statement.",
+                      f"{meta[oi][1]}). Check it against the statement.",
                       file=sys.stderr)
             # The shares are acquired/delivered ON the exercise, so the
             # stock leg's trade date is the option leg's date, stamped
@@ -484,14 +526,14 @@ class WebullBrokerage(BaseBrokerage):
             print(f"warning: Webull {source}: {opt['symbol']} closed at "
                   f"$0 on {opt['date']} and "
                   f"{abs(float(stock['quantity'])):g} {stock['symbol']} "
-                  f"traded at the strike {meta[oi]:g} settling "
+                  f"traded at the strike {meta[oi][0]:g} settling "
                   f"{stock['date_settle']} with a "
                   f"{float(stock.get('fee') or 0):.2f} commission — an "
                   f"ordinary trade's fee, not Webull's $1.00 exercise/"
                   f"assignment charge, so exercise/assignment was NOT "
                   f"inferred: booked as an expiry plus a separate trade. "
                   f"If the statement shows an exercise/assignment, the "
-                  f"premium belongs in the shares' cost (s.49(3)) — see "
+                  f"premium belongs in the shares' cost ({meta[oi][1]}) — see "
                   f"KNOWN_ISSUES 'Webull exercise/assignment inference'.",
                   file=sys.stderr)
 
