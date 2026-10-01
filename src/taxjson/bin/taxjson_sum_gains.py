@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib.ticker_map import get_underlying as get_base_ticker, is_option_ticker
 
@@ -419,6 +420,7 @@ def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], yea
     lines.append(f"{CYAN}{'-' * 112}{RESET}")
     return "\n".join(lines)
 
+@guard_main("taxjson-sum-gains")
 def main():
     parser = argparse.ArgumentParser(description="Summarize gains from taxjson_gains.py output.")
     parser.add_argument("--sort-by", "-s", choices=['total', 'total_gain', 'capital_gain', 'option_gain', 'dividend', 'pil', 'holding_days', 'ticker'], default='ticker')

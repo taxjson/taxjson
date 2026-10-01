@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import TaxTransaction, load_transactions
 
 PROG = "taxjson-sort"
@@ -94,6 +95,7 @@ def deduplicate(transactions: List[TaxTransaction], return_dropped: bool = False
     return kept
 
 
+@guard_main("taxjson-sort")
 def main():
     parser = argparse.ArgumentParser(description="Sort and optionally deduplicate transactions")
     parser.add_argument("input", nargs="?", help="Input JSON file (default: stdin)")

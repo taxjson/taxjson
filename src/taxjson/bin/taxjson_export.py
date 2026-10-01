@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib import cli_diag
 
@@ -655,6 +656,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any]) -> Dict[str, Any]:
     return {"inventory": inventory}
 
 
+@guard_main("taxjson-export")
 def main():
     parser = argparse.ArgumentParser(
         description="Export holdings to various formats or as a text report.",

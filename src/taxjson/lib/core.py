@@ -686,8 +686,23 @@ def load_transactions(path: Path) -> List[TaxTransaction]:
       when an in-memory pipeline composes loaders).
     * The FUZZ #K hard input guards (via coerce_transaction_row).
     """
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.loads(strip_json_comments(f.read()))
+    from taxjson.lib.cli_diag import InputReadError
+    with open(path, 'rb') as f:
+        raw = f.read()
+    try:
+        text = raw.decode('utf-8')
+    except UnicodeDecodeError as e:
+        # An OSError-class error, not the ValueError the data guards
+        # raise: an unreadable file is an environment error (exit 2),
+        # and it names the file (audit S070-23).
+        raise InputReadError(
+            f"cannot read {path}: not UTF-8 text (byte "
+            f"0x{raw[e.start]:02x} at offset {e.start})") from None
+    try:
+        data = json.loads(strip_json_comments(text))
+    except json.JSONDecodeError as e:
+        raise json.JSONDecodeError(f"{path}: {e.msg}", e.doc,
+                                   e.pos) from None
 
     txs = data.get("transactions", []) if isinstance(data, dict) else data
     return [coerce_transaction_row(t, i, f"load_transactions({path})")

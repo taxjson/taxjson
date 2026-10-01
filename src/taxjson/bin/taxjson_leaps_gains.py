@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib.ticker_map import get_underlying, is_option_ticker
 from taxjson.lib import cli_diag
@@ -60,6 +61,7 @@ def process_data(data, leaps_by_underlying):
         gain = float(tx.get('gain', 0.0))
         leaps_by_underlying[underlying]['total_gain'] += gain
 
+@guard_main("taxjson-leaps-gains")
 def main():
     parser = argparse.ArgumentParser(description="Summarize LONG option gains (every tenor).")
     parser.add_argument("files", nargs="*", metavar="FILE",
