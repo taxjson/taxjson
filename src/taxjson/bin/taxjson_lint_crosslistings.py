@@ -32,6 +32,7 @@ import argparse
 import re
 import sys
 
+from taxjson.lib.cli_diag import guard_main
 from typing import Any, Dict, List
 
 OPT_RE = re.compile(r"\d{6}[CP]\d{6,}")  # OCC option symbol
@@ -150,6 +151,7 @@ def venue_splits(taxable_txs, sheltered_txs):
     return out
 
 
+@guard_main("taxjson-lint-crosslistings")
 def main():
     p = argparse.ArgumentParser(
         description="Flag cross-listed securities the wash radar may not "

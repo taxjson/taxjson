@@ -69,6 +69,7 @@ import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import is_option_symbol
 from taxjson.lib.futures import is_plain_future
 from typing import Any, Dict, List, Optional, Tuple
@@ -755,6 +756,7 @@ def write_csv(rep: Dict[str, Any], path: Path) -> None:
                             "hand"])
 
 
+@guard_main("taxjson-form-export")
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Render taxjson gains into IRS Form 8949 or CRA "
@@ -784,7 +786,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--out", type=Path, default=None,
                         help="TXF only: write the .txf here instead of "
                              "stdout")
-    parser.add_argument("--year", type=int, default=None,
+    parser.add_argument("--year", type=tax_year, default=None,
                         help="Defensive year filter (pipeline gains files "
                              "are already year-scoped)")
     parser.add_argument("--base-currency", default="",

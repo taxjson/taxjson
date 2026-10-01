@@ -14,7 +14,10 @@ from __future__ import annotations
 import importlib
 import os
 import re
+import sys
 from typing import Any, Callable
+
+from taxjson.lib.cli_diag import guard_main
 
 
 def private_umask() -> None:
@@ -29,7 +32,13 @@ def __getattr__(name: str) -> Callable[[], Any]:
 
     def run() -> Any:
         private_umask()
-        return importlib.import_module(f"taxjson.bin.{name}").main()
+        main = importlib.import_module(f"taxjson.bin.{name}").main
+        # An unreadable input path (missing, a directory, not UTF-8,
+        # not JSON) is one `<prog>: error:` line with exit 2 for every
+        # console script, never a traceback (audit S070-23 / S079-10).
+        prog = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] \
+            else f"taxjson-{name}"
+        return guard_main(prog)(main)()
 
     run.__name__ = name
     return run

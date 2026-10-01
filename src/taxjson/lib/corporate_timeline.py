@@ -547,12 +547,6 @@ class SplitTimeline:
             return self.alias_factor(symbol, from_date, ref_date)
         return f_a / f_r
 
-    def splits_between(self, symbol: str, lo: str, hi: str
-                       ) -> List[Tuple[str, float]]:
-        """The (lo, hi] event rows themselves, migrated-schedule view."""
-        return [(d, r) for d, r in self._schedule.get(symbol, [])
-                if lo < d <= hi]
-
     # ------------------------------------------------------------ dedup
 
     @staticmethod

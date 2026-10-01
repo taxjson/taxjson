@@ -32,6 +32,7 @@ import os
 import sys
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from typing import Any, Dict, List, Tuple
 
@@ -186,6 +187,7 @@ def parse_args():
     return parser.parse_args()
 
 
+@guard_main("taxjson-diff")
 def main():
     args = parse_args()
     explicit_by = args.by is not None

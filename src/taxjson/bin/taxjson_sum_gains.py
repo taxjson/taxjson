@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib.ticker_map import get_underlying as get_base_ticker, is_option_ticker
 from taxjson.lib import cli_diag
@@ -110,7 +111,9 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
         if fee != 0:
             total_fees[currency] = total_fees.get(currency, 0.0) + fee
             is_opt = is_option_ticker(symbol)
-            asset_type = 'Options' if is_opt else 'Stocks'
+            from taxjson.lib.futures import is_plain_future
+            asset_type = ('Options' if is_opt else
+                          'Futures' if is_plain_future(symbol) else 'Stocks')
             
             if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
             if currency not in returns_by_asset[asset_type]: 
@@ -433,6 +436,7 @@ def output_statistics(currency: str, asset_type: str, stats: Dict[str, Any], yea
     lines.append(f"{CYAN}{'-' * 112}{RESET}")
     return "\n".join(lines)
 
+@guard_main("taxjson-sum-gains")
 def main():
     parser = argparse.ArgumentParser(description="Summarize gains from taxjson_gains.py output.")
     parser.add_argument("--sort-by", "-s", choices=['total', 'total_gain', 'capital_gain', 'option_gain', 'dividend', 'pil', 'holding_days', 'ticker'], default='ticker')
@@ -488,8 +492,9 @@ def main():
                                  summary['wash_solver_iterations'])
             for curr, bucket in (summary.get('total_fees_by_currency') or {}).items():
                 m = merged_fees.setdefault(curr, {'stocks': 0.0, 'options': 0.0, 'total': 0.0})
-                for k in ('stocks', 'options', 'total'):
-                    m[k] += float(bucket.get(k, 0.0) or 0.0)
+                for k in ('stocks', 'options', 'total') + (
+                        ('futures',) if 'futures' in bucket else ()):
+                    m[k] = m.get(k, 0.0) + float(bucket.get(k, 0.0) or 0.0)
         merged_data = {
             'by_ticker': all_by_ticker,
             'transactions': all_txs,

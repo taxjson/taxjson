@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib import cli_diag
 from taxjson.lib.json_input import InputFileError, read_json_doc
@@ -783,6 +784,7 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
     return {"inventory": inventory}
 
 
+@guard_main("taxjson-export")
 def main():
     parser = argparse.ArgumentParser(
         description="Export holdings to various formats or as a text report.",
@@ -906,6 +908,12 @@ def main():
                 parts = line.split()
                 if len(parts) >= 2:
                     tv_map[parts[0]] = parts[1]
+                else:
+                    # Warn like the sibling map loaders do (audit
+                    # S077-07: silently dropped).
+                    print(f"warning: {map_file}: expected `SYMBOL "
+                          f"EXCHANGE`, got {line!r} — line ignored",
+                          file=sys.stderr)
 
     # The holdings aggregation applies JOURNAL renames — they net
     # offsetting cross-currency legs (Norbert's Gambit) here, post-gains,

@@ -20,7 +20,10 @@ Per-account content:
                   from its own base book and priced at the blended
                   ACB/share — which is exactly the s.47 presentation.
   summary         recomputed for the slice (total_gain,
-                  total_disallowed, year)
+                  total_disallowed, fees, US count)
+  inventory dates position_start_date is the account's own (from its
+                  base book); last_acq_date stays the pool's (s.54
+                  looks at any acquisition of the identical property)
 """
 
 import argparse
@@ -49,6 +52,52 @@ def _phantom_openings(combined: Dict[str, Any], account: str) -> List[dict]:
     return out
 
 
+def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
+    """{symbol: trade date the account's CURRENT position in it opened}
+    from the account's own book (renames followed, splits applied once
+    per event), the engine's position_start_date convention: the last
+    time the balance left zero (or changed sign). The blended row's own
+    date is the POOL's start — another account's (audit S050-19)."""
+    from taxjson.lib.corporate_timeline import split_seen
+    date_key = "date_settle" if basis == "settle" else "date"
+    order = sorted(rows, key=lambda t: (str(t.get(date_key)
+                                            or t.get("date") or ""),
+                                        str(t.get("date") or ""),
+                                        str(t.get("time") or "")))
+    bal: Dict[str, float] = {}
+    start: Dict[str, str] = {}
+    seen: set = set()
+    for t in order:
+        sym = str(t.get("symbol") or "")
+        act = t.get("action")
+        if act in ("BUYSELL", "ASSIGN", "OPENING_BALANCE", "TRANSFER"):
+            q = float(t.get("quantity") or 0.0)
+            before = bal.get(sym, 0.0)
+            after = before + q
+            bal[sym] = after
+            if abs(after) < 1e-9:
+                start.pop(sym, None)
+            elif abs(before) < 1e-9 or (before > 0) != (after > 0):
+                start[sym] = str(t.get("date") or "")
+        elif act == "SPLIT":
+            ratio = float(t.get("quantity") or 0.0)
+            new = (t.get("symbol_new") or "").strip()
+            if not ratio or split_seen(
+                    seen, sym, str(t.get("date") or ""), ratio, new,
+                    account=str(t.get("account") or "")) is not None:
+                continue
+            q = bal.pop(sym, 0.0) * ratio
+            st = start.pop(sym, None)
+            tgt = new or sym
+            if tgt != sym and abs(bal.get(tgt, 0.0)) > 1e-9:
+                st = min(filter(None, (st, start.get(tgt)))) \
+                    if (st or start.get(tgt)) else None
+            bal[tgt] = bal.get(tgt, 0.0) + q
+            if st and abs(bal[tgt]) > 1e-9:
+                start[tgt] = st
+    return start
+
+
 def split_for_account(combined: Dict[str, Any], account: str,
                       base_txs: Optional[List[dict]]) -> Dict[str, Any]:
     txs = [e for e in combined.get("transactions", [])
@@ -70,6 +119,10 @@ def split_for_account(combined: Dict[str, Any], account: str,
     # (audit R1-275 / R1-322 — SPY showed -379 shares at a negative cost,
     # BK.TO vanished).
     openings = _phantom_openings(combined, account)
+    _basis = (combined.get("summary") or {}).get("tax_date_basis") \
+        or "settle"
+    starts = (_position_starts(list(base_txs) + openings, _basis)
+              if base_txs is not None else {})
     inventory: List[Dict[str, Any]] = []
     for row in combined.get("inventory", []):
         row_acct = row.get("account")
@@ -88,7 +141,15 @@ def split_for_account(combined: Dict[str, Any], account: str,
             continue
         share = qty / total_qty
         r = dict(row)
-        r["qty"] = round(qty, 6)
+        # Full precision (audit S050-21: 6 dp turned 4e-07 ETH into a
+        # 0.0-unit row with a cost); 10 dp only trims float noise.
+        r["qty"] = round(qty, 10)
+        # SINCE is the account's own position start; last_acq_date stays
+        # the POOL's on purpose (s.54 looks at any acquisition of the
+        # identical property, in any account).
+        _st = starts.get(row.get("symbol", ""))
+        if _st and "position_start_date" in row:
+            r["position_start_date"] = _st
         # Every ADDITIVE field scales with the account's share — the
         # deferred superficial loss too (audit R1-160: copied whole into
         # every account, it was counted once per account).
@@ -108,6 +169,8 @@ def split_for_account(combined: Dict[str, Any], account: str,
     summary = dict(combined.get("summary") or {})
     summary["total_gain"] = round(realized, 2)
     summary["total_disallowed"] = round(disallowed, 2)
+    if "count" in summary:          # US: this file's records (S050-23)
+        summary["count"] = len(txs)
     # Per-slice fee map: copying the COMBINED map into every account's
     # file made each .sum carry all accounts' fees (`taxjson sum`
     # multi-counted them — the FUZZ #I class). The map is rebuilt from
@@ -135,9 +198,13 @@ def split_for_account(combined: Dict[str, Any], account: str,
             continue
         curr = btx.get("currency") or "?"
         is_opt = bool(_re.search(r"\d{6}[CP]\d+", btx.get("symbol") or ""))
+        from taxjson.lib.futures import is_plain_future
+        asset = ("options" if is_opt else
+                 "futures" if is_plain_future(btx.get("symbol") or "")
+                 else "stocks")
         bucket = fees.setdefault(
             curr, {"stocks": 0.0, "options": 0.0, "total": 0.0})
-        bucket["options" if is_opt else "stocks"] += fee
+        bucket[asset] = bucket.get(asset, 0.0) + fee
         bucket["total"] += fee
     summary["total_fees_by_currency"] = fees
 
@@ -161,6 +228,19 @@ def split_for_account(combined: Dict[str, Any], account: str,
                   for d in w.get("tainted_dispositions") or [])]
     if slw:
         out["superficial_loss_warnings"] = slw
+    # Option/right-replacement warnings follow their loss (by its id),
+    # and the phantom log its account (audit S050-11: both were dropped
+    # from the canonical per-account file).
+    _loss_ids = _entry_ids | {e.get("tx_id") or e.get("id")
+                              for e in manual}
+    orw = [w for w in combined.get("option_replacement_warnings") or []
+           if w.get("loss_id") in _loss_ids]
+    if orw:
+        out["option_replacement_warnings"] = orw
+    plog = [e for e in combined.get("phantom_application_log") or []
+            if e.get("account") == account]
+    if plog:
+        out["phantom_application_log"] = plog
     return out
 
 
@@ -180,12 +260,15 @@ def main(argv=None) -> int:
         cli_diag.error(PROG, f"could not read {e}")
         return 2
     base_txs = None
-    if args.base and args.base.exists():
+    if args.base:
+        # A named base book that is missing or unreadable is fatal, as
+        # an unreadable combined file is (audit S050-15: it emptied the
+        # account's fee map and dropped its blended holdings, exit 0).
         try:
             base_txs = read_json_doc(args.base).get("transactions", [])
-        except InputFileError as e:
-            cli_diag.warn(PROG, f"could not read {e} — "
-                                f"blended inventory rows omitted")
+        except (InputFileError, AttributeError) as e:
+            cli_diag.error(PROG, f"could not read --base {e}")
+            return 2
 
     out = split_for_account(combined, args.account, base_txs)
     json.dump(out, sys.stdout, indent=2, sort_keys=True)

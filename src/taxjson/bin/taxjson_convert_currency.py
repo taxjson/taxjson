@@ -16,6 +16,7 @@ from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import country_arg
 from datetime import datetime, timedelta
 
@@ -35,6 +36,30 @@ def norm_currency(code) -> str:
     target instead of being multiplied by the USD default rate and
     relabelled CAD (stage-tools audit)."""
     return (code or "").strip().upper()
+
+
+# A rate is a plain decimal: Decimal()/float() also take '1_35' (=135),
+# 'nan' and 'inf', which turned a typo into a silent 100x or an
+# unconverted row (audit S028-15 / S028-17).
+_PLAIN_DECIMAL_RE = re.compile(r'^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$')
+
+
+def positive_rate(value: str) -> float:
+    """argparse type for --default-rate: a plain positive finite number —
+    the rule load_exchange_rates applies to a rates file's rate column.
+    A negative rate flipped the sign of every converted amount; 0, nan
+    and inf zeroed, poisoned or skipped them, all with exit 0."""
+    import argparse
+    import math
+    text = str(value).strip()
+    try:
+        rate = float(text) if _PLAIN_DECIMAL_RE.match(text) else None
+    except ValueError:
+        rate = None
+    if rate is None or not math.isfinite(rate) or rate <= 0:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a positive number (a rate such as 1.35)")
+    return rate
 
 
 def resolve_default_rate(value) -> float:
@@ -107,6 +132,12 @@ def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, 
                         f"{date_str} is not a positive finite number — "
                         f"refusing to convert money with it. Fix or "
                         f"regenerate the rates file.")
+                if not _PLAIN_DECIMAL_RE.match(parts[4]):
+                    # '1_35' parses as 135 (S028-17): malformed, counted.
+                    skipped_malformed += 1
+                    if len(malformed_samples) < 3:
+                        malformed_samples.append(f"line {lineno}: {stripped!r}")
+                    continue
                 if from_curr not in history:
                     history[from_curr] = {}
                 # FIRST row per (currency, date) wins: to_base_curr
@@ -451,6 +482,7 @@ def emit_fallback_summary(default_rate, *, stream=None) -> None:
         file=(stream or sys.stderr),
     )
 
+@guard_main("taxjson-convert-currency")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input", nargs="?", help="Input tax.json file")
@@ -463,7 +495,7 @@ def main():
              "contracts (their settled P/L follows the country's lot "
              "rule: average cost in Canada, FIFO in the US)")
     parser.add_argument(
-        "--default-rate", type=float, default=None,
+        "--default-rate", type=positive_rate, default=None,
         help="Fallback rate when the rates file is missing a date "
              "(default: 1.35). Passing it explicitly also allows a "
              "currency that is entirely absent from --rates to convert "

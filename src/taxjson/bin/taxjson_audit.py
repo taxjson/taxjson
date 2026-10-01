@@ -47,6 +47,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.bin.taxjson_convert_currency import positive_rate
 from taxjson.lib.core import get_tax_rules, load_transactions
 from taxjson.lib.country import (add_country_argument, canonical_country,
                                  refuse_foreign_flags)
@@ -646,7 +648,7 @@ def parse_args(argv=None):
                     "ticker map -> FX -> pool -> gain, every step "
                     "cross-checked. Exit 1 when any check fails.")
     add_country_argument(p)
-    p.add_argument("--year", type=int, help="Tax year filter.")
+    p.add_argument("--year", type=tax_year, help="Tax year filter.")
     p.add_argument("--tax-date", choices=["trade", "settle"], default=None)
     p.add_argument("--base", required=True,
                    help="Engine input books (mapped + converted) — the "
@@ -671,7 +673,7 @@ def parse_args(argv=None):
     p.add_argument("--base-currency",
                    help="Report currency (inferred from the base books "
                         "when omitted).")
-    p.add_argument("--default-rate", type=float, default=1.35)
+    p.add_argument("--default-rate", type=positive_rate, default=1.35)
     p.add_argument("--map", dest="ticker_map", help="ticker.map for "
                                                     "naming rename rules.")
     p.add_argument("--source", action="append", default=[],
@@ -729,6 +731,7 @@ def _norm_country(c: str) -> str:
     return canonical_country(c, what="--country")
 
 
+@guard_main("taxjson-audit", value_errors=True)
 def main(argv=None) -> int:
     args = parse_args(argv)
     country = _norm_country(args.country)

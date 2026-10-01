@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
+from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.country import country_arg, refuse_foreign_flags
 from taxjson.lib.income_dating import IncomeRules, parse_ric_entries
 from taxjson.lib import cli_diag
@@ -290,6 +291,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker') -> str:
     return "\n".join(lines)
 
 
+@guard_main("taxjson-sum-income")
 def main():
     parser = argparse.ArgumentParser(
         description="Summarize income from a transaction book (the "
