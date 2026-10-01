@@ -95,6 +95,60 @@ class TestCanadaFeeApportionmentEndToEnd(unittest.TestCase):
                           row['gain']), (3600.0, 3006.0, 30.0, 564.0))
 
 
+class TestPreLossTriggerBumpTime(unittest.TestCase):
+    """R1-305: the pre-loss-trigger ADJUST lands at loss + 1 s (23:59:59
+    when the loss is at 23:59:59), so a later same-day sale of the pool
+    averages the bump in and the loss itself never absorbs it."""
+
+    def _book(self, loss_time, second_date):
+        return [
+            T('BUYSELL', '2025-01-06', 'XYZ.TO', 100, 2000),
+            T('BUYSELL', '2025-02-01', 'XYZ.TO', 100, 1200),  # pre-loss rebuy
+            T('BUYSELL', '2025-02-03', 'XYZ.TO', -100, 1000, time=loss_time),
+            T('BUYSELL', second_date, 'XYZ.TO', -50, 1500, time='14:00:00'),
+        ]
+
+    def _check(self, res, adjust_time):
+        # The bump is placed right after its loss row (_wash_after) and
+        # its ADJUST line names loss + 1 s, wrapping to 23:59:59.
+        cmds = [w['adjust_cmd'] for w in res['wash_sales']]
+        self.assertEqual(cmds, [f'ADJUST 2025-02-03 {adjust_time} XYZ.TO '
+                                f'CAD 300.0000'])
+        loss, later = sorted(sales(res), key=lambda s: (s['date'],
+                                                        s['proceeds']))
+        self.assertEqual((loss['gain'], loss['disallowed_amount']),
+                         (-300.0, 300.0))
+        self.assertEqual((later['cost'], later['gain']), (950.0, 550.0))
+        inv = {i['symbol']: i for i in res['inventory']}
+        self.assertEqual((inv['XYZ.TO']['qty'], inv['XYZ.TO']['total_cost']),
+                         (50.0, 950.0))
+
+    @rule("CA-SL-09")
+    def test_later_same_day_sale_absorbs_the_bump(self):
+        self._check(run(self._book('10:00:00', '2025-02-03'), 2025),
+                    '10:00:01')
+
+    @rule("CA-SL-09")
+    def test_loss_at_235959_keeps_its_own_denial(self):
+        self._check(run(self._book('23:59:59', '2025-02-04'), 2025),
+                    '23:59:59')
+
+
+class TestUsDecemberMonthEndHoldingPeriod(unittest.TestCase):
+    """R1-315: the Dec-31 acquisition branch of held_more_than_one_year
+    (Pub 550 / Rev. Rul. 66-7) had no test."""
+
+    @rule("US-HOLD-01")
+    def test_dec31_acquisition(self):
+        h = held_more_than_one_year
+        self.assertFalse(h('2023-12-31', '2024-06-01'))
+        self.assertFalse(h('2023-12-31', '2024-12-31'))
+        self.assertTrue(h('2023-12-31', '2025-01-01'))
+        self.assertTrue(h('2023-12-31', '2025-01-31'))
+        self.assertTrue(h('2024-11-30', '2025-12-01'))
+        self.assertFalse(h('2024-11-30', '2025-11-30'))
+
+
 class TestGainsJsonRounding(unittest.TestCase):
     """R1-317 (part 2): gains JSON money is rounded to 4 dp, ROUND_HALF_UP;
     quantity keys pass through. The old test compared with places=4,
@@ -129,6 +183,26 @@ class TestConvertCurrencySettleDateKey(unittest.TestCase):
         self.assertAlmostEqual(out.price, 140.0, places=6)
 
 
+class TestGrantSinceUsesTheWritesSettleYear(unittest.TestCase):
+    """S068-22: option_grant_timing_since compares the write's year on the
+    tax_date basis — a Dec-31 write settling in the `since` year is
+    grant-timed."""
+
+    @rule("CA-OPT-01")
+    def test_dec31_write_settling_in_since_year(self):
+        book = [
+            T('BUYSELL', '2025-12-31', 'ABC270115C00030000.TO', -1, 300,
+              settle='2026-01-02'),
+            T('BUYSELL', '2027-01-05', 'ABC270115C00030000.TO', 1, 400,
+              settle='2027-01-06'),
+        ]
+        kw = dict(option_premium_timing='grant', option_grant_since=2026)
+        self.assertEqual(run(book, 2026, **kw)['summary']['total_gain'],
+                         300.0)
+        self.assertEqual(run(book, 2027, **kw)['summary']['total_gain'],
+                         -400.0)
+
+
 class TestDaysHeldDrivesScheduleThreeAcqYear(unittest.TestCase):
     """S069-09: the Canada record's days_held is where form-export's
     Schedule 3 year of acquisition comes from."""
@@ -139,6 +213,60 @@ class TestDaysHeldDrivesScheduleThreeAcqYear(unittest.TestCase):
         rec, = sales(res)
         self.assertEqual(rec['days_held'], 824)
         self.assertEqual(schedule3(res, 2025)['XYZ.TO']['acq_year'], '2023')
+
+
+class TestWashWindowBalanceAtDayThirty(unittest.TestCase):
+    """S069-18: wash_window.bal_at_end counts rows dated ON day +30."""
+
+    def _bal(self, book):
+        res = run(book, 2025)
+        return {s['date']: (s.get('wash_window') or {}).get('bal_at_end')
+                for s in sales(res)}
+
+    def test_sale_on_day_30_reduces_the_end_balance(self):
+        bal = self._bal([
+            T('BUYSELL', '2025-01-06', 'XYZ.TO', 100, 2000),
+            T('BUYSELL', '2025-02-03', 'XYZ.TO', -100, 1000),
+            T('BUYSELL', '2025-02-10', 'XYZ.TO', 100, 1100),
+            T('BUYSELL', '2025-03-05', 'XYZ.TO', -50, 600)])
+        self.assertEqual(bal['2025-02-03'], 50.0)
+
+    def test_buy_on_day_30_adds_to_the_end_balance(self):
+        bal = self._bal([
+            T('BUYSELL', '2025-01-06', 'XYZ.TO', 100, 2000),
+            T('BUYSELL', '2025-02-03', 'XYZ.TO', -100, 1000),
+            T('BUYSELL', '2025-02-10', 'XYZ.TO', 60, 660),
+            T('BUYSELL', '2025-03-05', 'XYZ.TO', 40, 440)])
+        self.assertEqual(bal['2025-02-03'], 100.0)
+
+
+class TestRenameOnWindowEndPoolBacking(unittest.TestCase):
+    """S069-19: the end-of-window pool backing is keyed after every row of
+    the window's last day, so a rename on that day routes the bump to
+    the renamed pool, not to the old symbol's partial sale."""
+
+    @rule("CA-SL-09")
+    def test_rename_on_window_end_with_partial_sale(self):
+        book = [
+            T('BUYSELL', '2025-01-06', 'OLD.TO', 100, 2000, time='09:30:00',
+              id='a0'),
+            T('BUYSELL', '2025-02-03', 'OLD.TO', -100, 1000, id='a1'),
+            T('BUYSELL', '2025-02-10', 'OLD.TO', 100, 1100, id='a2'),
+            T('BUYSELL', '2025-02-20', 'OLD.TO', -60, 720, id='a3'),
+            T('SPLIT', '2025-03-05', 'OLD.TO', 1.0, 0, time='09:30:00',
+              price=0, symbol_new='NEW.TO', id='sp'),
+            T('BUYSELL', '2025-03-05', 'NEW.TO', 50, 600, time='11:00:00',
+              acct='b', id='a4'),
+        ]
+        res = run(book, 2025)
+        self.assertEqual(res['summary']['total_gain'], -100.0)
+        self.assertEqual(res['summary']['total_disallowed'], 1380.0)
+        by = {s['date']: s for s in sales(res)}
+        self.assertEqual((by['2025-02-20']['cost'], by['2025-02-20']['gain']),
+                         (1200.0, 0.0))
+        inv = {i['symbol']: i for i in res['inventory']}
+        self.assertEqual((inv['NEW.TO']['qty'], inv['NEW.TO']['total_cost']),
+                         (90.0, 1880.0))
 
 
 class TestCanadaOptionRecordUnits(unittest.TestCase):
@@ -187,6 +315,39 @@ class TestInventoryCurrencyReachesHoldingsToml(unittest.TestCase):
         self.assertEqual(h['base_total_cost'], 1350.0)
 
 
+class TestUsReplacementOrderAcquiredByTime(unittest.TestCase):
+    """S070-13: same-date replacements go in order acquired by clock time
+    (Reg. 1.1091-1(c)), whatever their ids: the 10:00 taxable lot takes
+    the wash, the 14:00 IRA lot does not make it permanent."""
+
+    def _run(self, tax_time, ira_time):
+        book = [U('BUYSELL', '2025-01-06', 'AAA.US', 100, 2000,
+                  time='09:30:00', id='b0'),
+                U('BUYSELL', '2025-02-03', 'AAA.US', -100, 1000, id='s0'),
+                U('BUYSELL', '2025-02-10', 'AAA.US', 100, 1100,
+                  time=tax_time, id='z_tax')]
+        ira = [U('BUYSELL', '2025-02-10', 'AAA.US', 100, 1100,
+                 time=ira_time, id='a_ira', acct='ira')]
+        res = run(book, 2025, country='usa', sheltered=ira)
+        inv = {i['symbol']: i for i in res['inventory']}
+        return res, inv['AAA.US']['total_cost']
+
+    @rule("US-WASH-09")
+    def test_taxable_lot_first(self):
+        res, basis = self._run('10:00:00', '14:00:00')
+        self.assertEqual(basis, 2100.0)
+        self.assertEqual(res['summary']['total_gain'], 0.0)
+
+    @rule("US-WASH-11")
+    def test_earlier_ira_lot_makes_it_permanent(self):
+        # The IRA lot was acquired first (10:00): it takes the wash, the
+        # denial is permanent and the 14:00 taxable lot keeps its cost.
+        res, basis = self._run('14:00:00', '10:00:00')
+        self.assertEqual(basis, 1100.0)
+        rec, = sales(res)
+        self.assertEqual(rec['permanently_disallowed'], 1000.0)
+
+
 class TestUsChunkFeeApportionment(unittest.TestCase):
     """S070-15: a FIFO sale across two lots splits its commission by each
     chunk's quantity."""
@@ -221,6 +382,60 @@ class TestUsOptionRecordReachesForm8949(unittest.TestCase):
         desc = sorted(r['description']
                       for r in build_8949(sales(res))['part_I'])
         self.assertEqual(desc, ['10 XYZ.US', '2 XYZ250620C00050000 (option)'])
+
+
+class TestSplitAtTheTradesOwnTimestamp(unittest.TestCase):
+    """S071-05: a trade stamped exactly at the split's (date, time) is
+    already in post-split units and is not re-denominated."""
+
+    @rule("CA-CORP-01")
+    def test_ex_date_trade_at_split_time(self):
+        res = run([
+            T('BUYSELL', '2025-01-06', 'XYZ.TO', 100, 2000, time='09:30:00',
+              id='b0'),
+            T('SPLIT', '2025-06-10', 'XYZ.TO', 2.0, 0, time='09:30:00',
+              price=0, id='sp'),
+            T('BUYSELL', '2025-06-10', 'XYZ.TO', 100, 1200, time='09:30:00',
+              settle='2025-06-11', id='b1'),
+            T('BUYSELL', '2025-07-02', 'XYZ.TO', -300, 4500,
+              settle='2025-07-03', id='s1')], 2025)
+        rec, = sales(res)
+        self.assertEqual((rec['qty'], rec['cost'], rec['gain']),
+                         (300.0, 3200.0, 1300.0))
+        self.assertEqual([i for i in res['inventory']
+                          if abs(i.get('qty') or 0) > 1e-9], [])
+
+
+class TestCanadaBalanceWalkClockOrder(unittest.TestCase):
+    """S074-11: the per-account balance walk orders same-day rows by clock
+    time like the ACB pass, even when the export lists them otherwise."""
+
+    @rule("CA-SL-08")
+    def test_buy_then_sell_same_day_other_account(self):
+        res = run([
+            T('BUYSELL', '2025-01-06', 'XYZ.TO', 100, 2000, time='09:30:00',
+              id='t1'),
+            T('BUYSELL', '2025-02-03', 'XYZ.TO', -100, 1000, id='t2'),
+            # Listed sell-first; the clock says buy 10:00, sell 14:00.
+            T('BUYSELL', '2025-02-10', 'XYZ.TO', -100, 1150, time='14:00:00',
+              acct='b', id='a_sell'),
+            T('BUYSELL', '2025-02-10', 'XYZ.TO', 100, 1100, time='10:00:00',
+              acct='b', id='z_buy'),
+            T('BUYSELL', '2025-02-11', 'XYZ.TO', 50, 550, time='09:30:00',
+              acct='b', id='t5')], 2025)
+        self.assertEqual(res['summary']['total_gain'], -725.0)
+        self.assertEqual(res['summary']['total_disallowed'], 725.0)
+        by = {s['date']: s for s in sales(res)}
+        self.assertEqual(by['2025-02-10']['cost'], 1600.0)
+        inv = {i['symbol']: i for i in res['inventory']}
+        self.assertEqual((inv['XYZ.TO']['qty'], inv['XYZ.TO']['total_cost']),
+                         (50.0, 775.0))
+        # The wash window's running balance walks the same clock order
+        # (the ACB pass no longer depends on this walk; its display does).
+        win = {(t['date'], t['role']): t['running_bal'] for t in
+               by['2025-02-03']['wash_window']['transactions']}
+        self.assertEqual(win[('2025-02-10', 'trigger')], 100.0)
+        self.assertEqual(win[('2025-02-10', 'other_sell')], 0.0)
 
 
 if __name__ == '__main__':
