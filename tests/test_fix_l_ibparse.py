@@ -664,5 +664,72 @@ class TestIbCommissionRefundFolds(unittest.TestCase):
         self.assertIn('kept as a FEE row', err)
 
 
+# ------------------------------------------- pinned behaviours (tests)
+INT_H = 'Interest,Header,Currency,Date,Description,Amount\n'
+
+
+class TestIbGuardsBothWays(unittest.TestCase):
+    """S058-00 / S059-20: each refusal tested for every operand."""
+
+    def _refused(self, text):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaises(BrokerageParseError):
+            _parse_ib(text)
+
+    def test_blank_currency_alone_is_refused(self):
+        self._refused(_trades(
+            'Trades,Data,Order,Stocks,,U5550001,QZX,'  # pii-ok
+            '"2025-03-03, 10:00:00",100,10,0,-1000,-1,0,0,0,O\n'))
+
+    def test_blank_symbol_alone_is_refused(self):
+        self._refused(_trades(_trade('', '2025-03-03, 10:00:00', 100, 10,
+                                     -1000)))
+
+    def test_forex_symbol_without_quote_or_dot_is_refused(self):
+        for sym in ('USD.', 'USDCAD'):
+            with self.subTest(sym=sym):
+                self._refused(_trades(_trade(
+                    sym, '2025-03-03, 10:00:00', 1000, 1.38, -1380,
+                    cat='Forex', cur='CAD')))
+
+    def test_implausible_commission_either_sign_is_refused(self):
+        for comm in (-600, 600):
+            with self.subTest(comm=comm):
+                self._refused(_trades(_trade(
+                    'QZX', '2025-03-03, 10:00:00', 100, 10, -1000,
+                    comm=comm)))
+
+
+class TestIbSignsAsExported(unittest.TestCase):
+    """S058-14 / S058-15 / S059-01: fixtures with IB's real signs."""
+
+    def test_debit_interest_is_negative_and_nets(self):
+        _, txs, _ = _parse_ib(HEAD + INT_H
+                              + 'Interest,Data,CAD,2025-02-04,CAD Debit '
+                                'Interest for Jan-2025,-24.64\n'
+                              + 'Interest,Data,CAD,2025-02-04,CAD Credit '
+                                'Interest for Jan-2025,1.10\n')
+        self.assertEqual([t['net_amount'] for t in txs], [-24.64, 1.10])
+        self.assertAlmostEqual(sum(t['net_amount'] for t in txs), -23.54)
+
+    def test_fee_reversal_nets_its_charge(self):
+        _, txs, _ = _parse_ib(HEAD + FEES_H
+                              + 'Fees,Data,Other Fees,CAD,2025-03-03,'
+                                'QZX Market Data for Mar 2025,-1.40\n'
+                              + 'Fees,Data,Other Fees,CAD,2025-03-10,'
+                                'Cancel[QZX Market Data for Mar 2025],1.40\n')
+        self.assertEqual([t['net_amount'] for t in txs], [1.40, -1.40])
+        self.assertAlmostEqual(sum(t['net_amount'] for t in txs), 0.0)
+
+    def test_transfer_out_row_keeps_price_and_positive_net(self):
+        _, txs, _ = _parse_ib(HEAD + XFER_H + _xfer(
+            'QZX', '2025-08-13', -700, '"-27,650.00"', typ='Internal',
+            cur='CAD'))
+        t, = txs
+        self.assertEqual(t['quantity'], -700)
+        self.assertAlmostEqual(t['price'], 39.5)
+        self.assertAlmostEqual(t['net_amount'], 27650.0)
+
+
 if __name__ == '__main__':
     unittest.main()
