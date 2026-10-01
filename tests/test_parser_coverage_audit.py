@@ -638,7 +638,9 @@ class TestIbRowAccounting(unittest.TestCase):
         self.assertEqual(parser._skip_counts.get(
             f"{NE}section Cash Report (not translated)"), 2)
         actions = sorted(t["action"] for t in txs)
-        self.assertEqual(actions, ["BUYSELL", "DIVIDEND", "FEE", "FEE",
+        # The commission refund names the MSFT buy: folded into it
+        # (tax-logic CA-ACB-COMMREFUND), so one FEE row (market data).
+        self.assertEqual(actions, ["BUYSELL", "DIVIDEND", "FEE",
                                    "INTEREST", "SPLIT", "TAX", "TRANSFER"])
         # (a) the summary note actually prints for IB now.
         self.assertIn("recognized non-event", err)
@@ -649,9 +651,10 @@ class TestIbRowAccounting(unittest.TestCase):
         # RE-PREMISED: the SEC levy (0.30) is a breakdown of the -1
         # Comm/Fee, not an extra charge (Cash Report identity:
         # sum(Comm/Fee) == Commissions + Transaction Fees).
+        # The 0.50 refund nets against it (audit R1-58).
         msft = next(t for t in txs if t["action"] == "BUYSELL")
-        self.assertAlmostEqual(msft["fee"], 1.00)
-        self.assertAlmostEqual(msft["net_amount"], 20001.00)
+        self.assertAlmostEqual(msft["fee"], 0.50)
+        self.assertAlmostEqual(msft["net_amount"], 20000.50)
 
     def test_fees_subtotals_excluded_from_dateless_warning(self):
         csv = IB_HEAD + (

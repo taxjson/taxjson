@@ -29,10 +29,17 @@ Convention notes encoded here (the "why" behind the checks):
     lint mode, since warning on every IB split would be pure noise.
   * ADJUST: signed ACB delta in `net_amount` (negative = reduction,
     e.g. return of capital).
+  * FEE: `net_amount` POSITIVE = charged, NEGATIVE = a refund or
+    rebate — the sign IB, Questrade, RBC, the .tt FEE line, taxjson
+    fx-cash and the fees report use (a broker's cash sign is the
+    opposite: flip it, as TAX is flipped). Audit S065-10.
   * date/date_settle: `YYYY-MM-DD`. `date_settle` is the settlement
     date; equities follow the era-aware T+2 (pre-2024-05-28 US /
     05-27 CA) → T+1 rule, options T+1 — see
     `BaseBrokerage.equity_settlement_date` / `settlement_date_t1`.
+    Crypto and other round-the-clock assets settle on the TRADE date
+    (date_settle = date): a T+1 helper moved a Dec-31 crypto sale into
+    the next tax year (audit S065-13).
 """
 
 import re
@@ -149,7 +156,11 @@ def validate_transactions(txs: List[Dict[str, Any]],
                 errors.append(f"{_who(tx, i)}: trade net_amount must be "
                               f">= 0 (got {net}); direction belongs in "
                               f"the quantity sign")
-            if price < -_MONEY_EPS:
+            # A futures price can be negative (WTI, April 2020; a
+            # calendar spread): booked correctly, so not an error
+            # there (audit S053-13).
+            if price < -_MONEY_EPS and not str(
+                    tx.get('symbol') or '').startswith('F:'):
                 errors.append(f"{_who(tx, i)}: negative price {price}")
             # Notional sanity: net_amount vs qty * price * multiplier
             # (brokers round, and fees sit inside net for buys / outside
@@ -203,6 +214,19 @@ def validate_transactions(txs: List[Dict[str, Any]],
                         f"legacy plain-split spelling; canonical is "
                         f"symbol_new='' (both are normalized downstream)")
 
+        # A bare (crypto) symbol settles on its trade date; a later
+        # settle date is an equity/option cycle applied to a 24/7 asset
+        # (a Dec-31 sale then lands in the next year — S065-13).
+        _bare = tx.get('symbol') or ''
+        if (action == 'BUYSELL' and _bare and '.' not in _bare
+                and not _bare.startswith('F:')
+                and not is_option_symbol(_bare)
+                and tx.get('date_settle') and tx.get('date')
+                and tx['date_settle'] != tx['date']):
+            warnings.append(f"{_who(tx, i)}: bare (crypto) symbol settles "
+                            f"{tx['date_settle']}, not on its trade date "
+                            f"— crypto has no settlement cycle")
+
         # Suffix sanity: dotted symbols must end in a known market
         # suffix (bare symbols are crypto and exempt). OCC option
         # symbols carry their own suffix and match the core regex.
@@ -254,6 +278,8 @@ def render_schema_prompt() -> str:
         "reversal rows that must net out — never abs() an amount.",
         "  - DIVIDEND gross_amount is the pre-withholding amount when "
         "known; TAX rows are positive-means-withheld.",
+        "  - FEE: net_amount POSITIVE = charged, NEGATIVE = a refund or "
+        "rebate (flip the broker's cash sign; never abs()).",
         "  - SPLIT: quantity holds the RATIO (2.0 = 2-for-1). "
         "symbol_new='' for a plain split; a different symbol means a "
         "rename.",
@@ -263,9 +289,11 @@ def render_schema_prompt() -> str:
         "RETURN OF CAPITAL).",
         "  - date_settle: use the broker's settlement column when "
         "present; otherwise compute it — equities are era-aware T+2 "
-        "(before 2024-05-28 US / 2024-05-27 CA) then T+1, options are "
-        "T+1. Call BaseBrokerage.equity_settlement_date / "
-        "settlement_date_t1; do NOT hardcode T+1 for equities.",
+        "(before 2024-05-28 US / 2024-05-27 CA) then T+1: call "
+        "BaseBrokerage.equity_settlement_date (do NOT hardcode T+1 for "
+        "equities); options are T+1: settlement_date_t1. Crypto and "
+        "other round-the-clock assets settle on the TRADE date "
+        "(date_settle = date) — no settle helper applies to them.",
         "  - Equity symbols carry a market suffix from the currency "
         "(.US/.TO/...) via BaseBrokerage.apply_currency_suffix; option "
         "symbols are OCC format (BASE + yymmdd + C/P + 8-digit strike) "

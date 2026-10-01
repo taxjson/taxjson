@@ -553,10 +553,12 @@ def looks_like_ib_statement(text: str) -> bool:
     """The section,Header/Data CSV shape ib_extractor parses. A Flex
     query produces it with 'include section code and line descriptor'
     enabled; without it the download is a different format the parser
-    would refuse."""
-    head = text[:4000]
-    return ("Statement,Header," in head or '"Statement","Header"' in head
-            or "Trades,Header," in head or '"Trades","Header"' in head)
+    would refuse. The SAME test broker detection routes on, so a
+    download fetch accepts is one `taxjson run` can read (audit R1-57:
+    a 'Trades,Header' anywhere in the first 4 KB used to pass here and
+    then stop the run with "cannot detect broker")."""
+    from taxjson.bin.taxjson_detect_brokerage import looks_like_ib_text
+    return looks_like_ib_text(text)
 
 
 # ------------------------------------------------------------ window

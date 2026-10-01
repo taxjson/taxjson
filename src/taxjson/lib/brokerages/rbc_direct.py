@@ -186,10 +186,11 @@ def _err(path: Path, line: int, msg: str) -> RbcFormatError:
     return RbcFormatError(f"{path.name}:{line}: {msg}")
 
 
-_NUM_RE = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)')
+_NUM_RE = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)', re.ASCII)
 # A first group of 0 is a decimal comma ('0,125'), never thousands
 # (audit S055-08).
-_THOUSANDS_RE = re.compile(r'[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?')
+_THOUSANDS_RE = re.compile(r'[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d*)?',
+                           re.ASCII)
 
 
 def rbc_number(raw: Optional[str], *, path: Path, line: int,
@@ -216,6 +217,10 @@ def rbc_number(raw: Optional[str], *, path: Path, line: int,
                    f"parser can read safely (expected e.g. 1234.5, "
                    f"1,234.50 or (12.50)) — refusing to guess")
     v = float(s)
+    if v in (float('inf'), float('-inf')):
+        # A 400-digit run overflows (audit S055-09).
+        raise _err(path, line, f"{column} {raw!r} is out of range — "
+                   f"refusing it")
     if neg:
         if v < 0:
             raise _err(path, line, f"{column} {raw!r}: a parenthesised "

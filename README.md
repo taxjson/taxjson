@@ -324,7 +324,7 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 #                                   # closing purchase is not a disposition s.54 reaches)
 # fx_cash_gains = true         # end-of-run s.39(1.1) FX-on-cash report (off by default)
 # foreign_return_of_capital = "dividend" # IB "(Return of Capital)" from a NON-Canadian
-#                                   # issuer: "dividend" (Canada default — ITA s.90(2)) or
+#                                   # issuer: "dividend" (Canada default — ITA s.90(1)) or
 #                                   # "acb". Canada-only: a US project always
 #                                   # lowers basis (IRC s.301(c)(2)).
 # corporate_distributions = ["XYZ.TO"] # Canada-only: Canadian issuers whose
@@ -1047,9 +1047,10 @@ cases differently:
    a **payment in lieu** labeled "(Return of Capital)" is paid by the share
    borrower and is always income (`DIVIDEND_IN_LIEU`), never an ACB
    reduction; and ROC from a **non-Canadian issuer** (ISIN country not
-   `CA`) is booked as a foreign dividend — ITA s.90(2) deems a non-resident
-   corporation's pro-rata distribution a dividend whatever the US label
-   says (the s.90(3) exception is for foreign affiliates). Set
+   `CA`) is booked as a foreign dividend (ITA s.90(1)): a US "return of capital"
+   (a distribution beyond earnings and profits) is a cost reduction for
+   Canadian purposes only when the issuer really reduced its paid-up
+   capital (s.53(2)(b)(ii)); s.90(2)/(3) are foreign-affiliate rules. Set
    `foreign_return_of_capital = "acb"` in `[settings]` to keep the ACB
    treatment instead.
 2. **Fund/ETF distribution ROC needs one manual entry per fund per year.**
@@ -1270,6 +1271,7 @@ BUYSELL  <date>  <time>  <symbol>  <qty>  <currency>  <price>  <total>  <fee>
 | `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount), written as a positive number. A negative sell total is refused (a cash-signed `-2000` used to be booked as negative proceeds); if the commission exceeds the proceeds, enter `0`. |
 | `fee` | commission (optional) |
 | INTEREST lines | `INTEREST date time CURRENCY amount` — income with no symbol, e.g. a T5 box-13 interest figure a broker's trade export does not carry (Webull): `INTEREST 2025-12-31 16:00:00 USD 1149.27`. |
+| FEE lines | `FEE date time CURRENCY amount` — a charge is POSITIVE, a refund or rebate NEGATIVE (the sign `fees` and `fx-cash` read; the opposite of a cash-statement sign). |
 
 Example — a confirmation for "bought 100 XYZ.US @ $45.00, $5 commission":
 
@@ -1333,7 +1335,7 @@ The commands below drive the pipeline stage by stage — handy for one-off files
 ```bash
 # 1. Convert a broker CSV to normalized JSON. --country picks the one
 #    country-specific parse choice (IB foreign return of capital: ITA
-#    s.90(2) dividend in Canada, a basis reduction in the US).
+#    s.90(1) dividend in Canada, a basis reduction in the US).
 taxjson-brokerage --brokerage ib --account margin --country ca activity.csv > margin.json
 
 # 2. Merge each ACCOUNT'S broker files into one per-account JSON.
