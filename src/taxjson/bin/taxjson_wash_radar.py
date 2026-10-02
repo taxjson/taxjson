@@ -1755,7 +1755,18 @@ def main():
         if not adv:
             if abs(tax_q) > _eps or abs(shl_q) > _eps:
                 is_relevant = True
-                if _short_pos and us_mode:
+                if _short_pos and is_option_ticker(ticker):
+                    # A written option: it is bought back, and only the
+                    # identical contract ever replaces it (CA-SL-06 /
+                    # US-WASH-03) — never "the shares".
+                    adv = ("CLEAR: "
+                           + ("No recent writes of this contract. "
+                              if us_mode else "No recent buys. ")
+                           + "Safe to buy it back at a loss (do not "
+                           + ("write it again" if us_mode
+                              else "buy the same contract again")
+                           + " for 30 days).")
+                elif _short_pos and us_mode:
                     adv = ("CLEAR: No recent short sales. Safe to cover at "
                            "a loss (do not short it again for 30 days — a "
                            "new short sale is the replacement, §1091(e)).")

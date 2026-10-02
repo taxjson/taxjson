@@ -397,6 +397,17 @@ class TestShortWording(unittest.TestCase):
         self.assertNotIn("Safe to sell", row["advisory"])
 
 
+@rule("CA-PLAN-01")
+class TestWrittenOptionWording(unittest.TestCase):
+    def test_written_call_is_bought_back_not_covered_with_shares(self):
+        book = [_row("2026-08-03", "ABC261218C00050000.TO", -1, 200.0,
+                     rid="w1")]
+        row = _rows(book, "2026-10-01")["ABC261218C00050000.TO"]
+        self.assertEqual(row["category"], "CLEAR")
+        self.assertIn("buy it back", row["advisory"])
+        self.assertNotIn("shares", row["advisory"])
+
+
 # ------------------------------------------------ settle calendars
 @rule("CA-PLAN-01")
 class TestRescueCalendars(unittest.TestCase):
