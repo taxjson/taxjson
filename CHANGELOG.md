@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `.tt` files: a symbol with no market suffix (MSFT for MSFT.US) on a
+  line of an account that is not `crypto = true` is now warned about in
+  the run diagnostics like an unknown suffix — it is its own ACB pool and
+  the broker's rows for the real listing go short (A2-0777).
 - IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
   database is a one-line error saying to install `tzdata` (now a declared
   dependency on Windows), not a ZoneInfoNotFoundError traceback

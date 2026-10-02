@@ -515,5 +515,50 @@ class TestIbNoTzdata(unittest.TestCase):
             "2025-07-01")
 
 
+class TestTtBareEquitySymbol(_Tmp):
+    """A2-0777: a suffix-less symbol in an equity account is said."""
+
+    def make(self, crypto=False):
+        (self.root / "taxjson.toml").write_text(
+            TOML + ("crypto = true\n" if crypto else ""))
+        d = self.root / "inputs" / "margin"
+        d.mkdir(parents=True)
+        (d / "hand.tt").write_text(
+            "BUYSELL 2025-02-03 10:00:00 QZMS.TO 10 CAD 400 4001 1\n"
+            "BUYSELL 2025-06-03 10:00:00 QZMS -5 CAD 420 2099 1\n")
+        return d / "hand.tt"
+
+    def test_warned_in_equity_account(self):
+        tt = self.make()
+        r = tj(self.root, "run", "--no-input")
+        no_tb(self, r)
+        # The channel of the unknown-suffix warning (S028-19): the
+        # stage .diag and the .sum DIAGNOSTICS.
+        self.assertIn("symbol QZMS has no market suffix",
+                      (self.root / "reports" / "margin.sum").read_text())
+        self.assertTrue(tt.exists())
+
+    def test_not_warned_in_crypto_account(self):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_convert_tt import tt_to_json
+        tt = self.make(crypto=True)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            tt_to_json(tt, "margin")
+        self.assertNotIn("no market suffix", err.getvalue())
+
+    def test_outside_project_not_warned(self):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_convert_tt import tt_to_json
+        tt = self.root / "x.tt"
+        tt.write_text("BUYSELL 2025-02-03 10:00:00 QZMS 10 USD 400 4001 1\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            tt_to_json(tt, "default")
+        self.assertNotIn("no market suffix", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
