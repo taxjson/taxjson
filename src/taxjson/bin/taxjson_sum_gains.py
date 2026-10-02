@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.country import country_arg
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib.ticker_map import get_underlying as get_base_ticker, is_option_ticker
 from taxjson.lib import cli_diag
@@ -249,7 +250,12 @@ def get_sort_value(ticker: str, currency: str, key: str, ticker_stats: Dict[str,
     return 0
 
 def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool = False,
-                  staking: bool = False) -> str:
+                  staking: bool = False, country: str = None) -> str:
+    """`country` (canada | usa | None) words the form and cost
+    pointers: Schedule 3 / ACB, Form 8949 / basis, or neutral words
+    for a standalone run without --country (re-audit A2-0432)."""
+    from taxjson.lib.country import COST_TERM, GAINS_FORM, LOSS_RULE
+    form, cost_word = GAINS_FORM[country], COST_TERM[country]
     lines = []
     ticker_stats = data['ticker_stats']
     total_year = data['total_year']
@@ -289,7 +295,8 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         iter_note = f" after {iters} iterations" if iters else ""
         lines.append(f"{BOLD}{RED}{'!' * 112}{RESET}")
         lines.append(
-            f"{BOLD}{RED}WARNING: the CRA wash-sale solver did NOT converge{iter_note}. "
+            f"{BOLD}{RED}WARNING: the {LOSS_RULE[country]} solver did NOT "
+            f"converge{iter_note}. "
             f"Gains and disallowed-loss totals below may be incomplete or "
             f"inconsistent — verify before filing.{RESET}"
         )
@@ -396,7 +403,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         # gains below are the same under both conventions (2026-09
         # audit R1-208).
         lines.append("  (engine sign convention: shorts/written options "
-                     "negated — for Schedule 3 proceeds and ACB use "
+                     f"negated — for {form} proceeds and {cost_word} use "
                      "`taxjson form-export`)")
         lines.append("-" * 54)
         # 'cap' is every NON-option disposition: shares and units, but
@@ -404,7 +411,7 @@ def format_report(data: Dict[str, Any], sort_by: str = 'ticker', no_color: bool 
         # old "STOCK" label read as line 4 and disagreed with it by the
         # futures/crypto gains (audit R1-211, S051-01, S031-04).
         lines.append(f"TOTAL REALIZED NON-OPTION GAIN:{color_val(totals['cap'], '14,.2f')} {currency}")
-        lines.append("  (shares, units, futures and crypto — Schedule 3 "
+        lines.append(f"  (shares, units, futures and crypto — {form} "
                      "lines: `taxjson form-export`)")
         lines.append(f"TOTAL REALIZED OPTION GAIN: {color_val(totals['opt'], is_cost=False)} {currency}")
         lines.append(f"TOTAL REALIZED GAIN:        {color_val(totals['total'], is_cost=False)} {currency}")
@@ -523,6 +530,11 @@ def main():
     parser.add_argument("--staking", action="store_true",
                         help="The books are a crypto account's: label its "
                              "DIVIDEND total as staking rewards")
+    parser.add_argument("--country", type=country_arg, default=None,
+                        metavar="{canada,ca,usa,us}",
+                        help="Words the form and cost pointers (Schedule "
+                             "3 / ACB or Form 8949 / basis; neutral "
+                             "without it). `taxjson run` passes it.")
     parser.add_argument("files", nargs="*", metavar="FILE")
     args = parser.parse_args()
     
@@ -591,7 +603,7 @@ def main():
         print(json.dumps(report_data, indent=2, sort_keys=True))
         return
     print(format_report(report_data, args.sort_by, args.no_color,
-                        staking=args.staking))
+                        staking=args.staking, country=args.country))
 
 if __name__ == "__main__":
     main()

@@ -4,7 +4,7 @@
 Usage:
     taxjson-corp-actions --brokerage ib IB.csv --country canada > corp.json
     taxjson-corp-actions --brokerage ib stmt_q1.csv stmt_q2.csv \\
-        --manifest elections.json > corp.json
+        --country canada --manifest elections.json > corp.json
 
 All events from all years are surfaced — even old ones — because corp
 actions shape inventory across years. An unresolved 2024 spinoff would
