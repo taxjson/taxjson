@@ -1519,6 +1519,7 @@ class RbcBrokerage(BaseBrokerage):
                     expiries.append(tx)
             transactions.extend(out)
         self._pair_reinvest_reversals(transactions)
+        self._pair_warrant_exercises(transactions)
 
         if spinoffs:
             # Country-neutral (audit S064-20): corp-actions has election
@@ -1976,6 +1977,15 @@ class RbcBrokerage(BaseBrokerage):
             or desc_is_assignment_notice
         ):
             action = 'ASSIGN'
+        # A warrant / right EXERCISE (a non-option symbol): the leg that
+        # gives up the warrants (qty < 0, no cash) and the leg that
+        # receives the shares are paired after the file is read; the
+        # warrant leg becomes an ASSIGN naming the shares (A2-0274).
+        _ex_role = ''
+        if (not is_option_symbol and 'Exercise' in activity
+                and abs(qty) > 1e-12):
+            _ex_role = 'warrant' if (qty < 0 and abs(net) < 0.005) \
+                else ('shares' if qty > 0 else '')
 
         fee = self.back_compute_fee(qty, price, net, is_option=is_option_symbol)
         if r.cls == 'expiry' and not opt:
@@ -2002,10 +2012,53 @@ class RbcBrokerage(BaseBrokerage):
             'description': desc,
             '_expiry': is_expiry,
         }
+        if _ex_role:
+            tx['_exercise'] = (_ex_role, r.line)
         oc = self._open_close(r, bool(occ))
         if oc:
             tx['open_close'] = oc
         return tx
+
+    def _pair_warrant_exercises(self, transactions) -> None:
+        """Mark each warrant/right `Exercise` leg (the warrants given up,
+        no cash) with the share listing the same-date `Exercise` buy
+        delivers: an ASSIGN the engines treat like a long call's
+        exercise — no disposition, the warrant's cost goes into the
+        shares (CA s.49(3); US basis carryover; A2-0274). A leg with no
+        single share leg is refused: booked as a sale at 0 its cost
+        would become a capital loss."""
+        legs = [t for t in transactions if t.get('_exercise')]
+        shares = [t for t in legs if t['_exercise'][0] == 'shares']
+        used = set()
+        for w in legs:
+            role, line = w['_exercise']
+            if role != 'warrant':
+                continue
+            cands = [t for t in shares if id(t) not in used
+                     and t['date'] == w['date']
+                     and t.get('currency') == w.get('currency')]
+            if len(cands) > 1:
+                wr = re.sub(r'\.(TO|US|V|CN|NE)$', '', w['symbol'])
+                cands = [t for t in cands if wr.replace('.', '').startswith(
+                    re.sub(r'\.(TO|US|V|CN|NE)$', '',
+                           t['symbol']).replace('.', ''))]
+            if len(cands) != 1:
+                raise _err(Path(self._fname), line,
+                    f"an Exercise of {w['symbol']} (a warrant or right) "
+                    f"with {'no' if not cands else 'more than one'} "
+                    f"same-day Exercise share leg — refusing to book the "
+                    f"warrants as a sale at 0 (their cost belongs in the "
+                    f"shares). Book the exercise in a .tt file.")
+            st = cands[0]
+            used.add(id(st))
+            w['action'] = 'ASSIGN'
+            w['exercise_of'] = st['symbol']
+            w['date_settle'] = st['date_settle']
+            self._note(f"line {line}: warrant {w['symbol']} exercised into "
+                       f"{st['symbol']} — no disposition; the warrant's "
+                       f"cost goes into the shares' cost.")
+        for t in legs:
+            t.pop('_exercise', None)
 
     def _open_close(self, r, is_option: bool) -> str:
         """The broker's own open/close marker on an option row, as the

@@ -499,10 +499,21 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "row), .VN, .CN and .NE fold into .TO for broker exports "
                  "and .tt lines alike. Two other listings are one "
                  "security only when ticker.map joins them. Renames and "
-                 "splits carry the pool forward; a renamed ticker that "
-                 "trades again after its rename stays identical to the "
-                 "new symbol for the superficial-loss rule and is flagged "
-                 "(ATTENTION) — it may be another company reusing it."),
+                 "splits carry the pool forward (CA-ACB-RENAME)."),
+            Rule("CA-ACB-RENAME",
+                 "A ticker change is a dated event (a broker corporate-"
+                 "action row, a .tt SPLIT line, or a ticker.map line "
+                 "`RENAME OLD NEW YYYY-MM-DD`): on that date the pool, "
+                 "its ACB and acquisition dates carry from OLD to NEW, and "
+                 "the superficial-loss rule treats OLD before the date and "
+                 "NEW after it as identical property. A trade in OLD after "
+                 "the date is a different security unless ticker.map "
+                 "says it is the renamed shares (`late=fold`, booked as "
+                 "NEW); `late=separate` records another company reusing "
+                 "the ticker. Such trades are listed by `taxjson renames` "
+                 "and stop `run --strict` until declared. An undated "
+                 "rename (GLOBAL, or RENAME without a date) applies to "
+                 "every row of OLD.", cont=True),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -705,6 +716,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-OPT-07",
                  "If the premium's year was already filed, `taxjson "
                  "option-boundary` flags the T1-ADJ.", cont=True),
+            Rule("CA-OPT-09",
+                 "Exercising a warrant or right is not a disposition: its "
+                 "cost and the exercise price paid become the shares' ACB "
+                 "(s.49(3)). The parser names the shares on the warrant "
+                 "leg (IB `Ex` legs, RBC `Exercise` rows, paired by date); "
+                 "IB leaves a leg it cannot pair a disposal at 0 with an "
+                 "ATTENTION line, RBC refuses the file.", cont=True),
         ]),
         ("Corporate actions (elections in the account manifest)", [
             Rule("CA-CORP-01",
@@ -1140,11 +1158,22 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "whatever venue the input names (.V on a CAD row, .VN, "
                  ".CN, .NE; a dotted preferred series), for broker "
                  "exports and .tt lines alike; two other listings are one "
-                 "security only when ticker.map joins them. A renamed "
-                 "ticker that trades again after its rename stays "
-                 "identical to the new symbol for the wash-sale rule and "
-                 "is flagged (ATTENTION) — it may be another company "
-                 "reusing it."),
+                 "security only when ticker.map joins them; renames are "
+                 "dated events (US-BASIS-RENAME)."),
+            Rule("US-BASIS-RENAME",
+                 "A ticker change is a dated event (a broker corporate-"
+                 "action row, a .tt SPLIT line, or a ticker.map line "
+                 "`RENAME OLD NEW YYYY-MM-DD`): on that date the basis "
+                 "lots and their holding periods carry from OLD to NEW, "
+                 "and the wash-sale rule treats OLD before the date and "
+                 "NEW after it as one security. A trade in OLD after "
+                 "the date is a different security unless ticker.map says "
+                 "it is the renamed shares (`late=fold`, booked as NEW); "
+                 "`late=separate` records another company reusing the "
+                 "ticker. Such trades are listed by `taxjson renames` and "
+                 "stop `run --strict` until declared. An undated rename "
+                 "(GLOBAL, or RENAME without a date) applies to every row "
+                 "of OLD.", cont=True),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "
@@ -1408,6 +1437,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "never by row order.", cont=True),
             Rule("US-OPT-03", "Cash-settled options realize on the option.",
                  cont=True),
+            Rule("US-OPT-06",
+                 "Exercising a warrant or right is not a sale: its basis "
+                 "and the exercise price paid become the shares' basis, "
+                 "and the shares' holding period starts at the exercise. "
+                 "The parser names the shares on the warrant leg (IB `Ex` "
+                 "legs, RBC `Exercise` rows, paired by date); IB leaves a "
+                 "leg it cannot pair a disposal at 0 with an ATTENTION "
+                 "line, RBC refuses the file.", cont=True),
             Rule("US-OPT-04",
                  "Not modelled: §1256 60/40 contracts, §1233 and §1259. A "
                  "broad-based index option (SPX, XSP, NDX, RUT, VIX, DJX, "

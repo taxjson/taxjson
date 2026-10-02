@@ -40,7 +40,11 @@ from taxjson.lib.ticker_map import map_ticker
 #   DISTINCT a b      — declares two look-alike listings are SEPARATE
 #                       securities (a CDR vs its US underlying); changes
 #                       no symbol, silences the scan's MAP-GAP nag.
-_MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT")
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     — a ticker change on that date: a DATED event
+#                       (lib/renames). Without a date it is GLOBAL.
+_MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT",
+                 "RENAME")
 
 # Parsed map: glob/tobase/journal are {from: to}; delete is {symbol,...};
 # distinct is a set of frozenset pairs the user declares are SEPARATE
@@ -49,9 +53,13 @@ _MAP_KEYWORDS = ("GLOBAL", "TOBASE", "JOURNAL", "DELETE", "DISTINCT")
 # equivalent — pooling their ACB would be wrong). DISTINCT changes no
 # symbol; it silences the scan's MAP-GAP nagging for that pair and
 # records the judgment in the map file where it belongs.
+# dated: the dated RENAME lines (lib/renames.DatedRename), each a ticker
+# change booked as an event on its date; undated_rename: the FROM symbols
+# of undated RENAME lines (kept in glob — they mean exactly GLOBAL).
 TickerMap = namedtuple("TickerMap",
                        ["glob", "tobase", "journal", "delete",
-                        "distinct"])
+                        "distinct", "dated", "undated_rename"],
+                       defaults=((), frozenset()))
 
 
 def _parse_map_file(file_path: Path):
@@ -73,7 +81,10 @@ def _parse_map_file(file_path: Path):
     distinct = set()
     problems: List[str] = []
     notes: List[str] = []
-    buckets = {"GLOBAL": glob, "TOBASE": tobase, "JOURNAL": journal}
+    buckets = {"GLOBAL": glob, "TOBASE": tobase, "JOURNAL": journal,
+               "RENAME": glob}
+    dated: list = []
+    undated_rename = set()
     # from -> (target, where, line) of its first rename rule
     first_rule: Dict[str, tuple] = {}
     distinct_where: Dict[frozenset, tuple] = {}
@@ -92,7 +103,26 @@ def _parse_map_file(file_path: Path):
             if kw not in _MAP_KEYWORDS:
                 problems.append(
                     f"{where}: line has no GLOBAL/TOBASE/JOURNAL/DELETE/"
-                    f"DISTINCT keyword: {line!r}")
+                    f"DISTINCT/RENAME keyword: {line!r}")
+                continue
+            if kw == "RENAME" and len(syms) > 2:
+                # RENAME OLD NEW YYYY-MM-DD [late=fold|late=separate]
+                from taxjson.lib.renames import (DatedRename,
+                                                 parse_rename_tail)
+                try:
+                    _d, _late = parse_rename_tail(parts[3:])
+                except ValueError as e:
+                    problems.append(
+                        f"{where}: RENAME line needs `from to "
+                        f"YYYY-MM-DD [late=fold|late=separate]` — {e}: "
+                        f"{line!r}")
+                    continue
+                if syms[0] == syms[1]:
+                    notes.append(f"{where}: RENAME renames a symbol to "
+                                 f"itself (no effect): {line!r}")
+                    continue
+                dated.append(DatedRename(syms[0], syms[1], _d, _late,
+                                         where, line))
                 continue
             want = 1 if kw == "DELETE" else 2
             if len(syms) > want:
@@ -135,11 +165,34 @@ def _parse_map_file(file_path: Path):
                         continue
                     first_rule.setdefault(frm, (to, where, line))
                     buckets[kw][frm] = to
+                    if kw == "RENAME":
+                        undated_rename.add(frm)
                 else:
                     problems.append(f"{where}: {kw} line needs `from to` "
                                     f"(two symbols separated by a space): "
                                     f"{line!r}")
-    tmap = TickerMap(glob, tobase, journal, delete, distinct)
+    # A dated rename next to an undated rule for the same symbol, or two
+    # dated renames of one symbol close together, contradict each other.
+    _seen_dated: Dict[str, list] = {}
+    for dr in dated:
+        if dr.old in glob:
+            to, w, ln = first_rule[dr.old]
+            problems.append(
+                f"{dr.where}: RENAME {dr.old} {dr.new} {dr.date} is "
+                f"dated but {dr.old} is also renamed (undated) to {to} at "
+                f"{w} ({ln!r}) — an undated rule applies to every row "
+                f"at any date; keep one of the two: {dr.line!r}")
+        for prev in _seen_dated.get(dr.old, []):
+            from taxjson.lib.renames import WINDOW_DAYS, _days
+            gap = _days(prev.date, dr.date)
+            if gap is not None and gap <= WINDOW_DAYS:
+                problems.append(
+                    f"{dr.where}: RENAME {dr.old} on {dr.date} repeats "
+                    f"the rename of {dr.old} on {prev.date} at "
+                    f"{prev.where} — one event, one line: {dr.line!r}")
+        _seen_dated.setdefault(dr.old, []).append(dr)
+    tmap = TickerMap(glob, tobase, journal, delete, distinct,
+                     tuple(dated), frozenset(undated_rename))
     for to_base in (False, True):
         raw = raw_renames(tmap, to_base)
         for frm in sorted(raw):
@@ -469,6 +522,14 @@ def main():
         # RAW symbol. taxjson-merge2 applies the same order so one map
         # file means one thing on the equity and crypto paths.
         transactions = apply_drops(transactions, tmap.delete)
+        # Dated RENAME lines are events (lib/renames), booked on the raw
+        # symbols like taxjson-merge2 does.
+        from taxjson.lib.renames import RenameConflict, apply_dated_renames
+        try:
+            transactions = apply_dated_renames(transactions, tmap.dated)
+        except RenameConflict as e:
+            print(f"taxjson-ticker-map: error: {e}", file=sys.stderr)
+            sys.exit(1)
         mapping = guard_option_listing_collisions(
             [t.symbol for t in transactions], mapping)
         for _w in bare_target_warnings([t.symbol for t in transactions],

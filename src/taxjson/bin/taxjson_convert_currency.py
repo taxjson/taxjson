@@ -260,6 +260,15 @@ def convert_transaction(
         # ('cad ', 'Cad'). The raw compare used to treat those as a
         # foreign currency, apply the default rate and stamp them CAD.
         converted.currency = target_curr
+    elif tx.action == 'SPLIT' and not any(
+            float(getattr(tx, f, 0) or 0) for f in (
+                "proceeds", "commission", "fee", "price", "net_amount",
+                "gross_amount")):
+        # A split / rename row carries no money (its quantity is a
+        # ratio): only the label changes. A .tt SPLIT line is labelled
+        # CAD, and a US project with no CAD rates refused the whole
+        # account over it.
+        converted.currency = target_curr
     elif src_curr:
         # Resolve rate for this transaction's date
         tx_date = tx.date_settle if tx.date_settle else tx.date

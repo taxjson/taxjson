@@ -552,10 +552,14 @@ def main():
     # under the new one showed COOLING + EXITABLE while the engine
     # denied the loss (2026-09 audit). Pools stay keyed by raw symbol
     # (rows print per ticker); only the MATCHING is class-level.
+    # DATED (A2-0197): an old ticker's row after its rename date
+    # is its own security (SplitTimeline.class_at); `date` None = now.
     _split_tl = SplitTimeline.from_transactions(
         [t for t in transactions if _booked(t)],
         date_of=_tax_day)
-    alias_of = _split_tl.canonical
+
+    def alias_of(sym, date=None, before=False):
+        return _split_tl.class_at(sym, date, before=before)
 
     def _f_end(sym, d, inclusive=False):
         # Units of `sym` at date `d` -> units after every later split
@@ -599,7 +603,7 @@ def main():
         u = parse_option_underlying(sym)
         return _cls_root.get(u.upper(), u) if u else u
 
-    def _call_underlying_cls(sym):
+    def _call_underlying_cls(sym, date=None):
         if parse_option_right(sym) != 'C':
             return None
         und = _call_und(sym)
@@ -608,7 +612,7 @@ def main():
         # manual check (CA-SL-15 / US-WASH-15; audit A2-0378/0690).
         if not und or _FUTURES_PREFIX_RE.match(und):
             return None
-        return alias_of(und)
+        return alias_of(und, date)
     seen_splits = set()   # (symbol, account, date, ratio, symbol_new) dedup
 
     def _holder(group, pool_acct):
@@ -627,7 +631,8 @@ def main():
               'f': _f_end(tx.symbol, _d),
               'symbol': tx.symbol}
         acq_events.setdefault(cls, []).append(ev)
-        _u = _call_underlying_cls(tx.symbol) if direction == 'LONG' else None
+        _u = (_call_underlying_cls(tx.symbol, tx.date)
+              if direction == 'LONG' else None)
         if _u:
             # One contract is a right to its declared size of the
             # underlying (100 for a standard equity option, the size a
@@ -644,7 +649,8 @@ def main():
 
     def _move(key, tx, qty_raw):
         account_pool_qty[key] += qty_raw
-        _k = (alias_of(key[0]), _holder(key[1], key[2]))
+        _k = (alias_of(key[0], tx.date),      # dated class (A2-0197)
+              _holder(key[1], key[2]))
         _bal_cum[_k] = _bal_cum.get(_k, 0.0) + qty_raw * _f_end(
             tx.symbol, _tax_day(tx),
             inclusive=(tx.action == 'OPENING_BALANCE'))
@@ -725,7 +731,8 @@ def main():
             continue
 
         ticker = tx.symbol
-        cls = alias_of(ticker)     # rename-class key for the matching maps
+        cls = alias_of(ticker, tx.date,      # rename-class key for the
+                       tx.action == 'SPLIT')  # matching maps
         # Pool per (ticker, group, account) — NOT per file. All sheltered
         # accounts share one --sheltered file, so a per-file pool would apply a
         # split that happened in ONE registered account (e.g. a 10:1 in the
@@ -929,7 +936,7 @@ def main():
             if not v or str(t.id) in _seen_ids:
                 continue
             _seen_ids.add(str(t.id))
-            _record_loss(alias_of(t.symbol), t, {
+            _record_loss(alias_of(t.symbol, t.date), t, {
                 'date': t.date,
                 'epoch': t._epoch,
                 'qty': v['qty'],
@@ -1111,10 +1118,10 @@ def main():
         try:
             found = (detect_unresolved_option_replacement_matches(
                 entries, _flag_events, date_of=_tax_day,
-                canonical=alias_of)
+                canonical=_split_tl.canonical)   # as the engines pass
                 + detect_right_replacement_matches(
                     entries, _flag_events, date_of=_tax_day,
-                    canonical=alias_of))
+                    canonical=_split_tl.canonical))
         except Exception:                                  # noqa: BLE001
             return []
         out = []

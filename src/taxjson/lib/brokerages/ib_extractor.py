@@ -3,7 +3,7 @@ import io
 import re
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 
 
@@ -1933,6 +1933,44 @@ class IbBrokerage(BaseBrokerage):
         pre = getattr(self, '_ib_pre', None) or {}
         return set(pre.get('accounts') or ())
 
+    @staticmethod
+    def _pair_warrant_exercises(warrant_legs, share_legs) -> None:
+        """Mark each warrant exercise leg with the share listing it
+        delivers: the one share leg coded Ex on the same date and in the
+        same currency (several: the one whose root starts the warrant's
+        symbol). An unpaired leg keeps the old booking with an
+        ATTENTION line."""
+        def _root(sym: str) -> str:
+            return re.sub(r'\.(TO|US|AX|L|V|CN|NE)$', '', sym or '')
+        used = set()
+        for w, where, code in warrant_legs:
+            cands = [t for t in share_legs if id(t) not in used
+                     and t['date'] == w['date']
+                     and t.get('currency') == w.get('currency')]
+            if len(cands) > 1:
+                wr = _root(w['symbol']).replace('.', '')
+                cands = [t for t in cands
+                         if wr.startswith(_root(t['symbol']).replace('.', ''))]
+            if len(cands) == 1:
+                st = cands[0]
+                used.add(id(st))
+                w['exercise_of'] = st['symbol']
+                w['date_settle'] = st['date_settle']
+                print(f"note: {where}: warrant {w['symbol']} exercised into "
+                      f"{st['symbol']} ({-float(w['quantity']):g} warrants "
+                      f"-> {float(st['quantity']):g} shares) — no "
+                      f"disposition; the warrant's cost goes into the "
+                      f"shares' cost.", file=sys.stderr)
+                continue
+            print(f"{ATTENTION_PREFIX} {where}: warrant {w['symbol']} "
+                  f"exercised ({-float(w['quantity']):g}, code {code}) but "
+                  f"{'no' if not cands else 'more than one'} share leg "
+                  f"coded Ex on {w['date']} names the shares — booked as a "
+                  f"disposal at 0, so the warrant's cost becomes a capital "
+                  f"loss instead of part of the shares' cost (ITA s.49(3); "
+                  f"US basis carryover). Correct it by hand: the warrant's "
+                  f"cost belongs in the shares acquired.", file=sys.stderr)
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions = []
         # Corporate Actions rows that aren't SPLIT or Spinoff (e.g.
@@ -2030,6 +2068,10 @@ class IbBrokerage(BaseBrokerage):
         # stock side (a BUYSELL coded A or Ex), paired after the loop.
         assign_option_legs: List[Dict[str, Any]] = []
         assign_stock_legs: List[Dict[str, Any]] = []
+        # Warrant exercises: (warrant leg, where, code) and the share
+        # legs coded Ex, paired after the loop (A2-0090).
+        warrant_ex_legs: List[Tuple[Dict[str, Any], str, str]] = []
+        share_ex_legs: List[Dict[str, Any]] = []
 
         # `Transaction Fees` rows (UK Stamp Tax, SEC/FINRA-style
         # levies) are a per-fill BREAKDOWN of charges IB ALREADY
@@ -2562,22 +2604,6 @@ class IbBrokerage(BaseBrokerage):
                 if (('A' in code_tokens or 'Ex' in code_tokens)
                         and abs(price) < 1e-5):
                     action = 'ASSIGN'
-                    if asset_cat == 'Warrants' and qty < 0:
-                        # The engines roll an OPTION's premium into the
-                        # exercised shares; a warrant's cost is not
-                        # rolled yet (no s.49(3) / basis carryover for
-                        # it): the leg is a disposal at 0 — a capital
-                        # loss of the warrant's cost. Said, not silent
-                        # (audit A2-0090, deferred).
-                        print(f"{ATTENTION_PREFIX} {where}: warrant "
-                              f"{symbol} exercised ({-qty:g}, code "
-                              f"{code}) — booked as a disposal at 0, so "
-                              f"the warrant's cost becomes a capital "
-                              f"loss instead of part of the shares' cost "
-                              f"(ITA s.49(3); US basis carryover). "
-                              f"Correct it by hand: the warrant's cost "
-                              f"belongs in the shares acquired.",
-                              file=sys.stderr)
 
                 # Expiry: the `Ep` code, a row of the Options
                 # Expirations section, or a zero-price zero-proceeds
@@ -2716,6 +2742,12 @@ class IbBrokerage(BaseBrokerage):
                 elif (asset_cat in ('Stocks', 'Warrants')
                       and ('A' in code_tokens or 'Ex' in code_tokens)):
                     assign_stock_legs.append(_trade_tx)
+                if 'Ex' in code_tokens and 'Ca' not in code_tokens:
+                    if (asset_cat == 'Warrants' and action == 'ASSIGN'
+                            and qty < 0):
+                        warrant_ex_legs.append((_trade_tx, where, code))
+                    elif asset_cat == 'Stocks' and qty > 0:
+                        share_ex_legs.append(_trade_tx)
                 # Cash Report: futures settle daily through "Cash
                 # Settling MTM", never through Trades (Sales/Purchase).
                 if asset_cat != 'Futures':
@@ -4514,6 +4546,14 @@ class IbBrokerage(BaseBrokerage):
                         break
             if _st is not None:
                 _ol['date_settle'] = _st['date_settle']
+
+        # A warrant exercise (warrant leg `C;Ex` at 0, shares `Ex;O` at
+        # the exercise price) is not a disposition: the warrant leg names
+        # the shares it delivers (`exercise_of`) and the engines roll its
+        # cost into them like a long call's premium (CA s.49(3); US basis
+        # carryover — tax-logic CA-OPT-09 / US-OPT-06, A2-0090). A leg
+        # whose shares cannot be told apart stays a disposal at 0, said.
+        self._pair_warrant_exercises(warrant_ex_legs, share_ex_legs)
 
         self.clamp_settlement_to_expiry(transactions, expiry_txs)
 

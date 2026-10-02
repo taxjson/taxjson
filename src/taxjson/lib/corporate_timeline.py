@@ -128,9 +128,13 @@ class UsPriority(IntEnum):
 
 
 def _is_option_leg(tx: Any) -> bool:
+    """The premium-staging leg of an assignment: an option, or a warrant
+    exercise leg the parser marked (`exercise_of`) — it must sort before
+    its stock leg like an option's."""
     # Lazy: core imports this module at load time.
-    from taxjson.lib.core import is_option_symbol
-    return is_option_symbol(getattr(tx, 'symbol', '') or '')
+    from taxjson.lib.core import exercise_target, is_option_symbol
+    return (is_option_symbol(getattr(tx, 'symbol', '') or '')
+            or bool(exercise_target(tx)))
 
 
 def _settle_first(tx: Any) -> str:
@@ -485,6 +489,11 @@ class SplitTimeline:
         self._events: List[Tuple[str, str, float, str]] = []
         self._events_sorted: Optional[
             List[Tuple[str, str, float, str]]] = None
+        # Rename events on TRADE dates — (date, old, new) — for the
+        # dated identity classes (class_at). Built lazily.
+        self._renames: List[Tuple[str, str, str]] = []
+        self._away: Optional[Dict[str, List[str]]] = None
+        self._eparent: Dict[str, str] = {}
 
     # ------------------------------------------------------------ build
 
@@ -513,6 +522,8 @@ class SplitTimeline:
                     (date_of(t), float(ratio)))
             target = (getattr(t, 'symbol_new', '') or '').strip()
             if target and target != sym:
+                tl._renames.append((str(t.date or date_of(t) or ''),
+                                    sym, target))
                 # Union for the alias-class view. Rename applies even when
                 # the ratio is falsy (both engines behave this way).
                 ra, rb = tl._find(sym), tl._find(target)
@@ -546,8 +557,110 @@ class SplitTimeline:
 
     def canonical(self, symbol: str) -> str:
         """Equivalence-class representative across SPLIT-rename chains
-        (identity for symbols never renamed)."""
+        (identity for symbols never renamed). DATE-BLIND: every row of a
+        renamed symbol is in the class, even rows after the rename —
+        use class_at for identical-property matching."""
         return self._find(symbol)
+
+    # ------------------------------------------------------ dated classes
+    #
+    # A rename is a DATED event (owner decision on audit A2-0197): OLD
+    # up to the rename date and NEW after it are one security; OLD after
+    # the date is NOT automatically that security (the broker
+    # may still book the renamed shares under OLD, or another company
+    # may now use the ticker — `taxjson renames` lists such rows and the
+    # user declares which in ticker.map). Each symbol therefore has one
+    # identity per "epoch": epoch 0 before its first rename away, epoch
+    # k after its k-th. A rename at date d joins OLD's identity just
+    # before d with NEW's identity at d.
+
+    def _epoch_build(self) -> None:
+        if self._away is not None:
+            return
+        from datetime import datetime
+        kept: List[Tuple[str, str, str]] = []
+        last: Dict[Tuple[str, str], str] = {}
+        # Copies of one rename (two brokers, two dates within the split
+        # window) are one event, on the earliest date.
+        for d, o, n in sorted(set(self._renames)):
+            p = last.get((o, n))
+            if p is not None:
+                try:
+                    gap = (datetime.strptime(d[:10], '%Y-%m-%d')
+                           - datetime.strptime(p[:10], '%Y-%m-%d')).days
+                except ValueError:
+                    gap = None
+                if gap is not None and gap <= SPLIT_DATE_WINDOW_DAYS:
+                    continue
+            last[(o, n)] = d
+            kept.append((d, o, n))
+        away: Dict[str, List[str]] = {}
+        for d, o, _n in kept:
+            away.setdefault(o, [])
+            if d not in away[o]:
+                away[o].append(d)
+        for k in away:
+            away[k].sort()
+        self._away = away
+        for d, o, n in kept:
+            ra = self._efind(self._node(o, self._epoch(o, d, before=True)))
+            rb = self._efind(self._node(n, self._epoch(n, d, before=True)))
+            if ra != rb:
+                self._eparent[ra] = rb
+
+    def _epoch(self, sym: str, date: Optional[str], *,
+               before: bool = False) -> int:
+        import bisect
+        dates = (self._away or {}).get(sym)
+        if not dates:
+            return 0
+        if date is None:
+            return len(dates)
+        d = str(date)[:10]
+        # A row ON the rename date is still the renamed security (the
+        # broker books the change on that day; a trade under the old
+        # ticker the same day is no reuse — S069-14): only rows AFTER
+        # the date are a new identity. `before` is the same boundary,
+        # kept for callers that ask for the identity a SPLIT acts on.
+        del before
+        return bisect.bisect_left(dates, d)
+
+    def _node(self, sym: str, epoch: int) -> str:
+        if epoch <= 0:
+            return sym
+        return f"{sym}@{(self._away or {})[sym][epoch - 1]}"
+
+    def _efind(self, s: str) -> str:
+        while self._eparent.get(s, s) != s:
+            s = self._eparent[s]
+        return s
+
+    def class_at(self, symbol: str, date: Optional[str] = None, *,
+                 before: bool = False) -> str:
+        """Identical-property class of `symbol` as of `date` (a TRADE
+        date; None = now, after every event). A row ON a rename date is
+        still the renamed security; only a row AFTER the date is a new
+        identity. `before=True` (the identity a SPLIT row dated `date`
+        acts on) is the same boundary. Equals the date-blind
+        canonical() class for every row of a book in which no renamed
+        ticker trades again after its rename date."""
+        self._epoch_build()
+        return self._efind(self._node(
+            symbol, self._epoch(symbol, date, before=before)))
+
+    def class_of_row(self, t: Any) -> str:
+        """class_at for a transaction row: its trade date; a SPLIT row
+        belongs to the identity whose shares it acts on (just before
+        its date)."""
+        return self.class_at(getattr(t, 'symbol', '') or '',
+                             (getattr(t, 'date', '') or
+                              getattr(t, 'date_settle', '') or None),
+                             before=getattr(t, 'action', '') == 'SPLIT')
+
+    def renamed_away(self) -> Dict[str, List[str]]:
+        """{old symbol: [rename dates]} (trade dates, copies merged)."""
+        self._epoch_build()
+        return {k: list(v) for k, v in (self._away or {}).items()}
 
     # ------------------------------------------------------------ factors
 

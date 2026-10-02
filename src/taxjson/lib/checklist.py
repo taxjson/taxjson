@@ -81,6 +81,10 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
      "(truncated history) is booked as a short and left out of the year, understating the "
      "proceeds and gain; shares acquired at $0 cost (an undeclared corporate action) "
      "overstate the gain by the missing basis."),
+    ("renames", 2, "Every ticker change dated; no undeclared trade in an old ticker after its rename",
+     "taxjson renames",
+     "A rename carries the position and cost on its date; a later trade in the old ticker is "
+     "another security unless ticker.map folds it (`late=fold` / `late=separate`)."),
     ("elections", 2, "No unresolved merger or spin-off election",
      "taxjson elect --pending",
      "A deferred election leaves the account out of the run."),
@@ -1130,6 +1134,23 @@ def d_check_dates(ctx: Ctx) -> Result:
     return Result("check-dates", "done", f"{doc.get('checked', 0)} rows checked")
 
 
+def d_renames(ctx: Ctx) -> Result:
+    from taxjson.lib.renames import report
+    if not ctx.cache.is_dir():
+        return Result("renames", "blocked", "no work/ — run `taxjson run`")
+    try:
+        doc = report(ctx.root, ctx.cfg)
+    except ValueError as e:
+        return Result("renames", "blocked", str(e))
+    if doc["unresolved"]:
+        return Result("renames", "attention",
+                      f"{doc['unresolved']} trade(s) in an old ticker after "
+                      f"its rename not declared — `taxjson renames`")
+    return Result("renames", "done",
+                  f"{len(doc['renames'])} dated rename(s); no undeclared "
+                  f"late trade")
+
+
 def d_handoff(ctx: Ctx) -> Result:
     y = ctx.year
     configured = ctx.settings.get("prior_year_record")
@@ -1450,6 +1471,7 @@ DETECTORS: Dict[str, Callable[[Ctx], Result]] = {
     "inputs-committed": d_inputs_committed,
     "run-clean": d_run_clean,
     "check-dates": d_check_dates,
+    "renames": d_renames,
     "sanity": d_sanity,
     "missing-history": d_missing_history,
     "elections": d_elections,
