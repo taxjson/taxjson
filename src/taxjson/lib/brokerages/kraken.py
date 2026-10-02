@@ -1291,8 +1291,8 @@ class KrakenBrokerage(BaseBrokerage):
         """DIVIDEND (+ acquisition) rows for one reward credit.
 
         Same-currency fee (every real export so far: feecurrency ==
-        asset): Kraken's balance moves by amount − fee — a 0.19842 SOL
-        reward with a 0.04961 SOL commission credits 0.14882 SOL.
+        asset): Kraken's balance moves by amount − fee — a 0.20 SOL
+        reward with a 0.05 SOL commission credits 0.15 SOL.
         Booking the gross minted phantom units and overstated the
         income by the commission; both the income and the acquired
         quantity are the NET coins, the USD value net likewise

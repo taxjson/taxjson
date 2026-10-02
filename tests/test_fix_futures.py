@@ -273,7 +273,7 @@ from taxjson.lib.futures import (  # noqa: E402
     FUTURES_SETTLEMENT, settle_futures, is_plain_future)
 
 
-def _fut(date, qty, net, price, symbol="F:CLZ5.US", fee=2.37,
+def _fut(date, qty, net, price, symbol="F:CLZ5.US", fee=2.00,
          cur="USD", time="10:00:00", **kw):
     return TaxTransaction(
         action="BUYSELL", date=date, date_settle=date, time=time,
@@ -282,13 +282,13 @@ def _fut(date, qty, net, price, symbol="F:CLZ5.US", fee=2.37,
         account="IB", **kw)
 
 
-# The owner's 2025 CL round trip, in shape: 1 CL bought (notional
-# 57,400 + 2.37 commission), sold (61,730 - 2.37). IB's realized P/L is
-# 4,325.26 USD; the T5008 shows proceeds ~6,051, cost 0.
-CL_OPEN = ("2025-10-20", 1.0, 57402.37, 57.40)
-CL_CLOSE = ("2025-10-24", -1.0, 61727.63, 61.73)
-RATES = {"USD": {"2025-10-20": Decimal("1.4036"),
-                 "2025-10-24": Decimal("1.4014"),
+# A synthetic CL round trip: 1 CL bought (notional 50,000 + 2.00
+# commission), sold (54,000 - 2.00). The broker's realized P/L is
+# 3,996.00 USD; a T5008 would show the P/L as proceeds, cost 0.
+CL_OPEN = ("2025-10-06", 1.0, 50002.00, 50.00)
+CL_CLOSE = ("2025-10-09", -1.0, 53998.00, 54.00)
+RATES = {"USD": {"2025-10-06": Decimal("1.3900"),
+                 "2025-10-09": Decimal("1.3800"),
                  "2025-11-03": Decimal("1.4000"),
                  "2025-11-10": Decimal("1.3500")}}
 
@@ -320,7 +320,7 @@ class TestSettleFutures(unittest.TestCase):
         rows, st = settle_futures([_fut(*CL_OPEN), _fut(*CL_CLOSE)], "average")
         self.assertEqual([r.type for r in rows], [FUTURES_SETTLEMENT] * 2)
         self.assertEqual(rows[0].net_amount, 0.0)
-        self.assertAlmostEqual(rows[1].net_amount, 4325.26, places=6)
+        self.assertAlmostEqual(rows[1].net_amount, 3996.00, places=6)
         self.assertEqual(st["closes"], 1)
 
     def test_crossing_fill_is_split_and_short_close_is_signed(self):
@@ -359,9 +359,9 @@ class TestFuturesGainAtCloseRate(unittest.TestCase):
         conv = _convert([_fut(*CL_OPEN), _fut(*CL_CLOSE)])
         g = _gains(conv)
         self.assertEqual(len(g), 1)
-        # 4,325.26 x 1.4014 — not 61,727.63 x 1.4014 - 57,402.37 x
-        # 1.4036 = 5,935.13 (FX on a notional never paid).
-        self.assertAlmostEqual(g[0]["gain"], 4325.26 * 1.4014, places=2)
+        # 3,996.00 x 1.38 — not 53,998.00 x 1.38 - 50,002.00 x
+        # 1.39 = 5,014.46 (FX on a notional never paid).
+        self.assertAlmostEqual(g[0]["gain"], 3996.00 * 1.38, places=2)
 
     def test_short_gain_is_native_pl_at_the_closing_rate(self):
         es = lambda d, q, n: _fut(d, q, n, n / 50, symbol="F:ESZ5.US",  # noqa
@@ -383,11 +383,11 @@ class TestFuturesGainAtCloseRate(unittest.TestCase):
         self.assertAlmostEqual(g[1]["gain"], -5 * 1.35, places=6)
 
     def test_futures_options_untouched_and_no_country_refused(self):
-        fop = _fut("2025-10-20", 1.0, 2500.0, 2.5,
+        fop = _fut("2025-10-06", 1.0, 2500.0, 2.5,
                    symbol="F:CL251117C00070000.US")
         conv = _convert([fop])
         self.assertEqual(conv[0].type, "")
-        self.assertAlmostEqual(conv[0].net_amount, 2500.0 * 1.4036, places=6)
+        self.assertAlmostEqual(conv[0].net_amount, 2500.0 * 1.39, places=6)
         # The settlement basis no longer depends on a CAD target
         # (partition ENGINE-02): a book with futures needs the country.
         with self.assertRaises(ValueError) as cm:
@@ -407,10 +407,10 @@ class TestFuturesScheduleThree(unittest.TestCase):
         rep = build_schedule3(entries + loss, 2025)
         rows = {r["symbol"]: r for r in rep["rows"]}
         cl = rows["F:CLZ5.US"]
-        self.assertAlmostEqual(cl["proceeds"], 6061.42, places=2)
+        self.assertAlmostEqual(cl["proceeds"], 3996.00 * 1.38, places=2)
         self.assertEqual(cl["acb"], 0.0)
         self.assertEqual(cl["outlays"], 0.0)
-        self.assertAlmostEqual(cl["gain"], 6061.42, places=2)
+        self.assertAlmostEqual(cl["gain"], 3996.00 * 1.38, places=2)
         lo = rows["F:CLF6.US"]
         self.assertEqual(lo["proceeds"], 0.0)
         self.assertAlmostEqual(lo["acb"], 1350.0, places=2)
@@ -428,8 +428,8 @@ class TestFuturesAudit(unittest.TestCase):
                         for r in raw}
         base_index = {r.id: r.to_dict() for r in base}
         nets = futures_native_nets(source_index, base_index, "canada")
-        self.assertAlmostEqual(nets[raw[1].id], 4325.26, places=6)
-        self.assertAlmostEqual(nets[raw[1].id] * 1.4014,
+        self.assertAlmostEqual(nets[raw[1].id], 3996.00, places=6)
+        self.assertAlmostEqual(nets[raw[1].id] * 1.38,
                                base_index[raw[1].id]["net_amount"],
                                places=6)
 
@@ -438,12 +438,12 @@ class TestFuturesFxCash(unittest.TestCase):
     def test_only_the_settled_pl_moves_usd(self):
         from taxjson.bin.taxjson_fx_cash import build_ledger
         rows = [r.to_dict() for r in (_fut(*CL_OPEN), _fut(*CL_CLOSE))]
-        rates = {"2025-10-20": 1.4036, "2025-10-24": 1.4014}
+        rates = {"2025-10-06": 1.39, "2025-10-09": 1.38}
         led = build_ledger(rows, "CAD", {}, 2025,
                            rate_of=lambda c, d: rates.get(d),
                            country="canada")
         usd = led["per_currency"]["USD"]
-        self.assertAlmostEqual(usd["acquired"], 4325.26, places=2)
+        self.assertAlmostEqual(usd["acquired"], 3996.00, places=2)
         self.assertAlmostEqual(usd["disposed"], 0.0, places=2)
 
 

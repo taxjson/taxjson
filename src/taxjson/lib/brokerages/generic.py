@@ -76,7 +76,7 @@ the cell as is. A mapping that references columns the CSV doesn't have
 refuses loudly.
 
 Mis-mapped columns are the importer's worst failure mode — amounts in
-the fee column once inflated a filed return by ~$41k without a word.
+the fee column can inflate a return by thousands without a word.
 So every BUY/SELL row is cross-checked and the import REFUSES when:
 
 * two logical fields name the same CSV header (e.g. fee = amount);

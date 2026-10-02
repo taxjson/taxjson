@@ -3733,7 +3733,7 @@ def _refuse_phantoms_for_unknown_accounts(phantoms: Path,
     """phantoms.json is keyed by account LABEL. An entry whose account is
     not in [accounts] (the account was renamed or removed) used to be
     skipped silently — its opening vanished and the filed gain changed
-    (audit S021-05: a pure relabel moved a real book by -71,734.84).
+    (audit S021-05: a pure relabel moved a book by tens of thousands).
     Refuse the run and name each stale label with a suggestion."""
     import difflib
     from taxjson.lib.phantom_holdings import load_phantoms
@@ -6986,8 +6986,8 @@ def cmd_winners(args: argparse.Namespace) -> None:
     total = _foot(r["gain"] for _t, r in ranked)
     if shel_accts:
         # A registered account's gains are not taxable events; the
-        # headline alone overstated the owner's 2025 Schedule 3 gain by
-        # 124% (audit S040-13). Same split and note `sum` prints.
+        # headline alone overstated a Schedule 3 gain several-fold
+        # (audit S040-13). Same split and note `sum` prints.
         print(f"\nTAXABLE: {money(grp_gain['taxable'])} {base_cur}   "
               f"SHELTERED ({', '.join(sorted(shel_accts))} — not taxable "
               f"events): {money(grp_gain['sheltered'])} {base_cur}")

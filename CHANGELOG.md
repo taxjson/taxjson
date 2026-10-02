@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Source comments, tests and this changelog no longer quote amounts or
+  positions from the maintainer's own books; the futures tests use a
+  synthetic CL round trip (A2-0758, A2-1382, A2-1383, A2-1385).
 - `scripts/check-pii.sh` no longer passes silently on a private denylist
   saved with a UTF-8 BOM (the BOM is dropped, so the first pattern
   works) and fails closed on a UTF-16, non-UTF-8 or directory denylist
@@ -1553,7 +1556,7 @@
   `Code` (O opening, C closing, C;O both) is kept on each trade. A short
   IB declares (a sale coded O, or C;O that closed the long and opened the
   short) is listed as a real short, not "missing a buy — fix before
-  filing", and is never offered as a phantom (the owner's 2025 AMZN short
+  filing", and is never offered as a phantom (a declared real short
   no longer blocks the checklist). A sale coded C with no position in the
   data — a long option bought before the statements — is always flagged
   (options and futures included) with IB's Basis, and `option-boundary`
@@ -3714,8 +3717,8 @@
   close carries the realized native P/L (commissions included), converted
   at the closing leg's rate. Line 6 shows a gain as proceeds and a loss as
   ACB (the T5008 shape); `sum`, `form-export`, `audit` (which re-derives
-  the P/L from the broker rows) and `fx-cash` agree. Owner books: 2025
-  +241.09 (CL), 2026 -2,251.16. Options on futures are unchanged.
+  the P/L from the broker rows) and `fx-cash` agree. Real books moved
+  in both years. Options on futures are unchanged.
 - **T1135: a futures contract has no cost amount.** A long futures
   position was counted at its full notional (one CL contract added about
   80,000 CAD to the threshold test and could flip "filing required").
@@ -3859,8 +3862,8 @@
   `deductions`/`carrying_charges` in `[estimate]` (which `instalments`
   reads too), lower net and taxable income; the AMT base takes the
   deductions in full and carrying charges at 50%. Before, a year with
-  an RRSP deduction and little other income was overstated (the
-  owner's filed 2025 mix: +16,082 before, +1,354 after) and a binding
+  an RRSP deduction and little other income was overstated (by
+  thousands on a typical salary-plus-RRSP mix) and a binding
   AMT could read as not binding.
 - **A malformed `ticker.map` line stops the run.** A typo such as
   `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
@@ -3940,7 +3943,7 @@
   loss in full: ten times the loss it could back. Replacement units are
   now claimed in a fixed order, each by one denied unit, across fills
   and across losses; a call that expires before day 30 is not held on
-  day 30. Owner books: 2025 -28.41, 2026 -86.53.
+  day 30. Real books moved by small amounts.
 - **Year-to-year hand-off (`taxjson handoff`).** `close-year` now also
   records every sale, the positions and cost at Dec 31 (with the
   superficial-loss deferrals the full history decided), and the trades

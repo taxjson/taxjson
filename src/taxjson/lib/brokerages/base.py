@@ -237,8 +237,8 @@ class BrokerageParseError(ValueError):
     is unparseable, a row's money does not add up (|proceeds| far from
     |qty| x price x multiplier), the file is a different report than the
     parser reads, or the parsed rows disagree with the broker's own
-    totals. Reading a missing column as 0 once inflated a filed return
-    by ~41k — failing closed is the point. `taxjson-brokerage` turns it
+    totals. Reading a missing column as 0 can inflate a return by
+    thousands — failing closed is the point. `taxjson-brokerage` turns it
     into a one-line error and a nonzero exit."""
 
 
@@ -688,8 +688,8 @@ class BaseBrokerage:
         (audit R1-93); a thousands comma (`1,234.56`) is fine.
         REQUIRED money/quantity cells must use
         `parse_strict_number` instead: a garbage-to-0 read of a
-        required field is how a missing column once inflated a filed
-        return by ~41k."""
+        required field is how a missing column can inflate a return
+        by thousands."""
         if raw is None or raw == '':
             return default
         s = str(raw).strip()
