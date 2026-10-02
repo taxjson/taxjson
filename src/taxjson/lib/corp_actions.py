@@ -557,8 +557,9 @@ def _ib_warn_currency_tags(events: List[CorporateAction]) -> None:
                   f"symbol {root!r} ends in the currency/venue tag .{tag} "
                   f"— booked as {sym}, a security of its own apart from "
                   f"{base}. If it is the same security, join it in "
-                  f"ticker.map (e.g. `GLOBAL {sym} {base}."
-                  f"{sym.rsplit('.', 1)[1]}`).", file=sys.stderr)
+                  f"ticker.map with the listing that holds it (e.g. "
+                  f"`GLOBAL {sym} {base}.US` or `{base}.TO`).",
+                  file=sys.stderr)
 
 
 def _ib_norm_date_time(s: str) -> str:
