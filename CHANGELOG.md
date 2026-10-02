@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- Damaged price caches no longer crash a run (re-audit A2-0772,
+  A2-0773, A2-1403, A2-1446, A2-0464, A2-0474, A2-0800). An entry in
+  ~/.crypto_price_cache.json that is null, text, true or Infinity is
+  now a cache miss: fill-crypto warns, naming the cache and the entry,
+  and looks the price up again. Before, it either crashed or priced the
+  coin at 1.0 or inf. crypto-sends does the same. A cache that is not a
+  JSON object is ignored. In ~/.currency_price_cache.json, a
+  `_coverage`, `_boc` or `_boc_noon` block of the wrong shape is
+  dropped with a warning naming the file, and its dates are fetched
+  again (offline they have no rate). It used to be a traceback in the
+  FX stage, or the cached Bank of Canada series was silently discarded.
+- Rates files (re-audit A2-0790, A2-1434, A2-1411, A2-1437, A2-1423,
+  A2-1424). A work/to_base.csv that is not UTF-8, is a directory or
+  cannot be read is now reported in one line naming the file. This
+  applies to fx-cash, harvest, fees-sum, audit, convert-currency and
+  crypto-sends, which all used to print a traceback. A UTF-8 BOM no
+  longer drops the first rate. `taxjson-convert-currency --rates FILE`
+  refuses a missing FILE (exit 2); before, it converted every row at
+  --default-rate. fees-sum reports a NaN rate in one line (exit 2), and
+  fx-cash reports a futures row it cannot settle in one line.
+- crypto-sends files (re-audit A2-0465, A2-0467, A2-0775, A2-1407,
+  A2-1405, A2-1406, A2-1404, A2-1415, A2-0776/A2-1449 for sends.json):
+  - The double-booking check now reads a hand-written .tt saved with a
+    BOM the way convert-tt does, so a duplicate sale on line 1 is
+    flagged.
+  - A generated crypto_sends.tt re-saved with a BOM is still recognized
+    as generated. It is no longer refused, and it no longer shows as
+    OUT OF DATE indefinitely.
+  - A transfer sidecar of the wrong shape is reported in one line
+    naming the file.
+  - An inputs/<acct>/sends.json that is a directory or cannot be read
+    is reported in one line. It is no longer read as "no decisions",
+    and `--set` no longer leaves sends.json.part behind.
+  - sends.json may start with a BOM, and a non-text `note` is refused
+    in one line.
+  - The error for a bad sends.json no longer suggests deleting the
+    file.
+
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

@@ -38,7 +38,6 @@ from __future__ import annotations
 import csv
 import json
 import math
-import os
 import re
 import sys
 from datetime import datetime, timedelta
@@ -160,11 +159,30 @@ def load_transfer_rows(cache: Path, accounts: Iterable[str],
                 continue
             if present is not None and (acct, broker) not in present:
                 continue
+            # The work/ artifact contract: a wrong shape ([] or a row
+            # that is not an object, a text quantity) is one line naming
+            # the file, never an AttributeError (re-audit A2-1406).
+            from taxjson.lib.json_input import (InputFileError,
+                                               check_row_types,
+                                               read_json_doc)
             try:
-                doc = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as e:
-                raise ValueError(f"could not read {p.name}: {e}") from None
-            meta = doc.get("metadata") or {}
+                doc = read_json_doc(p, list_key=None)
+                trows = doc.get("transactions")
+                if trows is not None and (
+                        not isinstance(trows, list)
+                        or any(not isinstance(r, dict) for r in trows)):
+                    raise InputFileError(f'{p}: "transactions" must be a '
+                                         f'list of JSON objects')
+                check_row_types(trows, p)
+            except InputFileError as e:
+                msg = str(e)
+                if msg.startswith(f"{p}: "):
+                    msg = msg[len(f"{p}: "):]
+                if "taxjson run" not in msg:
+                    msg += " — re-run `taxjson run` to rebuild it."
+                raise ValueError(f"could not read {p.name}: {msg}") from None
+            meta = doc.get("metadata")
+            meta = meta if isinstance(meta, dict) else {}
             if meta.get("kind") != "transfer_sidecar":
                 continue
             exch = str(meta.get("brokerage") or broker)
@@ -454,13 +472,28 @@ def price_problem(price: Any) -> Optional[str]:
 
 
 def load_decisions(path: Path) -> Dict[str, Any]:
-    if not path.is_file():
+    if not path.exists() and not path.is_symlink():
         return {"schema_version": 1, "sends": {}}
+    # A directory, an unreadable file or a symlink loop is said in one
+    # line, never read as "no decisions" (re-audit A2-1404). A BOM from a
+    # Windows editor is accepted, like taxjson.toml (A2-0776 / A2-1449).
+    if not path.is_file():
+        raise ValueError(f"{path} cannot be read: not a regular file — "
+                         f"it holds your gift/payment/self decisions; "
+                         f"restore it (nothing was read or written).")
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise ValueError(f"{path} is not valid JSON ({e}) — fix or delete "
-                         f"it (it holds your gift/payment/self decisions)."
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        why = (e.strerror if isinstance(e, OSError) else None) or e
+        raise ValueError(f"{path} cannot be read ({why}) — it holds your "
+                         f"gift/payment/self decisions; fix its "
+                         f"permissions or encoding (nothing was written)."
+                         ) from None
+    try:
+        doc = json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"{path} is not valid JSON ({e}) — fix it (it "
+                         f"holds your gift/payment/self decisions)."
                          ) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("sends"), dict):
         raise ValueError(f"{path}: expected {{\"sends\": {{ID: {{...}}}}}}.")
@@ -485,6 +518,10 @@ def load_decisions(path: Path) -> Dict[str, Any]:
         if rec.get("decision") == FEE_DECISION and rec.get("price") is None:
             raise ValueError(f"{path}: send {sid!r} is `{FEE_DECISION}` "
                              f"without a price — give one or remove it.")
+        if rec.get("note") is not None and not isinstance(rec["note"],
+                                                           str):
+            raise ValueError(f"{path}: send {sid!r} has note "
+                             f"{rec['note']!r} — expected text.")
         if "unpair" in rec and not isinstance(rec["unpair"], bool):
             raise ValueError(f"{path}: send {sid!r} has unpair "
                              f"{rec['unpair']!r} — expected true or false.")
@@ -493,13 +530,18 @@ def load_decisions(path: Path) -> Dict[str, Any]:
 
 
 def save_decisions(path: Path, doc: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".part")
-    # Strict JSON: an Infinity/NaN never reaches the manifest.
-    tmp.write_text(json.dumps(doc, indent=2, sort_keys=True,
-                              allow_nan=False) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, path)
+    from taxjson.lib.cli_diag import write_text_atomic
+    # Strict JSON: an Infinity/NaN never reaches the manifest. A failed
+    # write is one line and leaves no .part behind (re-audit A2-1404).
+    text = json.dumps(doc, indent=2, sort_keys=True,
+                      allow_nan=False) + "\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(path, text)
+    except OSError as e:
+        msg = str(e) if str(path) in str(e) else \
+            f"cannot write {path}: {e.strerror or e}"
+        raise ValueError(f"{msg} — the decision was not saved.") from None
 
 
 def record_decision(path: Path, sid: str, decision: str,
@@ -1353,12 +1395,26 @@ def render_tt(account: str, entries: List[Dict[str, Any]],
     return "\n".join(out) + "\n"
 
 
+def read_tt(path: Path) -> Optional[str]:
+    """A crypto_sends.tt's text as convert-tt reads it (a BOM a
+    re-save added dropped), None when there is no file. Read plain, a
+    BOM'd generated file was 'not generated by taxjson' and OUT OF DATE
+    for good (re-audit A2-1405)."""
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        why = (e.strerror if isinstance(e, OSError) else None) or e
+        raise ValueError(f"cannot read {path} ({why}).") from None
+
+
 def write_tt(path: Path, text: Optional[str]) -> str:
     """'written' | 'unchanged' | 'removed' | 'absent'. Refuses to touch
     a crypto_sends.tt it did not generate."""
     exists = path.is_file()
     if exists:
-        cur = path.read_text(encoding="utf-8")
+        cur = read_tt(path)
         if not cur.startswith(GENERATED_MARK):
             raise ValueError(
                 f"{path} exists but was not generated by `taxjson "
@@ -1371,9 +1427,11 @@ def write_tt(path: Path, text: Optional[str]) -> str:
             return "removed"
     elif text is None:
         return "absent"
-    tmp = path.with_name(path.name + ".part")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    from taxjson.lib.cli_diag import write_text_atomic
+    try:
+        write_text_atomic(path, text)
+    except OSError as e:
+        raise ValueError(str(e)) from None
     return "written"
 
 
@@ -1382,7 +1440,7 @@ def tt_ids(path: Path) -> Optional[set]:
     if not path.is_file():
         return None
     ids = set()
-    for ln in path.read_text(encoding="utf-8").splitlines():
+    for ln in (read_tt(path) or "").splitlines():
         m = re.match(r"^# ((?:kr|cb|[a-z]{2})-\d{8}T\d{6}-\S+): ", ln)
         if m:
             ids.add(m.group(1))
@@ -1399,9 +1457,8 @@ def tt_stale_ids(acct_doc: Dict[str, Any], path: Path) -> List[str]:
     have = tt_ids(path) or set()
     stale = set(want ^ have)
     try:
-        lines = set(path.read_text(encoding="utf-8").splitlines()) \
-            if path.is_file() else set()
-    except OSError:
+        lines = set((read_tt(path) or "").splitlines())
+    except ValueError:
         lines = set()
     for e in list(acct_doc["sends"]) + list(acct_doc.get("network_fees") or []):
         if e["id"] in want and e.get("tt") and e["tt"] not in lines:
@@ -1466,7 +1523,9 @@ def duplicate_lines(acct_dir: Path, entries: List[Dict[str, Any]]
                     or p.name == TT_NAME):
                 continue
             try:
-                text = p.read_text(encoding="utf-8")
+                # utf-8-sig, as convert-tt reads it: a BOM hid the first
+                # line, which convert-tt still books (re-audit A2-0465).
+                text = p.read_text(encoding="utf-8-sig")
             except (OSError, UnicodeDecodeError):
                 continue
             lines = []

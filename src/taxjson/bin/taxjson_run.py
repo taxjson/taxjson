@@ -6167,7 +6167,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         entries, unpriced = CS.tt_entries(adoc)
         tt = Path(adoc["tt_file"])
         want = CS.render_tt(acct, entries, report["country"])
-        have = tt.read_text(encoding="utf-8") if tt.is_file() else None
+        have = CS.read_tt(tt)              # a BOM re-save (A2-1405)
         print()
         if unpriced:
             print(f"NOT BOOKED — no fair value for "
