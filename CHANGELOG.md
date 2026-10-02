@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **US: shares closed by one sale never wash each other.** A sale that
+  closed an old lot together with shares bought in the last 30 days
+  washed the old lot's loss into the very shares it was selling, split
+  them, and cascaded one chunk at a time: a 1-share old lot sold with
+  100 recent shares gave 101 Form 8949 rows (100 code W, 55,500 of
+  adjustments on a 1,060 loss, the short-term loss reported long-term),
+  and a 0.001-share lot 100,001 rows. Shares (or shorts) closed by the
+  same sale or cover — one row, or the same-second fills of one order —
+  are no longer replacements for each other; shares kept after the sale
+  still are (tax-logic US-WASH-17; audit A2-0001, A2-0017, A2-0553).
+  The wash radar's US EXITABLE advice now says the full exit must be
+  one order.
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

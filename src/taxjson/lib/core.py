@@ -4671,6 +4671,85 @@ class USATaxRules(TaxRules):
                 return pending_option_adjustments.take(tx)
             return 0.0
 
+        # One disposition = one sale (or cover) row, or the same-second
+        # fills of one order: consecutive BUYSELL rows of one account and
+        # symbol, same direction, same date and a real clock time (a
+        # date-only or midnight stamp is no evidence of one order). Lots
+        # drawn by one disposition are never replacements for each
+        # other's losses (tax-logic US-WASH-17; audit A2-0001/A2-0017/
+        # A2-0553: a 1-share old lot sold with 100 recent shares washed
+        # its loss into the very shares being sold, split them, and
+        # cascaded one share at a time — 100,001 Form 8949 W rows).
+        _disp_total: Dict[str, float] = {}   # lead row id -> group qty
+        _disp_member: set = set()            # non-lead fill ids
+        _disp_prev: Dict[Any, tuple] = {}
+
+        def _real_stamp(tm) -> bool:
+            return bool(tm) and tm not in ('00:00:00', '00:00')
+        for _t in taxable_sorted:
+            if non_capital(_t.action, _t.type):
+                continue
+            _k = (_t.account, _t.symbol)
+            if _t.action != 'BUYSELL' or abs(_t.quantity or 0) < epsilon:
+                _disp_prev.pop(_k, None)
+                continue
+            _p = _disp_prev.get(_k)
+            if (_p is not None and _real_stamp(_t.time)
+                    and _p[0].date == _t.date and _p[0].time == _t.time
+                    and (_p[0].quantity > 0) == (_t.quantity > 0)):
+                _disp_total[_p[1]] += abs(_t.quantity)
+                _disp_member.add(_t.id)
+                _disp_prev[_k] = (_t, _p[1])
+            else:
+                _disp_total[_t.id] = abs(_t.quantity)
+                _disp_prev[_k] = (_t, _t.id)
+
+        def _plan_draw(inv, ikey_, sym, q, on_date, ref_key, amt_key):
+            """Reserve the lots this disposition draws (FIFO, `q` units):
+            the boundary lot is split so the KEPT units are their own lot
+            (and the replacement record's ref follows them), and every
+            replacement record whose lot is drawn loses that capacity
+            now, before any of the disposition's losses is matched."""
+            lots = inv.get(ikey_, [])
+            reps = (long_replacements if ref_key == 'lot_ref'
+                    else short_replacements).get(_rep_key(sym), [])
+            left = q
+            i = 0
+            while left > epsilon and i < len(lots):
+                lot = lots[i]
+                take = min(lot['qty'], left)
+                if lot['qty'] > take + epsilon:
+                    frac = D(take) / D(lot['qty'])
+                    keep = dict(lot)
+                    keep['qty'] = lot['qty'] - take
+                    keep[amt_key] = lot[amt_key] * (1 - frac)
+                    _wd = lot.get('wash_deferred', Decimal(0))
+                    keep['wash_deferred'] = _wd * (1 - frac)
+                    lot['qty'] = take
+                    lot[amt_key] = lot[amt_key] - keep[amt_key]
+                    lot['wash_deferred'] = _wd - keep['wash_deferred']
+                    lots.insert(i + 1, keep)
+                    for r in reps:
+                        if r.get(ref_key) is lot:
+                            r[ref_key] = keep
+                    drawn = keep
+                else:
+                    drawn = lot
+                for r in reps:
+                    if r.get(ref_key) is drawn:
+                        _cuf = _rep_units_factor(sym, r['date'], on_date)
+                        r['remaining_qty'] = max(
+                            0.0, r['remaining_qty'] - take / (_cuf or 1.0))
+                left -= take
+                i += 1
+
+        def _plan_disposition(inv, ikey_, tx_, ref_key, amt_key):
+            if not detect_wash_sales or tx_.id in _disp_member:
+                return
+            _plan_draw(inv, ikey_, tx_.symbol,
+                       _disp_total.get(tx_.id, abs(tx_.quantity)),
+                       tx_.date, ref_key, amt_key)
+
         # Blended (combined multi-account) mode: FIFO basis pools are
         # per-(account, symbol) — the IRS keys basis per account — while
         # everything symbol-keyed (replacement lists, wash matching,
@@ -5080,6 +5159,9 @@ class USATaxRules(TaxRules):
                 # trade sorted between the option leg and the stock leg
                 # used to hijack the premium.
                 option_adj = _take_option_adj(tx)
+                if not is_option_assign:
+                    _plan_disposition(inventory_short, ikey, tx,
+                                      'short_lot_ref', 'proceeds')
 
                 # --- buy-to-close: pop short lots FIFO ---
                 while qty_remaining > epsilon and inventory_short[ikey]:
@@ -5418,6 +5500,9 @@ class USATaxRules(TaxRules):
             # — subtracting it from per-chunk proceeds yields proceeds + gain.
             # Same marked-leg gate as the BUY path above.
             option_adj_sell = _take_option_adj(tx)
+            if not is_option_assign:
+                _plan_disposition(inventory_long, ikey, tx,
+                                  'lot_ref', 'cost_basis')
 
             # --- sell-to-close: pop long lots FIFO ---
             while qty_remaining > epsilon and inventory_long[ikey]:

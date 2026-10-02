@@ -1002,6 +1002,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "Re-shorting after a short-cover loss also counts.",
                  cont=True),
             Rule("US-WASH-06", "There is no still-held test,", cont=True),
+            Rule("US-WASH-17",
+                 "but shares (or shorts) closed by the same sale (or "
+                 "cover) — one row, or the same-second fills of one order "
+                 "— never replace each other's losses; shares kept after "
+                 "that sale still do,", cont=True),
             Rule("US-WASH-07",
                  "and look-alike securities are not detected.", cont=True),
             Rule("US-WASH-08",
