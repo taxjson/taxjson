@@ -984,7 +984,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "denied)."),
             Rule("CA-PLAN-02",
                  "A long call on the shares bought in the window counts "
-                 "as a replacement at its contract size; a warrant, an "
+                 "as a replacement at its contract size (buy-check states "
+                 "the denial per share and per standard contract); a "
+                 "warrant, an "
                  "adjusted-series call or a futures option is a note to "
                  "check by hand.", cont=True),
             Rule("CA-PLAN-03",
@@ -1606,7 +1608,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-PLAN-05",
                  "harvest counts a loss in an account marked crypto as "
                  "claimable now, with no wash-sale advice: those "
-                 "accounts are outside the wash-sale rule (US-WASH-13)."),
+                 "accounts are outside the wash-sale rule (US-WASH-13); "
+                 "buy-check and sell-check answer a coin held there "
+                 "(a bare symbol, ETH) the same way, and an equity "
+                 "sharing its root (ETH.US) keeps its own verdict under "
+                 "its own name."),
         ]),
         ("Project country", _ownership(c)),
     ]

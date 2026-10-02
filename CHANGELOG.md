@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `buy-check` / `sell-check`: in a US project a bare coin held in a
+  crypto account (`buy-check ETH`) is answered as outside the wash-sale
+  rule instead of taking ETH.US's verdict or saying "no tracked taxable
+  position"; a LOCKED row (a registered / IRA buy in the window) no
+  longer says a full exit escapes the rule; a Canadian call bought
+  after a share loss states the denial per share and per 100-share
+  contract (US-PLAN-05, CA-PLAN-02; audit A2-0408, A2-0749, A2-0750,
+  A2-0752, A2-1340).
 - Crypto sends in a US project: `taxjson run`'s note, the parse NOTE in
   the crypto .sum, and `crypto-sends`' hints, listing and decision error
   no longer say a gift is a disposition or offer `gift` (refused there):

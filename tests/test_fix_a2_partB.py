@@ -199,5 +199,104 @@ class TestCryptoSendsGiftWording(unittest.TestCase):
         self.assertIn("(gift or payment), each is a taxable", summ)
 
 
+
+def _recent(days):
+    from datetime import date, timedelta
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+class TestBuySellCheck(unittest.TestCase):
+    """buy-check / sell-check country gates (A2-0408, A2-0749, A2-0750,
+    A2-0752, A2-1340)."""
+
+    def _run_both(self, td, accounts, files):
+        p = projects_both(td, year=int(_recent(0)[:4]), accounts=accounts,
+                          files=files)
+        for c, root in p.items():
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, (c, r.stderr[-2000:]))
+        return p
+
+    @rule("CA-SL-05", "CA-PLAN-02")
+    def test_canada_call_denial_is_sized_per_contract(self):
+        # A2-0752: one contract replaces 100 shares; the text priced the
+        # denial per unit as if per contract.
+        rows = (f"BUYSELL {_recent(120)} 10:00:00 XYZ.TO 100 CAD 50.00 "
+                f"-5000.00 0.00\n"
+                f"BUYSELL {_recent(11)} 10:00:00 XYZ.TO -100 CAD 40.00 "
+                f"4000.00 0.00\n")
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, year=int(_recent(0)[:4]), files={
+                "inputs/margin/m.tt": rows})["canada"]
+            r = cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            b = cli(root, "buy-check", "XYZ261218C00040000.TO")
+        self.assertEqual(b.returncode, 1, b.stdout + b.stderr)
+        self.assertIn("$10.00 of it per share", b.stdout)
+        self.assertIn("$1,000.00 per standard 100-share contract", b.stdout)
+
+    @rule("CA-PLAN-01")
+    @rule("US-PLAN-01")
+    def test_locked_buy_check_does_not_promise_a_full_exit(self):
+        # A2-0408: a registered/IRA buy in the window denies a taxable
+        # loss sale even as a full exit; buy-check said "a full exit is
+        # not" a wash/superficial sale.
+        accounts = ('[accounts.margin]\ntype = "taxable"\n'
+                    '[accounts.reg]\ntype = "sheltered"\n')
+        with tempfile.TemporaryDirectory() as td:
+            p = self._run_both(td, accounts, {
+                "inputs/margin/m.tt":
+                    f"BUYSELL {_recent(200)} 10:00:00 XYZ.US 100 USD "
+                    f"50.00 -5000.00 0.00\n",
+                "inputs/reg/r.tt":
+                    f"BUYSELL {_recent(5)} 10:00:00 XYZ.US 50 USD 40.00 "
+                    f"-2000.00 0.00\n"})
+            b = cli_both(p, "buy-check", "XYZ.US")
+        for c, r in b.items():
+            self.assertIn("LOCKED", r.stdout, c)
+            self.assertNotIn("a full exit is not", r.stdout, c)
+            self.assertNotIn("selling the full position is not", r.stdout,
+                             c)
+            self.assertIn("does not escape the rule", r.stdout, c)
+
+    @rule("US-PLAN-05")
+    @rule_absent("US-PLAN-05", country="canada")
+    @rule("CA-SL-13")
+    def test_us_coin_query_is_outside_the_wash_rule(self):
+        # A2-0749 / A2-0750 / A2-1340: the coin is in no US radar row;
+        # buy-check ETH took ETH.US's COOLING verdict, sell-check BTC said
+        # "no tracked taxable position".
+        accounts = ('[accounts.margin]\ntype = "taxable"\n'
+                    '[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
+        with tempfile.TemporaryDirectory() as td:
+            p = self._run_both(td, accounts, {
+                "inputs/margin/m.tt":
+                    f"BUYSELL {_recent(120)} 10:00:00 ETH.US 100 USD 50.00 "
+                    f"-5000.00 0.00\n"
+                    f"BUYSELL {_recent(8)} 10:00:00 ETH.US -100 USD 40.00 "
+                    f"4000.00 0.00\n",
+                "inputs/kr/k.tt":
+                    f"BUYSELL {_recent(100)} 10:00:00 ETH 1 USD 3000.00 "
+                    f"-3000.00 0.00\n"})
+            b = cli_both(p, "buy-check", "ETH")
+            s = cli_both(p, "sell-check", "ETH")
+            e = cli(p["usa"], "buy-check", "ETH.US")
+        us_b, us_s = b["usa"], s["usa"]
+        self.assertEqual(us_b.returncode, 0, us_b.stdout + us_b.stderr)
+        self.assertIn("crypto is not subject to the wash-sale rule",
+                      us_b.stdout)
+        self.assertNotIn("COOLING", us_b.stdout)
+        self.assertIn("ETH.US is a separate listing", us_b.stdout)
+        self.assertEqual(us_s.returncode, 0, us_s.stdout + us_s.stderr)
+        self.assertIn("crypto is not subject to the wash-sale rule",
+                      us_s.stdout)
+        self.assertNotIn("no tracked taxable position", us_s.stdout)
+        # The ETF keeps its own verdict under its own name.
+        self.assertIn("COOLING", e.stdout)
+        # Canada radars the coin (CA-SL-13): no US wording.
+        self.assertNotIn("wash-sale rule", b["canada"].stdout)
+        self.assertIn("this is the ETH listing", b["canada"].stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14548,6 +14548,62 @@ def _radar_country_is_usa(root: Path) -> bool:
         return False
 
 
+def _us_crypto_coins(root: Path, cache: Path, prog: str
+                     ) -> Dict[str, List[str]]:
+    """{SYMBOL: [account, ...]} for the coins in a US project's crypto
+    accounts' books ({} in Canada, where crypto accounts are radar'd
+    like any other: CA-SL-13)."""
+    import json as _json
+    from taxjson.lib.core import is_option_symbol
+    cfg = _radar_config(root, prog) or {}
+    if _country(cfg.get("settings") or {}) != "usa":
+        return {}
+    out: Dict[str, List[str]] = {}
+    for n, c in sorted((cfg.get("accounts") or {}).items()):
+        if not ((c or {}).get("type") == "taxable"
+                and (c or {}).get("crypto")):
+            continue
+        try:
+            doc = _json.loads((cache / f"{n}_base.json").read_text(
+                encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows = (doc if isinstance(doc, list)
+                else (doc.get("transactions") or [])
+                if isinstance(doc, dict) else [])
+        for t in rows:
+            if not isinstance(t, dict):
+                continue
+            sy = str(t.get("symbol") or "").strip().upper()
+            if sy and "." not in sy and not is_option_symbol(sy):
+                if n not in out.setdefault(sy, []):
+                    out[sy].append(n)
+    return out
+
+
+def _us_coin_answer(canon, radar: Dict[str, Dict[str, Any]],
+                    q: str) -> Optional[List[str]]:
+    """buy-check / sell-check lines for a bare coin query in a US
+    project's crypto account, or None: the coin is outside the
+    wash-sale rule (US-WASH-13; US-PLAN-05); an equity sharing its root
+    (ETH.US) keeps its own verdict under its own name."""
+    coins = getattr(canon, "us_crypto_coins", None) or {}
+    q = q.strip().upper()
+    if q not in coins:
+        return None
+    lines = [f"{q}: a coin in crypto account(s) "
+             f"{', '.join(coins[q])} — crypto is not subject to the "
+             f"wash-sale rule (US-WASH-13): no wash-sale exposure."]
+    others = sorted({t for t in radar
+                     if t.strip().upper().rpartition(".")[0] == q})
+    if others:
+        lines.append(f"{', '.join(others)} "
+                     f"{'is a separate listing' if len(others) == 1 else 'are separate listings'}"
+                     f" — query {'it' if len(others) == 1 else 'them'} "
+                     f"by name.")
+    return lines
+
+
 def _wash_class_context(root: Path, cache: Path, prog: str):
     """(radar, canon, last_loss) shared by buy-check and sell-check:
     the combined radar document flattened per ticker, a symbol-class
@@ -14714,6 +14770,12 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     # query that names one of them means that listing, never also the
     # equity sharing its root (ETH.US) (S047-06).
     canon.bare_listings = {_sy for _sy in _shares if "." not in _sy}
+    # A US project leaves its crypto accounts out of the radar (§1091
+    # does not reach digital assets, US-WASH-13), so a coin there is
+    # in no radar row: `buy-check ETH` took ETH.US's verdict and
+    # `sell-check BTC` said "no tracked taxable position" (audit
+    # A2-0749, A2-0750, A2-1340). {coin: [crypto accounts]}.
+    canon.us_crypto_coins = _us_crypto_coins(root, cache, prog)
 
     _acct_cfg = _soft_config(root).get("accounts") or {}
     _taxable = {a for a, c in _acct_cfg.items()
@@ -15022,6 +15084,12 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
     from taxjson.lib.core import parse_option_right as _opt_right
     for want in args.symbol:
         want = _fold_class_separator(want)
+        _coin = _us_coin_answer(_canon, radar, want)
+        if _coin is not None:
+            results.append({"symbol": want.strip().upper(),
+                            "verdict": "SAFE", "clears_at": None,
+                            "detail": _coin, "last_loss": None})
+            continue
         wroot, matches, _note = _class_matches(radar, _canon, want)
         _q = want.strip().upper()
         # Short this very contract: the buy closes it and acquires
@@ -15093,6 +15161,19 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                 _per = (f" on as many units as you buy (about "
                         f"${float(_rl) / float(_rq):,.2f} of it per unit)"
                         if _rl and _rq and float(_rq) > 1e-9 else "")
+                if (_per and _is_opt_sym(_q)
+                        and not _is_opt_sym(t.strip().upper())):
+                    # A call replaces the shares it is a right to: one
+                    # standard contract is 100 of them (CA-SL-05; the
+                    # per-unit figure read as per contract, audit
+                    # A2-0752).
+                    from taxjson.lib.core import OPTION_CONTRACT_SHARES
+                    _ps = float(_rl) / float(_rq)
+                    _per = (f" on as many shares as the calls cover "
+                            f"(about ${_ps:,.2f} of it per share, "
+                            f"${_ps * OPTION_CONTRACT_SHARES:,.2f} per "
+                            f"standard {OPTION_CONTRACT_SHARES:g}-share "
+                            f"contract)")
                 lines.append(
                     f"{t}: {cat} — a loss sold within the past 30 "
                     f"days; buying now cancels it{_per}"
@@ -15122,7 +15203,23 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                         f"{t}: {r.get('advisory')} Buying now changes "
                         f"nothing for that loss, but it starts a new "
                         f"30-day window for a later loss sale.")
-            elif cat in ("LOCKED", "EXITABLE", "CAUTION"):
+            elif cat == "LOCKED":
+                # A registered account's / IRA's in-window buy denies a
+                # taxable loss sale even as a full exit: the generic
+                # "a full exit is not" contradicted sell-check's LOCKED
+                # verdict (audit A2-0408). The radar's advisory states
+                # the case in the project's law.
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                _adv = str(r.get("advisory") or "")
+                _adv = _adv.split(":", 1)[1].strip() if \
+                    _adv.startswith("LOCKED:") else _adv
+                lines.append(
+                    f"{t}: LOCKED — no recent loss sale, buying is safe "
+                    f"TODAY, but selling even the full taxable position "
+                    f"at a loss does not escape the rule: {_adv} Buying "
+                    f"more extends the wash window.")
+            elif cat in ("EXITABLE", "CAUTION"):
                 if verdict == "SAFE":
                     verdict = "SAFE*"
                 lines.append(
@@ -15210,6 +15307,13 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
     results = []
     for want in args.symbol:
         want = _fold_class_separator(want)
+        _coin = _us_coin_answer(_canon, radar, want)
+        if _coin is not None:
+            results.append({"symbol": want.strip().upper(),
+                            "verdict": "SAFE", "clears_at": None,
+                            "act_by": None, "detail": _coin,
+                            "last_loss": None})
+            continue
         wroot, matches, _note = _class_matches(radar, _canon, want)
         matches = _replacement_rows(want, matches, "sell")
         verdict, lines = "SAFE", ([_note] if _note else [])
