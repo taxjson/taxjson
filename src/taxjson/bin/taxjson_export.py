@@ -814,8 +814,22 @@ def _holdings_toml_to_inventory(doc: Dict[str, Any],
     if not isinstance(holdings, list) or any(
             not isinstance(h, dict) for h in holdings):
         _die(f"{path}: 'holding' must be an array of tables ([[holding]])")
+    import math
     inventory = []
-    for h in holdings:
+    for i, h in enumerate(holdings, start=1):
+        # A quantity 'abc' was a float() traceback in --report and
+        # --holdings-toml and exported silently in --seekingalpha /
+        # --tradingview (A2-1441): refused here, naming the row.
+        sym = h.get("symbol")
+        if not isinstance(sym, str) or not sym.strip():
+            _die(f"{path}: [[holding]] {i}: symbol is {sym!r}, not a "
+                 f"ticker")
+        for f in ("quantity", "total_cost"):
+            v = h.get(f, 0)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                    or not math.isfinite(v):
+                _die(f"{path}: [[holding]] {i} ({sym}): {f} is {v!r}, "
+                     f"not a number")
         psd = h.get("position_start_date")
         if psd is not None and not isinstance(psd, str):
             psd = psd.isoformat()
@@ -946,7 +960,9 @@ def main():
                     else _find_tv_map(args.inputs))
         if map_file is not None:
             try:
-                text = map_file.read_text(encoding="utf-8")
+                # utf-8-sig: a BOM became part of the first key and
+                # its rule was dropped in silence (A2-0806 / A2-1410).
+                text = map_file.read_text(encoding="utf-8-sig")
             except (OSError, UnicodeDecodeError) as e:
                 _die(f"{map_file}: cannot read ({e})")
             for line in text.splitlines():

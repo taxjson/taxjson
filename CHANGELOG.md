@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson export`: a tv_exchange.map saved with a BOM keeps its first
+  rule, and a holdings TOML row whose quantity or total_cost is not a
+  number (or whose symbol is blank) is refused naming the row in every
+  mode (A2-0806, A2-1410, A2-1442, A2-1443, A2-1441).
 - Web UI: `accounts = 5` (or a list) in taxjson.toml is the one-line
   config error `taxjson serve` gives for the other bad shapes, and a
   dangling work/*_base.json symlink no longer breaks the wash-radar page

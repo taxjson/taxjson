@@ -348,5 +348,39 @@ class TestWebShapes(_Tmp):
         data.freshness(ctx)
 
 
+# --------------------------------------------------------------- export
+def export(*args, cwd=None):
+    return subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_export",
+                           *args], capture_output=True, text=True, cwd=cwd,
+                          env=ENV, stdin=subprocess.DEVNULL)
+
+
+class TestExport(_Tmp):
+    """A2-0806, A2-1410, A2-1442, A2-1443 (tv-map BOM), A2-1441."""
+
+    def test_tv_map_bom_keeps_first_rule(self):
+        g = self.root / "g.json"
+        g.write_text('{"inventory":[{"symbol":"XYZ.TO","qty":10,'
+                     '"total_cost":100.0,"currency":"CAD"}]}')
+        m = self.root / "bom.map"
+        m.write_bytes(b"\xef\xbb\xbfXYZ NEO\n")
+        r = export("--tradingview", "--tv-map", str(m), str(g))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("NEO:XYZ", r.stdout)
+
+    def test_holdings_toml_bad_quantity_refused(self):
+        h = self.root / "h.toml"
+        for bad in ('quantity = "abc"\ntotal_cost = 10.0',
+                    'quantity = 5\ntotal_cost = "x"'):
+            h.write_text('[meta]\nschema_version = 1\n[[holding]]\n'
+                         'symbol = "XEI.TO"\n' + bad +
+                         '\ncurrency = "CAD"\n')
+            for mode in ("--report", "--seekingalpha", "--tradingview"):
+                r = export(mode, str(h))
+                no_tb(self, r)
+                self.assertEqual(r.returncode, 2, (mode, r.stderr))
+                self.assertIn("[[holding]] 1 (XEI.TO)", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
