@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- IB: when a statement cancels (`Ca`) a trade, transfer or cash in lieu
+  from an EARLIER statement and rebooks it, the earlier original is
+  cancelled and the rebook is booked; before, both disappeared from the
+  books (re-audit A2-0886, A2-1559, A2-1560).
 - `taxjson t1135 --year-wash-only`: the superficial loss excluded from the
   cost columns is the sum of each account's share of a blended pool's
   deferral, not the largest account's share (re-audit A2-1552).
