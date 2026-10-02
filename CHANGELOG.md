@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **US: a §355 spin-off's `allocated_acb` is read in US dollars** on any
+  listing (A2-0973): on a TSX-listed parent it is converted at the
+  spin-off date's rate, so the moved basis is exactly the USD figure;
+  it used to be read as CAD. The prompt and US-CORP-07 say so.
 - Corporate-action rows name the election actually made instead of
   `election=none` (A2-0558), and a taxable merger booked at $0 says
   whether the saved election values it at 0 and gives the `taxjson

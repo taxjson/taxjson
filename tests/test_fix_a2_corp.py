@@ -12,7 +12,7 @@ from contextlib import redirect_stderr
 from datetime import date, timedelta
 from pathlib import Path
 
-from tax_rules import rule
+from tax_rules import rule, rule_absent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -122,6 +122,42 @@ class TestS861UsdParent(unittest.TestCase):
                            fx=lambda *a: None)
         self.assertEqual({r['currency'] for r in rows}, {'CAD'})
         self.assertIn('no CAD->USD rate', err)
+
+    @rule("US-CORP-07")
+    def test_a2_0973_us_355_basis_is_usd_on_a_cad_listing(self):
+        from taxjson.lib.corp_actions import resolve_event
+        ev = _event(source_symbol='PARNT.TO', target_symbol='SPNCO.TO',
+                    currency='CAD', target_currency='CAD')
+        rows = resolve_event(ev, 'tax_free_355', country='usa',
+                             hints={'allocated_acb': 200.0},
+                             fx=_flat_fx(1.40))
+        self.assertEqual({r['currency'] for r in rows}, {'CAD'})
+        buy = next(r for r in rows if r['action'] == 'BUYSELL')
+        adj = next(r for r in rows if r['action'] == 'ADJUST')
+        self.assertAlmostEqual(buy['net_amount'], 280.0, places=9)
+        self.assertAlmostEqual(adj['net_amount'], -280.0, places=9)
+        # A USD listing is untouched.
+        rows = resolve_event(_event(), 'tax_free_355', country='usa',
+                             hints={'allocated_acb': 200.0},
+                             fx=_flat_fx(1.40))
+        self.assertEqual([(r['currency'], r['net_amount']) for r in rows],
+                         [('USD', 200.0), ('USD', -200.0)])
+
+    @rule_absent("US-CORP-07", country="canada")
+    def test_us_355_allocation_is_not_offered_in_canada(self):
+        from taxjson.lib.corp_actions import resolve_event
+        with self.assertRaises(KeyError):
+            resolve_event(_event(), 'tax_free_355', country='canada',
+                          hints={'allocated_acb': 200.0},
+                          fx=_flat_fx(1.40))
+
+    @rule_absent("CA-CORP-06", country="usa")
+    def test_s86_1_cad_allocation_is_not_offered_in_the_usa(self):
+        from taxjson.lib.corp_actions import resolve_event
+        with self.assertRaises(KeyError):
+            resolve_event(_event(), 'rollover_s_86_1', country='usa',
+                          hints={'allocated_acb_cad': 1400.0},
+                          fx=_flat_fx(1.40))
 
     def test_mixed_currency_guard_counts_adjust_rows(self):
         from taxjson.bin.taxjson_run import _raw_mixed_currency_symbols

@@ -3508,12 +3508,7 @@ USA_SPINOFF = RuleSpec(
         ),
     ],
     apply=lambda ev, opt, hints: (
-        _emit_allocated_basis_spinoff(
-            ev, hints,
-            description_base=(
-                f"Spinoff {ev.source_symbol}→{ev.target_symbol} "
-                f"(§355 tax-free; §358(b) basis allocated from parent)"
-            ))
+        _us_spinoff_tax_free_355(ev, hints)
         if opt == 'tax_free_355'
         else _emit_distribution(
             ev, hints,
@@ -3726,6 +3721,24 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
     return rows
 
 
+def _us_spinoff_tax_free_355(event: CorporateAction, hints: dict
+                             ) -> List[dict]:
+    """US wrapper: §355 tax-free spin-off. The `allocated_acb` basis is
+    the US dollar amount (the parent's USD basis x the Form 8937
+    allocation); on a non-USD listing it is converted at the spin-off
+    date's rate, never read as that listing's currency (A2-0973)."""
+    rows = _emit_allocated_basis_spinoff(
+        event, hints,
+        description_base=(
+            f"Spinoff {event.source_symbol}→{event.target_symbol} "
+            f"(§355 tax-free; §358(b) basis allocated from parent)"
+        ),
+        allocated_acb=float((hints or {}).get('allocated_acb') or 0.0),
+        alloc_cur='USD')
+    return _allocation_in_listing_currency(event, hints, rows, 'USD',
+                                           '§355')
+
+
 def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: dict) -> List[dict]:
     """Canada wrapper: s. 86.1 foreign-spinoff rollover. Only valid for
     an "eligible distribution" under ITA s. 86.1(2) — among other
@@ -3760,49 +3773,55 @@ def _canada_spinoff_rollover_s_86_1(event: CorporateAction, option: str, hints: 
         alloc_cur='CAD' if cad else None,
     )
     if cad:
-        rows = _cad_allocation_in_listing_currency(event, hints, rows)
+        rows = _allocation_in_listing_currency(event, hints, rows, 'CAD',
+                                               's.86.1')
     return rows
 
 
-def _cad_allocation_in_listing_currency(event: CorporateAction,
-                                        hints: dict,
-                                        rows: List[dict]) -> List[dict]:
-    """Express the s.86.1(3) CAD allocation rows in each leg's listing
-    currency at the spin-off date's rate (the parent ADJUST in the
-    event's currency, the spun-off BUYSELL in the target's). The
-    conversion stage values a row at that same date's rate from the
-    same rates file, so the converted books get back exactly the CAD
-    figure the user entered, while the native-currency (raw) view of a
-    USD pool stays in one currency. Booking the rows in CAD on a USD
-    listing made the raw holdings pass abort `taxjson run` (A2-0002,
-    a regression of S072-15) or skip the holdings refresh with a false
-    'rollover rename' message (A2-0215, A2-0967). With no rate the rows
-    stay in CAD and the run skips only the native view, loudly."""
+def _allocation_in_listing_currency(event: CorporateAction, hints: dict,
+                                    rows: List[dict], amount_cur: str,
+                                    what: str) -> List[dict]:
+    """Express basis-allocation rows entered in the project's own
+    currency (`amount_cur`: Canada's s.86.1(3) CAD cost, the US §358(b)
+    USD basis) in each leg's listing currency at the spin-off date's
+    rate (the parent ADJUST in the event's currency, the spun-off
+    BUYSELL in the target's). The conversion stage values a row at that
+    same date's rate from the same rates file, so the converted books
+    get back exactly the figure the user entered, while the native-
+    currency (raw) view of the pool stays in one currency. Booking the
+    rows in CAD on a USD listing made the raw holdings pass abort
+    `taxjson run` (A2-0002, a regression of S072-15) or skip the
+    holdings refresh with a false 'rollover rename' message (A2-0215,
+    A2-0967); a US USD basis was read as CAD on a TSX listing (A2-0973).
+    With no rate the rows stay in `amount_cur` and the run skips only
+    the native view, loudly."""
+    amount_cur = amount_cur.upper()
     out = []
     for r in rows:
         cur = ((event.target_currency or event.currency)
                if r['action'] == 'BUYSELL' else event.currency)
-        cur = (cur or 'CAD').upper()
-        if cur == 'CAD' or (r.get('currency') or '').upper() != 'CAD':
+        cur = (cur or amount_cur).upper()
+        if cur == amount_cur or (r.get('currency') or '').upper() \
+                != amount_cur:
             out.append(r)
             continue
-        cad_amt = float(r.get('net_amount') or 0.0)
-        conv = _convert(hints, cad_amt, 'CAD', cur, event.date)
+        amt = float(r.get('net_amount') or 0.0)
+        conv = _convert(hints, amt, amount_cur, cur, event.date)
         if conv is None:
-            print(f"warning: s.86.1 spin-off {event.source_symbol}→"
-                  f"{event.target_symbol} on {event.date}: no CAD->{cur} "
-                  f"rate available, so the {r['symbol']} row is booked in "
-                  f"CAD (the tax books are right; the native-currency "
-                  f"holdings view of that {cur} pool is skipped).",
-                  file=sys.stderr)
+            print(f"warning: {what} spin-off {event.source_symbol}→"
+                  f"{event.target_symbol} on {event.date}: no "
+                  f"{amount_cur}->{cur} rate available, so the "
+                  f"{r['symbol']} row is booked in {amount_cur} (the tax "
+                  f"books are right; the native-currency holdings view "
+                  f"of that {cur} pool is skipped).", file=sys.stderr)
             return rows
         r = dict(r, currency=cur, net_amount=conv)
         qty = float(r.get('quantity') or 0.0)
         if r['action'] == 'BUYSELL' and qty:
             r['price'] = conv / qty
         r['description'] = (f"{r.get('description', '')} "
-                            f"[{abs(cad_amt):.2f} CAD allocated, booked "
-                            f"in {cur} at the {event.date} rate]")
+                            f"[{abs(amt):.2f} {amount_cur} allocated, "
+                            f"booked in {cur} at the {event.date} rate]")
         out.append(r)
     return out
 
@@ -3949,9 +3968,11 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
     ],
     'tax_free_355': [
         ('allocated_acb',
-         "Basis (dollar amount) allocated from the parent to the spun-off "
+         "Basis in US DOLLARS allocated from the parent to the spun-off "
          "position per §358(b) — the company's Form 8937 publishes the "
-         "allocation percentage; multiply by your parent basis."),
+         "allocation percentage; multiply by your parent's USD basis "
+         "(`taxjson list`). A non-US listing's rows are converted at the "
+         "spin-off date's rate."),
     ],
 }
 

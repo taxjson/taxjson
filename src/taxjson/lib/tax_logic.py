@@ -1069,9 +1069,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "shares' cost)"),
             Rule("US-CORP-07",
                  "or tax_free_355 (§355: the basis moved to the spin-off "
-                 "is the dollar amount you give, per the company's Form "
-                 "8937; §358(b); only a significant distributee attaches "
-                 "the Reg. §1.355-5 statement).", cont=True),
+                 "is the US-dollar amount you give, per the company's "
+                 "Form 8937, booked exactly even on a non-US listing; "
+                 "§358(b); only a significant distributee attaches the "
+                 "Reg. §1.355-5 statement).", cont=True),
             Rule("US-CORP-08",
                  "ignore skips broker noise only; on a real event it "
                  "leaves the books wrong."),
