@@ -755,7 +755,21 @@ Examples:
                                  if float(t.get('quantity') or 0) < 0
                                  and not str(t.get('description') or '')
                                  .lower().startswith('hybridearn'))
-                    if _sends:
+                    if _sends and args.country == "usa":
+                        # A US donor's gift is not a sale (US-SEND-02;
+                        # audit A2-0721, A2-0740, A2-1286).
+                        print(
+                            f"  NOTE: {_sends} crypto withdrawal/"
+                            f"send(s) among them — if any paid for "
+                            f"something (payment), each is a taxable "
+                            f"SALE at fair market value: `taxjson "
+                            f"crypto-sends` lists them with the fair "
+                            f"value and writes the .tt sale for each "
+                            f"payment (a gift is not a sale for a US "
+                            f"donor; it and self-custody moves need "
+                            f"nothing).",
+                            file=sys.stderr)
+                    elif _sends:
                         print(
                             f"  NOTE: {_sends} crypto withdrawal/"
                             f"send(s) among them — if any left your "
@@ -764,7 +778,11 @@ Examples:
                             f"value: `taxjson crypto-sends` lists "
                             f"them with the fair value and writes the "
                             f".tt sale for each gift/payment "
-                            f"(self-custody moves need nothing).",
+                            f"(self-custody moves need nothing)"
+                            + ("" if args.country else
+                               "; with --country usa only a payment "
+                               "is a sale")
+                            + ".",
                             file=sys.stderr)
             transactions = [tx for tx in transactions if tx.get('action', '').upper() != 'TRANSFER']
 

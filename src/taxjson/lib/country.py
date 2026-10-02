@@ -30,6 +30,8 @@ Ownership tables (who a setting, a CLI flag or a command belongs to):
   ``"usa"`` or ``BOTH``. This is also the list of known keys.
 - ``CONFIG_COUNTRY``: other config paths (``"[instalments]"``,
   ``"[estimate] deductions"`` ...) that belong to one country.
+- ``PLAN_COUNTRY``: ``[accounts.X] plan`` kinds (tfsa ... Canada; ira,
+  roth, 401k, hsa ... US; taxable / sheltered both); ``plan_kinds()``.
 - ``FLAG_COUNTRY``: engine CLI flags that belong to one country
   (``--option-premium-timing`` ... Canada; ``--per-account-basis`` US).
 - ``COMMAND_COUNTRY``: ``taxjson`` subcommands, or ``command:variant``
@@ -296,6 +298,31 @@ CONFIG_WHY: Dict[str, str] = {
     "[estimate] carrying_charges": "line 22100 of the Canadian return",
 }
 
+# [accounts.X] plan kinds: each registered plan belongs to one country
+# (audit A2-0739, A2-1272, A2-1332); "taxable" and "sheltered" to both.
+# The one table `taxjson`'s config check and its scan read.
+PLAN_COUNTRY: Dict[str, str] = {
+    "tfsa": CANADA, "rrsp": CANADA, "rrif": CANADA, "lira": CANADA,
+    "lif": CANADA, "lrif": CANADA, "fhsa": CANADA, "resp": CANADA,
+    "rdsp": CANADA, "prpp": CANADA,
+    "ira": USA, "roth": USA, "401k": USA, "403b": USA, "457b": USA,
+    "sep": USA, "hsa": USA, "529": USA,
+    "taxable": BOTH, "sheltered": BOTH,
+}
+
+PLAN_WHY: Dict[str, str] = {
+    CANADA: "a Canadian registered plan",
+    USA: "a US tax-advantaged account",
+}
+
+
+def plan_kinds(country: Optional[str] = None) -> List[str]:
+    """The [accounts.X] plan values a project of `country` accepts (all
+    of them when None), in table order."""
+    return [k for k, o in PLAN_COUNTRY.items()
+            if country is None or o in (BOTH, country)]
+
+
 # CLI flags owned by one country: the engine CLIs' (taxjson-gains,
 # -explain, -audit, -carryover: refuse_foreign_flags) and `taxjson`'s
 # estimate flags (sum/estimate/instalments: checked at dispatch).
@@ -446,6 +473,19 @@ def config_country_problems(cfg: Mapping[str, Any]) -> List[str]:
         if present:
             out.append(_owner_problem(owner, country, path,
                                       CONFIG_WHY.get(path, "")))
+    accounts = cfg.get("accounts") or {}
+    if isinstance(accounts, Mapping):
+        for name, acfg in accounts.items():
+            if not isinstance(acfg, Mapping) or acfg.get("plan") is None:
+                continue
+            plan = str(acfg.get("plan")).strip().lower()
+            owner = PLAN_COUNTRY.get(plan, BOTH)
+            if owner not in (BOTH, country):
+                out.append(_owner_problem(
+                    owner, country, f"[accounts.{name}] plan = \"{plan}\"",
+                    PLAN_WHY[owner])
+                    + f" (this country's plans: "
+                      f"{' | '.join(plan_kinds(country))})")
     bp = base_currency_problem(country, settings.get("base_currency"))
     if bp:
         out.append(bp)
