@@ -628,6 +628,54 @@ def read_rbc_rows(path: Path) -> RbcExport:
                      notes=notes, as_of=_export_as_of(records, hpos))
 
 
+# The tax words in the parser's notes, by the project's country
+# (taxjson-brokerage --country; `taxjson run` always passes it). The
+# parser books the same rows either way — only the words differ: a US
+# project never reads a T3/T5 slip, an ACB or the ITA (re-audit A2-0729,
+# A2-0731, A2-0733, A2-0736, A2-1254, A2-1309, A2-1313, A2-1314,
+# A2-1321, A2-1344, A2-1347). None (no --country): neutral words.
+RBC_TERMS: Dict[Optional[str], Dict[str, str]] = {
+    'canada': {
+        'fund_slip': "the fund's T3",
+        'fund_slips': "the funds' {y} T3 slips",
+        'dist_income': "the fund's T3 (usually box 21)",
+        'roc_slip': 'the T3/T5 slip',
+        'roc_income': "the fund's T3 (with box 42)",
+        'rights': 'nil ACB; ITA s.15(1)(c)',
+        'rights_benefit': 'their FMV may be a taxable benefit',
+    },
+    'usa': {
+        'fund_slip': 'Form 1099-DIV',
+        'fund_slips': 'the {y} Forms 1099-DIV',
+        'dist_income': 'Form 1099-DIV',
+        'roc_slip': 'Form 1099-DIV (box 3)',
+        'roc_income': 'Form 1099-DIV (box 3 is the nondividend part)',
+        'rights': 'zero basis; IRC §305(a) — §307 allocates basis from '
+                  'the shares when the rights are worth 15% or more of '
+                  'them, or when you elect it',
+        'rights_benefit': 'they may be a taxable distribution (§305(b))',
+    },
+    None: {
+        'fund_slip': "the fund's tax slip",
+        'fund_slips': "the funds' {y} tax slips",
+        'dist_income': "the fund's tax slip",
+        'roc_slip': 'the tax slip',
+        'roc_income': "the fund's tax slip",
+        'rights': 'nil cost',
+        'rights_benefit': 'their value may be taxable',
+    },
+}
+
+
+def rbc_terms(country: Optional[str]) -> Dict[str, str]:
+    """The note words for `country` ('canada' | 'usa' | None); the cost
+    noun is lib/country's COST_TERM, the one every report uses."""
+    from taxjson.lib.country import COST_TERM
+    terms = dict(RBC_TERMS.get(country, RBC_TERMS[None]))
+    terms['cost'] = COST_TERM.get(country, COST_TERM[None])
+    return terms
+
+
 # RBC posts year-end book-cost adjustments (a notional distribution, a
 # year-end return of capital) dated Dec 31 but only after the fund's
 # tax slips are out, in the following spring (2026-09 audit R1-85): an
@@ -636,7 +684,8 @@ RBC_YEAR_END_POSTING = (6, 30)
 
 
 def rbc_coverage_messages(exports, year: int, listings=None,
-                          today=None) -> List[str]:
+                          today=None,
+                          country: Optional[str] = None) -> List[str]:
     """Coverage findings for tax year `year` from the exports' "as of"
     timestamps (audit S063-22), one message each:
 
@@ -718,8 +767,8 @@ def rbc_coverage_messages(exports, year: int, listings=None,
         f"{year_end}) only in the spring of {y + 1}, and an export "
         f"starting Jan 1, {y + 1} never holds them. Re-export {y} after "
         f"{posted} (keep both files: overlapping downloads are "
-        f"de-duplicated) or check the ACB against the funds' {y} T3 "
-        f"slips.")
+        f"de-duplicated) or check the {rbc_terms(country)['cost']} "
+        f"against {rbc_terms(country)['fund_slips'].format(y=y)}.")
     return out
 
 
@@ -1363,6 +1412,13 @@ class RbcBrokerage(BaseBrokerage):
     # Set by taxjson-brokerage (see `prepare_files`) to share identity
     # maps across all of an account's RBC exports; None = this file alone.
     account_context: Optional[RbcAccountContext] = None
+    # The project's country, for the wording of the notes only (set by
+    # taxjson-brokerage --country; None = neutral words). See RBC_TERMS.
+    country: Optional[str] = None
+
+    @property
+    def _terms(self) -> Dict[str, str]:
+        return rbc_terms(self.country)
 
     @classmethod
     def prepare_files(cls, paths) -> RbcAccountContext:
@@ -1376,7 +1432,8 @@ class RbcBrokerage(BaseBrokerage):
 
     @staticmethod
     def coverage_messages(ctx: 'RbcAccountContext', year: int,
-                          today=None) -> List[str]:
+                          today=None,
+                          country: Optional[str] = None) -> List[str]:
         """The account's coverage findings for tax year `year` (see
         rbc_coverage_messages); taxjson-brokerage prints them when
         `taxjson run` passes the project year (--tax-year)."""
@@ -1386,7 +1443,7 @@ class RbcBrokerage(BaseBrokerage):
               {_norm_account(r.account) for r in ctx.exports[k].rows
                if r.account.strip()})
              for k in ctx.files],
-            year, ctx.listings, today=today)
+            year, ctx.listings, today=today, country=country)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         path = Path(path)
@@ -1771,7 +1828,8 @@ class RbcBrokerage(BaseBrokerage):
         if cls == 'roc':
             if abs(r.value) < 0.005:
                 self._warn(f"$0 return-of-capital row — {r.label()}; "
-                           f"nothing to book (check the T3/T5 slip).")
+                           f"nothing to book (check "
+                           f"{self._terms['roc_slip']}).")
             return [self.tx_roc_adjust(
                 symbol=self._equity_symbol(r.symbol, r.currency, r, market=True),
                 currency=r.currency, date=r.date, desc=r.desc,
@@ -2157,8 +2215,8 @@ class RbcBrokerage(BaseBrokerage):
         self._note(f"line {r.line}: in-kind reinvested distribution — "
                    f"income {amount:,.2f} {r.currency} and a purchase of "
                    f"{r.qty:g} {symbol} at {price:g}; the distribution's "
-                   f"character (dividend, capital gain, ROC) is on the "
-                   f"fund's T3.")
+                   f"character (dividend, capital gain, ROC) is on "
+                   f"{self._terms['fund_slip']}.")
         return [{
             'action': 'DIVIDEND',
             'date': r.date, 'time': '09:30:00', 'date_settle': r.date,
@@ -2199,10 +2257,11 @@ class RbcBrokerage(BaseBrokerage):
         conferred on all shareholders) and a NIL cost, so a $0 acquisition
         is the right booking — said out loud now instead of silently."""
         symbol = self._equity_symbol(self._resolve_temp(r), r.currency, r)
+        t = self._terms
         self._note(f"line {r.line}: rights/warrants distribution booked as a "
-                   f"$0 acquisition of {r.qty:g} {symbol} (nil ACB; ITA "
-                   f"s.15(1)(c)). If these were NOT issued to all "
-                   f"shareholders, their FMV may be a taxable benefit.")
+                   f"$0 acquisition of {r.qty:g} {symbol} ({t['rights']}). "
+                   f"If these were NOT issued to all shareholders, "
+                   f"{t['rights_benefit']}.")
         return {
             'action': 'BUYSELL',
             'date': r.date, 'time': self._time(r),
@@ -2296,8 +2355,9 @@ class RbcBrokerage(BaseBrokerage):
             raise _err(Path(self._fname), r.line,
                        f"a 'Return of Capital' row describes a NOTIONAL "
                        f"distribution ({r.desc[:80]!r}) — one lowers the "
-                       f"ACB, the other raises it; refusing to guess. Book "
-                       f"it in a .tt ADJUST from the fund's T3.")
+                       f"{self._terms['cost']}, the other raises it; "
+                       f"refusing to guess. Book it in a .tt ADJUST from "
+                       f"{self._terms['fund_slip']}.")
         if act_roc or is_roc_description(r.desc):
             # The year-end ROC book-cost row reclassifies part of the
             # cash distributions already booked as income (its Value is
@@ -2305,10 +2365,11 @@ class RbcBrokerage(BaseBrokerage):
             # those dollars (re-audit A2-0094).
             self._warn(f"line {r.line}: year-end return of capital "
                        f"{amount:,.2f} {r.currency} on {symbol} lowers "
-                       f"its ACB; RBC posts no cash for it, so it is "
-                       f"usually part of the cash distributions already in "
-                       f"the income totals (counted twice) — take the "
-                       f"income (and box 42) from the fund's T3, not from "
+                       f"its {self._terms['cost']}; RBC posts no cash for "
+                       f"it, so it is usually part of the cash "
+                       f"distributions already in the income totals "
+                       f"(counted twice) — take the income from "
+                       f"{self._terms['roc_income']}, not from "
                        f"divs-sum.", attention=True)
             return [self.tx_roc_adjust(symbol=symbol, currency=r.currency,
                                        date=r.date, desc=r.desc,
@@ -2318,10 +2379,11 @@ class RbcBrokerage(BaseBrokerage):
         # book-cost side and taxjson books only that (audit S063-17 —
         # whether to book the income is the owner's call).
         self._warn(f"line {r.line}: notional distribution {amount:,.2f} "
-                   f"{r.currency} on {symbol} raises its ACB; the "
-                   f"distribution itself is income reported on the fund's "
-                   f"T3 (usually box 21) and is NOT in taxjson's income "
-                   f"totals — take it from the slip.", attention=True)
+                   f"{r.currency} on {symbol} raises its "
+                   f"{self._terms['cost']}; the distribution itself is "
+                   f"income reported on {self._terms['dist_income']} and "
+                   f"is NOT in taxjson's income totals — take it from the "
+                   f"slip.", attention=True)
         return [{
             'action': 'ADJUST',
             'date': r.date, 'time': '09:30:00', 'date_settle': r.date,
@@ -2483,7 +2545,8 @@ class RbcBrokerage(BaseBrokerage):
                        f"({rem.desc[:60]!r})")
             return []
         self._note(f"option adjustment {rem.date}: {old_sym} continues as "
-                   f"{tgt_sym} ×{factor:g}{adj}; ACB and open date carried")
+                   f"{tgt_sym} ×{factor:g}{adj}; {self._terms['cost']} "
+                   f"and open date carried")
         return [{
             'action': 'SPLIT',
             'date': rem.date, 'time': rbc_time(max(rem.k, rc.k)),

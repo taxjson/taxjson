@@ -384,9 +384,6 @@ These are real bugs in code paths the standard `taxjson run` flow never exercise
 - **Where:** `lib/income_dating.py`; tax-logic US-INC-DATE-RIC.
 - **Current behaviour:** §852(b)(7) / §857(b)(9) put a fund or REIT dividend declared in October–December and paid in January on Dec 31, but no export says which payer is a fund. A US project keeps the pay date, warns when a January dividend has an October–December ex date (IB accruals, from any statement of the same IB account and matched to a posting within a week of the accrued pay date) or record date (Questrade/RBC), and moves the payments in `[settings] ric_january_dividends` to Dec 31.
 
-### `wash-sales --explain` traces each account on its own
-- The explain trace predates the blended passes; the numbers in the table are the blended ones.
-
 ## Conventions
 
 - **Severity ranking:** items above are loosely ordered: gaps that drop tax-relevant data first, cosmetic / latent items last.

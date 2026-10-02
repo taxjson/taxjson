@@ -31,10 +31,31 @@ def _s(exchange="coinbase", account="c", date="2025-07-13",
     return r
 
 
+def _daily(table, until="2025-12-31"):
+    """A sparse {cur: {date: (rate, src)}} forward-filled to a row per
+    day, as the real rates file is (its 7-day carry and the stage's
+    5-day lookback, A2-0414): a sparse fixture row is the day's rate
+    until the next one."""
+    from datetime import date, timedelta
+    out = {}
+    for cur, days in table.items():
+        keys = sorted(days)
+        filled = {}
+        for i, k in enumerate(keys):
+            d = date.fromisoformat(k)
+            end = (date.fromisoformat(keys[i + 1]) if i + 1 < len(keys)
+                   else date.fromisoformat(until) + timedelta(days=1))
+            while d < end:
+                filled[d.isoformat()] = days[k]
+                d += timedelta(days=1)
+        out[cur] = filled
+    return out
+
+
 def _rates(table=None, base="CAD"):
-    return cs.Rates(table if table is not None else
-                    {"USD": {"2025-01-01": (1.35, "boc"),
-                             "2025-03-01": (1.45, "boc")}}, base)
+    return cs.Rates(_daily(table if table is not None else
+                           {"USD": {"2025-01-01": (1.35, "boc"),
+                                    "2025-03-01": (1.45, "boc")}}), base)
 
 
 class TestFormatting(unittest.TestCase):
@@ -731,7 +752,8 @@ def _project(tmp, *, country="canada", base="CAD", sidecar=None,
         "metadata": {"kind": "transfer_sidecar", "brokerage": "kraken"},
         "transactions": sidecar or []}))
     (root / "work" / "to_base.csv").write_text(
-        rates or "2025-01-01 12:00:00 USD CAD 1.40 boc\n")
+        rates or ("2025-01-01 12:00:00 USD CAD 1.40 boc\n"
+                  "2025-01-31 12:00:00 USD CAD 1.40 boc\n"))
     if decisions is not None:
         (root / "inputs" / "a" / "sends.json").write_text(
             json.dumps({"sends": decisions}))

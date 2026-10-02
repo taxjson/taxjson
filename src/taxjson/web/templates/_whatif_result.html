@@ -31,6 +31,7 @@
 {% if result.scope_note %}<p class="note">{{ result.scope_note }}</p>{% endif %}
 {% if result.basis and 'blended' in result.basis %}<p class="note">Basis: {{ result.basis }} — the same ACB pool and superficial-loss context the filing uses.</p>
 {% elif result.basis and 'wash sales across' in result.basis %}<p class="note">Basis: {{ result.basis }} — the same FIFO lots and cross-account wash-sale context the filing uses.</p>
+{% elif result.basis and ctx.country == "usa" %}<p class="note">Basis: {{ result.basis }} — this simulates one account's book: its FIFO lots are the filing basis, but another account's purchase in the window is not in this wash-sale check. The COMBINED wash radar has the cross-account view.</p>
 {% elif result.basis %}<p class="note">Basis: {{ result.basis }} — this simulates one account's book. A Canadian project with two or more taxable accounts is simulated on the blended pool; here the account's own book is the filing basis only when it is the sole account of its kind. The COMBINED wash radar has the cross-account view.</p>{% endif %}
 {% else %}
 <p class="err">Could not simulate: {{ result.reason }}</p>

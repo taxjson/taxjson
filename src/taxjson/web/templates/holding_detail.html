@@ -19,7 +19,8 @@
 {% endif %}
 
 <h2>Trades — current position</h2>
-<p class="muted">Basis: native per-account snapshot, pre-blend — for the filing ACB (s.47 blended across taxable accounts) use <code>taxjson list</code>.</p>
+{% if ctx.country == "usa" %}<p class="muted">Basis: native per-account FIFO snapshot, before the cross-account wash-sale pass — for the filing basis (wash-sale adjustments included) use <code>taxjson list</code>.</p>
+{% else %}<p class="muted">Basis: native per-account snapshot, pre-blend — for the filing ACB (s.47 blended across taxable accounts) use <code>taxjson list</code>.</p>{% endif %}
 <table>
   <thead><tr><th>Date</th><th>Action</th><th class="num">Qty</th><th class="num">Price</th></tr></thead>
   <tbody>

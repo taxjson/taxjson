@@ -166,8 +166,9 @@ def load_positions(files: List[Path],
     return out
 
 
-def load_inventory_agg(files: List[Path],
-                       column: str) -> Dict[str, Dict[str, Any]]:
+def load_inventory_agg(files: List[Path], column: str,
+                       include_sold: bool = False
+                       ) -> Dict[str, Dict[str, Any]]:
     """Per-symbol aggregate over a set of gains files' inventories:
     {symbol: {qty, last_add}}. `last_add` is the most recent acquisition
     across those accounts (`last_acq_settle` in Canada — the settle date
@@ -180,7 +181,14 @@ def load_inventory_agg(files: List[Path],
     before its latest add (DRIP/auto-buys), so the fallback could only
     OVERSTATE the age — reading "34d, clear of the window" when the
     true answer is "13d, permanently denied" (a real user hit exactly
-    this). Files predating the field show '-' and a warning instead."""
+    this). Files predating the field show '-' and a warning instead.
+
+    `include_sold` (the US sheltered side): a purchase the account has
+    since SOLD still counts — an IRA buy within 30 days of a loss sale
+    makes it a wash sale whether or not the IRA still holds the shares
+    (no still-held test in §1091; re-audit A2-1298). Its date comes
+    from the dispositions' `acquired_date`. Canada keeps held units
+    only: s.54 denies a loss only for units still held on day 30."""
     out: Dict[str, Dict[str, Any]] = {}
     stale: List[str] = []
     for p in files:
@@ -202,6 +210,19 @@ def load_inventory_agg(files: List[Path],
             rec["qty"] += qty
             if add and (rec["last_add"] is None or add > rec["last_add"]):
                 rec["last_add"] = add
+        if include_sold:
+            for t in (data.get("transactions") or []):
+                if not isinstance(t, dict) or "gain" not in t:
+                    continue
+                if str(t.get("direction") or "LONG").upper() != "LONG":
+                    continue
+                sym = str(t.get("symbol") or "")
+                add = str(t.get("acquired_date") or "") or None
+                if not sym or not add:
+                    continue
+                rec = out.setdefault(sym, {"qty": 0.0, "last_add": None})
+                if rec["last_add"] is None or add > rec["last_add"]:
+                    rec["last_add"] = add
         if not file_has_field and (data.get("inventory") or []):
             stale.append(Path(p).name)
     if stale:
@@ -682,7 +703,7 @@ def main(argv: Optional[List[str]] = None,
     # buy pushed the clear date past what the sheltered adds implied).
     taxable_agg = load_inventory_agg(files, "TX_ADD")
     sheltered = load_inventory_agg([Path(f) for f in args.sheltered],
-                                   "SH_QTY/SH_ADD")
+                                   "SH_QTY/SH_ADD", include_sold=is_usa)
     show_sheltered = bool(args.sheltered)
     basis = gains_basis_label(files)
 
@@ -1066,10 +1087,24 @@ def main(argv: Optional[List[str]] = None,
                       "SAME contract within 30 days of a loss sale "
                       "still triggers the wash/superficial rule.")
     if show_sheltered:
-        legend.append("SH_QTY: shares held across sheltered accounts. "
-                      "SH_ADD: last sheltered buy — one within 30 days "
-                      "either side of a loss sale makes the loss "
-                      "PERMANENTLY denied, not deferred.")
+        # The two countries' rules differ (re-audit A2-1299): an IRA
+        # buy in the window washes the loss for good whether or not
+        # the IRA still holds it (Rev. Rul. 2008-5); a registered
+        # account's buy denies it only for the units it still holds
+        # 30 days after the sale (s.54 / s.40(2)(g), CA-SL-02/08).
+        if is_usa:
+            legend.append("SH_QTY: shares held across sheltered "
+                          "accounts. SH_ADD: last IRA buy, held or "
+                          "since sold — one within 30 days either side "
+                          "of a loss sale makes the loss PERMANENTLY "
+                          "disallowed, not deferred.")
+        else:
+            legend.append("SH_QTY: shares held across sheltered "
+                          "accounts. SH_ADD: last registered-account "
+                          "buy — one within 30 days either side of a "
+                          "loss sale makes the loss PERMANENTLY denied "
+                          "(not deferred) for the units the registered "
+                          "account still holds 30 days after the sale.")
     legend.append("Signed days: -Nd = N days ago, +Nd = N days ahead "
                   "(ADVISORY clear dates). The radar's clear date runs "
                   "from the MOST RECENT buy on either side.")
