@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Kraken: rows that are not your own cash moving are no longer
+  ignored.** A trades row whose type is blank or not buy/sell, a fiat
+  `credit` or `adjustment`, and a coin row that moves nothing but a fee
+  are UNBOOKED warnings (shown by `taxjson run`, refused by `--strict`);
+  they were a quiet note saying moving your own cash is not a tax event.
+  A fee taken in a coin on a fiat withdrawal or on a staking reward is a
+  sale of those coins at fair value, as on a coin withdrawal (tax-logic
+  CA-CRYPTO-03 / US-CRYPTO-03). `earn/migration` rows are a wallet move,
+  and a ledger whose rows are all recognized non-events (an ETH->ETH2
+  relabel, a fiat deposit) no longer prints the "parsed to 0
+  transactions" warning that `run --strict` refused (re-audit A2-0245,
+  A2-0578, A2-1002, A2-0582, A2-1018, A2-1017, A2-0583).
 - **Kraken: a broken quote or a duplicated column is refused.** A stray
   quote that closed in a later row swallowed the rows between into one
   cell, silently dropping those fills or rewards; an unterminated quote

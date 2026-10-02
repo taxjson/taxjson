@@ -678,8 +678,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "de-peg, is not computed; a fill more than 2% off 1.00 "
                  "USD is warned about)."),
             Rule("CA-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin (on a withdrawal, a fiat "
+                 "deposit or withdrawal, or a staking reward) is a sale of "
+                 "that coin."),
             Rule("CA-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
@@ -1103,8 +1104,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "(ahead of any USD value the exchange states); a sale "
                  "for dollars at the fill's price."),
             Rule("US-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin (on a withdrawal, a fiat "
+                 "deposit or withdrawal, or a staking reward) is a sale of "
+                 "that coin."),
             Rule("US-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),

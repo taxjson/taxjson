@@ -258,5 +258,107 @@ class TestCsvShape(unittest.TestCase):
             _parse({"kr_trades.csv": t}, "kr_trades.csv")
 
 
+class TestUnbookedRows(unittest.TestCase):
+    """A2-0245 / A2-0578 / A2-1002 / A2-1017 / A2-0583."""
+
+    def test_trades_row_with_blank_or_unknown_type_is_unbooked(self):
+        for typ in ("", "settle"):
+            with self.subTest(typ=typ):
+                t = _KT_H + (f"T1,O1,SOL/USD,2025-06-01 16:00:00,{typ},"
+                             f"limit,65000,3250,0,0.05,,,\n")
+                _txs, err = _parse({"kr_trades.csv": t}, "kr_trades.csv")
+                self.assertIn("warning: UNBOOKED", err)
+
+    def test_fiat_credit_or_adjustment_is_unbooked(self):
+        for typ, a in (("credit", "ZUSD"), ("adjustment", "ZCAD")):
+            with self.subTest(typ=typ):
+                led = _ledger([f"L1,R1,2025-03-01 12:00:00,{typ},,currency,"
+                               f"{a},spot,50,0,50"])
+                txs, err = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+                self.assertEqual(txs, [])
+                self.assertIn("warning: UNBOOKED", err)
+                self.assertNotIn("moving your own cash", err)
+
+    def test_fiat_deposit_still_ignored_quietly(self):
+        led = _ledger(["L1,F1,2025-03-01 12:00:00,deposit,,currency,ZUSD,"
+                       "spot,50,0,50"])
+        txs, err = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertEqual(txs, [])
+        self.assertNotIn("UNBOOKED", err)
+
+    def test_zero_amount_coin_row_with_a_fee_is_unbooked(self):
+        for typ in ("adjustment", "transfer"):
+            with self.subTest(typ=typ):
+                led = _ledger([f"L1,R1,2025-03-01 12:00:00,{typ},,currency,"
+                               f"XETH,spot,0,0.001,0.5"])
+                txs, err = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+                self.assertIn("warning: UNBOOKED", err)
+                self.assertNotIn("moving your own cash", err)
+
+    def test_earn_migration_is_a_wallet_move(self):
+        led = _ledger([
+            "L1,R1,2025-03-01 12:00:00,earn,migration,currency,DOT,spot,"
+            "-100,0,0",
+            "L2,R1,2025-03-01 12:00:00,earn,migration,currency,DOT.S,earn,"
+            "100,0,100"])
+        txs, err, k = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                             want_extractor=True)
+        self.assertEqual(txs, [])
+        self.assertNotIn("UNBOOKED", err)
+        self.assertTrue(getattr(k, "zero_tx_reason", None))
+
+    def test_file_of_only_non_events_reports_a_reason(self):
+        for rows in (
+                ["L1,R1,2025-03-01 12:00:00,spend,,currency,XETH,spot,-1,0,"
+                 "1", "L2,R1,2025-03-01 12:00:00,receive,,currency,ETH2.S,"
+                 "spot,1,0,1"],
+                ["L1,F1,2025-03-01 12:00:00,deposit,,currency,ZUSD,spot,50,"
+                 "0,50"]):
+            with self.subTest(rows=rows[0]):
+                txs, _err, k = _parse({"kr_ledgers.csv": _ledger(rows)},
+                                      "kr_ledgers.csv", want_extractor=True)
+                self.assertEqual(txs, [])
+                self.assertTrue(getattr(k, "zero_tx_reason", None))
+
+    def test_unbooked_file_gets_no_zero_tx_reason(self):
+        led = _ledger(["L1,R1,2025-03-01 12:00:00,credit,,currency,ZUSD,"
+                       "spot,50,0,50"])
+        _txs, _err, k = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                               want_extractor=True)
+        self.assertFalse(getattr(k, "zero_tx_reason", None))
+
+
+class TestFeeInAnotherCoin(unittest.TestCase):
+    """A2-0582 / A2-1018: the fee coins left the account — a sale."""
+
+    @rule("CA-CRYPTO-03")
+    def test_reward_fee_in_another_coin_is_disposed_of(self):
+        led = _ledger([
+            "L1,R1,2026-03-01 12:00:00,earn,reward,currency,DOT,earn,10,"
+            "0.001,10,50,3,XETH"], header=_KL_H2)
+        for cash in (True, False):
+            with self.subTest(cash=cash):
+                txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                                cash=cash)
+                fee = [t for t in txs if t["symbol"] == "ETH"]
+                self.assertEqual(len(fee), 1)
+                self.assertAlmostEqual(fee[0]["quantity"], -0.001)
+                self.assertAlmostEqual(fee[0]["net_amount"], 3.0)
+                div = [t for t in txs if t["action"] == "DIVIDEND"][0]
+                self.assertAlmostEqual(div["net_amount"], 47.0)
+
+    @rule("US-CRYPTO-03")
+    def test_fiat_withdrawal_fee_in_a_coin_is_disposed_of(self):
+        led = _ledger([
+            "L1,F1,2026-03-01 12:00:00,withdrawal,,currency,ZUSD,spot,-500,"
+            "0.001,0,500,3,ETH"], header=_KL_H2)
+        for cash in (True, False):
+            with self.subTest(cash=cash):
+                txs, _ = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv",
+                                cash=cash)
+                self.assertEqual(_bs(txs), [("ETH", -0.001)])
+                self.assertAlmostEqual(txs[0]["net_amount"], 3.0)
+
+
 if __name__ == "__main__":
     unittest.main()
