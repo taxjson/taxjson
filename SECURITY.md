@@ -34,9 +34,10 @@ during `taxjson run`, and only when a cache miss requires it:
 
 - **FX rates** — `taxjson-to-base-curr` downloads the base-currency
   pairs listed under `source_currencies` into `work/to_base.csv`: from
-  the Bank of Canada Valet API (www.bankofcanada.ca) for a CAD base,
-  and from Yahoo Finance for dates before 2017-01-03, currencies the
-  Bank does not publish, and non-CAD bases. Only currency-pair symbols
+  the Bank of Canada Valet API (www.bankofcanada.ca) for a CAD base
+  (its daily rate from 2017-03-01, its legacy noon rate from 2007-05-01
+  to 2017-02-28), and from Yahoo Finance for dates before 2007-05-01,
+  currencies the Bank does not publish, and non-CAD bases. Only currency-pair symbols
   and date ranges are sent.
 - **Crypto prices** — `taxjson-fill-crypto` looks up any crypto row
   that carries no price (Kraken staking rewards) from Yahoo Finance:

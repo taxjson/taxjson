@@ -2741,7 +2741,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
 
     # Broker groups REMOVED from inputs/: their parsed JSON, .diag and
     # corp files would otherwise persist forever — stale .diag lines in
-    # every .sum, dead fees counted by `taxjson-fees --cache`, dead
+    # every .sum, dead fees counted by `taxjson-fees-sum --cache`, dead
     # sources fed to the audit (2026-09 audit).
     _present = {f"{name}_{b}" for b in grouped} \
         | {f"{name}_{b}_corp" for b in grouped} \
@@ -3866,7 +3866,7 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
     cross-broker comparison. Reads the parsed per-broker JSONs in the cache
     (the only place the brokerage tag survives), year-scoped to the tax year."""
     print("==> fees report")
-    # capture_diag=True: taxjson-fees emits FX default-rate fallback and
+    # capture_diag=True: taxjson-fees-sum emits FX default-rate fallback and
     # skipped-file warnings on stderr; persist them to the .diag so a silently
     # wrong rate can't slip through (the report body carries them too).
     _tm = cache.parent / "ticker.map"
@@ -6249,7 +6249,7 @@ def _cannot_write_decisions(path, e: OSError) -> str:
 
 def cmd_crypto_sends(args: argparse.Namespace) -> None:
     """`taxjson crypto-sends`: every outgoing crypto transfer that did
-    not arrive on another of your exchanges, with your decision (self /
+    not arrive in another of your crypto accounts, with your decision (self /
     gift / payment), its fair value and the ready .tt line; --set
     records a decision, --write regenerates inputs/<acct>/crypto_sends.tt."""
     from taxjson.lib import crypto_sends as CS
@@ -6422,15 +6422,15 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
     if _usa:
         # A US donor's gift is not a disposition (the recipient takes
         # over the basis); `gift` is refused (COMMAND_COUNTRY).
-        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
-              "another of your exchanges. A move to your own wallet is "
-              "not a sale (self); a payment is a sale at fair market "
+        print("CRYPTO SENDS — outgoing transfers that did not arrive in "
+              "another of your crypto accounts. A move to your own wallet "
+              "is not a sale (self); a payment is a sale at fair market "
               "value. A gift is not a sale for a US donor: record it as "
               "self.")
     else:
-        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
-              "another of your exchanges. A move to your own wallet is not a "
-              "sale (self); a gift or a payment is a disposition at fair "
+        print("CRYPTO SENDS — outgoing transfers that did not arrive in "
+              "another of your crypto accounts. A move to your own wallet is "
+              "not a sale (self); a gift or a payment is a disposition at fair "
               "market value.")
     fx_by_year: Dict[str, float] = {}
     for acct, adoc in report["accounts"].items():
@@ -16625,11 +16625,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
 
 
 def cmd_fees_sum(args: argparse.Namespace) -> None:
-    """Convenience wrapper over `taxjson-fees`: trading-fee report by brokerage
+    """Convenience wrapper over `taxjson-fees-sum`: trading-fee report by brokerage
     (converted to the base currency), reading the parsed per-broker JSONs in
     work/. Resolves cache / base currency / rates from the project. Like the
     other roll-ups it takes an optional PERIOD window (30d/6w/…, wired to
-    `taxjson-fees --since`), defaulting to the tax year; a lone non-period
+    `taxjson-fees-sum --since`), defaulting to the tax year; a lone non-period
     positional is read as an account (its per-broker files only)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -16648,7 +16648,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     cmd = _cmd("taxjson-fees")
     if account:
         # Scope to one account by feeding only its parsed per-broker files;
-        # non-broker JSONs (…_base.json etc.) are skipped by taxjson-fees.
+        # non-broker JSONs (…_base.json etc.) are skipped by taxjson-fees-sum.
         # Exclude files that actually belong to a LONGER-named sibling
         # account sharing this prefix (accounts `margin` and `margin_us`:
         # the glob "margin_*.json" also matches margin_us_ib.json, leaking
@@ -16682,7 +16682,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
         if year:
             cmd += ["--year", str(year)]
 
-    # taxjson-fees needs --rates alongside --to; pass both only when the rate
+    # taxjson-fees-sum needs --rates alongside --to; pass both only when the rate
     # file exists, else report native per-brokerage amounts (no conversion).
     rates = cache / "to_base.csv"
     if rates.exists():
@@ -16852,9 +16852,15 @@ def _main() -> None:
     # shell umask — SECURITY.md promises it.
     from taxjson.bin._entry import private_umask
     private_umask()
-    p = argparse.ArgumentParser(prog="taxjson",
-                                description=__doc__.splitlines()[0],
-                                formatter_class=_CappedHelpFormatter)
+    p = argparse.ArgumentParser(
+        prog="taxjson", description=__doc__.splitlines()[0],
+        formatter_class=_CappedHelpFormatter,
+        epilog="Exit codes: 0 success; 1 failure, or a command's finding "
+               "(drift, a handoff problem, an unsafe trade, a lint hit); "
+               "2 usage, or a named input or output that cannot be read "
+               "or written; 3 elections required (run --no-input); 130 "
+               "interrupted; 141 stdout closed (| head). `taxjson help "
+               "COMMAND` or `taxjson COMMAND --help` for one command.")
     p.add_argument("-C", "--dir", default=".", help="Project root (default: cwd)")
     try:
         from importlib.metadata import version as _pkg_version
@@ -16972,12 +16978,22 @@ def _main() -> None:
 
     p_csend = sub.add_parser(
         "crypto-sends",
-        help="Crypto withdrawals/sends that did not arrive on another of "
-             "your exchanges: decide self (own wallet) / gift "
-             "(Canada only) / payment, "
-             "see the fair value and the .tt BUYSELL line; --write "
-             "generates inputs/<acct>/crypto_sends.tt. Stablecoins get "
-             "the currency-gain calculation instead of a sale line.")
+        help="Crypto withdrawals/sends that did not arrive in another of "
+             "your crypto accounts: decide self (own wallet) / gift "
+             "(Canada only) / payment, see the fair value and the .tt "
+             "BUYSELL line; --write generates inputs/<acct>/crypto_sends.tt. "
+             "Stablecoins get the currency-gain calculation instead of a "
+             "sale line.",
+        description="Crypto withdrawals/sends that did not arrive in "
+                    "another of your crypto accounts. A send is paired "
+                    "with an arrival of the same coin on another "
+                    "exchange, or on the same exchange in another "
+                    "account, from 10 minutes before to 3 days after the "
+                    "send, losing at most 10% to the network fee; a "
+                    "paired send is your own move. Decide each unpaired "
+                    "send: self (own wallet) / gift (Canada only) / "
+                    "payment; --write generates "
+                    "inputs/<acct>/crypto_sends.tt.")
     p_csend.add_argument("account", nargs="?",
                          help="Crypto account (default: all)")
     p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
