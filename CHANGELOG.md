@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Webull parser: a row whose Action Code is blank but that carries a
+  date, quantity, price or proceeds is refused naming the file line; the
+  trade was dropped at rc 0 (A2-0788).
 - IB parser: a Dividends or Withholding Tax row whose Description has
   no leading `TICKER (ISIN)` token is refused naming the file line; it
   was booked on UNKNOWN.US (or a word of the text) and a Canadian

@@ -423,5 +423,44 @@ class TestIbIncomeTicker(unittest.TestCase):
                          [("TAX", "CASH")])
 
 
+WB = ('Webull Securities (Canada) Ltd.\nSynthetic Demo Statement\n'
+      'Date Range: January 1 2024 - December 31 2024\n\n'
+      '"Currency","Date","Action Code","Symbol","Security Description",'
+      '"Type Code","Quantity","Price","Proceeds"\n'
+      'USD,15-01-2024,BUY,@AAPL,APPLE INC,EQ,100,185.00,"(18,500.00)"\n')
+
+
+def wb_parse(text, name="wb_demo.csv", encoding="utf-8"):
+    import contextlib
+    import io
+    from taxjson.lib.brokerages.webull import WebullBrokerage
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / name
+        p.write_bytes(text.encode(encoding) if encoding != "utf-16"
+                      else b"\xff\xfe" + text.encode("utf-16-le"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            return WebullBrokerage().parse_file(p)
+
+
+class TestWebullBlankAction(unittest.TestCase):
+    """A2-0788."""
+
+    def test_blank_action_trade_cells_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaisesRegex(BrokerageParseError,
+                                    r"line \d+: .*blank Action Code"):
+            wb_parse(WB + 'USD,10-05-2024,,@AAPL,APPLE INC,EQ,75,200.00,'
+                          '"14,995.05"\n')
+
+    def test_blank_continuation_row_ok(self):
+        txs = wb_parse(WB + ',,,,,,,,\n')
+        self.assertEqual(len(txs), 1)
+
+    def test_utf16_webull_read(self):
+        """A2-0805 (Webull half)."""
+        self.assertEqual(len(wb_parse(WB, encoding="utf-16")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
