@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Coinbase rows must add up.** A Buy/Sell whose Total is not
+  Subtotal ± fee, a Buy/Sell, Convert or staking reward whose value does
+  not fit Quantity × Price (5% for spread), and a Convert whose Quantity
+  Transacted disagrees with its Notes are refused, naming the file and
+  line. A 10x Subtotal on a Convert used to add about 26.8k to the gain
+  under `run --strict`. A sale whose fee exceeds its Subtotal now books
+  negative proceeds whatever sign the Total cell carries, and an
+  explicit $0.00 Buy is refused like a blank one. Before, fill-crypto
+  re-priced it at market. Re-audit A2-0022, A2-0080 (the Coinbase half),
+  A2-0250, A2-0565, A2-0997 and A2-1023.
+- **Coinbase classification.** A fiat `Withdrawal` is a recognized
+  non-event like a fiat `Deposit`. Before, it raised a false UNBOOKED
+  "moves coins" warning and `run --strict` failed. A `Deposit` or
+  `Subscription` in a coin is now UNBOOKED; it used to be dropped as a
+  non-event. A row cut inside Fees or Notes is refused as truncated. The
+  unterminated-quote error names the line the quote opened on. The two
+  legs of a Convert in an export without an ID column share one id stem,
+  so fill-crypto values the swap once. Advanced Trade legs on a
+  crypto-quoted pair say "crypto-to-crypto". A USD-valued Convert or
+  `*-USDC` Advanced Trade more than 2% off the peg prints the de-peg
+  warning. Re-audit A2-0237, A2-0564, A2-0566, A2-0567, A2-1024,
+  A2-0249, A2-0584, A2-0998 and A2-1003.
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
