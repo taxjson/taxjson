@@ -3346,7 +3346,10 @@ def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
         except (OSError, ValueError):
             continue
         for t in doc.get("transactions", []):
-            if t.get("action") in ("BUYSELL", "ASSIGN", "OPENING_BALANCE"):
+            # A position moved in kind into the account (a declared
+            # TRANSFER) is held there too (re-audit A2-1231).
+            if t.get("action") in ("BUYSELL", "ASSIGN", "OPENING_BALANCE",
+                                   "TRANSFER"):
                 sym = (t.get("symbol") or "").strip()
                 if sym:
                     by_symbol.setdefault(sym, set()).add(name)
@@ -10340,6 +10343,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                              f"quantity — fix the file (an unreadable "
                              f"row is never skipped).")
                 try:
+                    # A TOML boolean is not a quantity (`true` read as 1,
+                    # re-audit A2-1230).
+                    if isinstance(_qraw, bool):
+                        raise TypeError("bool")
                     q = float(_qraw)
                 except (TypeError, ValueError):
                     sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "

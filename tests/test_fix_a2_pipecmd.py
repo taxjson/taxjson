@@ -710,5 +710,36 @@ class TestCoveredCallNamesTheHeldClassShare(unittest.TestCase):
         self.assertNotIn("RCI.TO", groups)
 
 
+# ------------------------------------------------------ A2-1230 / A2-1231
+class TestSmallRunReaders(unittest.TestCase):
+
+    def test_overlap_note_counts_transfers(self):
+        import contextlib, io
+        from taxjson.bin.taxjson_run import _warn_cross_taxable_overlap
+        with tempfile.TemporaryDirectory() as td:
+            a, b = Path(td) / "a.json", Path(td) / "b.json"
+            a.write_text(json.dumps({"transactions": [
+                {"action": "BUYSELL", "symbol": "XYZ.TO"}]}))
+            b.write_text(json.dumps({"transactions": [
+                {"action": "TRANSFER", "symbol": "XYZ.TO"}]}))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                _warn_cross_taxable_overlap([("a", a), ("b", b)],
+                                            {"country": "canada"})
+            self.assertIn("XYZ.TO", err.getvalue())
+
+    def test_sanity_refuses_boolean_quantity(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [
+                "BUYSELL 2026-01-05 10:00:00 XYZ.TO 30 CAD 10 -300 0"])
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            h = Path(td) / "h.toml"
+            h.write_text('[[holding]]\nsymbol = "XYZ.TO"\nquantity = true\n')
+            r = _cli(root, home, "sanity", f"m={h}")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("is not a number", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

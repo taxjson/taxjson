@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `taxjson sanity` refuses a holdings `quantity = true` (read as 1), and
+  the cross-account overlap note counts a position moved in kind into a
+  second taxable account (re-audit A2-1230, A2-1231).
 - A long option expiring ON Dec 31 with no expiry row is warned about in
   that year's project; ccd.rpt / leaps / ccd-sum / the .sum name a
   covered call's held class share (RCI.B.TO) even when the shares were
