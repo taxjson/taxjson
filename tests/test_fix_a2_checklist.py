@@ -449,3 +449,64 @@ class TestLocks(unittest.TestCase):
             self.assertNotEqual(r.returncode, 0)
             self.assertNotIn("-1.json", r.stderr + r.stdout)
             self.assertIn("year is required", r.stderr)
+
+
+# ------------------------------------------------------------ crypto-sends
+class TestCryptoSendsCommand(unittest.TestCase):
+    def setUp(self):
+        from test_fix_sends import CB_CSV, KR_LEDGER, _rates_file
+        self._td = tempfile.TemporaryDirectory()
+        td = Path(self._td.name)
+        self.root = td / "proj"
+        for a, fn, body in (("cb", "cb_2025.csv", CB_CSV), ("kr", "kr_ledgers.csv", KR_LEDGER)):
+            (self.root / "inputs" / a).mkdir(parents=True)
+            (self.root / "inputs" / a / fn).write_text(body)
+        (self.root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2026\ncountry = "canada"\n'
+            'base_currency = "CAD"\nsource_currencies = ["USD"]\n'
+            '[accounts.cb]\ntype = "taxable"\ncrypto = true\n'
+            '[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
+        (self.root / "work").mkdir()
+        _rates_file(self.root / "work" / "to_base.csv")
+        self.home = td / "home"
+        self.home.mkdir()
+        (self.home / ".crypto_price_cache.json").write_text(json.dumps({
+            "TAO22974-2026-05-04": 284.9259948730469,
+            "TAO22974-2026-01-05": 300.0}))
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def cli(self, *a):
+        from test_fix_sends import _cli
+        return _cli(self.root, self.home, *a)
+
+    def test_unparsed_peer_guard_and_unset(self):
+        """A2-0359: with kr not parsed, a send to it is not offered as a
+        gift; A2-1163: a saved decision can be removed."""
+        sol = "cb-20250713T071327-SOL-50.0001"
+        r = self.cli("run", "--no-input", "--account", "cb")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        r = self.cli("crypto-sends", "cb", "--set", f"{sol}=gift")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("kr have not been parsed", r.stderr)
+        r = self.cli("crypto-sends", "cb")
+        self.assertIn("kr have not", r.stderr)
+        from taxjson.lib.tomlcompat import tomllib
+        cfg = tomllib.loads((self.root / "taxjson.toml").read_text())
+        c = cl.Ctx(root=self.root, cfg=cfg, year=2026, today=date(2026, 9, 1),
+                   run_sub=lambda argv, timeout=900: (0, "", ""))
+        res = cl.d_crypto_sends(c)
+        self.assertEqual(res.status, "blocked", res.detail)
+        self.assertIn("kr not parsed", res.detail)
+        # Full run: SOL matched; decide the BTC send, then take it back.
+        self.assertEqual(self.cli("run", "--no-input").returncode, 0)
+        btc = "cb-20250801T080000-BTC-0.001"
+        self.assertEqual(self.cli("crypto-sends", "cb", "--set", f"{btc}=self").returncode, 0)
+        r = self.cli("crypto-sends", "cb", "--unset", btc)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        man = json.loads((self.root / "inputs" / "cb" / "sends.json").read_text())
+        self.assertNotIn(btc, man["sends"])
+        r = self.cli("crypto-sends", "cb", "--unset", btc)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no saved decision", r.stderr)

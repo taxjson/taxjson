@@ -1729,6 +1729,18 @@ def _crypto_broker_files(root: Path, cfg: Dict[str, Any]
     return out
 
 
+def _unparsed_crypto_accounts(root: Path, cfg: Dict[str, Any],
+                              exclude: Optional[str] = None) -> List[str]:
+    """Crypto accounts with an exchange export whose transfer sidecar
+    (work/<acct>_<exchange>_transfers.json) does not exist yet: their
+    arrivals are unknown, so a send to them looks unmatched."""
+    files = _crypto_broker_files(root, cfg)
+    cache = root / "work"
+    return sorted(a for a, fs in files.items() if a != exclude and any(
+        not (cache / f"{a}_{b}_transfers.json").exists()
+        for b, _p in fs if b in ("kraken", "coinbase")))
+
+
 def _is_us(cfg: Dict[str, Any]) -> bool:
     return _country((cfg.get("settings") or {})) in ("us",
                                                                  "usa")
@@ -1836,9 +1848,7 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
     # multi-account project): its arrivals are unknown, so a send to it
     # would look like a gift. Don't ask until its sidecar exists.
     files = _crypto_broker_files(root, cfg)
-    unparsed = [a for a, fs in files.items() if a != name and any(
-        not (cache / f"{a}_{b}_transfers.json").exists()
-        for b, _p in fs if b in ("kraken", "coinbase"))]
+    unparsed = _unparsed_crypto_accounts(root, cfg, exclude=name)
     try:
         report = CS.build_report(root, cfg, files, CS.yahoo_usd_price(root),
                                  want=name)
@@ -5475,21 +5485,52 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         _die(f"{acct!r} is not a crypto account — crypto accounts: "
              f"{', '.join(accts)}.")
     sets = list(getattr(args, "set", None) or [])
-    if (sets or args.write) and not acct:
+    unsets = list(getattr(args, "unset", None) or [])
+    if (sets or unsets or args.write) and not acct:
         if len(accts) != 1:
-            _die(f"--set/--write need an account: `taxjson crypto-sends "
-                 f"<{'|'.join(accts)}> --set ID=gift`.")
+            _die(f"--set/--unset/--write need an account: `taxjson "
+                 f"crypto-sends <{'|'.join(accts)}> --set ID=gift`.")
         acct = accts[0]
     if (args.note is not None or args.price is not None) and not sets:
         _die("--note/--price only apply with --set ID=DECISION.")
-    if args.json and (sets or args.write):
+    if args.json and (sets or unsets or args.write):
         _die("--json applies to the listing only.")
+    if sets and unsets:
+        _die("--set and --unset go in separate commands.")
     cache = root / "work"
     if not any((cache / f"{a}_{b}_transfers.json").exists()
                for a in accts for b in ("kraken", "coinbase")):
         _die("no crypto transfer evidence in work/ — run `taxjson run` "
              "first (the parse keeps withdrawals/sends in "
              "work/<acct>_<exchange>_transfers.json).")
+    # Another crypto account not parsed yet: its arrivals are unknown,
+    # so a send to it reads as unmatched — the guard `run` applies
+    # before it asks (A2-0359).
+    unparsed = _unparsed_crypto_accounts(root, cfg)
+    if unparsed and (sets or args.write):
+        _die(f"crypto account(s) {', '.join(unparsed)} have not been "
+             f"parsed yet — a send to them would look unmatched. Run "
+             f"`taxjson run` first, then decide.")
+    if unsets:
+        from taxjson.lib.crypto_sends import MANIFEST_NAME as _MN
+        _man = root / "inputs" / acct / _MN
+        try:
+            for sid in unsets:
+                sid = sid.strip()
+                if not CS.clear_decision(_man, sid):
+                    _die(f"no saved decision for {sid!r} in "
+                         f"inputs/{acct}/{_MN}.")
+                print(f"removed: {sid} (undecided again — `taxjson run` "
+                      f"asks, or `--set {sid}=...`)")
+        except ValueError as e:
+            _die(str(e))
+        print(f"Regenerate the .tt lines: `taxjson crypto-sends {acct} "
+              f"--write` (or just `taxjson run`).")
+        return
+    if unparsed:
+        print(f"note: crypto account(s) {', '.join(unparsed)} have not "
+              f"been parsed yet — a send to them is listed as unmatched "
+              f"until `taxjson run` reads them.", file=sys.stderr)
     try:
         if sets:
             light = CS.build_report(root, cfg, None, None, want=acct,
@@ -14744,6 +14785,10 @@ def main() -> None:
                          help="Record a decision (self | gift | payment) "
                               "for a send id from the listing; "
                               "repeatable")
+    p_csend.add_argument("--unset", action="append", metavar="ID",
+                         help="Remove the saved decision for a send id "
+                              "(it is undecided again: `taxjson run` "
+                              "asks); repeatable")
     p_csend.add_argument("--note", metavar="TEXT",
                          help="With --set: a note kept with the decision "
                               "and written into crypto_sends.tt")

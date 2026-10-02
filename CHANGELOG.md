@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson crypto-sends`: `--unset ID` removes a saved decision (the send
+  is undecided again); `--set`/`--write` refuse while another crypto
+  account has not been parsed (a send to it looked unmatched and could be
+  booked as a gift), and the checklist step is "blocked" then (re-audit
+  A2-0359, A2-1163).
 - Locks: a lock taken before its year ended (`close-year --force` on an
   open year) is called a snapshot, not a filed return, by the checklist's
   filed-lock and lock-committed steps (attention), by check-filed (a note

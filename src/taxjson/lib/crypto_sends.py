@@ -283,6 +283,17 @@ def record_decision(path: Path, sid: str, decision: str,
     save_decisions(path, doc)
 
 
+def clear_decision(path: Path, sid: str) -> bool:
+    """Remove a saved decision (the send is undecided again: `run`
+    asks, the checklist lists it). False when none was saved."""
+    doc = load_decisions(path)
+    if sid not in doc["sends"]:
+        return False
+    doc["sends"].pop(sid)
+    save_decisions(path, doc)
+    return True
+
+
 # ---------------------------------------------------------------- rates
 def load_rates(path: Path) -> Dict[str, Dict[str, Tuple[float, str]]]:
     """{currency: {date: (rate, source)}} from work/to_base.csv

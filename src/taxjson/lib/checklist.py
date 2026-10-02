@@ -1074,6 +1074,18 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                for n in names for b in ("kraken", "coinbase")):
         return Result("crypto-sends", "blocked",
                       "no crypto transfer evidence in work/ — run `taxjson run`")
+    # A crypto account not parsed yet: a send to it reads as unmatched
+    # and undecided (A2-0359) — the books are not ready to judge.
+    try:
+        from taxjson.bin.taxjson_run import _unparsed_crypto_accounts
+        unparsed = _unparsed_crypto_accounts(ctx.root, ctx.cfg)
+    except SystemExit:
+        unparsed = []
+    if unparsed:
+        return Result("crypto-sends", "blocked",
+                      f"crypto account(s) {', '.join(unparsed)} not parsed "
+                      f"yet — a send to them would look unmatched; run "
+                      f"`taxjson run`")
     try:
         rep = cs.build_report(ctx.root, ctx.cfg, None, None, with_pool=False)
     except ValueError as e:
