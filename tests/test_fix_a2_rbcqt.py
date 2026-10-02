@@ -1022,9 +1022,16 @@ class TestCoordinatorHandOffs(unittest.TestCase):
     def test_questrade_truncated_row_is_refused(self):
         from taxjson.lib.brokerages.base import BrokerageParseError
         full = q()
-        cut = ",".join(full.rstrip("\n").split(",")[:11]) + "\n"
+        # Cut into the money columns: refused.
+        cut = ",".join(full.rstrip("\n").split(",")[:9]) + "\n"
         with self.assertRaises(BrokerageParseError):
             qt_parse(cut)
+        # Only the trailing account columns missing: booked, said.
+        cut = ",".join(full.rstrip("\n").split(",")[:11]) + "\n"
+        txs, err, _ = qt_parse(cut)
+        self.assertEqual(len(txs), 1)
+        self.assertTrue(any("Account Type" in ln for ln in _attention(err)),
+                        err)
 
 
 if __name__ == "__main__":

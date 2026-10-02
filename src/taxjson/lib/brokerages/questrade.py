@@ -175,7 +175,7 @@ def _canon_action(raw: Optional[str]) -> str:
     return _QT_ACTION_CANON.get(a.upper(), a.upper())
 
 
-def _read_qt_rows(path: Path) -> List[tuple]:
+def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
     """(line number, row) for every data row of a Questrade export. The
     header must carry every column in _QT_COLUMNS."""
     path = Path(path)
@@ -194,6 +194,7 @@ def _read_qt_rows(path: Path) -> List[tuple]:
             f"standard English columns.")
     reader.fieldnames = header
     rows = []
+    cut_meta: List[int] = []
     for lineno, row in enumerate(reader, 2):
         extra = [v for v in (row.get(None) or []) if (v or '').strip()]
         vals = [str(v or '').strip() for k, v in row.items()
@@ -217,6 +218,20 @@ def _read_qt_rows(path: Path) -> List[tuple]:
                   "cells; refusing to guess which row they belong to. "
                   "Fix the stray quote/comma in the CSV and re-run.")
         short = [k for k, v in row.items() if k is not None and v is None]
+        _meta = ('Account #', 'Activity Type', 'Account Type')
+        if short and all(k in _meta for k in short):
+            # Only the trailing account columns are cut: the money and
+            # the Action code are all there. Booked, but said (once per
+            # file) — the account check and the Activity Type fallbacks
+            # cannot see the row.
+            if warn and not cut_meta:
+                print(f"warning: ATTENTION: {path.name} line {lineno}: the "
+                      f"row has no {', '.join(short)} cell(s) (fewer cells "
+                      f"than the header) — booked from its Action code; "
+                      f"re-export the file if this is not a hand-made "
+                      f"fixture.", file=sys.stderr)
+            cut_meta.append(lineno)
+            short = []
         if short:
             # Fewer cells than the header (a cut-off row): the missing
             # trailing cells read as blank and the row was booked
@@ -745,7 +760,7 @@ class QuestradeBrokerage(BaseBrokerage):
             ctx.emit()
         self._ctx = ctx
         self._desc_to_ticker = ctx.desc_to_ticker
-        rows = self._in_real_order(path, _read_qt_rows(path))
+        rows = self._in_real_order(path, _read_qt_rows(path, warn=True))
 
         # Taxable hint from the Account Type column: a registered-plan
         # marker -> sheltered; "margin"/"cash" without one -> taxable;
