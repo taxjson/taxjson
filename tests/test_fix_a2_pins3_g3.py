@@ -259,5 +259,139 @@ class TestEdgeCasesStockDividend(unittest.TestCase):
         self.assertFalse(stock_dividend_in_loss_window("usa"))
 
 
+# ====================================================== income dating
+from taxjson.lib.income_dating import IncomeRules  # noqa: E402
+
+# Spelled out here, not read from the module: dropping an entry there
+# must fail a test (re-audit A2-1562).
+_CA_SUFFIXES = ("TO", "V", "CN", "NE", "VN")
+_SPLIT_SHARE_ROOTS = ("BK", "DF", "DFN", "DGS", "ENS", "FFN", "FTN", "GDV",
+                      "LBS", "LCS", "LFE", "PDV", "PIC", "PWI", "SBC", "SBN",
+                      "WFS", "XMF", "XTD", "YCM")
+
+
+def _inc(**kw):
+    r = {"action": "DIVIDEND", "symbol": "ZZF.US", "date": "2026-01-15",
+         "currency": "USD", "net_amount": 10.0, "gross_amount": 10.0}
+    r.update(kw)
+    return r
+
+
+def _dist(symbol):
+    return _inc(symbol=symbol, currency="CAD", income_label="distribution",
+                record_date="2025-12-31")
+
+
+class TestCanadaListingsAndSplitShares(unittest.TestCase):
+    """A2-0924 (M13, 'V'), A2-1562: every Canadian listing suffix in
+    CA_LISTING_SUFFIXES dates a trust's distribution by its record date,
+    and every SPLIT_SHARE_ROOTS entry (a corporation) keeps the pay
+    date."""
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_every_canadian_listing_is_a_canadian_trust(self):
+        rules = IncomeRules("canada")
+        for sfx in _CA_SUFFIXES:
+            with self.subTest(suffix=sfx):
+                self.assertEqual(rules.income_date(_dist(f"ZZT.UN.{sfx}")),
+                                 "2025-12-31")
+        # A US listing is a foreign fund: the pay date.
+        self.assertEqual(rules.income_date(_dist("ZZT.US")), "2026-01-15")
+
+    @rule("CA-INC-DATE-TRUST", "CA-INC-DATE-DIV")
+    def test_every_split_share_root_keeps_the_pay_date(self):
+        rules = IncomeRules("canada")
+        for root in _SPLIT_SHARE_ROOTS:
+            for sym in (f"{root}.TO", f"{root}.PR.A.TO"):
+                with self.subTest(symbol=sym):
+                    self.assertEqual(rules.income_date(_dist(sym)),
+                                     "2026-01-15")
+
+
+class TestCanadaJanuaryRocWarning(unittest.TestCase):
+    """A2-0924 (M08): the January-ROC warning fires only when the export
+    has NO record date (`and not _iso(_get(r, "record_date"))`)."""
+
+    def _roc(self, **kw):
+        r = {"action": "ADJUST", "type": "roc", "symbol": "ZZT.UN.TO",
+             "date": "2026-01-15", "currency": "CAD", "net_amount": -12.0}
+        r.update(kw)
+        return r
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_no_warning_when_the_record_date_is_printed(self):
+        rules = IncomeRules("canada")
+        bare = rules.warnings([self._roc()], year=2026)
+        self.assertTrue(any("with no record date" in w for w in bare), bare)
+        dated = rules.warnings([self._roc(record_date="2026-01-05")],
+                               year=2026)
+        self.assertFalse(any("with no record date" in w for w in dated),
+                         dated)
+
+
+class TestUsRicWarningWindow(unittest.TestCase):
+    """A2-0889, A2-0924 (M09), A2-1561, A2-1562: income_dating.warnings
+    `d[:4] == str(prev) and d[5:7] in ("10", "11", "12")` and
+    `pay[5:7] != "01"` — a January payment with an ex or record date in
+    October-December of the PRIOR year is warned about; September, a
+    February payment and a two-years-earlier date are not."""
+
+    def _warned(self, **kw):
+        return bool(IncomeRules("usa").warnings([_inc(**kw)], year=2026))
+
+    @rule("US-INC-DATE-RIC")
+    def test_october_to_december_ex_dates_warn(self):
+        for ex in ("2025-10-01", "2025-10-31", "2025-11-14", "2025-12-15"):
+            with self.subTest(ex=ex):
+                self.assertTrue(self._warned(ex_date=ex))
+        # The record date counts too.
+        self.assertTrue(self._warned(record_date="2025-10-03"))
+
+    @rule("US-INC-DATE-RIC")
+    def test_outside_the_window_is_quiet(self):
+        self.assertFalse(self._warned(ex_date="2025-09-30"))
+        self.assertFalse(self._warned(record_date="2025-09-30"))
+        # Two years before the pay date: not the prior year.
+        self.assertFalse(self._warned(ex_date="2024-11-14"))
+        # A February payment is not a January dividend.
+        self.assertFalse(self._warned(date="2026-02-13",
+                                      ex_date="2025-12-15"))
+        self.assertFalse(self._warned())
+
+
+# ====================================================== sum-income
+class TestSumIncomeAccumulates(unittest.TestCase):
+    """A2-1563: taxjson_sum_income.summarize_income adds every row of a
+    (ticker, currency) — the 'div', 'tax', 'pil' and type-'other'
+    accumulators (`+=`), not only the last one."""
+
+    def test_two_rows_per_column_add_up(self):
+        from taxjson.bin.taxjson_sum_income import summarize_income
+        rows = [
+            _inc(symbol="ZZD.US", date="2025-03-14", gross_amount=50.0,
+                 net_amount=50.0),
+            _inc(symbol="ZZD.US", date="2025-06-13", gross_amount=100.0,
+                 net_amount=100.0),
+            {"action": "TAX", "symbol": "ZZD.US", "date": "2025-03-14",
+             "currency": "USD", "net_amount": 7.5},
+            {"action": "TAX", "symbol": "ZZD.US", "date": "2025-06-13",
+             "currency": "USD", "net_amount": 15.0},
+            {"action": "DIVIDEND_IN_LIEU", "symbol": "ZZD.US",
+             "date": "2025-09-12", "currency": "USD", "gross_amount": 3.0,
+             "net_amount": 3.0},
+            {"action": "DIVIDEND_IN_LIEU", "symbol": "ZZD.US",
+             "date": "2025-12-12", "currency": "USD", "gross_amount": 4.0,
+             "net_amount": 4.0},
+            {"action": "OTHER", "type": "other", "symbol": "ZZO.US",
+             "date": "2025-04-01", "currency": "USD", "net_amount": 10.0},
+            {"action": "OTHER", "type": "other", "symbol": "ZZO.US",
+             "date": "2025-05-01", "currency": "USD", "net_amount": 20.0},
+        ]
+        st = summarize_income(rows, 2025)["ticker_stats"]
+        self.assertEqual(st["ZZD.US"]["USD"],
+                         {"div": 150.0, "tax": 22.5, "pil": 7.0})
+        self.assertEqual(st["ZZO.US"]["USD"]["div"], 30.0)
+
+
 if __name__ == "__main__":
     unittest.main()
