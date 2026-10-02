@@ -65,16 +65,75 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
         BUYSELL 2026-02-02 10:00:00 QZX.US -100 USD 60 6000
     """
 
+    @rule("CA-OPT-08")
     def test_ca_opposite_direction_same_moment(self):
         # R1-28: put premium off the put shares' cost (5800), call
-        # premium onto the call shares' proceeds (6200).
-        res, _ = _run(CanadaTaxRules(), _tt(self.TWO_ASSIGN))
-        sale = [r for r in _rows(res, 'QZX.US')
-                if r['date'] == '2025-12-19'][0]
-        self.assertAlmostEqual(sale['proceeds'], 6200.0, places=2)
-        yrs = _by_year(res)
-        self.assertAlmostEqual(yrs['2025'], 800.0, places=2)
-        self.assertAlmostEqual(yrs['2026'], 600.0, places=2)
+        # premium onto the call shares' proceeds (6200), whichever
+        # ASSIGN row is staged first. (These legs sit at their strikes,
+        # so the identity pairing settles them; the direction filter
+        # itself is pinned by the unpaired-legs tests below.)
+        base = self.TWO_ASSIGN.strip().splitlines()
+        swapped = base[:3] + [base[4], base[3]] + base[5:]
+        for rows in (self.TWO_ASSIGN, "\n".join(swapped)):
+            res, _ = _run(CanadaTaxRules(), _tt(rows))
+            sale = [r for r in _rows(res, 'QZX.US')
+                    if r['date'] == '2025-12-19'][0]
+            self.assertAlmostEqual(sale['proceeds'], 6200.0, places=2)
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2025'], 800.0, places=2)
+            self.assertAlmostEqual(yrs['2026'], 600.0, places=2)
+
+    # Two same-moment assignments whose stock legs are NOT identifiable
+    # (filled in 60 + 40 share pieces, off the strike): the identity
+    # pairing leaves them to the ledger's proximity rule, where only the
+    # share DIRECTION tells the put's buys from the call's sells (core
+    # _AssignPremiumLedger.take: `same = [e for e in cands if e['dir']
+    # in (None, sign)]`, staged with `'dir': self._direction(opt_tx)`).
+    # Re-audit A2-0936: with either line mutated, the put premium (300)
+    # went onto the first SELL piece when the put was staged first.
+    UNPAIRED_LEGS = """
+        BUYSELL 2024-06-03 10:00:00 QZX.US 100 USD 50 5000
+        BUYSELL 2025-11-03 10:00:00 QZX251219P00061000.US -1 USD 3 300
+        BUYSELL 2025-11-03 10:00:00 QZX251219C00060000.US -1 USD 2 200
+        ASSIGN 2025-12-19 16:20:00 QZX251219P00061000.US 1 USD 0 0
+        ASSIGN 2025-12-19 16:20:00 QZX251219C00060000.US 1 USD 0 0
+        BUYSELL 2025-12-19 16:20:01 QZX.US -60 USD 59.9 3594
+        BUYSELL 2025-12-19 16:20:02 QZX.US 60 USD 61.1 3666
+        BUYSELL 2025-12-19 16:20:03 QZX.US -40 USD 59.9 2396
+        BUYSELL 2025-12-19 16:20:04 QZX.US 40 USD 61.1 2444
+        BUYSELL 2026-02-02 10:00:00 QZX.US -100 USD 60 6000
+    """
+
+    def _unpaired_orders(self):
+        base = self.UNPAIRED_LEGS.strip().splitlines()
+        return (self.UNPAIRED_LEGS,
+                "\n".join(base[:3] + [base[4], base[3]] + base[5:]))
+
+    @rule("CA-OPT-08")
+    def test_ca_unpaired_legs_take_their_own_direction(self):
+        # Call premium 200 onto the SELL pieces (5990 + 200 = 6190);
+        # put premium 300 off the BUY pieces (6110 - 300 = 5810).
+        for rows in self._unpaired_orders():
+            res, _ = _run(CanadaTaxRules(), _tt(rows))
+            sells = [r for r in _rows(res, 'QZX.US')
+                     if r['date'] == '2025-12-19']
+            self.assertEqual([r['proceeds'] for r in sells],
+                             [3714.0, 2476.0])
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2025'], 995.6, places=2)
+            self.assertAlmostEqual(yrs['2026'], 384.4, places=2)
+
+    @rule("US-OPT-05")
+    def test_us_unpaired_legs_take_their_own_direction(self):
+        for rows in self._unpaired_orders():
+            res, _ = _run(USATaxRules(), _tt(rows))
+            sells = [r for r in _rows(res, 'QZX.US')
+                     if r['date'] == '2025-12-19']
+            self.assertEqual([r['proceeds'] for r in sells],
+                             [3714.0, 2476.0])
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2025'], 1190.0, places=2)
+            self.assertAlmostEqual(yrs['2026'], 190.0, places=2)
 
     def test_us_opposite_direction_either_row_order(self):
         # S071-11: 1200 LT / 200 ST whatever the row order.

@@ -294,6 +294,21 @@ class Book:
     def wanted(self, acct: str) -> bool:
         return not self.only or acct == self.only
 
+    def window_row(self, r: Dict[str, Any]) -> bool:
+        """A row that can be a window acquisition (or, Canada, a sale
+        near day 30): a trade, assignment or transfer in wash scope. A
+        US stock dividend is not a purchase (US-STKDIV-01), so the US
+        never lists it as an in-window acquisition (re-audit A2-1547);
+        Canada counts it (CA-STKDIV-01)."""
+        from taxjson.lib.core import is_stock_dividend
+        from taxjson.lib.country import stock_dividend_in_loss_window
+        if (r.get("action") not in ACQ_ACTIONS
+                or r.get("action") == "OPENING_BALANCE"
+                or not self.in_wash_scope(r["_acct"])):
+            return False
+        return (stock_dividend_in_loss_window(self.country)
+                or not is_stock_dividend(r))
+
 
 # ------------------------------------------------------------ year boundary
 
@@ -632,10 +647,7 @@ def windows_across_year_end(book: Book) -> List[Dict[str, Any]]:
     y = book.year
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
     for r in book.txs:
-        if (r.get("action") in ACQ_ACTIONS
-                and r.get("action") != "OPENING_BALANCE"
-                and float(r.get("quantity") or 0) > 0
-                and book.in_wash_scope(r["_acct"])):
+        if book.window_row(r) and float(r.get("quantity") or 0) > 0:
             by_sym.setdefault(r.get("symbol") or "", []).append(r)
     out = []
     for g in book.gains:
@@ -834,9 +846,7 @@ def window_edges(book: Book, margin: int = 3) -> List[Dict[str, Any]]:
     by_sym: Dict[str, List[Dict[str, Any]]] = {}
     calls = _long_calls(book)
     for r in book.txs:
-        if (r.get("action") in ACQ_ACTIONS
-                and r.get("action") != "OPENING_BALANCE"
-                and book.in_wash_scope(r["_acct"])):
+        if book.window_row(r):
             by_sym.setdefault(r.get("symbol") or "", []).append(r)
     out = []
     for g, ld, lo_ in _losses(book):
