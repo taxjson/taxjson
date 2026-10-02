@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- Errors are one line with a consistent exit code in more places
+  (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
+  A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
+  as its `taxjson-<tool>` console script (in process and with
+  TAXJSON_DISPATCH=subprocess), so an unreadable ticker.map in
+  `taxjson reconcile-slips` is no longer a traceback; a symlink loop or
+  any other OS error on an input is `cannot read <file>: <reason>`
+  (exit 2); a ticker.map rename cycle is one line (exit 2) in
+  taxjson-ticker-map / merge2 / apply-distributions / reconcile-slips;
+  a missing or unreadable named input exits 2 in lint-crosslistings
+  --map (1 is a lint finding), brokerage --security-overrides,
+  wash-radar/safe-to-sell --incomplete-history, generate-parser and
+  `taxjson redact`; a `--ticker-map` that names a missing file is
+  refused by corp-actions, apply-distributions and harvest (it was
+  ignored); wash-radar --json-out under a file and gains
+  --suggest-phantoms into a folder say `cannot write`.
+- A console tool piped into `head` exits quietly (141) instead of
+  printing a BrokenPipeError (exit 120), also when `taxjson` runs it;
+  under an ASCII locale a report's `—` is replaced, not a
+  UnicodeEncodeError (A2-1426, A2-1417, A2-1427).
+- The elections manifest: a directory, an unreadable file, a symlink
+  loop or a dangling link is one `manifest ... cannot be read` line in
+  `elect`, `spinoffs` and run's FILING REQUIRED check (it was a
+  traceback or read as 'no elections'); a failed save is one line and
+  keeps the old file; a BOM is accepted; a non-string `summary` /
+  `notes` is refused (A2-0160, A2-0463, A2-1402, A2-0804, A2-1399,
+  A2-1401, A2-1449).
+- A UTF-8 BOM before hand-edited JSON is accepted by every transaction
+  book and JSON loader (taxjson-sort, merge, merge2, fill-crypto,
+  validate, json_input, phantoms.json) — it was refused with
+  'Unexpected UTF-8 BOM' (A2-0776, A2-1412).
+- edge-cases, check-dates, harvest, apply-distributions and split-gains
+  read work/ documents through the shared reader: a wrong-shape
+  document or a text number is one line naming the file and row
+  (A2-0794, A2-1408, A2-0793).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

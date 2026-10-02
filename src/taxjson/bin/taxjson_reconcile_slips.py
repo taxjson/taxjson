@@ -61,7 +61,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.bin.taxjson_form_export import grant_buyback_units, load_json
-from taxjson.lib.cli_diag import tax_year
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.numeric import nonneg_float_arg
 
 _SUFFIX_RE = re.compile(r"\.(US|TO|AX|L|V|CN|NE)$", re.IGNORECASE)
@@ -785,6 +785,10 @@ def render(rep: Dict[str, Any], tolerance: float,
     return "\n".join(lines)
 
 
+# Guarded here as well as by the console script: `taxjson reconcile-slips`
+# calls this main directly, and an unreadable ticker.map was a traceback
+# there while `taxjson-reconcile-slips` printed one line (A2-0161).
+@guard_main("taxjson-reconcile-slips")
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="taxjson-reconcile-slips",

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 from datetime import datetime
 
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import InputContentError, guard_main
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.ticker_map import map_ticker
 
@@ -281,7 +281,9 @@ def merge_renames(tmap: "TickerMap", to_base: bool) -> Dict[str, str]:
     for frm in raw:
         cyc = _chain_cycle(frm, raw)
         if cyc:
-            raise ValueError(
+            # InputContentError (a ValueError): one line, exit 2, in every
+            # stand-alone tool that merges renames (re-audit A2-0770).
+            raise InputContentError(
                 f"ticker.map: rename cycle "
                 f"{' -> '.join(cyc + [cyc[0]])} — a chain of renames "
                 f"must end at one symbol")

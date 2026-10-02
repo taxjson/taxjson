@@ -1690,7 +1690,10 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
     `create=True` a fresh empty manifest is written when neither exists."""
     user_manifest = acct_dir / "manifest.json"
     legacy = cache / f"{name}_manifest.json"
-    if user_manifest.exists():
+    # A symlink that loops or dangles is returned too: Manifest.load
+    # refuses it in one line (writing a fresh manifest through it was an
+    # ELOOP traceback, A2-0160).
+    if user_manifest.exists() or user_manifest.is_symlink():
         return user_manifest
     if legacy.exists():
         acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -4440,7 +4443,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                                   # the election only kept the books
                                   # consistent
             _mp = _manifest_path_for(inputs_dir / _name, cache, _name)
-            if not _mp.exists():
+            if not _mp.exists() and not _mp.is_symlink():
                 continue
             try:
                 _recs = list(Manifest.load(_mp).records.values())
@@ -4760,7 +4763,7 @@ def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
 def _print_elections(name: str, manifest_path: Path,
                      country: Optional[str] = None) -> int:
     from taxjson.lib.corp_actions import Manifest, election_keys
-    man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
+    man = Manifest.load(manifest_path)
     if not man.records:
         print(f"  {name}: no elections recorded.")
         return 0
@@ -4855,8 +4858,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         from taxjson.lib.corp_actions import Manifest
         for acct, adoc in sorted((doc.get("accounts") or {}).items()):
             mpath = _manifest_path_for(inputs_dir / acct, cache, acct)
-            man = (Manifest.load(mpath) if mpath.exists()
-                   else Manifest())
+            man = Manifest.load(mpath)
             for ev in adoc.get("pending", []):
                 head = f"{acct}: {ev['event_id']}  {ev.get('summary', '')}"
                 rec = man.get(ev.get("event_id", ""))
@@ -4897,7 +4899,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             doc: Dict[str, Any] = {}
             for name in accounts:
                 mp = _manifest_path_for(inputs_dir / name, cache, name)
-                if not mp.exists():
+                if not mp.exists() and not mp.is_symlink():
                     continue
                 try:
                     man = Manifest.load(mp)
@@ -4936,7 +4938,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         # One account's SAVED elections — same shape as the
         # all-accounts listing (it printed the text listing before).
         doc_one: Dict[str, Any] = {}
-        if manifest_path.exists():
+        if manifest_path.exists() or manifest_path.is_symlink():
             try:
                 _man = Manifest.load(manifest_path)
                 doc_one[name] = {
@@ -5068,7 +5070,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                          f"hint(s) {', '.join(sorted(unknown))}"
                          + (f" (it takes: {', '.join(sorted(declared))})"
                             if declared else " (it takes none)"))
-        man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
+        man = Manifest.load(manifest_path)
         prior = man.get(event_id)
         # Best summary available: pending doc (the happy path — user
         # copied the id from `elect --pending`), else the prior
@@ -5133,7 +5135,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  "--pending` after a `run --no-input`).".format(name))
     manifest_backup = (manifest_path.read_bytes()
                        if manifest_path.exists() else None)
-    man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
+    man = Manifest.load(manifest_path)
     # `is not None`: --event '' (e.g. an unset shell variable) must NOT
     # silently widen to ALL elections (REVIEW #34 wiped everything).
     if args.event is not None:
@@ -10991,7 +10993,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                  f"(have: {', '.join(sorted(tax))})")
 
     def _file(name: str, ctx: str) -> Path:
-        p2 = Path(name).expanduser().resolve()
+        try:
+            p2 = Path(name).expanduser().resolve()
+        except (OSError, RuntimeError) as e:     # a symlink loop (A2-0791)
+            sys.exit(f"taxjson sanity: {ctx}: cannot read {name!r} ({e})")
         if p2.is_file():
             return p2
         sys.exit(f"taxjson sanity: {ctx}: {name!r} is not an existing "

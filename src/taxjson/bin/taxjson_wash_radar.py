@@ -485,8 +485,11 @@ def main():
         try:
             _phantoms = load_phantoms(Path(args.incomplete_history))
         except (OSError, ValueError) as e:
-            sys.exit(f"taxjson-wash-radar: --incomplete-history "
-                     f"{args.incomplete_history}: {e}")
+            # Exit 2 like gains/t1135/audit --incomplete-history; a
+            # sys.exit(str) exited 1, the 'finding' code (A2-1435).
+            print(f"taxjson-wash-radar: error: --incomplete-history "
+                  f"{args.incomplete_history}: {e}", file=sys.stderr)
+            sys.exit(2)
 
         def _with_openings(rows, group):
             new_rows, _log = synthesize_openings(rows, _phantoms)
@@ -1925,10 +1928,20 @@ def main():
         }
         if args.json_out:
             out_path = Path(args.json_out)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
             # 'cannot write <path>: ...', not the input wording
-            # (re-audit A2-0707).
-            from taxjson.lib.cli_diag import write_text_atomic
+            # (re-audit A2-0707), for the folder as well (A2-1428: a
+            # parent that is a file was a FileExistsError traceback).
+            from taxjson.lib.cli_diag import (OutputWriteError,
+                                              write_text_atomic)
+            try:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                why = (f"{out_path.parent} is not a folder"
+                       if isinstance(e, (FileExistsError,
+                                         NotADirectoryError))
+                       else (e.strerror or str(e)))
+                raise OutputWriteError(
+                    f"cannot write --json-out {out_path}: {why}") from None
             write_text_atomic(out_path, json.dumps(payload, indent=2,
                                                    sort_keys=True) + "\n")
 

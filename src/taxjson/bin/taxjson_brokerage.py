@@ -449,8 +449,11 @@ Examples:
         overrides = (load_security_overrides(Path(args.security_overrides))
                      if args.security_overrides else [])
     except (OSError, SecurityOverrideError) as e:
+        # An unreadable file is an environment error: exit 2, as its
+        # sibling tools exit (re-audit A2-1421); a malformed line stays
+        # a data error (1).
         print(f"taxjson-brokerage: error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2 if isinstance(e, OSError) else 1)
     override_hits: dict = {}
     # (symbol|CURRENCY) the overrides renamed (-> new symbols) or left
     # alone — the corp-action stage's rows of the same security follow

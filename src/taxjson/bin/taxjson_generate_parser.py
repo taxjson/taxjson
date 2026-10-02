@@ -310,8 +310,9 @@ def main():
     input_path = Path(args.input_file)
     output_path = Path(args.output)
     if not input_path.exists():
+        # Exit 2: a missing input is a usage error (A2-1435).
         print(f"taxjson-generate-parser: error: file not found: {input_path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     if not base_path.exists() or not example_path.exists():
         print(f"taxjson-generate-parser: error: base.py or questrade.py not found in {here / 'lib' / 'brokerages'}",
               file=sys.stderr)

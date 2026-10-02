@@ -448,7 +448,9 @@ class TestRedactBatch(unittest.TestCase):
                 r = self._run("--out", str(t / "out"), str(bad), str(ok))
             finally:
                 bad.chmod(0o600)
-            self.assertEqual(r.returncode, 1)
+            # Exit 2: an unreadable input is an environment error, not a
+            # finding (re-audit A2-1435).
+            self.assertEqual(r.returncode, 2)
             self.assertNotIn("Traceback", r.stderr)
             self.assertIn("a_unreadable.csv", r.stderr)
             self.assertTrue((t / "out" / "b_ok.redacted.csv").exists())
@@ -466,7 +468,7 @@ class TestRedactBatch(unittest.TestCase):
                 r = self._run("--out", str(ro / "x"), str(src))
             finally:
                 ro.chmod(0o755)
-            self.assertEqual(r.returncode, 1)
+            self.assertEqual(r.returncode, 2)          # A2-1435
             self.assertNotIn("Traceback", r.stderr)
             self.assertIn("taxjson redact:", r.stderr)
 

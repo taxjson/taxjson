@@ -108,6 +108,15 @@ def _inventory(doc: Dict[str, Any], p: Path) -> List[Dict[str, Any]]:
         from taxjson.lib.cli_diag import error
         error(PROG, f'{p}: "inventory" must be a list of JSON objects')
         sys.exit(2)
+    # A text qty / total_cost is one line naming the file and row, like
+    # every other reader of a gains file (re-audit A2-0793).
+    from taxjson.lib.json_input import InputFileError, check_row_types
+    try:
+        check_row_types(inv, p, "inventory")
+    except InputFileError as e:
+        from taxjson.lib.cli_diag import error
+        error(PROG, str(e))
+        sys.exit(2)
     return inv
 
 
@@ -636,6 +645,12 @@ def main(argv: Optional[List[str]] = None,
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Show per-tier price-chain diagnostics")
     args = p.parse_args(argv)
+    if args.ticker_map is not None and not Path(args.ticker_map).exists():
+        # A named input that does not exist is refused, not silently
+        # skipped (re-audit A2-1436).
+        from taxjson.lib.cli_diag import error as _error
+        _error(PROG, f"no such file: --ticker-map {args.ticker_map}")
+        return 2
 
     from taxjson.lib.country import is_usa as _country_is_usa
     is_usa = _country_is_usa(args.country)

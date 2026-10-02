@@ -61,6 +61,12 @@ def run_cmd(cmd: List[str], *,
     """
     spec = tool_module(cmd)
     if spec is None or interactive or _use_subprocess():
+        if spec is not None:
+            # Out of process through the console-script trampoline: the
+            # same one-line errors, umask and pipe handling as
+            # `taxjson-<tool>` (re-audit A2-0161).
+            cmd = [cmd[0], "-m", "taxjson.bin._entry",
+                   spec[0].rsplit(".", 1)[-1], *spec[1]]
         if stdout is not None:
             return subprocess.run(cmd, stdout=stdout,
                                   stderr=(None if interactive
@@ -91,7 +97,12 @@ def run_cmd(cmd: List[str], *,
             if err_buf is not None:
                 stack.enter_context(contextlib.redirect_stderr(err_buf))
             try:
-                r = module.main()
+                # The tool's main under the console script's guard: an
+                # unreadable input it reports in one line (exit 2) when
+                # run as `taxjson-<tool>` is the same line here, not a
+                # traceback (re-audit A2-0161).
+                from taxjson.lib.cli_diag import console_prog, guard_main
+                r = guard_main(console_prog(module_name))(module.main)()
                 rc = int(r) if r is not None else 0
             except SystemExit as e:
                 if e.code is None:
@@ -102,7 +113,9 @@ def run_cmd(cmd: List[str], *,
                     print(e.code, file=(err_buf if err_buf is not None
                                         else sys.stderr))
                     rc = 1
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, BrokenPipeError):
+                # A closed reader is the caller's to handle (a quiet
+                # exit), never a tool crash with a traceback (A2-1417).
                 raise
             except Exception:              # noqa: BLE001 — subprocess
                 # isolation semantics: a crashing tool is a non-zero

@@ -98,7 +98,12 @@ def _project_doc_near(path) -> Dict[str, Any]:
             import tomli as tomllib          # type: ignore
         except ImportError:
             return {}
-    p = Path(path).resolve()
+    try:
+        p = Path(path).resolve()
+    except (OSError, RuntimeError):
+        # A symlink loop: the reader of the file itself reports it in
+        # one line (re-audit A2-0791).
+        return {}
     for d in (p.parent, p.parent.parent):
         cfg = d / 'taxjson.toml'
         if cfg.is_file():
@@ -1053,7 +1058,8 @@ def format_suggestions(candidates: List[PhantomCandidate]) -> str:
 def load_phantoms(path: Path) -> Set[Tuple[str, str]]:
     """Load phantoms.json. Returns a set of (symbol, account) pairs.
     Underscore-prefixed metadata fields are ignored."""
-    with open(path, 'r', encoding='utf-8') as f:
+    # utf-8-sig: a hand-edited file's BOM is dropped (re-audit A2-0776).
+    with open(path, 'r', encoding='utf-8-sig') as f:
         try:
             data = json.load(f)
         except json.JSONDecodeError as e:

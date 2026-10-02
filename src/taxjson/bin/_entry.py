@@ -17,7 +17,7 @@ import re
 import sys
 from typing import Any, Callable
 
-from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.cli_diag import console_prog, guard_main, tolerant_stdout
 
 
 def private_umask() -> None:
@@ -32,13 +32,29 @@ def __getattr__(name: str) -> Callable[[], Any]:
 
     def run() -> Any:
         private_umask()
+        # A report's '—' under an ASCII locale is replaced, not a
+        # UnicodeEncodeError (re-audit A2-1427).
+        tolerant_stdout()
         main = importlib.import_module(f"taxjson.bin.{name}").main
         # An unreadable input path (missing, a directory, not UTF-8,
         # not JSON) is one `<prog>: error:` line with exit 2 for every
-        # console script, never a traceback (audit S070-23 / S079-10).
+        # console script, never a traceback (audit S070-23 / S079-10);
+        # a closed pipe is a quiet exit (A2-1426).
         prog = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] \
-            else f"taxjson-{name}"
+            else console_prog(name)
         return guard_main(prog)(main)()
 
     run.__name__ = name
     return run
+
+
+if __name__ == "__main__":
+    # `python -m taxjson.bin._entry <module> ARGS...`: the subprocess form
+    # lib/dispatch uses, so a tool run out of process gets the same
+    # umask, one-line errors and pipe handling as its console script
+    # (`python -m taxjson.bin.<module>` skipped all three — A2-0161).
+    if len(sys.argv) < 2:
+        sys.exit("usage: python -m taxjson.bin._entry <module> [ARGS...]")
+    _mod = sys.argv[1]
+    sys.argv = [console_prog(_mod)] + sys.argv[2:]
+    sys.exit(__getattr__(_mod)())     # as the console script does

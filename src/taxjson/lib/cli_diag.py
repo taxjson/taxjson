@@ -112,6 +112,73 @@ def read_stdin_utf8() -> str:
         raise not_utf8("<stdin>", e) from None
 
 
+class InputContentError(ValueError):
+    """A named input whose CONTENT a tool refuses (a ticker.map rename
+    cycle, a work/ document of the wrong shape): ``str(err)`` is one line
+    that names the file. A ValueError, so the orchestrator's data-error
+    handlers keep catching it; every guard_main-wrapped tool reports it
+    as ``<prog>: error: <line>`` with exit 2 — the stand-alone tools
+    printed a traceback for the refusals `taxjson run` reports in one line
+    (re-audit A2-0770 / A2-0793)."""
+
+
+# Console-script names whose module name is not taxjson_<x> -> taxjson-<x>.
+_PROG_ALIASES = {
+    "taxjson_fees": "taxjson-fees-sum",
+    "to_base_curr": "taxjson-to-base-curr",
+    "fill_crypto_prices": "taxjson-fill-crypto",
+    "xlsx_to_csv": "taxjson-xlsx-to-csv",
+}
+
+
+def console_prog(module: str) -> str:
+    """The console-script name of a bin module (`taxjson.bin.taxjson_corp_
+    actions` or `taxjson_corp_actions` -> `taxjson-corp-actions`)."""
+    name = str(module).rsplit(".", 1)[-1]
+    if name in _PROG_ALIASES:
+        return _PROG_ALIASES[name]
+    if name.startswith("taxjson_"):
+        name = name[len("taxjson_"):]
+    return "taxjson-" + name.replace("_", "-")
+
+
+# Exit status of a tool whose reader went away (`taxjson-x | head`): the
+# shell's 128 + SIGPIPE, with no traceback (re-audit A2-1426 / A2-1417).
+BROKEN_PIPE_EXIT = 141
+
+
+def silence_stdout() -> None:
+    """Point the stdout file descriptor at /dev/null after a broken pipe,
+    so the interpreter's final flush does not print 'Exception ignored
+    ... BrokenPipeError' (and exit 120)."""
+    import os
+    try:
+        fd = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):
+        return                              # a StringIO (in-process)
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, fd)
+        os.close(devnull)
+    except OSError:
+        pass
+
+
+def tolerant_stdout() -> None:
+    """Replace, rather than crash on, characters the terminal's encoding
+    cannot show: under an ASCII locale (PYTHONIOENCODING=ascii, LANG=C on
+    an old system) a '—' or '→' in a report raised UnicodeEncodeError
+    and exit 1 (re-audit A2-1427)."""
+    out = sys.stdout
+    enc = (getattr(out, "encoding", None) or "").lower().replace("-", "")
+    if enc in ("utf8", "utf8sig") or not hasattr(out, "reconfigure"):
+        return
+    try:
+        out.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
+
+
 def describe_input_error(exc: BaseException) -> str:
     """The one-line text for an input a tool could not read."""
     import json
@@ -131,6 +198,13 @@ def describe_input_error(exc: BaseException) -> str:
                 f"0x{exc.object[exc.start]:02x} at offset {exc.start})")
     if isinstance(exc, json.JSONDecodeError):
         return f"cannot read input: not valid JSON ({exc})"
+    if isinstance(exc, OSError) and fn:
+        # ELOOP (a symlink loop), EIO, ENAMETOOLONG...: the file and the
+        # reason, not a traceback (re-audit A2-0791).
+        return f"cannot read {fn}: {exc.strerror or exc}"
+    if isinstance(exc, RuntimeError):
+        # pathlib's resolve() on a symlink loop (Python < 3.13).
+        return f"cannot read input: {exc}"
     return str(exc)
 
 
@@ -138,11 +212,24 @@ _INPUT_ERRORS = (InputReadError, OutputWriteError, FileNotFoundError, IsADirecto
                  PermissionError, UnicodeDecodeError)
 
 
+def _is_symlink_loop(exc: BaseException) -> bool:
+    return isinstance(exc, RuntimeError) and "symlink loop" in str(exc).lower()
+
+
+def _flush_stdout() -> None:
+    try:
+        sys.stdout.flush()
+    except (AttributeError, ValueError):
+        pass
+
+
 def guard_main(prog: str, *, value_errors: bool = False):
-    """Decorator for a bin tool's main(): an unreadable input (and, with
-    `value_errors`, any engine/loader ValueError — the refusals
-    taxjson-gains already reports this way) becomes
-    ``<prog>: error: <one line>`` with exit 2 instead of a traceback."""
+    """Decorator for a bin tool's main(): an unreadable input (any
+    OSError, a symlink loop, not UTF-8, not JSON), an InputContentError
+    (and, with `value_errors`, any engine/loader ValueError — the
+    refusals taxjson-gains already reports this way) becomes
+    ``<prog>: error: <one line>`` with exit 2 instead of a traceback.
+    A reader that goes away (`| head`) is a quiet exit 141."""
     import functools
     import json
 
@@ -150,14 +237,31 @@ def guard_main(prog: str, *, value_errors: bool = False):
         @functools.wraps(fn)
         def wrapper(*a, **kw):
             try:
-                return fn(*a, **kw)
-            except _INPUT_ERRORS + (json.JSONDecodeError,) as e:
+                try:
+                    r = fn(*a, **kw)
+                except SystemExit:
+                    _flush_stdout()
+                    raise
+                _flush_stdout()     # a broken pipe surfaces here, not
+                return r            # at interpreter exit (exit 120)
+            except BrokenPipeError:
+                silence_stdout()
+                raise SystemExit(BROKEN_PIPE_EXIT)
+            except _INPUT_ERRORS + (json.JSONDecodeError, OSError) as e:
                 error(prog, describe_input_error(e))
+                raise SystemExit(2)
+            except InputContentError as e:
+                error(prog, str(e))
                 raise SystemExit(2)
             except ValueError as e:
                 if not value_errors:
                     raise
                 error(prog, str(e))
+                raise SystemExit(2)
+            except RuntimeError as e:
+                if not _is_symlink_loop(e):
+                    raise
+                error(prog, describe_input_error(e))
                 raise SystemExit(2)
         return wrapper
     return deco

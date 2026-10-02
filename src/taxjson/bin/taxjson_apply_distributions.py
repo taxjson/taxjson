@@ -519,14 +519,20 @@ def main(argv=None) -> int:
                          "will synthesize (`taxjson run` passes it).")
     args = ap.parse_args(argv)
 
+    if args.ticker_map is not None and not args.ticker_map.exists():
+        # A named input that does not exist is refused, not silently
+        # skipped (re-audit A2-1436; reconcile-slips' twin refuses too).
+        cli_diag.error(PROG, f"no such file: --ticker-map {args.ticker_map}")
+        return 2
     if not args.map.exists():
         cli_diag.error(PROG, f"no such map file: {args.map}")
         return 2
-    from taxjson.lib.json_input import InputFileError, read_json_doc
+    from taxjson.lib.json_input import InputFileError, read_work_doc
     try:
         # A bare-array book is accepted, as load_transactions does
-        # (audit S079-11).
-        doc = read_json_doc(args.base_json)
+        # (audit S079-11); a row whose quantity is text is one line
+        # naming the file and row (re-audit A2-0793).
+        doc = read_work_doc(args.base_json)
     except InputFileError as e:
         cli_diag.error(PROG, f"could not read {e}")
         return 2
