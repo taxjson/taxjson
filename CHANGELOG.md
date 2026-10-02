@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Kraken: a broken quote or a duplicated column is refused.** A stray
+  quote that closed in a later row swallowed the rows between into one
+  cell, silently dropping those fills or rewards; an unterminated quote
+  was reported at the end of the span as a truncated row; a header with
+  two `fee` columns used the last one. Each is now refused, naming the
+  line the quote opened on or the duplicated column (re-audit A2-0246,
+  A2-0247, A2-0248, A2-1022).
 - **US: all five USD stablecoins at par on Kraken.** In a US project
   PYUSD and GUSD are valued at their 1.00 USD par like USDC, USDT and
   DAI (a swap, a reward or a fee in one); an EUR/PYUSD fill is refused

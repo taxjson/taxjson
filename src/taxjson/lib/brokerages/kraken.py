@@ -219,6 +219,66 @@ def _check_row_width(raw: Dict[Any, Any], path: Path, line: int,
             f"Re-export the file or fix the row.")
 
 
+def _refuse_duplicate_columns(fieldnames, path: Path, kind: str) -> None:
+    """Two header cells naming one column (`fee` twice, `Cost` beside
+    `cost`): csv.DictReader keeps the LAST, so a second `fee` column of
+    zeros silently erased every withdrawal fee. Refused, as the generic
+    and Webull parsers do (re-audit A2-0246)."""
+    seen: Dict[str, int] = {}
+    for h in fieldnames or []:
+        k = (h or '').strip().lower()
+        if k:
+            seen[k] = seen.get(k, 0) + 1
+    dup = sorted(k for k, n in seen.items() if n > 1)
+    if dup:
+        raise ValueError(
+            f"Kraken {kind} CSV {path.name}: column(s) {', '.join(dup)} "
+            f"appear twice in the header — refusing to guess which one "
+            f"holds the values. Remove the extra column or re-export the "
+            f"file.")
+
+
+def _dict_rows(f, path: Path, kind: str, required=()):
+    """(row, first line) for every data row of a Kraken CSV, with the
+    header and each row's shape checked first:
+
+    * a required column missing, or two columns of one name: refused;
+    * a cell holding a line break: refused, naming the line the cell
+      OPENED on. A stray quote that closes in a later row swallows the
+      rows between into one cell — with the same cell count, so the
+      width check passed and those fills/rewards vanished (re-audit
+      A2-0247/0248); an unterminated quote was reported at the END of
+      the span as a "truncated row" (A2-1022);
+    * fewer or more cells than the header: refused (_check_row_width).
+    """
+    reader = csv.DictReader(f)
+    if required:
+        _require_columns(reader.fieldnames, required, path, kind)
+    _refuse_duplicate_columns(reader.fieldnames, path, kind)
+    prev_end = reader.line_num          # the header's last line
+    for raw in reader:
+        if not raw:
+            continue
+        cells = [v for k, v in raw.items() if k is not None]
+        cells += list(raw.get(None) or [])
+        cells = [c for c in cells if isinstance(c, str)]
+        breaks = sum(c.count('\n') for c in cells)
+        end = reader.line_num
+        # The row began after the previous one ended (a cell cut off by
+        # the end of the file also holds that last line's newline).
+        start = max(prev_end + 1, end - breaks)
+        prev_end = end
+        if breaks or any('\r' in c for c in cells):
+            raise ValueError(
+                f"Kraken {kind} CSV {path.name} line {start}: a cell holds "
+                f"a line break — an unterminated or stray quote on that "
+                f"line swallowed the row(s) after it (through line {end}), "
+                f"so they would silently be missing from the books. Fix "
+                f"the quote or re-export the file.")
+        _check_row_width(raw, path, start, kind)
+        yield raw, start
+
+
 # Ledger columns that identify one ledger ENTRY's content. Two exports
 # of the same entry share its txid and these values (newer exports add
 # columns such as amountusd/feecurrency, so the full row may differ).
@@ -321,12 +381,9 @@ class KrakenBrokerage(BaseBrokerage):
                     if _classify_header(f.readline()) != 'ledgers':
                         continue
                     f.seek(0)
-                    rdr = csv.DictReader(f)
-                    _require_columns(rdr.fieldnames, _LEDGER_REQUIRED, p,
-                                     'ledger')
                     found = True
-                    for raw in rdr:
-                        _check_row_width(raw, p, rdr.line_num, 'ledger')
+                    for raw, _line in _dict_rows(f, p, 'ledger',
+                                                 _LEDGER_REQUIRED):
                         row = _lower_row(raw)
                         ref = (row.get('refid') or '').strip()
                         if not ref:
@@ -464,13 +521,8 @@ class KrakenBrokerage(BaseBrokerage):
         coin_fee_fills = 0
         margin_fills = 0
         with open(path, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            _require_columns(reader.fieldnames, _TRADES_REQUIRED, path,
-                             'trades')
-            for raw in reader:
-                if not raw:
-                    continue
-                _check_row_width(raw, path, reader.line_num, 'trades')
+            for raw, line in _dict_rows(f, path, 'trades',
+                                        _TRADES_REQUIRED):
                 row = _lower_row(raw)
                 type_ = (row.get('type') or '').strip().lower()
                 if type_ not in ('buy', 'sell'):
@@ -543,7 +595,7 @@ class KrakenBrokerage(BaseBrokerage):
                     # false gain (S061-11).
                     self._same_property_swap(
                         abs(vol), abs(cost), base,
-                        f"trades {path.name} line {reader.line_num} "
+                        f"trades {path.name} line {line} "
                         f"({pair})")
                     continue
 
@@ -742,13 +794,8 @@ class KrakenBrokerage(BaseBrokerage):
         unbooked: List[tuple] = []
 
         with open(path, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            _require_columns(reader.fieldnames, _LEDGER_REQUIRED, path,
-                             'ledger')
-            for raw in reader:
-                if not raw:
-                    continue
-                _check_row_width(raw, path, reader.line_num, 'ledger')
+            for raw, line in _dict_rows(f, path, 'ledger',
+                                        _LEDGER_REQUIRED):
                 row = _lower_row(raw)
                 txid = (row.get('txid') or '').strip()
                 if txid:
@@ -764,7 +811,7 @@ class KrakenBrokerage(BaseBrokerage):
                         if prev != ident:
                             raise ValueError(
                                 f"Kraken ledger {path.name} line "
-                                f"{reader.line_num}: ledger txid "
+                                f"{line}: ledger txid "
                                 f"{txid[:2]}*** appears twice with "
                                 f"DIFFERENT content — the file is "
                                 f"corrupt or two accounts' exports were "
@@ -1080,7 +1127,7 @@ class KrakenBrokerage(BaseBrokerage):
                         continue
                     f.seek(0)
                     found = True
-                    for raw in csv.DictReader(f):
+                    for raw, _line in _dict_rows(f, p, 'trades'):
                         t = (_lower_row(raw).get('txid') or '').strip()
                         if t:
                             txids.add(t)

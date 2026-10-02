@@ -196,5 +196,67 @@ class TestUsStablecoinsAtPar(unittest.TestCase):
                          [("DIVIDEND", "PYUSD"), ("BUYSELL", "PYUSD")])
 
 
+class TestCsvShape(unittest.TestCase):
+    """A2-0246 / A2-0247 / A2-0248 / A2-1022."""
+
+    _TR = _KT_H + (
+        'T1,O1,SOL/USD,2025-06-01 16:00:00,buy,limit,100,100,0,1,,x,LA\n'
+        'T2,O2,SOL/USD,2025-06-02 16:00:00,buy,limit,100,200,0,2,,y,LB\n'
+        'T3,O3,SOL/USD,2025-06-03 16:00:00,buy,limit,100,300,0,3,,z,LC\n')
+    _LE = _ledger([
+        "L1,R1,2025-06-01 12:00:00,staking,,currency,SOL.S,spot,0.1,0,0.1",
+        "L2,R2,2025-06-02 12:00:00,staking,,currency,SOL.S,spot,0.2,0,0.3",
+        "L3,R3,2025-06-03 12:00:00,staking,,currency,SOL.S,spot,0.3,0,0.6"])
+
+    def test_control(self):
+        txs, _ = _parse({"kr_trades.csv": self._TR}, "kr_trades.csv")
+        self.assertEqual(len(txs), 3)
+        txs, _ = _parse({"kr_ledgers.csv": self._LE}, "kr_ledgers.csv")
+        self.assertEqual(len(txs), 6)
+
+    def test_stray_quote_closing_later_is_refused_naming_its_line(self):
+        bad = self._TR.replace(",x,LA", ',"x,LA').replace(",z,LC", ',z",LC')
+        with self.assertRaises(ValueError) as cm:
+            _parse({"kr_trades.csv": bad}, "kr_trades.csv")
+        self.assertIn("line 2", str(cm.exception))
+        self.assertIn("line break", str(cm.exception))
+        bad = self._LE.replace(",spot,0.1,0,0.1", ',spot,0.1,0,"0.1').replace(
+            ",spot,0.3,0,0.6", ',spot,0.3,0,0.6"')
+        with self.assertRaises(ValueError) as cm:
+            _parse({"kr_ledgers.csv": bad}, "kr_ledgers.csv")
+        self.assertIn("line 2", str(cm.exception))
+
+    def test_stray_quote_in_a_sibling_ledger_is_refused(self):
+        t = _KT_H + ("T1,O1,SOL/CAD,2025-06-02 16:00:00.1,buy,limit,200,"
+                     "2000,5,10,,,\n")
+        bad = self._LE.replace(",spot,0.1,0,0.1", ',spot,0.1,0,"0.1')
+        with self.assertRaises(ValueError) as cm:
+            _parse({"kr_trades.csv": t, "kr_ledgers.csv": bad},
+                   "kr_trades.csv")
+        self.assertIn("kr_ledgers.csv line 2", str(cm.exception))
+
+    def test_unterminated_quote_names_the_opening_line(self):
+        bad = self._LE.replace(",spot,0.1,0,0.1", ',spot,0.1,0,"0.1')
+        with self.assertRaises(ValueError) as cm:
+            _parse({"kr_ledgers.csv": bad}, "kr_ledgers.csv")
+        msg = str(cm.exception)
+        self.assertIn("line 2", msg)
+        self.assertIn("quote", msg)
+        self.assertNotIn("truncated", msg)
+
+    def test_duplicate_column_is_refused(self):
+        led = _ledger([
+            "L1,F1,2025-03-01 12:00:00,withdrawal,,currency,XXBT,spot,-0.1,"
+            "0.0002,0,0"], header=_KL_H.replace("balance\n", "balance,fee\n"))
+        with self.assertRaises(ValueError) as cm:
+            _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertIn("fee", str(cm.exception))
+        self.assertIn("twice", str(cm.exception))
+        t = _KT_H.replace("ledgers\n", "ledgers,Cost\n") + (
+            "T1,O1,SOL/USD,2025-06-01 16:00:00,buy,limit,100,100,0,1,,,,0\n")
+        with self.assertRaises(ValueError):
+            _parse({"kr_trades.csv": t}, "kr_trades.csv")
+
+
 if __name__ == "__main__":
     unittest.main()
