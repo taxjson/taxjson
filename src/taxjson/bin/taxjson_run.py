@@ -11086,7 +11086,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     # estimate nets them, so the ledger does too (A2-0678).
     for _y, _amt in sorted(_box18_by_year(root, taxable).items()):
         argv += ["--slip-gains", f"{_y}={_amt!r}"]
-    _w = _grant_since_warning(settings)
+    _w = _grant_since_warning(settings, root)
     if _w:
         print(f"taxjson carryover: warning: {_w}", file=sys.stderr)
     # Deferred / failed / validation-ERROR books drive the carryforward
