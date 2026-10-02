@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Questrade / RBC: an option description whose strike is only partly
+  readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
+  Questrade row with fewer cells than the header is refused instead of
+  booked with blank trailing cells (re-audit A2-1041 and A2-1042, the
+  Questrade / RBC halves).
 - RBC: a merger whose removal and receipt sit in two yearly exports is
   left to taxjson-corp-actions (which pairs the legs across the
   account's statements, A2-0214) instead of two UNBOOKED legs that

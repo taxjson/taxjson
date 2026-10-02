@@ -835,6 +835,28 @@ def classify_rbc_row(r) -> str:
     return 'unknown'
 
 
+def strict_option_from_description(parser, desc: str):
+    """BaseBrokerage.parse_option_from_description, refusing a strike the
+    pattern only partly read (re-audit A2-1041, the Questrade / RBC half):
+    '2,50' was read as 2 and '1,0000' as 1000 — the strike ends where a
+    comma or another digit still follows."""
+    if not desc:
+        return None
+    for pat in parser._option_description_patterns():
+        m = pat.search(desc)
+        if not m:
+            continue
+        rest = desc[m.end(4):]
+        if re.match(r'[,\d]', rest):
+            raise BrokerageParseError(
+                f"{getattr(parser, '_fname', '') or getattr(parser, '_qt_name', '')}"
+                f": option description {desc[:70]!r} has a strike that is "
+                f"not a plain number ({desc[m.start(4):m.end(4)]}{rest[:5]}"
+                f"...: a decimal comma?) — refusing to guess the strike.")
+        return BaseBrokerage.parse_option_from_description(parser, desc)
+    return None
+
+
 def _names_underlying(root: str, symbol: str) -> bool:
     """Does the Symbol column name the stock the option ROOT is on?
     Exactly, or by the class / adjustment spelling the engine accepts
@@ -1319,6 +1341,9 @@ class RbcBrokerage(BaseBrokerage):
 
     def _option_description_patterns(self):
         return _RBC_OPTION_PATTERNS
+
+    def parse_option_from_description(self, desc):
+        return strict_option_from_description(self, desc)
 
     # ----------------------------------------------------------- warnings
     def _warn(self, msg: str, *, lint: bool = False,

@@ -216,6 +216,18 @@ def _read_qt_rows(path: Path) -> List[tuple]:
                 + " — an unescaped quote or comma swallowed or shifted "
                   "cells; refusing to guess which row they belong to. "
                   "Fix the stray quote/comma in the CSV and re-run.")
+        short = [k for k, v in row.items() if k is not None and v is None]
+        if short:
+            # Fewer cells than the header (a cut-off row): the missing
+            # trailing cells read as blank and the row was booked
+            # (re-audit A2-1042, the Questrade half; Webull, RBC, Kraken
+            # and IB refuse the same).
+            raise BrokerageParseError(
+                f"{path.name} line {lineno}: the row has "
+                f"{len(header) - len(short)} cells for {len(header)} "
+                f"columns (missing: {', '.join(short[:4])}) — a truncated "
+                f"row; refusing to read the missing cells as blank. "
+                f"Re-export the file.")
         rows.append((lineno, row))
     return rows
 
@@ -514,6 +526,12 @@ class QuestradeBrokerage(BaseBrokerage):
         if sym.upper().endswith('.TO') and len(sym) > 3:
             return canonical_ca_listing(sym, 'CAD')
         return super().apply_currency_suffix(symbol, currency)
+
+    def parse_option_from_description(self, desc):
+        # A strike only partly read ('2,50' as 2) is refused (A2-1041).
+        from taxjson.lib.brokerages.rbc_direct import (
+            strict_option_from_description)
+        return strict_option_from_description(self, desc)
 
     @classmethod
     def prepare_files(cls, paths) -> QtAccountContext:

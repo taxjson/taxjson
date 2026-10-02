@@ -998,5 +998,34 @@ class TestClassShareAssignmentStockLeg(unittest.TestCase):
                          [("RCI.B.TO", -100.0)], err)
 
 
+
+class TestCoordinatorHandOffs(unittest.TestCase):
+    """A2-1041 (Questrade / RBC strike consumers) and A2-1042 (the
+    Questrade half), left by the IB area."""
+
+    def test_decimal_comma_strike_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaises(BrokerageParseError):
+            qt_parse(q(sym="AAPL.OPT", desc="CALL AAPL 06/20/25 2,50",
+                       qty="1", price="1.5", gross="-150", comm="0",
+                       net="-150"))
+        with self.assertRaises(BrokerageParseError):
+            parse_one(row("March 3, 2025", "Buy", "8ZZZZZ3", "", "1", "1.5",
+                          "-150", "CAD", "CALL .XYZ 06/20/25 1,0000 XYZ CORP "
+                          "OPEN CONTRACT"))
+        txs, _err, _ = parse_one(row(
+            "March 3, 2025", "Buy", "8ZZZZZ3", "", "1", "1.5", "-150", "CAD",
+            "CALL .XYZ 06/20/25 1,050 XYZ CORP OPEN CONTRACT"))
+        self.assertEqual([t["symbol"] for t in txs],
+                         ["XYZ250620C01050000.TO"])
+
+    def test_questrade_truncated_row_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        full = q()
+        cut = ",".join(full.rstrip("\n").split(",")[:11]) + "\n"
+        with self.assertRaises(BrokerageParseError):
+            qt_parse(cut)
+
+
 if __name__ == "__main__":
     unittest.main()
