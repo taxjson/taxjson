@@ -1,10 +1,12 @@
 import csv
+import io
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.brokerages.base import BaseBrokerage
+from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         read_broker_text)
 from taxjson.lib.brokerages._crypto_common import (strict_money, utc_to_local,
                                                    warn_depeg)
 
@@ -259,7 +261,7 @@ class KrakenBrokerage(BaseBrokerage):
                 else _FIAT_CURRENCIES)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
-        with open(path, 'r', encoding='utf-8-sig') as f:
+        with io.StringIO(read_broker_text(path)) as f:
             header_line = f.readline()
         kind = _classify_header(header_line)
         if kind == 'trades':
@@ -314,7 +316,11 @@ class KrakenBrokerage(BaseBrokerage):
             if not (n.startswith('kr_') or 'kraken' in n):
                 continue
             try:
-                with open(p, 'r', encoding='utf-8-sig') as f:
+                _text = read_broker_text(p)
+            except BrokerageParseError:
+                continue        # a legacy encoding: reported when parsed
+            try:
+                with io.StringIO(_text) as f:
                     if _classify_header(f.readline()) != 'ledgers':
                         continue
                     f.seek(0)
@@ -460,7 +466,7 @@ class KrakenBrokerage(BaseBrokerage):
         unverified = 0
         coin_fee_fills = 0
         margin_fills = 0
-        with open(path, 'r', encoding='utf-8-sig') as f:
+        with io.StringIO(read_broker_text(path)) as f:
             reader = csv.DictReader(f)
             _require_columns(reader.fieldnames, _TRADES_REQUIRED, path,
                              'trades')
@@ -738,7 +744,7 @@ class KrakenBrokerage(BaseBrokerage):
         # margin P&L): (type/subtype, date, asset, amount).
         unbooked: List[tuple] = []
 
-        with open(path, 'r', encoding='utf-8-sig') as f:
+        with io.StringIO(read_broker_text(path)) as f:
             reader = csv.DictReader(f)
             _require_columns(reader.fieldnames, _LEDGER_REQUIRED, path,
                              'ledger')
@@ -1072,7 +1078,11 @@ class KrakenBrokerage(BaseBrokerage):
             if not (n.startswith('kr_') or 'kraken' in n):
                 continue
             try:
-                with open(p, 'r', encoding='utf-8-sig') as f:
+                _text = read_broker_text(p)
+            except BrokerageParseError:
+                continue        # a legacy encoding: reported when parsed
+            try:
+                with io.StringIO(_text) as f:
                     if _classify_header(f.readline()) != 'trades':
                         continue
                     f.seek(0)

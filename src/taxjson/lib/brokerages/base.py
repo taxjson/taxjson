@@ -264,6 +264,17 @@ def decode_broker_text(raw: bytes, name: str = '') -> str:
             f"encoding? Re-export the file, or save it as CSV UTF-8.")
 
 
+def read_broker_text(path) -> str:
+    """A broker export's text through `decode_broker_text` (UTF-16 with a
+    BOM, else UTF-8 with an optional BOM), with line ends folded to
+    '\\n' the way a text-mode open() reads them — the drop-in for
+    `open(path, encoding='utf-8-sig').read()` in a parser, so a UTF-16
+    re-save is read rather than refused as 'not UTF-16' (audit
+    A2-0101 / A2-1451)."""
+    text = decode_broker_text(Path(path).read_bytes(), shown_name(path))
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
 # Strict number grammar for REQUIRED money/quantity cells. A leading
 # sign, then either a plain digit run or a comma-grouped integer part
 # whose groups are exactly three digits after a lead that is not 0
