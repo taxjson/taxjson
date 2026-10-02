@@ -1517,8 +1517,12 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
         # USD return of capital on a CAD listing that
         # _raw_align_adjust_currency could not price (A2-0055/0191/0204),
         # would stop the native gains pass.
-        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
-                                   "ADJUST", "DISALLOW"):
+        # Every action the engines' currency guards check (an
+        # OPENING_BALANCE too; a TRANSFER is never checked) — the list
+        # here missed OPENING_BALANCE and flagged TRANSFER (audit
+        # A2-0440). lib/core.POOL_FREE_ACTIONS is the one list.
+        from taxjson.lib.core import POOL_FREE_ACTIONS
+        if t.get("action") in POOL_FREE_ACTIONS:
             continue
         c, sym = t.get("currency"), t.get("symbol")
         if c and sym:

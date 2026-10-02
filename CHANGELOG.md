@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson run`'s native-currency (raw) pass checks the same actions as
+  the engines' currency guard: an OPENING_BALANCE in another currency
+  than its listing skips the raw view with a warning instead of stopping
+  the run, and a TRANSFER in another currency no longer skips it
+  needlessly (audit A2-0440).
 - The built-in FX placeholder rate follows the direction: a row older
   than the rates file in a US (USD) project converts CAD at the inverse
   of 1.35, not at 1.35 (which booked 1,000 CAD of cost as 1,350 USD);

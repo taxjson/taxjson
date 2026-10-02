@@ -572,5 +572,33 @@ class TestFxFallbackDirection(unittest.TestCase):
         CC.reset_fallback_tally()
 
 
+
+class TestRawMixedCurrencyActions(unittest.TestCase):
+    """A2-0440: the raw-pass mixed-currency detector counted a fixed set
+    of actions — it missed an OPENING_BALANCE in another currency (the
+    native gains pass then stopped the run) and flagged a TRANSFER the
+    engines never check."""
+
+    def _syms(self, rows):
+        from taxjson.bin.taxjson_run import _raw_mixed_currency_symbols
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "m_raw.json"
+            p.write_text(_book(rows))
+            return _raw_mixed_currency_symbols(p)
+
+    def test_detector_follows_the_engines_guard(self):
+        buy = _row("BUYSELL", "2025-02-03", "QZE.TO", 10, -100.0,
+                   currency="CAD")
+        self.assertEqual(self._syms([
+            buy, _row("OPENING_BALANCE", "2025-01-02", "QZE.TO", 5, -50.0,
+                      currency="USD")]), ["QZE.TO"])
+        self.assertEqual(self._syms([
+            buy, _row("TRANSFER", "2025-03-03", "QZE.TO", 5, 0.0,
+                      currency="USD")]), [])
+        self.assertEqual(self._syms([
+            buy, _row("DIVIDEND", "2025-03-03", "QZE.TO", 0, 5.0,
+                      currency="USD")]), [])
+
+
 if __name__ == "__main__":
     unittest.main()
