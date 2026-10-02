@@ -1154,9 +1154,17 @@ class TestFxSources(unittest.TestCase):
             fetch=lambda t, a, b: {d: 1.3 for d in self._weekdays(a, b)})
         self.assertEqual(errs, [])
         self.assertIn('USDCAD-2015-06-15', cache)
-        # A range before the source's known history: remembered as empty.
+        # A range before the source's history: remembered as empty only
+        # when the source, asked now, answers for the later dates
+        # (re-audit A2-0136: later CACHED data used to be the proof, so a
+        # failed download was remembered for good).
         errs = T.refresh_yahoo(cache, 'USDCAD', [('2000-01-01', '2000-12-31')],
                                '2026-09-28', fetch=lambda t, a, b: {})
+        self.assertTrue(errs)
+        errs = T.refresh_yahoo(
+            cache, 'USDCAD', [('2000-01-01', '2000-12-31')], '2026-09-28',
+            fetch=lambda t, a, b: {d: 1.3 for d in self._weekdays(
+                max(a, '2003-12-01'), b)})
         self.assertEqual(errs, [])
 
     def test_pre_coverage_fallback_message_names_a_working_remedy(self):

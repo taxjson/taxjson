@@ -49,6 +49,25 @@
   date, a fee-inclusive or rounded quantity, a thousands comma and a
   split sale.
 
+- FX rates: a transient failure is no longer cached as a permanent
+  answer (re-audit A2-0136, A2-0393). A failed Yahoo download counts as
+  "no data" only when Yahoo, asked again right then, answers for the
+  dates after the range (later dates already in the cache are no proof);
+  a second empty Bank of Canada answer is no longer read as a stopped
+  series (a series counts as stopped only after 45 silent days with
+  nothing cached after the range), and when the Bank answers again the
+  hole an earlier empty answer left is asked for again; a noon or Yahoo
+  answer cut off before the range end records only the dates it reached
+  and says so.
+- FX rates: a cached Bank of Canada (or Yahoo) rate that is not a
+  positive number (`"abc"`, `"1,3316"`, a list) is no longer copied into
+  the rates file, where the run then blamed the config ("no rates at
+  all for USD"): it is dropped, named with `~/.currency_price_cache.json`
+  and its date, and asked for again online (re-audit A2-1212).
+- tax-logic CA-FX-02 / US-FX-02 now state the rate gap the converter
+  really accepts: the rates file carries a rate over weekends and
+  holidays for up to 7 days and a day with no row looks back 5 more, so
+  a rate up to 12 days old is used; no number changes (re-audit A2-0706).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

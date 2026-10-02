@@ -401,13 +401,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "currency the Bank does not publish, or a series it "
                  "stopped.", cont=True),
             Rule("CA-FX-02",
-                 "A day with no rate uses the latest rate of the 5 days "
-                 "before; a longer gap converts the row at a placeholder "
-                 "rate and is a validation ERROR (the .sum DIAGNOSTICS, "
-                 "`taxjson checklist`; `run --strict` stops), and a "
-                 "currency with no rates at all stops the run. `taxjson "
-                 "fx-cash` counts a cash event with no rate in those 5 "
-                 "days as unrated (named in its report).",
+                 "The rates file carries each rate over weekends and "
+                 "holidays for up to 7 days, and a day with no row there "
+                 "uses the latest row of the 5 days before, so a rate up "
+                 "to 12 days old is used (real Bank of Canada gaps are 4 "
+                 "days or less); a longer gap converts the row at a "
+                 "placeholder rate and is a validation ERROR (the .sum "
+                 "DIAGNOSTICS, `taxjson checklist`; `run --strict` "
+                 "stops), and a currency with no rates at all stops the "
+                 "run. `taxjson fx-cash` counts a cash event with no rate "
+                 "row in those 5 days as unrated (named in its report).",
                  cont=True),
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
@@ -915,13 +918,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  keys=("base_currency",)),
             Rule("US-FX-02",
                  "Other currencies are converted at the Yahoo Finance "
-                 "daily rate for the settle date. A day with no rate uses "
-                 "the latest rate of the 5 days before; a longer gap "
-                 "converts the row at a placeholder rate and is a "
-                 "validation ERROR (`run --strict` stops), and a currency "
-                 "with no rates at all stops the run. `taxjson fx-cash` "
-                 "counts a cash event with no rate in those 5 days as "
-                 "unrated (named in its report).", cont=True),
+                 "daily rate for the settle date. The rates file carries "
+                 "each rate over weekends and holidays for up to 7 days, "
+                 "and a day with no row there uses the latest row of the "
+                 "5 days before, so a rate up to 12 days old is used; a "
+                 "longer gap converts the row at a placeholder rate and "
+                 "is a validation ERROR (`run --strict` stops), and a "
+                 "currency with no rates at all stops the run. `taxjson "
+                 "fx-cash` counts a cash event with no rate row in those "
+                 "5 days as unrated (named in its report).", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
