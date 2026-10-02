@@ -30,6 +30,18 @@ DEFAULT_LOCAL_TZ = 'America/Toronto'
 # (PYUSD/GUSD missing in some, audit S060-24 / re-audit A2-0589).
 USD_STABLECOINS = frozenset({'USDC', 'USDT', 'DAI', 'PYUSD', 'GUSD'})
 
+# Fiat currencies an exchange row can be priced or quoted in, ONE list
+# for the Coinbase and Kraken parsers. Anything else is a crypto-asset:
+# erring toward "crypto" books a visible phantom position, while a coin
+# wrongly taken for cash would drop a disposition silently. Kraken knew
+# only USD/CAD/EUR/GBP, so an AUD/JPY/CHF bank deposit became a crypto
+# send and an XBT/AUD fill a coin-for-coin swap (re-audit A2-0579).
+FIAT_CURRENCIES = frozenset({
+    'USD', 'CAD', 'EUR', 'GBP', 'AUD', 'NZD', 'JPY', 'CHF', 'SGD', 'HKD',
+    'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'BRL', 'MXN', 'INR', 'ZAR', 'TRY',
+    'KRW', 'CNY', 'AED', 'ILS',
+})
+
 # Currency markers an exchange may glue to an amount. Longest first so
 # `CA$` is not half-eaten by `A$`/`$`.
 _MONEY_PREFIXES = ('CA$', 'US$', 'C$', 'A$', '$', '€', '£')

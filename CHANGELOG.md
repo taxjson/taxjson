@@ -100,6 +100,61 @@
   `*-USDC` Advanced Trade more than 2% off the peg prints the de-peg
   warning. Re-audit A2-0237, A2-0564, A2-0566, A2-0567, A2-1024,
   A2-0249, A2-0584, A2-0998 and A2-1003.
+- **Kraken: a stablecoin swap far off the peg is warned about.** A
+  ledger instant swap or an ETH/USDC fill whose ledger `amountusd`
+  implies a stablecoin price more than 2% from 1.00 USD now prints the
+  de-peg warning a USDC/USD fill does (tax-logic CA-CRYPTO-02; re-audit
+  A2-1003, Kraken half).
+- **tax-logic states the Kraken staked-code fold.** CA-CRYPTO-01 and
+  US-CRYPTO-01 now say that Kraken's staked and bonded wallet codes
+  (DOT.S, DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) are the
+  same coin as the bare code, so a 1:1 swap between them is not a sale,
+  which is what the parser already did (re-audit A2-0236).
+- **Kraken trades: the cost must fit vol x price.** A fill whose cost
+  contradicts |vol| x price by more than rounding, or whose fee is more
+  than 5% of the cost, is refused, naming the txid: a shifted, swapped
+  or 10x column used to book with at most a schema warning (re-audit
+  A2-0080).
+- **Kraken: three smaller ledger fixes.** An instant-trade spend with a
+  positive amount or a receive with a negative one is refused (the
+  amount was taken as abs(), booking an inverted trade as an ordinary
+  buy); a fill whose fee was paid with KFEE fee credits books with no
+  fee instead of being refused; and a multi-coin dust sweep into one
+  coin keeps ids fill-crypto pairs, so each split swap is valued once
+  instead of each leg at its own coin's close (re-audit A2-1019,
+  A2-0577, A2-0581).
+- **Kraken: rows that are not your own cash moving are no longer
+  ignored.** A trades row whose type is blank or not buy/sell, a fiat
+  `credit` or `adjustment`, and a coin row that moves nothing but a fee
+  are UNBOOKED warnings (shown by `taxjson run`, refused by `--strict`);
+  they were a quiet note saying moving your own cash is not a tax event.
+  A fee taken in a coin on a fiat withdrawal or on a staking reward is a
+  sale of those coins at fair value, as on a coin withdrawal (tax-logic
+  CA-CRYPTO-03 / US-CRYPTO-03). `earn/migration` rows are a wallet move,
+  and a ledger whose rows are all recognized non-events (an ETH->ETH2
+  relabel, a fiat deposit) no longer prints the "parsed to 0
+  transactions" warning that `run --strict` refused (re-audit A2-0245,
+  A2-0578, A2-1002, A2-0582, A2-1018, A2-1017, A2-0583).
+- **Kraken: a broken quote or a duplicated column is refused.** A stray
+  quote that closed in a later row swallowed the rows between into one
+  cell, silently dropping those fills or rewards; an unterminated quote
+  was reported at the end of the span as a truncated row; a header with
+  two `fee` columns used the last one. Each is now refused, naming the
+  line the quote opened on or the duplicated column (re-audit A2-0246,
+  A2-0247, A2-0248, A2-1022).
+- **US: all five USD stablecoins at par on Kraken.** In a US project
+  PYUSD and GUSD are valued at their 1.00 USD par like USDC, USDT and
+  DAI (a swap, a reward or a fee in one); an EUR/PYUSD fill is refused
+  like EUR/USDC instead of being dropped as a forex conversion; and a
+  Kraken ledger instant swap against a stablecoin takes the par ahead
+  of the export's amountusd, as the trades export does. tax-logic
+  US-CRYPTO-02 says so (re-audit A2-1004, A2-1020).
+- **Kraken: every fiat currency is cash.** Only USD, CAD, EUR and GBP
+  were: an AUD, JPY or CHF bank deposit or withdrawal became a crypto
+  send to classify, an XBT/AUD fill a coin-for-coin swap with a phantom
+  `AUD` coin, and an AUD.HOLD reward an unpriced coin. Kraken now uses
+  the Coinbase parser's fiat list (re-audit A2-0238, A2-0251, A2-0579,
+  A2-0580).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
