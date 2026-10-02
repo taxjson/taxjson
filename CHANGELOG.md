@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson events` lines keep a dividend's withholding-netted amount
+  (the optional 9th column) and a declared TRANSFER's `DECLARED` token,
+  as `.tt` export does, so a pasted line re-imports the same row
+  (A2-0989).
+
 - US: a stock dividend paid after the shares were sold (between the
   record and pay dates) no longer asks for "the missing purchase
   history"; the warning says the §307 allocation reaches the sold lots

@@ -543,5 +543,25 @@ class TestUsStockDividendAfterSale(unittest.TestCase):
         self.assertIn("missing purchase history", err)
 
 
+class TestEventsLineRoundTrip(unittest.TestCase):
+    """A2-0989: `taxjson events` lines keep a dividend's netted 9th
+    column and a TRANSFER's DECLARED token."""
+
+    def test_dividend_net_and_declared_transfer(self):
+        from taxjson.bin.taxjson_run import _tx_display_line
+        from taxjson.lib.pipeline import MANUAL_TRANSFER_DECLARATION
+        div = {"action": "DIVIDEND", "date": "2025-06-30", "time": "00:00:00",
+               "symbol": "XYZ.US", "quantity": 0, "price": 0,
+               "gross_amount": 100.0, "net_amount": 85.0, "currency": "USD"}
+        self.assertTrue(_tx_display_line(div).endswith(" 100.00 85.00"))
+        div["net_amount"] = 100.0
+        self.assertTrue(_tx_display_line(div).endswith(" 100.00"))
+        tr = {"action": "TRANSFER", "date": "2025-02-03", "time": "10:00:00",
+              "symbol": "XYZ.US", "quantity": 10.0, "price": 5.0,
+              "net_amount": 50.0, "currency": "USD",
+              "description": MANUAL_TRANSFER_DECLARATION}
+        self.assertTrue(_tx_display_line(tr).endswith(" DECLARED"))
+
+
 if __name__ == "__main__":
     unittest.main()

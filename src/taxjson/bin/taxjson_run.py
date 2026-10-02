@@ -4638,13 +4638,21 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     if action in ("BUYSELL", "ASSIGN"):
         return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
     if action == "TRANSFER":
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}"
+        # The opt-in DECLARED token rides along as in tx_to_tt_line, or a
+        # re-import loses the declaration (audit A2-0989).
+        from taxjson.lib.pipeline import MANUAL_TRANSFER_DECLARATION
+        decl = (" DECLARED" if tx.get("description")
+                == MANUAL_TRANSFER_DECLARATION else "")
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}{decl}"
     if action == "SPLIT":
         return f"SPLIT {date} {time} {sym} {tx.get('symbol_new') or sym} {sig(qty)}"
     if action in ("DIVIDEND", "DIVIDEND_IN_LIEU", "TAX"):
         # Signed so a reversal row reads as negative instead of masquerading
         # as more income/tax.
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(gross)}"
+        # The withholding-NETTED 9th column, as tx_to_tt_line writes it:
+        # without it the line re-parses net as gross (audit A2-0989).
+        net9 = f" {money(net)}" if abs(net - gross) > 0.005 else ""
+        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(gross)}{net9}"
     if action in ("INTEREST", "FEE"):
         return f"{action} {date} {time} {cur} {money(net)}"
     if action in ("ADJUST", "DISALLOW"):
