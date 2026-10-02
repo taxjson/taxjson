@@ -184,9 +184,13 @@ def _bdate(r: Dict[str, Any], basis: str) -> Optional[date]:
 
 def groups(cfg: Dict[str, Any]) -> Dict[str, List[str]]:
     """Taxable accounts split into the pools the engine blends:
-    equities together, crypto together."""
+    equities together, crypto together — in taxjson.toml order, the
+    order the run blends them in: rows of two accounts at one moment
+    follow it (CA-DATE-14 / US-DATE-13). Sorted by name, the snapshot
+    replayed a same-moment sale after another account's buy and
+    recorded a deferral the return never had (A2-1556)."""
     out: Dict[str, List[str]] = {"equity": [], "crypto": []}
-    for name, a in sorted((cfg.get("accounts") or {}).items()):
+    for name, a in (cfg.get("accounts") or {}).items():
         if not isinstance(a, dict) or a.get("type") != "taxable":
             continue
         out["crypto" if a.get("crypto") else "equity"].append(name)

@@ -408,5 +408,63 @@ class TestCloseYearAndHandoffPins(unittest.TestCase):
                          [("QQQ.TO", "2026-01-05")], rep)
 
 
+_GENERIC_MAP = """[columns]
+date="Date"
+settle="Settle"
+action="Type"
+symbol="Ticker"
+quantity="Shares"
+price="Price"
+amount="Amount"
+currency="Currency"
+[actions]
+"BUY"="buy"
+"SELL"="sell"
+"""
+
+
+class TestCloseYearAccountOrder(unittest.TestCase):
+    """A2-1556: the close-year snapshot blends the taxable accounts in
+    taxjson.toml order, as the run does — rows of two accounts at one
+    moment (the generic importer prints no clock time) follow it."""
+
+    @rule("CA-DATE-14")
+    def test_a2_1556_year_end_follows_the_toml_account_order(self):
+        rows = {
+            "zeta": ["2025-01-06,2025-01-07,BUY,XYZ.TO,100,10,-1000,CAD",
+                     "2025-03-03,2025-03-04,SELL,XYZ.TO,-100,12,1200,CAD"],
+            "alpha": ["2025-03-03,2025-03-04,BUY,XYZ.TO,100,20,-2000,CAD"],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "p"
+            root.mkdir()
+            # zeta (the sale) is listed first: it sells from the shares
+            # held before alpha's same-moment buy — a 200 gain, nothing
+            # denied. Alphabetical order would sell from the blended
+            # pool at a loss and record a deferral the return never had.
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\n\n'
+                '[accounts.zeta]\ntype = "taxable"\n\n'
+                '[accounts.alpha]\ntype = "taxable"\n')
+            for a, rs in rows.items():
+                d = root / "inputs" / a
+                d.mkdir(parents=True)
+                (d / "generic.toml").write_text(_GENERIC_MAP)
+                (d / "generic_t.csv").write_text(
+                    "Date,Settle,Type,Ticker,Shares,Price,Amount,Currency\n"
+                    + "\n".join(rs) + "\n")
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = _run_cli(root, "close-year")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("disallowed 0.00", r.stdout + r.stderr)
+            rec = json.loads((root / "filed" / "2025.json").read_text())
+        xyz = rec["year_end"]["equity"]["XYZ.TO"]
+        self.assertAlmostEqual(xyz["qty"], 100.0)
+        self.assertAlmostEqual(xyz["acb"], 2000.0, places=2)
+        self.assertAlmostEqual(xyz.get("deferred", 0.0), 0.0, places=2)
+
+
 if __name__ == '__main__':
     unittest.main()

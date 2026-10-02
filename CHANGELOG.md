@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson close-year` blends the taxable accounts in taxjson.toml order,
+  as the run does: with two accounts trading one security at the same
+  moment, the year-end record could carry a superficial-loss deferral
+  (and a lower cost) that the return never had (re-audit A2-1556).
 - An IB corporate-action cancellation (`Ca`) now cancels the leg in its
   own currency: a spin-off delivered on both the CAD and the USD listing
   whose CAD leg IB cancelled used to drop the USD event and offer the

@@ -391,14 +391,17 @@ class TestYearEndLandings(unittest.TestCase):
     def test_settle_basis_bump_lands_after_the_losing_sale(self):
         # A2-1140: the pre-loss bump was dated settle = trade day, so on
         # settle basis it was applied before the sale settled (1,650
-        # instead of the engine's 1,800).
+        # instead of the engine's 1,800). alpha (the same-moment buy) is
+        # listed first, so the run sells from the blended pool at a loss
+        # and denies it (rows at one moment follow taxjson.toml order,
+        # and since A2-1556 the snapshot does too).
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "p"
             p.mkdir()
             (p / "taxjson.toml").write_text(
                 '[settings]\nyear = 2025\ncountry = "canada"\n'
-                'base_currency = "CAD"\n\n[accounts.zeta]\n'
-                'type = "taxable"\n\n[accounts.alpha]\ntype = "taxable"\n')
+                'base_currency = "CAD"\n\n[accounts.alpha]\n'
+                'type = "taxable"\n\n[accounts.zeta]\ntype = "taxable"\n')
             rows = {"zeta": ["2025-01-06,2025-01-07,BUY,XYZ.TO,100,10,"
                              "-1000,CAD",
                              "2025-03-03,2025-03-04,SELL,XYZ.TO,-100,12,"
