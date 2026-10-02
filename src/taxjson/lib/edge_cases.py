@@ -634,7 +634,11 @@ def calls_in_windows(book: Book) -> List[Dict[str, Any]]:
         if (r.get("action") == "BUYSELL" and _right(sym) == "C"
                 and float(r.get("quantity") or 0) > 0):
             und = _underlying(sym)
-            if und:
+            # A futures option is never a sized replacement of the
+            # futures loss, however it is spelled — the engines flag it
+            # for a manual check (CA-SL-15 / US-WASH-15; audit A2-0378).
+            from taxjson.lib.core import _FUTURES_PREFIX_RE
+            if und and not _FUTURES_PREFIX_RE.match(und):
                 calls.setdefault(und, []).append(r)
     out = []
     for g, ld, lo_ in _losses(book):

@@ -644,50 +644,56 @@ _LOSS_TERM = {'canada': 'the loss may be superficial',
 
 def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
     for w in warnings:
-        held = ''
-        if w['held_at_window_end'] is not None:
-            held = (' — still held at window end'
-                    if w['held_at_window_end'] else
-                    ' — NOT held at window end (s.54 would likely not '
-                    'apply)')
-        if w['rule'] == 'right_vs_share_loss':
-            verdict = (f"a warrant/right is a right to acquire the "
-                       f"shares, so {_LOSS_TERM[country]} — review it "
-                       f"by hand")
-        elif w['rule'] == 'adjusted_option_vs_loss':
-            verdict = (f"a call on an adjusted series of the shares is a "
-                       f"right to acquire them (its deliverable is not in "
-                       f"the books), so {_LOSS_TERM[country]} — review "
-                       f"it by hand")
-        elif w['rule'] == 'futures_vs_loss':
-            verdict = ("a futures contract (or an option on one) is a "
-                       "§1256 contract, not stock or securities, and "
-                       "usually outside §1091: the loss is NOT denied — "
-                       "review it by hand")
-        elif w['rule'] == 'futures_option_vs_loss':
-            verdict = (f"a call on the same futures contract is a right "
-                       f"to acquire it, so {_LOSS_TERM[country]}"
-                       + (" (a commodity future is a §1256 contract, not "
-                          "stock or securities, and usually outside "
-                          "§1091)" if country == 'usa' else '')
-                       + " — review it by hand")
-        elif w.get('loss_qty'):
-            verdict = (f"up to {w['covered_shares']:g} of the "
-                       f"{w['loss_qty']:g} shares' loss "
-                       f"({w['at_risk_amount']:+,.2f}) would be denied "
-                       f"({w['option_qty']:g} contract(s) x "
-                       f"{w.get('contract_size') or OPTION_CONTRACT_SHARES:g}"
-                       f" shares, each used once)")
-        else:
-            verdict = "this loss would be denied"
-        print(
-            f"warning: option-replacement (warn-only, numbers unchanged): "
-            f"{w['loss_symbol']} loss {w['loss_amount']:+,.2f} on "
-            f"{w['loss_date']} has {w['option_symbol']} acquired "
-            f"{w['option_acquired']} in the ±30d window{held}; under "
-            f"{w['statute']} {verdict} [{w['rule']}]",
-            file=sys.stderr,
-        )
+        print(f"warning: {format_option_replacement_warning(w, country=country)}",
+              file=sys.stderr)
+
+
+def format_option_replacement_warning(w, *, country: str) -> str:
+    """One option/right-replacement flag as the run prints it (after
+    "warning: "). The web what-if puts the same text in its result
+    (audit A2-0687: the flag went only to the server's stderr)."""
+    held = ''
+    if w['held_at_window_end'] is not None:
+        held = (' — still held at window end'
+                if w['held_at_window_end'] else
+                ' — NOT held at window end (s.54 would likely not '
+                'apply)')
+    if w['rule'] == 'right_vs_share_loss':
+        verdict = (f"a warrant/right is a right to acquire the "
+                   f"shares, so {_LOSS_TERM[country]} — review it "
+                   f"by hand")
+    elif w['rule'] == 'adjusted_option_vs_loss':
+        verdict = (f"a call on an adjusted series of the shares is a "
+                   f"right to acquire them (its deliverable is not in "
+                   f"the books), so {_LOSS_TERM[country]} — review "
+                   f"it by hand")
+    elif w['rule'] == 'futures_vs_loss':
+        verdict = ("a futures contract (or an option on one) is a "
+                   "§1256 contract, not stock or securities, and "
+                   "usually outside §1091: the loss is NOT denied — "
+                   "review it by hand")
+    elif w['rule'] == 'futures_option_vs_loss':
+        verdict = (f"a call on the same futures contract is a right "
+                   f"to acquire it, so {_LOSS_TERM[country]}"
+                   + (" (a commodity future is a §1256 contract, not "
+                      "stock or securities, and usually outside "
+                      "§1091)" if country == 'usa' else '')
+                   + " — review it by hand")
+    elif w.get('loss_qty'):
+        verdict = (f"up to {w['covered_shares']:g} of the "
+                   f"{w['loss_qty']:g} shares' loss "
+                   f"({w['at_risk_amount']:+,.2f}) would be denied "
+                   f"({w['option_qty']:g} contract(s) x "
+                   f"{w.get('contract_size') or OPTION_CONTRACT_SHARES:g}"
+                   f" shares, each used once)")
+    else:
+        verdict = "this loss would be denied"
+    return (
+        f"option-replacement (warn-only, numbers unchanged): "
+        f"{w['loss_symbol']} loss {w['loss_amount']:+,.2f} on "
+        f"{w['loss_date']} has {w['option_symbol']} acquired "
+        f"{w['option_acquired']} in the ±30d window{held}; under "
+        f"{w['statute']} {verdict} [{w['rule']}]")
 
 
 _JSON_COMMENT_RE = re.compile(r'"(?:[^"\\]|\\.)*"|(#[^\n]*)')

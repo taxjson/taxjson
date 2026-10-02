@@ -187,6 +187,84 @@ def render_table(headers, aligns, body, foot=(), gap="  "):
     return lines
 
 
+def grant_write_closes(transactions, inventory,
+                       year=None) -> "dict[int, float]":
+    """{index in `transactions`: contracts closed} for the grant-timing
+    WRITE records (``grant``) that are the only record of their close.
+
+    Under grant timing (ITA s.49(1)) the premium is recognised at the
+    WRITE; a buy-back adds its own closing record, but an expiry adds
+    none. The views count closing records only, so an expired write
+    showed 0 closes / 0 contracts while close timing showed 1 / 5
+    (audit A2-0693, regression of S024-01 / S028-07).
+
+    Per series, in date order: each WRITE queues its contracts, each
+    non-grant SHORT record of the same symbol consumes from the queue
+    (FIFO; one with nothing queued closes a write from an earlier year).
+    What is left, less the contracts still written at the end of the
+    data (``inventory``, a negative quantity), expired when the series'
+    expiry date has passed by the end of ``year`` (or today, if
+    earlier): it is attributed to the earliest remaining writes. A
+    series expiring later is open at the year end, or closed in a later
+    year's books, and is not counted."""
+    from datetime import date as _date
+    from taxjson.lib.core import parse_option_expiry
+    bound = _date.today().isoformat()
+    if year:
+        bound = min(bound, f"{year}-12-31")
+    by_sym: "dict[str, list]" = {}
+    for i, t in enumerate(transactions or ()):
+        if not isinstance(t, dict) or not t.get("symbol"):
+            continue
+        if t.get("grant") or t.get("direction") == "SHORT":
+            by_sym.setdefault(str(t["symbol"]), []).append(i)
+    open_short: "dict[str, float]" = {}
+    for r in inventory or ():
+        try:
+            q = float(r.get("qty") or 0.0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if q < 0:
+            sym = str(r.get("symbol"))
+            open_short[sym] = open_short.get(sym, 0.0) - q
+    out: "dict[int, float]" = {}
+    eps = 1e-9
+    for sym, idxs in by_sym.items():
+        if not any(transactions[i].get("grant") for i in idxs):
+            continue
+        exp = parse_option_expiry(sym)
+        if exp is None or exp > bound:
+            continue
+        idxs.sort(key=lambda i: (str(transactions[i].get("date") or ""),
+                                 0 if transactions[i].get("grant") else 1,
+                                 i))
+        queue: list = []                     # [index, remaining contracts]
+        for i in idxs:
+            try:
+                q = abs(float(transactions[i].get("qty") or 0.0))
+            except (TypeError, ValueError):
+                continue
+            if transactions[i].get("grant"):
+                queue.append([i, q])
+                continue
+            while q > eps and queue:
+                take = min(q, queue[0][1])
+                queue[0][1] -= take
+                q -= take
+                if queue[0][1] <= eps:
+                    queue.pop(0)
+        # Contracts still written at the end are the LATEST writes.
+        still = open_short.get(sym, 0.0)
+        for ent in reversed(queue):
+            take = min(still, ent[1])
+            ent[1] -= take
+            still -= take
+        for i, left in queue:
+            if left > eps:
+                out[i] = left
+    return out
+
+
 def resolve_gains_files(cache, account: Optional[str] = None, *,
                         prefer_wash: bool = True) -> "dict[str, Path]":
     """THE canonical discovery of per-account gains files under work/.
