@@ -59,7 +59,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### Trade reversals across export files
 - **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI / stock dividend).
-- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. A Questrade CIL/REI/stock-dividend reversal must find its original in the SAME export file, else the parse is refused.
+- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. An OVERLAPPING statement of the same IB account (a download taken before IB posted the cancellation) that still holds the original drops it too, for Trades, Transfers and Corporate Actions rows, so dedup keeps one book (`IbBrokerage.reconcile_files`); statements of different IB accounts (Account Information) never touch each other. A Questrade CIL/REI/stock-dividend reversal must find its original in the SAME export file, else the parse is refused.
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
@@ -391,8 +391,11 @@ Commissions + Transaction Fees = the Comm/Fee sum) — the fold this
 item first shipped charged them twice and was removed in the 2026-09
 parse hardening; `Commission Adjustments` refunds
 are folded into the trade they name (a lower cost for a purchase,
-higher proceeds for a sale; tax-logic CA-ACB-COMMREFUND), or kept as a
-negative FEE row when that trade is not in the same statement; tender / voluntary-offer journals are netted
+higher proceeds for a sale; tax-logic CA-ACB-COMMREFUND) — in the
+same statement or in another statement of the account (a December trade
+refunded in January), and a refund naming one execution of an Order row
+folds into that order; a refund that matches no trade, or several, is
+kept as a negative FEE row, with a note; tender / voluntary-offer journals are netted
 (zero-proceeds round trip = recognized no-op, cash settlement = a
 booked sale with a NOTE; an allocation that delivers ANOTHER security
 is an UNBOOKED warning — book the exchange by hand). Kraken `transfer/transferpeertopeer` is

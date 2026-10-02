@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **IB: overlapping statements of one account no longer resurrect a
+  cancelled or refunded row.** A statement pairs a `Ca` cancellation
+  with its original (Trades, Transfers, Corporate Actions), folds a
+  commission refund into its trade and joins a cash in lieu to its
+  split on its own; an older overlapping download that still held the
+  unadjusted original kept it through dedup (a cancelled split applied
+  twice, a cancelled sale booked, a refunded buy booked twice). The
+  same adjustment is now applied to every overlapping statement of the
+  same IB account, and a `Ca` whose original is in two other
+  statements undoes both (audit A2-0023, A2-0024, A2-0088, A2-0258,
+  A2-0259, A2-1038).
+- **IB: a commission refund folds into its trade in another statement**
+  (a December trade refunded in January), and a refund naming one
+  execution of an Order row (`Refund (KWEB, -400, ...)` for a -440
+  order) or an option trade folds too (tax-logic CA-ACB-COMMREFUND /
+  US-BASIS-COMMREFUND; audit A2-0604, A2-0605, A2-1032, A2-1036). A
+  cash in lieu paid in the statement after its split joins that split
+  (A2-1037). A Corporate Actions `Ca` matches its original's currency
+  and asset category too (a CAD leg undid a USD split, A2-0603).
+
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
