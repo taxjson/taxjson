@@ -61,6 +61,23 @@
   account (A2-0030, A2-0103, A2-0106, A2-0107, A2-0299, A2-0626, A2-0628,
   A2-0629, A2-1075, A2-1076, A2-1079, A2-1080, A2-1081, A2-1083,
   A2-1085).
+- Webull: a last row cut short ('CAD,12-12-2024,') is refused instead of
+  dropped; an unreadable Date is refused by file line; a share row with
+  no Price and no Proceeds, and a $0 option row that opens a position,
+  are refused instead of booked at $0; DIV/transfer rows are
+  `warning: UNBOOKED:` (console echo, `--strict` refuses); the ticker-
+  change hint now sees the buy-first shape and renames across yearly
+  exports; an inferred assignment's option leg settles with its stock
+  leg (CA-DATE-04); a split assignment shape is named; a newest-first
+  export is read bottom-up (CA-DATE-14); each row names its broker
+  account (preamble Account Number) for cross-file dedup (A2-0028,
+  A2-0102, A2-0284, A2-0285, A2-0286, A2-0288, A2-0289, A2-0290,
+  A2-0617, A2-0618, A2-0619, A2-1065, A2-1067, A2-1068, A2-1069,
+  A2-1070, A2-1071).
+- UTF-16 exports: the Webull, Kraken and Coinbase parsers and the IB
+  corporate-actions reader decode them like the IB/Questrade/RBC parsers
+  (no more false 'not UTF-8 or UTF-16 text') (A2-0101, A2-1064, A2-1066,
+  A2-1451).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
