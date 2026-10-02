@@ -89,6 +89,52 @@ def _project(tmp, csv=_PHANTOM_CSV, phantoms=None, config=_CONFIG):
     return root
 
 
+# ------------------------------------------------------- A2-0111 / A2-0305
+
+class TestNativeBooksApplyPhantoms(unittest.TestCase):
+    """A2-0111 / A2-0305 (R1-275 / R1-322): the native raw-gains pass
+    applies phantoms.json, so holdings.toml carries no phantom short
+    and `taxjson gains` shows no realized gain for the tainted sale."""
+
+    @rule("CA-ACB-11")
+    def test_holdings_and_native_gains_agree_with_sum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, phantoms=[{"symbol": "ZZZ.TO",
+                                            "account": "margin"}])
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            raw = json.loads((root / "work" / "margin_raw_gains.json")
+                             .read_text())
+            syms = [g.get("symbol") for g in raw.get("transactions", [])
+                    if "gain" in g]
+            self.assertNotIn("ZZZ.TO", syms)
+            self.assertIn("XEI.TO", syms)
+            self.assertEqual(
+                [m.get("symbol") for m in raw["manual_reporting_required"]],
+                ["ZZZ.TO"])
+            inv = {i["symbol"]: i["qty"] for i in raw.get("inventory", [])}
+            self.assertAlmostEqual(inv.get("ZZZ.TO", 0.0), 100.0)
+            toml = (root / "reports" / "margin_holdings.toml").read_text()
+            self.assertNotIn("-100", toml)
+            self.assertIn("ZZZ", toml)
+            g = _run_cli(root, "gains", "--json")
+            self.assertEqual(g.returncode, 0, g.stderr)
+            rows = json.loads(g.stdout)["rows"]
+            self.assertEqual([x["symbol"] for x in rows], ["XEI.TO"])
+            self.assertIn("1 phantom-basis disposition(s)", g.stderr)
+
+    def test_without_phantoms_the_native_view_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            g = _run_cli(root, "gains", "--json")
+            self.assertEqual(sorted(x["symbol"] for x in
+                                    json.loads(g.stdout)["rows"]),
+                             ["XEI.TO", "ZZZ.TO"])
+            self.assertNotIn("phantom-basis", g.stderr)
+
+
 # ------------------------------------------------------------------ A2-0313
 
 class TestDanglingProjectMap(unittest.TestCase):

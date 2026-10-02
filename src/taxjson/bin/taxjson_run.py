@@ -2521,7 +2521,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                           file=sys.stderr)
         else:
             raw_gains = cache / f"{name}_raw_gains.json"
-            if force or needs_rebuild(raw_gains, raw_json):
+            # phantoms.json applies to the native books too: without it
+            # holdings.toml (and the web positions) listed every
+            # phantom pair as a SHORT, and `taxjson gains` showed a
+            # tainted sale as a realized gain (audit A2-0111 / A2-0305,
+            # R1-275 / R1-322). A pair spelled with a TOBASE target the
+            # native books do not use simply has no rows here.
+            _ph_raw = (["--incomplete-history", str(incomplete_history)]
+                       if incomplete_history is not None else [])
+            _ph_deps = ([incomplete_history]
+                        if incomplete_history is not None else [])
+            if force or needs_rebuild(raw_gains, raw_json, *_ph_deps):
                 print("  raw gains")
                 # Match the country to the rest of the pipeline (it is
                 # required; it used to default to Canada, and the US
@@ -2531,7 +2541,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 run_to_file(_cmd("taxjson-gains") + [
                     "--country", country,
                 ] + option_timing_flags(settings)
-                    + income_dating_flags(settings) + [str(raw_json)],
+                    + income_dating_flags(settings) + _ph_raw
+                    + [str(raw_json)],
                             raw_gains, capture_diag=False)
             # Base-currency companion: convert the SAME raw merge to the base
             # currency (per-transaction FX, no ticker consolidation — so symbols
@@ -2552,12 +2563,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                     "--country", country,
                 ], raw_base_json)
             raw_base_gains = cache / f"{name}_raw_base_gains.json"
-            if force or needs_rebuild(raw_base_gains, raw_base_json):
+            if force or needs_rebuild(raw_base_gains, raw_base_json,
+                                      *_ph_deps):
                 print("  raw base gains")
                 run_to_file(_cmd("taxjson-gains") + [
                     "--country", country,
                 ] + option_timing_flags(settings)
-                    + income_dating_flags(settings) + [str(raw_base_json)],
+                    + income_dating_flags(settings) + _ph_raw
+                    + [str(raw_base_json)],
                             raw_base_gains, capture_diag=False)
             # Machine-readable holdings handoff (TOML) for live-pricing /
             # trading tools. ticker.map's JOURNAL lines net offsetting
@@ -3393,7 +3406,9 @@ def cmd_run(args: argparse.Namespace) -> None:
               "with it")
         _ph_marker.unlink()
         import os as _os
-        for _f in cache.glob("*_base.json"):
+        # (*_raw.json too: the native raw-gains pass applies the
+        # phantoms since A2-0111 and depends on that file.)
+        for _f in [*cache.glob("*_base.json"), *cache.glob("*_raw.json")]:
             _os.utime(_f)
         # distributions.map ADJUSTs in the taxable base books were
         # sized WITH the phantom openings (S000-08): drop those books
@@ -6992,6 +7007,7 @@ def cmd_gains(args: argparse.Namespace) -> None:
 
     rows = []
     bad_dates = 0
+    manual = 0
     for acct in accounts:
         f = cache / f"{acct}{suffix}"
         if not f.exists():
@@ -7000,6 +7016,15 @@ def cmd_gains(args: argparse.Namespace) -> None:
             continue
         data = _load_json_or_die(f)
         _settle = _settle_basis(root, data)
+        # phantoms.json sales (basis before the data) are routed out of
+        # the gains, as in `sum`: count them so the view says so (audit
+        # A2-0305).
+        for g in data.get("manual_reporting_required") or []:
+            if sym_filter is not None and not sym_filter(g.get("symbol") or ""):
+                continue
+            d = _gains_row_date(g, keep, _settle)
+            if _ISO_DATE_RE.match(d) and keep(d):
+                manual += 1
         for g in data.get("transactions", []):
             if g.get("action") in _INCOME:
                 continue
@@ -7015,6 +7040,12 @@ def cmd_gains(args: argparse.Namespace) -> None:
     if bad_dates:
         print(f"taxjson: warning: {bad_dates} gain row(s) had a missing/unparseable "
               f"date and were excluded.", file=sys.stderr)
+    if manual:
+        print(f"taxjson gains: note: {manual} phantom-basis disposition(s) "
+              f"(sales of shares bought before the data, phantoms.json) "
+              f"are not shown — their basis is unknown; `taxjson "
+              f"form-export` lists them for manual reporting.",
+              file=sys.stderr)
     rows.sort(key=lambda r: (r[0], r[1]))
     if getattr(args, "json", False):
         jt: Dict[str, float] = {}
