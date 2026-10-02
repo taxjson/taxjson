@@ -70,5 +70,42 @@ class TestCarryoverCryptoOnly(unittest.TestCase):
         self.assertAlmostEqual(float(nets["canada"]["net_gain"]), 0.0, places=2)
 
 
+TWO_TAXABLE = ('[accounts.acctA]\ntype = "taxable"\n'
+               '[accounts.acctB]\ntype = "taxable"\n')
+
+
+def _two_account_projects(td, a_rows, b_rows):
+    return projects_both(td, accounts=TWO_TAXABLE, files={
+        "inputs/acctA/acctA.tt": a_rows, "inputs/acctB/acctB.tt": b_rows})
+
+
+class TestListDateBasisWording(unittest.TestCase):
+    """A2-0154, A2-0410, A2-0720, A2-0734, A2-1244, A2-1266, A2-1318,
+    A2-1330: `list --date` told a US project its per-account cost was an
+    ACB and that the return blends it (s.47)."""
+
+    @rule("CA-ACB-01")
+    @rule_absent("CA-ACB-01", country="usa")
+    @rule("US-BASIS-01")
+    def test_s47_note_is_canada_only(self):
+        a = "BUYSELL 2025-03-03 10:00:00 XYZ.US 100 USD 30.00 -3000.00 0.00\n"
+        b = "BUYSELL 2025-03-03 10:00:00 XYZ.US 100 USD 10.00 -1000.00 0.00\n"
+        with tempfile.TemporaryDirectory() as td:
+            p = _two_account_projects(td, a, b)
+            for c, root in p.items():
+                r = cli(root, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, (c, r.stderr[-2000:]))
+            t = cli_both(p, "list", "--date", "2025-06-30")
+            j = cli_both(p, "list", "--date", "2025-06-30", "--json")
+        for c in p:
+            self.assertEqual(t[c].returncode, 0, (c, t[c].stderr))
+        self.assertIn("s.47", t["canada"].stderr)
+        self.assertIn("per-account ACB", json.loads(j["canada"].stdout)["basis"])
+        self.assertNotIn("s.47", t["usa"].stderr)
+        self.assertNotIn("ACB", t["usa"].stderr + t["usa"].stdout)
+        self.assertIn("per-account FIFO basis",
+                      json.loads(j["usa"].stdout)["basis"])
+
+
 if __name__ == "__main__":
     unittest.main()

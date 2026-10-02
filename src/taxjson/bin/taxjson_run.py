@@ -11487,7 +11487,16 @@ def cmd_positions(args: argparse.Namespace) -> None:
         # pass (R1-282, S044-21).
         _asof_word = ("settlement date" if _asof_basis == "settle"
                       else "trade date")
-        basis = (f"as of {as_of} by {_asof_word} (per-account ACB, "
+        # Canada pools a symbol's ACB across the taxable accounts
+        # (s.47); the US return keeps FIFO basis per account, so the
+        # per-account figure IS the filing basis there and neither "ACB"
+        # nor the s.47 note applies (CA-ACB-01 / US-BASIS-01; audit
+        # A2-0154, A2-0410, A2-0720, A2-0734).
+        from taxjson.lib.country import basis_pooled_across_accounts
+        _pooled = basis_pooled_across_accounts(country)
+        _basis_word = ("per-account ACB" if _pooled
+                       else "per-account FIFO basis")
+        basis = (f"as of {as_of} by {_asof_word} ({_basis_word}, "
                  f"before the cross-account wash pass)")
         # A symbol held in two taxable accounts has ONE s.47 ACB on the
         # return (plain `list` shows it); this view recomputes each
@@ -11501,7 +11510,7 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 if abs(float(it.get("qty") or 0.0)) > 1e-9:
                     _held.setdefault(str(it.get("symbol")), []).append(n)
         _shared = sorted(s_ for s_, a in _held.items() if len(set(a)) > 1)
-        if _shared:
+        if _shared and _pooled:
             print(f"taxjson list: note: --date shows each account's OWN "
                   f"ACB; {len(_shared)} symbol(s) held in more than one "
                   f"taxable account ({', '.join(_shared[:5])}"
@@ -16478,8 +16487,10 @@ def main() -> None:
                             "cutoff on the project's date basis "
                             "(settlement date unless tax_date = "
                             "\"trade\"); phantoms.json applied; "
-                            "per-account ACB (no s.47 blend across "
-                            "taxable accounts), with the in-account "
+                            "each account alone (Canada: per-account "
+                            "ACB, before the s.47 blend across taxable "
+                            "accounts; USA: the per-account FIFO basis "
+                            "the return uses), with the in-account "
                             "superficial-loss / wash-sale deferral but "
                             "before the cross-account wash pass")
     p_pos.add_argument("--negative", action="store_true",

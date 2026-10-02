@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `taxjson list --date` in a US project calls its cost the per-account
+  FIFO basis (the return's own basis) and no longer claims a symbol held
+  in two accounts has one blended s.47 ACB on the return; the note and
+  the "ACB" wording stay in Canada (CA-ACB-01 / US-BASIS-01; audit
+  A2-0154, A2-0410, A2-0720, A2-0734, A2-1244, A2-1266, A2-1318,
+  A2-1330).
 - `taxjson carryover` in a US project whose only taxable accounts are
   crypto accounts no longer applies the wash-sale rule to the coins: the
   books go to the ledger's no-wash crypto pass, as in a mixed project
