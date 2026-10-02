@@ -334,44 +334,160 @@ def _ib_period(raw: str):
     return None
 
 
-def _warn_coverage_gaps(periods, today=None) -> None:
-    """Warn when an account's IB statements leave days of a FINISHED
-    calendar year uncovered: a gap between two statements, or a last
-    statement that stops before Dec 31 (the 2024 statement that ended
-    Dec 27 dropped a Dec 30 sale silently — audit R1-2 / R1-195). The
-    first statement may start mid-year (an account opened in May); the
-    current year is still open, so its end is not checked."""
+def _ib_no_trading_gap(g0, g1) -> bool:
+    """True when every day of the gap [g0, g1] is a weekend day or Jan 1
+    / Dec 25 — no exchange trades and IB books nothing then, so a
+    Friday-to-Monday split between two statements is not a hole (audit
+    A2-0609)."""
+    d = g0
+    while d <= g1:
+        if d.weekday() < 5 and (d.month, d.day) not in ((1, 1), (12, 25)):
+            return False
+        d += timedelta(days=1)
+    return True
+
+
+def _coverage_groups(periods):
+    """{broker account: (merged spans [[start, end, name]], gaps)} of a
+    label's IB statement periods — (name, start, end) or (name, start,
+    end, accounts) — merged across weekend-only gaps. A statement naming
+    no account covers every account of the label."""
+    named = sorted(set().union(*(per[3] for per in periods
+                                 if len(per) > 3 and per[3])))
+    groups: Dict[str, list] = {}
+    for per in periods:
+        n, a, b = per[0], per[1], per[2]
+        accts = (sorted(per[3]) if len(per) > 3 and per[3]
+                 else named or [''])
+        for acct in accts:
+            groups.setdefault(acct, []).append((a, b, n))
+    out = {}
+    for acct, spans in groups.items():
+        spans.sort()
+        merged = [[spans[0][0], spans[0][1], spans[0][2]]]
+        gaps = []
+        for a, b, n in spans[1:]:
+            cur = merged[-1]
+            if (a <= cur[1] + timedelta(days=1)
+                    or _ib_no_trading_gap(cur[1] + timedelta(days=1),
+                                          a - timedelta(days=1))):
+                if b > cur[1]:
+                    cur[1], cur[2] = b, n
+            else:
+                gaps.append((cur[1] + timedelta(days=1),
+                             a - timedelta(days=1), cur[2], n))
+                merged.append([a, b, n])
+        out[acct] = (merged, gaps)
+    return out
+
+
+def _year_shortfall(merged, tax_year):
+    """(end, statement name) when an account's merged statement spans
+    stop before Dec 31 of `tax_year` — end None when none covers the
+    year but an earlier one exists — else None."""
+    from datetime import date as _date
+    y0, y1 = _date(tax_year, 1, 1), _date(tax_year, 12, 31)
+    covering = [m for m in merged if m[0] <= y1 and m[1] >= y0]
+    if not covering:
+        last = max(merged, key=lambda m: m[1])
+        return (None, last[2]) if last[1] < y0 else None
+    end = max(m[1] for m in covering)
+    if end >= y1:
+        return None
+    return end, next(m[2] for m in covering if m[1] == end)
+
+
+def ib_year_coverage(paths, tax_year: int) -> List[tuple]:
+    """[(masked account or '', end or None)] for each IB account whose
+    statements among `paths` stop before Dec 31 of `tax_year` (end None:
+    no statement covers the year) — the checklist's per-statement test
+    (audit A2-0262). Unreadable files are skipped."""
+    periods = []
+    for path in paths:
+        try:
+            rows = IbBrokerage._read_rows(Path(path))
+            pre = _ib_prescan(rows, shown_name(path))
+        except (OSError, UnicodeError, BrokerageParseError, csv.Error):
+            continue
+        for row in rows:
+            if (len(row) >= 4 and row[0] == 'Statement'
+                    and row[1] == 'Data' and row[2] == 'Period'):
+                span = _ib_period(row[3])
+                if span:
+                    periods.append((shown_name(path), *span,
+                                    frozenset(pre['accounts'])))
+                break
+    out = []
+    for acct, (merged, _gaps) in sorted(_coverage_groups(periods).items()):
+        short = _year_shortfall(merged, tax_year)
+        if short is not None:
+            out.append((_mask_account(acct) if acct else '', short[0]))
+    return out
+
+
+def _warn_coverage_gaps(periods, today=None, tax_year=None) -> None:
+    """Warn when an IB account's statements leave days uncovered: a gap
+    between two statements (weekend-only gaps excepted), or statements
+    that stop before Dec 31 of the tax year (the 2024 statement that
+    ended Dec 27 dropped a Dec 30 sale silently — audit R1-2 / R1-195).
+
+    Per broker ACCOUNT (Account Information): one label may hold the
+    statements of two IB accounts, and one account's full year hid the
+    other's missing half-year (audit A2-0091 / A2-0261).
+
+    `tax_year` (taxjson run passes the project year): an account whose
+    statements stop before Dec 31 of that FINISHED year — or hold
+    nothing of it — is reported; a statement running into the next year
+    covers it (A2-0262 / A2-0609). Without it, the year of the last
+    statement is checked when that year is over (the first statement
+    may start mid-year: an account opened in May)."""
     from datetime import date as _date
     if not periods:
         return
     today = today or _date.today()
-    spans = sorted((a, b, n) for n, a, b in periods)
-    merged = [[spans[0][0], spans[0][1], spans[0][2]]]
-    gaps = []
-    for a, b, n in spans[1:]:
-        cur = merged[-1]
-        if a <= cur[1] + timedelta(days=1):
-            if b > cur[1]:
-                cur[1], cur[2] = b, n
-        else:
-            gaps.append((cur[1] + timedelta(days=1),
-                         a - timedelta(days=1), cur[2], n))
-            merged.append([a, b, n])
-    for g0, g1, before, after in gaps:
-        print(f"{ATTENTION_PREFIX} IB statements leave {g0.isoformat()} .. "
-              f"{g1.isoformat()} uncovered (between {before} and {after}) "
-              f"— any trade or income in those days is missing from the "
-              f"books. Download the statement for that period.",
-              file=sys.stderr)
-    last_end, last_name = merged[-1][1], merged[-1][2]
-    if last_end.year < today.year and (last_end.month, last_end.day) != (12, 31):
-        print(f"{ATTENTION_PREFIX} {last_name}: the account's IB statements "
-              f"end {last_end.isoformat()}, before the end of "
-              f"{last_end.year} — any trade or income from "
-              f"{(last_end + timedelta(days=1)).isoformat()} to "
-              f"{last_end.year}-12-31 is missing from the books. Download "
-              f"the statement that covers the rest of the year.",
-              file=sys.stderr)
+    groups = _coverage_groups(periods)
+    many = len(groups) > 1
+    for acct, (merged, gaps) in sorted(groups.items()):
+        who = (f" (IB account {_mask_account(acct)})"
+               if many and acct else '')
+        for g0, g1, before, after in gaps:
+            print(f"{ATTENTION_PREFIX} IB statements{who} leave "
+                  f"{g0.isoformat()} .. {g1.isoformat()} uncovered "
+                  f"(between {before} and {after}) — any trade or income "
+                  f"in those days is missing from the books. Download "
+                  f"the statement for that period.", file=sys.stderr)
+        last_end, last_name = merged[-1][1], merged[-1][2]
+        if tax_year is not None:
+            if today <= _date(tax_year, 12, 31):
+                continue                 # the year is still open
+            short = _year_shortfall(merged, tax_year)
+            if short is None:
+                continue
+            end, end_name = short
+            if end is None:
+                print(f"{ATTENTION_PREFIX} {end_name}: the account's IB "
+                      f"statements{who} end {last_end.isoformat()} — none "
+                      f"covers {tax_year}, so any {tax_year} trade or "
+                      f"income is missing from the books. Download the "
+                      f"{tax_year} statement.", file=sys.stderr)
+            else:
+                print(f"{ATTENTION_PREFIX} {end_name}: the account's IB "
+                      f"statements{who} end {end.isoformat()}, before the "
+                      f"end of {tax_year} — any trade or income from "
+                      f"{(end + timedelta(days=1)).isoformat()} to "
+                      f"{tax_year}-12-31 is missing from the books. "
+                      f"Download the statement that covers the rest of "
+                      f"the year.", file=sys.stderr)
+            continue
+        if (last_end.year < today.year
+                and (last_end.month, last_end.day) != (12, 31)):
+            print(f"{ATTENTION_PREFIX} {last_name}: the account's IB "
+                  f"statements{who} end {last_end.isoformat()}, before the "
+                  f"end of {last_end.year} — any trade or income from "
+                  f"{(last_end + timedelta(days=1)).isoformat()} to "
+                  f"{last_end.year}-12-31 is missing from the books. "
+                  f"Download the statement that covers the rest of the "
+                  f"year.", file=sys.stderr)
 
 
 def _ib_cil_unmatched_note(c: Dict[str, Any]) -> str:
@@ -550,6 +666,54 @@ def _ib_posted_dividends(rows) -> List[tuple]:
         if _IB_DATE_RE.match(g('Date')):
             out.append((_ib_income_ticker(g('Description'))[0], g('Date')))
     return out
+
+
+def _ib_accrual_facts(rows) -> List[Dict[str, Any]]:
+    """The dividend-accrual facts of a statement's Change in Dividend
+    Accruals section (symbol, pay dates, ex date, currency, the Po row's
+    rate and share count), one per dividend — the account-wide evidence
+    for a posting in ANOTHER statement (audit A2-0601). Read leniently:
+    a malformed row is the statement parse's to report."""
+    out: Dict[tuple, Dict[str, Any]] = {}
+    hm: Dict[str, int] = {}
+    for row in rows:
+        if len(row) < 2 or row[0] != 'Change in Dividend Accruals':
+            continue
+        if row[1] == 'Header':
+            hm = {c: i for i, c in enumerate(row)}
+            continue
+        if row[1] != 'Data' or not hm:
+            continue
+
+        def g(col, _row=row):
+            i = hm.get(col)
+            return _row[i].strip() if i is not None and i < len(_row) else ''
+        toks = set(re.split(r'[;,\s]+', g('Code')))
+        code = 'Po' if 'Po' in toks else 'Re' if 'Re' in toks else ''
+        sym = g('Symbol').replace(' ', '.')
+        if not code or not sym:
+            continue
+        ex, pay = g('Ex Date'), g('Pay Date')
+        key = ((g('Account'), sym, 'ex', ex) if ex
+               else (g('Account'), sym, 'pay', pay))
+        m = out.setdefault(key, {'symbol': sym, 'pay_date': pay,
+                                 'pay_dates': set(),
+                                 'currency': _norm_ccy(g('Currency'))})
+        if pay:
+            m['pay_date'] = pay
+            m['pay_dates'].add(pay)
+        if _IB_DATE_RE.match(ex or ''):
+            m['ex_date'] = ex
+        if code == 'Po':
+            for col, fld in (('Gross Rate', 'po_rate'),
+                             ('Quantity', 'po_qty')):
+                try:
+                    v = abs(parse_strict_number(g(col), field=col))
+                except (BrokerageParseError, ValueError):
+                    v = 0.0
+                if v:
+                    m[fld] = v
+    return list(out.values())
 
 
 def _norm_ccy(v: str) -> str:
@@ -972,16 +1136,18 @@ class IbBrokerage(BaseBrokerage):
     account_context = None
 
     @classmethod
-    def prepare_files(cls, paths) -> Dict[str, Any]:
+    def prepare_files(cls, paths, tax_year=None) -> Dict[str, Any]:
         """Read ALL of one account's IB statements once, before any is
-        parsed: statement periods (coverage check below) and the facts a
-        per-file parse cannot see alone. Account-level warnings print
-        here, once."""
+        parsed: statement periods (coverage check below, per broker
+        account and against `tax_year` when taxjson-brokerage passes it)
+        and the facts a per-file parse cannot see alone. Account-level
+        warnings print here, once."""
         ctx: Dict[str, Any] = {
             'periods': [], 'occ_by_conid': {}, 'contract_conids': {},
             'opt_underlying': {}, 'stock_conid_syms': {},
             'stock_isins': {}, 'held': set(), 'posted_dividends': [],
-            'tender_parked': {}}
+            'tender_parked': {}, 'accrual_facts': [],
+            'file_accounts': {}}
         for path in paths:
             name = Path(path).name
             try:
@@ -989,12 +1155,15 @@ class IbBrokerage(BaseBrokerage):
                 pre = _ib_prescan(rows, shown_name(path))
             except (OSError, UnicodeError, BrokerageParseError):
                 continue                 # parse_file reports it
+            accts = frozenset(pre['accounts'])
+            ctx['file_accounts'][name] = accts
             for row in rows:
                 if (len(row) >= 4 and row[0] == 'Statement'
                         and row[1] == 'Data' and row[2] == 'Period'):
                     span = _ib_period(row[3])
                     if span:
-                        ctx['periods'].append((shown_name(path), *span))
+                        ctx['periods'].append((shown_name(path), *span,
+                                               accts))
                     break
             # Identity facts learned from ANY of the account's
             # statements: an option root alias listed only in last
@@ -1014,12 +1183,31 @@ class IbBrokerage(BaseBrokerage):
                 ctx['stock_isins'].setdefault(root, set()).update(ids)
             for sym, cat, cur in pre['held_rows']:
                 ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
+            # Postings and accrual facts carry their statement's broker
+            # accounts: another IB account's dividend never pays this
+            # account's accrual (audit A2-1035 / A2-1039).
             ctx['posted_dividends'].extend(
-                (name, t, d) for t, d in _ib_posted_dividends(rows))
+                (name, t, d, accts) for t, d in _ib_posted_dividends(rows))
+            ctx['accrual_facts'].extend(
+                dict(m, file=name, accounts=accts)
+                for m in _ib_accrual_facts(rows))
             for sym, n in _ib_tender_parked(rows, pre['fii']).items():
                 ctx['tender_parked'][sym] = (
                     ctx['tender_parked'].get(sym, 0.0) + n)
-        _warn_coverage_gaps(ctx['periods'])
+        _warn_coverage_gaps(ctx['periods'], tax_year=tax_year)
+        _accts = set().union(*ctx['file_accounts'].values()) \
+            if ctx['file_accounts'] else set()
+        if len(_accts) > 1 and not any(
+                a >= _accts for a in ctx['file_accounts'].values()):
+            # Separate statements of several IB accounts in one label:
+            # booked as ONE account (right only for one tax entity).
+            print(f"{ATTENTION_PREFIX} this account's IB statements "
+                  f"belong to {len(_accts)} IB accounts ("
+                  f"{', '.join(sorted(_mask_account(a) for a in _accts))}"
+                  f") — every row is booked to ONE account label. That is "
+                  f"right only when they are one tax entity (e.g. two "
+                  f"taxable margin accounts); give a registered account "
+                  f"(TFSA/RRSP) its own folder.", file=sys.stderr)
         _warn_stock_aliases(ctx['stock_conid_syms'],
                             'the account\'s IB statements')
         return ctx
@@ -1937,7 +2125,9 @@ class IbBrokerage(BaseBrokerage):
         root_alias = pre['root_alias']
         aliased_roots: Dict[str, str] = {}
         if len(pre['accounts']) > 1:
-            print(f"warning: {shown_name(path)}: IB statement spans "
+            # ATTENTION (the run's console): a TFSA/RRSP inside a
+            # consolidated statement lands in this book (audit A2-0610).
+            print(f"{ATTENTION_PREFIX} {shown_name(path)}: IB statement spans "
                   f"{len(pre['accounts'])} accounts ("
                   f"{', '.join(sorted(_mask_account(a) for a in pre['accounts']))}"
                   f") — every row is booked to ONE account label. That "
@@ -2603,6 +2793,8 @@ class IbBrokerage(BaseBrokerage):
                 if pay_date:
                     _meta['pay_date'] = pay_date
                     _meta['pay_dates'].add(pay_date)
+                if re.fullmatch(r'\d{4}-\d{2}-\d{2}', ex_date or ''):
+                    _meta['ex_date'] = ex_date
                 # The per-share rate and share count of the dividend, so
                 # a Payment-in-Lieu row — which has neither in its own
                 # description — can be reconciled to shares below. Taken
@@ -3829,15 +4021,28 @@ class IbBrokerage(BaseBrokerage):
             except (TypeError, ValueError):
                 return None
 
+        def _same_acct(accts) -> bool:
+            mine = set(pre['accounts'])
+            return not accts or not mine or bool(set(accts) & mine)
+
+        # The accrual facts of the account's OTHER statements (same IB
+        # account): a dividend whose Po/Re rows sit in the previous
+        # statement kept no ex date or share count (audit A2-0601).
+        _ext_metas = [m for m in ((ctx or {}).get('accrual_facts') or ())
+                      if m.get('file') != path.name
+                      and _same_acct(m.get('accounts'))]
+
         def _accrual_for(ticker: str, date: str, currency: str):
             """The accrual of the dividend a posting on `date` pays: same
             ticker, a pay date within a week (the exact date first), the
             posting's currency first — two listings of one ticker can pay
             on the same day (audit S057-22 / S058-05), and IB posts some
             dividends a day or more after the accrued pay date
-            (S058-12)."""
+            (S058-12). This statement's accruals first, then the
+            account's other statements'."""
             best = None
-            for meta in accrual_meta.values():
+            for _n, meta in enumerate(list(accrual_meta.values())
+                                      + _ext_metas):
                 if meta['symbol'] != ticker:
                     continue
                 dists = [d for d in (_days_apart(pd, date) for pd in
@@ -3845,7 +4050,8 @@ class IbBrokerage(BaseBrokerage):
                          if d is not None]
                 if not dists or min(dists) > 7:
                     continue
-                rank = (min(dists), meta['currency'] != currency)
+                rank = (min(dists), meta['currency'] != currency,
+                        _n >= len(accrual_meta))
                 if best is None or rank < best[0]:
                     best = (rank, meta)
             return best[1] if best else None
@@ -3853,19 +4059,23 @@ class IbBrokerage(BaseBrokerage):
         for tx in transactions:
             if tx.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
                 continue
-            _ex = accrual_ex.get(((tx.get('symbol') or '').rsplit('.', 1)[0],
-                                  tx.get('date')))
+            ticker = (tx.get('symbol') or '').rsplit('.', 1)[0]
+            meta = _accrual_for(ticker, tx.get('date') or '',
+                                tx.get('currency') or '')
+            # The ex date of the accrual this posting pays — matched the
+            # way the share count is (a posting a day after the accrued
+            # pay date kept no ex date, so the US §852(b)(7) advisory
+            # never fired: audit A2-0602).
+            _ex = (meta or {}).get('ex_date') or accrual_ex.get(
+                (ticker, tx.get('date')))
             if _ex and _ex <= (tx.get('date') or ''):
                 tx['ex_date'] = _ex
             if tx.get('price'):          # description already gave a rate
                 continue
-            ticker = (tx.get('symbol') or '').rsplit('.', 1)[0]
             # SIGNED amount: a reversal row back-computes a NEGATIVE share
             # count, matching _parse_div_qty_rate's convention (qty carries
             # the row's sign; the positive per-share rate stays positive).
             amt = float(tx.get('net_amount') or 0.0)
-            meta = _accrual_for(ticker, tx.get('date') or '',
-                                tx.get('currency') or '')
             if meta is None or not amt:
                 continue
             rate = meta.get('po_rate') or 0.0
@@ -3947,9 +4157,9 @@ class IbBrokerage(BaseBrokerage):
         # December accrual is often paid in the next year's statement
         # (R1-327).
         postings = list(posted_dividend_keys) + [
-            (_s, _d) for _n, _s, _d in
+            (_s, _d) for _n, _s, _d, _a in
             ((ctx or {}).get('posted_dividends') or ())
-            if _n != path.name]
+            if _n != path.name and _same_acct(_a)]
         used = [False] * len(postings)
 
         def _claim(meta, window: int) -> bool:
@@ -3995,8 +4205,10 @@ class IbBrokerage(BaseBrokerage):
                 f"{sym} pay:{pay or '?'} ~{amt:.2f} {cur}".rstrip()
                 for sym, pay, amt, cur in open_accruals
             )
+            # ATTENTION: income the books may be missing (the run's
+            # console, not only .sum/.diag — audit A2-0264).
             print(
-                f"warning: {len(open_accruals)} dividend(s) in {shown_name(path)} are "
+                f"{ATTENTION_PREFIX} {len(open_accruals)} dividend(s) in {shown_name(path)} are "
                 f"accrued but not yet booked as posted dividends ({details}). "
                 f"IB books the cash with a lag — accruals are estimates and "
                 f"are NOT counted as income. If a more recent statement "

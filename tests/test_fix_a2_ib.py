@@ -17,7 +17,8 @@ from tax_rules import rule
 from tax_rules.dual import gains_both
 from taxjson.lib import country as C
 
-from test_fix_l_ibparse import _book
+from test_fix_l_ibparse import _book, _ACC_H, _DIV_H as _DIVA_H, _acc, _div
+from test_fix_ibparse import _parse_account
 
 from test_fix_ibparse import (HEAD, TRADES_H, XFER_H, CA_H, FII_H, DIV_H,
                               _trade, _xfer, _ca, _parse_ib, _brokerage_cli,
@@ -444,6 +445,138 @@ class TestCorporateActionListingAndDeliveredLine(unittest.TestCase):
             'QZPAR(US9990001201) Cash in Lieu of Fractional Shares '
             '(QZNEWC, QZNEWC INC, US9990001202)', -0.5, proceeds=15))
         self.assertEqual([t['symbol'] for t in txs], ['QZNEWC.US'])
+
+
+# ------------------------------------------------- statement coverage
+def _prepare(files, tax_year=None):
+    err = io.StringIO()
+    with tempfile.TemporaryDirectory() as td:
+        paths = []
+        for name, text in files.items():
+            p = Path(td) / name
+            p.write_text(text, encoding='utf-8')
+            paths.append(p)
+        with contextlib.redirect_stderr(err):
+            IbBrokerage.prepare_files(paths, tax_year=tax_year)
+    return err.getvalue()
+
+
+class TestStatementCoveragePerAccountAndYear(unittest.TestCase):
+    """A2-0091 / A2-0261 / A2-0262 / A2-0609."""
+
+    def test_other_accounts_statement_does_not_hide_a_gap(self):
+        err = _prepare({
+            'a.csv': _stmt('January 1, 2025', 'December 31, 2025'),
+            'b.csv': _stmt('January 1, 2025', 'June 30, 2025', accts=(A2,))},
+            tax_year=2025)
+        self.assertIn('end 2025-06-30, before the end of 2025', err)
+        self.assertIn('U5***', err)
+        # ... and the label holding two IB accounts is said.
+        self.assertIn('belong to 2 IB accounts', err)
+
+    def test_prior_year_only_statement_is_flagged_for_the_project_year(self):
+        err = _prepare({'a.csv': _stmt('January 1, 2024',
+                                       'December 31, 2024')}, tax_year=2025)
+        self.assertIn('none covers 2025', err)
+
+    def test_weekend_split_and_a_statement_into_next_year_are_quiet(self):
+        # The owner's 2024 download pattern: Jan 1 - Fri Dec 27 and
+        # Mon Dec 30 - Jan 1 2025.
+        files = {'a.csv': _stmt('January 1, 2024', 'December 27, 2024'),
+                 'b.csv': _stmt('December 30, 2024', 'January 1, 2025')}
+        self.assertNotIn('ATTENTION', _prepare(files, tax_year=2024))
+        rc, _out, err, _ = _brokerage_cli(files, '--tax-year', '2024')
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn('uncovered', err)
+        self.assertNotIn('before the end of', err)
+
+    def test_weekday_gap_is_still_flagged(self):
+        err = _prepare({'a.csv': _stmt('January 1, 2024', 'December 24, 2024'),
+                        'b.csv': _stmt('December 30, 2024',
+                                       'December 31, 2024')}, tax_year=2024)
+        self.assertIn('2024-12-25 .. 2024-12-29 uncovered', err)
+
+
+# -------------------------------------------- dividend accruals, per account
+P25 = 'Statement,Data,Period,"January 1, 2025 - December 31, 2025"\n'
+P26 = 'Statement,Data,Period,"January 1, 2026 - January 31, 2026"\n'
+
+
+class TestAccrualsAcrossStatementsAndAccounts(unittest.TestCase):
+
+    def test_other_accounts_posting_does_not_pay_this_accrual(self):
+        # A2-1035 / A2-1039.
+        a = (HEAD + P25 + _acct(A1) + _ACC_H
+             + _acc('QZT', '2025-12-15', '2025-12-15', '2025-12-31', 1000,
+                    0.35, 350, 'Po', cur='CAD'))
+        b = (HEAD + P25 + _acct(A2) + _DIVA_H
+             + _div('QZT', 'CA9990001301', '2025-12-31', 350, cur='CAD',
+                    rate=0.35).replace(A1, A2))
+        _, err = _parse_account({'a.csv': a, 'b.csv': b})
+        self.assertIn('accrued but not yet booked', err)
+        # The open accrual is an ATTENTION line (run's console, A2-0264).
+        self.assertIn('warning: ATTENTION: 1 dividend(s)', err)
+
+    @rule("US-INC-DATE-RIC")
+    def test_ex_date_from_the_previous_statements_accrual(self):
+        # A2-0601: the Po/Re rows are in the 2025 statement, the
+        # posting in 2026.
+        y25 = (HEAD + P25 + _acct(A1) + _ACC_H
+               + _acc('QZS', '2025-12-22', '2025-12-22', '2026-01-05', 400,
+                      0.25, 100, 'Po'))
+        y26 = (HEAD + P26 + _acct(A1) + _DIVA_H
+               + _div('QZS', 'US9990001401', '2026-01-05', 100,
+                      rate=0.25))
+        txs, err = _parse_account({'a.csv': y25, 'b.csv': y26})
+        div = [t for t in txs if t['action'] == 'DIVIDEND']
+        self.assertEqual(div[0].get('ex_date'), '2025-12-22', err)
+
+    @rule("US-INC-DATE-RIC")
+    def test_ex_date_of_a_posting_a_day_late(self):
+        # A2-0602: posted 01-16 for an accrual paying 01-15.
+        body = (HEAD + P26 + _ACC_H
+                + _acc('QZS', '2026-01-02', '2025-12-22', '2026-01-15', 400,
+                       0.25, 100, 'Po')
+                + _acc('QZS', '2026-01-16', '2025-12-22', '2026-01-15', 400,
+                       0.25, -100, 'Re')
+                + _DIVA_H + _div('QZS', 'US9990001401', '2026-01-16', 100,
+                                 rate=0.25))
+        _, txs, err = _parse_ib(body)
+        div = [t for t in txs if t['action'] == 'DIVIDEND']
+        self.assertEqual(div[0].get('ex_date'), '2025-12-22', err)
+
+
+class TestConsoleAttention(unittest.TestCase):
+
+    def test_consolidated_statement_is_an_attention_line(self):
+        # A2-0610: two accounts in one statement reach the console.
+        _, _, err = _parse_ib(_stmt('January 1, 2025', 'December 31, 2025',
+                                    TRADES_H, _trade('QZA', '2025-03-03, '
+                                                     '10:00:00', 1, 10, -10),
+                                    accts=(A1, A2)))
+        self.assertRegex(err, r'warning: ATTENTION: \S+: IB statement '
+                              r'spans 2 accounts')
+
+
+class TestChecklistIbStatementCoverage(unittest.TestCase):
+    """A2-0262: checklist inputs-frozen said done for an IB account whose
+    only statement is the prior year."""
+
+    def test_prior_year_ib_statement_is_attention(self):
+        from datetime import date
+        from taxjson.lib import checklist as cl
+        from test_checklist import _project, _ctx
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _project(root)                # another source runs to Feb 2026
+            ib = root / 'inputs' / 'margin' / 'ib.csv'
+            ib.write_text(_stmt('January 1, 2024', 'December 31, 2024'))
+            r = cl.d_inputs_frozen(_ctx(root, {}, today=date(2026, 3, 1)))
+            self.assertEqual(r.status, 'attention')
+            self.assertIn('no IB statement', r.detail)
+            ib.write_text(_stmt('January 1, 2025', 'December 31, 2025'))
+            r = cl.d_inputs_frozen(_ctx(root, {}, today=date(2026, 3, 1)))
+            self.assertEqual(r.status, 'done', r.detail)
 
 
 if __name__ == '__main__':

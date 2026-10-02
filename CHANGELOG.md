@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- IB statement coverage is checked per broker account and against the
+  project year: another IB account's statement no longer hides this
+  account's missing half-year, an account whose only statement is the
+  prior year is reported (and `checklist` inputs-frozen says so), and
+  the owner's 2024 download pattern (Jan 1 - Fri Dec 27, Mon Dec 30 -
+  Jan 1) no longer reports the weekend as a gap or 2025 as missing. A
+  label holding the separate statements of several IB accounts is an
+  ATTENTION line (audit A2-0091, A2-0261, A2-0262, A2-0609).
+- IB: an open dividend accrual and a statement spanning several IB
+  accounts are ATTENTION lines on the run's console (they were only in
+  the .sum/.diag; audit A2-0264, A2-0610). Another IB account's posted
+  dividend no longer pays this account's accrual (A2-1035, A2-1039). A
+  dividend's ex date and share count come from its accrual in the
+  previous statement too, and a posting a day after the accrued pay
+  date keeps its ex date, so the US §852(b)(7) January-dividend
+  warning fires (A2-0601, A2-0602).
 - IB: a corporate action follows the security it names. A split whose
   new leg names another ticker (`OLDT ... Split 1 for 10 (NEWT, ...)`)
   moves the pool to it, a cash in lieu naming a delivered security

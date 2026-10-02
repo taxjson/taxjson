@@ -387,7 +387,12 @@ Examples:
     _prepare = getattr(extractor_class, 'prepare_files', None)
     if _prepare is not None:
         try:
-            shared_context = _prepare(input_paths)
+            # The tax year, for a parser whose account-level coverage
+            # check needs it (IB statement periods, audit A2-0262).
+            shared_context = (
+                _prepare(input_paths, tax_year=args.tax_year)
+                if 'tax_year' in inspect.signature(_prepare).parameters
+                else _prepare(input_paths))
         except csv.Error as e:
             print(f"taxjson-brokerage: error: the CSV module refused an "
                   f"input file ({e}) — see the per-file error below by "
