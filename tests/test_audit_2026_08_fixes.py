@@ -210,6 +210,8 @@ class TestRbcSignPreserved(unittest.TestCase):
                                msg="abs() reported $276 income for a fully "
                                    "reversed dividend")
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_withholding_charge_positive_refund_negative(self):
         txs = self._parse(
             # Charge: cash out, negative Amount → +4.05 tax withheld.

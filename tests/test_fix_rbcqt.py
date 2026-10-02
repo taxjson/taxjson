@@ -596,6 +596,8 @@ class TestRbcIncomeAndCorporateRows(unittest.TestCase):
                            "SMARTCENTRES", "2", "", "64.48", "CAD",
                            "REI - SMARTCENTRES REINV@C$32.24"))
 
+    @rule("CA-DIST-03")
+    @rule("US-DIST-03")
     def test_in_kind_reinvested_distribution(self):
         """R1-87."""
         txs, _, _ = rbc_parse(rrow(

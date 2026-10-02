@@ -604,6 +604,7 @@ def _tx(action, date, symbol, qty, net, settle=None, time="10:00:00",
     return r
 
 
+@rule("CA-RPT-12")
 class TestT1135Walk(unittest.TestCase):
     def _walk(self, rows, year=2025, overrides=None, **kw):
         from taxjson.bin.taxjson_t1135 import walk_costs

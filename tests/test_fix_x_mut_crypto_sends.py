@@ -832,6 +832,8 @@ class TestNetworkFees(unittest.TestCase):
                          (0.01, 1.0, 0.99))
         self.assertTrue(f["id"].endswith("-SOL-1-fee"))
 
+    @rule("CA-CRYPTO-06")
+    @rule("US-CRYPTO-05")
     def test_skips(self):
         # m1103/m1104: another account's pair, and a send whose fee the
         # ledger states, are not this account's hidden fees; m1108: a

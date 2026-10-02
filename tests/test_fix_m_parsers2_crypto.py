@@ -25,6 +25,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tax_rules import rule
 
 CB_HEADER = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
              "Price Currency,Price at Transaction,Subtotal,"
@@ -251,6 +252,8 @@ class TestBondedStakingCodes(unittest.TestCase):
                           ("C98.S", "C98"), ("L3", "L3")):
             self.assertEqual(_normalize_asset(raw), want, raw)
 
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_reward_books_to_bare_coin(self):
         led = KR_LEDGER_H + ("LS1,RS1,2025-06-01 10:00:00,staking,,"
                              "currency,,DOT28.S,spot,2.0,0,2.0\n")

@@ -118,6 +118,8 @@ class TestReconcileDividendTax(unittest.TestCase):
         self.assertEqual(d.net_amount, 100.0)
         self.assertEqual((trade.quantity, trade.price), (10.0, 5.0))
 
+    @rule("CA-INC-05")
+    @rule("US-INC-03")
     def test_split_payment_apportions_pro_rata(self):
         # m791 (x -> /), m773 / m794 (8-decimal rounding): 15 withheld
         # on 10 + 20 gross -> nets 5 and 10... with 1.0 withheld on

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_carryover import (build_canada_ledger, load_claimed,
                                            main)
+from tax_rules import rule
 
 
 def tx(date, qty, net, price, symbol="XEI.TO"):
@@ -17,6 +18,7 @@ def tx(date, qty, net, price, symbol="XEI.TO"):
             "price": price, "net_amount": net, "currency": "CAD"}
 
 
+@rule("CA-RPT-10")
 class TestPendingClaimCarrybackWindow(unittest.TestCase):
     """S001-03: a claim recorded under 2021 (pre-book losses) must not
     be satisfied by a 2025 loss — a net capital loss carries back only
