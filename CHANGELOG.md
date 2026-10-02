@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- run: a decided crypto gift/payment that cannot be written (no fair
+  value, a malformed sends.json) now reaches the account .sum
+  DIAGNOSTICS and stops `run --strict`; the warning also says when the
+  previous crypto_sends.tt is still booked (re-audit A2-0112).
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

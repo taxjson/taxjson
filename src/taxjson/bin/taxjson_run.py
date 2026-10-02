@@ -1799,13 +1799,20 @@ def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
-def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
+def _stage_crypto_sends(root: Path, name: str, interactive: bool,
+                        strict: bool = False) -> None:
     """`taxjson run` hook for a crypto account, right after the parse:
     prompt for undecided sends at a TTY (else one note line), then
-    refresh the generated crypto_sends.tt from the saved decisions."""
+    refresh the generated crypto_sends.tt from the saved decisions.
+
+    A decided gift/payment that cannot be written (no fair value, a
+    malformed sends.json) is a missing disposition: the error goes to
+    work/<acct>_crypto_sends.diag, so the account .sum DIAGNOSTICS
+    carries it, and `run --strict` stops (A2-0112)."""
     from taxjson.lib import crypto_sends as CS
     cfg = _soft_config(root)
     cache = root / "work"
+    diag = cache / f"{name}_crypto_sends.diag"
     # Another crypto account not parsed yet (first run of a
     # multi-account project): its arrivals are unknown, so a send to it
     # would look like a gift. Don't ask until its sidecar exists.
@@ -1843,13 +1850,26 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool) -> None:
             print(f"  crypto-sends: inputs/{name}/{CS.TT_NAME} {status}")
         for w in _dup_warning(name, dups):
             print(f"taxjson: WARNING: {w}", file=sys.stderr)
+        diag.unlink(missing_ok=True)
     except CS.RefusedDecision as e:
         # A saved decision the country refuses (a US gift): not booked,
         # and the run stops until sends.json says what it was.
         sys.exit(f"taxjson run: {name}: crypto sends: {e}")
     except ValueError as e:
-        print(f"taxjson: WARNING: {name}: crypto sends: {e}",
-              file=sys.stderr)
+        tt = root / "inputs" / name / CS.TT_NAME
+        msg = (f"crypto sends: {e} The decided gift(s)/payment(s) it "
+               f"names are NOT booked"
+               + (f"; the previous inputs/{name}/{CS.TT_NAME} is still "
+                  f"booked as it was" if tt.exists() else "")
+               + ". `run --strict` refuses this.")
+        if strict:
+            sys.exit(f"taxjson run --strict: {name}: {msg}")
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            diag.write_text(f"error: {msg}\n")
+        except OSError:
+            pass
+        print(f"taxjson: WARNING: {name}: {msg}", file=sys.stderr)
 
 
 def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
@@ -2229,7 +2249,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if is_crypto and not include_transfers:
         _stage_crypto_sends(inputs_dir.parent, name,
                             interactive=not (no_input
-                                             or not sys.stdin.isatty()))
+                                             or not sys.stdin.isatty()),
+                            strict=strict)
 
     # 2. corp-actions per equity broker. taxjson-corp-actions requires
     # --manifest when multiple CSVs are passed, so always provide one.
