@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Schedule 3 / reconcile-slips: under grant timing a buy-back nets
+  against this year's write only when it closes a write of the same
+  year; a buy-back of an earlier year's write (grant or pre-`since`
+  close timing) next to a new write of the same series is its own
+  disposition (units 2, not 1; re-audit A2-0320, A2-0650, A2-0651). The
+  engine's buy-back rows name the write years they close
+  (`grant_closed`).
+- reconcile-slips: an option written under grant timing and still open
+  at Dec 31 is NO_SLIP_EXPECTED in the write year, and the close year's
+  T5008 (premium as proceeds) reconciles with a note; both years failed
+  (re-audit A2-0657). A computed row with no slip row keeps its listing
+  suffix in the label. Two columns that are both exact spellings of one
+  amount are refused as ambiguous (A2-0656), and a broker option
+  description with a grouped strike (`5,000.00`) is matched (A2-1113).
+
 - option-boundary: an assignment whose option root drops the share
   class (RCI for RCI.B.TO, BRKB for BRK.B.US) is paired with its share
   leg by the engine's own resolver; it was called cash-settled with
