@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson crypto-sends` prices a send, and values the stablecoin pool,
+  with a rate from the send's day or the 5 days before it, as the
+  conversion stage does; an older rate (a January rate for a June send)
+  leaves it unpriced instead (re-audit A2-0414).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

@@ -467,7 +467,9 @@ class TestStablecoinPool(_UTC):
     @rule("CA-CRYPTO-08")
     def test_deposit_fees_leave_the_pool(self):
         # A2-0592: an unpaired deposit's fee; A2-1011: a paired one's.
-        rates = cs.Rates({"USD": {"2025-01-01": (1.40, "boc")}}, "CAD")
+        # A rate within the 5-day lookback of the deposit (A2-0414).
+        rates = cs.Rates({"USD": {"2025-01-01": (1.40, "boc"),
+                                  "2025-01-31": (1.40, "boc")}}, "CAD")
         dep = _s(exchange="kraken", date="2025-02-01", symbol="USDC",
                  quantity=500.0, fee=5.0)
         res = cs.usd_pool([], [dep], [], {}, rates)
