@@ -354,20 +354,6 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 
 These are real bugs in code paths the standard `taxjson run` flow never exercises. They're documented so anyone repurposing the engine knows.
 
-### `taxjson audit` reports phantom-backed dispositions as "not found"
-
-A disposition that drains a `phantoms.json` opening is, by design, pulled
-out of the gains file into `manual_reporting_required`. The audit's
-pipeline tie-out does not consult that list, so each such sale prints
-"disposition not found in the pipeline gains file(s) — cannot tie out
-(books changed since the last run?)" and the tie-out line ends with ✗
-even though nothing is stale. Seen on the 2024 reconstruction (two BK.TO
-sales that RBC marks as a SHORT sale — a real short covered three days
-later, which a phantom entry had turned into missing basis; the
-missing-history report now lists broker-marked shorts apart). Reading fix: the audit should
-recognise the manual-reporting rows and tie them out as "phantom basis —
-reported manually" instead of counting them as missing.
-
 ### US: a move between two of your own taxable accounts does not carry the lot
 - **Where:** `taxjson run` with `transfers = false` (the default) in a US project.
 - **Current behaviour:** a security moved from one of your taxable accounts to another keeps its basis and purchase date (the move is not a sale), but the US books keep FIFO lots per account and the move's TRANSFER rows sit in the transfer sidecar, so the receiving account's sale of those shares reads as a short with no basis and the sending account still holds them. Since the re-audit (A2-0032) the run prints an `ATTENTION` line naming each such move (paired out/in legs of one symbol and quantity within 10 days) and `run --strict` stops; report those sales by hand. Canada pools the ACB across the accounts (s.47), so it is not affected.

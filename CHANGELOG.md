@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **`taxjson audit` / `taxjson-explain` recompute the books the way the
+  run does.** They now apply the Canadian trust ROC record date
+  (CA-INC-DATE-ROC-TRUST, with the project's corporate_distributions),
+  test the grant-timing since-year on the project's tax date, and use
+  per-account FIFO on a US book by default, so a correct project no
+  longer fails its tie-out (re-audit A2-0033, A2-0327, A2-0314,
+  A2-0317, A2-0315, A2-0318). The audit traces and ties out a s.40(3)
+  deemed gain (a return of capital on an empty pool or beyond the ACB,
+  A2-0316), ties phantom-basis sales to the MANUAL REPORTING REQUIRED
+  list instead of calling them "stale or truncated saved books" with
+  exit 1 (A2-0640, A2-1098), and quotes an option's per-share price at
+  its declared contract size (A2-1099).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of
