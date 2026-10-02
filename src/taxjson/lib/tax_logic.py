@@ -827,7 +827,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "AB) with AMT on top of your other income, for planning "
                  "only.", keys=("province",)),
             Rule("CA-RPT-04",
-                 "Canadian dividends are treated as eligible (38% gross-up "
+                 "Canadian dividends (a Canadian issuer: its CA ISIN when "
+                 "the export gives one, else a Canadian listing) are "
+                 "treated as eligible (38% gross-up "
                  "and credit; a capital-gains dividend in "
                  "capital_gains_dividends.map as a capital gain),",
                  cont=True),

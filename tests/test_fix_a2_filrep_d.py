@@ -389,5 +389,80 @@ class TestInstalmentPrepayment(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+def _estimate_project(tmp, rows, base_rows=None, *, country="canada"):
+    """A project with a hand-written gains file (and base book) for one
+    taxable account; `taxjson estimate --json` reads them."""
+    root = Path(tmp)
+    (root / "work").mkdir()
+    cur = "CAD" if country == "canada" else "USD"
+    (root / "taxjson.toml").write_text(
+        f'[settings]\nyear = 2025\ncountry = "{country}"\n'
+        f'base_currency = "{cur}"\nsource_currencies = []\n'
+        + ('province = "ON"\n' if country == "canada" else "")
+        + '[accounts.margin]\ntype = "taxable"\n')
+    (root / "work" / "margin_gains.json").write_text(json.dumps(
+        {"summary": {"year": 2025}, "transactions": rows,
+         "inventory": [], "wash_sales": []}))
+    if base_rows is not None:
+        (root / "work" / "margin_base.json").write_text(json.dumps(
+            {"transactions": base_rows}))
+    return root
+
+
+def _div_rows(sym, issuer, action="DIVIDEND"):
+    g = {"date": "2025-06-30", "date_settle": "2025-06-30",
+         "symbol": sym, "qty": 0.0, "currency": "CAD", "gain": 0.0,
+         "cost": 0.0, "proceeds": 0.0, "dividend": 4000.0,
+         "account": "margin", "id": "d1", "action": action}
+    if action == "DIVIDEND_IN_LIEU":
+        g.update(pil=0.0, deemed_dividend="ITA s.260")
+    b = {"action": action, "date": "2025-06-30", "time": "10:00:00",
+         "date_settle": "2025-06-30", "symbol": sym, "quantity": 0.0,
+         "price": 0.0, "net_amount": 4000.0, "gross_amount": 4000.0,
+         "currency": "CAD", "account": "margin", "id": "d1",
+         "dealer_country": "CA"}
+    if issuer:
+        b["issuer_country"] = issuer
+    return [g], [b]
+
+
+class TestEstimateCanadianIssuer(unittest.TestCase):
+    """A2-0319, A2-0662: the Canada estimate decides a dividend's
+    issuer like the engine (income_dating.is_canadian_issuer: the CA
+    ISIN, else the listing) — a Canadian issuer on a US listing is an
+    eligible dividend with no assumed foreign tax credit."""
+
+    def _est(self, sym, issuer, action="DIVIDEND"):
+        g, b = _div_rows(sym, issuer, action)
+        with tempfile.TemporaryDirectory() as td:
+            root = _estimate_project(td, g, b)
+            r = _taxjson(root, "estimate", "--other-income", "100000",
+                         "--json")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            return json.loads(r.stdout)["estimate"]
+
+    @rule("CA-RPT-04")
+    def test_a2_0319_ca_isin_on_us_listing_is_eligible(self):
+        to = self._est("ZQX.TO", "")
+        us_ca = self._est("ZQX.US", "CA")
+        us_us = self._est("ZQX.US", "US")
+        self.assertEqual(us_ca["ftc_assumed"], 0.0)
+        self.assertAlmostEqual(us_ca["grossed_eligible"],
+                               to["grossed_eligible"], places=2)
+        self.assertAlmostEqual(us_ca["estimated_tax"], to["estimated_tax"],
+                               places=2)
+        # A US issuer stays foreign (the control).
+        self.assertGreater(us_us["ftc_assumed"], 0.0)
+        self.assertEqual(us_us["grossed_eligible"], 0.0)
+
+    @rule("CA-INC-03")
+    def test_a2_0662_s260_pil_ca_isin_us_listing_is_eligible(self):
+        to = self._est("ZQX.TO", "", "DIVIDEND_IN_LIEU")
+        us_ca = self._est("ZQX.US", "CA", "DIVIDEND_IN_LIEU")
+        self.assertEqual(us_ca["ftc_assumed"], 0.0)
+        self.assertAlmostEqual(us_ca["grossed_eligible"],
+                               to["grossed_eligible"], places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

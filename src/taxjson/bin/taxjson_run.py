@@ -7960,6 +7960,32 @@ def cmd_scan(args: argparse.Namespace) -> None:
     raise SystemExit(1)
 
 
+def _issuer_is_canadian_by_symbol(cache: Path, acct: str
+                                  ) -> Dict[str, bool]:
+    """{symbol: Canadian issuer?} from the income rows of an account's
+    base book that carry the issuer's country (an IB CA/US ISIN): the
+    estimate splits Canadian (eligible) from foreign dividends with the
+    SAME test the engine uses for a s.260 payment in lieu,
+    income_dating.is_canadian_issuer, not the listing suffix alone
+    (A2-0319, A2-0662). A symbol with no such row is not in the map:
+    the caller falls back to its listing."""
+    from taxjson.lib.income_dating import is_canadian_issuer
+    out: Dict[str, bool] = {}
+    try:
+        data = _read_work_doc(cache / f"{acct}_base.json")
+    except (OSError, ValueError):
+        return out
+    for t in data.get("transactions", []) or []:
+        if not isinstance(t, dict) or not t.get("issuer_country"):
+            continue
+        if t.get("action") not in ("DIVIDEND", "DIVIDEND_IN_LIEU"):
+            continue
+        sym = str(t.get("symbol") or "")
+        if sym:
+            out[sym] = is_canadian_issuer(t)
+    return out
+
+
 def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
                          year, foreign_by_acct: Dict[str, float]) -> None:
     """Move the tax year's T5 box 18 capital-gains dividends named in
@@ -7992,8 +8018,9 @@ def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
             if ystr and not str(d).startswith(ystr):
                 continue
             cg = row_amount(t) * f
-            sym = str(t.get("symbol") or "")
-            if sym.rsplit(".", 1)[-1].upper() in ("TO", "V", "CN", "NE"):
+            from taxjson.lib.income_dating import is_canadian_issuer
+            # The issuer test the dividend split uses (A2-0319).
+            if is_canadian_issuer(t):
                 est["div_ca"] = max(0.0, est["div_ca"] - cg)
             else:
                 est["div_foreign"] = max(0.0, est["div_foreign"] - cg)
@@ -8156,9 +8183,15 @@ def cmd_summary(args: argparse.Namespace) -> None:
             year = year or (data.get("summary") or {}).get("year")
             res = summarize_gains(data)
         cap = opt = div = pil = 0.0
+        _issuer_ca = (_issuer_is_canadian_by_symbol(cache, acct)
+                      if want_estimate and acct in taxable_accounts
+                      else {})
         for ticker, cur_map in res.get("ticker_stats", {}).items():
-            is_ca_listed = (ticker.rsplit(".", 1)[-1].upper()
-                            in ("TO", "V", "CN", "NE"))
+            from taxjson.lib.income_dating import is_canadian_listing
+            # The issuer's ISIN country when the books carry it, else
+            # the listing (A2-0319, A2-0662).
+            is_ca_listed = _issuer_ca.get(ticker,
+                                          is_canadian_listing(ticker))
             for s in cur_map.values():
                 cap += float(s.get("cap", 0) or 0)
                 opt += float(s.get("opt", 0) or 0)
@@ -9067,7 +9100,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                "grossed up]")]
              if r.get("capital_gains_dividends") else []) + [
             ("Eligible dividends (grossed)", r["grossed_eligible"],
-             f"[{money(est['div_ca'])} x1.38, Canadian-listed]"),
+             f"[{money(est['div_ca'])} x1.38, Canadian issuers]"),
             ("Foreign dividends", est["div_foreign"],
              f"[FTC {money(r['ftc_assumed'])} — "
              f"{r.get('ftc_source', 'assumed 15%')}]"),

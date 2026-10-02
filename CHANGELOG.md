@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `estimate` (Canada): a dividend or s.260 payment in lieu from a
+  Canadian issuer on a US listing (CA ISIN in the books) is an eligible
+  dividend, not a foreign one with an assumed 15% credit — the estimate
+  uses the engine's issuer test (ISIN, else listing) instead of the
+  listing suffix (re-audit A2-0319, A2-0662).
 - `instalments`: a payment made before January 1 is accepted as a
   prepayment of the project year's instalments when its row says
   `tax_year = YEAR` (credited from January 1, as the interest model
