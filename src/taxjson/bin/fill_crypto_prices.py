@@ -20,14 +20,45 @@ CACHE_FILE = os.path.expanduser("~/.crypto_price_cache.json")
 
 def load_cache():
     # OSError too: an unreadable cache (permissions, dangling symlink)
-    # degrades to a refetch, not a traceback.
+    # degrades to a refetch, not a traceback. A cache that is valid
+    # JSON but not an object ([], 5) degrades the same way, as
+    # to_base_curr's loader does (re-audit A2-1403 / A2-1446).
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            with open(CACHE_FILE, 'r', encoding='utf-8-sig') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
         except (ValueError, OSError):   # JSON or UTF-8 damage (S055-04)
             pass
     return {}
+
+
+def _cache_number(v):
+    """A cache value as a float when it is a real finite number (an int,
+    a float or a numeric string; never a bool, null, list or text),
+    else None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        return None
+    try:
+        f = float(v)
+    except ValueError:
+        return None
+    return f if math.isfinite(f) else None
+
+
+def cached_price(cache, key):
+    """The usable cached price for `key` (a finite number > 0), else
+    None. A damaged entry — null, "abc", true, Infinity, a list — is a
+    cache MISS, never a traceback and never a price of 1.0 or inf
+    (re-audit A2-0772 / A2-0773 / A2-1403 / A2-0464)."""
+    f = _cache_number(cache.get(key)) if isinstance(cache, dict) else None
+    return f if f is not None and f > 0 else None
+
+
+def _damaged_entry(cache, key) -> bool:
+    """`key` is in the cache but its value is not a number at all."""
+    return key in cache and _cache_number(cache[key]) is None
 
 def save_cache(cache_data):
     # A unique temp file renamed into place under a lock, merged with
@@ -300,6 +331,15 @@ def _fill(args):
                 # symbol (stage-tools audit).
                 y_symbol = SYMBOL_OVERRIDES.get(tx.symbol, tx.symbol)
                 cache_key = f"{y_symbol}-{tx.date}"
+                if _damaged_entry(cache, cache_key):
+                    # null / "abc" / true / Infinity: a miss, looked up
+                    # again (re-audit A2-0772 / A2-1403).
+                    cli_diag.warn(
+                        PROG,
+                        f"{CACHE_FILE}: entry {cache_key} is "
+                        f"{cache[cache_key]!r}, not a price — ignored "
+                        f"and looked up again.")
+                    del cache[cache_key]
                 if cache_key not in cache and cache_key not in provisional:
                     if tx.symbol == 'USD' or tx.symbol in _STABLE_ONE_TO_ONE:
                         p = 1.0
@@ -325,8 +365,8 @@ def _fill(args):
                         cache[cache_key] = p
                         cache_dirty = True
 
-                fetched_price = cache.get(cache_key,
-                                          provisional.get(cache_key, 0.0))
+                fetched_price = (cached_price(cache, cache_key)
+                                 or provisional.get(cache_key, 0.0))
                 if not fetched_price > 0:
                     unpriced.append(tx)
                 if fetched_price > 0:

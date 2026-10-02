@@ -6169,7 +6169,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         entries, unpriced = CS.tt_entries(adoc)
         tt = Path(adoc["tt_file"])
         want = CS.render_tt(acct, entries, report["country"])
-        have = tt.read_text(encoding="utf-8") if tt.is_file() else None
+        have = CS.read_tt(tt)              # a BOM re-save (A2-1405)
         print()
         if unpriced:
             print(f"NOT BOOKED — no fair value for "
@@ -14453,8 +14453,11 @@ def _fx_cash_doc(root: Path, cache: Path):
     if not found:
         sys.exit(f"taxjson fx-cash: no native transaction files in "
                  f"{cache} (run `taxjson run` first).")
-    fx = load_fx_history(cache / "to_base.csv", base)
-    ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
+    try:      # an unreadable rates file, a futures refusal (A2-1424/1434)
+        fx = load_fx_history(cache / "to_base.csv", base)
+        ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
+    except (OSError, ValueError) as e:
+        sys.exit(f"taxjson fx-cash: error: {e}")
     verdict = FX.apply_jurisdiction(ledger["net_gain"], country)
     return ledger, verdict, base, int(year), country
 

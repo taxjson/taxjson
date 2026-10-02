@@ -37,7 +37,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.cli_diag import warn
+from taxjson.lib.cli_diag import error, warn
 from taxjson.bin.taxjson_convert_currency import norm_currency
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.core import (is_option_symbol, parse_option_expiry,
@@ -775,7 +775,13 @@ def main(argv: Optional[List[str]] = None,
     # user's ETN.US loss by the full FX factor.
     base = args.base_currency.upper()
     rates_path = args.rates or (files[0].parent / "to_base.csv")
-    fx_history = load_fx_history(rates_path, base)
+    try:
+        fx_history = load_fx_history(rates_path, base)
+    except (OSError, ValueError) as e:
+        # An unreadable or damaged to_base.csv: one line, whether run
+        # as taxjson-harvest or `taxjson harvest` (re-audit A2-0790).
+        error(PROG, str(e))
+        return 2
     today_iso = date.today().isoformat()
     stale_warned: set = set()
 

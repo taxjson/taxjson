@@ -158,7 +158,7 @@ def load_cache():
     # OSError too: an unreadable cache degrades to a refetch.
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            with open(CACHE_FILE, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
@@ -829,6 +829,64 @@ def _good_rate(v) -> bool:
     return f > 0 and f != float("inf")      # NaN fails `f > 0`
 
 
+def _valid_coverage(v) -> bool:
+    """A `_coverage` entry is a list of [lo, hi] YYYY-MM-DD pairs."""
+    return isinstance(v, list) and all(
+        isinstance(iv, list) and len(iv) == 2
+        and all(isinstance(x, str) and _DATE_RE.match(x) for x in iv)
+        and iv[0] <= iv[1] for iv in v)
+
+
+def _drop_bad_shapes(cache: dict, offline: bool) -> List[str]:
+    """Remove the parts of the cache whose SHAPE is damaged — a
+    `_coverage`, `_boc` or `_boc_noon` that is not an object, a pair's
+    block or its `obs` that is not an object, a coverage entry that is
+    not a list of [lo, hi] date pairs — with one CacheProblem each,
+    naming the cache file. What is dropped is asked for again online;
+    offline its dates have no row. A damaged block used to be an
+    AttributeError traceback in the FX stage, and a damaged coverage
+    entry silently discarded the whole cached Bank series (re-audit
+    A2-0474 / A2-0800 / A2-1446)."""
+    out: List[str] = []
+    then = ("its dates have no rate this run (TAXJSON_OFFLINE) and are "
+            "asked for again online" if offline
+            else "its dates are asked for again")
+
+    def bad(what: str, v) -> None:
+        out.append(CacheProblem(
+            f"{CACHE_FILE}: {what} is damaged ({str(v)[:40]!r}) — "
+            f"dropped; {then}."))
+
+    cov = cache.get("_coverage")
+    if cov is not None and not isinstance(cov, dict):
+        bad("_coverage", cov)
+        del cache["_coverage"]
+    for key in list((cache.get("_coverage") or {})):
+        if not _valid_coverage(cache["_coverage"][key]):
+            bad(f"_coverage[{key!r}]", cache["_coverage"][key])
+            del cache["_coverage"][key]
+    for top, cov_pre in (("_boc", "boc"), ("_boc_noon", "boc_noon")):
+        blocks = cache.get(top)
+        if blocks is None:
+            continue
+        if not isinstance(blocks, dict):
+            bad(top, blocks)
+            del cache[top]
+            for key in [k for k in (cache.get("_coverage") or {})
+                        if k.startswith(f"{cov_pre}:")]:
+                del cache["_coverage"][key]
+            continue
+        for pair in list(blocks):
+            blk = blocks[pair]
+            if isinstance(blk, dict) and (blk.get("obs") is None
+                                          or isinstance(blk["obs"], dict)):
+                continue
+            bad(f"{top}[{pair!r}]", blk)
+            del blocks[pair]
+            (cache.get("_coverage") or {}).pop(f"{cov_pre}:{pair}", None)
+    return out
+
+
 def _drop_bad_obs(cache: dict, pair: str, offline: bool) -> List[str]:
     """Remove cached observations for `pair` that are not a positive
     finite number, and the coverage of their dates (an online run asks
@@ -887,6 +945,7 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
     errors: List[str] = []
     notes: List[str] = []
     pair = f"{from_curr}{to_curr}"
+    errors += _drop_bad_shapes(cache, offline)
     errors += _drop_bad_obs(cache, pair, offline)
     if offline:
         notes.append("TAXJSON_OFFLINE is set — using cached rates only "
