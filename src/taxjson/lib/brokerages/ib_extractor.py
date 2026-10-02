@@ -701,6 +701,12 @@ def _ib_income_ticker(description: str):
     return ticker.replace(' ', '.'), isin
 
 
+_IB_INCOME_PHRASE_WORDS = frozenset((
+    'CASH', 'DIVIDEND', 'DIVIDENDS', 'PAYMENT', 'RETURN', 'WITHHOLDING',
+    'INTEREST', 'CHOICE', 'STOCK', 'TAX', 'PER', 'SHARE', 'USD', 'CAD',
+    'ORDINARY', 'SPECIAL', 'BONUS', 'CREDIT', 'DEBIT'))
+
+
 def _ib_income_ticker_strict(description: str, where: str,
                              section: str):
     """`_ib_income_ticker` for a row that is BOOKED: a Dividends or
@@ -713,6 +719,15 @@ def _ib_income_ticker_strict(description: str, where: str,
     symbol the Interest section books the interest itself on."""
     if _IB_INCOME_TICKER_RE.search(description or ''):
         return _ib_income_ticker(description)
+    # An older statement's 'QZNO Return of Capital USD 0.20 per Share':
+    # a leading upper-case ticker, then IB's mixed-case wording — kept
+    # as before (no ISIN: the issuer country stays unknown). A leading
+    # word of the income phrase itself ('CASH DIVIDEND ...') is not a
+    # ticker.
+    m = re.match(r'([A-Z][A-Z.\d\-]*)\s+(\S.*)$', description or '')
+    if (m and m.group(1) not in _IB_INCOME_PHRASE_WORDS
+            and re.search(r'[a-z]', m.group(2))):
+        return m.group(1), ''
     if section == 'Withholding Tax' and 'interest' in (description
                                                        or '').lower():
         return 'CASH', ''
