@@ -184,5 +184,211 @@ class TestViewsRefuseUnreadable(unittest.TestCase):
         self.assertIn("Do not delete", msg)
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _run_cli(root, *args, env=None):
+    import subprocess
+    import sys
+    e = dict(os.environ)
+    e["TAXJSON_OFFLINE"] = "1"
+    e.update(env or {})
+    return subprocess.run(
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+         *args], cwd=REPO_ROOT, capture_output=True, text=True, env=e,
+        stdin=subprocess.DEVNULL)
+
+
+def _ttx(action, date, time, sym, qty, price=0.0, settle="", **kw):
+    from taxjson.lib.core import TaxTransaction
+    return TaxTransaction(action=action, date=date, time=time,
+                          date_settle=settle, symbol=sym, quantity=qty,
+                          price=price, net_amount=-qty * price,
+                          currency="CAD", account="margin", **kw)
+
+
+class TestSameSettleTradeOrder(unittest.TestCase):
+    """A2-0067: two rows settling the same day were applied by clock
+    time, so a Monday buy went before the previous Friday's sale."""
+
+    def _rows(self, buy_time):
+        # Columbus Day 2025-10-13 (Fed holiday, NYSE open): the Friday
+        # sale and the Monday buy both settle 2025-10-14.
+        return [_ttx("BUYSELL", "2025-09-02", "10:00:00", "XYZ.US", 100, 10,
+                     settle="2025-09-03"),
+                _ttx("BUYSELL", "2025-10-10", "15:00:00", "XYZ.US", -50, 12,
+                     settle="2025-10-14"),
+                _ttx("BUYSELL", "2025-10-13", buy_time, "XYZ.US", 100, 20,
+                     settle="2025-10-14")]
+
+    @rule("CA-DATE-14")
+    def test_friday_sale_before_monday_buy(self):
+        import contextlib
+        import io
+        from taxjson.lib.core import CanadaTaxRules
+        for buy_time in ("09:45:00", "16:00:00"):
+            rows = self._rows(buy_time)
+            for order in (rows, [rows[0], rows[2], rows[1]]):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    res = CanadaTaxRules().compute_gains(
+                        list(order), option_premium_timing="grant")
+                sale = [e for e in res["transactions"] if "proceeds" in e]
+                self.assertEqual(len(sale), 1)
+                self.assertAlmostEqual(sale[0]["gain"], 100.0, places=2)
+                self.assertAlmostEqual(sale[0]["disallowed_amount"], 0.0)
+                inv = {i["symbol"]: (i["qty"], i["total_cost"])
+                       for i in res["inventory"]}
+                self.assertEqual(inv["XYZ.US"], (150.0, 2500.0))
+                self.assertNotIn("negative days_held", err.getvalue())
+
+    def test_sort_key_trade_date_before_clock(self):
+        from taxjson.lib.corporate_timeline import event_sort_key
+        sale, buy = self._rows("09:45:00")[1:]
+        for prof in ("ca_main", "ca_balance"):
+            self.assertLess(event_sort_key(sale, profile=prof),
+                            event_sort_key(buy, profile=prof))
+        # an opening balance still leads its settle day's pre-existing rows
+        ob = _ttx("OPENING_BALANCE", "2025-10-14", "00:00:00", "XYZ.US", 5)
+        self.assertLess(event_sort_key(ob, profile="ca_main"),
+                        event_sort_key(sale, profile="ca_main"))
+
+
+QT_H = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+        "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+        "Account #,Activity Type,Account Type\n")
+QT_SPLIT = QT_H + (
+    "2025-01-10 12:00:00 AM,2025-01-13 12:00:00 AM,Buy,XYZ.TO,XYZ CORP,300,"
+    "10.00,-3000.00,-4.95,-3004.95,CAD,55500001,Trades,Individual margin\n"
+    "2025-03-10 12:00:00 AM,2025-03-10 12:00:00 AM,DIS,XYZ.TO,XYZ CORP STK "
+    "SPLIT ON 300 SHS REC 03/05/25 PAY 03/10/25,400,0.00,0.00,0.00,0.00,CAD,"
+    "55500001,Dividends,Individual margin\n"
+    "2025-06-10 12:00:00 AM,2025-06-11 12:00:00 AM,Sell,XYZ.TO,XYZ CORP,-700,"
+    "5.00,3500.00,-4.95,3495.05,CAD,55500001,Trades,Individual margin\n"
+)  # pii-ok
+CONFIG_CA = """\
+[settings]
+year = 2025
+country = "canada"
+base_currency = "CAD"
+source_currencies = []
+option_grant_timing_since = 2025
+
+[accounts.margin]
+type = "taxable"
+"""
+
+
+class TestRoundedSplitCopy(unittest.TestCase):
+    """A2-0070: a manual .tt SPLIT repeating a broker split with a
+    rounded ratio was applied twice, silently."""
+
+    def test_split_seen_near_ratio(self):
+        import contextlib
+        import io
+        from taxjson.lib.corporate_timeline import split_seen
+        seen = set()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(split_seen(seen, "XYZ.TO", "2025-03-10",
+                                         2.333333333, ""))
+            self.assertEqual(split_seen(seen, "XYZ.TO", "2025-03-07",
+                                        2.333333, ""), "2025-03-10")
+            self.assertEqual(split_seen(seen, "XYZ.TO", "2025-03-10",
+                                        2.33333333, ""), "2025-03-10")
+            # a genuinely different ratio, or outside the window, is not
+            self.assertIsNone(split_seen(seen, "XYZ.TO", "2025-03-10",
+                                         2.34, ""))
+            self.assertIsNone(split_seen(seen, "XYZ.TO", "2025-04-30",
+                                         2.333333, ""))
+            # per-account keys stay per account
+            self.assertIsNone(split_seen(seen, "XYZ.TO", "2025-03-10",
+                                         2.333333333, "", account="a"))
+            self.assertIsNone(split_seen(seen, "XYZ.TO", "2025-03-10",
+                                         2.333333, "", account="b"))
+        self.assertIn("applied ONCE", err.getvalue())
+
+    @rule("CA-CORP-01")
+    def test_run_applies_rounded_copy_once_and_says_so(self):
+        for date, ratio in (("2025-03-10", "2.333333"),
+                            ("2025-03-07", "2.333333"),
+                            ("2025-03-07", "2.33333333")):
+            with self.subTest(date=date, ratio=ratio), \
+                    tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "taxjson.toml").write_text(CONFIG_CA)
+                acct = root / "inputs" / "margin"
+                acct.mkdir(parents=True)
+                (acct / "questrade_2025.csv").write_text(QT_SPLIT)
+                (acct / "manual.tt").write_text(
+                    f"SPLIT {date} 09:30:00 XYZ.TO XYZ.TO {ratio}\n")
+                r = _run_cli(root, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                self.assertIn("ATTENTION: split:", r.stdout + r.stderr)
+                g = json.loads((root / "work" / "margin_gains.json")
+                               .read_text())
+                self.assertAlmostEqual(g["summary"]["total_gain"], 490.10,
+                                       places=2)
+                self.assertFalse([i for i in g.get("inventory", [])
+                                  if i["symbol"] == "XYZ.TO"
+                                  and abs(i["qty"]) > 1e-6])
+
+    def test_merge2_same_date_rounded_is_attention_not_conflict(self):
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_merge2 import warn_duplicate_splits
+        a = _ttx("SPLIT", "2025-03-10", "00:00:00", "XYZ.TO", 2.333333333)
+        b = _ttx("SPLIT", "2025-03-10", "09:30:00", "XYZ.TO", 2.333333)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(warn_duplicate_splits([a, b]), 1)
+        self.assertIn("warning: ATTENTION: split:", err.getvalue())
+        self.assertNotIn("EACH is applied", err.getvalue())
+
+
+class TestLineageSameDayChain(unittest.TestCase):
+    """A2-0983: lineage_factor walked a same-day rename chain in input
+    order."""
+
+    def test_order_independent(self):
+        from taxjson.lib.corporate_timeline import SplitTimeline
+        ab = _ttx("SPLIT", "2025-03-10", "00:00:00", "AAA.TO", 2.0,
+                  symbol_new="BBB.TO")
+        bc = _ttx("SPLIT", "2025-03-10", "00:00:00", "BBB.TO", 3.0,
+                  symbol_new="CCC.TO")
+        got = set()
+        for order in ([ab, bc], [bc, ab]):
+            tl = SplitTimeline.from_transactions(order)
+            got.add(tl.lineage_factor("BBB.TO", "2025-03-01",
+                                      "AAA.TO", "2025-03-01"))
+            self.assertEqual(tl.factor("CCC.TO", "2025-03-01",
+                                       "2025-03-31"), 6.0)
+        self.assertEqual(got, {0.5})
+
+    @rule("CA-SL-01")
+    def test_engine_allowed_loss_order_independent(self):
+        import contextlib
+        import io
+        from taxjson.lib.core import CanadaTaxRules
+        base = [_ttx("BUYSELL", "2025-01-02", "10:00:00", "AAA.TO", 100, 20,
+                     settle="2025-01-03"),
+                _ttx("BUYSELL", "2025-03-03", "10:00:00", "AAA.TO", -100, 10,
+                     settle="2025-03-04"),
+                _ttx("BUYSELL", "2025-03-05", "10:00:00", "BBB.TO", 30, 5,
+                     settle="2025-03-06")]
+        ab = _ttx("SPLIT", "2025-03-10", "00:00:00", "AAA.TO", 2.0,
+                  symbol_new="BBB.TO")
+        bc = _ttx("SPLIT", "2025-03-10", "00:00:00", "BBB.TO", 3.0,
+                  symbol_new="CCC.TO")
+        gains = set()
+        for sp in ([ab, bc], [bc, ab]):
+            with contextlib.redirect_stderr(io.StringIO()):
+                res = CanadaTaxRules().compute_gains(
+                    base + sp, option_premium_timing="grant")
+            gains.add(round(sum(e["gain"] for e in res["transactions"]
+                                if "proceeds" in e), 2))
+        self.assertEqual(len(gains), 1, gains)
+
+
 if __name__ == "__main__":
     unittest.main()

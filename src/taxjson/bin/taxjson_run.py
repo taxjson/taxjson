@@ -2423,6 +2423,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # not — a row booked once (or twice) on a guess must not scroll by.
     echo_attention_lines(cache / f"{name}_sorted.json" if is_crypto
                          else base_json, prefix="dedup: ")
+    # A split booked twice with a rounded ratio (A2-0070): one event,
+    # applied once — on the console, so the manual line gets deleted.
+    if not is_crypto:
+        echo_attention_lines(base_json, prefix="split: ")
 
     # 5. gains
     gains_json = cache / f"{name}_gains.json"
