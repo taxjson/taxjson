@@ -1100,8 +1100,9 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
                 f"of {len(accts)} RBC accounts ({', '.join(accts)}) — "
                 f"every row is booked to ONE taxjson account. That is "
                 f"right only when they are one tax entity (two taxable "
-                f"accounts of yours); export a registered plan "
-                f"(TFSA/RRSP) separately into its own inputs/<account>/.")
+                f"accounts of yours); export a sheltered (tax-"
+                f"advantaged) account separately into its own "
+                f"inputs/<account>/.")
 
     live = [(fi, r) for fi, k in enumerate(files) for r in ctx.rows(k)]
     chrono = sorted(live, key=lambda x: (x[1].date, x[1].k, x[0],

@@ -2076,10 +2076,17 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                 f"current, so a send to it may look unmatched (or a "
                 f"network fee be missed) — run without --account."))
         if adoc["undecided"]:
+            # The decisions the country allows (a gift is a disposition
+            # only in Canada, s.69(1)(b); US-SEND-02, re-audit A2-1378).
+            _gift_ok = command_country_problem(
+                "crypto-sends", _country(cfg.get("settings")),
+                "gift") is None
             print(f"  note: {adoc['undecided']} crypto send(s) not yet "
-                  f"classified as self / gift / payment — `taxjson "
-                  f"crypto-sends {name}` lists them (a gift or payment is "
-                  f"a disposition at fair value).", file=sys.stderr)
+                  f"classified as "
+                  f"{'self / gift / payment' if _gift_ok else 'self / payment'}"
+                  f" — `taxjson crypto-sends {name}` lists them ("
+                  f"{'a gift or payment is a disposition at fair value' if _gift_ok else 'a payment is a sale at fair value'}"
+                  f").", file=sys.stderr)
             if strict and not unparsed:
                 # A pending decision, like a pending election: a send
                 # that may be a disposition is not in the books (A2-0362).
@@ -4952,6 +4959,19 @@ def _reextract_pending_entry(acct_dir: Path, name: str, country: str,
     return None
 
 
+def _print_wrong_country(wrong: List[Dict[str, str]], country: str) -> None:
+    """`elect --pending`: the saved elections this country's rules do not
+    know, each with the command that replaces it."""
+    from taxjson.lib.country import display_name
+    print(f"Elections that are not {display_name(country)} elections "
+          f"(`taxjson run` refuses them):")
+    for w in wrong:
+        print(f"{w['account']}: {w['event_id']}  {w['summary']}   "
+              f"[saved: {w['election']}]")
+        print(f"  taxjson elect {w['account']} --redo --event "
+              f"{w['event_id']}")
+
+
 def _save_manifest(man, manifest_path: Path) -> None:
     """Save the elections manifest, or one line naming it when its
     folder cannot be written (a read-only inputs/<acct>/): it was a
@@ -5027,12 +5047,25 @@ def cmd_elect(args: argparse.Namespace) -> None:
 
     if getattr(args, "pending", False):
         import json as _json
+        # A saved election the project's country does not know (a
+        # Canadian rollover left in a project switched to usa) stops
+        # `taxjson run`; it is pending too (re-audit A2-0725).
+        from taxjson.lib.corp_views import (ViewError,
+                                            wrong_country_elections)
+        try:
+            _wrong = wrong_country_elections(root, cfg)
+        except ViewError as e:
+            _die(str(e))
         agg_path = cache / "pending_elections.json"
         if not agg_path.exists():
             if getattr(args, "json", False):
                 # Same shape as the pending document itself, so a
                 # machine consumer never has to parse prose.
-                _json_out({"schema_version": 1, "accounts": {}})
+                _json_out({"schema_version": 1, "accounts": {}}
+                          | ({"wrong_country": _wrong} if _wrong else {}))
+                return
+            if _wrong:
+                _print_wrong_country(_wrong, country)
                 return
             print("No pending elections (no --no-input run has deferred "
                   "any, or they've been resolved).")
@@ -5046,8 +5079,12 @@ def cmd_elect(args: argparse.Namespace) -> None:
             _die_input(f"{e} — a damaged work file: re-run `taxjson run "
                        f"--no-input` to rebuild it.")
         if getattr(args, "json", False):
+            if _wrong:
+                doc = dict(doc, wrong_country=_wrong)
             print(_json.dumps(doc, indent=2, sort_keys=True))
             return
+        if _wrong:
+            _print_wrong_country(_wrong, country)
         from taxjson.lib.corp_actions import Manifest
         for acct, adoc in sorted((doc.get("accounts") or {}).items()):
             mpath = _manifest_path_for(inputs_dir / acct, cache, acct)
@@ -13542,6 +13579,11 @@ def _explain_wash_sales(root: Path, cache: Path,
     settings = _soft_settings(root)
     common: List[str] = ["--wash-sales"]
     common += ["--country", _country(settings)]
+    if _country(settings) in ("us", "usa"):
+        # The blended table keeps FIFO per account (US-BASIS-01): said
+        # explicitly, as `taxjson audit` does, so the trace of a merged
+        # book never pools lots across accounts (re-audit A2-0155).
+        common.append("--per-account-basis")
     if settings.get("tax_date"):
         common += ["--tax-date", settings["tax_date"]]
     # The table lists the tax year's wash sales; the trace printed every
@@ -13824,8 +13866,12 @@ def _radar_engine_args(bases: List[Path],
         # date as the engine does, and leaves a listed corporation's on
         # its pay date (CA-INC-DATE-ROC-TRUST; audit A2-1174/A2-1178).
         try:
-            _corp = (_soft_settings(Path(phantoms).parent).get(
-                "corporate_distributions") or [])
+            _s = _soft_settings(Path(phantoms).parent)
+            _corp = (_s.get("corporate_distributions") or [])
+            # CA-SL-11 / CA-SL-12 in the radar's own pool too (a loss
+            # outside the gains files' year — audit A2-0442).
+            if _s.get("option_buyback_loss_superficial") is True:
+                out.append("--option-buyback-wash")
         except Exception:                                  # noqa: BLE001
             _corp = []
         if isinstance(_corp, (list, tuple)):
@@ -15401,6 +15447,28 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
             for r in matches.values())
         for t, r in sorted(matches.items()):
             cat = r.get("category") or ""
+            if _usa and r.get("outside_wash_rule"):
+                # A futures contract / futures option: outside §1091
+                # (US-WASH-18) — a re-purchase never disallows its loss
+                # (audit A2-0435: UNSAFE, exit 1).
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(f"{t}: {r.get('advisory')}")
+                continue
+            _sc = r.get("short_cover_loss") if _usa else None
+            if _sc and not _is_opt_sym(_q):
+                # §1091(e) / US-WASH-05: only a new SHORT sale replaces a
+                # short-cover loss; a buy never does (audit A2-0436).
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(
+                    f"{t}: the loss sold within the past 30 days was on "
+                    f"covering a short ({_sc.get('date')}) — a buy does "
+                    f"not replace it (§1091(e)); only a new short sale "
+                    f"before {_sc.get('reshort_ok_from')} would disallow "
+                    f"it.")
+                if cat in ("BLOCKED", "COOLING"):
+                    continue
             if (_us_call_note and not _is_opt_sym(t.strip().upper())
                     and cat in ("BLOCKED", "COOLING", "VIOLATION",
                                 "WASHED")):
@@ -15468,9 +15536,10 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                 if verdict == "SAFE":
                     verdict = "SAFE*"
                 lines.append(
-                    f"{t}: {cat} — no recent loss sale, buying is "
-                    f"safe TODAY, but it extends the wash window: "
-                    f"{_future_rule}.")
+                    f"{t}: {cat} — no recent loss sale"
+                    + (" a buy can disallow" if _sc else "")
+                    + f", buying is safe TODAY, but it extends the wash "
+                    f"window: {_future_rule}.")
         # A warrant/right, a call on an adjusted series or a futures
         # option on the shares of a recent loss: the engines flag it for
         # a manual check (CA-SL-14/15, US-WASH-14/15); buy-check said
@@ -15560,7 +15629,11 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
         for t, r in sorted(matches.items()):
             cat = r.get("category") or ""
             adv = r.get("advisory") or ""
-            if cat == "LOCKED":
+            if _usa and r.get("outside_wash_rule"):
+                # A futures contract / futures option: outside §1091
+                # (US-WASH-18) — the radar's own line, not 'do not rebuy'.
+                lines.append(f"{t}: {adv}")
+            elif cat == "LOCKED":
                 # A registered account's in-window buy it still holds
                 # denies the loss on up to that many units — the rest of
                 # a sale stands (s.54, per holder). UNSAFE only when the
@@ -15674,13 +15747,18 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                                  f"(taxable or "
                                  f"{'IRA' if _usa else 'sheltered'}) for "
                                  f"30 days.")
-                    # Warn-only flags for a sale today (a US long call,
-                    # a warrant, an adjusted series, a futures option
-                    # bought in the window — audit A2-0687).
-                    for _n in r.get("notes") or []:
-                        if verdict == "SAFE":
-                            verdict = "SAFE*"
-                        lines.append(f"{t}: {_n}")
+            # Warn-only flags (a US long call, a warrant, an adjusted
+            # series, a futures option bought in the window; a US
+            # short-cover loss's re-short rule), whatever the row's
+            # category — a BLOCKED row dropped them (audit A2-0687 /
+            # A2-0434 / A2-0445); skipped when the line already quotes
+            # the advisory that carries them.
+            for _n in r.get("notes") or []:
+                if any(_n in ln for ln in lines):
+                    continue
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(f"{t}: {_n}")
         if len(lines) == bool(_note):
             lines.append(f"{wroot}: no tracked taxable position — "
                          f"nothing to sell (or run `taxjson run` to "

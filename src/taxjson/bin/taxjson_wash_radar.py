@@ -90,6 +90,9 @@ class _EngineLosses:
     def __init__(self):
         self.by_key: Dict[tuple, list] = {}
         self.cover: Dict[str, set] = {}     # account -> {(year, basis)}
+        # The project's option_buyback_loss_superficial as the gains
+        # files state it (CA-SL-11 / CA-SL-12).
+        self.buyback_wash = False
 
     @classmethod
     def load(cls, paths):
@@ -112,6 +115,7 @@ class _EngineLosses:
                          f"work/<acct>_gains*.json files")
             basis = str(summ.get('tax_date_basis') or 'settle').lower()
             buyback_wash = bool(summ.get('option_buyback_loss_superficial'))
+            self.buyback_wash = self.buyback_wash or buyback_wash
             accts = set()
             meta_acct = ((doc.get('metadata') or {}).get('account') or '')
             if meta_acct:
@@ -225,6 +229,20 @@ def _is_futures(t) -> bool:
                 or (getattr(t, 'type', '') or '') == 'futures_settlement')
 
 
+def _outside_1091(sym: str) -> bool:
+    """A futures contract or an option on one (F:/'/'/'\\' prefix): a
+    §1256 contract, not stock or securities — the US engine never
+    disallows a loss on it (tax-logic US-WASH-18; core.py's own
+    _outside_1091). US only: Canada's s.54 covers any property."""
+    from taxjson.lib.core import (_FUTURES_PREFIX_RE, is_option_symbol,
+                                  parse_option_underlying)
+    s = str(sym or '')
+    if is_option_symbol(s):
+        return bool(_FUTURES_PREFIX_RE.match(parse_option_underlying(s)
+                                             or ''))
+    return bool(_FUTURES_PREFIX_RE.match(s))
+
+
 def _last_trading_day(deadline_iso: str, currency: str) -> str:
     """The last trading day on or before `deadline_iso` on `currency`'s
     market (a same-day-settling futures rescue sale)."""
@@ -305,6 +323,14 @@ def main():
                              "of capital keeps its pay date; a Canadian "
                              "trust's moves to its record date, as in "
                              "the engine — CA-INC-DATE-ROC-TRUST)")
+    parser.add_argument("--option-buyback-wash", action="store_true",
+                        help="Canada: [settings] "
+                             "option_buyback_loss_superficial = true — a "
+                             "loss on buying back a written option is "
+                             "superficial when the same option is bought "
+                             "in its window (CA-SL-12). Default: exempt "
+                             "(CA-SL-11). The gains files' summary states "
+                             "it too.")
     add_country_argument(parser,
                          help="Project country (required). canada "
                              "(s.54, settle dates): only a LONG acquisition "
@@ -321,6 +347,14 @@ def main():
 
     args = parser.parse_args()
     us_mode = args.country == "usa"
+    if us_mode and args.option_buyback_wash:
+        # A Canada-only flag (lib/country FLAG_COUNTRY: ITA s.54).
+        from taxjson.lib.country import flag_country_problems
+        for _p in flag_country_problems(
+                args.country, {"--option-buyback-wash": True},
+                tool="taxjson-wash-radar"):
+            print(_p, file=sys.stderr)
+        sys.exit(2)
 
     def _tax_day(t):
         """The date a row's window is measured on: the TRADE date under
@@ -510,6 +544,7 @@ def main():
     # audit). Windows stay on the country's basis (the rows keep their
     # epochs); only the "is it booked yet" test uses the trade date.
     engine = _EngineLosses.load(args.gains)
+    _buyback_wash = bool(args.option_buyback_wash or engine.buyback_wash)
     # A .tt line has ONE date: in a settle-basis project it is the
     # settlement date, so a line dated tomorrow is a trade made today
     # (T+1). Its trade date is the last trading day that settles by it
@@ -536,7 +571,20 @@ def main():
     def _booked(t):
         return date_to_epoch(_trade_day(t)) <= today_epoch
 
-    transactions.sort(key=lambda x: (x._epoch_full, get_tx_priority(x)))
+    if us_mode:
+        transactions.sort(key=lambda x: (x._epoch_full, get_tx_priority(x)))
+    else:
+        # The Canada engine's order (lib/corporate_timeline ca_main):
+        # settle date, then TRADE date, then clock time — two settle-
+        # lagged rows that settle the same day (a Friday sale and the
+        # next trading day's buy over a settlement holiday) are taken in
+        # the order they were made, an opening balance or a split first.
+        # By clock time alone a Monday 09:45 buy was applied before the
+        # Friday 15:00 sale, which then read as a loss (audit A2-0443).
+        transactions.sort(key=lambda x: (
+            x._epoch,
+            '' if x.action in ('OPENING_BALANCE', 'SPLIT') else (x.date or ''),
+            x.time or '', get_tx_priority(x)))
     # The walk's own processing order: same-moment questions (does a
     # rebuy listed after a loss sale count as acquired after it; which
     # of two same-moment losses claims a shared replacement first) are
@@ -874,7 +922,14 @@ def main():
                   # here as "sold for 0", it invented a loss equal to
                   # the option's cost (2026-09 audit: DELL, IMG, QQQ).
                   and not (tx.action == 'ASSIGN'
-                           and is_option_ticker(ticker))):
+                           and is_option_ticker(ticker))
+                  # A buy-back loss on a WRITTEN option is exempt unless
+                  # the project opts in (CA-SL-11 / CA-SL-12), as in
+                  # the engine (core.py _wash_eligible) and the gains-
+                  # file path above: outside the files' year it showed
+                  # COOLING (audit A2-0442).
+                  and not (current_inv < 0 and is_option_ticker(ticker)
+                           and not _buyback_wash)):
                 # Prorate proceeds to the CLOSED portion: a sale that
                 # crosses zero (sell 150 holding 100) otherwise nets the
                 # FULL proceeds against only the closed shares' cost —
@@ -1127,6 +1182,21 @@ def main():
         out = []
         for w in found:
             what = _flag_kind.get(w['rule'], w['rule'])
+            if us_mode and w['rule'] == 'futures_option_vs_loss':
+                # US-WASH-18: a futures contract is a §1256 contract, not
+                # stock or securities — the loss is never disallowed; the
+                # engine flags the call for a manual check only (audit
+                # A2-1343: it read as a wash-sale risk on "shares").
+                _which = ("a loss sale today" if today_view
+                          else f"the {w['loss_date']} loss")
+                out.append(
+                    f"NOTE: {w['option_symbol']} ({what}) was bought "
+                    f"{w['option_acquired']}, inside the window of "
+                    f"{_which} — a futures contract is a §1256 contract, "
+                    f"not stock or securities, so §1091 does not disallow "
+                    f"that loss (US-WASH-18); the engine only flags it "
+                    f"[{w['rule']}], so check it by hand.")
+                continue
             if today_view:
                 out.append(
                     f"NOTE: {w['option_symbol']} ({what}) was bought "
@@ -1271,8 +1341,38 @@ def main():
         loss_j = None            # BLOCKED/COOLING: (in-window loss, units sold)
         deadline_passed = False  # VIOLATION only: no rescue sale settles in time
         #                          would lose to a registered holder
+        # US: a futures contract or an option on one is outside §1091
+        # (US-WASH-18) — its loss is never disallowed, so there is no
+        # COOLING/BLOCKED re-entry date (audit A2-0435 / A2-1343).
+        _us_exempt = us_mode and _outside_1091(ticker)
+        # US: a short-cover loss is replaced only by a new SHORT sale
+        # (§1091(e), US-WASH-05) — a long buy never disallows it (audit
+        # A2-0436 / A2-1369). Stated as a note on the position's own
+        # forward view, or as COOLING when nothing is held.
+        short_cover_j = None
+        _short_cover_note = None
 
-        if in_window_losses:
+        if _us_exempt:
+            if in_window_losses or abs(tax_q) > _eps or abs(shl_q) > _eps:
+                is_relevant = True
+                if in_window_losses:
+                    _amt = sum(float(l['loss']) for l in in_window_losses)
+                    _dates = ", ".join(sorted({l['date']
+                                               for l in in_window_losses}))
+                    adv = (f"CLEAR: the loss of ${_amt:.2f} on {_dates} is "
+                           f"on a futures contract (or an option on one) "
+                           f"— a §1256 contract, not stock or securities, "
+                           f"so §1091 never disallows it (US-WASH-18); a "
+                           f"re-purchase within 30 days is only flagged "
+                           f"for a manual check.")
+                else:
+                    adv = ("CLEAR: a futures contract (or an option on "
+                           "one) is a §1256 contract, not stock or "
+                           "securities — outside §1091 (US-WASH-18): a "
+                           "loss sale is never disallowed; a re-purchase "
+                           "within 30 days of it is only flagged for a "
+                           "manual check.")
+        elif in_window_losses:
             is_relevant = True
             # US: the engine already disallowed these (§1091). Nothing
             # the user does now changes it — no still-held test, so no
@@ -1487,6 +1587,21 @@ def main():
                     settle_deadline = settle_d
                     deadline_passed = True
                     adv = f"VIOLATION: {_passed_txt}"
+            elif us_mode and all(l.get('direction', 'LONG') == 'SHORT'
+                                 for l in in_window_losses):
+                # §1091(e): only a new SHORT sale replaces a short-cover
+                # loss; the position's own view (below) still applies.
+                last = max(in_window_losses, key=lambda l: l['epoch'])
+                safe_d = epoch_to_date(last['epoch'] + 31 * 86400)
+                _amt = sum(float(l['loss']) for l in in_window_losses)
+                short_cover_j = {"loss": round(_amt, 6),
+                                 "date": last['date'],
+                                 "reshort_ok_from": safe_d}
+                _short_cover_note = (
+                    f"NOTE: the loss of ${_amt:.4f} on covering a short "
+                    f"on {last['date']} is disallowed only by a new SHORT "
+                    f"sale before {safe_d} (§1091(e)); buying the shares "
+                    f"does not replace it.")
             else:
                 # No held in-window replacement: the binding constraint
                 # is the LATEST loss's window (re-entry before it closes
@@ -1627,10 +1742,19 @@ def main():
                 clear_in = f"{safe_d} ({days_left}d)"
                 clears_at = safe_d
                 at_risk_j = round(at_risk, 6)
+                # US: an IRA purchase in the window backs the denial
+                # whatever the IRA holds now (no still-held test), so the
+                # text states what it BOUGHT and what it holds (audit
+                # A2-0751 / A2-0754: 'still holds 40' after selling all).
                 who = "; ".join(
-                    [f"'{b['account'] or h[1] or 'unknown'}' bought "
-                     f"{epoch_to_date(b['last'])} and still holds "
-                     f"{_qfmt(b['units'])} of those shares"
+                    [(f"'{b['account'] or h[1] or 'unknown'}' bought "
+                      f"{_qfmt(b['units'])} of those shares in the window "
+                      f"(last {epoch_to_date(b['last'])}; holds "
+                      f"{_qfmt(max(0.0, b.get('held', 0.0)))} now)")
+                     if us_mode else
+                     (f"'{b['account'] or h[1] or 'unknown'}' bought "
+                      f"{epoch_to_date(b['last'])} and still holds "
+                      f"{_qfmt(b['units'])} of those shares")
                      for h, b in sorted(shl_back.items())]
                     + [f"'{c['account'] or k[0][1] or 'unknown'}' bought "
                        f"{_qfmt(c['contracts'])} {k[1]} call(s) on "
@@ -1759,10 +1883,50 @@ def main():
                        "a small part). Pause DRIPs/sheltered adds for 30 "
                        "days, or sell the sheltered shares too.")
 
+        if not adv and _short_cover_note:
+            # Nothing else to say about the position: the short-cover
+            # loss's own window (a re-short is what disallows it).
+            adv = (f"COOLING: Loss of ${short_cover_j['loss']:.4f} on "
+                   f"covering a short on {short_cover_j['date']}. Do not "
+                   f"short it again before "
+                   f"{short_cover_j['reshort_ok_from']} — a new short sale "
+                   f"in the window disallows it (§1091(e)); buying the "
+                   f"shares does not.")
+            clears_at = short_cover_j['reshort_ok_from']
+            clear_in = (f"{clears_at} ("
+                        f"{int((date_to_epoch(clears_at) - today_epoch) / 86400)}d)")
+        elif _short_cover_note:
+            adv += " " + _short_cover_note
+
         if not adv:
             if abs(tax_q) > _eps or abs(shl_q) > _eps:
                 is_relevant = True
-                if _short_pos and is_option_ticker(ticker):
+                if abs(tax_q) <= _eps:
+                    # Held only in registered accounts / IRAs: nothing to
+                    # sell at a loss, and "No recent buys" was false for a
+                    # sheltered purchase in the last 30 days (audit
+                    # A2-0751 / A2-1370) — name it; the taxable row of
+                    # the property it makes superficial says the rest.
+                    _recent = [e for e in acq_events.get(cls, [])
+                               if e['holder'][0] == 'SHELTERED'
+                               and e['symbol'] == ticker
+                               and today_epoch - window_sec <= e['epoch']
+                               <= today_epoch]
+                    _bought = ""
+                    if _recent:
+                        _e = max(_recent, key=lambda e: e['epoch'])
+                        _bought = (f" ('{_e['account'] or _e['holder'][1] or 'unknown'}'"
+                                   f" bought it {epoch_to_date(_e['epoch'])})")
+                    adv = (f"CLEAR: Held only in {_reg}{_bought} — "
+                           f"selling it there has no tax effect"
+                           + ("; while it is held, that purchase can "
+                              "make a taxable loss on "
+                              + ("the shares it acquires " if
+                                 is_option_ticker(ticker) else
+                                 "the same property ")
+                              + f"{_sl_adj} (see the taxable row)."
+                              if _recent else "."))
+                elif _short_pos and is_option_ticker(ticker):
                     # A written option: it is bought back, and only the
                     # identical contract ever replaces it (CA-SL-06 /
                     # US-WASH-03) — never "the shares".
@@ -1795,11 +1959,15 @@ def main():
                 for l in in_window_losses
                 if not l.get('is_option')
                 and l.get('direction', 'LONG') == 'LONG'])
+            _named = {n.split(' ', 2)[1] for n in notes}
             if abs(tax_q) > _eps and tax_q > 0:
-                notes += _flag_notes([{'symbol': ticker,
+                # A purchase already named against an in-window loss is
+                # not named again for a sale today (one line per buy).
+                notes += [n for n in _flag_notes([{'symbol': ticker,
                                        'date': _today_iso, 'amount': -1.0,
                                        'direction': 'LONG', 'id': ''}],
                                      today_view=True)
+                          if n.split(' ', 2)[1] not in _named]
                 if us_mode and 'NOTE: a long call' not in adv and any(
                         today_epoch - window_sec <= e['epoch']
                         <= today_epoch
@@ -1816,6 +1984,9 @@ def main():
             notes = [n for n in dict.fromkeys(notes) if n not in adv]
             if notes:
                 adv += " " + " ".join(notes)
+        if _short_cover_note and _short_cover_note in adv \
+                and _short_cover_note not in notes:
+            notes.append(_short_cover_note)
 
         if args.all or is_relevant:
             table_data.append([ticker, _qfmt(tax_q), _qfmt(shl_q), clear_in, adv])
@@ -1849,6 +2020,14 @@ def main():
                 # the tools that print their own verdict line (sell-check
                 # CLEAR, buy-check).
                 "notes": notes,
+                # US only: a futures contract / futures option, outside
+                # §1091 (US-WASH-18) — buy-check and sell-check say so
+                # instead of a re-entry date.
+                "outside_wash_rule": bool(_us_exempt),
+                # US only: the in-window losses are short covers, which
+                # only a new SHORT sale replaces (§1091(e)) — a buy is
+                # not a replacement ({loss, date, reshort_ok_from}).
+                "short_cover_loss": short_cover_j,
                 "category": _advisory_category(adv),
             })
 
@@ -1975,6 +2154,10 @@ _US_DEFINITIONS = (
     "days).",
     "A long call on the shares bought in a loss's window is noted, not "
     "enforced (the US engine only warns).",
+    "After a loss on covering a short, only a new short sale within 30 "
+    "days is a replacement (§1091(e)); buying the shares is not.",
+    "A futures contract or an option on one is a §1256 contract, outside "
+    "§1091: its loss is never disallowed (a re-purchase is only flagged).",
 )
 
 
