@@ -388,7 +388,7 @@ class TestRedactLow(unittest.TestCase):
 
     def test_label_cell_contact_values(self):                 # S037-08
         for line, val in (("Phone:,4165550123", "4165550123"),
-                          ("SIN:,046454286", "046454286"),
+                          ("SIN:,046454286", "046454286"),  # pii-ok (CRA sample SIN)
                           ("Payee:,Zelda Quixote", "Zelda"),
                           ("Beneficiary:,Zelda Quixote", "Zelda")):
             out, rep = self._rt(line + "\n")

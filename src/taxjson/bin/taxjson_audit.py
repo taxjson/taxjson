@@ -384,9 +384,14 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
         # file holds the same content (`<id>~<n>`, bin/taxjson_sort.
         # plan_dedup): its source row carries the plain id — pick the
         # file the book row came from.
-        _src = (base_index.get(gid) or {}).get("source")
+        _b = base_index.get(gid) or {}
+        _src = _b.get("source")
+        # The source key keeps two files shown alike apart (A2-0159).
+        _key = _b.get("source_key") or ""
         hits = [h for h in source_index.get(str(gid).split("~")[0]) or []
-                if not _src or h["row"].get("source") == _src]
+                if not _src or (h["row"].get("source") == _src
+                                and (h["row"].get("source_key") or "")
+                                == _key)]
     ev["sources"] = [{"file": h["label"], "row": h["row"]} for h in hits]
     if not hits:
         ev["warnings"].append(
@@ -552,7 +557,8 @@ def _cont(out, text: str):
 
 def render_event(ev: Dict[str, Any], n: int, total: int,
                  country: str, show_trace: bool,
-                 use_color: bool = False) -> List[str]:
+                 use_color: bool = False,
+                 no_wash: bool = False) -> List[str]:
     W = 86
     paint = _mk_paint(use_color)
     OK = paint("\u2713", "ok")
@@ -627,8 +633,13 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
                        + (OK if fx["ties"] else BAD))
 
     # ---- disposition -------------------------------------------------
+    # A US book run with --no-wash is a crypto account's: digital
+    # assets are outside §1091 (US-WASH-13), so no wash-sale label
+    # (re-audit A2-1267).
     rule = ("ACB pool — ITA s.47, blended across taxable accounts"
             if country not in ("us", "usa")
+            else "FIFO lots — IRC; no wash-sale rule (digital assets "
+                 "are outside \u00a71091)" if no_wash
             else "FIFO lots — IRC, wash sale \u00a71091")
     _sec(out, paint, "DISPOSITION", paint(rule, "dim"))
 
@@ -766,7 +777,8 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
 def render_reconciliation(events: List[Dict[str, Any]],
                           check_labels: List[str],
                           checks_supplied: bool,
-                          use_color: bool = False) -> List[str]:
+                          use_color: bool = False,
+                          country: Optional[str] = None) -> List[str]:
     W = 86
     paint = _mk_paint(use_color)
     OK = paint("\u2713", "ok")
@@ -827,16 +839,28 @@ def render_reconciliation(events: List[Dict[str, Any]],
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
             "dim"))
-    out.append(paint(f"  {TOTALS_NOTE}", "dim"))
+    out.append(paint(f"  {totals_note(country)}", "dim"))
     out.append(paint("\u2550" * W, "dim"))
     return out
 
 
-# R1-267: the audit sums unrounded engine values; Schedule 3 (form-export,
-# `sum` FOR THE RETURN) rounds each row to the cent first.
-TOTALS_NOTE = ("Totals are unrounded engine sums; Schedule 3 rows "
-               "(form-export, sum FOR THE RETURN) are rounded to the cent "
-               "first, so those totals can differ by a few cents.")
+# R1-267: the audit sums unrounded engine values; the return's form rows
+# (form-export, `sum` FOR THE RETURN) round each row to the cent first.
+# Each country's own form (re-audit A2-0737): Schedule 3 or Form 8949.
+def totals_note(country: Optional[str]) -> str:
+    from taxjson.lib.country import GAINS_FORM
+    form = GAINS_FORM[_canon_or_none(country)]
+    return (f"Totals are unrounded engine sums; {form} rows "
+            f"(form-export, sum FOR THE RETURN) are rounded to the cent "
+            f"first, so those totals can differ by a few cents.")
+
+
+def _canon_or_none(country: Optional[str]) -> Optional[str]:
+    try:
+        return canonical_country(country)
+    except Exception:                               # noqa: BLE001
+        return None
+
 
 
 # ---------------------------------------------------------------------------
@@ -1257,7 +1281,7 @@ def main(argv=None) -> int:
                    "total_disallowed": round(
                        sum(float(e.get("disallowed_amount") or 0)
                            for e in events), 2),
-                   "totals_note": TOTALS_NOTE,
+                   "totals_note": totals_note(country),
                    "reconciliation_failures": reconciliation_failures,
                    "failed": failed},
                   sys.stdout, indent=2, default=str)
@@ -1291,14 +1315,16 @@ def main(argv=None) -> int:
         for i, e in enumerate(events, 1):
             lines += render_event(e, i, len(events), country,
                                   show_trace=not args.no_trace,
-                                  use_color=use_color)
+                                  use_color=use_color,
+                                  no_wash=args.no_wash)
             lines.append("")
         for ln in lines:
             print(ln)
 
     for ln in render_reconciliation(events, check_labels,
                                     bool(args.check),
-                                    use_color=use_color):
+                                    use_color=use_color,
+                                    country=country):
         print(ln)
     for f in reconciliation_failures:
         print(f"FAILED: {f}")

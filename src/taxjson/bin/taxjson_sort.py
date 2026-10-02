@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from taxjson.lib.brokerages.base import source_identity
 from taxjson.lib.cli_diag import guard_main
 from taxjson.lib.core import TaxTransaction, load_transactions
 
@@ -147,11 +148,18 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
     source_accounts = source_accounts or {}
     plan = DedupPlan()
     uids = [_row_uid(t) for t in rows]
-    srcs = [str(_row_get(t, "source", "") or "") for t in rows]
+    # One identity per input file: the shown (masked) name plus, when
+    # the name was masked, its key — two files whose names differ only
+    # in an account-number token are two sources (audit A2-0159). The
+    # messages name the shown name only.
+    srcs = [source_identity(_row_get(t, "source", ""),
+                            _row_get(t, "source_key", "")) for t in rows]
     raccts = [str(_row_get(t, "source_account", "") or "") for t in rows]
+    shown = {s: str(_row_get(t, "source", "") or "")
+             for s, t in zip(srcs, rows)}
 
     def is_tt(s: str) -> bool:
-        return s.lower().endswith(TT_SUFFIX)
+        return shown.get(s, s).lower().endswith(TT_SUFFIX)
 
     def accts_of(i: int) -> Set[str]:
         """The broker accounts row i can belong to: its own (stamped per
@@ -230,8 +238,8 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
                 ix, iy = (in_a, in_b) if x == a else (in_b, in_a)
                 v = "copy-ambiguous"
                 why = (f"the files disagree on the dates both cover "
-                       f"({lo}..{hi}): only in {x}: "
-                       f"{only_in(x, ix - iy)}; only in {y}: "
+                       f"({lo}..{hi}): only in {shown.get(x, x)}: "
+                       f"{only_in(x, ix - iy)}; only in {shown.get(y, y)}: "
                        f"{only_in(y, iy - ix)} — those rows are ALL "
                        f"booked. If one file is a newer statement of the "
                        f"same account that restated a row (a commission "
@@ -318,7 +326,10 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
             plan.keep.append(i)
     plan.drop.sort()
 
-    for (a, b, v), ex in events.items():
+    for (ka, kb, v), ex in events.items():
+        a, b = shown.get(ka, ka), shown.get(kb, kb)
+        if a == b:      # two files shown alike (masked account tokens)
+            a, b = f"{a} (one file)", f"{b} (another file)"
         sample = "; ".join(_row_brief(rows[i])
                            for i in ex[:_DEDUP_EXAMPLES])
         more = (f"; +{len(ex) - _DEDUP_EXAMPLES} more"
@@ -327,7 +338,7 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
         if v == "copy-ambiguous":
             plan.attention.append(
                 f"dedup: {a} and {b} both hold {n} identical row(s) "
-                f"({sample}{more}) — {verdicts[(a, b) if a <= b else (b, a)][1]}. "
+                f"({sample}{more}) — {verdicts[(ka, kb) if ka <= kb else (kb, ka)][1]}. "
                 f"Booked ONCE (read as the same row exported twice). If "
                 f"they are separate trades, book the missing one as a "
                 f".tt line.")
@@ -342,7 +353,9 @@ def plan_dedup(rows, source_accounts: Optional[Dict[str, Any]] = None
                 f"dedup: {a} and {b} are statements of different broker "
                 f"accounts; {n} identical row(s) in them ({sample}{more}) "
                 f"are booked separately.")
-    plan.attention.extend(_tt_near_duplicates(rows, srcs, plan.keep, is_tt))
+    plan.attention.extend(_tt_near_duplicates(
+        rows, [shown.get(x, x) for x in srcs], plan.keep,
+        lambda x: x.lower().endswith(TT_SUFFIX)))
     return plan
 
 

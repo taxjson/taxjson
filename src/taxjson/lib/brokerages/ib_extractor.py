@@ -3551,7 +3551,8 @@ class IbBrokerage(BaseBrokerage):
                             f"for {_tsym} delivered {qty:g} {_delivered} "
                             f"(another security) — a share-for-share "
                             f"exchange is a disposition of {_tsym} (or a "
-                            f"s.85.1 rollover): book it by hand in a .tt "
+                            f"tax-deferred share exchange): book it by "
+                            f"hand in a .tt "
                             f"file.")
                         continue
                     if abs(proceeds) < 0.005:

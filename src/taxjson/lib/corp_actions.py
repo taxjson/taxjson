@@ -1013,8 +1013,8 @@ def _ib_spinoff_events(spin_rows, account, acct_of, fii=None
                                 tsx_unit=parent.endswith('.U.TO'))
         if not parts['parent']:
             print(f"warning: IB spin-off row names no parent ticker "
-                  f"({desc[:90]!r}) — a s.86.1 rollover's parent-ACB "
-                  f"reduction has nowhere to land.", file=sys.stderr)
+                  f"({desc[:90]!r}) — a tax-deferred spin-off's parent "
+                  f"cost reduction has nowhere to land.", file=sys.stderr)
         events.append(CorporateAction(
             date=date_part.strip(), time=(time_part.strip() or '20:25:00'),
             action_type='spinoff',
@@ -1532,8 +1532,8 @@ def parse_questrade_corporate_actions(
                       f"several listings in this account ("
                       f"{', '.join(_suffix(sy, c) for sy, c in cands)}) "
                       f"and the one held on {event_date} is not clear — "
-                      f"not guessed; a rollover's parent-ACB reduction "
-                      f"would land on the SEC# code. Fold the listings "
+                      f"not guessed; a tax-deferred spin-off's parent "
+                      f"cost reduction would land on the SEC# code. Fold the listings "
                       f"with a ticker.map rule.", file=sys.stderr)
         hit = cands[0] if len(cands) == 1 else None
         if hit:
@@ -1549,7 +1549,8 @@ def parse_questrade_corporate_actions(
             print(f"warning: Questrade spinoff parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded or transferred "
                   f"in any export of this account, so its ticker is "
-                  f"unknown — a rollover's parent-ACB reduction would "
+                  f"unknown — a tax-deferred spin-off's parent cost "
+                  f"reduction would "
                   f"land on an empty {parent_code!r} pool. Add the "
                   f"export that bought or transferred the parent into "
                   f"this account, or — when the parent is held in a "
@@ -2475,8 +2476,8 @@ def parse_rbc_corporate_actions(
         if not parent and not syms:
             print(f"warning: RBC spin-off parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded in this statement, so "
-                  f"its ticker is unknown — a s.86.1 rollover's parent-ACB "
-                  f"reduction would land on an empty pool. Include the "
+                  f"its ticker is unknown — a tax-deferred spin-off's "
+                  f"parent cost reduction would land on an empty pool. Include the "
                   f"statement that bought the parent.", file=sys.stderr)
         # The parent's OWN listing, never the spun-off row's currency: a
         # TSX parent whose spin-off arrives in USD was PARENT.US, and the
@@ -3790,7 +3791,9 @@ def _emit_allocated_basis_spinoff(event: CorporateAction, hints: dict,
             'symbol': event.source_symbol, 'currency': alloc_cur,
             'net_amount': -adjusted_acb,
             'account': event.account,
-            'description': description + ' (parent ACB reduction)',
+            # Shared by both countries' wrappers: neutral words, never
+            # Canada's "ACB" in a US §355 row (A2-1278).
+            'description': description + ' (parent cost reduction)',
         })
     return rows
 
@@ -3950,8 +3953,8 @@ def _emit_rename(event: CorporateAction, hints: dict) -> List[dict]:
         'account': event.account,
         'description': (
             f"Name/ticker change {event.source_symbol}→"
-            f"{event.target_symbol} (no disposition; basis, acquisition "
-            f"dates, and wash-sale identity carried)"
+            f"{event.target_symbol} (no disposition; cost, acquisition "
+            f"dates and identity for loss-denial rules carried)"
         ),
     }]
 
@@ -4205,9 +4208,11 @@ def rates_converter(rates_path: Optional[Path], base_currency: str
     """A converter `fx(amount, from_cur, to_cur, date)` over the
     project's rates file (the one the conversion stage uses: one
     `<src> -> base` series per source currency). Cross rates go through
-    the base currency; a date with no rate takes the latest one within
-    the previous 6 days (the conversion stage's own lookback). Returns
-    None when no rates file is given."""
+    the base currency; a date with no row takes the latest row of the 5
+    days before it — the conversion stage's own lookback over the same
+    7-day forward-filled file, so the same rate as convert-currency and
+    up to 12 days old (CA-FX-02 / US-FX-02 state it). Returns None when
+    no rates file is given."""
     if not rates_path:
         return None
     from datetime import datetime as _dt, timedelta as _td

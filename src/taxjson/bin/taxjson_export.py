@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.country import country_arg
 from taxjson.lib.numeric import nonneg_float_arg
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib import cli_diag
@@ -715,10 +716,19 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         # distributions.map adjustments are booked in the base books
         # only (amounts in the base currency), so neither cost here has
         # them (audit A2-0226): said too.
-        lines.append('base_cost_basis = "per-account, per-listing, before '
-                     'superficial-loss adjustments, the s.47 blend and '
-                     'distributions.map adjustments (total_cost excludes '
-                     'those too; the filing ACB is `taxjson list`)"')
+        # Each country's own words (re-audit A2-0745): a US project has
+        # wash-sale adjustments and no s.47 blend.
+        _c = getattr(args, 'country', None)
+        _adj = {'canada': 'superficial-loss adjustments, the s.47 blend',
+                'usa': 'wash-sale basis adjustments (§1091(d))',
+                None: 'loss-denial adjustments, any cross-account '
+                      'pooling'}[_c]
+        from taxjson.lib.country import COST_TERM
+        lines.append(f'base_cost_basis = "per-account, per-listing, before '
+                     f'{_adj} and '
+                     f'distributions.map adjustments (total_cost excludes '
+                     f'those too; the filing {COST_TERM[_c]} is '
+                     f'`taxjson list`)"')
     lines.append("")
 
     held_stock = [s for s in agg
@@ -913,6 +923,12 @@ def main():
     parser.add_argument(
         "--account-name", default=None,
         help="Account name to stamp into the --holdings-toml output.",
+    )
+    parser.add_argument(
+        "--country", type=country_arg, default=None,
+        metavar="{canada,ca,usa,us}",
+        help="Words the --holdings-toml cost note in the country's terms "
+             "(neutral without it); `taxjson run` passes it.",
     )
     parser.add_argument(
         "--map", dest="map_file", metavar="FILE", default=None,

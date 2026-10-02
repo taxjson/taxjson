@@ -490,7 +490,7 @@ def _warn_unknown_suffix(tx: dict, line: str, source: str) -> None:
             print(f"warning: {_where(source)}symbol {sym} ends in .{ext}, "
                   f"which is not a known market suffix "
                   f"({', '.join(sorted(KNOWN_SUFFIXES))}) — a typo here is "
-                  f"its own ACB pool, and the broker's rows for the real "
+                  f"its own cost-basis pool, and the broker's rows for the real "
                   f"listing go short: {line.strip()!r}", file=sys.stderr)
 
 
@@ -714,6 +714,7 @@ def _warn_bare_equity_symbol(tx: dict, line: str, source: str) -> None:
 
 
 def tt_to_json(input_path: Path, account_name: str) -> dict:
+    from taxjson.lib.brokerages.base import shown_name, source_key
     transactions = []
     equity = _equity_account(input_path, account_name)
     # utf-8-sig: an editor's byte-order mark used to reach the first
@@ -727,12 +728,12 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
     if _text and not _text.endswith(('\n', '\r')):
         _last = strip_tt_comment(_text.splitlines()[-1]).strip()
         if _last:
-            print(f"warning: {input_path.name}: the last line has no line "
+            print(f"warning: {shown_name(input_path)}: the last line has no line "
                   f"end — if the file was cut short, its last number may "
                   f"be truncated; check it: {_last!r}", file=sys.stderr)
     with io.StringIO(_text) as f:
         for lineno, line in enumerate(f, 1):
-            source = f"{input_path.name}:{lineno}"
+            source = f"{shown_name(input_path)}:{lineno}"
             try:
                 expanded = expand_acquired(line)
             except ValueError as e:
@@ -779,12 +780,16 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
             by_id[tx['id']] = tx
         combined.append(tx)
     transactions = combined
-    from taxjson.lib.brokerages.base import shown_name
+    _key = source_key(input_path)
     for tx in transactions:
         tx['id'] = compute_tt_id(tx)
         # Provenance for cross-file dedup (not part of the id): two .tt
-        # files holding the same line are separate records (R1-296).
+        # files holding the same line are separate records (R1-296);
+        # a masked name carries a key so two files never share it
+        # (A2-0159).
         tx['source'] = shown_name(input_path)
+        if _key:
+            tx['source_key'] = _key
     return {
         "transactions": transactions,
         "metadata": {

@@ -36,7 +36,8 @@ from taxjson.lib.core import (register_brokerage, TaxTransaction,
                               load_brokerage, is_option_symbol)
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          decode_broker_text,
-                                         shown_name)
+                                         shown_name, source_identity,
+                                         source_key)
 from taxjson.lib.country import country_arg
 from taxjson.lib.brokerages.schema import ATTENTION_TAG as SCHEMA_ATTENTION_TAG
 from taxjson.lib.brokerages.schema import validate_transactions
@@ -140,14 +141,14 @@ def load_security_overrides(path: Path):
         parts = [p.strip() for p in line.split('|')]
         if len(parts) != 3 or not parts[0] or not parts[2]:
             raise SecurityOverrideError(
-                f"{path.name} line {n}: malformed security-override line "
+                f"{shown_name(path)} line {n}: malformed security-override line "
                 f"{raw.strip()!r} — expected `description | currency | "
                 f"symbol` (currency may be '*')")
         desc_sub, currency, symbol = parts
         currency = currency.upper()
         if not _OVR_CURRENCY_RE.match(currency):
             raise SecurityOverrideError(
-                f"{path.name} line {n}: currency {parts[1]!r} is not a "
+                f"{shown_name(path)} line {n}: currency {parts[1]!r} is not a "
                 f"3-letter code or '*'")
         overrides.append((desc_sub.lower(), currency, symbol))
     return overrides
@@ -625,6 +626,7 @@ Examples:
     # unique within this parse) and, per file, the broker accounts the
     # export names — hashed, account ids never reach work/ files.
     _source_names: dict = {}
+    _source_keys: dict = {}
     source_accounts: dict = {}
     for input_path, extractor, _txs in parsed_files:
         _nm = shown_name(input_path)
@@ -633,6 +635,10 @@ Examples:
             _k += 1
             _nm = f"{_base}#{_k}"
         _source_names[id(extractor)] = _nm
+        # A masked name carries a key (hash of the real name), so files
+        # parsed in separate calls whose names differ only in an
+        # account-number token stay separate sources (audit A2-0159).
+        _source_keys[id(extractor)] = source_key(input_path)
         _accts = extractor.statement_accounts() \
             if hasattr(extractor, 'statement_accounts') else set()
         # The accounts the parser read per row count too (a Questrade
@@ -642,7 +648,8 @@ Examples:
             str(t['broker_account']).strip() for t in _txs
             if str(t.get('broker_account') or '').strip()}
         if _accts:
-            source_accounts[_nm] = sorted(
+            source_accounts[source_identity(
+                _nm, _source_keys[id(extractor)])] = sorted(
                 hash_broker_account(a) for a in _accts)
         stamp_source_accounts(_txs, _accts)
 
@@ -650,6 +657,7 @@ Examples:
     for input_path, extractor, transactions in parsed_files:
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
         _source = _source_names[id(extractor)]
+        _source_key = _source_keys[id(extractor)]
 
         # Correct mislabeled tickers FIRST — before the TRANSFER rows
         # are set aside (the sidecar used to keep the un-overridden
@@ -825,6 +833,8 @@ Examples:
             if args.account_name is not None:
                 clean['account'] = args.account_name
             clean['source'] = _source
+            if _source_key:
+                clean['source_key'] = _source_key
             normalized.append(TaxTransaction(**clean))
             multipliers.append(t.get('multiplier'))
 

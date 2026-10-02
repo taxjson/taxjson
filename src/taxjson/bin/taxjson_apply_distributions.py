@@ -445,7 +445,10 @@ def apply_distributions(doc: dict, map_rows, account: str,
                   file=sys.stderr)
             continue
         amount = round(bal * per_share, 6)
-        _cost = "basis" if country == "usa" else "ACB"
+        # Neutral without a country: the row is saved into the book,
+        # and "ACB" is Canada's word (A2-1234).
+        from taxjson.lib.country import COST_TERM
+        _cost = COST_TERM[country]
         kind = (f"reinvested distribution ({_cost} up)" if per_share > 0
                 else f"return of capital ({_cost} down)")
         # Deterministic AND unique: a SYMBOL+DATE entered twice (two
@@ -483,8 +486,7 @@ def apply_distributions(doc: dict, map_rows, account: str,
                                country)
         print(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
               f"{per_share:g} = {amount:+.2f} "
-              f"{'basis' if country == 'usa' else 'ACB'} "
-              f"adjustment.{income}", file=sys.stderr)
+              f"{_cost} adjustment.{income}", file=sys.stderr)
         applied += 1
     doc["transactions"] = txs
     return doc, applied
@@ -504,8 +506,11 @@ def main(argv=None) -> int:
                          "trade (a manual override).")
     ap.add_argument("--country", type=country_arg, default=None,
                     metavar="{canada,ca,usa,us}",
-                    help="Only words the income note (T3/T5 slip or "
-                         "Form 1099-DIV); `taxjson run` passes it.")
+                    help="Only words the output: the book row's "
+                         "description and the note (ACB and the T3/T5 "
+                         "slip for canada, basis and Form 1099-DIV for "
+                         "usa, neutral 'cost' without it); `taxjson "
+                         "run` passes it.")
     ap.add_argument("--ticker-map", type=Path, default=None,
                     metavar="TICKER_MAP",
                     help="ticker.map the base book went through: map "

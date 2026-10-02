@@ -15,7 +15,8 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          desc_number,
                                          income_facts_from_description,
                                          is_roc_description,
-                                         parse_strict_number)
+                                         parse_strict_number,
+                                         shown_name)
 
 
 _DATE_FMT = "%Y-%m-%d %I:%M:%S %p"
@@ -187,7 +188,7 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
     missing = [c for c in _QT_COLUMNS if c not in header]
     if missing:
         raise BrokerageParseError(
-            f"{path.name}: Questrade export is missing required "
+            f"{shown_name(path)}: Questrade export is missing required "
             f"column(s) {', '.join(repr(c) for c in missing)} — "
             f"refusing to guess (a missing money column read as 0 "
             f"corrupts the return). Export Activity with the "
@@ -209,7 +210,7 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
                       and ('\n' in (v or '') or '\r' in (v or ''))), None)
         if spill is not None or extra:
             raise BrokerageParseError(
-                f"{path.name} line {lineno}: "
+                f"{shown_name(path)} line {lineno}: "
                 + (f"a cell spans a line break ({spill[:60]!r})"
                    if spill is not None else
                    f"the row has {len(header) + len(row.get(None) or [])} "
@@ -225,7 +226,7 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
             # file) — the account check and the Activity Type fallbacks
             # cannot see the row.
             if warn and not cut_meta:
-                print(f"warning: ATTENTION: {path.name} line {lineno}: the "
+                print(f"warning: ATTENTION: {shown_name(path)} line {lineno}: the "
                       f"row has no {', '.join(short)} cell(s) (fewer cells "
                       f"than the header) — booked from its Action code; "
                       f"re-export the file if this is not a hand-made "
@@ -238,7 +239,7 @@ def _read_qt_rows(path: Path, warn: bool = False) -> List[tuple]:
             # (re-audit A2-1042, the Questrade half; Webull, RBC, Kraken
             # and IB refuse the same).
             raise BrokerageParseError(
-                f"{path.name} line {lineno}: the row has "
+                f"{shown_name(path)} line {lineno}: the row has "
                 f"{len(header) - len(short)} cells for {len(header)} "
                 f"columns (missing: {', '.join(short[:4])}) — a truncated "
                 f"row; refusing to read the missing cells as blank. "
@@ -601,7 +602,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 mixed = True
             out.extend(head + body)
         if mixed:
-            print(f"note: {path.name}: rows are not in date order, so "
+            print(f"note: {shown_name(path)}: rows are not in date order, so "
                   f"same-day rows keep the file's order (intra-day order "
                   f"unknown) — check a same-day sale and rebuy.",
                   file=sys.stderr)
@@ -640,7 +641,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 wrong.append(_mask(a))
         if wrong:
             raise BrokerageParseError(
-                f"{path.name}: the export holds rows of {len(accts)} "
+                f"{shown_name(path)}: the export holds rows of {len(accts)} "
                 f"Questrade accounts ({desc}); {', '.join(wrong)} "
                 f"{'is a registered plan' if taxable else 'is a taxable account'}"
                 f" but the file sits in a "
@@ -648,7 +649,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 f"so its trades would be booked there — refusing. Export "
                 f"each Questrade account separately into its own "
                 f"inputs/<account>/ folder.")
-        print(f"warning: ATTENTION: {path.name}: the export holds rows of "
+        print(f"warning: ATTENTION: {shown_name(path)}: the export holds rows of "
               f"{len(accts)} Questrade accounts ({desc}) — every row is "
               f"booked to ONE account. That is right only when they are one "
               f"tax entity (two taxable accounts of yours); export a "
@@ -1408,7 +1409,7 @@ class QuestradeBrokerage(BaseBrokerage):
         self.clamp_settlement_to_expiry(transactions, expiries)
         self.disambiguate_split_fills(transactions)
         if ca_legs:
-            print(f"note: {path.name}: {len(ca_legs)} quantity-bearing DIS "
+            print(f"note: {shown_name(path)}: {len(ca_legs)} quantity-bearing DIS "
                   f"corporate-action leg(s) ({', '.join(ca_legs[:8])}"
                   f"{', ...' if len(ca_legs) > 8 else ''}) are not "
                   f"booked by the parser — taxjson-corp-actions books "
@@ -1419,7 +1420,7 @@ class QuestradeBrokerage(BaseBrokerage):
         if net_of_tax and taxable is not False:
             # ATTENTION (re-audit A2-0276 / A2-0282): income and the
             # foreign tax credit are wrong until the slip is used.
-            print(f"warning: ATTENTION: {path.name}: {len(net_of_tax)} "
+            print(f"warning: ATTENTION: {shown_name(path)}: {len(net_of_tax)} "
                   f"dividend(s) "
                   f"marked NON-RES TAX WITHHELD are booked at the NET "
                   f"amount — the export gives neither the gross nor the "
@@ -1440,7 +1441,7 @@ class QuestradeBrokerage(BaseBrokerage):
             # account and there is no OPENING_BALANCE .tt action.
             # ATTENTION (re-audit A2-0276 / A2-0283): the sale reads
             # as a short and the year's gain is missing.
-            print(f"warning: ATTENTION: {path.name}: {len(no_book_value)} "
+            print(f"warning: ATTENTION: {shown_name(path)}: {len(no_book_value)} "
                   f"transfer-in(s) carry no TRANSFER BOOK VALUE "
                   f"({'; '.join(no_book_value[:6])}"
                   f"{'; ...' if len(no_book_value) > 6 else ''}). In a "
@@ -1457,7 +1458,7 @@ class QuestradeBrokerage(BaseBrokerage):
                 _t.setdefault('broker_account', _acct)
         self._cost_journal_pairs(journal_txs)
         if journals:
-            print(f"note: {path.name}: {len(journals)} BRW journal row(s) "
+            print(f"note: {shown_name(path)}: {len(journals)} BRW journal row(s) "
                   f"move units between the CAD and USD lines of one "
                   f"security ({', '.join(journals[:6])}) — booked as "
                   f"TRANSFER legs; a ticker.map JOURNAL rule (e.g. "

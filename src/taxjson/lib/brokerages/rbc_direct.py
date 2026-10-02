@@ -31,7 +31,8 @@ from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          desc_number,
                                          _parse_div_qty_rate,
                                          income_facts_from_description,
-                                         is_roc_description)
+                                         is_roc_description,
+                                         shown_name)
 from taxjson.lib.corp_actions import (
     RBC_REORG_CODES, RbcReorgPairing, pair_rbc_reorganizations,
     rbc_norm_company,
@@ -220,7 +221,7 @@ class RbcExport:
 
 
 def _err(path: Path, line: int, msg: str) -> RbcFormatError:
-    return RbcFormatError(f"{path.name}:{line}: {msg}")
+    return RbcFormatError(f"{shown_name(path)}:{line}: {msg}")
 
 
 _NUM_RE = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)', re.ASCII)
@@ -342,12 +343,12 @@ def _find_header(records, path: Path):
         # The holdings report (positions at a date), not the activity
         # export (audit R1-332: it died with a bare 'no header' error).
         raise RbcFormatError(
-            f"{path.name}: this is an RBC Holdings export ({first[:50]!r}), "
+            f"{shown_name(path)}: this is an RBC Holdings export ({first[:50]!r}), "
             f"not an Activity export — it lists positions, not "
             f"transactions; refusing it. Download Activity (all "
             f"transaction types) for the account instead.")
     raise RbcFormatError(
-        f"{path.name}: no RBC header row found (a row with the columns "
+        f"{shown_name(path)}: no RBC header row found (a row with the columns "
         f"{', '.join(REQUIRED_COLUMNS)} and Value/Amount). Is this an "
         f"RBC Direct Investing activity export?")
 
@@ -385,7 +386,7 @@ def _no_format_error(path: Path, column: str, values, lines):
         f = next(f for f in _DATE_FMTS if _parse_all([v], f) is not None)
         seen.setdefault(f, (v, ln))
     ex = '; '.join(f"{v!r} (line {ln})" for v, ln in list(seen.values())[:3])
-    return RbcFormatError(f"{path.name}: mixed date formats in the {column} "
+    return RbcFormatError(f"{shown_name(path)}: mixed date formats in the {column} "
                           f"column — {ex}. Refusing to guess; re-export.")
 
 
@@ -422,7 +423,7 @@ def _pick_date_formats(path: Path, rows: List[RbcRow]) -> Tuple[str, str]:
         return good[0][1], good[0][2]
     amb = [f for f in list(dg.values()) + list(sg.values())]
     raise RbcFormatError(
-        f"{path.name}: ambiguous dates — the file reads validly as more than "
+        f"{shown_name(path)}: ambiguous dates — the file reads validly as more than "
         f"one of {sorted(set(amb))} (day/month vs month/day) and the "
         f"settlement dates don't settle it. Refusing to guess; re-export "
         f"with month names (RBC's default) or ISO dates.")
@@ -439,7 +440,7 @@ def read_rbc_rows(path: Path) -> RbcExport:
         else:
             text = raw.decode('utf-8-sig')
     except UnicodeDecodeError as e:
-        raise RbcFormatError(f"{path.name}: not UTF-8/UTF-16 text ({e}) — "
+        raise RbcFormatError(f"{shown_name(path)}: not UTF-8/UTF-16 text ({e}) — "
                              f"re-export the CSV from RBC") from None
     reader = csv.reader(io.StringIO(text))
     records = []
