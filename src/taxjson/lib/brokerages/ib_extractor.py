@@ -1690,7 +1690,8 @@ class IbBrokerage(BaseBrokerage):
                     f"or mislabelled column, or a wrong contract "
                     f"multiplier; refusing to book it.")
             if ((qty > 0 and proceeds > 0.005)
-                    or (qty < 0 and proceeds < -0.005)) and not getattr(
+                    or (qty < 0 and proceeds < -0.005)) and not (
+                        price < 0 and exact) and not getattr(
                         self, '_sign_warned', False):
                 self._sign_warned = True
                 print(f"warning: {where}: {symbol}: Proceeds "
@@ -2517,6 +2518,16 @@ class IbBrokerage(BaseBrokerage):
                 # sell brings in Proceeds + Comm/Fee.
                 comm_fee = 0.0 - comm_signed   # (no -0.0 for a zero charge)
                 net_amount = (gross_proceeds + comm_fee) if qty > 0 else (gross_proceeds - comm_fee)
+                if asset_cat == 'Futures':
+                    # A futures price can be negative (WTI, April 2020):
+                    # the notional's SIGN is kept — a sale at -37.63
+                    # pays 37,630, a buy at -37.63 receives it. The
+                    # magnitude booked a loss as a gain (audit A2-0092;
+                    # S053-13 only silenced the schema error). Same
+                    # numbers as before for a positive price.
+                    net_amount = (-(proceeds_signed + comm_signed)
+                                  if qty > 0
+                                  else proceeds_signed + comm_signed)
                 action = 'BUYSELL'
                 # IB packs multiple per-trade codes into one cell
                 # (separators are `;`, `,`, or whitespace) — e.g.

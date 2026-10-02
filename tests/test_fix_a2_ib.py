@@ -753,5 +753,47 @@ class TestWarrantExerciseIsSaid(unittest.TestCase):
         self.assertRegex(err, r'warning: ATTENTION: .*warrant QZYW')
 
 
+FUT_FII = ('Financial Instrument Information,Data,Futures,QZCLK0,'
+           'QZCL MAY20,999000091,,QZCL,NYMEX,1000,2020-04-21,2020-05,,,\n')
+
+
+class TestFuturesAtANegativePrice(unittest.TestCase):
+    """A2-0092: a futures fill at a negative price lost its money sign:
+    a loss was booked as a gain and the other way round."""
+
+    def _settled(self, buy_px, sell_px, method):
+        from taxjson.lib.futures import settle_futures
+        body = (HEAD + TRADES_H
+                + _trade('QZCLK0', '2020-04-01, 10:00:00', 1, buy_px,
+                         -buy_px * 1000, cat='Futures')
+                + _trade('QZCLK0', '2020-04-20, 14:00:00', -1, sell_px,
+                         sell_px * 1000, cat='Futures', code='C')
+                + FII_H + FUT_FII)
+        _, txs, err = _parse_ib(body)
+        rows, _st = settle_futures(_book(txs), method)
+        return sum(float(t.net_amount) for t in rows), txs, err
+
+    @rule("CA-FX-04")
+    def test_sale_at_a_negative_price_is_a_loss(self):
+        pl, txs, err = self._settled(20.0, -37.63, 'average')
+        self.assertAlmostEqual(txs[1]['net_amount'], -37630.0, msg=err)
+        self.assertAlmostEqual(pl, -57630.0)
+        self.assertNotIn('opposite sign', err)
+
+    @rule("US-FUT-01")
+    def test_buy_at_a_negative_price_then_a_sale(self):
+        pl, txs, _ = self._settled(-37.63, 10.0, 'fifo')
+        self.assertAlmostEqual(txs[0]['net_amount'], -37630.0)
+        self.assertAlmostEqual(pl, 47630.0)
+
+    def test_the_schema_accepts_the_negative_buy(self):
+        from taxjson.lib.brokerages.schema import validate_transactions
+        _, txs, _ = _parse_ib(HEAD + TRADES_H + _trade(
+            'QZCLK0', '2020-04-20, 10:00:00', 1, -37.63, 37630,
+            cat='Futures') + FII_H + FUT_FII)
+        errs = validate_transactions(txs)[0]
+        self.assertFalse([e for e in errs if 'net_amount' in e], errs)
+
+
 if __name__ == '__main__':
     unittest.main()

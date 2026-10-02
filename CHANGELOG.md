@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **IB: a futures fill at a negative price keeps its money sign.** A
+  sale at -37.63 (WTI, April 2020) was booked as receiving 37,630, a
+  loss of 57,630 became a gain; the parser now keeps the notional's
+  sign, the futures settlement books a buy's cost signed and the schema
+  accepts the negative buy (tax-logic CA-FX-04 / US-FUT-01; audit
+  A2-0092). The generic importer and `.tt` lines still read the
+  magnitude (KNOWN_ISSUES).
 - IB: a warrant exercise leg (booked as a disposal at 0 — the warrant's
   cost becomes a loss instead of part of the shares' cost) is an
   ATTENTION line; the fix is deferred (KNOWN_ISSUES, audit A2-0090).

@@ -63,6 +63,11 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
+### A negative futures price in a generic or `.tt` file
+- **Where:** `src/taxjson/lib/brokerages/generic.py` (`_trade_net` takes the magnitude), `src/taxjson/bin/taxjson_convert_tt.py` (a `.tt` total is a magnitude).
+- **Current behavior:** IB futures rows keep the sign of a negative price (audit A2-0092); a generic-import or `.tt` futures row at a negative price is still read as its magnitude, so its P/L sign is wrong.
+- **Workaround:** book such a fill from the IB statement, or enter the realized P/L of the close by hand.
+
 ### A warrant exercise is booked as a disposal at 0
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` (a `Warrants` leg coded `Ex`/`A` at price 0), `src/taxjson/lib/brokerages/rbc_direct.py` (an `Exercise` of a non-option symbol); the premium roll in `lib/core.py` handles OPTION symbols only.
 - **Current behavior:** the warrant leg is a disposal at 0, so the warrant's cost is a capital loss on the exercise date and the shares carry only the cash paid; the correct treatment is no disposition and the warrant's cost added to the shares (ITA s.49(3); US basis carryover with a holding period from the exercise). IB prints an `ATTENTION` line for the leg (audit A2-0090 / A2-0274).

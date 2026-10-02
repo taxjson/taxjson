@@ -429,8 +429,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A futures contract is booked on its settled P/L: nothing "
                  "is paid to open one, so its notional is never converted. "
                  "Each close's P/L (commissions included, average cost of "
-                 "the open contracts) is converted at that closing leg's "
-                 "rate;"),
+                 "the open contracts; a negative price keeps its sign) is "
+                 "converted at that closing leg's rate;"),
             Rule("CA-FX-05",
                  "Schedule 3 shows a gain as proceeds and a loss as ACB.",
                  cont=True),
@@ -1192,7 +1192,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-FUT-01",
                  "A futures contract is booked on its settled P/L: nothing "
                  "is paid to open one, so its notional is never converted "
-                 "or reported. A close's P/L (commissions included) is "
+                 "or reported. A close's P/L (commissions included; a "
+                 "negative price keeps its sign) is "
                  "taken first in, first out from the open contracts, and "
                  "a non-USD contract's P/L is converted at the closing "
                  "leg's rate."),
