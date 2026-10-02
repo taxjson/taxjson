@@ -3354,10 +3354,31 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
     with proportional basis, like the taxable path."""
     boot = float((hints or {}).get('cash_boot') or 0.0)
     basis = float((hints or {}).get('source_basis_total') or 0.0)
+    tgt_cur = (event.target_currency or event.currency or 'USD').upper()
+    src_cur = (event.currency or 'USD').upper()
     tgt_fmv = event.target_fmv
+    fmv_cur = (event.target_fmv_currency or tgt_cur).upper()
     hint_ps = float((hints or {}).get('fmv_per_share') or 0.0)
     if tgt_fmv <= 0 and hint_ps > 0:
         tgt_fmv = hint_ps * event.qty_received
+        fmv_cur = tgt_cur
+    # One currency for the §356 arithmetic: US dollars. The boot and the
+    # new shares' value are in the target listing's currency, the basis
+    # in USD (what a US project's `taxjson list` shows); each leg is
+    # then booked in its own listing's currency at the event-date rate.
+    # The hints used to be added unconverted across currencies (A2-0216).
+    usd_boot = _convert(hints, boot, tgt_cur, 'USD', event.date)
+    usd_fmv = _convert(hints, tgt_fmv, fmv_cur, 'USD', event.date)
+    in_usd = usd_boot is not None and usd_fmv is not None
+    if in_usd:
+        boot, tgt_fmv = usd_boot, usd_fmv
+    elif 'USD' not in {tgt_cur, src_cur} or len({tgt_cur, src_cur,
+                                                    fmv_cur}) > 1:
+        print(f"warning: boot merger {event.source_symbol}→"
+              f"{event.target_symbol} on {event.date}: no exchange rate "
+              f"for its currencies ({src_cur}/{tgt_cur}) — the cash, "
+              f"the basis and the new shares' value are combined as "
+              f"entered; check the recognized gain.", file=sys.stderr)
 
     if boot <= 0:
         print(
@@ -3408,12 +3429,25 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
     if frac_qty > 0:
         description += f"; cash-in-lieu for {frac_qty:.6g} fractional share(s)"
 
+    sell_cur, buy_cur = event.currency, event.target_currency or \
+        event.currency
+    if in_usd:
+        p = _convert(hints, proceeds, 'USD', src_cur, event.date)
+        b = _convert(hints, new_basis, 'USD', tgt_cur, event.date)
+        if p is not None and b is not None:
+            proceeds, new_basis = p, b
+        else:                     # keep both legs in USD, said loudly
+            sell_cur = buy_cur = 'USD'
+            print(f"warning: boot merger {event.source_symbol}→"
+                  f"{event.target_symbol} on {event.date}: no USD rate "
+                  f"for its listings — both legs are booked in USD.",
+                  file=sys.stderr)
     rows = [{
         'action': 'BUYSELL',
         'date': event.date, 'time': event.time, 'date_settle': event.date,
         'symbol': event.source_symbol,
         'quantity': -abs(event.qty_disposed),
-        'currency': event.currency,
+        'currency': sell_cur,
         'price': (proceeds / event.qty_disposed) if event.qty_disposed else 0.0,
         'net_amount': proceeds,
         'fee': 0.0,
@@ -3428,7 +3462,7 @@ def _emit_boot_exchange(event: CorporateAction, hints: dict) -> List[dict]:
             'date_settle': event.date,
             'symbol': event.target_symbol,
             'quantity': whole_qty,
-            'currency': event.target_currency or event.currency,
+            'currency': buy_cur,
             'price': new_basis / whole_qty,
             'net_amount': new_basis,
             'fee': 0.0,
@@ -3944,17 +3978,19 @@ HINTS_BY_ELECTION: Dict[str, List[tuple]] = {
     ],
     'reorg_368_boot': [
         ('cash_boot',
-         "Total CASH (boot) you received in the exchange, in the target "
-         "currency."),
+         "Total CASH (boot) you received in the exchange, in the NEW "
+         "shares' listing currency (converted to USD at the effective "
+         "date's rate)."),
         ('source_basis_total',
          "Your TOTAL cost basis in the old shares immediately before the "
-         "merger (see `taxjson list` / holdings.toml). The engine books "
-         "gain = engineered proceeds − its own pool basis, so this must "
-         "match your books or the recognized gain drifts by the "
-         "difference."),
+         "merger, in US DOLLARS (see `taxjson list` / holdings.toml). The "
+         "engine books gain = engineered proceeds − its own pool basis, "
+         "so this must match your books or the recognized gain drifts by "
+         "the difference."),
         ('fmv_per_share',
-         "FMV per NEW share on the effective date — used only to compute "
-         "your realized gain for the min(gain, boot) cap.",
+         "FMV per NEW share on the effective date, in the NEW shares' "
+         "listing currency — used only to compute your realized gain for "
+         "the min(gain, boot) cap.",
          lambda ev: (getattr(ev, 'target_fmv', 0.0) or 0.0) <= 0),
     ],
     'taxable_distribution_301': [

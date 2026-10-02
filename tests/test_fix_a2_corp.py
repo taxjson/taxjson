@@ -811,5 +811,44 @@ class TestElectionWording(unittest.TestCase):
         self.assertIn('no fmv_per_share hint was given', err)
 
 
+
+class TestUsBootCurrencies(unittest.TestCase):
+    @rule("US-CORP-05")
+    def test_a2_0216_hints_are_combined_in_usd(self):
+        from taxjson.lib.corp_actions import resolve_event
+        ev = _event(action_type='merger', source_symbol='OLDC.TO',
+                    target_symbol='NEWC.US', currency='CAD',
+                    target_currency='USD', qty_disposed=100,
+                    qty_received=100)
+        rows, err = _quiet(resolve_event, ev, 'reorg_368_boot',
+                           country='usa', fx=_flat_fx(1.37),
+                           hints={'cash_boot': 500.0,
+                                  'source_basis_total': 730.0,
+                                  'fmv_per_share': 10.0})
+        sell = next(r for r in rows if r['quantity'] < 0)
+        buy = next(r for r in rows if r['quantity'] > 0)
+        # realized 1000 + 500 - 730 = 770; recognized min(770, 500) = 500
+        self.assertEqual(sell['currency'], 'CAD')
+        self.assertAlmostEqual(sell['net_amount'], (730 + 500) * 1.37,
+                               places=6)
+        self.assertEqual(buy['currency'], 'USD')
+        self.assertAlmostEqual(buy['net_amount'], 730.0, places=6)
+
+    def test_same_currency_boot_unchanged(self):
+        from taxjson.lib.corp_actions import resolve_event
+        ev = _event(action_type='merger', source_symbol='OLDC.US',
+                    target_symbol='NEWC.US', qty_disposed=100,
+                    qty_received=100)
+        for fx in (None, _flat_fx(1.37)):
+            rows, _ = _quiet(resolve_event, ev, 'reorg_368_boot',
+                             country='usa', fx=fx,
+                             hints={'cash_boot': 500.0,
+                                    'source_basis_total': 730.0,
+                                    'fmv_per_share': 10.0})
+            self.assertEqual([(r['currency'], round(r['net_amount'], 6))
+                              for r in rows],
+                             [('USD', 1230.0), ('USD', 730.0)])
+
+
 if __name__ == "__main__":
     unittest.main()

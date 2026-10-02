@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- US `reorg_368_boot`: the cash boot and the new shares' value (in the
+  new listing's currency) and the old basis (in US dollars) are combined
+  in USD, and each leg is booked in its own listing's currency at the
+  effective date's rate; the hints were added unconverted across
+  currencies (A2-0216). The prompts name each hint's currency.
 - **US: a §355 spin-off's `allocated_acb` is read in US dollars** on any
   listing (A2-0973): on a TSX-listed parent it is converted at the
   spin-off date's rate, so the moved basis is exactly the USD figure;
