@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Per-account holdings and distributions.map sizing follow each
+  ticker's own shares.** The record-date balance walk (used to size a
+  distributions.map adjustment and to split a blended Canada pool by
+  account) kept one running balance for a whole rename family: a
+  rename-split scaled shares already held under the new ticker, an old
+  ticker bought again after its rename counted under both names, two
+  accounts' copies of one split doubled each other, and a buy listed
+  before a same-moment split was scaled by it. It now holds shares per
+  account and symbol like the engine (list/shares/sanity and the
+  adjustments agree with the gains), a map key that still holds shares
+  under its own name is sized on them, and the blended-pool
+  conservation warning names an excess as over-reporting instead of
+  blaming phantoms (A2-0021, A2-0074, A2-0225, A2-0986).
+
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

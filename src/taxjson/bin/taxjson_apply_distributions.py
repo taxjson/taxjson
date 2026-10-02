@@ -131,9 +131,10 @@ def _row_date(t: dict, date_basis: str) -> str:
 def balance_on(transactions: List[dict], symbol: str, date: str,
                date_basis: str = "settle") -> float:
     """Shares of `symbol` held at end of `date`, from the book's own
-    rows: position deltas summed, SPLIT ratios applied, renames
-    (symbol_new) followed — so a map row keyed to the CURRENT ticker
-    finds shares bought under a pre-rename one.
+    rows: position deltas summed per account and raw symbol, each SPLIT
+    applied to its own symbol's shares, renames (symbol_new) moving
+    them — so a map row keyed to the CURRENT ticker finds shares bought
+    under a pre-rename one, and only those.
 
     `date_basis` picks which date a row moves the balance on. Fund
     record dates go by the holder of record — the SETTLED position —
@@ -146,16 +147,6 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     if date_basis not in DATE_BASES:
         raise ValueError(f"date_basis must be one of {DATE_BASES}, "
                          f"got {date_basis!r}")
-    aliases = {symbol}
-    changed = True
-    while changed:                      # follow rename chains backwards
-        changed = False
-        for t in transactions:
-            new = (t.get("symbol_new") or "").strip()
-            if (t.get("action") == "SPLIT" and new in aliases
-                    and t.get("symbol") not in aliases):
-                aliases.add(t["symbol"])
-                changed = True
     # A trade executed BEFORE a split but settling AFTER it: the engine
     # re-denominates its quantity into post-split shares (core.py, the
     # settle-lag re-denomination), because under settle ordering the
@@ -164,39 +155,66 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     # shares sized an ADJUST where the engine held 1000).
     factor = _settle_lag_factors(transactions) \
         if date_basis == "settle" else {}
-    bal = 0.0
+    # Order like the Canada balance walk (corporate_timeline 'ca_balance'
+    # profile, tax-logic CA-DATE-14): at one sort date an opening balance
+    # or a settle-lagged execution first, then a split (effective at the
+    # open), then the day's own trades — whatever the export's row order
+    # (audit A2-0225: a buy listed before a same-stamp SPLIT was scaled
+    # by it).
+    def _phase(t: dict) -> int:
+        act = t.get("action")
+        if act == "OPENING_BALANCE":
+            return 0
+        if act == "SPLIT":
+            return 1
+        d = str(t.get("date") or "")
+        return 0 if d and d < _row_date(t, date_basis) else 2
     rows = sorted(transactions,
-                  key=lambda t: (_row_date(t, date_basis),
-                                 str(t.get("date") or ""),
+                  key=lambda t: (_row_date(t, date_basis), _phase(t),
                                  str(t.get("time") or "")))
     # One corporate event = one application: an account fed by two
     # brokers carries the same SPLIT once per broker CSV (distinct ids,
     # so upstream dedup keeps both). The gains engine dedupes these per
     # corporate event; without the same dedup here, the blended
     # per-account split apportioned DOUBLED quantities (2026-09 audit).
-    from taxjson.lib.corporate_timeline import split_seen
+    from taxjson.lib.corporate_timeline import (normalize_symbol_new,
+                                                split_seen)
     _seen_splits = set()
+    # Shares per (account, raw symbol), the way the engine walk holds
+    # them: a SPLIT scales and moves only the shares of ITS symbol (in
+    # its account), so shares already held under a rename's target are
+    # not scaled by the rename's ratio (audit A2-0021), an old ticker
+    # traded again after its rename stays its own holding (A2-0074),
+    # and one account's copy of a split never scales another account's
+    # shares (A2-0986).
+    held: dict = {}
     for t in rows:
         if _row_date(t, date_basis) > date:
             break
-        if t.get("symbol") not in aliases:
-            continue
+        sym = str(t.get("symbol") or "")
+        acct = str(t.get("account") or "")
         act = t.get("action")
         if act in ("BUYSELL", "ASSIGN", "OPENING_BALANCE", "TRANSFER"):
-            bal += float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0)
+            held[(acct, sym)] = held.get((acct, sym), 0.0) + (
+                float(t.get("quantity") or 0.0) * factor.get(id(t), 1.0))
         elif act == "SPLIT":
             ratio = float(t.get("quantity") or 0.0)
             if not ratio:
                 continue
             # split_seen: the same split booked on two dates by two
             # brokers (within a week) is still ONE event.
-            if split_seen(_seen_splits, str(t.get("symbol") or ""),
+            if split_seen(_seen_splits, sym,
                           str(t.get("date") or ""), ratio,
                           t.get("symbol_new") or "",
-                          account=str(t.get("account") or "")) is not None:
+                          account=acct) is not None:
                 continue
-            bal *= ratio
-    return bal
+            target = normalize_symbol_new(sym, t.get("symbol_new")) or sym
+            for key in [k for k in held
+                        if k[1] == sym and (not acct or k[0] == acct)]:
+                moved = held.pop(key) * ratio
+                held[(key[0], target)] = held.get((key[0], target),
+                                                  0.0) + moved
+    return sum(q for (_a, s), q in held.items() if s == symbol)
 
 
 def _settle_lag_factors(transactions: List[dict]) -> dict:
@@ -322,7 +340,15 @@ def apply_distributions(doc: dict, map_rows, account: str,
         if renames:
             from taxjson.bin.taxjson_ticker_map import map_symbol
             sym = map_symbol(sym, renames)
-        sym = resolve_live_symbol(sizing, sym, date)
+        live = resolve_live_symbol(sizing, sym, date)
+        # A key that still holds shares under its own name on the record
+        # date is that holding — a ticker reused after its rename (FB
+        # bought again after FB -> META) is not the renamed pool (audit
+        # A2-0074).
+        if live != sym and balance_on(sizing, sym, date,
+                                      date_basis) > 1e-9:
+            live = sym
+        sym = live
         via = f" (as {sym})" if sym != key else ""
         bal = balance_on(sizing, sym, date, date_basis)
         if bal <= 1e-9:

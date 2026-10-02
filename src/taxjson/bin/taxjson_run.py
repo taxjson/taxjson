@@ -2853,12 +2853,22 @@ def _blend_conservation_gaps(blended_doc: Dict[str, Any],
     out: List[str] = []
     for sym, total in sorted(blended_inv.items()):
         got = split_sums.get(sym, 0.0)
-        if abs(total - got) > 1e-4:
+        # Name the direction (audit A2-0021/A2-0074: an EXCESS was
+        # reported as 'only ... under-report' and blamed on phantoms).
+        if total - got > 1e-4:
             out.append(f"blended {sym} holds {total:g} but the per-account "
-                       f"split accounts for only {got:g} — the difference "
-                       f"is likely phantom (phantoms.json) shares, which "
-                       f"the split cannot attribute to an account. "
-                       f"Per-account holdings under-report by the gap.")
+                       f"split accounts for only {got:g} — "
+                       f"{total - got:g} short. Shares from phantoms.json "
+                       f"cannot be attributed to an account; otherwise a "
+                       f"rename or split of {sym} is read differently by "
+                       f"the per-account walk. Per-account holdings "
+                       f"under-report by the gap.")
+        elif got - total > 1e-4:
+            out.append(f"blended {sym} holds {total:g} but the per-account "
+                       f"split accounts for {got:g} — {got - total:g} MORE "
+                       f"than the pool. Check the renames and splits of "
+                       f"{sym} (and any ticker reused after a rename). "
+                       f"Per-account holdings over-report by the excess.")
     return out
 
 
