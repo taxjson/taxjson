@@ -572,5 +572,23 @@ class TestIncomeRuleRefusalWording(unittest.TestCase):
         self.assertNotIn("[settings]", str(cm.exception))
 
 
+# ------------------------------------------- ticker-map summary (06)
+
+class TestTickerMapSummaryNoSuffixGuess(unittest.TestCase):
+    """A2-1367: summary mode never 'maps' a .US listing to .TO."""
+
+    def test_summary_keeps_listings(self):
+        from taxjson.bin.taxjson_ticker_map import generate_summary
+        from taxjson.lib.core import TaxTransaction
+        txs = [TaxTransaction(action="BUYSELL", date="2026-01-05",
+                              time="10:00:00", symbol=s, quantity=1,
+                              price=1.0, net_amount=1.0, currency="USD",
+                              account="brk")
+               for s in ("QZQ.US", "U.19SEP25.26.P")]
+        m = generate_summary(txs)["mappings"]
+        self.assertEqual(m["QZQ.US"], "QZQ.US")
+        self.assertEqual(m["U.19SEP25.26.P"], "U250919P00026000")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson-ticker-map` summary mode no longer "maps" every `.US`
+  listing to `.TO` (a hard-coded CAD target, wrong beside a US project
+  and not a real listing in a Canadian one); it lists the symbols with
+  only their option-string normalisation (re-audit A2-1367).
 - An invalid `ric_january_dividends` / `corporate_distributions` entry
   is refused with an example listing of the setting's own country
   (XYZ.US for the US-only RIC list), and a bad `--ric-january-dividend`
