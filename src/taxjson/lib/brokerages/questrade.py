@@ -550,7 +550,18 @@ class QuestradeBrokerage(BaseBrokerage):
         rev_originals: Dict[tuple, List[List[Dict[str, Any]]]] = {}
         reversals: List[tuple] = []
         self._rows_seen = 0
+        # Each row's broker account (`Account #`): every row emitted for
+        # a CSV row carries it as `broker_account`, so cross-file dedup
+        # never collapses two accounts' identical rows (audit A2-0008).
+        self._qt_accounts = {(r.get('Account #') or '').strip()
+                             for _, r in rows} - {''}
+        _acct_from, _acct = 0, ''
         for lineno, row in rows:
+            for _t in transactions[_acct_from:]:
+                if _acct:
+                    _t.setdefault('broker_account', _acct)
+            _acct_from = len(transactions)
+            _acct = (row.get('Account #') or '').strip()
             self._rows_seen += 1
             action_raw = _canon_action(row.get('Action'))
             activity_type = (row.get('Activity Type') or '').strip()
@@ -1051,6 +1062,9 @@ class QuestradeBrokerage(BaseBrokerage):
                 # IB/RBC/Webull trade rows already do; Questrade's was the gap.
                 'description': desc,
             }
+            if not opt and not is_expired and not is_assigned:
+                self.warn_zero_cost_buy(self._where(lineno), symbol, qty,
+                                        price, net)
             transactions.append(_tx)
             if is_expired and not is_assigned:
                 expiries.append(_tx)
@@ -1097,6 +1111,9 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"find-missing-history --gen-phantoms`)."
                   f"{'' if taxable else ' (Account type unknown — ignore in a registered account.)'}",
                   file=sys.stderr)
+        for _t in transactions[_acct_from:]:
+            if _acct:
+                _t.setdefault('broker_account', _acct)
         self._cost_journal_pairs(journal_txs)
         if journals:
             print(f"note: {path.name}: {len(journals)} BRW journal row(s) "
@@ -1107,6 +1124,12 @@ class QuestradeBrokerage(BaseBrokerage):
                   f"the pair nets out.", file=sys.stderr)
         self.emit_skip_summary(path.name)
         return transactions
+
+    def statement_accounts(self) -> set:
+        """The `Account #` values of the last parsed export (audit
+        A2-0008: Questrade exports name their account, so statements of
+        two broker accounts are told apart like IB's)."""
+        return set(getattr(self, '_qt_accounts', set()))
 
     @staticmethod
     def _cost_journal_pairs(legs: List[Dict[str, Any]]) -> None:

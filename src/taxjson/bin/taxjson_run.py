@@ -1363,17 +1363,95 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
         # refresh was skipped with a misleading "rollover rename"
         # message (R1-126). A rename's currency mix still shows through
         # the trades on either side of it (followed via `renames`).
-        # ADJUST rows carry money onto the pool too: a CAD-valued
-        # corporate-action ADJUST on a USD pool (an s.86.1 allocation
-        # with no rate to express it in USD) made the raw gains stage
-        # abort the whole run (A2-0002).
+        # ADJUST / DISALLOW rows carry money onto the pool too: a
+        # CAD-valued corporate-action ADJUST on a USD pool (an s.86.1
+        # allocation with no rate to express it in USD — A2-0002), or a
+        # USD return of capital on a CAD listing that
+        # _raw_align_adjust_currency could not price (A2-0055/0191/0204),
+        # would stop the native gains pass.
         if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
-                                   "ADJUST"):
+                                   "ADJUST", "DISALLOW"):
             continue
         c, sym = t.get("currency"), t.get("symbol")
         if c and sym:
             curs.setdefault(_final(sym), set()).add(c)
     return sorted(sym for sym, cs in curs.items() if len(cs) > 1)
+
+
+def _raw_align_adjust_currency(raw_json: Path, rates_path: Path,
+                               base_currency: str) -> List[str]:
+    """Restate, in the pool's own currency, every ADJUST / DISALLOW row of
+    the NATIVE-currency raw merge that is in another currency: a USD
+    return of capital on a TSX listing (RBC, Questrade, IB), a CAD T3
+    box-42 ADJUST on a USD unit (README recipe). The native gains pass
+    pools one currency per symbol and used to stop the whole run at
+    "raw gains" with advice a project user cannot act on (audit
+    A2-0055/0191/0204). The amount is converted through the base
+    currency at the row's date (the same Bank of Canada / base rates the
+    filing books use); the converted, tax-authoritative books are
+    untouched — they convert every row anyway. A row with no rate is
+    left as is (the raw view is then skipped with a note). Returns one
+    line per restated row for the console."""
+    import json as _json
+    from datetime import timedelta
+    from decimal import Decimal as _D
+    try:
+        doc = _json.loads(raw_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    txs = doc.get("transactions", []) if isinstance(doc, dict) else []
+    pool_cur: Dict[str, set] = {}
+    for t in txs:
+        if t.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER",
+                               "OPENING_BALANCE") and t.get("currency"):
+            pool_cur.setdefault(t.get("symbol"), set()).add(t["currency"])
+    todo = [t for t in txs
+            if t.get("action") in ("ADJUST", "DISALLOW")
+            and t.get("currency")
+            and len(pool_cur.get(t.get("symbol"), ())) == 1
+            and t["currency"] not in pool_cur[t.get("symbol")]]
+    if not todo:
+        return []
+    from taxjson.bin.taxjson_convert_currency import load_exchange_rates
+    base = (base_currency or "").upper()
+    try:
+        hist = load_exchange_rates(rates_path, target_curr=base)
+    except (OSError, ValueError):
+        return []
+
+    def _rate(cur: str, day: str):
+        if cur == base:
+            return _D(1)
+        h = hist.get(cur) or {}
+        try:
+            d0 = datetime.strptime(day, "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return None
+        for i in range(6):           # prior business day, as convert does
+            k = (d0 - timedelta(days=i)).strftime("%Y-%m-%d")
+            if k in h:
+                return h[k]
+        return None
+    notes = []
+    for t in todo:
+        src, dst = t["currency"], next(iter(pool_cur[t["symbol"]]))
+        day = t.get("date") or ""
+        r_src, r_dst = _rate(src, day), _rate(dst, day)
+        if not r_src or not r_dst:
+            continue
+        f = r_src / r_dst
+        for k in ("net_amount", "gross_amount"):
+            if t.get(k) not in (None, ""):
+                t[k] = float(_D(str(t[k])) * f)
+        t["currency"] = dst
+        notes.append(f"{t['symbol']} {t['action']} {day}: {src} amount "
+                     f"restated as {t['net_amount']:,.2f} {dst} for the "
+                     f"native-currency holdings view")
+    if notes:
+        tmp = raw_json.with_name(raw_json.name + ".part")
+        tmp.write_text(_json.dumps(doc, indent=2), encoding="utf-8")
+        tmp.replace(raw_json)
+    return notes
 
 
 # ---------------------------------------------------------------- stages
@@ -2583,6 +2661,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # not — a row booked once (or twice) on a guess must not scroll by.
     echo_attention_lines(cache / f"{name}_sorted.json" if is_crypto
                          else base_json, prefix="dedup: ")
+    # A ticker.map rename to a bare symbol (audit A2-0304).
+    echo_attention_lines(base_json, prefix="ticker.map: ")
     # A split booked twice with a rounded ratio (A2-0070): one event,
     # applied once — on the console, so the manual line gets deleted.
     if not is_crypto:
@@ -2616,6 +2696,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    # A basis adjustment the engine could not apply (US: a return of
+    # capital or notional distribution with no shares held) is a number
+    # the user must report by hand — on the console every run, cached or
+    # not, not only in the .sum (audit A2-0199).
+    echo_attention_lines(gains_json, prefix="unapplied basis adjustment: ")
     # Income a record date moves across a year end, or an implausible
     # record date (lib/income_dating): on the console every run, cached
     # or not — one project year leaves that income out (audit A2-0073,
@@ -2652,17 +2737,23 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 raw_cmd += ["--map", str(ticker_map)]
             raw_cmd += [str(p) for p in sources]
             run_to_file(raw_cmd, raw_json, capture_diag=False)
+        # Idempotent: rewrites only rows still in another currency (also
+        # a raw merge an earlier version left behind).
+        for _ln in _raw_align_adjust_currency(raw_json, rates,
+                                              base_currency):
+            print(f"  note: {_ln}", file=sys.stderr)
         mixed = _raw_mixed_currency_symbols(raw_json)
         if mixed:
             # Unrepresentable in a native-currency book (cross-currency
-            # rollover rename): skip the raw view rather than kill the
+            # rollover rename, or a foreign-currency cost adjustment with
+            # no rate on file): skip the raw view rather than kill the
             # run. The converted books, gains, wash and .sum reports
             # above are complete and authoritative.
             print(f"  !! raw holdings skipped for '{name}': "
                   f"{', '.join(mixed)} would pool mixed currencies "
-                  f"(a cross-currency rollover rename, or a corporate-"
-                  f"action row booked in another currency for lack of "
-                  f"a rate). "
+                  f"(a cross-currency rollover rename, or a cost "
+                  f"adjustment or corporate-action row in another "
+                  f"currency with no exchange rate on file). "
                   f"{name}_holdings.toml was NOT refreshed this run.",
                   file=sys.stderr)
             # The native books of an EARLIER run (before the rollover
@@ -3213,6 +3304,37 @@ def _duplicate_crypto_exports(cache: Path, names: List[str]) -> List[str]:
                     f"inputs/{a}/ and inputs/{b}/, so its trades are "
                     f"booked twice. Keep it in one account.")
     return out
+def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
+    """One broker account's export in TWO taxjson accounts books every
+    row twice (audit A2-0293, A2-0630). The rows carry their broker
+    account (hashed, `source_account`); name each pair of taxjson
+    accounts that share one, with the count of identical rows."""
+    import json
+    seen: Dict[str, Dict[str, set]] = {}
+    for name, base in bases:
+        try:
+            rows = json.loads(Path(base).read_text()).get("transactions")
+        except (OSError, ValueError, AttributeError):
+            continue
+        per: Dict[str, set] = {}
+        for t in rows or ():
+            if isinstance(t, dict) and t.get("source_account"):
+                # The id hashes the taxjson account label: compare the
+                # row's content instead.
+                per.setdefault(t["source_account"], set()).add(
+                    (t.get("date"), t.get("action"), t.get("symbol"),
+                     t.get("quantity"), t.get("net_amount")))
+        seen[name] = per
+    names = sorted(seen)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            for h in sorted(set(seen[a]) & set(seen[b])):
+                same = len(seen[a][h] & seen[b][h])
+                print(f"  {ATTENTION_PREFIX} the same broker account "
+                      f"(#{h[:6]}) feeds two taxjson accounts, {a} and "
+                      f"{b} ({same} identical row(s)) — every row of it "
+                      f"is booked in BOTH. Put each broker account's "
+                      f"exports under ONE inputs/<account>/ folder.")
 
 
 def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
@@ -3987,6 +4109,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         _warn_cross_taxable_overlap(
             [(n, o["base"]) for n, o, c in taxable_outputs if not c],
             settings)
+        _warn_shared_broker_accounts(
+            [(n, o["base"]) for n, o in sheltered_outputs]
+            + [(n, o["base"]) for n, o, _c in taxable_outputs])
         if _crypto_blend:
             _warn_cross_taxable_overlap(
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],
@@ -4156,7 +4281,7 @@ country           = "{country}"{country_pad}# canada | ca | usa | us
 {province_line}base_currency     = "{base_currency}"{base_pad}# report currency (the country's); CAD: Bank of Canada rates, USD: Yahoo
 source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besides base_currency (FX rates fetched)
 tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
-# futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
+# futures_settle = "trade"            # trade | next_day: futures & futures options (IB, generic) settle on the TRADE date
 #                                     #   (daily variation margin); next_day = the clearing premium date
 # local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone (IANA name)
 # prior_year_record = "../{prev_year}/filed/{prev_year}.json"
@@ -5005,7 +5130,19 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     # negative proceeds as positive, so the "round-trippable" view
     # flipped both on re-import (audit S039-11).
     if action in ("BUYSELL", "ASSIGN"):
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
+        line = f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
+        # The declared contract size rides along as `x<size>`, as in
+        # tx_to_tt_line: without it a re-imported x10 mini or a CL
+        # future lost its multiplier (A2-0621).
+        from taxjson.lib.core import is_option_symbol
+        try:
+            _m = float(tx.get("multiplier") or 0.0)
+        except (TypeError, ValueError):
+            _m = 0.0
+        if _m > 0 and (str(sym).startswith(("F:", "/", "\\"))
+                       or (is_option_symbol(str(sym)) and _m != 100.0)):
+            line += f" x{_m:g}"
+        return line
     if action == "TRANSFER":
         # The opt-in DECLARED token rides along as in tx_to_tt_line, or a
         # re-import loses the declaration (audit A2-0989).

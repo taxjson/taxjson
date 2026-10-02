@@ -136,6 +136,21 @@ def validate_transactions(transactions, filename="input",
             except ValueError:
                 issues[context].append(
                     f"Impossible date_settle: '{date_settle}'")
+            else:
+                # CA-DATE-03 / US-DATE-04 (audit A2-0959).
+                if (action in ("BUYSELL", "ASSIGN") and date
+                        and re.match(r"^\d{4}-\d{2}-\d{2}$", date)):
+                    if date_settle < date:
+                        issues[context].append(
+                            f"date_settle {date_settle} is before the "
+                            f"trade date {date} (a settlement never "
+                            f"precedes its trade)")
+                    elif (datetime.strptime(date_settle, "%Y-%m-%d")
+                          - datetime.strptime(date, "%Y-%m-%d")).days > 31:
+                        warnings[context].append(
+                            f"date_settle {date_settle} is more than a "
+                            f"month after the trade date {date} — "
+                            f"implausible for a settlement cycle")
 
         if action == "SPLIT" and nums["quantity"] is not None \
                 and nums["quantity"] <= 0:
@@ -177,9 +192,10 @@ def validate_transactions(transactions, filename="input",
 
             price_val = nums["price"]
             # A futures price can be negative (WTI, April 2020; a
-            # spread) and is booked correctly (audit S053-13).
+            # spread) and is booked correctly (audit S053-13), whatever
+            # futures prefix the symbol carries (A2-1087/A2-1089).
             if (price_val is not None and price_val < 0
-                    and not (symbol or "").startswith("F:")):
+                    and not (symbol or "").startswith(("F:", "/", "\\"))):
                 issues[context].append(f"Price is negative: {price_val}")
 
         if (require_prices and action in {"BUYSELL", "DIVIDEND"}

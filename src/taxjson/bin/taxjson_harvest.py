@@ -152,7 +152,8 @@ def load_inventory_agg(files: List[Path],
                        column: str) -> Dict[str, Dict[str, Any]]:
     """Per-symbol aggregate over a set of gains files' inventories:
     {symbol: {qty, last_add}}. `last_add` is the most recent acquisition
-    across those accounts (`last_acq_date`) — the date the 30-day
+    across those accounts (`last_acq_settle` in Canada — the settle date
+    s.54 counts from — else `last_acq_date`) — the date the 30-day
     superficial-loss / wash window measures from. Used for both sides:
     the TAXABLE inputs feed TX_ADD, the --sheltered files feed
     SH_QTY/SH_ADD (a recent add on EITHER side extends the clear date).
@@ -174,7 +175,11 @@ def load_inventory_agg(files: List[Path],
                 continue
             if "last_acq_date" in h:
                 file_has_field = True
-            add = str(h.get("last_acq_date") or "") or None
+            # Canada's inventory also carries the acquisition's SETTLE
+            # date — the s.54 window's own basis (CA-SL-01, A2-0958); the
+            # US inventory has trade dates only, which is the US basis.
+            add = str(h.get("last_acq_settle")
+                      or h.get("last_acq_date") or "") or None
             rec = out.setdefault(sym, {"qty": 0.0, "last_add": None})
             rec["qty"] += qty
             if add and (rec["last_add"] is None or add > rec["last_add"]):

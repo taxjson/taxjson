@@ -35,7 +35,14 @@ def encode_occ_strike(strike) -> str:
 # strike 5 -- two contracts in one OCC symbol and one ACB pool (audit
 # R1-170). The grouped form is tried first; option_strike_text drops
 # the separators.
-OPTION_STRIKE_RE = r'([1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?|[\d\.]+)'
+#
+# A comma that is NOT a valid thousands group ('2,50', '12,5',
+# '1,0000') is captured whole (the second alternative), so
+# option_strike_text refuses it instead of the regex stopping at the
+# comma and booking strike 2 / 12 / 1000 (audit A2-0632).
+OPTION_STRIKE_RE = (r'([1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?(?![\d,])'
+                    r'|[\d\.]+(?:,[\d\.]+)*)')
+_VALID_GROUPED_STRIKE_RE = re.compile(r'[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?')
 
 
 # A number inside broker DESCRIPTION text ("ON 1,000 SHS", "BOOK COST
@@ -46,8 +53,15 @@ DESC_NUMBER_RE = r'(\d+(?:,\d+)*(?:\.\d+)?|\.\d+)'
 
 
 def option_strike_text(raw: str) -> str:
-    """A matched strike with its thousands separators removed."""
-    return (raw or '').replace(',', '')
+    """A matched strike with its thousands separators removed. A comma
+    that is not a thousands group (a decimal comma '2,50', '1,0000') is
+    refused rather than guessed (audit A2-0632)."""
+    raw = raw or ''
+    if ',' in raw and not _VALID_GROUPED_STRIKE_RE.fullmatch(raw):
+        raise BrokerageParseError(
+            f"option strike {raw!r} has a comma that is not a thousands "
+            f"separator (a decimal comma?) — refusing to guess the strike")
+    return raw.replace(',', '')
 
 
 # Return-of-capital marker, shared by every parser so the classification
@@ -212,6 +226,11 @@ def _parse_div_qty_rate(description: str, amount: float):
     return qty, rate
 
 
+# A broker-printed settle date more than this many calendar days after
+# the trade is flagged ATTENTION (CA-DATE-03 / US-DATE-04, audit A2-0104).
+SETTLE_LAG_FLAG_DAYS = 7
+
+
 class BrokerageParseError(ValueError):
     """A broker export the parser refuses to read rather than guess at:
     a required column is missing, a required money/quantity/date cell
@@ -262,6 +281,17 @@ def decode_broker_text(raw: bytes, name: str = '') -> str:
             f"{where}not UTF-8 or UTF-16 text (byte 0x{raw[e.start]:02x} "
             f"at offset {e.start}) — a spreadsheet re-save in a legacy "
             f"encoding? Re-export the file, or save it as CSV UTF-8.")
+
+
+def read_broker_text(path) -> str:
+    """A broker export's text through `decode_broker_text` (UTF-16 with a
+    BOM, else UTF-8 with an optional BOM), with line ends folded to
+    '\\n' the way a text-mode open() reads them — the drop-in for
+    `open(path, encoding='utf-8-sig').read()` in a parser, so a UTF-16
+    re-save is read rather than refused as 'not UTF-16' (audit
+    A2-0101 / A2-1451)."""
+    text = decode_broker_text(Path(path).read_bytes(), shown_name(path))
+    return text.replace('\r\n', '\n').replace('\r', '\n')
 
 
 # Strict number grammar for REQUIRED money/quantity cells. A leading
@@ -353,12 +383,15 @@ def parse_strict_number(raw, *, field: str = 'value', where: str = '',
     if t.startswith('(') and t.endswith(')'):
         neg = True
         t = t[1:-1].strip()
-    # Currency sign on either side of the sign: $-12 / -$12.
+    # ONE currency sign on either side of the sign: $-12 / -$12. A
+    # second one ('$€5', '$-€5') is text, refused below (audit A2-0633).
     for cs in _CURRENCY_SIGNS:
         if t.startswith(cs):
             t = t[len(cs):].lstrip()
-        elif t[:1] in '+-' and t[1:].startswith(cs):
+            break
+        if t[:1] in '+-' and t[1:].startswith(cs):
             t = t[0] + t[1 + len(cs):].lstrip()
+            break
     m = _STRICT_NUM_RE.match(t)
     if (not m or not (m.group('int') or (m.group('frac') or '')[1:])
             or (m.group('exp') and ',' in m.group('int'))
@@ -913,6 +946,42 @@ class BaseBrokerage:
                 f"settlement never precedes its trade, and the tax year "
                 f"follows the settle date; refusing to guess. Fix the "
                 f"cell (or blank it for the standard cycle).")
+        # A printed settle date far AFTER the trade (a typo a year out)
+        # moves the disposition into a later tax year just as silently:
+        # trusted, but flagged on the console (audit A2-0104). No cycle
+        # with its holidays runs past 7 calendar days.
+        if date_iso and settle_iso and settle_iso > date_iso:
+            try:
+                lag = (datetime.strptime(settle_iso[:10], '%Y-%m-%d')
+                       - datetime.strptime(date_iso[:10], '%Y-%m-%d')).days
+            except ValueError:
+                return
+            if lag > SETTLE_LAG_FLAG_DAYS:
+                import sys
+                loc = f"{where}: " if where else ''
+                print(f"warning: ATTENTION: {loc}Settlement Date "
+                      f"{settle_iso} is {lag} days after the trade date "
+                      f"{date_iso}{f' ({what})' if what else ''} — no "
+                      f"settlement cycle is that long, and the tax year "
+                      f"follows the settle date. Booked as printed; check "
+                      f"the cell (blank it for the standard cycle).",
+                      file=sys.stderr)
+
+    @staticmethod
+    def warn_zero_cost_buy(where: str, symbol: str, qty: float,
+                           price: float, net: float) -> None:
+        """A share BUY at $0 price and $0 cash is almost always a
+        transfer or journal row, booked with no cost (the generic
+        importer refuses it). Booked as printed, flagged on the console
+        (audit A2-0619)."""
+        if (qty or 0) > 0 and abs(price or 0) < 1e-9 \
+                and abs(net or 0) < 0.005:
+            import sys
+            print(f"warning: ATTENTION: {where}: a buy of {qty:g} "
+                  f"{symbol} at ZERO cost (price and cash both 0) — "
+                  f"booked with no cost basis. If it is a transfer or a "
+                  f"journal, book its real cost (a .tt BUYSELL) instead.",
+                  file=sys.stderr)
 
     def settlement_date_t1(self, date_str: str, *formats: str,
                            currency: str = 'USD') -> str:

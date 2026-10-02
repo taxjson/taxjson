@@ -75,7 +75,11 @@ def parse_args():
     )
     parser.add_argument(
         "--sheltered",
-        help="Path to tax-sheltered transactions JSON (for wash-sale detection)",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="Path to tax-sheltered transactions JSON (for wash-sale "
+             "detection); repeatable, as in taxjson-gains",
     )
     parser.add_argument(
         "--affiliated",
@@ -118,7 +122,7 @@ def parse_args():
                         "or close timing for written options (match the "
                         "run). Default: close, with a note — `taxjson run` "
                         "defaults a Canada project to grant.")
-    parser.add_argument("--option-grant-since", type=int, default=None,
+    parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR")
     parser.add_argument("--option-buyback-wash", action="store_true")
     parser.add_argument(
@@ -264,8 +268,10 @@ def main():
     if args.tax_date is None:
         args.tax_date = default_tax_date(args.country)
     transactions = load_input(args)
-    sheltered = (load_transactions_or_exit("taxjson-explain", args.sheltered)
-                 if args.sheltered else [])
+    # Repeatable (A2-0194): a second --sheltered used to replace the
+    # first silently, and the superficial-loss denial it backed vanished.
+    sheltered = [t for f in args.sheltered
+                 for t in load_transactions_or_exit("taxjson-explain", f)]
     affiliated = (load_transactions_or_exit("taxjson-explain",
                                             args.affiliated)
                   if args.affiliated else [])

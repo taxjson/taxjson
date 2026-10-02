@@ -1,11 +1,12 @@
 import csv
 import hashlib
+import io
 import re
 import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
-from taxjson.lib.brokerages.base import BaseBrokerage
+from taxjson.lib.brokerages.base import BaseBrokerage, read_broker_text
 from taxjson.lib.brokerages._crypto_common import (USD_STABLECOINS,
                                                    strict_money, utc_to_local,
                                                    warn_depeg)
@@ -182,7 +183,7 @@ class CoinbaseBrokerage(BaseBrokerage):
         self._stems: Dict[str, int] = {}
         # utf-8-sig swallows a BOM if present, plain utf-8 reads it as a
         # data byte and silently breaks the first column match.
-        with open(path, 'r', encoding='utf-8-sig') as f:
+        with io.StringIO(read_broker_text(path)) as f:
             reader = csv.reader(f)
             header = None
             header_map: Dict[str, int] = {}

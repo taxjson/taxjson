@@ -54,6 +54,20 @@ _TIME_RE = re.compile(r'^\d{2}:\d{2}:\d{2}$')
 # audit S026-22. Without it an option line is checked at the equity 100
 # and a futures line is not checked at all.
 _MULT_RE = re.compile(r'^[xX](\d+(?:\.\d+)?)$')
+# Optional income facts at the END of a DIVIDEND / DIVIDEND_IN_LIEU /
+# TAX / ADJUST line, as `key=value` tokens: the record date that dates
+# trust income and ROC, the broker's "distribution" label, the paying
+# dealer's and the issuer's countries (an s.260 payment in lieu by a
+# Canadian dealer is a deemed dividend), and an ADJUST's kind (`roc`,
+# `dist`). A json -> tt -> json round trip dropped them all, moving
+# income to the pay year and a deemed dividend to other income with no
+# word (audit A2-0291, A2-0631).
+_FACT_KEYS = {'record': 'record_date', 'ex': 'ex_date',
+              'label': 'income_label', 'dealer': 'dealer_country',
+              'issuer': 'issuer_country', 'type': 'type'}
+_FACT_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'ADJUST')
+_FACT_RE = re.compile(r'^([a-z]+)=(\S+)$')
+_ADJUST_TYPES = ('roc', 'dist')
 
 
 def strip_tt_comment(line: str) -> str:
@@ -137,6 +151,12 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"least a date and a time: {line.strip()!r}")
     _check_date(parts[1], 'date', line, source)
     _check_time(parts[2], line, source)
+    facts = {}
+    if action in _FACT_ACTIONS:
+        while parts and _FACT_RE.match(parts[-1]):
+            key, val = _FACT_RE.match(parts.pop()).groups()
+            facts[key] = val
+        facts = _check_facts(action, facts, line, source)
     _max = _MAX_TOKENS.get(action)
     if _max is not None and len(parts) > _max:
         raise ValueError(
@@ -243,19 +263,31 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 _fee = tx.get('fee', 0.0)
                 _expected = (abs(_q) * tx['price'] * _mult
                              + (_fee if _q > 0 else -_fee))
-                if _q < 0:
-                    # A sale whose commission exceeds its gross is
-                    # entered as 0 (a negative total is refused below),
-                    # so 0 is its correct total — comparing against the
-                    # negative figure warned on exactly that (S029-01).
-                    _expected = max(_expected, 0.0)
-                _total = abs(tx['net_amount'])
-                if (tx['price'] > 0 and abs(_q) > 0
+                # A sale whose commission exceeds its gross nets
+                # NEGATIVE proceeds (qty x price - fee < 0): that signed
+                # total is what the line carries now (A2-0622/A2-0623),
+                # so a SELL total is compared signed. The old `enter 0`
+                # dropped the excess commission from the loss — the
+                # check now says so instead of calling 0 correct.
+                _total = (tx['net_amount'] if _q < 0
+                          else abs(tx['net_amount']))
+                if (_q < 0 and _expected < 0 and tx['price'] > 0
+                        and abs(tx['net_amount']) < 0.005
+                        and (not _is_fut or tx.get('multiplier'))):
+                    print(
+                        f"warning: {_where(source)}.tt sell total 0 on a "
+                        f"sale whose commission {_fee:.2f} exceeds its "
+                        f"gross {abs(_q) * tx['price'] * _mult:.2f}: the "
+                        f"proceeds are {_expected:.2f}, and 0 leaves "
+                        f"{-_expected:.2f} of commission out of the loss "
+                        f"— write the negative total ({_expected:.2f}): "
+                        f"{line.strip()!r}", file=sys.stderr)
+                elif (tx['price'] > 0 and abs(_q) > 0
                         # A futures line is checked only with its size
                         # on the line (`x1000`).
                         and (not _is_fut or tx.get('multiplier'))
                         and abs(_total - _expected) >
-                        max(0.05, 0.01 * max(_expected, 1.0))):
+                        max(0.05, 0.01 * max(abs(_expected), 1.0))):
                     print(
                         f"warning: {_where(source)}.tt line total "
                         f"{_total:.2f} differs from "
@@ -299,26 +331,144 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"transaction the engine downstream needs."
         ) from e
 
-    # A SELL total is the POSITIVE net proceeds (qty x price - fee;
-    # direction lives in the qty sign). A negative one was booked as
-    # negative proceeds -- a +1,000 gain became a -3,000 loss with no
-    # word, because the net >= 0 schema rule never runs on .tt rows
-    # (audit R1-117). It is ambiguous (a cash-signed proceeds figure, or
-    # a commission larger than the proceeds), so refuse it. A negative
+    # A SELL total is the net proceeds (qty x price - fee; direction
+    # lives in the qty sign). A negative one is either a cash-signed
+    # proceeds figure typed with a '-' (booked as negative proceeds, a
+    # +1,000 gain became a -3,000 loss with no word: audit R1-117) or a
+    # sale whose commission exceeds its gross (a penny option close,
+    # S017-00). Only the second is unambiguous: the line's own fee is
+    # larger than qty x price (x size) and the total is qty x price -
+    # fee. That one is booked signed, like every parser books it (the
+    # whole commission is an outlay, CA-DISP-01); any other negative
+    # SELL total is refused. The .tt writers emit exactly that signed
+    # total, so json -> tt -> json round-trips (A2-0292, A2-0620,
+    # A2-0621, A2-0622, A2-0623, A2-1073, A2-1226, A2-1227). A negative
     # BUY total cannot mean anything but the cash sign (qty x price +
     # fee is never negative) and stays read as its magnitude.
     if (action in ('BUYSELL', 'ASSIGN') and tx.get('quantity', 0) < 0
-            and tx.get('net_amount', 0) < 0):
+            and tx.get('net_amount', 0) < 0
+            and not _excess_commission_sale(tx)):
         raise ValueError(
             f"{_where(source)}{action} sell total {parts[7]} is negative "
-            f"— a .tt total is the POSITIVE net proceeds (qty x price - "
+            f"— a .tt total is the net proceeds (qty x price - "
             f"commission); the sell direction lives in the negative qty. "
-            f"If you typed the cash sign, drop the '-'; if the commission "
-            f"exceeds the proceeds, enter 0. Line: {line.strip()!r}")
+            f"If you typed the cash sign, drop the '-'. A negative total "
+            f"is read only when the line's commission exceeds qty x "
+            f"price{' (add the contract size, e.g. x1000)' if str(tx.get('symbol') or '').startswith(_FUTURES_PREFIXES) and not tx.get('multiplier') else ''} "
+            f"and the total equals qty x price - commission. "
+            f"Line: {line.strip()!r}")
 
+    # Not part of the id (as in TaxTransaction.compute_id).
+    tx.update(facts)
+    _canonical_ca_symbols(tx)
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
     return tx
+
+
+def _canonical_ca_symbols(tx: dict) -> None:
+    """Spell a Canadian listing as every broker parser does: ROOT.TO
+    with a dotted preferred series (base.canonical_ca_listing). A .tt
+    `ABC.V`, `ABC.VN` or `FTN.PRA.TO` used to stay its own ACB pool, so
+    a loss sold here and the broker's repurchase of ABC.TO were never
+    linked as identical property (audit A2-0300, A2-0635). A `.V` is
+    Venture only on a CAD line (a SPLIT line has no currency: only the
+    unambiguous .VN/.CN/.NE and undotted preferreds are folded)."""
+    from taxjson.lib.brokerages.base import canonical_ca_listing
+    from taxjson.lib.core import is_option_symbol
+    cur = '' if tx.get('action') == 'SPLIT' else tx.get('currency', '')
+    for key in ('symbol', 'symbol_new'):
+        sym = tx.get(key) or ''
+        if (not sym or sym == 'CASH' or is_option_symbol(sym)
+                or sym.startswith(_FUTURES_PREFIXES)):
+            continue
+        canon = canonical_ca_listing(sym, cur)
+        if canon:
+            tx[key] = canon
+
+
+def _check_facts(action: str, facts: dict, line: str, source: str) -> dict:
+    """Validate the `key=value` income-fact tokens of one line and map
+    them to their row fields."""
+    out = {}
+    for key, val in facts.items():
+        field = _FACT_KEYS.get(key)
+        if field is None:
+            raise ValueError(
+                f"{_where(source)}unknown .tt token {key}={val} — the "
+                f"income facts are {', '.join(f'{k}=' for k in _FACT_KEYS)}"
+                f": {line.strip()!r}")
+        if key in ('record', 'ex'):
+            _check_date(val, f"{key}=", line, source)
+        elif key in ('dealer', 'issuer'):
+            if not re.match(r'^[A-Z]{2}$', val):
+                raise ValueError(
+                    f"{_where(source)}{key}={val} must be a two-letter "
+                    f"country code (CA, US): {line.strip()!r}")
+        elif key == 'type':
+            if action != 'ADJUST' or val not in _ADJUST_TYPES:
+                raise ValueError(
+                    f"{_where(source)}type={val}: only an ADJUST line "
+                    f"takes a type ({', '.join(_ADJUST_TYPES)}): "
+                    f"{line.strip()!r}")
+        elif key == 'label':
+            if not re.match(r'^[a-z_]+$', val):
+                raise ValueError(
+                    f"{_where(source)}label={val} must be a lower-case "
+                    f"word (distribution): {line.strip()!r}")
+        out[field] = val
+    return out
+
+
+def _fact_tokens(tx: dict, action: str) -> str:
+    """The `key=value` tokens that carry a row's income facts."""
+    toks = []
+    for key, field in _FACT_KEYS.items():
+        val = str(tx.get(field) or '').strip()
+        if not val:
+            continue
+        if key == 'type':
+            if action != 'ADJUST' or val.lower() not in _ADJUST_TYPES:
+                continue
+            val = val.lower()
+        if ' ' in val:
+            continue
+        toks.append(f"{key}={val}")
+    return (" " + " ".join(toks)) if toks else ""
+
+
+def _num(x: float) -> str:
+    """A quantity / price at full precision: `%.8f` when that is exact,
+    else the shortest exact decimal. Truncating to 8 decimals changed a
+    10-decimal crypto quantity on json -> tt -> json, and with it the
+    row's id (audit A2-1072)."""
+    x = float(x)
+    s = f"{x:.8f}"
+    if float(s) == x:
+        return s
+    from decimal import Decimal
+    return format(Decimal(repr(x)), 'f')
+
+
+def _excess_commission_sale(tx: dict) -> bool:
+    """A SELL (or ASSIGN) line whose negative total is a commission
+    larger than its gross: fee > |qty| x price x size and the total is
+    |qty| x price x size - fee within the typo-check tolerance. A
+    futures line needs its size on the line (`x1000`) to tell."""
+    from taxjson.lib.core import is_option_symbol
+    sym = str(tx.get('symbol') or '')
+    is_fut = sym.startswith(_FUTURES_PREFIXES)
+    if is_fut and not tx.get('multiplier'):
+        return False
+    mult = (tx['multiplier'] if tx.get('multiplier')
+            else 100.0 if is_option_symbol(sym) else 1.0)
+    gross = abs(float(tx.get('quantity') or 0.0)) * float(
+        tx.get('price') or 0.0) * mult
+    fee = float(tx.get('fee') or 0.0)
+    expected = gross - fee
+    net = float(tx.get('net_amount') or 0.0)
+    return (fee > gross and expected < 0
+            and abs(net - expected) <= max(0.05, 0.01 * abs(expected)))
 
 
 def _warn_unknown_suffix(tx: dict, line: str, source: str) -> None:
@@ -420,10 +570,11 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # SIGNED total/fee: abs() re-inflated sign-preserved reversal
         # rows (and fee rebates) on a json→tt→json cycle — the exact
         # corruption the parser-level sign fixes removed. Direction
-        # still comes from qty. parse_tt_line refuses a negative SELL
-        # total (R1-117): a commission above the gross is written 0.
-        line = (f"{action} {date} {time} {symbol} {qty:.8f} {currency} "
-                f"{price:.8f} {net:.5f} {fee:.5f}")
+        # still comes from qty. A sale whose commission exceeds its
+        # gross is written with its NEGATIVE total, which parse_tt_line
+        # reads back when the line's fee explains it (A2-0620).
+        line = (f"{action} {date} {time} {symbol} {_num(qty)} {currency} "
+                f"{_num(price)} {net:.5f} {fee:.5f}")
         # A declared contract size other than the equity option's 100
         # (or any size on a futures line) rides along as `x<size>`
         # (audit S026-22).
@@ -438,8 +589,8 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         return line
 
     if action == 'TRANSFER':
-        line = (f"TRANSFER {date} {time} {symbol} {qty:.8f} {currency} "
-                f"{price:.8f} {net:.5f}")
+        line = (f"TRANSFER {date} {time} {symbol} {_num(qty)} {currency} "
+                f"{_num(price)} {net:.5f}")
         # Round-trip the opt-in declaration token: without it a
         # json→tt→json cycle would strip attestation from declared
         # rows (and could never re-grant it, by design).
@@ -451,7 +602,7 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
     if action == 'SPLIT':
         # SPLIT date time symbol_old symbol_new ratio
         symbol_new = tx.get('symbol_new') or symbol
-        return f"SPLIT {date} {time} {symbol} {symbol_new} {qty:.8f}"
+        return f"SPLIT {date} {time} {symbol} {symbol_new} {_num(qty)}"
 
     if action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX'):
         # ACTION date time symbol qty currency price total
@@ -460,15 +611,15 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # (the exact bug the sign-preserving IB parser fix removed), and the
         # changed net_amount hashed to a different id, breaking dedup
         # against the originals. The .tt parser reads the value signed.
-        line = (f"{action} {date} {time} {symbol} {qty:.8f} {currency} "
-                f"{price:.8f} {gross:.5f}")
+        line = (f"{action} {date} {time} {symbol} {_num(qty)} {currency} "
+                f"{_num(price)} {gross:.5f}")
         # Optional 9th column: the withholding-NETTED amount, emitted
         # only when it differs from gross — without it a json→tt→json
         # cycle re-parsed net as gross and inflated income. Legacy
         # positional consumers ignore trailing columns.
         if abs(net - gross) > 0.005:
             line += f" {net:.5f}"
-        return line
+        return line + _fact_tokens(tx, action)
 
     if action in ('INTEREST', 'FEE'):
         # ACTION date time currency amount  (sign preserved on interest)
@@ -476,7 +627,8 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
 
     if action in ('ADJUST', 'DISALLOW'):
         # ACTION date time symbol currency amount
-        return f"{action} {date} {time} {symbol} {currency} {net:.5f}"
+        return (f"{action} {date} {time} {symbol} {currency} {net:.5f}"
+                + _fact_tokens(tx, action))
 
     return None
 
@@ -525,7 +677,18 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
     # utf-8-sig: an editor's byte-order mark used to reach the first
     # action as '\ufeffBUYSELL' ("unknown .tt action", R1-133).
     from taxjson.lib.cli_diag import read_text_utf8
-    with io.StringIO(read_text_utf8(input_path)) as f:
+    _text = read_text_utf8(input_path)
+    # A file whose last line has no line end may have been cut short
+    # (a copy or a download that stopped): `... 4.95` cut to `... 4`
+    # still parses, as fee 4 (audit A2-1086). Say so; editors and the
+    # writers here always end the last line.
+    if _text and not _text.endswith(('\n', '\r')):
+        _last = strip_tt_comment(_text.splitlines()[-1]).strip()
+        if _last:
+            print(f"warning: {input_path.name}: the last line has no line "
+                  f"end — if the file was cut short, its last number may "
+                  f"be truncated; check it: {_last!r}", file=sys.stderr)
+    with io.StringIO(_text) as f:
         for lineno, line in enumerate(f, 1):
             source = f"{input_path.name}:{lineno}"
             try:

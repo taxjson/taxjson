@@ -38,11 +38,15 @@ class TestTotalCheck(unittest.TestCase):
                         "4995.00 5.00")
         self.assertEqual(err, "")
 
-    def test_commission_over_gross_entered_as_zero_is_silent(self):
-        # S029-01: the README says to enter 0 when the commission
-        # exceeds the proceeds; the check compared 0 with -8.95.
+    def test_commission_over_gross_entered_as_zero_warns(self):
+        # S029-01 made the old `enter 0` advice silent; A2-0622/A2-0623:
+        # 0 drops the excess commission from the loss, and the signed
+        # total (-8.95) is now read, so 0 warns and names it.
         _, err = _parse("BUYSELL 2025-06-16 09:30:00 ZZZ250620C00050000.US "
                         "-1 USD 0.01 0 9.95")
+        self.assertIn("-8.95", err)
+        _, err = _parse("BUYSELL 2025-06-16 09:30:00 ZZZ250620C00050000.US "
+                        "-1 USD 0.01 -8.95 9.95")
         self.assertEqual(err, "")
 
 

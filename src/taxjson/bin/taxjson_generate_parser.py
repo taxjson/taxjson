@@ -130,14 +130,14 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _read_sample(csv_path: Path, n: int) -> str:
-    lines = []
-    with open(csv_path, 'r', encoding='utf-8') as f:
-        for _ in range(n):
-            line = f.readline()
-            if not line:
-                break
-            lines.append(line.rstrip('\n'))
-    return '\n'.join(lines)
+    """The first `n` lines of the sample, decoded the way detection and
+    every parser read a broker export (base.decode_broker_text: UTF-16
+    with a BOM, else UTF-8 with an optional BOM). A legacy encoding
+    raises BrokerageParseError naming the file (audit A2-1080)."""
+    from taxjson.lib.brokerages.base import decode_broker_text
+    text = decode_broker_text(csv_path.read_bytes(), csv_path.name)
+    return '\n'.join(line.rstrip('\r') for line in
+                     text.splitlines()[:n])
 
 
 # Synthetic ids the redactor and check-pii treat as placeholders.
@@ -322,7 +322,12 @@ def main():
     default_account = args.default_account or brokerage_name
     model_id = args.model or _DEFAULT_MODELS[args.provider]
 
-    sample = _read_sample(input_path, args.sample_lines)
+    from taxjson.lib.brokerages.base import BrokerageParseError
+    try:
+        sample = _read_sample(input_path, args.sample_lines)
+    except BrokerageParseError as e:
+        print(f"taxjson-generate-parser: error: {e}", file=sys.stderr)
+        sys.exit(1)
     if not sample:
         print(f"taxjson-generate-parser: error: {input_path} is empty", file=sys.stderr)
         sys.exit(1)

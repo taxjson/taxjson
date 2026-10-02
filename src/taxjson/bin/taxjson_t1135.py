@@ -92,12 +92,11 @@ _SUFFIX_COUNTRY: Dict[str, Optional[str]] = {
     "US": "USA",
     "L": "GBR",
     "AX": "AUS",
-    # Canadian exchanges — not specified foreign property.
-    "TO": None,
-    "V": None,
-    "CN": None,
-    "NE": None,
 }
+# Canadian exchanges — not specified foreign property. The shared set
+# (lib/income_dating): .VN was a '??' REVIEW here (audit A2-1077).
+from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
+_SUFFIX_COUNTRY.update({_v: None for _v in _CA_VENUES})
 
 # Actions that never move a position or its cost. Mirrors the engines'
 # non-capital skip list (core.py) minus ADJUST/SPLIT/OPENING_BALANCE which
@@ -1236,7 +1235,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         default="close",
                         help="Written-option premium timing the gains "
                              "files use (default close)")
-    parser.add_argument("--option-grant-since", type=int, default=None,
+    parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
                              "YEAR keep close timing")
