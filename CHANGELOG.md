@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson tax-logic` (US) states the wash-sale replacement order the
+  engine already applies: order acquired, and at the same moment taxable
+  accounts first, then IRAs, then affiliated accounts (US-WASH-20, re-audit
+  A2-0941).
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
