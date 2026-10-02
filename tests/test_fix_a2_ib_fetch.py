@@ -237,5 +237,56 @@ class TestFlexSpanIgnoresNumbers(unittest.TestCase):
         self.assertEqual(_flex_lost_dates(self._OLD, self._OLD, 2025), [])
 
 
+class TestQtWindowLocalMidnight(unittest.TestCase):
+    """A2-0599: startTime/endTime carry America/Toronto's offset of each
+    boundary date (EDT -04:00 in summer, EST -05:00 in winter)."""
+
+    def _queries(self, start, end):
+        from taxjson.bin.taxjson_fetch import qt_activities
+        seen = []
+
+        def http(url):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            seen.append((q["startTime"][0], q["endTime"][0]))
+            return json.dumps({"activities": []}).encode()
+        qt_activities({"api_server": "https://api01.iq.questrade.com/",
+                       "access_token": "AT"}, "1", start, end, http)
+        return seen
+
+    def test_summer_window_starts_at_edt_midnight(self):
+        q = self._queries(date(2025, 7, 2), date(2025, 7, 20))
+        self.assertEqual(q, [("2025-07-02T00:00:00-04:00",
+                              "2025-07-20T23:59:59-04:00")])
+
+    def test_winter_window_keeps_est(self):
+        q = self._queries(date(2025, 12, 1), date(2025, 12, 20))
+        self.assertEqual(q, [("2025-12-01T00:00:00-05:00",
+                              "2025-12-20T23:59:59-05:00")])
+
+    def test_dst_switch_days(self):
+        from taxjson.bin.taxjson_fetch import _toronto_stamp
+        # 2025-03-09: midnight is still EST, 23:59:59 is EDT;
+        # 2025-11-02: midnight is EDT, 23:59:59 is EST.
+        self.assertEqual(_toronto_stamp(date(2025, 3, 9), "00:00:00"),
+                         "2025-03-09T00:00:00-05:00")
+        self.assertEqual(_toronto_stamp(date(2025, 3, 9), "23:59:59"),
+                         "2025-03-09T23:59:59-04:00")
+        self.assertEqual(_toronto_stamp(date(2025, 11, 2), "00:00:00"),
+                         "2025-11-02T00:00:00-04:00")
+        self.assertEqual(_toronto_stamp(date(2025, 11, 2), "23:59:59"),
+                         "2025-11-02T23:59:59-05:00")
+
+    def test_fallback_without_tz_database(self):
+        from unittest import mock
+        from taxjson.bin.taxjson_fetch import _toronto_stamp
+        with mock.patch("zoneinfo.ZoneInfo", side_effect=KeyError("tz")):
+            self.assertEqual(_toronto_stamp(date(2025, 7, 2), "00:00:00"),
+                             "2025-07-02T00:00:00-04:00")
+            self.assertEqual(_toronto_stamp(date(2025, 3, 9), "00:00:00"),
+                             "2025-03-09T00:00:00-05:00")
+            self.assertEqual(_toronto_stamp(date(2025, 11, 2), "23:59:59"),
+                             "2025-11-02T23:59:59-05:00")
+
+
 if __name__ == "__main__":
     unittest.main()

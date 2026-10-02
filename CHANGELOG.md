@@ -18,6 +18,9 @@
   Statement Period (else its activity dates), not from any digits on any
   row. An 8-decimal P/L such as -26.20190219 read as 2019-02-19 and
   silenced the refusal (audit A2-0083).
+- `taxjson fetch` (Questrade): activity windows ask from local
+  (America/Toronto) midnight, -04:00 in summer, not a fixed -05:00 that
+  could miss the first day of a summer `--from` window (audit A2-0599).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
