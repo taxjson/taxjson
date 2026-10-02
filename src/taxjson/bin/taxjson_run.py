@@ -13495,8 +13495,12 @@ def _radar_engine_args(bases: List[Path],
         # date as the engine does, and leaves a listed corporation's on
         # its pay date (CA-INC-DATE-ROC-TRUST; audit A2-1174/A2-1178).
         try:
-            _corp = (_soft_settings(Path(phantoms).parent).get(
-                "corporate_distributions") or [])
+            _s = _soft_settings(Path(phantoms).parent)
+            _corp = (_s.get("corporate_distributions") or [])
+            # CA-SL-11 / CA-SL-12 in the radar's own pool too (a loss
+            # outside the gains files' year — audit A2-0442).
+            if _s.get("option_buyback_loss_superficial") is True:
+                out.append("--option-buyback-wash")
         except Exception:                                  # noqa: BLE001
             _corp = []
         if isinstance(_corp, (list, tuple)):
@@ -15057,6 +15061,28 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
             for r in matches.values())
         for t, r in sorted(matches.items()):
             cat = r.get("category") or ""
+            if _usa and r.get("outside_wash_rule"):
+                # A futures contract / futures option: outside §1091
+                # (US-WASH-18) — a re-purchase never disallows its loss
+                # (audit A2-0435: UNSAFE, exit 1).
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(f"{t}: {r.get('advisory')}")
+                continue
+            _sc = r.get("short_cover_loss") if _usa else None
+            if _sc and not _is_opt_sym(_q):
+                # §1091(e) / US-WASH-05: only a new SHORT sale replaces a
+                # short-cover loss; a buy never does (audit A2-0436).
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(
+                    f"{t}: the loss sold within the past 30 days was on "
+                    f"covering a short ({_sc.get('date')}) — a buy does "
+                    f"not replace it (§1091(e)); only a new short sale "
+                    f"before {_sc.get('reshort_ok_from')} would disallow "
+                    f"it.")
+                if cat in ("BLOCKED", "COOLING"):
+                    continue
             if (_us_call_note and not _is_opt_sym(t.strip().upper())
                     and cat in ("BLOCKED", "COOLING", "VIOLATION",
                                 "WASHED")):
@@ -15124,9 +15150,10 @@ def cmd_buy_check(args: argparse.Namespace) -> None:
                 if verdict == "SAFE":
                     verdict = "SAFE*"
                 lines.append(
-                    f"{t}: {cat} — no recent loss sale, buying is "
-                    f"safe TODAY, but it extends the wash window: "
-                    f"{_future_rule}.")
+                    f"{t}: {cat} — no recent loss sale"
+                    + (" a buy can disallow" if _sc else "")
+                    + f", buying is safe TODAY, but it extends the wash "
+                    f"window: {_future_rule}.")
         # A warrant/right, a call on an adjusted series or a futures
         # option on the shares of a recent loss: the engines flag it for
         # a manual check (CA-SL-14/15, US-WASH-14/15); buy-check said
@@ -15216,7 +15243,11 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
         for t, r in sorted(matches.items()):
             cat = r.get("category") or ""
             adv = r.get("advisory") or ""
-            if cat == "LOCKED":
+            if _usa and r.get("outside_wash_rule"):
+                # A futures contract / futures option: outside §1091
+                # (US-WASH-18) — the radar's own line, not 'do not rebuy'.
+                lines.append(f"{t}: {adv}")
+            elif cat == "LOCKED":
                 # A registered account's in-window buy it still holds
                 # denies the loss on up to that many units — the rest of
                 # a sale stands (s.54, per holder). UNSAFE only when the
@@ -15330,13 +15361,18 @@ def cmd_sell_check(args: argparse.Namespace) -> None:
                                  f"(taxable or "
                                  f"{'IRA' if _usa else 'sheltered'}) for "
                                  f"30 days.")
-                    # Warn-only flags for a sale today (a US long call,
-                    # a warrant, an adjusted series, a futures option
-                    # bought in the window — audit A2-0687).
-                    for _n in r.get("notes") or []:
-                        if verdict == "SAFE":
-                            verdict = "SAFE*"
-                        lines.append(f"{t}: {_n}")
+            # Warn-only flags (a US long call, a warrant, an adjusted
+            # series, a futures option bought in the window; a US
+            # short-cover loss's re-short rule), whatever the row's
+            # category — a BLOCKED row dropped them (audit A2-0687 /
+            # A2-0434 / A2-0445); skipped when the line already quotes
+            # the advisory that carries them.
+            for _n in r.get("notes") or []:
+                if any(_n in ln for ln in lines):
+                    continue
+                if verdict == "SAFE":
+                    verdict = "SAFE*"
+                lines.append(f"{t}: {_n}")
         if len(lines) == bool(_note):
             lines.append(f"{wroot}: no tracked taxable position — "
                          f"nothing to sell (or run `taxjson run` to "
