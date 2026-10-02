@@ -783,5 +783,24 @@ class TestTraceAndTableRoundAlike(unittest.TestCase):
         self.assertEqual(_fmt_signed_money(530.4250000000001), "+$530.42")
 
 
+# ---------------------------------------------------------------- A2-0710
+class TestByTickerFollowsRowsWithoutYear(unittest.TestCase):
+
+    @rule("CA-INC-03")
+    def test_deemed_dividend_pil(self):
+        from tax_rules.dual import tx
+        book = [tx("BUYSELL", "2025-01-06", "ABC.TO", 100, 1000,
+                   currency="CAD"),
+                tx("DIVIDEND_IN_LIEU", "2025-03-03", "ABC.TO", 0, 12.0,
+                   gross_amount=12.0, currency="CAD", dealer_country="CA",
+                   issuer_country="CA")]
+        for year in (None, 2025):
+            with self.subTest(year=year):
+                r = _gains_one(book, "canada", year=year)
+                bt = r["by_ticker"]["ABC.TO"]
+                self.assertEqual(bt["total_pil"], 0.0)
+                self.assertEqual(bt["total_div"], 12.0)
+
+
 if __name__ == "__main__":
     unittest.main()

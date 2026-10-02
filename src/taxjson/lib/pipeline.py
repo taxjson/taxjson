@@ -1349,51 +1349,53 @@ def run_gains(transactions, sheltered_transactions=(),
             ]
             results['summary']['total_disallowed'] = sum(w['disallowed_amount'] for w in results['wash_sales'])
 
-        # Rebuild by_ticker from year-filtered transactions. Without this,
-        # consumers reading by_ticker['AAPL.US']['total_gain'] get all-year
-        # totals on what looks like a single-year report.
-        #
-        # Skip `tainted` rows — they carry fabricated gain numbers (cost
-        # basis = 0 against a synthetic/phantom opening) which are about
-        # to be routed to `manual_reporting_required` below. Letting them
-        # into by_ticker totals would silently inflate any downstream
-        # consumer that reads by_ticker instead of `transactions`.
-        if 'by_ticker' in results:
-            rebuilt: Dict[str, Dict] = {}
-            for t in results['transactions']:
-                if t.get('tainted'):
-                    continue
-                sym = t.get('symbol')
-                if not sym:
-                    continue
-                stats = rebuilt.setdefault(sym, {
-                    'total_cost': 0.0, 'total_proceeds': 0.0,
-                    'total_gain': 0.0, 'total_div': 0.0,
-                    'total_pil': 0.0,
-                    'trade_count': 0, 'hold_days': [],
-                })
-                action = t.get('action')
-                if action == 'DIVIDEND':
-                    stats['total_div'] += float(t.get('dividend', 0.0) or 0.0)
-                elif action == 'DIVIDEND_IN_LIEU':
-                    # A Canadian s.260 payment in lieu carries its
-                    # amount as 'dividend' (see the income pass above).
-                    stats['total_div'] += float(t.get('dividend', 0.0)
-                                                or 0.0)
-                    # PIL is its own bucket — same per-ticker association
-                    # as a dividend but bucketed separately so downstream
-                    # T5 totals stay clean. Before this branch, PIL rows
-                    # fell into the trade accumulator below: trade_count
-                    # got incremented and the PIL amount was invisible.
-                    stats['total_pil'] += float(t.get('pil', 0.0) or 0.0)
-                else:
-                    stats['total_cost'] += float(t.get('cost', 0.0) or 0.0)
-                    stats['total_proceeds'] += float(t.get('proceeds', 0.0) or 0.0)
-                    stats['total_gain'] += float(t.get('gain', 0.0) or 0.0)
-                    stats['trade_count'] += 1
-                    if t.get('days_held') is not None:
-                        stats['hold_days'].append(t['days_held'])
-            results['by_ticker'] = rebuilt
+    # Rebuild by_ticker from the (year-filtered) rows, with or without
+    # --year (re-audit A2-0710: without it an s.260 deemed dividend
+    # stayed in total_pil). Under --year, consumers reading
+    # by_ticker['AAPL.US']['total_gain'] otherwise got all-year totals
+    # on what looks like a single-year report.
+    #
+    # Skip `tainted` rows — they carry fabricated gain numbers (cost
+    # basis = 0 against a synthetic/phantom opening) which are about
+    # to be routed to `manual_reporting_required` below. Letting them
+    # into by_ticker totals would silently inflate any downstream
+    # consumer that reads by_ticker instead of `transactions`.
+    if 'by_ticker' in results:
+        rebuilt: Dict[str, Dict] = {}
+        for t in results['transactions']:
+            if t.get('tainted'):
+                continue
+            sym = t.get('symbol')
+            if not sym:
+                continue
+            stats = rebuilt.setdefault(sym, {
+                'total_cost': 0.0, 'total_proceeds': 0.0,
+                'total_gain': 0.0, 'total_div': 0.0,
+                'total_pil': 0.0,
+                'trade_count': 0, 'hold_days': [],
+            })
+            action = t.get('action')
+            if action == 'DIVIDEND':
+                stats['total_div'] += float(t.get('dividend', 0.0) or 0.0)
+            elif action == 'DIVIDEND_IN_LIEU':
+                # A Canadian s.260 payment in lieu carries its
+                # amount as 'dividend' (see the income pass above).
+                stats['total_div'] += float(t.get('dividend', 0.0)
+                                            or 0.0)
+                # PIL is its own bucket — same per-ticker association
+                # as a dividend but bucketed separately so downstream
+                # T5 totals stay clean. Before this branch, PIL rows
+                # fell into the trade accumulator below: trade_count
+                # got incremented and the PIL amount was invisible.
+                stats['total_pil'] += float(t.get('pil', 0.0) or 0.0)
+            else:
+                stats['total_cost'] += float(t.get('cost', 0.0) or 0.0)
+                stats['total_proceeds'] += float(t.get('proceeds', 0.0) or 0.0)
+                stats['total_gain'] += float(t.get('gain', 0.0) or 0.0)
+                stats['trade_count'] += 1
+                if t.get('days_held') is not None:
+                    stats['hold_days'].append(t['days_held'])
+        results['by_ticker'] = rebuilt
 
     # Aggregate trading fees across the raw transaction list (both buys AND
     # sells, both taxable and sheltered) for informational reporting. Gain
