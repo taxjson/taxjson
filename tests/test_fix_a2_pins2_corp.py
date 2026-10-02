@@ -247,5 +247,166 @@ class TestIbSpinoffParsing(unittest.TestCase):
                          [(1000.0, 25840.67)], err)
 
 
+# ============================================== close-year and handoff
+_QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+              "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+              "Account #,Activity Type,Account Type\n")
+
+
+def _qt(trade, settle, action, sym, qty, price):
+    gross = abs(qty) * price
+    net = -gross if action == "Buy" else gross
+    return (f"{trade} 09:30:00 AM,{settle} 12:00:00 AM,{action},{sym},D,"
+            f"{qty},{price:.2f},{gross:.2f},0.00,{net:.2f},CAD,55500001,"  # pii-ok
+            f"Trades,Individual\n")
+
+
+def _run_cli(root, *args):
+    return subprocess.run(
+        [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C", str(root),
+         *args], cwd=REPO_ROOT, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, timeout=600)
+
+
+def _project(root, year, files, extra_settings="", acct="margin"):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "inputs" / acct).mkdir(parents=True, exist_ok=True)
+    (root / "taxjson.toml").write_text(
+        f'[settings]\nyear = {year}\ncountry = "canada"\n'
+        f'base_currency = "CAD"\nsource_currencies = []\n{extra_settings}'
+        f'[accounts.{acct}]\ntype = "taxable"\n')
+    for name, text in files.items():
+        (root / "inputs" / acct / name).write_text(text)
+    return root
+
+
+# 2025 (settlement basis): XYZ bought, 40 sold Dec 31 settling Jan 2
+# 2026; ABC bought and sold in December; LOS sold at a 200 loss on
+# Apr 7 and bought back Apr 21 (a superficial loss, replacement still
+# held at Dec 31).
+Y2025 = (_QT_HEADER
+         + _qt("2025-03-03", "2025-03-04", "Buy", "XYZ.TO", 100, 10.0)
+         + _qt("2025-12-31", "2026-01-02", "Sell", "XYZ.TO", -40, 12.0)
+         + _qt("2025-06-03", "2025-06-04", "Buy", "ABC.TO", 50, 20.0)
+         + _qt("2025-12-29", "2025-12-30", "Sell", "ABC.TO", -50, 22.0)
+         + _qt("2025-01-06", "2025-01-07", "Buy", "LOS.TO", 100, 10.0)
+         + _qt("2025-04-07", "2025-04-08", "Sell", "LOS.TO", -100, 8.0)
+         + _qt("2025-04-21", "2025-04-22", "Buy", "LOS.TO", 100, 9.0))
+
+_OPEN = ("BUYSELL 2025-03-04 09:30:00 XYZ.TO 100 CAD 10 1000 0\n"
+         "BUYSELL 2025-04-22 09:30:00 LOS.TO 100 CAD 11 1100 0\n")
+
+
+class TestCloseYearAndHandoffPins(unittest.TestCase):
+    """A2-0515, A2-0881 (the year-end cost carries the s.53(1)(f)
+    addition and the deferral), A2-1557 (the record's own date basis
+    and filed dispositions), A2-1567 (the matching windows)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.base = Path(cls.tmp.name)
+        cls.p25 = _project(cls.base / "p2025", 2025,
+                           {"questrade.csv": Y2025})
+        r = _run_cli(cls.p25, "run", "--no-input")
+        assert r.returncode == 0, r.stderr
+        r = _run_cli(cls.p25, "close-year")
+        assert r.returncode == 0, r.stderr
+        cls.rec_path = cls.p25 / "filed" / "2025.json"
+        cls.record = json.loads(cls.rec_path.read_text())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def _p26(self, name, tt, extra="", record=None):
+        rec = record or self.rec_path
+        p = _project(self.base / name, 2026, {"start.tt": tt},
+                     f'prior_year_record = "{rec}"\n{extra}')
+        r = _run_cli(p, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return p
+
+    def _handoff(self, p):
+        r = _run_cli(p, "handoff", "--json")
+        self.assertIn(r.returncode, (0, 1), r.stderr)
+        return r.returncode, json.loads(r.stdout)
+
+    @rule("CA-RPT-08")
+    def test_a2_0515_0881_year_end_cost_carries_the_denied_loss(self):
+        los = self.record["year_end"]["equity"]["LOS.TO"]
+        self.assertAlmostEqual(los["qty"], 100.0)
+        # 900 paid for the replacement + the 200 denied (s.53(1)(f))
+        self.assertAlmostEqual(los["acb"], 1100.0, places=2)
+        self.assertAlmostEqual(los["deferred"], 200.0, places=2)
+        # and the next year opening at that cost hands off cleanly
+        p = self._p26("clean", _OPEN
+                      + "BUYSELL 2026-01-02 09:30:00 XYZ.TO -40 CAD 12 480 0\n")
+        rc, rep = self._handoff(p)
+        self.assertEqual((rc, rep["positions"]), (0, []), rep)
+
+    @rule("CA-RPT-08")
+    def test_a2_1557_1567_record_basis_and_windows(self):
+        # This project is on TRADE dates; the 2025 record on settlement
+        # dates. The record's Dec-31 sale settling in 2026 is not here
+        # (only a distinct same-size XYZ sale on Jan 20): missed. ABC
+        # bought and sold Jan 5/7 for the closed sale's proceeds is a
+        # distinct sale 8 days after it settled: not a double.
+        self.assertEqual(self.record["date_basis"], "settle")
+        p = self._p26("windows", _OPEN
+                      + "BUYSELL 2026-01-20 09:30:00 XYZ.TO -40 CAD 12 480 0\n"
+                      + "BUYSELL 2026-01-05 09:30:00 ABC.TO 50 CAD 20 1000 0\n"
+                      + "BUYSELL 2026-01-07 09:30:00 ABC.TO -50 CAD 22 1100 0\n",
+                      extra='tax_date = "trade"\n')
+        rc, rep = self._handoff(p)
+        self.assertEqual((rep["record_basis"], rep["basis"]),
+                         ("settle", "trade"))
+        self.assertEqual([m["symbol"] for m in rep["missed"]], ["XYZ.TO"],
+                         rep)
+        self.assertEqual(rep["double"], [], rep)
+
+    def test_a2_1557_doubles_are_checked_against_the_filed_return(self):
+        # The 2025 return was prepared with another tool and reported
+        # DEF, not ABC: a January ABC sale like the books' is no double;
+        # a January DEF sale like the filed one is.
+        rec = dict(self.record)
+        rec["filed_dispositions"] = [{
+            "symbol": "DEF.TO", "date": "2025-12-29",
+            "date_settle": "2025-12-30", "qty": 30.0, "proceeds": 600.0,
+            "cost": 450.0, "gain": 150.0}]
+        rp = self.base / "rec_filed.json"
+        rp.write_text(json.dumps(rec))
+        p = self._p26("filed", _OPEN
+                      + "BUYSELL 2026-01-02 09:30:00 XYZ.TO -40 CAD 12 480 0\n"
+                      + "BUYSELL 2026-01-02 09:30:00 ABC.TO 50 CAD 20 1000 0\n"
+                      + "BUYSELL 2026-01-02 10:30:00 ABC.TO -50 CAD 22 1100 0\n"
+                      + "BUYSELL 2026-01-02 09:30:00 DEF.TO 30 CAD 15 450 0\n"
+                      + "BUYSELL 2026-01-02 10:30:00 DEF.TO -30 CAD 20 600 0\n",
+                      record=rp)
+        rc, rep = self._handoff(p)
+        self.assertEqual([d["symbol"] for d in rep["double"]], ["DEF.TO"],
+                         rep)
+
+    def test_a2_1567_early_january_rows_of_the_closed_inputs(self):
+        # The closed project's inputs held January rows (they count in
+        # 2026, so the 2025 return left them out). One dated Jan 5 that
+        # this project lacks is in neither return; one dated Jan 20 is
+        # past the window the two projects overlap in, not checked.
+        rec = dict(self.record)
+        rows = [dict(group="equity", account="margin", action="BUYSELL",
+                     symbol="QQQ.TO", date=d, date_settle=d, quantity=10.0,
+                     net=-100.0, tax_date=d)
+                for d in ("2026-01-05", "2026-01-20")]
+        rec["boundary_rows"] = list(rec.get("boundary_rows") or []) + rows
+        rp = self.base / "rec_boundary.json"
+        rp.write_text(json.dumps(rec))
+        p = self._p26("boundary", _OPEN
+                      + "BUYSELL 2026-01-02 09:30:00 XYZ.TO -40 CAD 12 480 0\n",
+                      record=rp)
+        rc, rep = self._handoff(p)
+        self.assertEqual([(b["symbol"], b["date"]) for b in rep["boundary"]],
+                         [("QQQ.TO", "2026-01-05")], rep)
+
+
 if __name__ == '__main__':
     unittest.main()
