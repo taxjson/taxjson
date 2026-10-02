@@ -279,7 +279,7 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-OPT-05",
                  "Writing an option: nothing is taxed until it closes "
                  "(option_premium_timing = \"close\").", keys=tk),
-            Rule("CA-OPT-05",
+            Rule("CA-OPT-10",
                  "Buying it back or expiry: the premium minus the cost is "
                  "a gain or loss on that date.", keys=tk),
             Rule("CA-OPT-04",

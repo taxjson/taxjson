@@ -20,7 +20,7 @@ class TestTaxLogic(unittest.TestCase):
         self.assertIn("right to acquire", text)
         self.assertIn("a put never replaces the shares", text)
 
-    @rule("CA-OPT-05")
+    @rule("CA-OPT-05", "CA-OPT-10")
     def test_settings_change_the_text(self):
         st = {"tax_date": "trade", "option_premium_timing": "close",
               "futures_settle": "next_day",

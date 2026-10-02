@@ -413,5 +413,33 @@ class TestIncomeDatingCitesKnownIds(unittest.TestCase):
         self.assertEqual(ids - known, set())
 
 
+# ------------------------------------------------------------ options
+class TestCloseTimingClaims(unittest.TestCase):
+    """A2-0826: one id per claim under close timing, each pinned on the
+    engine (forcing grant timing fails both)."""
+
+    _BOOK = [tx("BUYSELL", "2025-11-03", "ZZQ260116C00050000.US", -1, 300),
+             tx("BUYSELL", "2026-01-05", "ZZQ260116C00050000.US", 1, 100)]
+
+    def _year(self, year, timing="close"):
+        r = _gains_one("canada", self._BOOK, year=year,
+                       option_premium_timing=timing)
+        return [t for t in r["transactions"] if t.get("symbol")]
+
+    @rule("CA-OPT-05")
+    def test_write_is_not_taxed_until_it_closes(self):
+        self.assertEqual(self._year(2025), [])
+        self.assertTrue(self._year(2025, timing="grant"))
+
+    @rule("CA-OPT-10")
+    def test_buy_back_realizes_premium_minus_cost(self):
+        g = self._year(2026)
+        self.assertEqual(len(g), 1)
+        self.assertAlmostEqual(g[0]["gain"], 200.0, places=2)
+        self.assertIn("premium minus the cost",
+                      _text("canada", "CA-OPT-10",
+                            option_premium_timing="close"))
+
+
 if __name__ == "__main__":
     unittest.main()

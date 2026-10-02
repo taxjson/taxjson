@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- tax-logic gives the close-timing buy-back claim its own id (CA-OPT-10;
+  CA-OPT-05 named two claims), each pinned on the engine (re-audit
+  A2-0826).
 - Canada income dating: the January return-of-capital warning no longer
   calls every Canadian issuer a trust — it asks, and listing a
   corporation in [settings] corporate_distributions stops it; tax-logic
