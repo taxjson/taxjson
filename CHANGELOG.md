@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Questrade / RBC: one export holding several broker accounts.** A
+  Questrade file whose Account Type puts a registered plan's rows in a
+  taxable account (or a taxable account's rows in a registered one) is
+  refused — its TFSA trades were booked as taxable gains with rc 0.
+  Any other multi-account Questrade file, and an RBC file holding rows
+  of several RBC accounts (RBC writes no account type), is an ATTENTION
+  line: every row goes to one taxjson account (re-audit A2-0025).
 - **RBC / Questrade / Webull: money-affecting parser warnings reach the
   run console.** A guessed listing for a USD return of capital on an
   untraded symbol (now suggesting `TOBASE`, which works, instead of

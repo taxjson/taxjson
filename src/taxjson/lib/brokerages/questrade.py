@@ -421,6 +421,53 @@ class QuestradeBrokerage(BaseBrokerage):
         print(f"warning: UNBOOKED: {self._where(lineno)}: {msg}",
               file=sys.stderr)
 
+    def _check_account_mix(self, path: Path, rows) -> None:
+        """One export holding rows of SEVERAL Questrade accounts (re-audit
+        A2-0025): every row is booked to the one taxjson account the file
+        sits in. A registered plan's rows (Account Type TFSA/RRSP/...)
+        in a TAXABLE account — or a taxable account's rows in a
+        registered one — put the wrong trades in the books: refused.
+        Any other mix (two taxable accounts) is booked as one and said
+        on the console."""
+        accts: Dict[str, set] = {}
+        for _ln, r in rows:
+            a = (r.get('Account #') or '').strip()
+            if a:
+                accts.setdefault(a, set()).add(
+                    (r.get('Account Type') or '').strip())
+        if len(accts) < 2:
+            return
+
+        _no = {a: i for i, a in enumerate(sorted(accts), 1)}
+
+        def _mask(a: str) -> str:
+            return f"#{_no[a]} {a[:2]}***"
+        desc = ', '.join(f"{_mask(a)} ({'/'.join(sorted(t - {''})) or '?'})"
+                         for a, t in sorted(accts.items()))
+        taxable = self.account_taxable       # None: the caller did not say
+        wrong = []
+        for a, types in sorted(accts.items()):
+            reg = any(_QT_REGISTERED_RE.search(t) for t in types)
+            tax = any(re.search(r'margin|cash', t, re.I)
+                      and not _QT_REGISTERED_RE.search(t) for t in types)
+            if (taxable is True and reg) or (taxable is False and tax):
+                wrong.append(_mask(a))
+        if wrong:
+            raise BrokerageParseError(
+                f"{path.name}: the export holds rows of {len(accts)} "
+                f"Questrade accounts ({desc}); {', '.join(wrong)} "
+                f"{'is a registered plan' if taxable else 'is a taxable account'}"
+                f" but the file sits in a "
+                f"{'taxable' if taxable else 'registered'} taxjson account, "
+                f"so its trades would be booked there — refusing. Export "
+                f"each Questrade account separately into its own "
+                f"inputs/<account>/ folder.")
+        print(f"warning: ATTENTION: {path.name}: the export holds rows of "
+              f"{len(accts)} Questrade accounts ({desc}) — every row is "
+              f"booked to ONE account. That is right only when they are one "
+              f"tax entity (two taxable accounts of yours); export a "
+              f"registered plan (TFSA/RRSP) separately.", file=sys.stderr)
+
     def _listing_currency(self, sym: str, currency: str) -> str:
         """The currency whose suffix a real (non-code) symbol takes: a
         symbol with no Canadian venue suffix that the account trades in
@@ -549,6 +596,7 @@ class QuestradeBrokerage(BaseBrokerage):
             self._qt_taxable_hint = True
         else:
             self._qt_taxable_hint = None
+        self._check_account_mix(path, rows)
 
         transactions: List[Dict[str, Any]] = []
         expiries: List[Dict[str, Any]] = []     # EXP rows (settle == date)

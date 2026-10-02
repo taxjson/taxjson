@@ -903,6 +903,24 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
                             extra_tag={}, pairings={}, occ_own={},
                             occ_by_code={}, names={}, listings={})
     _plan_overlaps(ctx, name_of)
+    for k in files:
+        # One export spanning several RBC accounts (re-audit A2-0025):
+        # every row lands in the one taxjson account the file sits in,
+        # and RBC writes no account type to tell a TFSA from a margin
+        # account. Across files is the normal layout (one export per
+        # RBC account, several taxable accounts pooled) — not flagged.
+        accts = sorted({_norm_account(r.account)
+                        for r in exports[k].rows if r.account.strip()})
+        if len(accts) > 1:
+            accts = [f"#{i} {_mask_account(a)}"
+                     for i, a in enumerate(accts, 1)]
+            ctx.messages.append(
+                f"warning: ATTENTION: {name_of[k]}: the export holds rows "
+                f"of {len(accts)} RBC accounts ({', '.join(accts)}) — "
+                f"every row is booked to ONE taxjson account. That is "
+                f"right only when they are one tax entity (two taxable "
+                f"accounts of yours); export a registered plan "
+                f"(TFSA/RRSP) separately into its own inputs/<account>/.")
 
     live = [(fi, r) for fi, k in enumerate(files) for r in ctx.rows(k)]
     chrono = sorted(live, key=lambda x: (x[1].date, x[1].k, x[0],

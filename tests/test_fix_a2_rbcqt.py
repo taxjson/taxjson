@@ -324,5 +324,53 @@ class TestMoneyWarningsReachTheConsole(unittest.TestCase):
         self.assertIn("ATTENTION: TDQ.TO: stock dividend of 5", r.stdout)
 
 
+class TestOneExportManyAccounts(unittest.TestCase):
+    """A2-0025: one Questrade / RBC export holding rows of two broker
+    accounts, one a TFSA, was booked to one taxable account silently."""
+
+    def _qt(self, acct, atype, td, action, qty, price):
+        g = qty * price
+        return q(td=td, action=action, sym="QZEQ.TO",
+                 desc="QZEQ ETF WE ACTED AS AGENT", qty=str(qty),
+                 price=str(price), gross=f"{-g:.2f}", comm="0",
+                 net=f"{-g:.2f}", cur="CAD").replace(
+                     f",{ACCT},Trades,Individual margin",
+                     f",{acct},Trades,{atype}")
+
+    def test_registered_rows_in_a_taxable_account_are_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        body = (self._qt(ACCT, "Individual margin", "2025-01-15", "Buy",
+                         10, 30)
+                + self._qt("55500002", "Individual TFSA",  # pii-ok
+                           "2025-02-18", "Buy", 100, 30))
+        with self.assertRaises(BrokerageParseError) as cm:
+            qt_parse(body, taxable=True)
+        self.assertIn("registered plan", str(cm.exception))
+        self.assertNotIn("55500002", str(cm.exception))   # masked
+
+    def test_two_taxable_accounts_are_said_out_loud(self):
+        body = (self._qt(ACCT, "Individual margin", "2025-01-15", "Buy",
+                         10, 30)
+                + self._qt("55500002", "Joint margin",  # pii-ok
+                           "2025-02-18", "Buy", 100, 30))
+        txs, err, _ = qt_parse(body, taxable=True)
+        self.assertEqual(len(txs), 2)
+        self.assertTrue(any("2 Questrade accounts" in ln
+                            for ln in _attention(err)), err)
+
+    def test_rbc_file_with_two_accounts(self):
+        a = row("March 3, 2025", "Buy", "XYZ", "XYZ CORP", "10", "5.00",
+                "-59.95", "CAD", "XYZ CORP UNSOLICITED")
+        b = row("March 4, 2025", "Buy", "XYZ", "XYZ CORP", "10", "5.00",
+                "-59.95", "CAD", "XYZ CORP UNSOLICITED",
+                acct="55500002")  # pii-ok
+        _txs, err, _ = parse_one(a + b)
+        self.assertTrue(any("2 RBC accounts" in ln for ln in _attention(err)),
+                        err)
+        # One account per file, several files: the normal layout.
+        _txs, err, _ = parse_files({"a.csv": a, "b.csv": b})
+        self.assertFalse(any("RBC accounts" in ln for ln in _attention(err)))
+
+
 if __name__ == "__main__":
     unittest.main()
