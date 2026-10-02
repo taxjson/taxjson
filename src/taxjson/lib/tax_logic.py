@@ -846,7 +846,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "two previous years — due March, June, September and "
                  "December 15 (the next business day on a weekend), on the "
                  "current-year, prior-year or CRA-reminder basis, with "
-                 "s.161 interest at CRA's prescribed rate."),
+                 "s.161 interest at CRA's prescribed rate. A payment "
+                 "made before January 1 counts only when its row says "
+                 "`tax_year = YEAR`, and earns credit from January 1."),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary."),

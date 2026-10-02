@@ -8690,11 +8690,28 @@ def _instalment_config(root: Path,
             # read "met" with zero interest and fabricated credit
             # interest — silently the maximally wrong answer.
             lo, hi = f"{year}-01-01", f"{int(year) + 1}-04-30"
-            if not (lo <= d <= hi):
+            # A prepayment made before January 1 counts only when the
+            # row designates this year (`tax_year = YEAR`): an
+            # undesignated prior-year date is the rollover trap above.
+            # The interest model credits it from January 1 (A2-0648).
+            _ty = row.get("tax_year")
+            if _ty is not None and (isinstance(_ty, bool)
+                                    or not isinstance(_ty, int)
+                                    or _ty != int(year) or d >= lo):
+                _die(f"[instalments] paid[{i}] tax_year = {_ty!r}: "
+                     f"`tax_year` designates a payment made BEFORE "
+                     f"January 1 as a prepayment of this project's "
+                     f"{year} instalments — it must be {year}, on a "
+                     f"row dated before {lo}.")
+            if not (lo <= d <= hi) and _ty is None:
                 _die(f"[instalments] paid[{i}] is dated {d}, outside "
                      f"tax year {year} ({lo}..{hi}). Instalments are "
                      f"per year — move it to that year's project or "
-                     f"remove it.")
+                     f"remove it"
+                     + (f"; if it is a prepayment of the {year} "
+                        f"instalments, add `tax_year = {year}` to the "
+                        f"row (it earns credit from January 1)"
+                        if d < lo else "") + ".")
         row_out = {"date": d, "amount": a}
         if row.get("note"):
             row_out["note"] = str(row["note"])

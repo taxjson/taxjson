@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `instalments`: a payment made before January 1 is accepted as a
+  prepayment of the project year's instalments when its row says
+  `tax_year = YEAR` (credited from January 1, as the interest model
+  already did); an undesignated prior-year date is still refused and
+  the message names the key (re-audit A2-0648).
 - `sum` / `estimate`: --other-income / --other-losses (and their
   [estimate] keys) are checked by one guard that names the flag or key
   it refuses (re-audit A2-1123); the --deductions / --carrying-charges
