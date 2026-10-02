@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Every parser message (Questrade, RBC, Webull, Kraken, Coinbase, the
+  generic importer, security-override and .tt errors) now names its file
+  the masked way IB's already did, so a download named after an account
+  number prints `55***_activity.csv`, not the number; the `run` stage
+  line for a .tt file too. The IB diagnostics and the other parsers are
+  now pinned by tests (audit A2-0461).
+- Two .tt files (or generic files) whose names differ only in an
+  account-number token (manual_55500001.tt / manual_55500002.tt) are two
+  sources again: dedup read both as `manual_55***.tt`, one file
+  repeating itself, and silently dropped one file's identical line. A
+  masked name now carries a short hash of the real name (`source_key`,
+  never the name itself) for dedup only (audit A2-0159).
 - Kraken notes, errors and skip summaries now mask every ledger refid
   and txid to its first two characters + *** (the multi-leg instant-trade
   note, the orphan-leg skip count, the both-sides-many-legs refusal and

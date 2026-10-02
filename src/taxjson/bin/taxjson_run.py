@@ -2584,7 +2584,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                  f"{tt.stem[:-len(_clash)] + _clash.replace('_', '-')}.tt")
         out = tt_json_path(cache, name, tt.name)
         if force or needs_rebuild(out, tt, src_manifest):
-            print(f"  convert-tt {tt.name}")
+            print(f"  convert-tt {_mask_ids_in_path(tt.name)}")
             run_to_file(_cmd("taxjson-convert-tt") + ["--account-name", name, str(tt)],
                         out)
         tt_jsons.append(out)

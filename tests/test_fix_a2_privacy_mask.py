@@ -117,5 +117,197 @@ class TestKrakenIdsMasked(unittest.TestCase):
         self._assert_masked(self._everything(out, err, k))
 
 
+# ------------------------------------------------------------ A2-0461
+_REPO = Path(__file__).resolve().parent.parent
+_ID = "U5550001"  # pii-ok (synthetic)
+_IB_NAME = f"{_ID}_20240101_20241231.csv"
+
+
+def _ib_demo():
+    return (_REPO / "examples" / "ib_demo.csv").read_text(encoding="utf-8")
+
+
+def _brokerage(name, text, *extra):
+    import os
+    import subprocess
+    import sys
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / name
+        p.write_text(text, encoding="utf-8")
+        env = dict(os.environ, PYTHONPATH=str(_REPO / "src"))
+        r = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_brokerage", *extra,
+             str(p)], capture_output=True, text=True, env=env,
+            stdin=subprocess.DEVNULL)
+    return r.returncode, r.stdout, r.stderr
+
+
+def _ib_variant(kind):
+    t = _ib_demo()
+    if kind == "no_cash_report":        # ATTENTION: not reconciled
+        return t
+    if kind == "title_refused":         # Realized Summary refusal
+        return t.replace("Title,Activity Statement",
+                         "Title,Realized Summary")
+    if kind == "title_warning":         # unknown title: warning
+        return t.replace("Title,Activity Statement",
+                         "Title,Custom Statement")
+    cash = ("Cash Report,Header,Currency Summary,Currency,Total,\n"
+            "Cash Report,Data,Starting Cash,Base Currency Summary,0,\n")
+    if kind == "cash_mismatch":         # parsed vs Cash Report
+        return t + cash + "Cash Report,Data,Dividends,USD,999.00,\n"
+    if kind == "cash_unreadable":       # Cash Report total not a number
+        return t + cash + "Cash Report,Data,Dividends,USD,abc,\n"
+    if kind == "row_cut_short":         # a Trades row missing cells
+        return t.replace(',-1.00,1481.00,0,0,O', ',-1.00', 1)
+    raise AssertionError(kind)
+
+
+class TestFileNameIdMasked(unittest.TestCase):
+    """A2-0461 (S027-02 pin): a broker's default download name carries
+    the account id; every diagnostic shows it masked (U5***)."""
+
+    def test_ib_diagnostics_never_print_the_id(self):
+        for kind in ("no_cash_report", "title_refused", "title_warning",
+                     "cash_mismatch", "cash_unreadable", "row_cut_short"):
+            with self.subTest(kind=kind):
+                rc, out, err = _brokerage(_IB_NAME, _ib_variant(kind),
+                                         "--brokerage", "ib")
+                self.assertIn("U5***", err)
+                self.assertNotIn(_ID, err)
+                if kind not in ("no_cash_report", "title_warning"):
+                    self.assertNotEqual(rc, 0, err)
+
+    def test_generic_parser_diagnostics_never_print_the_id(self):
+        # The questrade demo under an account-numbered name: the
+        # per-file summary and lint lines name the file.
+        qt = (_REPO / "examples" / "questrade_demo.csv").read_text(
+            encoding="utf-8")
+        name = "55500001_activity.csv"  # pii-ok (synthetic)
+        rc, out, err = _brokerage(name, qt, "--brokerage", "questrade",
+                                  "--lint")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("55***", err)
+        self.assertNotIn("55500001", err)  # pii-ok
+        rc, out, err = _brokerage(name, qt.replace(",", ";", 3),
+                                  "--brokerage", "questrade")
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("55500001", err)  # pii-ok
+
+    def test_kraken_orphan_warning_masks_the_refid(self):
+        led = _KL_H + (f"L1,{_REF},2025-03-01 12:00:00,spend,,currency,"
+                       "ADA,spot,-10,0,0\n")
+        rc, out, err = _brokerage("kr_ledgers.csv", led,
+                                  "--brokerage", "kraken")
+        self.assertIn("TS***", err)
+        self.assertNotIn(_REF, err)
+        self.assertNotIn(_REF, out)
+
+
+# ------------------------------------------------------------ A2-0159
+_TT_BUY = "BUYSELL 2025-03-04 10:00:00 XEI.TO 100 CAD 25.00 2500.00 9.96\n"
+_TT_SELL = "BUYSELL 2025-06-04 10:00:00 XEI.TO -200 CAD 30.00 6000.00 9.96\n"
+
+
+class TestMaskedSourceNamesStayDistinct(unittest.TestCase):
+    """A2-0159: two .tt / generic files whose names differ only in an
+    account-number token used to share the masked `source`
+    ('manual_55***.tt'), so dedup read them as one file repeating
+    itself and dropped a real trade silently."""
+
+    def _tt_rows(self, files):
+        from taxjson.bin.taxjson_convert_tt import tt_to_json
+        rows = []
+        with tempfile.TemporaryDirectory() as td:
+            for name, text in files.items():
+                p = Path(td) / name
+                p.write_text(text)
+                rows += tt_to_json(p, "margin")["transactions"]
+        return rows
+
+    def _plan(self, rows, accts=None):
+        from taxjson.bin.taxjson_sort import plan_dedup
+        return plan_dedup(rows, accts)
+
+    def test_two_tt_files_named_after_account_numbers_both_book(self):
+        rows = self._tt_rows({
+            "manual_55500001.tt": _TT_BUY,              # pii-ok
+            "manual_55500002.tt": _TT_BUY + _TT_SELL})  # pii-ok
+        self.assertEqual(rows[0]["source"], "manual_55***.tt")
+        plan = self._plan(rows)
+        self.assertEqual(plan.drop, [])
+        self.assertEqual(len(plan.keep), 3)
+        text = " ".join(plan.attention + plan.notes)
+        self.assertIn("Hand-kept .tt files are separate records", text)
+        self.assertIn("manual_55***.tt", text)
+        self.assertNotIn("55500001", text)  # pii-ok
+        self.assertNotIn("55500002", text)  # pii-ok
+
+    def test_run_books_both_buys_and_prints_no_id(self):
+        import json
+        from test_fix_a2_pipecmd import _cli, _tt_project
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [_TT_BUY.strip()], year=2025)
+            d = root / "inputs" / "m"
+            (d / "a.tt").rename(d / "manual_55500001.tt")   # pii-ok
+            (d / "manual_55500002.tt").write_text(          # pii-ok
+                _TT_BUY + _TT_SELL)
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            both = r.stdout + r.stderr
+            self.assertNotIn("5550000", both)
+            self.assertIn("Hand-kept .tt files are separate records", both)
+            s = _cli(root, home, "sum", "--json")
+            acct = json.loads(s.stdout)["filing"]["accounts"][0]
+            self.assertAlmostEqual(acct["acb"], 5000.0)   # both buys
+            self.assertAlmostEqual(acct["gain"], 1000.0)
+
+    def test_same_file_twice_still_collapses(self):
+        rows = self._tt_rows({"manual_55500001.tt": _TT_BUY})  # pii-ok
+        plan = self._plan(rows + [dict(r) for r in rows])
+        self.assertEqual(len(plan.drop), 1)
+
+    def test_unmasked_names_keep_their_old_shape(self):
+        rows = self._tt_rows({"margin_start.tt": _TT_BUY})
+        self.assertEqual(rows[0]["source"], "margin_start.tt")
+        self.assertNotIn("source_key", rows[0])
+
+    def test_generic_files_of_two_numbered_names_warn(self):
+        # One shared row and one row each: too thin an overlap to call
+        # a re-export, so the shared row is kept once WITH the ATTENTION.
+        def row(i, src, key):
+            return {"id": f"r{i}", "date": f"2025-01-0{i}",
+                    "action": "BUYSELL", "symbol": "XEI.TO",
+                    "quantity": 100, "source": src, "source_key": key}
+        a = [row(1, "generic_55***.csv", "k1"), row(2, "generic_55***.csv",
+                                                     "k1")]
+        b = [row(1, "generic_55***.csv", "k2"), row(3, "generic_55***.csv",
+                                                     "k2")]
+        plan = self._plan(a + b)
+        self.assertEqual(plan.drop, [2])
+        self.assertTrue(any("identical row" in x for x in plan.attention),
+                        plan.attention)
+
+    def test_brokerage_stamps_a_key_for_a_masked_name(self):
+        import json
+        qt = (_REPO / "examples" / "questrade_demo.csv").read_text(
+            encoding="utf-8")
+        keys = []
+        for name in ("55500001_activity.csv",   # pii-ok
+                     "55500002_activity.csv"):  # pii-ok
+            rc, out, err = _brokerage(name, qt, "--brokerage", "questrade")
+            self.assertEqual(rc, 0, err)
+            doc = json.loads(out)
+            tx = doc["transactions"][0]
+            self.assertEqual(tx["source"], "55***_activity.csv")
+            keys.append(tx["source_key"])
+            self.assertNotIn(name[:8], json.dumps(doc["transactions"]))
+            self.assertNotIn(name[:8], json.dumps(
+                doc["metadata"].get("source_accounts") or {}))
+            for k in (doc["metadata"].get("source_accounts") or {}):
+                self.assertIn(tx["source_key"], k)
+        self.assertNotEqual(keys[0], keys[1])
+
+
 if __name__ == "__main__":
     unittest.main()
