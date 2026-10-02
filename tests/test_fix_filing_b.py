@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -629,6 +630,7 @@ class TestT1135Walk(unittest.TestCase):
         self.assertAlmostEqual(
             w["per_symbol"]["XYZ.US"]["year_end_cost"], 6400.0, places=2)
 
+    @rule("CA-DATE-14")
     def test_same_stamp_order_is_the_engines(self):
         """S008-05: the walk takes a same-stamp round trip in the
         engine's order — since CA-DATE-14 (audit R1-30, owner decision

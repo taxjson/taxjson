@@ -178,6 +178,7 @@ class TestFillCryptoAmountsPinned(unittest.TestCase):
         self.assertEqual(got[0]["gross_amount"], 210.375)
 
 
+@rule("CA-DATE-14")
 class TestCaPriorityLadderPinned(unittest.TestCase):
     """G1-7: every rung of the Canada same-timestamp ladder, through the
     function and through the ca_main sort."""

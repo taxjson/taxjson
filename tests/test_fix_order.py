@@ -137,6 +137,7 @@ class TestFixedRungsStay(unittest.TestCase):
                 perm, key=lambda t: event_sort_key(t, profile=profile))))
         return out
 
+    @rule("CA-DATE-14")
     def test_canada_ladder(self):
         # Every rung but the trades is fixed; trades are one rung.
         self.assertEqual(CaPriority.TRADE, 3)
@@ -155,6 +156,7 @@ class TestFixedRungsStay(unittest.TestCase):
         self.assertEqual(got, [("SPLIT", 2.0), ("ASSIGN", 100),
                                ("BUYSELL", -100), ("ADJUST", 5)])
 
+    @rule("US-DATE-13")
     def test_us_ladder(self):
         fixed = [_ev("OPENING_BALANCE", 100), _ev("ASSIGN", -1, self.OPT),
                  _ev("ASSIGN", 100), _ev("SPLIT", 2.0), _ev("ADJUST", 5)]
