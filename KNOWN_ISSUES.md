@@ -63,6 +63,12 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
 
+### A warrant exercise is booked as a disposal at 0
+- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` (a `Warrants` leg coded `Ex`/`A` at price 0), `src/taxjson/lib/brokerages/rbc_direct.py` (an `Exercise` of a non-option symbol); the premium roll in `lib/core.py` handles OPTION symbols only.
+- **Current behavior:** the warrant leg is a disposal at 0, so the warrant's cost is a capital loss on the exercise date and the shares carry only the cash paid; the correct treatment is no disposition and the warrant's cost added to the shares (ITA s.49(3); US basis carryover with a holding period from the exercise). IB prints an `ATTENTION` line for the leg (audit A2-0090 / A2-0274).
+- **Why deferred:** the engines' premium roll keys on OCC option symbols; a warrant needs its own pairing with the exercised shares (parser marks the pair, both engines roll the cost, dual-country tests). No warrant exercise is in the owner's books.
+- **Workaround:** book the exercise by hand: drop the warrant leg and add the warrant's cost to the shares' purchase in a `.tt` file.
+
 ### Identical rows in two exports with little overlap are booked once
 - **Where:** `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, used by `taxjson-merge2 --dedup`, `taxjson-sort --dedup` and `fees-sum`.
 - **Current behavior:** the same row in two exports of one account is booked once. Sometimes the files' overlap cannot show that they are copies of one export: they share only that row, or each holds rows the other lacks on the dates both cover, or a `.tt` line equals an exported row. The row is still booked once, as a re-export, and `taxjson run` prints `warning: ATTENTION: dedup: ...` naming both files and the row. Exports are cut by date, so two exports can only both hold one fill when they both cover its whole day, and then both files hold all of that day's fills. Two separate identical trades can only end up split across files when an export is cut up by hand. Identical lines in two `.tt` files, and identical rows in IB statements of two different broker accounts, are both booked.

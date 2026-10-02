@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- IB: a warrant exercise leg (booked as a disposal at 0 — the warrant's
+  cost becomes a loss instead of part of the shares' cost) is an
+  ATTENTION line; the fix is deferred (KNOWN_ISSUES, audit A2-0090).
 - IB: a stock buy at zero cost is an ATTENTION line (it books a $0
   cost; almost always a transfer or journal row — audit A2-0263); an
   option description no form reads (a decimal-comma strike

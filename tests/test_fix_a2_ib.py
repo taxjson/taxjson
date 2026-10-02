@@ -739,5 +739,19 @@ class TestShortTradesRowIsRefused(unittest.TestCase):
         self.assertIn('cut short', str(cm.exception))
 
 
+class TestWarrantExerciseIsSaid(unittest.TestCase):
+    """A2-0090 (deferred: the engines do not roll a warrant's cost into
+    the shares yet): the exercise leg booked as a disposal at 0 is an
+    ATTENTION line, not silent."""
+
+    def test_warrant_exercise_leg_is_an_attention_line(self):
+        _, _, err = _parse_ib(HEAD + TRADES_H
+                              + _trade('QZYW', '2025-05-02, 16:20:00', -100,
+                                       0, 0, code='C;Ex', cat='Warrants')
+                              + _trade('QZY', '2025-05-02, 16:20:00', 100,
+                                       11.5, -1150, code='Ex;O'))
+        self.assertRegex(err, r'warning: ATTENTION: .*warrant QZYW')
+
+
 if __name__ == '__main__':
     unittest.main()

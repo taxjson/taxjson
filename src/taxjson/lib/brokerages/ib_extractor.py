@@ -2541,6 +2541,22 @@ class IbBrokerage(BaseBrokerage):
                 if (('A' in code_tokens or 'Ex' in code_tokens)
                         and abs(price) < 1e-5):
                     action = 'ASSIGN'
+                    if asset_cat == 'Warrants' and qty < 0:
+                        # The engines roll an OPTION's premium into the
+                        # exercised shares; a warrant's cost is not
+                        # rolled yet (no s.49(3) / basis carryover for
+                        # it): the leg is a disposal at 0 — a capital
+                        # loss of the warrant's cost. Said, not silent
+                        # (audit A2-0090, deferred).
+                        print(f"{ATTENTION_PREFIX} {where}: warrant "
+                              f"{symbol} exercised ({-qty:g}, code "
+                              f"{code}) — booked as a disposal at 0, so "
+                              f"the warrant's cost becomes a capital "
+                              f"loss instead of part of the shares' cost "
+                              f"(ITA s.49(3); US basis carryover). "
+                              f"Correct it by hand: the warrant's cost "
+                              f"belongs in the shares acquired.",
+                              file=sys.stderr)
 
                 # Expiry: the `Ep` code, a row of the Options
                 # Expirations section, or a zero-price zero-proceeds
