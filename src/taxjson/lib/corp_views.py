@@ -22,26 +22,57 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT
+from taxjson.lib.country import CANADA, USA, settings_country
+
 _FMV_RE = re.compile(r"FMV\s+([\d,]+(?:\.\d+)?)\s+([A-Z]{3})")
 
 
+class ViewError(ValueError):
+    """An input the view cannot read: the command refuses with this one
+    line rather than reporting an empty (and wrongly clean) view."""
+
+
 def _rows(path: Path) -> List[Dict[str, Any]]:
-    try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    """The rows of a work/<acct>_base.json. A missing file is an account
+    with no books yet; an unreadable or malformed one is refused (it
+    used to read as 'No splits in the books', A2-0969)."""
+    path = Path(path)
+    if not path.exists() and not path.is_symlink():
         return []
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ViewError(f"cannot read {path} ({e}) — re-run `taxjson run` "
+                        f"to rebuild it") from None
     rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        raise ViewError(f"{path} holds no transaction list — re-run "
+                        f"`taxjson run` to rebuild it")
     return [r for r in rows if isinstance(r, dict)]
 
 
 def _manifest(root: Path, acct: str) -> Dict[str, Any]:
+    """The account's saved elections, read the way `taxjson elect` reads
+    them (Manifest.load, canonical inputs/<acct>/manifest.json first,
+    else the legacy work/ copy). A malformed or unreadable manifest is
+    refused with elect's one-line error (A2-0968): it crashed on a
+    wrong-shape file and read an unreadable one as 'no elections'."""
+    from taxjson.lib.corp_actions import Manifest, ManifestError
     for p in (Path(root) / "inputs" / acct / "manifest.json",
               Path(root) / "work" / f"{acct}_manifest.json"):
-        try:
-            return json.loads(p.read_text(encoding="utf-8")).get(
-                "elections") or {}
-        except (OSError, ValueError):
+        if not p.exists() and not p.is_symlink():
             continue
+        try:
+            man = Manifest.load(p)
+        except ManifestError as e:
+            raise ViewError(str(e)) from None
+        except OSError as e:
+            raise ViewError(f"cannot read the elections manifest {p} "
+                            f"({e.strerror or e})") from None
+        return {eid: {"election": r.election, "hints": dict(r.hints or {}),
+                      "summary": r.summary}
+                for eid, r in man.records.items()}
     return {}
 
 
@@ -62,8 +93,29 @@ def _held(rows: List[Dict[str, Any]], sym: str, until: str,
 
 
 _SPIN_BOOKED_RE = re.compile(r"Spinoff\s+(\S+?)\s*\u2192\s*(\S+)")
-_SPIN_ELECTIONS = ("rollover_s_86_1", "taxable_deemed_dividend",
-                   "tax_free_355", "taxable_distribution")
+# The spin-off elections of both countries (corp_actions.RULES_BY_COUNTRY
+# keys; each key belongs to one country, so the wording below never mixes
+# Canadian and US law).
+_FMV_ELECTIONS = {
+    "taxable_deemed_dividend": (
+        "default treatment: a dividend equal to the new shares' fair "
+        "market value, which is also their cost"),
+    "taxable_distribution_301": (
+        "§301 distribution: income equal to the new shares' fair market "
+        "value, which is also their cost"),
+}
+_ALLOC_ELECTIONS = {
+    "rollover_s_86_1": (
+        "s.86.1 election: no income; the parent's cost is split between "
+        "the two. File the election with the return; the spin-off must "
+        "be on CRA's list"),
+    "tax_free_355": (
+        "§355 tax-free spin-off: no income; the basis moved to the new "
+        "shares is the amount from the company's Form 8937 (§358(b))"),
+}
+_SPIN_ELECTIONS = tuple(_FMV_ELECTIONS) + tuple(_ALLOC_ELECTIONS)
+_SHELTER_WORD = {CANADA: "registered account",
+                 USA: "tax-advantaged account (IRA)"}
 
 
 def _current_events(root: Path, acct: str) -> Dict[str, Any]:
@@ -107,6 +159,7 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
     root = Path(root)
     cache = root / "work"
     base_cur = (cfg.get("settings", {}) or {}).get("base_currency", "CAD")
+    shelter_word = _SHELTER_WORD[settings_country(cfg.get("settings"))]
     out: List[Dict[str, Any]] = []
     stale: List[Dict[str, Any]] = []
     for acct, acfg in sorted((cfg.get("accounts") or {}).items()):
@@ -175,11 +228,9 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
             flags: List[str] = []
             why: List[str] = []
             if sheltered:
-                why.append("registered account: no tax effect")
-            if election == "taxable_deemed_dividend":
-                why.append("default treatment: a dividend equal to the new "
-                           "shares' fair market value, which is also their "
-                           "cost")
+                why.append(f"{shelter_word}: no tax effect")
+            if election in _FMV_ELECTIONS:
+                why.append(_FMV_ELECTIONS[election])
                 if not fmv_ps and not sheltered:
                     flags.append("ZERO-VALUE")
                     msg = ("booked at $0: no dividend income and a $0 cost "
@@ -189,22 +240,27 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                         msg += (f"; the broker reported {broker_fmv:,.2f} "
                                 f"{broker_cur}")
                     why.append(msg + ". Set it with `taxjson elect "
-                               f"{acct} --set {eid}=taxable_deemed_dividend "
+                               f"{acct} --set {eid}={election} "
                                "--hint fmv_per_share=<value>`.")
                 elif not fmv_ps:
                     why.append("booked at $0" + (
                         f" (the broker reported {broker_fmv:,.2f} "
                         f"{broker_cur})" if broker_fmv else ""))
-            elif election == "rollover_s_86_1":
-                why.append("s.86.1 election: no income; the parent's cost "
-                           "is split between the two. File the election "
-                           "with the return; the spin-off must be on "
-                           "CRA's list")
-                if not (hints.get("allocated_acb_cad")
-                        or hints.get("allocated_acb")):
+            elif election in _ALLOC_ELECTIONS:
+                why.append(_ALLOC_ELECTIONS[election])
+                hint = ALLOCATED_BASIS_HINT[election]
+                # The legacy `allocated_acb` key still books an s.86.1.
+                given = [hints.get(hint)] + (
+                    [hints.get("allocated_acb")]
+                    if election == "rollover_s_86_1" else [])
+                if not any(given):
                     flags.append("NO-ALLOCATION")
                     why.append("no cost allocated to the new shares "
-                               "(allocated_acb_cad)")
+                               f"({hint}): the parent keeps its whole "
+                               "cost and the spin-off's sale books the "
+                               "gain. Set it with `taxjson elect "
+                               f"{acct} --set {eid}={election} --hint "
+                               f"{hint}=<amount>`.")
             elif election == "ignore":
                 flags.append("IGNORED")
                 why.append("ignored: nothing booked; correct only for "

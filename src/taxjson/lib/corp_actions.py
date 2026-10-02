@@ -2636,9 +2636,11 @@ class Manifest:
             # raw Python traceback.
             raise ManifestError(
                 f"manifest at {path} is not valid JSON ({exc.msg} at line "
-                f"{exc.lineno} col {exc.colno}). If this file used to be a "
-                f"CSV or other format, point --manifest at the correct path "
-                f"or delete the file to start fresh."
+                f"{exc.lineno} col {exc.colno}). It holds this account's "
+                f"elections and their hand-typed values: fix the JSON, or "
+                f"restore the file from git or a backup (`taxjson "
+                f"checklist` tracks it under inputs-committed). Do not "
+                f"delete it — that discards the recorded elections."
             ) from None
         if not isinstance(data, dict):
             raise ManifestError(
