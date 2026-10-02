@@ -95,6 +95,33 @@
   negative net (a .tt book) is a cost of its magnitude ('net 500.00' and
   '--101.00' before, A2-1111), and a contract on its own expiry day is
   open, not 'expired, missing its expiry row' (A2-1112).
+- `divs` / `roc` / `events`: a tax-year window places income and ROC
+  rows by their tax date, as `divs-sum` / `roc-sum` / the .sum do (a
+  Canadian trust's December record date, a listed US RIC January
+  dividend); the row still shows its pay date and a note says why it is
+  in the window (re-audit A2-0326, A2-0641, A2-0642, A2-0655, A2-1109,
+  A2-1125, A2-1127).
+- The row views (`events`, `divs`, `trades`, `roc`, `dil`) warn about an
+  account with inputs but no built book, as the -sum views do; `divs-sum`
+  / `roc-sum` / `dil-sum` outside a project with a country refuse, as
+  `divs` does, instead of an "all history" total with registered
+  accounts folded in (re-audit A2-0333, A2-1110).
+- `roc` / `roc-sum`: an RBC notional distribution is counted once (it was
+  also taken for a distributions.map row: doubled, with a false
+  double-entry warning); the `roc` view warns about a ROC entered both in
+  the books and in distributions.map, as `roc-sum` does; a missing base
+  book is named when distributions.map exists (re-audit A2-0116,
+  A2-1116, A2-1128).
+- `leaps` / `leaps-sum` stop when an account with option gains has no
+  native book, or when ticker.map cannot be read (a renamed LEAPS or a
+  whole account vanished at exit 0) (re-audit A2-0117, A2-0329,
+  A2-1126).
+- `ccd-sum` heads a call on a class-share root (Rogers RCI) under the
+  held class share (RCI.B.TO) even when no share was sold in the year
+  (re-audit A2-1115).
+- `transfers`: a Kraken withdrawal's fee paid in coins shows in the FEE
+  column ("0.002_TAO") and as fee_qty / fee_currency in --json; it was
+  empty on every real withdrawal (re-audit A2-0663).
 
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a

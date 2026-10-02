@@ -5158,12 +5158,24 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
         if not accounts:
             sys.exit(f"taxjson {label}: no transaction files in {cache} "
                      f"(run `taxjson run` first).")
+        # An account whose stage failed has no native book: say so, as
+        # the -sum twins do (audit A2-0333).
+        _warn_accounts_without_books(root, accounts, label,
+                                     "transaction file")
 
     rows = []
     bad_dates = 0
     # A "tax year N" window on a settle-basis project takes a trade by
     # its settlement date, as the books and Schedule 3 do (S039-18).
     _settle = _settle_basis(root)
+    # Income and ROC rows are windowed on their tax date (lib/
+    # income_dating: a Canadian trust's distribution or ROC by its
+    # record date, a listed US RIC January dividend on Dec 31), the
+    # date divs-sum / roc-sum / the .sum use — the row views used the
+    # pay date, so their tax-year totals disagreed (audit A2-0326,
+    # A2-0641, A2-0642, A2-0655, A2-1109, A2-1125, A2-1127).
+    _rules = _view_income_rules(root)
+    moved = 0
     for acct in accounts:
         native = _native_tx_file(cache, acct)
         if native is None:
@@ -5180,14 +5192,30 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             if not _ISO_DATE_RE.match(d):    # can't place it in the window
                 bad_dates += 1
                 continue
-            _wd = (_gains_row_date(tx, keep, _settle)
-                   if tx.get("action") in _TRADE_ACTIONS else d)
+            if tx.get("action") in _TRADE_ACTIONS:
+                _wd = _gains_row_date(tx, keep, _settle)
+            elif (_rules is not None and tx.get("action") in
+                  ("DIVIDEND", "DIVIDEND_IN_LIEU", "ADJUST")):
+                _wd = _rules.row_date(tx) or d
+            else:
+                _wd = d
             if keep(_wd):
                 rows.append((d, tx.get("time") or "", acct, tx))
+                if _wd[:4] != d[:4]:
+                    moved += 1
     if label == "roc":
         for acct, tx in _dist_adjust_rows(cache, accounts, keep):
             rows.append((tx.get("date") or "", tx.get("time") or "",
                          acct, tx))
+        # The same ROC as a book ADJUST and a distributions.map row
+        # cuts the ACB twice: the roc-sum warning, here too (A2-1116).
+        _warn_dist_double_entry(root, accounts, _rules, keep, label)
+    if moved:
+        print(f"taxjson {label}: note: {moved} income row(s) shown with "
+              f"their pay date belong to this window by their tax date "
+              f"(a Canadian trust's record date, a listed RIC January "
+              f"dividend — `taxjson tax-logic`), as in divs-sum / "
+              f"roc-sum.", file=sys.stderr)
 
     # Chronological, oldest → latest (date, then time), across all accounts.
     rows.sort(key=lambda r: (r[0], r[1], r[2]))
@@ -5336,6 +5364,27 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         # in the sidecar; the view dropped it (S039-21).
         return float(t.get("fee") or 0) + float(t.get("commission") or 0)
 
+    _COIN_FEE_RE = re.compile(r"\(fee ([0-9.eE+-]+) ([A-Za-z0-9.]+)\)")
+
+    def _coin_fee(t: Dict[str, Any]) -> Tuple[float, str]:
+        # A fee paid IN COINS (Kraken: fee_qty/fee_currency; never the
+        # money `fee` field, S061-17), else the "(fee 0.002 TAO)" the
+        # description of a sidecar from an older parse carries — the
+        # FEE column was empty on every real withdrawal (A2-0663).
+        try:
+            q = float(t.get("fee_qty") or 0)
+        except (TypeError, ValueError):
+            q = 0.0
+        if q:
+            return q, str(t.get("fee_currency") or "")
+        m = _COIN_FEE_RE.search(str(t.get("description") or ""))
+        if m:
+            try:
+                return float(m.group(1)), m.group(2)
+            except ValueError:
+                pass
+        return 0.0, ""
+
     rows: List[Dict[str, Any]] = []
     for p in sorted(cache.glob("*_transfers.json")):
         try:
@@ -5360,6 +5409,8 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "value": float(t.get("net_amount")
                                         or t.get("book_value") or 0),
                          "fee": _fee(t),
+                         "fee_qty": _coin_fee(t)[0],
+                         "fee_currency": _coin_fee(t)[1],
                          "currency": t.get("currency") or "",
                          "where": "sidecar"})
     for name in (cfg.get("accounts") or {}):
@@ -5396,6 +5447,8 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "type": t.get("description") or "",
                          "value": _value,
                          "fee": _fee(t),
+                         "fee_qty": _coin_fee(t)[0],
+                         "fee_currency": _coin_fee(t)[1],
                          "currency": t.get("currency") or "",
                          "where": "book"})
     if want:
@@ -5426,7 +5479,9 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             r["date"], r["account"], r["symbol"],
             fmt_qty(r["quantity"]), _ty,
             fmt_money(r["value"]),
-            (f"{r['fee']:g}" if r["fee"] else "-"),
+            (f"{r['fee']:g}" if r["fee"]
+             else (f"{r['fee_qty']:g}_{r['fee_currency']}".rstrip("_")
+                   if r["fee_qty"] else "-")),
             r["currency"], r["where"]]))
     _print_report_table(out_lines)
     print(f"\n{len(rows)} transfer row(s).")
@@ -5765,6 +5820,20 @@ def _leaps_contracts(root: Path, account: Optional[str],
              + (f" for account {account!r}" if account else "")
              + " — run `taxjson run` first (LEAPS come from the built "
                "books).")
+    # An account with option gains but no native book: its LEAPS
+    # entries are unknowable, and the report silently left them out with rc 0
+    # (audit A2-0117; S040-00 covered an unreadable book only).
+    _no_native = sorted(
+        a for a, gf in resolve_gains_files(cache, account or None).items()
+        if _native_tx_file(cache, a) is None
+        and any(is_option_symbol(str(t.get("symbol") or ""))
+                for t in (_load_json_or_die(gf).get("transactions")
+                          or []) if isinstance(t, dict)))
+    if _no_native:
+        _die(f"no native transaction file (work/<account>_raw.json) for "
+             f"account(s) {', '.join(_no_native)}, which have gains in "
+             f"{cache} — rerun `taxjson run` (this report would "
+             f"otherwise leave their LEAPS out).")
     leaps: set = set()
     qty_by_symbol: Dict[str, float] = {}
     # The native books carry the broker's listing (pre-TOBASE: BCE...US)
@@ -5774,12 +5843,17 @@ def _leaps_contracts(root: Path, account: Optional[str],
     _renames: Dict[str, str] = {}
     _tm = root / "ticker.map"
     if _tm.exists():
+        # Read as `run` reads it: an unreadable map stops the report —
+        # treated as empty, a TOBASE-renamed LEAPS vanished with rc 0
+        # (audit A2-0329, A2-1126).
         try:
-            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+            from taxjson.bin.taxjson_ticker_map import (load_map_file,
                                                         merge_renames)
-            _renames = merge_renames(_parse_map_file(_tm)[0], True)
-        except Exception:                               # noqa: BLE001
-            _renames = {}
+            _renames = merge_renames(load_map_file(_tm), True)
+        except Exception as e:                          # noqa: BLE001
+            _die(f"could not read {_tm}: {e} — fix it (`taxjson run` "
+                 f"refuses it too); the LEAPS report would otherwise "
+                 f"miss the renamed contracts.")
     from taxjson.bin.taxjson_ticker_map import map_symbol as _map_sym
     for acct in accounts:
         native = _native_tx_file(cache, acct)
@@ -6124,9 +6198,21 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     tainted_skipped = 0
     from taxjson.lib.ticker_map import class_share_aliases, underlying_of
     _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
-    _aliases = class_share_aliases(
-        t.get("symbol") for _a, _d in _docs
-        for t in _d.get("transactions", []) or [])
+    # The class share is found among every listing the accounts hold or
+    # traded (inventory and native books), not only the year's sales: a
+    # Rogers call written on held, unsold RCI.B.TO shares was headed
+    # RCI.TO while the holdings TOML said RCI.B.TO (audit A2-1115).
+    _alias_syms = [t.get("symbol") for _a, _d in _docs
+                   for t in (_d.get("transactions", []) or [])
+                   + (_d.get("inventory", []) or [])
+                   if isinstance(t, dict)]
+    for _a in resolved:
+        _nf = _native_tx_file(cache, _a)
+        if _nf is not None:
+            _alias_syms += [t.get("symbol") for t in
+                            (_load_json_or_die(_nf).get("transactions")
+                             or []) if isinstance(t, dict)]
+    _aliases = class_share_aliases(_alias_syms)
     for acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
@@ -6438,12 +6524,15 @@ def _tx_fee(tx: dict) -> float:
 
 
 def _view_income_rules(root: Path):
-    """The project's lib/income_dating rules for the income views, or
-    None outside a project (every row then keeps its pay date). A
-    project whose settings the rules refuse stops the view."""
+    """The project's lib/income_dating rules for the income views. A
+    project with no country, or whose settings the rules refuse, stops
+    the view."""
     settings = _soft_settings(root)
-    if not settings.get("country"):
-        return None
+    # No country (no taxjson.toml): the window, the account types and
+    # the dating rules are all unknown — refuse, as `divs` / `roc` do,
+    # instead of an 'all history' total with registered accounts folded
+    # in (audit A2-1110).
+    _country(settings)
     try:
         return _income_rules(settings)
     except ValueError as e:
@@ -6549,15 +6638,26 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
     transaction views read never see them, so `roc` / `roc-sum` said
     "No ACB adjustments" while the engine applied one (audit R1-163)."""
     out: List[Tuple[str, dict]] = []
+    # Only a project with a distributions.map has such rows; without one
+    # a missing base book hides nothing.
+    _has_map = (cache.parent / "distributions.map").exists()
+    missing: List[str] = []
     for acct in accounts:
         p = cache / f"{acct}_base.json"
         if not p.exists():
+            if _has_map:
+                missing.append(p.name)
             continue
         doc = _load_json_or_die(p)
         for t in (doc.get("transactions") if isinstance(doc, dict)
                   else doc) or []:
+            # The map's rows only (id DIST-*): RBC's NOTIONAL
+            # DISTRIBUTION row carries type 'dist' too, but it is a
+            # native row the view already shows — counted twice, with
+            # a false double-entry warning (audit A2-0116).
             if (t.get("action") == "ADJUST"
-                    and (t.get("type") or "").lower() == "dist"):
+                    and (t.get("type") or "").lower() == "dist"
+                    and str(t.get("id") or "").startswith("DIST-")):
                 # The map's own date (the record date) is date_settle:
                 # the trade-date stamp can sit a day earlier so a
                 # trade-ordered engine reaches the record holder's lots
@@ -6565,7 +6665,65 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
                 d = t.get("date_settle") or t.get("date") or ""
                 if _ISO_DATE_RE.match(d) and keep(d):
                     out.append((acct, t))
+    if missing and not warned_missing_base_once(missing):
+        # The map's adjustments live only in the base books: without
+        # one they vanished from roc / roc-sum with rc 0 (A2-1128).
+        print(f"taxjson: warning: distributions.map is present but "
+              f"{', '.join(missing)} is missing in {cache} (the last "
+              f"`taxjson run` did not build it) — that account's map "
+              f"ACB adjustments are NOT in this report.", file=sys.stderr)
     return out
+
+
+_WARNED_MISSING_BASE: set = set()
+
+
+def warned_missing_base_once(names) -> bool:
+    """True when this process already warned about these base books
+    (roc-sum reads them twice: the window's rows and the double-entry
+    check's)."""
+    key = tuple(sorted(names))
+    if key in _WARNED_MISSING_BASE:
+        return True
+    _WARNED_MISSING_BASE.add(key)
+    return False
+
+
+def _warn_dist_double_entry(root: Path, accounts, rules, keep,
+                            label: str) -> None:
+    """The same ROC entered as a .tt ADJUST (or booked by the broker) AND
+    in distributions.map reduces the ACB twice — say so (audit R1-163;
+    roc-sum only until A2-1116). Matched over ALL rows, not the
+    window's: the broker row is windowed on its record date and the map
+    row on its own date, so a pair straddling the year end never met
+    (audit A2-0072). The map date may be either the pay date or the
+    printed record date."""
+    cache = root / "work"
+    _all_native: List[Tuple[str, dict]] = []
+    for _a in accounts:
+        _nf = _native_tx_file(cache, _a)
+        if _nf is None:
+            continue
+        _all_native += [(_a, t) for t in
+                        (_load_json_or_die(_nf).get("transactions") or [])
+                        if t.get("action") == "ADJUST"]
+    _all_dist = _dist_adjust_rows(cache, accounts, lambda _d: True)
+    _book_keys: Dict[Tuple[str, str, str], str] = {}
+    for a, t in _all_native:
+        if float(t.get("net_amount") or 0.0) >= 0:
+            continue
+        _w = rules.roc_date(t) if rules else str(t.get("date") or "")
+        for _d in (t.get("date"), t.get("record_date")):
+            if _d:
+                _book_keys[(a, str(t.get("symbol") or ""), str(_d))] = _w
+    for a, t in _all_dist:
+        _md = str(t.get("date_settle") or t.get("date") or "")
+        _w = _book_keys.get((a, str(t.get("symbol") or ""), _md))
+        if _w is not None and (keep(_md) or keep(_w)):
+            print(f"taxjson {label}: warning: {t.get('symbol')} "
+                  f"{_md} ({a}) has an ADJUST in the books AND "
+                  f"a distributions.map row — the ACB is reduced twice "
+                  f"if both are the same distribution.", file=sys.stderr)
 
 
 def _load_json_or_die(path: Path) -> Any:
@@ -6996,37 +7154,7 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     if _acct_arg:
         _accts = [_acct_arg]
     dist_rows = _dist_adjust_rows(_root / "work", _accts, _keep)
-    # The same ROC entered as a .tt ADJUST (or booked by the broker) AND
-    # in distributions.map reduces the ACB twice — say so (audit
-    # R1-163). Matched over ALL rows, not the window's: the broker row
-    # is windowed on its record date and the map row on its own date,
-    # so a pair straddling the year end never met (audit A2-0072). The
-    # map date may be either the pay date or the printed record date.
-    _all_native: List[Tuple[str, dict]] = []
-    for _a in _accts:
-        _nf = _native_tx_file(_root / "work", _a)
-        if _nf is None:
-            continue
-        _all_native += [(_a, t) for t in
-                        (_load_json_or_die(_nf).get("transactions") or [])
-                        if t.get("action") == "ADJUST"]
-    _all_dist = _dist_adjust_rows(_root / "work", _accts, lambda _d: True)
-    _book_keys: Dict[Tuple[str, str, str], str] = {}
-    for a, t in _all_native:
-        if float(t.get("net_amount") or 0.0) >= 0:
-            continue
-        _w = _rules.roc_date(t) if _rules else str(t.get("date") or "")
-        for _d in (t.get("date"), t.get("record_date")):
-            if _d:
-                _book_keys[(a, str(t.get("symbol") or ""), str(_d))] = _w
-    for a, t in _all_dist:
-        _md = str(t.get("date_settle") or t.get("date") or "")
-        _w = _book_keys.get((a, str(t.get("symbol") or ""), _md))
-        if _w is not None and (_keep(_md) or _keep(_w)):
-            print(f"taxjson roc-sum: warning: {t.get('symbol')} "
-                  f"{_md} ({a}) has an ADJUST in the books AND "
-                  f"a distributions.map row — the ACB is reduced twice "
-                  f"if both are the same distribution.", file=sys.stderr)
+    _warn_dist_double_entry(_root, _accts, _rules, _keep, "roc-sum")
     rows = list(rows) + dist_rows
 
     money = fmt_money               # shared report-layer formatter
@@ -7057,10 +7185,12 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                                    "manual_rows": 0, "dist_rows": 0})
         rec["returned"] += returned
         _typ = (tx.get("type") or "").lower()
-        if _typ == "roc":
-            rec["roc_rows"] += 1
-        elif _typ == "dist":
+        if _typ == "dist" and str(tx.get("id") or "").startswith("DIST-"):
             rec["dist_rows"] += 1
+        elif _typ in ("roc", "dist"):
+            # Broker-classified: a ROC, or RBC's notional distribution
+            # (type 'dist' in the native book, not a map row — A2-0116).
+            rec["roc_rows"] += 1
         else:
             rec["manual_rows"] += 1
         totals[cur] = totals.get(cur, 0.0) + returned
