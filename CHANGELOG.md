@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson run` reads an unset `base_currency` as the country's currency,
+  like every other command (it refused it); an empty or unreadable
+  statement CSV is named as such instead of "rename it to cb_/kr_/
+  generic_"; an Apple Numbers export in an account folder is refused like
+  .xlsx (re-audit A2-0712, A2-0713, A2-1228, A2-0714).
 - `taxjson scan` no longer prints "No findings — clean scan." (exit 0)
   when an account's holdings report or raw book is missing: it names
   each account it could not scan and exits 1 (re-audit A2-0404).

@@ -942,7 +942,8 @@ def validate_config(cfg: Dict[str, Any],
             if not adir.is_dir():
                 continue
             for sub in sorted(adir.iterdir()):
-                if not sub.is_dir() or sub.name.startswith("."):
+                if (not sub.is_dir() or sub.name.startswith(".")
+                        or sub.suffix.lower() == ".numbers"):
                     continue
                 # Spreadsheets too: an .xlsx here got no word at all
                 # (S043-13).
@@ -1315,21 +1316,38 @@ def input_files(dirpath: Path, suffix: str) -> List[Path]:
 
 # Spreadsheet suffixes a broker export may arrive in. None is read by
 # the run; validate_config refuses them unless converted (R1-64).
-SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods")
+SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods", ".numbers")
 
 
 def spreadsheet_inputs(dirpath: Path) -> List[Path]:
     """Spreadsheet files directly in an inputs folder (never read)."""
     if not dirpath.is_dir():
         return []
+    # A Numbers document can be a package DIRECTORY (macOS bundle copied
+    # as-is): it is a spreadsheet all the same (re-audit A2-0714).
     return sorted(p for p in dirpath.iterdir()
-                  if p.is_file() and not p.name.startswith((".", "~$"))
+                  if (p.is_file() or (p.is_dir()
+                                      and p.suffix.lower() == ".numbers"))
+                  and not p.name.startswith((".", "~$"))
                   and p.suffix.lower() in SPREADSHEET_SUFFIXES)
 
 
 def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
     out: Dict[str, List[Path]] = {}
     for csv in input_files(account_dir, ".csv"):
+        # An unreadable or empty file got the "rename it to cb_/kr_/
+        # generic_" advice; renaming never helps (re-audit A2-0713,
+        # A2-1228).
+        try:
+            with open(csv, "rb") as _fh:
+                _head = _fh.read(4096)
+        except OSError as e:
+            from taxjson.lib.cli_diag import describe_input_error
+            _die(f"{describe_input_error(e)} — taxjson cannot read this "
+                 f"input; fix its permissions (or remove it).")
+        if not _head.strip(b" \t\r\n\xef\xbb\xbf\x00"):
+            _die(f"{csv} is empty — a failed or interrupted download? "
+                 f"Download the export again (or remove the file).")
         broker = detect_broker(csv)
         if not broker:
             # Content detection cannot read a cp1252 re-save: the
@@ -3589,9 +3607,13 @@ def cmd_run(args: argparse.Namespace) -> None:
     # before the "missing year" death it causes.
     for msg in validate_config(cfg, root / "inputs"):
         print(f"taxjson: warning: taxjson.toml: {msg}", file=sys.stderr)
-    for required in ("year", "country", "base_currency"):
+    for required in ("year", "country"):
         if required not in settings:
             _die(f"missing [settings] {required} in taxjson.toml")
+    if not settings.get("base_currency"):
+        # Unset means the country's currency, as every other command
+        # reads it (INPUTS-07; re-audit A2-0712: only `run` refused it).
+        settings["base_currency"] = _base(settings)
 
     inputs_dir = root / "inputs"
     cache = root / "work"

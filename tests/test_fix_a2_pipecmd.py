@@ -604,5 +604,63 @@ class TestScanIsNotCleanOverMissingBooks(unittest.TestCase):
                     f.write_bytes(data)
 
 
+# ---------------------------------------------------------------- A2-0712
+class TestRunDefaultsBaseCurrency(unittest.TestCase):
+
+    def test_unset_base_is_the_countrys(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [
+                "BUYSELL 2026-01-05 10:00:00 XYZ.TO 10 CAD 10 -100 0",
+                "BUYSELL 2026-03-05 10:00:00 XYZ.TO -10 CAD 12 120 0"])
+            cfg = root / "taxjson.toml"
+            cfg.write_text(cfg.read_text().replace(
+                'base_currency = "CAD"\n', ""))
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            self.assertIn("20.00", (root / "reports" / "m.sum").read_text())
+
+
+# --------------------------------------------- A2-0713 / A2-1228 / A2-0714
+class TestUnusableStatementFiles(unittest.TestCase):
+
+    def _proj(self, td):
+        return _tt_project(td, [
+            "BUYSELL 2026-01-05 10:00:00 XYZ.TO 10 CAD 10 -100 0"])
+
+    def test_empty_csv(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            (root / "inputs" / "m" / "questrade_2026.csv").write_text("")
+            r = _cli(root, home, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("is empty", r.stderr)
+            self.assertNotIn("Rename to start", r.stderr)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
+                     "root reads any file")
+    def test_unreadable_csv(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            f = root / "inputs" / "m" / "questrade_2026.csv"
+            f.write_text("x,y\n1,2\n")
+            f.chmod(0)
+            try:
+                r = _cli(root, home, "run", "--no-input")
+            finally:
+                f.chmod(0o600)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("permission denied", r.stderr)
+            self.assertNotIn("Rename to start", r.stderr)
+
+    def test_numbers_export_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            (root / "inputs" / "m" / "Activity_2026.numbers").write_bytes(
+                b"PK\x03\x04")
+            r = _cli(root, home, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("Activity_2026.numbers", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
