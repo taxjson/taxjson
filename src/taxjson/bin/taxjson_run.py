@@ -12022,13 +12022,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     if not base_argv and not crypto_argv:
         sys.exit(f"taxjson carryover: no taxable base files in {cache} "
                  f"(run `taxjson run` first).")
-    if not base_argv:
-        # positional FILEs are required; a crypto-only project feeds
-        # its books positionally (the standalone folds/splits them by
-        # country policy either way).
-        base_argv = [crypto_argv[i + 1]
-                     for i in range(0, len(crypto_argv), 2)]
-        crypto_argv = []
+    # A crypto-only project passes its books as --crypto only: fed as
+    # positional FILEs they lost the US no-wash pass (US-WASH-13; audit
+    # A2-0146, A2-0411, A2-0412).
 
     argv = base_argv + crypto_argv + [
         "--country", _country(settings),

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson carryover` in a US project whose only taxable accounts are
+  crypto accounts no longer applies the wash-sale rule to the coins: the
+  books go to the ledger's no-wash crypto pass, as in a mixed project
+  (US-WASH-13; audit A2-0146, A2-0411, A2-0412).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the
