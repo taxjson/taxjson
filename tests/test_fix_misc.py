@@ -178,6 +178,7 @@ class TestFillCryptoAmountsPinned(unittest.TestCase):
         self.assertEqual(got[0]["gross_amount"], 210.375)
 
 
+@rule("CA-DATE-14")
 class TestCaPriorityLadderPinned(unittest.TestCase):
     """G1-7: every rung of the Canada same-timestamp ladder, through the
     function and through the ca_main sort."""
@@ -528,6 +529,8 @@ class TestToBaseOptionCollision(unittest.TestCase):
 class TestNonNorthAmericanSettlement(unittest.TestCase):
     """G5-0: LSE (GBP) and ASX (AUD) shares settle T+2, not the US T+1."""
 
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
     def test_gbp_and_aud_settle_t2(self):
         from taxjson.lib.brokerages.ib_extractor import get_ib_settlement
         from taxjson.lib.dates import settlement_lag_days

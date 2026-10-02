@@ -383,6 +383,8 @@ class TestExpiryAndAssignmentOrder(unittest.TestCase):
     """S062-23 / S063-14 / S064-03: intra-day stamps the engine orders
     by."""
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_questrade_same_day_write_then_expiry(self):
         write = q(td='2025-03-21', sd='2025-03-24', action='Sell', sym='',
                   desc='CALL QZA 03/21/25 10 QZA CORP', qty='-1',
@@ -398,6 +400,8 @@ class TestExpiryAndAssignmentOrder(unittest.TestCase):
         self.assertEqual((w['date'], w['time']), ('2025-03-21', '10:15:00'))
         self.assertEqual((e['date'], e['time']), ('2025-03-21', '16:00:00'))
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_rbc_same_day_write_then_expiry(self):
         body = (rrow("March 24, 2025", "Reorganization", "8QZQQQ2", "", "1",
                      "", "0", "USD", "EXP - CALL .QZA 03/21/25 10 QZA CORP "

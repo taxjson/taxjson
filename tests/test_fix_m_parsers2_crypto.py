@@ -24,8 +24,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 from tax_rules import rule
+from unittest import mock
 
 CB_HEADER = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
              "Price Currency,Price at Transaction,Subtotal,"
@@ -356,6 +356,8 @@ class TestCoinbaseLayout(unittest.TestCase):
             _parse_cb(row + ",extra\n")
 
 
+@rule("CA-CRYPTO-01")
+@rule("US-CRYPTO-01")
 class TestSwapOneValue(unittest.TestCase):
     """S013-08."""
 

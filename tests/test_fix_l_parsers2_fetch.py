@@ -17,6 +17,7 @@ from datetime import date
 from unittest.mock import patch
 
 from taxjson.bin import taxjson_fetch as F
+from tax_rules import rule
 
 
 class TestQtWindow(unittest.TestCase):
@@ -106,6 +107,8 @@ class TestFillValue(unittest.TestCase):
 class TestTodayNotCached(unittest.TestCase):
     """S025-08."""
 
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_open_candle_used_but_not_cached(self):
         from taxjson.bin import fill_crypto_prices as fcp
         today = fcp._utc_today()

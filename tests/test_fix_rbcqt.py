@@ -72,6 +72,8 @@ def of(txs, **kw):
 
 # ------------------------------------------------------------------ Questrade
 
+@rule("CA-ACB-04")
+@rule("US-BASIS-06")
 class TestQtListingSuffix(unittest.TestCase):
     """A .TO listing keeps .TO whatever the row currency (R1-68 and the
     DLR.U.TO item found in round 1)."""
@@ -315,6 +317,7 @@ class TestQtRowShapes(unittest.TestCase):
         self.assertEqual(txs[0]['date_settle'], '2023-12-29')
 
     @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_warrant_expiry_books_on_its_expiry_date(self):
         """S065-04."""
         txs, _, _ = qt_parse(q(td='2028-01-03', action='EXP', sym='QZWW',
@@ -323,6 +326,29 @@ class TestQtRowShapes(unittest.TestCase):
                                net='0'))
         self.assertEqual((txs[0]['date'], txs[0]['date_settle']),
                          ('2027-12-31', '2027-12-31'))
+
+
+class TestQtAssignmentLegsShareASettleDate(unittest.TestCase):
+    """A2-0488 / A2-0489: the Questrade twin of S058-01 / S065-06. An
+    ASN option leg with a blank Settlement Date takes its stock leg's
+    cycle (T+2 before the 2024 cutover), not the option T+1 — a Dec-28
+    assignment's premium stays with the stock leg's tax year."""
+
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
+    def test_blank_settle_assignment_legs_share_the_equity_cycle(self):
+        txs, _, _ = qt_parse(
+            q(td='2023-12-28', sd='', action='ASN', sym='QZA28Dec23C50.00',
+              desc='CALL QZA 12/28/23 50 QZA CORP ASSIGNMENT', qty='1',
+              price='0', gross='0', comm='0', net='0', cur='CAD')
+            + q(td='2023-12-28', sd='', action='Sell', sym='QZA',
+                desc='QZA CORP COMMON STOCK ASSIGNMENT OF OPTION CALL QZA '
+                     '12/28/23 50', qty='-100', price='50', gross='5000',
+                comm='0', net='5000', cur='CAD'))
+        leg = next(t for t in txs if t['action'] == 'ASSIGN')
+        stock = next(t for t in txs if t['action'] == 'BUYSELL')
+        self.assertEqual(stock['date_settle'], '2024-01-02')
+        self.assertEqual(leg['date_settle'], '2024-01-02')
 
 
 class TestQtStockDividendAndDis(unittest.TestCase):
@@ -559,6 +585,8 @@ class TestRbcTradeRows(unittest.TestCase):
                            "50", "4990.05", "USD",
                            "CALL XYZ 05/16/25 50 XYZ CORP"))
 
+    @rule("CA-DATE-04")
+    @rule("US-DATE-04")
     def test_blank_settle_assignment_legs_share_the_equity_cycle(self):
         """S065-06: pre-cutover, the ASN option leg follows its stock leg."""
         txs, _, _ = rbc_parse(
@@ -569,6 +597,8 @@ class TestRbcTradeRows(unittest.TestCase):
                    "06/16/23", settle=""))
         self.assertEqual({t['date_settle'] for t in txs}, {'2023-06-20'})
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_warrant_expiry_settles_on_its_date(self):
         """S065-04."""
         txs, _, _ = rbc_parse(rrow("December 31, 2027", "Reorganization",
@@ -576,6 +606,13 @@ class TestRbcTradeRows(unittest.TestCase):
                                    "CAD", "EXP - WTS QZW CORP AS OF 12/31/27 "
                                    "EXPIRED", settle="January 3, 2028"))
         self.assertEqual(txs[0]['date_settle'], '2027-12-31')
+        # Posted the next business day: booked on the description's date.
+        txs, _, _ = rbc_parse(rrow("January 3, 2028", "Reorganization",
+                                   "QZW.WT", "QZW CORP WTS", "-100", "", "0",
+                                   "CAD", "EXP - WTS QZW CORP AS OF 12/31/27 "
+                                   "EXPIRED", settle="January 4, 2028"))
+        self.assertEqual((txs[0]['date'], txs[0]['date_settle']),
+                         ('2027-12-31', '2027-12-31'))
 
 
 class TestRbcIncomeAndCorporateRows(unittest.TestCase):

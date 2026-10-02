@@ -39,10 +39,10 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
+from tax_rules import rule
 
 from test_fix_planning import (REPO_ROOT, _QT_HEADER, _cli, _config, _disp,
                                _gains, _qt, _row)
-from tax_rules import rule
 
 
 def _radar(tmp, taxable, as_of, sheltered=None, gains=None, extra=()):
@@ -308,6 +308,7 @@ class TestBuybackSettings(unittest.TestCase):   # R1-234
         return _gains(rows, option_premium_timing="grant",
                       option_buyback_loss_superficial=strict)
 
+    @rule("CA-SL-12", "CA-PLAN-01")
     def test_strict_buyback_loss_then_rebuy_is_a_violation(self):
         rows = [_disp("w1", "2026-09-02", self.OPT, 1, 200.0, cost=0.0,
                       direction="SHORT", is_option=True, grant=True),
@@ -323,6 +324,7 @@ class TestBuybackSettings(unittest.TestCase):   # R1-234
         self.assertEqual(_cat(before, self.OPT), "COOLING")
         self.assertEqual(_cat(after, self.OPT), "VIOLATION")
 
+    @rule("CA-SL-11", "CA-PLAN-01")
     def test_default_rewrite_after_buyback_is_not_a_violation(self):
         rows = [_disp("w1", "2026-09-02", self.OPT, 1, 200.0, cost=0.0,
                       direction="SHORT", is_option=True, grant=True),

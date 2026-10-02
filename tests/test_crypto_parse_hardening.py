@@ -305,6 +305,8 @@ class TestKrakenCoinFees(unittest.TestCase):
 
 # ------------------------------------------------------------------ M9
 class TestKrakenLegacyLedger(unittest.TestCase):
+    @rule("CA-INC-04")
+    @rule("US-INC-02")
     def test_staking_dividend_and_suffixes(self):
         csv = (_KL_H +
                "L1,R1,2023-03-01 12:00:00,staking,,currency,DOT.S,spot,0.5,0,100.5\n"

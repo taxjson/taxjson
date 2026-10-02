@@ -277,6 +277,8 @@ class TestSumTotalsConvention(unittest.TestCase):
 
 
 # ------------------------------------------------- R1-310 sum-income pins
+@rule("CA-INC-05", "CA-INC-DATE-DIV")
+@rule("US-INC-03", "US-INC-DATE-DIV")
 class TestSumIncomeYearPin(unittest.TestCase):
     """A multi-year base book (as `taxjson run` passes it) summarised for
     one year: the year filter, the withholding subtraction and the
