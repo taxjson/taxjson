@@ -13965,11 +13965,23 @@ def cmd_audit(args: argparse.Namespace) -> None:
     # recorded, as check-filed does: `audit --year 2025` from a 2026
     # project without since = 2025 printed -1,000 for a year filed at
     # -601, with no word (S048-18).
+    # The lock may live in the previous year's project (per-year
+    # layout, [settings] prior_year_record) — it counts the same as a
+    # local filed/<year>.json (A2-0335, A2-0664). Its recorded DATE
+    # BASIS applies too, as check-filed's lock_settings does: a year
+    # filed on settlement dates is audited on settlement dates
+    # (A2-0334, A2-1129).
     _timing_flags = option_timing_flags(settings)
     if year and str(year) != str(settings.get("year")):
         from taxjson.bin import taxjson_filed as _tf
-        _lp = _tf.snapshot_path(root, year)
-        if _lp.exists():
+        try:
+            _hit = _tf.lock_for_year(root, settings, int(year))
+        except _tf.PriorRecordError as e:
+            _die(str(e))
+        if _hit is not None:
+            _lp, _ = _hit
+            _lname = _tf.lock_label(root, _lp)
+            _lock = None
             try:
                 _lock = _json.loads(_lp.read_text(encoding="utf-8"))
                 _lot = (_lock.get("option_timing")
@@ -13977,15 +13989,23 @@ def cmd_audit(args: argparse.Namespace) -> None:
             except (OSError, ValueError) as e:
                 _lot = None
                 print(f"taxjson audit: warning: cannot read "
-                      f"filed/{_lp.name} ({e}) — {year} is recomputed "
-                      f"with this project's option timing, which may "
-                      f"not be the timing it was filed on.",
-                      file=sys.stderr)
+                      f"{_lname} ({e}) — {year} is recomputed "
+                      f"with this project's option timing and date "
+                      f"basis, which may not be the ones it was filed "
+                      f"on.", file=sys.stderr)
+            _lb = _tf.lock_settings(_lock, settings).get("tax_date") \
+                if isinstance(_lock, dict) else None
+            if _lb in ("settle", "trade") and _lb != tax_date:
+                print(f"taxjson audit: note: {year} is locked "
+                      f"({_lname}) — recomputed on the {_lb} date basis "
+                      f"its lock recorded, not this project's "
+                      f"{tax_date} basis.", file=sys.stderr)
+                tax_date = _lb
             if isinstance(_lot, dict):
                 _lf = _tf._lock_timing_flags(settings, int(year), _lot)
                 if _lf != _timing_flags:
                     print(f"taxjson audit: note: {year} is locked "
-                          f"(filed/{_lp.name}) — recomputed with the "
+                          f"({_lname}) — recomputed with the "
                           f"option timing its lock recorded "
                           f"({' '.join(_lf)}), not this project's "
                           f"({' '.join(_timing_flags) or 'none'}).",
