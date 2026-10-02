@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- An output path that is a directory (or cannot be written) says
+  "cannot write <path>" and leaves no `.part` file (taxjson-convert-tt,
+  taxjson-brokerage sidecars, wash-radar --json-out); the --explain trace
+  rounds a denial to the same cent as the wash-sales table (re-audit
+  A2-0707, A2-0708).
 - `taxjson sanity` refuses a holdings `quantity = true` (read as 1), and
   the cross-account overlap note counts a position moved in kind into a
   second taxable account (re-audit A2-1230, A2-1231).

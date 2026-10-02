@@ -63,11 +63,44 @@ def read_text_utf8(path, encoding: str = "utf-8-sig") -> str:
         raise not_utf8(path, e) from None
 
 
+class OutputWriteError(OSError):
+    """An output path that cannot be written (a directory, no permission,
+    a missing folder): 'cannot write <path>: ...', exit 2. The input
+    wording ('cannot read <out>.part: is a directory') named the wrong
+    file and the wrong direction (re-audit A2-0707)."""
+
+
+def write_text_atomic(path, text: str, encoding: str = "utf-8") -> None:
+    """Write `text` to `path` through `<path>.part` in the same folder
+    (the old contents stay until the new ones are complete). A failure
+    raises OutputWriteError naming `path` and leaves no .part behind."""
+    import os
+    from pathlib import Path
+    path = Path(path)
+    if path.is_dir():
+        raise OutputWriteError(f"cannot write {path}: is a directory")
+    tmp = path.with_name(path.name + ".part")
+    try:
+        tmp.write_text(text, encoding=encoding)
+        os.replace(tmp, path)
+    except OutputWriteError:
+        raise
+    except OSError as e:
+        raise OutputWriteError(
+            f"cannot write {path}: {e.strerror or e}") from None
+    finally:
+        try:
+            if tmp.is_file():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def describe_input_error(exc: BaseException) -> str:
     """The one-line text for an input a tool could not read."""
     import json
     fn = getattr(exc, "filename", None)
-    if isinstance(exc, InputReadError):
+    if isinstance(exc, (InputReadError, OutputWriteError)):
         return str(exc)
     if isinstance(exc, FileNotFoundError):
         return f"no such file: {fn}"
@@ -85,7 +118,7 @@ def describe_input_error(exc: BaseException) -> str:
     return str(exc)
 
 
-_INPUT_ERRORS = (InputReadError, FileNotFoundError, IsADirectoryError, NotADirectoryError,
+_INPUT_ERRORS = (InputReadError, OutputWriteError, FileNotFoundError, IsADirectoryError, NotADirectoryError,
                  PermissionError, UnicodeDecodeError)
 
 

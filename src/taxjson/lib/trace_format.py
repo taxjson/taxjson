@@ -9,14 +9,24 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
+def _denoise(amount) -> float:
+    """The amount with float noise below a micro-cent removed. A trace
+    recomputes the engine's value (530.4250000000001) where the saved
+    gains file holds 530.425: formatted as is, the trace printed 530.43
+    and the wash-sales table 530.42 (re-audit A2-0708)."""
+    return round(float(amount or 0.0), 6)
+
+
 def _fmt_money(amount: float) -> str:
     """Compact accounting-style money: $1,234.56 or -$1,234.56."""
+    amount = _denoise(amount)
     sign = '-' if amount < 0 else ''
     return f"{sign}${abs(amount):,.2f}"
 
 
 def _fmt_signed_money(amount: float) -> str:
     """Explicit-sign money for gain columns: +$1,234.56 / -$1,234.56 / $0.00."""
+    amount = _denoise(amount)
     if abs(amount) < 0.005:
         return "$0.00"
     sign = '+' if amount > 0 else '-'

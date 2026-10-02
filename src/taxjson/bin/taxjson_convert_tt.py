@@ -805,13 +805,8 @@ def json_to_tt_lines(input_path: Path, date_basis: str = 'settle'):
 def _write_atomic(path: Path, text: str) -> None:
     """Write `text` to `path` through a temp file in the same folder:
     the old contents stay until the new ones are complete."""
-    tmp = path.with_name(path.name + ".part")
-    try:
-        tmp.write_text(text, encoding='utf-8')
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    from taxjson.lib.cli_diag import write_text_atomic
+    write_text_atomic(path, text)
 
 
 @guard_main("taxjson-convert-tt")
