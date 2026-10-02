@@ -126,7 +126,7 @@ def tolerant_stdout() -> None:
             pass
 
 
-def _stdout_closed_exit() -> "NoReturn":
+def _stdout_closed_exit() -> None:
     """The reader of our stdout went away (`taxjson trades | head -1`):
     stop quietly with the shell's SIGPIPE status, 141, and no traceback
     (re-audit A2-0785). stdout is pointed at /dev/null first so the
