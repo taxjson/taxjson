@@ -363,7 +363,8 @@ class LockUnreadable(ValueError):
 
 
 # The gain lines a return carries (close-year's form_lines keys).
-_GAIN_LINES = {'canada': ('13200', '15300', '15301'),
+# 10690/10694: the 2024 form's Period 1 lines (A2-0166).
+_GAIN_LINES = {'canada': ('13200', '15300', '15301', '10690', '10694'),
                'usa': ('I_gain', 'II_gain')}
 
 LOCK_SOURCE_TEXT = {
@@ -386,7 +387,8 @@ def lock_figure(path: Path, country: str) -> Dict[str, Any]:
     source, st, lt, dispositions}. The figure is, by preference, the
     gain the return reported with another tool (filed_totals.gain;
     Canada — it has no term split), else the sum of the return's gain
-    lines (form_lines: Schedule 3 13200/15300/15301, Form 8949 Part I/II
+    lines (form_lines: Schedule 3 13200/15300/15301 and 2024's Period 1
+    10690/10694, Form 8949 Part I/II
     — per-row rounded, what the return carries; audit A2-1132), else
     the lock's realized total. A lock that cannot be read, or whose
     numbers are missing or not finite (NaN, Infinity), raises

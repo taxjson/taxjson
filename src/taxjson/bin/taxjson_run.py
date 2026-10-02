@@ -9340,7 +9340,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _filing_ents += _ents
         if _is_us:
             try:
-                _parts = filing_parts_8949(_ents)
+                _parts = filing_parts_8949(_ents, _fyear)
             except SystemExit as e:
                 # Dropping the account (and, below, every account's
                 # Part I/II lines) printed RETURN 0.00 next to a nonzero
@@ -9355,12 +9355,14 @@ def cmd_summary(args: argparse.Namespace) -> None:
                 "dispositions": len(_ents)})
         else:
             filing_rows.append({"account": acct,
-                                **filing_totals(_ents, _fyear)})
+                                **filing_totals(_ents, _fyear,
+                                                _date_key)})
     filing_line_rows: List[Dict[str, Any]] = []
     _filing_6781: Optional[Dict[str, Any]] = None
     if _is_us:
         try:
-            filing_line_rows = filing_parts_8949(_filing_ents)
+            filing_line_rows = filing_parts_8949(_filing_ents,
+                                                 _fyear)
             # §1256 contracts stay off Form 8949 (Form 6781 by hand,
             # US-FUT-02 / US-OPT-04; A2-0324): shown beside the block.
             _filing_6781 = filing_6781(_filing_ents)
@@ -9368,7 +9370,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             filing_line_rows = []           # warned per account above
         _fkeys = ("proceeds", "cost", "adjustment", "gain")
     else:
-        filing_line_rows = filing_lines(_filing_ents, _fyear)
+        filing_line_rows = filing_lines(_filing_ents, _fyear, _date_key)
         _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
     filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
                     for k in _fkeys}
@@ -13351,8 +13353,12 @@ def _check_filed_years(root: Path, cache: Path,
                 snap.get("basis", ""), _filed_run_gains,
                 option_timing=_lock_timing)
             _stage = "lock"
+            _diff_notes: List[str] = []
             lines = taxjson_filed.diff_snapshot(snap, recomputed,
-                                                unconfigured=_gone)
+                                                unconfigured=_gone,
+                                                notes=_diff_notes)
+            for _dn in _diff_notes:
+                print(f"  note: filed {year}: {_dn}")
         except SystemExit:
             raise
         except Exception as e:          # this lock only
@@ -17434,8 +17440,11 @@ def _main() -> None:
                               "importable file built from the 8949 "
                               "rows, US projects only)")
     p_forms.add_argument("--box", default=None, choices=["A", "B", "C"],
-                         help="txf only: 8949 checkbox pairing (A/D "
-                              "basis-reported, the default; B/E, C/F)")
+                         help="txf only: 8949 checkbox pairing for "
+                              "securities (A/D basis-reported, the "
+                              "default; B/E, C/F); from 2025 a crypto "
+                              "account's rows belong on boxes G-L, which "
+                              "the TXF leaves out with a warning")
     p_forms.add_argument("--out", metavar="FILE", default=None,
                          help="txf only: write the .txf here instead "
                               "of stdout")

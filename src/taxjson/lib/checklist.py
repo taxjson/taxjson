@@ -1608,7 +1608,7 @@ def _slip_mismatch_summary(code: int, out: str, err: str) -> str:
 def _slip_names(ctx: Ctx) -> str:
     """The slips a project's dispositions come on: T5008 in Canada; in
     the US Form 1099-B for securities and, from tax year 2025, Form
-    1099-DA for a broker's digital-asset sales (US-RPT-09, A2-1149)."""
+    1099-DA for a broker's digital-asset sales (US-RPT-10, A2-1149)."""
     if not is_us(ctx.settings.get("country")):
         return "T5008"
     names = []
