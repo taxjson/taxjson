@@ -60,7 +60,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from taxjson.bin.taxjson_form_export import load_json
+from taxjson.bin.taxjson_form_export import grant_buyback_units, load_json
 from taxjson.lib.cli_diag import tax_year
 from taxjson.lib.numeric import nonneg_float_arg
 
@@ -98,19 +98,23 @@ _CURRENCY_ALIASES = {"CDN": "CAD", "C$": "CAD", "CA$": "CAD", "CAN": "CAD",
 _MONTHS = {m: i for i, m in enumerate(
     ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT",
      "NOV", "DEC"), 1)}
+# A strike with or without thousands separators ('5,000.00', R1-170 /
+# A2-1113 — the parsers' OPTION_STRIKE_RE accepts it); a decimal comma
+# ('2,50') does not match and the cell stays a plain (unmatched) symbol.
+_STRIKE = r"((?:[1-9]\d{0,2}(?:,\d{3})+|\d+)(?:\.\d+)?)"
 _IB_OPT_RE = re.compile(
     r"^([A-Z][A-Z0-9.]*)\s+(\d{1,2})([A-Z]{3})(\d{2})\s+"
-    r"(\d+(?:\.\d+)?)\s+([CP])$")
+    + _STRIKE + r"\s+([CP])$")
 _WB_OPT_RE = re.compile(
     r"^(CALL|PUT)\s+([A-Z][A-Z0-9.]*?)\s*(\d{2})/(\d{2})/(\d{2})\s+"
-    r"(\d+(?:\.\d+)?)$")
+    + _STRIKE + r"$")
 _PADDED_OCC_RE = re.compile(r"^([A-Z][A-Z0-9.]*)\s+(\d{6}[CP]\d{8})$")
 
 
 def _occ(root: str, yy: str, mm: int, dd: int, cp: str,
          strike: str) -> str:
     return (f"{root}{yy}{mm:02d}{dd:02d}{cp}"
-            f"{int(round(float(strike) * 1000)):08d}")
+            f"{int(round(float(strike.replace(',', '')) * 1000)):08d}")
 
 
 def split_listing(sym: str) -> Tuple[str, str]:
@@ -179,7 +183,9 @@ def _map_headers(fieldnames: List[str], path: Optional[Path] = None
     """Map our canonical keys to the CSV's actual column names. An EXACT
     label wins; otherwise the first synonym (in priority order) that
     exactly ONE unclaimed column contains. Two columns containing the
-    same synonym is refused as ambiguous, and no column serves two keys
+    same synonym, or two exact labels of one amount (A2-0656; the
+    symbol keeps its synonym priority), is refused as ambiguous, and no
+    column serves two keys
     (S036-02): first-substring-wins let a blank box-23 'Quantity of
     securities received on settlement' column silently switch the
     quantity check off, and 'Proceeds (USD)' before '(CAD)' compared
@@ -192,6 +198,18 @@ def _map_headers(fieldnames: List[str], path: Optional[Path] = None
         free = {low: orig for low, orig in lowered.items()
                 if orig not in claimed}
         exact = [free[syn] for syn in synonyms if syn in free]
+        if len(exact) > 1 and key != "symbol":
+            # Two columns that are BOTH exact spellings of one amount
+            # ('Proceeds' and 'Proceeds of disposition', 'Quantity' and
+            # 'Shares') — picking one by synonym priority compared the
+            # other's figure silently (A2-0656). The symbol keeps its
+            # priority: a slip often has a ticker AND a security-name
+            # column ('Symbol', 'Security').
+            raise AmbiguousHeader(
+                f"taxjson-reconcile-slips: {where}ambiguous header — "
+                f"{', '.join(repr(h) for h in exact)} all look like "
+                f"the {key!r} column. Rename or delete the extra "
+                f"column(s) so exactly one matches.")
         if exact:
             mapping[key] = exact[0]
             claimed.add(exact[0])
@@ -398,6 +416,8 @@ def load_computed(gains_paths: List[Path],
     out: Dict[str, Dict[str, Any]] = {}
     ystr = str(year) if year else None
     grant_qty: Dict[Tuple[str, str], float] = {}
+    grant_gross: Dict[Tuple[str, str], float] = {}
+    grant_net: Dict[Tuple[str, str], float] = {}
     short_close_qty: Dict[Tuple[str, str], float] = {}
     for p in gains_paths:
         data = load_json(p)
@@ -435,9 +455,19 @@ def load_computed(gains_paths: List[Path],
             root, sfx = split_listing(full)
             if not root:
                 continue
+            # open_grant*: this year's grant-timing writes still open at
+            # the year end (premium reported now, s.49(1); the broker's
+            # slip reports it at the close). prior_grant: the premium of
+            # an EARLIER year's grant write this year's buy-back closed —
+            # the broker's close-year slip carries it as proceeds
+            # (A2-0657).
             rec = out.setdefault(root, {"qty": 0.0, "proceeds_net": 0.0,
                                         "proceeds_gross": 0.0, "cost": 0.0,
                                         "rows": 0, "tainted_rows": 0,
+                                        "open_grant_qty": 0.0,
+                                        "open_grant": 0.0,
+                                        "open_grant_net": 0.0,
+                                        "prior_grant": 0.0,
                                         "listings": {}})
             proceeds = float(e.get("proceeds") or 0.0)
             cost = float(e.get("cost") or 0.0)
@@ -469,9 +499,20 @@ def load_computed(gains_paths: List[Path],
             key = (root, sfx)
             if e.get("grant"):
                 grant_qty[key] = grant_qty.get(key, 0.0) + q
+                grant_gross[key] = (grant_gross.get(key, 0.0)
+                                    + proceeds + outlays)
+                grant_net[key] = grant_net.get(key, 0.0) + proceeds
                 q = 0.0
             elif short:
-                short_close_qty[key] = short_close_qty.get(key, 0.0) + q
+                short_close_qty[key] = (short_close_qty.get(key, 0.0)
+                                        + grant_buyback_units(e, year))
+                if ystr:
+                    _prior = sum(
+                        float((v or {}).get("premium") or 0.0)
+                        for y, v in (e.get("grant_closed") or {}).items()
+                        if str(y) < ystr)
+                    if _prior:
+                        _bump(rec, sfx, prior_grant=_prior)
             _bump(rec, sfx, qty=q, proceeds_net=proceeds,
                   proceeds_gross=proceeds + outlays, cost=cost, rows=1,
                   tainted_rows=1 if e.get("tainted") else 0)
@@ -480,7 +521,10 @@ def load_computed(gains_paths: List[Path],
         if extra:
             # Written this year, still open (or closed next year): the
             # write itself is the year's disposition.
-            _bump(out[root], sfx, qty=extra)
+            f = extra / gq if gq else 0.0
+            _bump(out[root], sfx, qty=extra, open_grant_qty=extra,
+                  open_grant=grant_gross.get((root, sfx), 0.0) * f,
+                  open_grant_net=grant_net.get((root, sfx), 0.0) * f)
     return out
 
 
@@ -504,18 +548,51 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
     notes: List[str] = []
     d_gross = s["proceeds"] - c["proceeds_gross"]
     d_net = s["proceeds"] - c["proceeds_net"]
+    # Grant timing (A2-0657): the broker's slip follows the CONTRACT —
+    # it reports a written option's premium when the position closes,
+    # while the books report it in the write year (s.49(1)). Take this
+    # year's still-open writes out, and put an earlier year's premium
+    # that this year's buy-back closed back in, before comparing.
+    _open = float(c.get("open_grant") or 0.0)
+    _open_net = float(c.get("open_grant_net") or 0.0)
+    _prior = float(c.get("prior_grant") or 0.0)
+    _timed = abs(_open) > 0.005 or abs(_prior) > 0.005
+    d_gross_t = d_gross + _open - _prior
+    d_net_t = d_net + _open_net - _prior
+    grant_note = []
+    if abs(_open) > 0.005:
+        grant_note.append(f"{_open:,.2f} premium of written option(s) "
+                          f"still open at the year end is reported this "
+                          f"year (grant timing, s.49(1)) but not on this "
+                          f"year's slip")
+    if abs(_prior) > 0.005:
+        grant_note.append(f"slip proceeds include {_prior:,.2f} premium "
+                          f"of earlier-year write(s) already reported in "
+                          f"the write year (grant timing, s.49(1)) — not "
+                          f"income again")
     if abs(d_gross) <= tolerance:
         pass
     elif abs(d_net) <= tolerance:
         notes.append("matches NET proceeds (slip appears net of "
                      "commissions)")
+    elif _timed and abs(d_gross_t) <= tolerance:
+        notes.extend(grant_note)
+    elif _timed and abs(d_net_t) <= tolerance:
+        notes.extend(grant_note)
+        notes.append("matches NET proceeds (slip appears net of "
+                     "commissions)")
     else:
-        closer = d_gross if abs(d_gross) <= abs(d_net) else d_net
+        cands = [d_gross, d_net] + ([d_gross_t, d_net_t] if _timed else [])
+        closer = min(cands, key=abs)
         problems.append(f"proceeds off by {closer:+,.2f} "
                         f"(slip {s['proceeds']:,.2f} vs computed "
                         f"gross {c['proceeds_gross']:,.2f} / net "
                         f"{c['proceeds_net']:,.2f})")
-    if s["qty"] > 0 and abs(s["qty"] - c["qty"]) > 1e-4:
+        if _timed:
+            problems.extend(grant_note)
+    _oq = float(c.get("open_grant_qty") or 0.0)
+    if s["qty"] > 0 and abs(s["qty"] - c["qty"]) > 1e-4 \
+            and not (_oq > 1e-9 and abs(s["qty"] - (c["qty"] - _oq)) <= 1e-4):
         problems.append(f"quantity off by {s['qty'] - c['qty']:+,.4f} "
                         f"(slip {s['qty']:,.4f} vs computed "
                         f"{c['qty']:,.4f})")
@@ -534,6 +611,19 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
 
 def _missing_from_slip(label: str, c: Dict[str, Any],
                        tolerance: float) -> Dict[str, Any]:
+    _open = float(c.get("open_grant") or 0.0)
+    if abs(_open) > 0.005 and \
+            abs(c["proceeds_gross"] - _open) <= max(tolerance, 0.005):
+        # Only this year's grant-timing writes still open at the year
+        # end (A2-0657): the premium is reported this year (s.49(1));
+        # the broker reports the contract on the slip of the year it
+        # closes.
+        return {"symbol": label, "status": "NO_SLIP_EXPECTED",
+                "detail": f"written option(s) still open at the year end: "
+                          f"the {_open:,.2f} premium is reported this year "
+                          f"without a slip (grant timing, s.49(1)); the "
+                          f"broker's slip reports it when the contract "
+                          f"closes"}
     if abs(c["proceeds_gross"]) <= min(tolerance, 0.005):
         # Nil proceeds — a long option that expired worthless. IB
         # issues no T5008 row for it; that is expected, not a gap
@@ -560,7 +650,11 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
     for root in sorted(set(slip) | set(computed)):
         s, c = slip.get(root), computed.get(root)
         if s is None:
-            rows.append(_missing_from_slip(root, c, tolerance))
+            # One row per listing, labelled with its suffix (A2-0657:
+            # the bare root hid which listing had no slip row).
+            for sfx, sub in sorted((c.get("listings") or {"": c}).items()):
+                rows.append(_missing_from_slip(_label(root, sfx), sub,
+                                               tolerance))
             continue
         if c is None:
             rows.append({"symbol": root, "status": "MISSING_FROM_COMPUTED",
@@ -656,16 +750,18 @@ def render(rep: Dict[str, Any], tolerance: float,
                  f"{c['missing_from_slip']} missing from slip"
                  + (f", {c['ambiguous_listing']} ambiguous listing"
                     if c.get("ambiguous_listing") else "")
-                 + (f", {c['no_slip_expected']} expired with no slip "
-                    f"row (not a failure)"
+                 + (f", {c['no_slip_expected']} with no slip row "
+                    f"expected (not a failure)"
                     if c.get("no_slip_expected") else "")
                  + f" (tolerance ±{tolerance:,.2f}).")
     lines.append("")
     lines.append("Notes:")
     lines.append("  - MISSING_FROM_SLIP can be benign: corp-action "
                  "dispositions don't always get T5008/1099-B rows. "
-                 "Worthless option expiries are listed as "
-                 "NO_SLIP_EXPECTED and do not fail the check.")
+                 "Worthless option expiries, and options written "
+                 "this year under grant timing and still open at the "
+                 "year end, are listed as NO_SLIP_EXPECTED and do not "
+                 "fail the check.")
     lines.append("  - A slip symbol without a listing suffix matches every "
                  "listing of that root; when the books hold two (AMZN.TO "
                  "CDR and AMZN.US), write the suffix in the slip CSV.")

@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional
 
 from taxjson.lib.core import convert_currency
 from taxjson.bin.taxjson_convert_currency import (
-    load_exchange_rates, get_rate_for_date,
+    load_exchange_rates, get_rate_for_date, norm_currency,
     reset_fallback_tally, emit_fallback_summary,
 )
 from taxjson.lib.ticker_map import is_option_ticker
@@ -61,6 +61,9 @@ TRADE_ACTIONS = ("BUYSELL", "ASSIGN")
 
 # convert-tt's source label for hand-entered .tt files (no broker named).
 MANUAL_TT = "manual (.tt)"
+# A generic-mapping import with no [broker] name (a named one is
+# 'generic:<name>').
+GENERIC = "generic"
 
 
 def _iso_date(text: str) -> str:
@@ -151,7 +154,8 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
     converting = bool(to_curr)
 
     def to_base(amount, curr, date):
-        if not converting or curr == to_curr or not amount:
+        if not converting or norm_currency(curr) == norm_currency(to_curr) \
+                or not amount:
             return amount
         rate = get_rate_for_date(curr, date, history, Decimal(str(default_rate)))
         return convert_currency(amount, curr, to_curr,
@@ -242,16 +246,20 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
     _fee_brokers = {k.split("/")[0] for k in buckets}
     _covered = {_CANONICAL_ID.get(b.split(":", 1)[1], b.split(":", 1)[1])
                 for b in _fee_brokers if b.startswith("generic:")}
-    zero_fee = sorted(b for b in brokers_seen - _fee_brokers - {MANUAL_TT}
+    zero_fee = sorted(b for b in brokers_seen - _fee_brokers
+                      - {MANUAL_TT, GENERIC}
                       if _CANONICAL_ID.get(b, b) not in _covered)
     # A hand-entered .tt file names no broker, so its fees cannot be
     # attributed: a broker whose period trades live only in a .tt is
-    # not 'fee-free' (R1-101).
-    manual_fees = any(k.split("/")[0] == MANUAL_TT for k in buckets)
+    # not 'fee-free' (R1-101). Neither is one whose fees sit in a
+    # generic import with no [broker] name (A2-0646).
+    _unnamed = {k.split("/")[0] for k in buckets} & {MANUAL_TT, GENERIC}
+    manual_fees = bool(_unnamed)
     info = {
         "files_read": files_read, "rows": n_rows, "dups": n_dups,
         "no_id": n_no_id, "skipped": skipped_no_broker, "zero_fee": zero_fee,
-        "manual_fees": manual_fees, "attention": list(plan.attention),
+        "manual_fees": manual_fees, "unnamed": sorted(_unnamed),
+        "attention": list(plan.attention),
     }
     return buckets, grand, info
 
@@ -301,7 +309,11 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
     if scope:
         title += f"  ({scope})"
     elif year:
-        title += f"  (tax year {year})"
+        # The window is the TRADE date (fees are incurred at the trade),
+        # not the project's tax_date — say so where the year is named
+        # (A2-1102: the .sum and trades-sum place a Dec 30 trade that
+        # settles in January in the next year).
+        title += f"  (tax year {year}, by TRADE date)"
     if converting:
         title += f"   [all amounts in {to_curr}]"
     out.append(title)
@@ -360,10 +372,14 @@ def render_text(buckets, grand, info, *, to_curr, by_account, year,
                + (f" | rows w/o id: {info['no_id']}" if info['no_id'] else ""))
     if info["zero_fee"]:
         if info.get("manual_fees"):
+            _un = info.get("unnamed") or [MANUAL_TT]
             out.append(f"Brokers with no fees in their own exports this "
                        f"period: {', '.join(info['zero_fee'])} — the "
-                       f"{MANUAL_TT} fees above are not attributed to a "
-                       f"broker and may belong to one of them.")
+                       f"{' / '.join(_un)} fees above are not attributed "
+                       f"to a broker and may belong to one of them"
+                       + (" (give the generic mapping a [broker] name to "
+                          "attribute them)" if GENERIC in _un else "")
+                       + ".")
         else:
             out.append(f"Brokers with NO fees in this period: "
                        f"{', '.join(info['zero_fee'])}")
@@ -429,6 +445,7 @@ def render_json(buckets, grand, info, *, to_curr, by_account, year,
             "generated_at": datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"),
             "year": year, "since": since, "base_currency": to_curr,
+            "date_basis": "trade",
             "group_by": "account_brokerage" if by_account else "brokerage",
             "files_read": info["files_read"], "fee_rows": info["rows"],
             "dups_collapsed": info["dups"], "rows_without_id": info["no_id"],
@@ -459,6 +476,9 @@ def main():
                    help="Only count fees on/after this date — the cutoff "
                         "channel `taxjson fees-sum PERIOD` drives.")
     p.add_argument("--to", dest="to_curr", metavar="CURR",
+                   # 'cad' / ' CAD' converted every CAD fee at the
+                   # --default-rate fallback (A2-0645).
+                   type=lambda v: norm_currency(v) or None,
                    help="Convert every fee to CURR for one comparable total. "
                         "Requires --rates.")
     p.add_argument("--rates", metavar="FILE",

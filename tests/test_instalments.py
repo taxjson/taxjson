@@ -495,6 +495,13 @@ class TestEstimateAndInstalmentsAgree(unittest.TestCase):
                        .replace('"CAD"', '"USD"')
                        .replace('province = "ON"\n', ''))
             (root / "taxjson.toml").write_text(us_toml)
+            # A US disposition carries its term: sum refuses one without
+            # it rather than drop the account (A2-1120).
+            g = root / "work" / "margin_gains.json"
+            gdoc = json.loads(g.read_text())
+            for t in gdoc["transactions"]:
+                t["term"] = "SHORT_TERM"
+            g.write_text(json.dumps(gdoc))
             # [instalments] is Canada-only (lib/country CONFIG_COUNTRY):
             # every command refuses the config, naming the table.
             for cmd in (["instalments"],

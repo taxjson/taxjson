@@ -103,8 +103,8 @@ class TestScopeAndPriorYears(unittest.TestCase):
         self.assertIn("15300", json.loads(js)["scope_note"])
 
     def test_scope_note_usa(self):
-        # A US ledger is in USD: the books must be too (A2-0351 refuses
-        # a CAD book under --country usa).
+        # A US ledger needs USD books: CAD rows under --country usa are
+        # refused now (A2-1118: the $3,000 offset applied to CAD).
         usd = Path(self.td.name) / "usd_base.json"
         usd.write_text(json.dumps({"transactions": [
             dict(t, currency="USD") for t in HISTORY]}))

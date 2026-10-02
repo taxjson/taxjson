@@ -113,7 +113,7 @@ class TestCloseYearRefusesBrokenBooks(_Base):
         shutil.rmtree(p / "reports")
         r = _run_cli(p, "close-year")
         self.assertNotEqual(r.returncode, 0, r.stdout)
-        self.assertIn("no reports", r.stderr)
+        self.assertIn("reports/", r.stderr)
         self.assertIn("Nothing was written", r.stderr)
         self.assertFalse((p / "filed" / "2025.json").exists())
 
