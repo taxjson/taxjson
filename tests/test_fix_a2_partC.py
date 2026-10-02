@@ -641,5 +641,52 @@ class TestStandaloneTimingDefaults(unittest.TestCase):
                          r.stdout + r.stderr)
 
 
+# --------------------------------- explain on a merged book (06)
+
+class TestExplainMergedBookBasis(unittest.TestCase):
+    """A2-0155, A2-0421, A2-0441, A2-0444 (fixed on main by eed1786;
+    pinned here): `taxjson-explain` on the merged taxable book traces
+    the sale the way the books do — FIFO per account in the US, one
+    s.47 pool in Canada — never FIFO pooled across accounts."""
+
+    def _list(self, country):
+        rows = [
+            {"action": "BUYSELL", "date": "2024-01-02", "time": "10:00:00",
+             "date_settle": "2024-01-02", "symbol": "QZQ.US",
+             "quantity": 100, "price": 10.0, "net_amount": 1000.0,
+             "currency": "USD", "account": "a1", "fee": 0.0},
+            {"action": "BUYSELL", "date": "2024-06-03", "time": "10:00:00",
+             "date_settle": "2024-06-03", "symbol": "QZQ.US",
+             "quantity": 100, "price": 20.0, "net_amount": 2000.0,
+             "currency": "USD", "account": "a2", "fee": 0.0},
+            {"action": "BUYSELL", "date": "2025-03-03", "time": "10:00:00",
+             "date_settle": "2025-03-03", "symbol": "QZQ.US",
+             "quantity": -50, "price": 15.0, "net_amount": 750.0,
+             "currency": "USD", "account": "a2", "fee": 0.0},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "merged.json"
+            f.write_text(json.dumps({"transactions": rows}))
+            timing = (["--option-premium-timing", "close"]
+                      if country == "canada" else [])
+            r = _module("taxjson.bin.taxjson_explain", "--country", country,
+                        *timing, "--list", str(f))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = [ln for ln in r.stdout.splitlines() if "QZQ.US" in ln]
+        self.assertEqual(len(line), 1, r.stdout)
+        return line[0]
+
+    @rule("US-BASIS-01")
+    def test_usa_fifo_per_account(self):
+        line = self._list("usa")
+        self.assertIn("cost=   1000.0000", line)
+        self.assertIn("gain=   -250.0000", line)
+
+    @rule("CA-ACB-01")
+    def test_canada_one_pool(self):
+        line = self._list("canada")
+        self.assertIn("cost=    750.0000", line)
+
+
 if __name__ == "__main__":
     unittest.main()
