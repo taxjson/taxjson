@@ -43,7 +43,7 @@ one shared `generic.toml` in the same folder. Example:
                                 # parses each named broker on its own;
                                 # its rows are recorded as
                                 # generic:wealthsimple (fees report)
-    account = "55500001"        # optional: the broker account every row
+    account = "<id>"            # optional: the broker account every row
                                 # belongs to (a mapped account column
                                 # wins); cross-file dedup never collapses
                                 # identical rows of two broker accounts

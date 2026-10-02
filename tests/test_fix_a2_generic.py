@@ -8,7 +8,7 @@ expiring on Dec 31), A2-0629 (an exercise/assignment the mapping cannot
 express), A2-1075 (a settle date far after the trade), A2-1076 (payment
 in lieu), A2-1081 (non-string [defaults]/[formats] values), A2-1083 and
 A2-1080 (UTF-16 exports), A2-1085 (the broker account of each row).
-Synthetic data only (account ids 55500001/55500002, pii-ok).
+Synthetic data only (synthetic account ids, marked pii-ok).
 """
 import io
 import os
