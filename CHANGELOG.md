@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson list --date` now passes the project's income-dating settings
+  (`corporate_distributions`) to its recomputation: a listed
+  corporation's return of capital was moved to its record date, as for
+  a trust, so the as-of cost disagreed with the run (A2-0995, A2-0996).
+
 - **Canada income dating: more split-share corporations, a loud
   year-end flag.** XTD, GDV, LCS, PWI, SBN, WFS and PIC.A (and any row
   whose description says "SPLIT CORP") are corporations: their

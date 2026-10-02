@@ -10070,7 +10070,10 @@ def cmd_positions(args: argparse.Namespace) -> None:
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
                    "--as-of", as_of, "--no-wash"] + option_timing_flags(
-                       settings)
+                       settings) + income_dating_flags(settings)
+            # income_dating_flags: [settings] corporate_distributions
+            # keeps a listed corporation's ROC on its pay date, as in
+            # the run (audit A2-0995, A2-0996).
             if _asof_basis_set:
                 cmd += ["--tax-date", _asof_basis]
             if accounts_cfg.get(n, {}).get("type") == "taxable":

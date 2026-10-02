@@ -472,5 +472,49 @@ class TestRicBareRoot(unittest.TestCase):
         self.assertFalse(moved("PSA.PR.H.US"))
 
 
+class TestListDateIncomeFlags(unittest.TestCase):
+    """A2-0995, A2-0996: `list --date` dates a listed corporation's ROC
+    like the run (pay date)."""
+
+    @rule("CA-INC-DATE-ROC")
+    def test_corporate_roc_stays_on_pay_date(self):
+        import json
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        repo = Path(__file__).resolve().parent.parent
+
+        def row(d, q, p):
+            return {"action": "BUYSELL", "date": d, "date_settle": d,
+                    "time": "09:30:00", "symbol": "ZZC.TO", "quantity": q,
+                    "price": p, "net_amount": abs(q) * p,
+                    "currency": "CAD", "account": "margin"}
+        txs = [row("2025-01-06", 1000, 10.0), row("2025-03-10", -500, 12.0),
+               {"action": "ADJUST", "type": "roc", "date": "2025-03-20",
+                "date_settle": "2025-03-20", "time": "00:00:00",
+                "record_date": "2025-03-03", "symbol": "ZZC.TO",
+                "quantity": 0.0, "net_amount": -500.0, "currency": "CAD",
+                "account": "margin"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\n'
+                'corporate_distributions = ["ZZC.TO"]\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            (root / "work" / "margin_base.json").write_text(
+                json.dumps({"transactions": txs}))
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+                 str(root), "list", "--date", "2025-03-31"],
+                cwd=repo, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("4,500.00", r.stdout)
+        self.assertNotIn("4,750.00", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
