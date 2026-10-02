@@ -1476,7 +1476,19 @@ taxjson find-missing-history margin --gen-phantoms phantoms.json
 This writes only the truncated-history rows (positions that go negative — what
 phantoms fix); $0-cost corp-action rows are left out because those need a
 merger/spinoff basis, not a synthetic opening. By default it emits only rows
-affecting the tax year; add `--all-history` for every candidate.
+affecting the tax year; add `--all-history` for every candidate. It never
+overwrites an existing file (a reviewed `phantoms.json` keeps your prunes and
+hand-added pairs): write to a new file and merge, or pass `--force` (the old
+file is kept as `<file>.bak`). A same-day Norbert's-gambit pair folded by a
+ticker.map `JOURNAL` line is not offered as a candidate.
+
+`taxjson run` (and t1135, wash-radar, option-boundary) still applies an entry
+the detection would not propose — a short the broker marks as a short sale
+(RBC `SHORT.`, IB code `O`) or an option the broker never coded closing — but
+prints an `ATTENTION` line for it, and `find-missing-history` lists it under
+"REMOVE from phantoms.json" (the checklist flags it). A buy the broker marks as
+covering a short (RBC `COVER SHORT.`, IB code `C`) with no short in the data is
+reported as missing history too: the short was opened before the data.
 
 **Review the file and delete any entry that's actually a real short position.**
 Then, if it's saved as `phantoms.json` at the project root, `taxjson run`
