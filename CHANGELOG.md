@@ -7,6 +7,19 @@
   be a wash sale: a stock dividend is not a purchase for §1091
   (US-STKDIV-01; re-audit A2-0550). Canada is unchanged (a $0
   acquisition that counts for s.54, CA-STKDIV-01).
+- `taxjson-export --holdings-toml` given --trades files of two accounts
+  applied each account's copy of a split to the summed balance, so a
+  closed round's trades stayed on the holding's `trades` list; a split is
+  one event there now (re-audit A2-1590).
+- The `taxjson-harvest` console script run on a project's
+  work/*_gains_wash.json without --ticker-map finds the project's
+  ticker.map (next to the inputs or the folder above), so a TOBASE-renamed
+  option is quoted as the contract held, in its own currency, as
+  `taxjson harvest` does (re-audit A2-0885).
+- `taxjson tax-logic` (US) states the wash-sale replacement order the
+  engine already applies: order acquired, and at the same moment taxable
+  accounts first, then IRAs, then affiliated accounts (US-WASH-20, re-audit
+  A2-0941).
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard

@@ -188,14 +188,6 @@ def _ca_priority(tx: Any) -> int:
     return CaPriority.OTHER
 
 
-def _walk_priority(tx: Any) -> int:
-    if tx.action == 'OPENING_BALANCE':
-        return WalkPriority.OPENING_BALANCE
-    if tx.action == 'SPLIT':
-        return WalkPriority.SPLIT
-    return WalkPriority.OTHER
-
-
 def _walk_rest(tx: Any) -> Tuple:
     """Phantom-walk key after the trade date: (group, time, rung).
 

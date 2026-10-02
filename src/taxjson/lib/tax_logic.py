@@ -1325,6 +1325,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "loss to the basis of THEIR replacement shares, so in "
                  "your books it is reported as permanently disallowed: "
                  "give them the amount for their basis."),
+            Rule("US-WASH-20",
+                 "Replacements are matched in the order acquired (Reg. "
+                 "§1.1091-1(c)). Purchases at the same moment go to your "
+                 "taxable accounts first, then IRAs, then affiliated "
+                 "accounts, then in the export's row order (accounts in "
+                 "taxjson.toml order)."),
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
