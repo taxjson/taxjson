@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Web: the wash-radar page shows the scope note (verdicts cover the
+  project's own accounts only, CA-PLAN-04 / US-PLAN-04); a radar sidecar
+  without "sections" or with a row field of the wrong type, and a
+  holdings row whose `trades` is not a list, are an error banner instead
+  of "no report yet", the stale .rpt, or an HTTP 500; the stale-rate
+  label uses harvest's threshold (7 days, not 4); and the freshness
+  fallback counts the same input files as the checklist (a Finder
+  .DS_Store no longer marks the dashboard stale) (re-audit A2-0374,
+  A2-0696, A2-1187, A2-1188, A2-1179, A2-1185).
+
 - Web what-if: an option is priced at the contract size the book's rows
   declare (a x10 mini option was priced at x100, a 10 loss shown as a
   350 gain), and a plain futures contract is refused instead of priced

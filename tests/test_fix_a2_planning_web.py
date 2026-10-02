@@ -13,6 +13,13 @@
                      it before the simulated sale (as run_gains does)
   A2-0687            the engine's option-replacement flag reaches the
                      what-if warnings (US-WASH-12 note)
+  A2-0374            the wash-radar page shows the CA-PLAN-04 /
+                     US-PLAN-04 scope note
+  A2-0696 / A2-1187 / A2-1188
+                     damaged artifact fields are an error banner, never a
+                     500 or a silent fallback
+  A2-1179            one stale-rate threshold shared with harvest
+  A2-1185            freshness fallback reads the checklist's input set
 """
 import contextlib
 import io
@@ -22,6 +29,12 @@ import unittest
 from pathlib import Path
 
 from tax_rules import rule, rule_absent
+
+try:
+    from fastapi.testclient import TestClient  # noqa: F401
+    _HAVE_WEB = True
+except Exception:          # pragma: no cover - extra not installed
+    _HAVE_WEB = False
 
 
 def _row(symbol, qty, net, date_, settle=None, acct="margin", price=None,
@@ -224,6 +237,156 @@ class TestWhatIfOptionReplacementNote(unittest.TestCase):
         joined = " ".join(r["warnings"])
         self.assertIn(call, joined)
         self.assertIn("call_vs_share_loss", joined)
+
+
+# ------------------------------------------------- radar page (data layer)
+def _sidecar(rows, **extra):
+    doc = {"schema_version": 1, "as_of_date": "2026-09-01",
+           "account": "margin", "sections": [{
+               "category": "VIOLATION", "title": "VIOLATION",
+               "rows": rows}]}
+    doc.update(extra)
+    return doc
+
+
+def _radar_row(**kw):
+    r = {"ticker": "DL.TO", "taxable_display": "100",
+         "sheltered_display": "0", "clears_at": "2026-09-17",
+         "advisory": "VIOLATION: ...", "category": "VIOLATION"}
+    r.update(kw)
+    return r
+
+
+class TestRadarSidecarShape(unittest.TestCase):
+    def _sections(self, doc, rpt=None):
+        from taxjson.web import data
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []})
+            (root / "reports" / "wash_radar_margin.json").write_text(
+                json.dumps(doc))
+            if rpt:
+                (root / "reports" / "wash_radar_margin.rpt").write_text(rpt)
+            return data.wash_radar_sections(_ctx(root), "margin")
+
+    def test_a2_0696_wrong_type_fields_raise_report_error(self):
+        from taxjson.web.data import ReportArtifactError
+        for bad in ({"clears_at": 20250101}, {"clears_at": ["2025-01-01"]},
+                    {"advisory": 5}, {"advisory": None},
+                    {"advisory": ["x"]}, {"ticker": {"a": 1}}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ReportArtifactError):
+                    self._sections(_sidecar([_radar_row(**bad)]))
+
+    def test_a2_1188_missing_sections_is_an_error_not_no_report(self):
+        from taxjson.web.data import ReportArtifactError
+        rpt = ("--- CLEAR ---\nTICKER | T | S | C | A\n"
+               "SHOP.TO | 1 | 0 | - | CLEAR — safe to sell at a loss\n")
+        for doc in ({"Sections": []}, {}):
+            with self.subTest(doc=doc):
+                with self.assertRaises(ReportArtifactError):
+                    self._sections(doc, rpt=rpt)
+
+    def test_valid_sidecar_still_renders(self):
+        secs = self._sections(_sidecar([_radar_row(clears_at=None)]))
+        self.assertEqual(secs[0]["rows"][0]["ticker"], "DL.TO")
+
+
+class TestHoldingsFieldShape(unittest.TestCase):
+    def test_a2_1187_trades_of_the_wrong_type_is_a_report_error(self):
+        from taxjson.web import data
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []})
+            (root / "reports" / "margin_holdings.toml").write_text(
+                '[[holding]]\nsymbol = "SHOP.TO"\nquantity = 1.0\n'
+                'trades = 5\n')
+            with self.assertRaises(data.ReportArtifactError):
+                data.find_holding(_ctx(root), "margin", "SHOP.TO")
+
+
+# ------------------------------------------------------------ A2-1179
+class TestStaleRateThreshold(unittest.TestCase):
+    def test_web_and_harvest_share_one_threshold(self):
+        from taxjson.web import data
+        from taxjson.bin.taxjson_harvest import _STALE_RATE_DAYS
+        days = _STALE_RATE_DAYS
+        rates = "".join(f"2026-09-{d:02d} 12:00:00 USD CAD 1.39000\n"
+                        for d in range(1, 11))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []})
+            (root / "work" / "to_base.csv").write_text(rates)
+            ctx = _ctx(root)
+            _p, _r, at = data._price_to_base(
+                ctx, 1.0, "USD", f"2026-09-{10 + days:02d}")
+            _p, _r, over = data._price_to_base(
+                ctx, 1.0, "USD", f"2026-09-{11 + days:02d}")
+        self.assertIsNone(at)
+        self.assertIsNotNone(over)
+
+
+# ------------------------------------------------------------ A2-1185
+class TestFreshnessInputSet(unittest.TestCase):
+    def test_finder_and_lock_files_follow_the_checklist_rule(self):
+        import os
+        import time
+        from taxjson.web import data
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []},
+                            inputs={"margin/trades.csv": "a\n"})
+            old = time.time() - 3600
+            os.utime(root / "inputs" / "margin" / "trades.csv", (old, old))
+            os.utime(root / "taxjson.toml", (old, old))
+            (root / "reports" / "margin.sum").write_text("x\n")
+            self.assertFalse(data.freshness(_ctx(root))["stale"])
+            (root / "inputs" / "margin" / ".DS_Store").write_text("x")
+            (root / "inputs" / "margin" / "notes.txt").write_text("x")
+            future = time.time() + 60
+            for n in (".DS_Store", "notes.txt"):
+                os.utime(root / "inputs" / "margin" / n, (future, future))
+            f = data.freshness(_ctx(root))
+            self.assertFalse(f["stale"], f)
+
+
+@unittest.skipUnless(_HAVE_WEB, "web extra not installed")
+class TestRoutes(unittest.TestCase):
+    def _client(self, root, **kw):
+        from taxjson.web.app import create_app
+        return TestClient(create_app(_ctx(root), **kw),
+                          base_url="http://127.0.0.1")
+
+    @rule("CA-PLAN-04")
+    def test_a2_0374_radar_page_shows_scope_note_canada(self):
+        from taxjson.lib.wash_scope import scope_note
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []})
+            (root / "reports" / "wash_radar_margin.rpt").write_text(
+                "--- CLEAR ---\nTICKER | T | S | C | A\n"
+                "SHOP.TO | 1 | 0 | - | CLEAR — safe to sell at a loss\n")
+            page = self._client(root).get("/wash-radar?account=margin").text
+        self.assertIn("affiliated", page)
+        self.assertIn(scope_note("canada")[:40], page)
+
+    @rule("US-PLAN-04")
+    def test_a2_0374_radar_page_shows_scope_note_usa(self):
+        from taxjson.lib.wash_scope import scope_note
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []}, country="usa", base="USD")
+            (root / "reports" / "wash_radar_margin.rpt").write_text(
+                "--- CLEAR ---\nTICKER | T | S | C | A\n"
+                "SHOP.US | 1 | 0 | - | CLEAR — safe to sell at a loss\n")
+            page = self._client(root).get("/wash-radar?account=margin").text
+        self.assertIn("§1091", page)
+        self.assertNotIn("s.251.1", page)
+        self.assertIn(scope_note("usa")[:40], page)
+
+    def test_a2_1187_holding_detail_bad_trades_is_banner_not_500(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(tmp, {"margin": []})
+            (root / "reports" / "margin_holdings.toml").write_text(
+                '[[holding]]\nsymbol = "SHOP.TO"\nquantity = 1.0\n'
+                'trades = 5\n')
+            r = self._client(root).get("/holdings/margin/SHOP.TO")
+        self.assertNotEqual(r.status_code, 500)
+        self.assertIn("re-run", r.text)
 
 
 if __name__ == "__main__":

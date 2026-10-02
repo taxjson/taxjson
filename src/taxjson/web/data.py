@@ -62,6 +62,16 @@ def load_holdings(ctx: ProjectContext, account: str) -> List[Dict[str, Any]]:
             f"{path.name} has no [[holding]] table array (holding = "
             f"{type(rows).__name__}) — re-run `taxjson run` or fix/delete "
             f"the file")
+    # A row's trade history is iterated by the detail page: `trades = 5`
+    # was a TypeError there and an HTTP 500 (A2-1187).
+    for h in rows:
+        tr = h.get("trades", [])
+        if not isinstance(tr, list) or any(not isinstance(t, dict)
+                                           for t in tr):
+            raise ReportArtifactError(
+                f"{path.name}: holding {str(h.get('symbol', '?'))!r} has "
+                f"trades = {type(tr).__name__}, not a list of tables — "
+                f"re-run `taxjson run` or fix/delete the file")
     return rows
 
 
@@ -84,6 +94,20 @@ def find_holding(ctx: ProjectContext, account: str, symbol: str
 
 
 # -------------------------------------------------------------- wash radar
+# Row fields the page renders, and which of them may be null.
+_RADAR_TEXT_FIELDS = ("ticker", "taxable_display", "sheltered_display",
+                      "clears_at", "advisory", "category")
+_RADAR_NULLABLE = ("clears_at", "category")
+
+
+def wash_radar_scope_note(ctx: ProjectContext, account: str) -> str:
+    """The CA-PLAN-04 / US-PLAN-04 disclosure for the radar page: the
+    verdicts cover the project's own accounts only (A2-0374 — the text
+    report and its sidecar carried it, the page did not). Always the
+    project country's own wording."""
+    return _scope_note(ctx.country)
+
+
 def _clears_in_display(clears_at: Optional[str],
                        today: Optional[date] = None) -> str:
     """VIEW-TIME countdown from an absolute clears_at date. The generation-day
@@ -166,7 +190,11 @@ def wash_radar_sections(ctx: ProjectContext, account: str = "margin",
             doc = _json.loads(json_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
             raise _bad(e) from e
-        secs = doc.get("sections", []) if isinstance(doc, dict) else None
+        # A document without the "sections" key is not a radar report
+        # ({} fell through to the stale .rpt, {"Sections": ...} read as
+        # "no report yet" — A2-1188), and a row field of the wrong type
+        # 500'd the page with a raw TypeError (A2-0696).
+        secs = doc.get("sections") if isinstance(doc, dict) else None
         if not isinstance(secs, list) or any(
                 not isinstance(sec, dict)
                 or not isinstance(sec.get("rows", []), list)
@@ -174,52 +202,61 @@ def wash_radar_sections(ctx: ProjectContext, account: str = "margin",
                 for sec in secs):
             raise _bad("not a radar document: expected {\"sections\": "
                        "[{\"title\", \"rows\": [{...}]}]}")
-        if doc:
-            sections: List[Dict[str, Any]] = []
-            for sec in secs:
-                def _row(r):
-                    ci = _clears_in_display(r.get("clears_at"), today)
-                    adv = r.get("advisory", "")
-                    if r.get("category") == "VIOLATION":
-                        # A VIOLATION's date is the rescue DEADLINE: the
-                        # LAST trade date for the full exit, inclusive
-                        # (the radar's own text says "by" it). The
-                        # deadline day itself is still actionable — it
-                        # rendered as "deadline passed" (S079-06).
-                        vdays = _days_until(r.get("clears_at"), today)
-                        if vdays == 0:
-                            ci = (f"{r.get('clears_at')} (0d — sell "
-                                  f"TODAY, last trade day)")
-                        elif vdays is not None and vdays < 0:
-                            ci = "deadline passed — loss denied"
-                            if adv:
-                                adv += (" [rescue deadline has PASSED "
-                                        "since this report was generated "
-                                        "— unless the position was "
-                                        "exited in time, the loss is "
-                                        "denied; re-run `taxjson run` to "
-                                        "reclassify]")
-                    elif ci == "cleared" and adv:
-                        # Category membership and advisory text are
-                        # GENERATION-time; weeks later the page said
-                        # LOCKED/"do not sell" next to "cleared"
-                        # (2026-09 audit). Say which one is current.
-                        adv += (" [window has CLEARED since this "
-                                "report was generated — re-run "
-                                "`taxjson run` to reclassify]")
-                    return {
-                        "ticker": r.get("ticker", ""),
-                        "taxable": r.get("taxable_display", ""),
-                        "sheltered": r.get("sheltered_display", ""),
-                        "clears_in": ci,
-                        "advisory": adv + stale_tag,
-                    }
-                rows = [_row(r) for r in sec.get("rows", [])]
-                if rows:
-                    sections.append({"title": f"{sec.get('title', '')} "
-                                              f"({len(rows)})",
-                                     "rows": rows})
-            return sections
+        for sec in secs:
+            if not isinstance(sec.get("title", ""), str):
+                raise _bad("a section title is not text")
+            for r in sec.get("rows", []):
+                for k in _RADAR_TEXT_FIELDS:
+                    v = r.get(k, "")
+                    if not (isinstance(v, str)
+                            or (v is None and k in _RADAR_NULLABLE)):
+                        raise _bad(f"row field {k!r} is "
+                                   f"{type(v).__name__}, not text")
+        sections: List[Dict[str, Any]] = []
+        for sec in secs:
+            def _row(r):
+                ci = _clears_in_display(r.get("clears_at"), today)
+                adv = r.get("advisory", "")
+                if r.get("category") == "VIOLATION":
+                    # A VIOLATION's date is the rescue DEADLINE: the
+                    # LAST trade date for the full exit, inclusive
+                    # (the radar's own text says "by" it). The
+                    # deadline day itself is still actionable — it
+                    # rendered as "deadline passed" (S079-06).
+                    vdays = _days_until(r.get("clears_at"), today)
+                    if vdays == 0:
+                        ci = (f"{r.get('clears_at')} (0d — sell "
+                              f"TODAY, last trade day)")
+                    elif vdays is not None and vdays < 0:
+                        ci = "deadline passed — loss denied"
+                        if adv:
+                            adv += (" [rescue deadline has PASSED "
+                                    "since this report was generated "
+                                    "— unless the position was "
+                                    "exited in time, the loss is "
+                                    "denied; re-run `taxjson run` to "
+                                    "reclassify]")
+                elif ci == "cleared" and adv:
+                    # Category membership and advisory text are
+                    # GENERATION-time; weeks later the page said
+                    # LOCKED/"do not sell" next to "cleared"
+                    # (2026-09 audit). Say which one is current.
+                    adv += (" [window has CLEARED since this "
+                            "report was generated — re-run "
+                            "`taxjson run` to reclassify]")
+                return {
+                    "ticker": r.get("ticker", ""),
+                    "taxable": r.get("taxable_display", ""),
+                    "sheltered": r.get("sheltered_display", ""),
+                    "clears_in": ci,
+                    "advisory": adv + stale_tag,
+                }
+            rows = [_row(r) for r in sec.get("rows", [])]
+            if rows:
+                sections.append({"title": f"{sec.get('title', '')} "
+                                          f"({len(rows)})",
+                                 "rows": rows})
+        return sections
     path = ctx.reports / f"wash_radar_{account}.rpt"
     if not path.exists():
         return []
@@ -280,10 +317,11 @@ def freshness(ctx: ProjectContext) -> Optional[Dict[str, Any]]:
         why = _fingerprint_diff(recorded, input_fingerprint(ctx.root, cfg))
         extra = [ctx.root / "crypto_ticker.map"]
     else:
+        # The checklist's own input set (its run-clean fallback): every
+        # file under inputs/ counted before, so a Finder .DS_Store or a
+        # stray notes file marked the dashboard stale while the
+        # checklist called the run clean (A2-1185).
         extra = _input_paths(ctx.root, cfg) + [ctx.root / "crypto_ticker.map"]
-        inputs_dir = ctx.root / "inputs"
-        if inputs_dir.is_dir():
-            extra += [p for p in inputs_dir.rglob("*") if p.is_file()]
     if not why:
         newer = [p for p in extra
                  if p.is_file() and p.stat().st_mtime > oldest + 1]
@@ -308,8 +346,9 @@ def _price_to_base(ctx: ProjectContext, price: float,
     base.
 
     The rate is the LATEST one on or before `on` (rates end at the last
-    `taxjson run`), labelled with its date when it is more than a few
-    days old — the same rule as `taxjson harvest`. A hardcoded 1.35 used
+    `taxjson run`), labelled with its date when it is older than
+    harvest's _STALE_RATE_DAYS — the same rule as `taxjson harvest`
+    (the page used 4 days against harvest's 7, A2-1179). A hardcoded 1.35 used
     to replace any rate more than 5 days old, and was applied to GBP or
     EUR prices too (R1-149)."""
     base = ctx.base_currency.strip().upper()
@@ -335,7 +374,8 @@ def _price_to_base(ctx: ProjectContext, price: float,
                - datetime.strptime(rate_date, "%Y-%m-%d")).days
     except ValueError:
         age = 0
-    if age > 4:
+    from taxjson.bin.taxjson_harvest import _STALE_RATE_DAYS
+    if age > _STALE_RATE_DAYS:
         note = (f"{cur}->{base} rate {rate:g} is from {rate_date}, "
                 f"{age} days before {on} (rates end at the last "
                 f"`taxjson run`) — re-run `taxjson run` for a current "

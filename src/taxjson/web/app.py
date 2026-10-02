@@ -228,6 +228,7 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
         return page("wash_radar.html", request, status_code=status,
                     errors=[stale] if stale else [],
                     account=acct, scope_note=scope_note,
+                    law_scope_note=data.wash_radar_scope_note(cur(), acct),
                     radar_accounts=(with_reports or candidates),
                     sections=sections, error=error)
 
