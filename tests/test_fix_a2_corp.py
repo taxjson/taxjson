@@ -543,5 +543,138 @@ class TestRbcRocClause(unittest.TestCase):
             self.assertIn('NOT booked', err)
 
 
+
+_RBC_H = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+          '"Price","Settlement Date","Account","Value","Currency",'
+          '"Description"\n')
+
+
+def _rbc(date, act, sym, symdesc, qty, value, cur, desc, price=''):
+    return (f'"{date} 00:00:00","{act}","{sym}","{symdesc}","{qty}",'
+            f'"{price}","{date} 00:00:00","55500001","{value}","{cur}",'  # pii-ok
+            f'"{desc}"\n')
+
+
+def _rbc_events(td, *bodies):
+    from taxjson.lib.corp_actions import parse_rbc_corporate_actions
+    paths = []
+    for i, b in enumerate(bodies):
+        p = Path(td) / f"rbc_{i}.csv"
+        p.write_text(_RBC_H + ''.join(b))
+        paths.append(p)
+    out, err = [], ''
+    for p in paths:
+        evs, e = _quiet(parse_rbc_corporate_actions, p, account='rbc',
+                        context_files=paths)
+        out += evs
+        err += e
+    return out, err
+
+
+class TestRbcSpinoffParentListing(unittest.TestCase):
+    def test_a2_0210_parent_is_the_listing_held_on_the_date(self):
+        rows = [
+            _rbc('2025-01-05', 'Buy', 'QUUX', 'QUUX CORP', '100', '-1000',
+                 'CAD', 'QUUX CORP BUY', '10'),
+            _rbc('2025-01-20', 'Sell', 'QUUX', 'QUUX CORP', '-100', '1100',
+                 'CAD', 'QUUX CORP SALE', '11'),
+            _rbc('2025-02-03', 'Buy', 'QUUX', 'QUUX CORP', '100', '-800',
+                 'USD', 'QUUX CORP BUY', '8'),
+            _rbc('2025-03-05', 'Reorganization', 'NEWC', 'NEWCO INC', '10',
+                 '0', 'USD', 'DIS - NEWCO INC SPINOFF ON 100 SHS FROM SEC# '
+                 'J000009 QUUX CORP REC 03/01/25 PAY 03/05/25')]
+        with tempfile.TemporaryDirectory() as td:
+            evs, err = _rbc_events(td, rows)
+        self.assertEqual([(e.source_symbol, e.target_symbol) for e in evs],
+                         [('QUUX.US', 'NEWC.US')], err)
+
+
+    def test_a2_0213_reverse_entry_cancels_its_spinoff(self):
+        spin = ('DIS - QZN CORP SPINOFF ON 100 SHS FROM SEC# 123 QZN CORP')
+        rows = [
+            _rbc('2025-06-09', 'Reorganization', 'QZV', 'QZV CORP', '30', '0',
+                 'USD', spin),
+            _rbc('2025-06-05', 'Reorganization', 'QZV', 'QZV CORP', '-30',
+                 '0', 'USD', spin + ' REVERSE ENTRY'),
+            _rbc('2025-06-02', 'Reorganization', 'QZV', 'QZV CORP', '30', '0',
+                 'USD', spin),
+            _rbc('2025-03-03', 'Buy', 'QZN', 'QZN CORP', '100', '-1009.95',
+                 'USD', 'QZN CORP', '10')]
+        with tempfile.TemporaryDirectory() as td:
+            evs, err = _rbc_events(td, rows)
+        self.assertEqual([(e.date, e.qty_received) for e in evs],
+                         [('2025-06-09', 30.0)], err)
+        self.assertNotIn('SHORT', err)
+
+    def test_a2_0214_merger_legs_in_two_statements_pair(self):
+        a = [_rbc('2025-12-31', 'Reorganization', 'H099006',
+                  'HESSO CORPORATION', '-15', '0', 'USD',
+                  'MGR - HESSO CORPORATION MERGER TO CHEVRO CORPORATION '
+                  '1.025 NEW = 1 OLD'),
+             _rbc('2025-03-03', 'Buy', 'HESO', 'HESSO CORPORATION', '15',
+                  '-1509.95', 'USD', 'HESSO CORPORATION', '100')]
+        b = [_rbc('2026-01-02', 'Reorganization', 'CVXX',
+                  'CHEVRO CORPORATION', '15', '0', 'USD',
+                  'MGR - CHEVRO CORPORATION SHRS RECEIVED THRU MERGER')]
+        from taxjson.lib.corp_actions import combine_broker_copies
+        with tempfile.TemporaryDirectory() as td:
+            evs, err = _rbc_events(td, a, b)
+        evs = combine_broker_copies(evs, stream=io.StringIO())
+        self.assertEqual([(e.action_type, e.source_symbol, e.target_symbol,
+                           e.qty_disposed, e.qty_received) for e in evs],
+                         [('merger', 'HESO.US', 'CVXX.US', 15.0, 15.0)], err)
+        self.assertNotIn('NO matching', err)
+
+    def test_a2_0223_corp_symbols_match_the_parser(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+        from taxjson.lib.corp_actions import _rbc_ca_symbol
+        b = RbcBrokerage()
+        for sym, cur in (('FTN.PRA', 'CAD'), ('ABC.V', 'CAD'),
+                         ('ABC.CN', 'CAD'), ('ABC.VN', 'CAD'),
+                         ('ABC', 'EUR'), ('XYZ', 'USD'), ('BRK B', 'USD')):
+            self.assertEqual(_rbc_ca_symbol(sym, cur),
+                             b.apply_currency_suffix(sym, cur), (sym, cur))
+        self.assertEqual(_rbc_ca_symbol('FTN.PRA', 'CAD'), 'FTN.PR.A.TO')
+
+    def test_a2_0214_unpaired_merger_removal_blocks(self):
+        a = [_rbc('2025-12-31', 'Reorganization', 'H099006',
+                  'HESSO CORPORATION', '-15', '0', 'USD',
+                  'MGR - HESSO CORPORATION MERGER TO CHEVRO CORPORATION '
+                  '1.025 NEW = 1 OLD'),
+             _rbc('2025-03-03', 'Buy', 'HESO', 'HESSO CORPORATION', '15',
+                  '-1509.95', 'USD', 'HESSO CORPORATION', '100')]
+        with tempfile.TemporaryDirectory() as td:
+            evs, err = _rbc_events(td, a)
+        self.assertEqual([e.action_type for e in evs], ['unsupported'], err)
+        self.assertIn('NO matching', err)
+
+
+
+class TestRbcOptionAdjustPairing(unittest.TestCase):
+    def test_a2_0222_strike_pairing_is_order_independent(self):
+        import itertools
+        from test_fix_m_corp import _rbc_pairing, _rbc_row
+        d = "XCH - CALL .TUX   03/21/25    {k} TUX CORP ADJ: SPCL CASH DIVD"
+        rows = [
+            _rbc_row("2024-11-15", "Reorganization", "8AAAAA1", "", "-1",
+                     "0", "CAD", d.format(k=60)),
+            _rbc_row("2024-11-15", "Reorganization", "8AAAAA2", "", "-1",
+                     "0", "CAD", d.format(k=65)),
+            _rbc_row("2024-11-15", "Reorganization", "8BBBBB1", "", "1",
+                     "0", "CAD", d.format(k=55)),
+            _rbc_row("2024-11-15", "Reorganization", "8BBBBB2", "", "1",
+                     "0", "CAD", d.format(k=60)),
+        ]
+        seen = set()
+        for perm in itertools.permutations(range(4)):
+            with tempfile.TemporaryDirectory() as tmp:
+                p = _rbc_pairing(tmp, *[rows[i] for i in perm])
+            seen.add(tuple(sorted((e.removal.symbol, e.receipt.symbol)
+                                  for e in p.events
+                                  if e.kind == 'option_adjust')))
+        self.assertEqual(seen, {(('8AAAAA1', '8BBBBB1'),
+                                 ('8AAAAA2', '8BBBBB2'))})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1906,6 +1906,53 @@ def _rbc_option_score(rem, rc) -> float:
             + (0.5 if rem.date == rc.date else 0.0))
 
 
+def _rbc_rank_option_pairs(removals, receipts, used: set
+                           ) -> List['RbcReorgEvent']:
+    """Option-adjust events for groups of n >= 2 removals and n receipts
+    of one series family (account, right, root, expiry, date) where
+    every removal/receipt pair is a candidate (`_rbc_option_score` > 0)
+    and the rank-matched pairs carry equal quantities: matched in strike
+    order. Marks the legs in `used`."""
+    def _fam(leg):
+        o = _rbc_leg_option(leg)
+        if not o:
+            return None
+        root = re.sub(r'\d+$', '', re.sub(r'[^A-Z0-9]', '', o[1]))
+        return (_rbc_account(leg), o[0], root, o[2], leg.date)
+
+    def _strike(leg):
+        try:
+            return float(_rbc_leg_option(leg)[3])
+        except (TypeError, ValueError, IndexError):
+            return None
+    groups: Dict[tuple, Tuple[list, list]] = {}
+    for r in removals:
+        if id(r) not in used and _rbc_leg_is_option(r) and _fam(r):
+            groups.setdefault(_fam(r), ([], []))[0].append(r)
+    for r in receipts:
+        if id(r) not in used and _rbc_leg_is_option(r) and _fam(r) in groups:
+            groups[_fam(r)][1].append(r)
+    out = []
+    for rems, rcs in groups.values():
+        if len(rems) < 2 or len(rems) != len(rcs):
+            continue
+        if any(_strike(x) is None for x in rems + rcs):
+            continue
+        if any(_rbc_option_score(a, b) <= 0 for a in rems for b in rcs):
+            continue
+        rems = sorted(rems, key=lambda x: (_strike(x), x.symbol))
+        rcs = sorted(rcs, key=lambda x: (_strike(x), x.symbol))
+        if len({_strike(x) for x in rems}) != len(rems) or len(
+                {_strike(x) for x in rcs}) != len(rcs):
+            continue
+        if any(abs(abs(a.qty) - b.qty) > 1e-9 for a, b in zip(rems, rcs)):
+            continue
+        for a, b in zip(rems, rcs):
+            used.update((id(a), id(b)))
+            out.append(RbcReorgEvent('option_adjust', a, b))
+    return out
+
+
 def _rbc_strike_gap(rem, rc) -> float:
     """|strike change| between a removal and a receipt option leg. A
     special-dividend XCH adjusts every strike a little (64 -> 63.50,
@@ -1988,7 +2035,16 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
                        and id(r) not in short and r.qty < 0), key=chrono)
     receipts = [r for r in legs if id(r) not in used
                 and id(r) not in short and r.qty > 0]
+    # Option series adjusted together (a special-dividend XCH moves
+    # every strike of one right and expiry by the same amount): pair
+    # removals to receipts by strike RANK. The greedy closest-strike
+    # pick below swapped two series' ACB whenever the adjustment exceeded
+    # half the strike spacing, depending only on row order (A2-0222).
+    for event in _rbc_rank_option_pairs(removals, receipts, used):
+        events.append(event)
     for rem in removals:
+        if id(rem) in used:
+            continue
         is_opt = _rbc_leg_is_option(rem)
         window = [rc for rc in receipts
                   if id(rc) not in used
@@ -2080,12 +2136,22 @@ def pair_rbc_reorganizations(rows) -> RbcReorgPairing:
     return RbcReorgPairing(events, unmatched, unmatched_cil)
 
 
+_RBC_SUFFIXER = None
+
+
 def _rbc_ca_symbol(symbol: str, currency: str) -> str:
-    """Match the brokerage parser's symbol shape: strip any market suffix,
-    spaces→dots, append the currency-derived suffix (CVX/USD → CVX.US)."""
-    sym = re.sub(r'\.(US|TO|AX|L)$', '', (symbol or '').strip().replace(' ', '.'),
-                 flags=re.I)
-    return f"{sym}.{_CURRENCY_SUFFIX.get((currency or '').upper(), 'US')}"
+    """The brokerage parser's own symbol for an RBC row: its
+    `apply_currency_suffix`, with the canonical-listing rules (FTN.PRA ->
+    FTN.PR.A.TO, a Venture / CSE suffix -> ROOT.TO, an unmapped currency
+    as the parser spells it). A private copy of the old suffix rule booked
+    a preferred share's merger on FTN.PRA.TO while its trades were on
+    FTN.PR.A.TO (A2-0223, the S014-07 twin)."""
+    global _RBC_SUFFIXER
+    if _RBC_SUFFIXER is None:
+        from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+        _RBC_SUFFIXER = RbcBrokerage()
+    return _RBC_SUFFIXER.apply_currency_suffix(
+        (symbol or '').strip(), (currency or '').upper() or 'USD')
 
 
 _RBC_SPINOFF_RE = re.compile(
@@ -2120,13 +2186,15 @@ def parse_rbc_corporate_actions(
     # Every export of the account is searched (this one first): the
     # position was often bought in an earlier year's export.
     lookup_rows = list(rows)
+    other_files: List[list] = []
     for other in context_files or []:
         if Path(other).resolve() == Path(csv_path).resolve():
             continue
         try:
-            lookup_rows.extend(read_rbc_rows(Path(other)).rows)
+            other_files.append(read_rbc_rows(Path(other)).rows)
         except Exception:
             continue
+        lookup_rows.extend(other_files[-1])
     # name -> {symbol: {listing currencies}}. Only SHARE lines count (an
     # option's code and description name the issuer too, and an s.86.1
     # ADJUST pointed at the option's empty pool became a phantom gain —
@@ -2156,11 +2224,22 @@ def parse_rbc_corporate_actions(
     def _listings(sym: str) -> set:
         return trade_cur.get(sym) or other_cur.get(sym) or set()
 
-    def _resolve(syms, prefer_cur: str = '', what: str = ''
-                 ) -> Optional[str]:
+    def _position(sym: str, cur: str, date: str) -> float:
+        """Shares of one listing held at the end of `date` (trades and
+        transfers of that symbol settled in that currency)."""
+        return sum(x.qty for x in share_rows
+                   if x.symbol == sym and (x.currency or '').upper() == cur
+                   and getattr(x, 'cls', '') in ('trade', 'transfer')
+                   and x.date <= date)
+
+    def _resolve(syms, prefer_cur: str = '', what: str = '',
+                 on_date: str = '') -> Optional[str]:
         """One (symbol, listing) from candidate share symbols, as the
         parser's suffixed symbol; None (with a warning) when several
-        listings remain after preferring `prefer_cur`."""
+        listings remain after preferring `prefer_cur`, then the one
+        listing held on `on_date` — a listing traded only before (sold
+        out of) is not the parent (A2-0210, the Questrade twin's
+        S073-05/S074-08 rule)."""
         opts = sorted({(sym, c) for sym in syms for c in _listings(sym)})
         if not opts:
             return None
@@ -2168,6 +2247,10 @@ def parse_rbc_corporate_actions(
             pick = [o for o in opts if o[1] == prefer_cur.upper()]
             if len(pick) == 1:
                 opts = pick
+        if len(opts) > 1 and on_date:
+            held = [o for o in opts if _position(*o, on_date) > 1e-9]
+            if len(held) == 1:
+                opts = held
         if len(opts) > 1:
             shown = ', '.join(_rbc_ca_symbol(sy, c) for sy, c in opts)
             print(f"warning: RBC {what}: the company trades under several "
@@ -2178,8 +2261,37 @@ def parse_rbc_corporate_actions(
         return _rbc_ca_symbol(*opts[0])
 
     pairing = pair_rbc_reorganizations(rows)
+    merger_pairs = [ev for ev in pairing.events if ev.kind == 'merger']
+    unmatched = list(pairing.unmatched)
+    # Legs of one merger split across two statements (a December removal,
+    # a January receipt): pair this file's leftover legs with the other
+    # statements' leftovers, as IB and Questrade do. Only a removal held
+    # in THIS file emits the event; a row an overlapping export repeats
+    # is not a second leg (A2-0214).
+    if other_files and unmatched:
+        def _key(x):
+            return (x.date, x.symbol, round(x.qty, 9), x.desc, x.currency,
+                    x.account)
+        own_keys = {_key(x) for x in rows}
+        pool = [x for x in unmatched]
+        pool += [x for x in rows if getattr(x, 'cls', '') == 'cil']
+        for f_rows in other_files:
+            other = pair_rbc_reorganizations(f_rows)
+            pool += [x for x in other.unmatched if _key(x) not in own_keys]
+            pool += [x for x in f_rows if getattr(x, 'cls', '') == 'cil'
+                     and _key(x) not in own_keys]
+        cross = pair_rbc_reorganizations(pool)
+        own_left = {id(x) for x in unmatched}
+        for ev in cross.events:
+            if id(ev.removal) in own_left or id(ev.receipt) in own_left:
+                own_left.discard(id(ev.removal))
+                own_left.discard(id(ev.receipt))
+                if ev.kind == 'merger' and any(
+                        ev.removal is x for x in unmatched):
+                    merger_pairs.append(ev)
+        unmatched = [x for x in unmatched if id(x) in own_left]
     events: List[CorporateAction] = []
-    for leg in pairing.unmatched:
+    for leg in unmatched:
         if _rbc_short_merger_leg(leg):
             print(
                 f"warning: RBC merger leg on {leg.date} ({leg.symbol}, qty "
@@ -2195,14 +2307,27 @@ def parse_rbc_corporate_actions(
                 f"warning: RBC merger removal on {leg.date} "
                 f"({(oldm.group(1).strip() if oldm else leg.symbol)!r}, "
                 f"qty {leg.qty:g}) has NO matching share receipt within "
-                f"7 days — the event was skipped and these shares will "
-                f"disappear from inventory. Check the statement covers the "
-                f"receipt row, or add the event manually.",
+                f"7 days in any statement of this account — taxjson "
+                f"cannot book it. Add the statement holding the receipt "
+                f"row, or record the exchange by hand in a .tt file and "
+                f"mark the event `ignore`.",
                 file=sys.stderr,
             )
-    for ev in pairing.events:
-        if ev.kind != 'merger':
-            continue
+            # Blocking, as on IB: the run stops until the user acts,
+            # instead of continuing with the old shares neither removed
+            # nor exchanged (A2-0214).
+            src = _rbc_ca_symbol(leg.symbol, leg.currency)
+            events.append(CorporateAction(
+                date=leg.date, time='09:30:00', action_type='unsupported',
+                source_symbol=src, source_isin=f"{src}@{leg.date}",
+                target_symbol='?', target_isin='?',
+                ratio_new=0.0, ratio_old=0.0,
+                qty_disposed=abs(leg.qty), qty_received=0.0, fmv=0.0,
+                currency=leg.currency or 'USD',
+                target_currency=leg.currency or 'USD', account=account,
+                raw_descriptions=[leg.desc],
+                broker_account=_rbc_account(leg)))
+    for ev in merger_pairs:
         rem, rc = ev.removal, ev.receipt
         rr = rbc_ratio_parts(rem.desc)
         if rr and rr[0] > 0 and rr[1] > 0:
@@ -2222,7 +2347,7 @@ def parse_rbc_corporate_actions(
                     or name_listings.get(_rbc_norm_company(rem.symdesc)))
             resolved = _resolve(syms or {}, rem.currency,
                                 f"merger removal {rem.symbol} on "
-                                f"{rem.date}") if syms else None
+                                f"{rem.date}", rem.date) if syms else None
             if resolved:
                 src = resolved
             elif not syms:
@@ -2256,8 +2381,32 @@ def parse_rbc_corporate_actions(
         ))
 
     # Spin-offs: a tax election (s.86.1 or an FMV dividend in kind).
+    # A "REVERSE ENTRY" row cancels its posting (same symbol and
+    # account, negated quantity, on or before it; the nearest), in
+    # whichever statement of the account holds it — as the reorg legs'
+    # step 1 does. A reversed-and-rebooked spin-off was offered twice and
+    # the reversal read as a short parent (A2-0213).
+    def _spin_key(x):
+        return (x.date, x.symbol, round(x.qty, 9), x.desc, x.account)
+    spin_all = [x for x in rows if getattr(x, 'cls', '') == 'spinoff']
+    _own_spin = {_spin_key(x) for x in spin_all}
+    spin_all += [x for f_rows in other_files for x in f_rows
+                 if getattr(x, 'cls', '') == 'spinoff'
+                 and _spin_key(x) not in _own_spin]
+    reversed_ids: set = set()
+    for rev in sorted((x for x in spin_all if x.qty < 0
+                       and 'REVERSE ENTRY' in (x.desc or '').upper()),
+                      key=lambda x: x.date):
+        cands = [x for x in spin_all
+                 if x.qty > 0 and id(x) not in reversed_ids
+                 and x.symbol == rev.symbol
+                 and abs(x.qty + rev.qty) < 1e-9 and x.date <= rev.date
+                 and _rbc_same_account(x, rev)]
+        if cands:
+            orig = max(cands, key=lambda x: x.date)
+            reversed_ids.update((id(orig), id(rev)))
     for r in rows:
-        if getattr(r, 'cls', '') != 'spinoff':
+        if getattr(r, 'cls', '') != 'spinoff' or id(r) in reversed_ids:
             continue
         if r.qty < 0:
             # Spun-off shares DEBITED: the account was short the parent
@@ -2298,7 +2447,7 @@ def parse_rbc_corporate_actions(
             if scored:
                 top = max(scored.values())
                 syms = {sy for sy, sc in scored.items() if sc == top}
-        parent = _resolve(syms, '', what) if syms else None
+        parent = _resolve(syms, '', what, r.date) if syms else None
         if not parent and not syms:
             print(f"warning: RBC spin-off parent {parent_name or parent_code!r} "
                   f"(SEC# {parent_code}) is not traded in this statement, so "

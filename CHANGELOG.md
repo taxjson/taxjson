@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- RBC corporate actions: a spin-off's parent is the listing held on the
+  spin-off date, not any listing the account ever traded (A2-0210); a
+  spin-off `REVERSE ENTRY` cancels its posting, so a reversed and
+  rebooked spin-off is offered once and no false short warning is
+  printed (A2-0213); merger legs split across two statements are paired,
+  and a removal with no receipt anywhere now blocks the run as an
+  `unsupported` event instead of only warning (A2-0214); options
+  adjusted together by a special-dividend XCH pair by strike rank,
+  whatever the row order (A2-0222); corporate-action symbols use the
+  parser's own canonical listing (FTN.PR.A.TO, not FTN.PRA.TO; A2-0223).
 - RBC corporate-action text: a ratio or option strike written with a
   decimal comma (`0,5 NEW = 1 OLD`, `6,4`) is refused instead of read
   from after the comma as 5 or 6 (A2-0972, A2-0976); cash on a
