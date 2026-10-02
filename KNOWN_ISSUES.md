@@ -172,7 +172,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ### US: sheltered (IRA) replacements already sold before the loss still deny it; taxable ones don't
 - **Where:** `core.py` US pass — sheltered BUYs register their full quantity with no lot reference and are never decremented by later sheltered SELLs; taxable replacement lots are zeroed on consumption.
 - **Current behavior:** IRA buys 100 on 05-20 and sells 100 on 05-25; taxable loss 06-15 → `permanently_disallowed`. The identical pattern in a second taxable account (`per_account_basis`) → loss allowed. §1091(a) keys on ACQUISITION within the window (no still-held test), so the IRA reading is the literal statute and the taxable reading follows Reg. 1.1091-1's lot consumption — the two books apply different theories.
-- **Why deferred:** which reading is right for shares acquired AND disposed inside the window before the loss is not settled authority; flagged so the asymmetry is known (2026-09 audit). `taxjson tax-logic` states the IRA reading (US-WASH-11, audit A2-0962).
+- **Why deferred:** which reading is right for shares acquired AND disposed inside the window before the loss is not settled authority; flagged so the asymmetry is known (2026-09 audit). `taxjson tax-logic` states both readings: the IRA one (US-WASH-11, audit A2-0962) and the taxable one (US-WASH-21, re-audit A2-0817).
 
 ### US: options as replacement property are advisory-only
 - **Where:** `core.py` `detect_option_replacement_matches` (warn-only in the US engine; the Canada engine enforces the call rule).

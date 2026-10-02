@@ -95,6 +95,22 @@ class TestFeesAndTradesSigns(unittest.TestCase):
             self.assertEqual(rebate[-1], "-0.50")
             penny = next(ln for ln in lines if ln[3].startswith("BBB26"))
             self.assertEqual(penny[-2], "-0.25")
+            # Every line is one the .tt reader takes back with the same
+            # signed money (re-audit A2-1479: a commission-over-gross
+            # close's negative total is reader-valid, A2-0622).
+            import contextlib
+            import io
+            from taxjson.bin.taxjson_convert_tt import parse_tt_line
+            for ln in r.stdout.splitlines():
+                if not ln.startswith("BUYSELL"):
+                    continue
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    tx = parse_tt_line(ln, account_name="margin",
+                                       source="trades-view")
+                self.assertEqual(err.getvalue(), "", ln)
+                self.assertAlmostEqual(
+                    tx["net_amount"],
+                    float(ln.split()[-2].replace(",", "")), places=2)
             # Signed sell total: 1197 + 10.5 - 0.25
             self.assertIn("TOTAL SELL:     1,207.25 CAD", r.stdout)
             doc = _json(root, "trades", "2026", "margin")

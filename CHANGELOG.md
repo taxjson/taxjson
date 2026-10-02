@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- tax-logic states that a US taxable purchase whose shares were sold
+  (first in, first out) before a loss no longer washes it, unlike an IRA
+  purchase (US-WASH-21); the US engine's unreachable 'consumed
+  replacement' branches are removed (re-audit A2-0817).
 - US tax-logic states the same-moment replacement order (taxable
   accounts, then IRAs, then affiliated, then row order — never the
   account's name; US-WASH-20) and the $0-lot fallback for a stock
