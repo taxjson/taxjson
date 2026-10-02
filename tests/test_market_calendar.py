@@ -25,6 +25,8 @@ def _iso(ds):
 
 
 class TestHolidayLists(unittest.TestCase):
+    @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_nyse_2025_2026(self):
         self.assertEqual(_iso(mc.nyse_holidays(2025)), [
             '2025-01-01', '2025-01-20', '2025-02-17', '2025-04-18',
@@ -35,6 +37,8 @@ class TestHolidayLists(unittest.TestCase):
             '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07',
             '2026-11-26', '2026-12-25'])
 
+    @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_tsx_2025_2026(self):
         self.assertEqual(_iso(mc.tsx_holidays(2025)), [
             '2025-01-01', '2025-02-17', '2025-04-18', '2025-05-19',

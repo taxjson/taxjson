@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1701,6 +1702,8 @@ class TestTickerMapSymbolNew(unittest.TestCase):
     ORPHAN identity while the acquirer's trades mapped elsewhere —
     phantom short plus stranded ACB."""
 
+    @rule("CA-ACB-04")
+    @rule("US-BASIS-06")
     def test_split_target_follows_the_mapping(self):
         from taxjson.bin.taxjson_ticker_map import apply_mapping
         tx = TaxTransaction(action='SPLIT', date='2025-06-01',

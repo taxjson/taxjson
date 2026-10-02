@@ -72,6 +72,8 @@ def of(txs, **kw):
 
 # ------------------------------------------------------------------ Questrade
 
+@rule("CA-ACB-04")
+@rule("US-BASIS-06")
 class TestQtListingSuffix(unittest.TestCase):
     """A .TO listing keeps .TO whatever the row currency (R1-68 and the
     DLR.U.TO item found in round 1)."""
