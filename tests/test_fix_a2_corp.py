@@ -747,5 +747,33 @@ class TestQuestradeCorpUnbooked(unittest.TestCase):
             self.assertNotIn('not traded', err)
 
 
+
+class TestElectionWording(unittest.TestCase):
+    def test_a2_0558_rows_name_the_elected_key(self):
+        from taxjson.lib.corp_actions import resolve_event
+        for country, ev, key in (
+                ('canada', _event(), 'taxable_deemed_dividend'),
+                ('usa', _event(), 'taxable_distribution_301'),
+                ('usa', _event(action_type='merger', qty_disposed=100),
+                 'taxable_exchange')):
+            rows, _ = _quiet(resolve_event, ev, key,
+                             hints={'fmv_per_share': 5.0}, country=country)
+            for r in rows:
+                self.assertNotIn('election=none', r['description'])
+                self.assertIn(f'election={key}', r['description'])
+
+    def test_a2_0974_zero_fmv_names_the_saved_zero(self):
+        from taxjson.lib.corp_actions import resolve_event
+        ev = _event(action_type='merger', qty_disposed=100,
+                    target_symbol='NEW.US')
+        _, err = _quiet(resolve_event, ev, 'taxable_disposition',
+                        hints={'fmv_per_share': 0.0})
+        self.assertIn('fmv_per_share=0)', err)
+        self.assertNotIn('no fmv_per_share hint was given', err)
+        self.assertIn(f'taxjson elect margin --set {ev.event_id}=', err)
+        _, err = _quiet(resolve_event, ev, 'taxable_disposition', hints={})
+        self.assertIn('no fmv_per_share hint was given', err)
+
+
 if __name__ == "__main__":
     unittest.main()

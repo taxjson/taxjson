@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Corporate-action rows name the election actually made instead of
+  `election=none` (A2-0558), and a taxable merger booked at $0 says
+  whether the saved election values it at 0 and gives the `taxjson
+  elect ... --set` command the run-level warning gives (A2-0974).
 - Questrade corporate actions: an UNBOOKED line from the corporate-action
   stage (a DIS chain that nets a removal) is echoed on the console and
   refused by `run --strict`, as the parse stage's are (A2-0211); the

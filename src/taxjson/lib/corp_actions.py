@@ -3072,14 +3072,20 @@ def _emit_taxable_exchange(event: CorporateAction, hints: dict,
     # documented "0 to defer" book a near-full-ACB fake loss silently
     # whenever RBC paid cash in lieu (audits S020-06, S074-00).
     if value <= 0:
+        # Name the real cause: a saved fmv_per_share of 0 is not "no
+        # hint given" (A2-0974); the remedy is the run-level line's.
+        why = ("the saved election values the new shares at 0 "
+               "(fmv_per_share=0)" if 'fmv_per_share' in (hints or {})
+               else "the broker booked $0 and no fmv_per_share hint was "
+                    "given")
         print(
             f"warning: taxable merger {event.source_symbol}→"
             f"{event.target_symbol} on {event.date} has NO fair market "
-            f"value for the new shares (broker booked $0 and no "
-            f"fmv_per_share hint was given) — emitting zero-valued rows: "
-            f"the SELL realizes a fake loss (proceeds are only the "
-            f"cash-in-lieu, if any) and the BUY enters at $0 basis. Re-run "
-            f"`taxjson elect --redo` and supply the FMV.",
+            f"value for the new shares ({why}) — emitting zero-valued "
+            f"rows: the SELL realizes a fake loss (proceeds are only the "
+            f"cash-in-lieu, if any) and the BUY enters at $0 basis. Set "
+            f"its value: taxjson elect {event.account} --set "
+            f"{event.event_id}=<election> --hint fmv_per_share=<value>",
             file=sys.stderr,
         )
 
@@ -3473,7 +3479,7 @@ USA_MERGER = RuleSpec(
             ev, hints,
             description_base=(
                 f"Merger {ev.source_symbol}→{ev.target_symbol} "
-                f"(taxable §1001 exchange; election=none)"
+                f"(taxable §1001 exchange; election={opt})"
             ))
     ),
 )
@@ -3513,7 +3519,7 @@ USA_SPINOFF = RuleSpec(
             ev, hints,
             description_base=(
                 f"Spinoff {ev.source_symbol}→{ev.target_symbol} "
-                f"(§301 taxable distribution at FMV; election=none)"
+                f"(§301 taxable distribution at FMV; election={opt})"
             ))
     ),
 )
@@ -3641,7 +3647,7 @@ def _canada_spinoff_deemed_dividend(event: CorporateAction, option: str, hints: 
         event, hints,
         description_base=(
             f"Spinoff {event.source_symbol}→{event.target_symbol} "
-            f"(deemed dividend at FMV; election=none)"
+            f"(deemed dividend at FMV; election={option})"
         ),
     )
 
