@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- run: the filing-basis `<acct>_wash.sum` of an account in the blended
+  s.47 pass no longer repeats the isolated per-account pass's s.40(3)
+  notes (return of capital beyond the account's own ACB, or on its
+  empty pool) — the blended pool booked no such gain; the per-account
+  `<acct>.sum` baseline keeps them (re-audit A2-0654, A2-1117).
 - run: a decided crypto gift/payment that cannot be written (no fair
   value, a malformed sends.json) now reaches the account .sum
   DIAGNOSTICS and stops `run --strict`; the warning also says when the

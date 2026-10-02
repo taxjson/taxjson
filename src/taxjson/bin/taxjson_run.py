@@ -306,12 +306,20 @@ _DIAG_DATE_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 
 
 def collect_diagnostics(cache: Path, account: str, *,
-                        post_pass: bool = True) -> str:
+                        post_pass: bool = True,
+                        blended: bool = False) -> str:
     """Concatenate persisted stderr diagnostics across an account's
     pipeline stages, keeping ok/warning/note/error lines — bare or
     prog-prefixed (`taxjson-fill-crypto: warning: …`) — plus their
     indented continuation lines. post_pass=False leaves out the
     cross-account passes' sidecars (_POST_PASS_DIAG_SUFFIXES).
+    blended=True (the filing-basis <acct>_wash.sum of an account the
+    blended s.47 pass covers) leaves out the isolated per-account gains
+    pass's <acct>_gains.json.diag: the blend re-ran the engine over the
+    same rows (its mirror <acct>_blend.diag carries what it said), and
+    the per-account pool's notes — a s.40(3) deemed gain on a return
+    of capital beyond the account's own ACB or on its empty pool — are
+    not what the blended books booked (A2-0654, A2-1117).
 
     The engine runs over the whole history, so a year's banner used to
     ask for action on events of a LATER year (declare 2026 transfer
@@ -341,6 +349,8 @@ def collect_diagnostics(cache: Path, account: str, *,
         if any(diag.name.startswith(f"{s}_") for s in siblings):
             continue
         if not post_pass and diag.name.endswith(_POST_PASS_DIAG_SUFFIXES):
+            continue
+        if blended and diag.name == f"{account}_gains.json.diag":
             continue
         kept_prev = False
         for line in diag.read_text(errors="replace").splitlines():
@@ -2878,10 +2888,12 @@ def _json_dumps_report(payload) -> str:
 
 
 def _diagnostics_banner(cache: Path, account: str, *,
-                        post_pass: bool = True) -> bytes:
+                        post_pass: bool = True,
+                        blended: bool = False) -> bytes:
     """A DIAGNOSTICS section for the top of a .sum file, or empty bytes
     when the account's pipeline stages produced no warnings/notes."""
-    diag = collect_diagnostics(cache, account, post_pass=post_pass)
+    diag = collect_diagnostics(cache, account, post_pass=post_pass,
+                               blended=blended)
     if not diag:
         return b""
     rule = "=" * 70
@@ -2921,7 +2933,8 @@ def stage_wash_pass(name: str, settings: Dict[str, Any], cache: Path, reports_di
 
 def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
                          reports_dir: Path, wash_gains: Path,
-                         base_json: Path) -> None:
+                         base_json: Path, *, blended: bool = False
+                         ) -> None:
     """The .sum + report.json rendering for one account's wash-adjusted
     gains — shared by the per-account (crypto) and blended (equity)
     passes."""
@@ -2930,7 +2943,7 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
     wash_tmp = wash_sum.with_name(wash_sum.name + ".part")
     try:
         with wash_tmp.open("wb") as out:
-            out.write(_diagnostics_banner(cache, name))
+            out.write(_diagnostics_banner(cache, name, blended=blended))
             _is_c = bool(((_soft_config(cache.parent).get("accounts")
                            or {}).get(name) or {}).get("crypto"))
             out.write(run_capture(_cmd("taxjson-sum-gains")
@@ -3135,7 +3148,8 @@ def stage_blended_wash_pass(names: List[str],
             "--base", str(cache / f"{name}_base.json"),
         ], wash_gains, capture_diag=False)
         _render_wash_outputs(name, settings, cache, reports_dir,
-                             wash_gains, cache / f"{name}_base.json")
+                             wash_gains, cache / f"{name}_base.json",
+                             blended=True)
     # Conservation check: the splitter apportions blended inventory
     # rows by each account's BASE-book balance, which does not include
     # phantom (OPENING_BALANCE) shares synthesized in-memory from
