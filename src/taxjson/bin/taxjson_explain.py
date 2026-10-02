@@ -40,7 +40,10 @@ from taxjson.lib.core import get_tax_rules
 from taxjson.lib.json_input import load_transactions_or_exit
 from taxjson.lib.country import (add_country_argument, default_tax_date,
                                  refuse_foreign_flags)
-from taxjson.lib.pipeline import load_stdin_transactions, prepare_books
+from taxjson.lib.pipeline import (add_income_dating_args,
+                                  apply_trust_roc_record_dates,
+                                  income_rules_from_args,
+                                  load_stdin_transactions, prepare_books)
 from taxjson.lib.trace_format import render_gain_block
 
 
@@ -125,6 +128,7 @@ def parse_args():
     parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR")
     parser.add_argument("--option-buyback-wash", action="store_true")
+    add_income_dating_args(parser)
     parser.add_argument(
         "--no-wash", action="store_true",
         help="Skip superficial-loss / wash-sale detection. Use it for a "
@@ -291,6 +295,10 @@ def main():
                             if getattr(args, 'incomplete_history', None)
                             else None),
         phantom_hint=False)
+    # The record-date move run_gains applies (CA-INC-DATE-ROC-TRUST): the
+    # trace used the pay date and contradicted the .sum (A2-0139).
+    apply_trust_roc_record_dates(transactions,
+                                 income_rules_from_args(args, args.country))
 
     rules = get_tax_rules(args.country)
     from taxjson.lib.core import AmbiguousTransferDateError

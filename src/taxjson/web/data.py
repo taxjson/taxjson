@@ -441,6 +441,11 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         return m, sh
 
     txs, sheltered = _prepare(txs)
+    # The record-date move run_gains applies (CA-INC-DATE-ROC-TRUST): the
+    # what-if used the pay date, a cost 500 off the .sum's (A2-0139).
+    from taxjson.lib.income_dating import IncomeRules
+    from taxjson.lib.pipeline import apply_trust_roc_record_dates
+    apply_trust_roc_record_dates(txs, IncomeRules.from_settings(ctx.settings))
 
     # The UI links holdings by their RAW per-listing symbol (holdings.toml is
     # built pre-TOBASE), while <account>_base.json is consolidated — a

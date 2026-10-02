@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A Canadian trust's return of capital is booked on its record date by
+  taxjson-audit, taxjson-explain and the web what-if too (they used the
+  pay date and contradicted the .sum; audit failed its own tie-out), and
+  a pay-year run names, as ATTENTION, each prior-year sale whose ACB a
+  December-record ROC lowers (re-audit A2-0139, A2-0201, A2-0397,
+  A2-0039).
 - Two SPLIT rows for one event with different ratios (both applied) are
   now a validation ERROR named on the console: `run --strict` stops and
   checklist run-clean is not done (re-audit A2-0040).

@@ -388,7 +388,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "record date: the pay date is used, and a January-paid "
                  "one is warned about (check the prior year's T3 box 42 "
                  "and move it to Dec 31 with a .tt ADJUST pair; the "
-                 "warning stops once that pair is in the books).",
+                 "warning stops once that pair is in the books). Every "
+                 "engine pass dates it the same way (run, audit, explain, "
+                 "the web what-if). When the record date falls in the "
+                 "year before the pay date, the pay-year run names, as "
+                 "ATTENTION, each sale of that earlier year whose ACB it "
+                 "lowers (that year may be filed without it).",
                  keys=("corporate_distributions",)),
             Rule("CA-INC-DATE-TRUST",
                  "A Canadian trust's distribution belongs to the year it "

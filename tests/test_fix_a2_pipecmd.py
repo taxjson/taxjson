@@ -12,6 +12,8 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
+from tax_rules import rule
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -152,6 +154,110 @@ class TestConflictingSplitsAreErrors(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(warn_duplicate_splits(rows, conflicts), 1)
         self.assertEqual(conflicts, [])
+
+
+# ------------------------------------------ A2-0139 / A2-0201 / A2-0397
+class TestTrustRocRecordDateEverywhere(unittest.TestCase):
+    """CA-INC-DATE-ROC-TRUST was applied only in pipeline.run_gains:
+    taxjson-audit, taxjson-explain and the web what-if booked a trust's
+    ROC on its pay date and contradicted the .sum (gain 500 there, 0
+    in audit/explain; what-if cost 10,000 instead of 9,500)."""
+
+    _LINES = [
+        "BUYSELL 2025-01-06 10:00:00 ZZR.TO 2000 CAD 10 -20000 0",
+        "BUYSELL 2025-03-10 10:00:00 ZZR.TO -1000 CAD 10 10000 0",
+        "ADJUST 2025-03-20 12:00:00 ZZR.TO CAD -1000 type=roc "
+        "record=2025-03-03",
+    ]
+
+    def _proj(self, td):
+        root, home = _tt_project(td, self._LINES, year=2025)
+        r = _cli(root, home, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        g = json.loads((root / "work" / "m_gains.json").read_text())
+        sale = [t for t in g["transactions"] if t.get("gain") is not None]
+        self.assertEqual(round(sale[0]["gain"], 2), 500.0)
+        return root, home
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_audit_ties_out(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            r = _cli(root, home, "audit")
+            self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-3000:])
+            self.assertNotIn("TIE-OUT FAILED", r.stdout + r.stderr)
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_explain_traces_the_booked_gain(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_explain",
+                 "--country", "canada", "--year", "2025",
+                 str(root / "work" / "m_base.json")],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL, env=_env(home))
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertIn("500.00", r.stdout)
+            self.assertNotIn("EMPTY pool", r.stdout + r.stderr)
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_web_what_if_cost(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            from taxjson.web import data
+            from taxjson.web.context import ProjectContext
+            res = data.what_if_sell(ProjectContext.load(root), "m",
+                                    "ZZR.TO", 1000, 10.0, on="2025-03-12")
+            self.assertTrue(res.get("ok"), res)
+            self.assertAlmostEqual(res["cost_basis"], 9500.0, places=2)
+            self.assertFalse(any("EMPTY" in w for w in res["warnings"]),
+                             res["warnings"])
+
+
+def _gains_one(book, country, **req):
+    import copy, contextlib, io
+    from taxjson.lib.pipeline import GainsRequest, run_gains
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = run_gains(copy.deepcopy(list(book)), [], [],
+                        req=GainsRequest(country=country, taxable=True,
+                                         **req))
+    res["_stderr"] = err.getvalue()
+    return res
+
+
+# ---------------------------------------------------------------- A2-0039
+class TestRocMovedIntoAClosedYearNamesTheSale(unittest.TestCase):
+    """A January-paid trust ROC with a December record date lowers the
+    ACB of a December sale: the pay-year run says which prior-year sale
+    changed (that year may be filed without it)."""
+
+    def _book(self):
+        from tax_rules.dual import tx
+        return [tx("BUYSELL", "2024-06-03", "ZZR.TO", 1000, 10000,
+                   currency="CAD", settle="2024-06-04"),
+                tx("BUYSELL", "2024-12-30", "ZZR.TO", -1000, 10000,
+                   currency="CAD", settle="2024-12-31"),
+                tx("ADJUST", "2025-01-08", "ZZR.TO", 0, -500.0, type="roc",
+                   currency="CAD", record_date="2024-12-30",
+                   description="RETURN OF CAPITAL REC 2024-12-30")]
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_pay_year_run_names_the_prior_year_sale(self):
+        err = _gains_one(self._book(), "canada", year=2025)["_stderr"]
+        line = [ln for ln in err.splitlines() if "2024 sale" in ln]
+        self.assertTrue(line, err)
+        self.assertIn("ATTENTION", line[0])
+        self.assertIn("2024-12-31", line[0])        # the settle date
+        self.assertIn("500.00", line[0])
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_same_year_move_is_quiet(self):
+        book = self._book()
+        book[2].date = book[2].date_settle = "2024-12-31"
+        err = _gains_one(book, "canada", year=2024)["_stderr"]
+        self.assertNotIn(" sale", err)
 
 
 if __name__ == "__main__":

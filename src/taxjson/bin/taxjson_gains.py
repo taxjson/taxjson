@@ -28,6 +28,7 @@ from taxjson.lib.phantom_holdings import detect_phantoms, format_suggestions
 # Back-compat re-exports: tests and older callers import these from here.
 from taxjson.lib.pipeline import (            # noqa: F401
     GainsRequest,
+    add_income_dating_args,
     TransferValidationError,
     _handle_transfers,
     load_stdin_transactions,
@@ -96,19 +97,7 @@ def _parse_args():
              "option as a superficial loss when identical options are acquired "
              "within 30 days and held (strict reading; default off — a "
              "closing purchase is not a disposition s.54 reaches).")
-    parser.add_argument(
-        "--corporate-distribution", action="append", default=None,
-        metavar="SYMBOL",
-        help="Canada: a Canadian issuer whose \"distribution\" rows are "
-             "a corporation's payout (dated when paid), beyond the "
-             "built-in split-share list; repeatable ([settings] "
-             "corporate_distributions).")
-    parser.add_argument(
-        "--ric-january-dividend", action="append", default=None,
-        metavar="\"SYMBOL [YYYY-01-DD]\"",
-        help="USA: a January fund/REIT dividend received on Dec 31 of "
-             "the prior year (§852(b)(7), §857(b)(9)); repeatable "
-             "([settings] ric_january_dividends).")
+    add_income_dating_args(parser)
     # Retired (2026-09-29): long calls vs share losses are enforced by
     # the Canada engine and always warned by the US engine; nothing is
     # opt-in any more. Accepted so old scripts keep working.

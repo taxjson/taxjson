@@ -53,7 +53,9 @@ from taxjson.lib.core import (get_tax_rules, is_option_symbol,
                               load_transactions)
 from taxjson.lib.country import (add_country_argument, canonical_country,
                                  refuse_foreign_flags)
-from taxjson.lib.pipeline import prepare_books
+from taxjson.lib.pipeline import (add_income_dating_args,
+                                  apply_trust_roc_record_dates,
+                                  income_rules_from_args, prepare_books)
 from taxjson.lib.trace_format import render_gain_block
 
 # Money agreement threshold for every cross-check in this tool: the
@@ -806,6 +808,7 @@ def parse_args(argv=None):
                    default=None, help="Canada only (default: close)")
     p.add_argument("--option-grant-since", type=tax_year, default=None)
     p.add_argument("--option-buyback-wash", action="store_true")
+    add_income_dating_args(p)
     p.add_argument("--no-wash", action="store_true",
                    help="Disable wash detection (US crypto: digital "
                         "assets are property, not securities — §1091 "
@@ -937,6 +940,10 @@ def main(argv=None) -> int:
         incomplete_history=(Path(args.incomplete_history)
                             if args.incomplete_history else None),
         phantom_hint=False)
+    # The record-date move run_gains applies (CA-INC-DATE-ROC-TRUST): the
+    # audit used the pay date and failed its own tie-out (A2-0139).
+    apply_trust_roc_record_dates(transactions,
+                                 income_rules_from_args(args, country))
 
     rules = get_tax_rules(country)
     kwargs: Dict[str, Any] = dict(

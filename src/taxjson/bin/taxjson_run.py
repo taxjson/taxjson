@@ -11911,6 +11911,7 @@ def _explain_wash_sales(root: Path, cache: Path,
     if phantoms.exists():
         common += ["--incomplete-history", str(phantoms)]
     common += option_timing_flags(settings)
+    common += income_dating_flags(settings)
 
     # Trace the computation the table comes from: the pipeline BLENDS
     # the taxable equity books (s.47 ACB / cross-account §1091), and
@@ -13982,6 +13983,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
         if phantoms.exists():
             fl += ["--incomplete-history", str(phantoms)]
         fl += _timing_flags
+        fl += income_dating_flags(settings)
         for sym in getattr(args, "symbol", None) or []:
             fl += ["--symbol", sym]
         if getattr(args, "gain_id", None):

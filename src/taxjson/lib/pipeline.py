@@ -1054,6 +1054,90 @@ def annotate_inventory_multipliers(results: dict, transactions) -> None:
             item['multiplier'] = m
 
 
+def apply_trust_roc_record_dates(transactions, income_rules) -> list:
+    """Canada: a Canadian trust's return of capital lowers the ACB when it
+    becomes payable (s.53(2)(h)): an ADJUST with a printed record date is
+    booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row keeps its id;
+    only its dates move. Every engine caller applies it (run_gains,
+    taxjson-audit, taxjson-explain, the web what-if): applied only in
+    run_gains, the others booked the ROC on its pay date and contradicted
+    the .sum (re-audit A2-0139 / A2-0201 / A2-0397). A no-op for the US
+    (IncomeRules.roc_record_date is Canada-only). Returns [(row, pay
+    date)] for each row moved."""
+    moved = []
+    for _t in transactions:
+        _rec = income_rules.roc_record_date(_t)
+        if _rec:
+            moved.append((_t, _t.date))
+            _t.date = _rec
+            _t.date_settle = _rec
+    return moved
+
+
+def add_income_dating_args(parser) -> None:
+    """--corporate-distribution / --ric-january-dividend ([settings]
+    corporate_distributions / ric_january_dividends): the engine CLIs
+    that date income share one spelling (taxjson-gains, -audit,
+    -explain)."""
+    parser.add_argument(
+        "--corporate-distribution", action="append", default=None,
+        metavar="SYMBOL",
+        help="Canada: a Canadian issuer whose \"distribution\" rows are "
+             "a corporation's payout (dated when paid), beyond the "
+             "built-in split-share list; repeatable ([settings] "
+             "corporate_distributions).")
+    parser.add_argument(
+        "--ric-january-dividend", action="append", default=None,
+        metavar="\"SYMBOL [YYYY-01-DD]\"",
+        help="USA: a January fund/REIT dividend received on Dec 31 of "
+             "the prior year (§852(b)(7), §857(b)(9)); repeatable "
+             "([settings] ric_january_dividends).")
+
+
+def income_rules_from_args(args, country):
+    """The IncomeRules an engine CLI's flags select (refuses a flag of
+    the other country, as GainsRequest does)."""
+    return GainsRequest(
+        country=country,
+        corporate_distributions=tuple(
+            getattr(args, "corporate_distribution", None) or ()),
+        ric_january_dividends=tuple(
+            getattr(args, "ric_january_dividend", None) or ()),
+    ).income_rules()
+
+
+def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
+    """A trust ROC paid in one year with a record date in the year before
+    lowers the ACB of a sale made between the two dates in that earlier
+    year — a year that may already be filed without it (re-audit
+    A2-0039). Name each such sale on the ATTENTION channel (`taxjson
+    run` echoes it) when this run's year is the pay year (or no year)."""
+    from taxjson.lib.income_dating import ATTENTION_INCOME_YEAR
+    key = 'date_settle' if tax_date == 'settle' else 'date'
+    for t, pay in moved:
+        rec = t.date or ''
+        if not rec or not pay or rec[:4] == pay[:4]:
+            continue
+        if year is not None and str(year) != pay[:4]:
+            continue
+        sales = [e for e in results.get('transactions') or []
+                 if e.get('gain') is not None
+                 and e.get('symbol') == t.symbol
+                 and rec <= (e.get('date') or '') < pay
+                 and (e.get(key) or e.get('date') or '')[:4] == rec[:4]]
+        if not sales:
+            continue
+        what = ", ".join(
+            f"{(e.get(key) or e.get('date'))} (gain now "
+            f"{float(e.get('gain') or 0.0):,.2f})" for e in sales)
+        amt = -float(t.net_amount or 0.0)
+        print(f"warning: {ATTENTION_INCOME_YEAR}{t.symbol}: the return of "
+              f"capital {amt:,.2f} {t.currency} paid {pay} (record date "
+              f"{rec}) lowers the ACB of the {rec[:4]} sale on {what}. If "
+              f"{rec[:4]} was filed without this ROC, that return needs an "
+              f"adjustment (T1-ADJ) for the gain.", file=sys.stderr)
+
+
 def run_gains(transactions, sheltered_transactions=(),
               affiliated_transactions=(), req: GainsRequest = None, *,
               trace_sink: Optional[Callable[[dict], None]] = None,
@@ -1090,16 +1174,7 @@ def run_gains(transactions, sheltered_transactions=(),
     _warn_year = int(req.year) if req.year else None
     for _w in income_rules.warnings(transactions, _warn_year):
         print(f"warning: {_w}", file=sys.stderr)
-    if req.country == 'canada':
-        # A Canadian trust's return of capital lowers the ACB when it
-        # becomes payable (s.53(2)(h)): an ADJUST with a printed record
-        # date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The
-        # row keeps its id; only its dates move.
-        for _t in transactions:
-            _rec = income_rules.roc_record_date(_t)
-            if _rec:
-                _t.date = _rec
-                _t.date_settle = _rec
+    _roc_moved = apply_trust_roc_record_dates(transactions, income_rules)
     if req.country == 'canada':
         # The parsers book a stock dividend as a neutral $0 event; the
         # Canadian cost is its declared amount, which the export does
@@ -1139,6 +1214,8 @@ def run_gains(transactions, sheltered_transactions=(),
     )
 
     annotate_inventory_multipliers(results, transactions)
+    _warn_roc_moved_into_prior_year(results, _roc_moved, tax_date,
+                                    _warn_year)
 
     # Capture tainted dispositions across ALL years before the year filter
     # strips them. The superficial-loss warning below pairs in-year clean
