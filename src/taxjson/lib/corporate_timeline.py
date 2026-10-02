@@ -42,8 +42,10 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 # between those copies. `event_sort_key` is the single definition; the
 # per-engine DIFFERENCES are explicit profiles, not implicit drift:
 #
-#   ca_main      (date, phase, time, priority)  — settle-basis dates
-#   ca_balance   (date, phase, time)            — no priority (unchanged
+#   ca_main      (date, phase, trade date, time, priority) — settle-basis
+#                                                  dates; rows settling the
+#                                                  same day go in trade order
+#   ca_balance   (date, phase, trade date, time) — no priority (unchanged
 #                                                  legacy behavior of the
 #                                                  running-balance walks)
 #   us_main      (date, time, priority)         — trade-basis dates; note
@@ -147,6 +149,19 @@ def _ca_phase(tx: Any, sort_date: str) -> int:
     if tx.date and tx.date < sort_date:
         return Phase.PRE_EXISTING           # settle-lagged: executed earlier
     return Phase.EXECUTED_TODAY
+
+
+def _ca_exec_date(tx: Any) -> str:
+    """Execution-order component of the Canada keys, after the phase.
+    Two settle-lagged rows that settle on the SAME day (a Friday trade
+    and the next trading day's trade both settling Tuesday over a
+    settlement holiday) are taken in TRADE-date order, then clock time:
+    a Monday 09:45 buy is not applied before the previous Friday's 15:00
+    sale (A2-0067). An opening balance or a split sorts first in its
+    phase ('' — they carry no execution of their own)."""
+    if tx.action in ('OPENING_BALANCE', 'SPLIT'):
+        return ''
+    return tx.date or ''
 
 
 def _ca_priority(tx: Any) -> int:
@@ -264,9 +279,10 @@ def event_sort_key(tx: Any, *, profile: str,
     d = (date_of or (_trade_date if profile == 'us_main'
                      else _settle_first))(tx)
     if profile == 'ca_main':
-        return (d, _ca_phase(tx, d), tx.time, _ca_priority(tx))
+        return (d, _ca_phase(tx, d), _ca_exec_date(tx), tx.time,
+                _ca_priority(tx))
     if profile == 'ca_balance':
-        return (d, _ca_phase(tx, d), tx.time)
+        return (d, _ca_phase(tx, d), _ca_exec_date(tx), tx.time)
     if profile == 'us_main':
         return (d, tx.time, _us_priority(tx))
     raise ValueError(f"unknown sort profile {profile!r}")
@@ -335,8 +351,85 @@ def split_seen(seen: Set, symbol: str, date: str, ratio: Any,
                     symbol, other, ratio, symbol_new,
                     account=account) in seen:
                 return other
+    # A copy whose ratio was ROUNDED (a hand-typed .tt line 2.333333, or
+    # convert-tt's 8 decimals, next to the parser's 2.333333333) is the
+    # same event too: it scaled the pool twice (A2-0070).
+    prior = _near_ratio_copy(seen, key, account is not None, window)
+    if prior is not None:
+        note_split_ratio_conflict(symbol, prior[0], date, prior[1],
+                                  float(ratio or 0))
+        return prior[0]
     seen.add(key)
     return None
+
+
+# Two copies of one split agree on the ratio to this RELATIVE tolerance
+# (rounding to 6 decimals or more); genuine distinct splits differ by far
+# more.
+SPLIT_RATIO_REL_TOL = 1e-6
+
+
+def split_ratios_close(a: Any, b: Any) -> bool:
+    a, b = float(a or 0), float(b or 0)
+    return abs(a - b) <= SPLIT_RATIO_REL_TOL * max(abs(a), abs(b))
+
+
+def _near_ratio_copy(seen: Set, key: Tuple, per_account: bool,
+                     window: int) -> Optional[Tuple[str, float]]:
+    """(date, ratio) of a recorded copy of `key`'s event whose ratio
+    differs only by rounding, within `window` days; None otherwise."""
+    from datetime import datetime
+    if per_account:
+        sym, acct, date, ratio, new = key
+    else:
+        sym, date, ratio, new = key
+        acct = None
+    try:
+        d0 = datetime.strptime((date or '')[:10], '%Y-%m-%d')
+    except ValueError:
+        d0 = None
+    best = None
+    for k in seen:
+        if not isinstance(k, tuple) or len(k) != len(key):
+            continue
+        if per_account:
+            ks, ka, kd, kr, kn = k
+            if ka != acct:
+                continue
+        else:
+            ks, kd, kr, kn = k
+        if ks != sym or kn != new or kr == ratio \
+                or not split_ratios_close(kr, ratio):
+            continue
+        if kd != date:
+            try:
+                dk = datetime.strptime((kd or '')[:10], '%Y-%m-%d')
+            except ValueError:
+                continue
+            if d0 is None or abs((dk - d0).days) > window:
+                continue
+        if best is None or kd < best[0]:
+            best = (kd, kr)
+    return best
+
+
+def note_split_ratio_conflict(symbol: str, kept: str, dropped: str,
+                             kept_ratio: float, dropped_ratio: float,
+                             stream=None) -> None:
+    """One stderr note per event: the same split was booked twice with
+    ratios that differ only by rounding, and is applied once."""
+    import sys
+    k = ('ratio', symbol, round(kept_ratio, 6), min(kept, dropped),
+         max(kept, dropped))
+    if k in _SPLIT_DATE_NOTES:
+        return
+    _SPLIT_DATE_NOTES.add(k)
+    when = (f"on {kept}" if kept == dropped
+            else f"on {min(kept, dropped)} and {max(kept, dropped)}")
+    print(f"note: split {symbol} is booked twice {when} with ratios "
+          f"{kept_ratio:.9g} and {dropped_ratio:.9g} (one rounded) — one "
+          f"corporate event; applied ONCE, x{kept_ratio:.9g} on {kept}.",
+          file=stream or sys.stderr)
 
 
 def note_split_date_conflict(symbol: str, kept: str, dropped: str,
@@ -494,20 +587,40 @@ class SplitTimeline:
         PRE-EXIST their sort date (opening balances, settle-lagged
         executions), whose shares a same-date event does scale."""
         if self._events_sorted is None:
-            # Stable date sort: same-day chains keep input order (the
-            # same positional semantics as from_transactions).
             self._events_sorted = sorted(
                 self._events, key=lambda e: e[0])
         qty, sym = 1.0, symbol
-        for d, e_sym, ratio, new_sym in self._events_sorted:
+        evs = self._events_sorted
+        i = 0
+        while i < len(evs):
+            d = evs[i][0]
+            j = i
+            while j < len(evs) and evs[j][0] == d:
+                j += 1
+            day = evs[i:j]
+            i = j
             if d < from_date or (d == from_date and not inclusive):
                 continue
-            if e_sym != sym:
-                continue
-            if ratio:
-                qty *= ratio
-            if new_sym:
-                sym = new_sym
+            # One day's events follow the share's chain, not the input
+            # order: A->B and B->C on one day take an A share to C
+            # whichever row is listed first, as factor() and
+            # alias_factor() already do (A2-0983 / S021-04). Each event
+            # applies at most once; a plain split leaves the symbol, so
+            # it is applied on its own pass.
+            used = [False] * len(day)
+            moved = True
+            while moved:
+                moved = False
+                for k, (_d, e_sym, ratio, new_sym) in enumerate(day):
+                    if used[k] or e_sym != sym:
+                        continue
+                    used[k] = True
+                    moved = True
+                    if ratio:
+                        qty *= ratio
+                    if new_sym:
+                        sym = new_sym
+                        break
         return qty, sym
 
     def lineage_factor(self, symbol: str, from_date: str,

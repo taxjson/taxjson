@@ -102,7 +102,9 @@ class TestRbcDifferentDateMerger(unittest.TestCase):
                 events = parse_rbc_corporate_actions(p)
         finally:
             os.remove(p)
-        self.assertEqual(events, [])
+        # A half merger blocks the run as an `unsupported` event (as on
+        # IB) instead of only warning (A2-0214).
+        self.assertEqual([e.action_type for e in events], ['unsupported'])
         self.assertIn("NO matching share receipt", err.getvalue())
 
 

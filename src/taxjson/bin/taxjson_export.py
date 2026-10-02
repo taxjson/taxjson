@@ -673,9 +673,13 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         # blend across taxable accounts: a denied loss's bump and the
         # blended cost are NOT in it, so it can call a position a gain
         # that is a tax loss (S037-24). Said in the file itself.
+        # distributions.map adjustments are booked in the base books
+        # only (amounts in the base currency), so neither cost here has
+        # them (audit A2-0226): said too.
         lines.append('base_cost_basis = "per-account, per-listing, before '
-                     'superficial-loss adjustments and the s.47 blend '
-                     '(the filing ACB is `taxjson list`)"')
+                     'superficial-loss adjustments, the s.47 blend and '
+                     'distributions.map adjustments (total_cost excludes '
+                     'those too; the filing ACB is `taxjson list`)"')
     lines.append("")
 
     held_stock = [s for s in agg

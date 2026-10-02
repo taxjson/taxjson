@@ -16,7 +16,7 @@ def _proj(rows, elections=None, sheltered=False):
     (root / "work" / "m_base.json").write_text(json.dumps(rows))
     (root / "inputs" / "m" / "manifest.json").write_text(
         json.dumps({"elections": elections or {}}))
-    cfg = {"settings": {"base_currency": "CAD"},
+    cfg = {"settings": {"base_currency": "CAD", "country": "canada"},
            "accounts": {"m": {"type": "sheltered" if sheltered
                               else "taxable"}}}
     return td, root, cfg

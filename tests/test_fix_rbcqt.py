@@ -456,7 +456,8 @@ class TestQtCorpActionChains(unittest.TestCase):
                                  price='0', gross='0', comm='0', net='0',
                                  act='Dividends'))
         self.assertEqual(len(ev), 1)
-        self.assertIn("INTERNAL code 'D056068'", err)
+        # Named as booked (A2-0966).
+        self.assertIn("INTERNAL code D056068.", err)
 
 
 
