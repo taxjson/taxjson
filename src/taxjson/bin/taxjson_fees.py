@@ -45,7 +45,8 @@ from pathlib import Path
 from taxjson.lib.report_model import fmt_money
 from taxjson.lib import cli_diag
 from taxjson.lib.cli_diag import guard_main, tax_year
-from taxjson.bin.taxjson_convert_currency import positive_rate
+from taxjson.bin.taxjson_convert_currency import (default_rate_for,
+                                                  positive_rate)
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.core import convert_currency
@@ -158,9 +159,11 @@ def aggregate(files, *, year, since, to_curr, history, default_rate, by_account,
         if not converting or norm_currency(curr) == norm_currency(to_curr) \
                 or not amount:
             return amount
-        rate = get_rate_for_date(curr, date, history, Decimal(str(default_rate)))
+        # The fallback of this direction (audit A2-0148).
+        _fb = default_rate_for(curr, to_curr, default_rate)
+        rate = get_rate_for_date(curr, date, history, _fb)
         return convert_currency(amount, curr, to_curr,
-                                {(curr, to_curr): rate}, default_rate)
+                                {(curr, to_curr): rate}, float(_fb))
 
     # Every parsed row first, then ONE dedup over all of them with the
     # books' own rule (taxjson_sort.plan_dedup): an id-only pass here
@@ -484,9 +487,10 @@ def main():
                         "Requires --rates.")
     p.add_argument("--rates", metavar="FILE",
                    help="Historical FX rates file (e.g. work/to_base.csv).")
-    p.add_argument("--default-rate", type=positive_rate, default=1.35,
+    p.add_argument("--default-rate", type=positive_rate, default=None,
                    help="FX fallback when a date/currency is missing "
-                        "(default 1.35); usage is reported, not silent.")
+                        "(default 1.35 for USD->CAD, its inverse for "
+                        "CAD->USD); usage is reported, not silent.")
     p.add_argument("--ticker-map", metavar="FILE",
                    help="The project's ticker.map: rows of a DELETE'd "
                         "symbol are left out, as the books leave them out.")

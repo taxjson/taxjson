@@ -8,7 +8,6 @@ import contextlib
 import io
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -51,12 +50,12 @@ def _project(td, country, files, *, accounts=("margin",), year=2025,
     return root
 
 
-def _gains_one(country, book, **req):
+def _gains_one(country, book, sheltered=(), **req):
     """One country's pipeline.run_gains on `book` (stderr captured)."""
     from taxjson.lib.pipeline import GainsRequest, run_gains
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
-        res = run_gains(list(book), [], [],
+        res = run_gains(list(book), list(sheltered), [],
                         req=GainsRequest(country=country, taxable=True,
                                          **dict(dict(year=2025), **req)))
     res["_stderr"] = err.getvalue()
@@ -627,6 +626,68 @@ class TestMergerCash(unittest.TestCase):
         self.assertAlmostEqual(g[0]["cost"], 8.0, places=2)
         self.assertEqual(g[0]["term"], "LONG_TERM")
         self.assertIn("oldest lot", _text("usa", "US-CORP-09"))
+
+
+# ------------------------------------------------------------ US wash
+class TestUsSameMomentReplacementOrder(unittest.TestCase):
+    """A2-0485: same-moment replacements go taxable first, then the
+    IRA, then by row order (accounts in taxjson.toml order) — never by
+    the account's label."""
+
+    def _book(self, first, second):
+        return [tx("BUYSELL", "2025-01-02", "XYZ.US", 100, 5000,
+                   account=first),
+                tx("BUYSELL", "2025-03-03", "XYZ.US", -100, 4000,
+                   account=first),
+                tx("BUYSELL", "2025-03-10", "XYZ.US", 100, 4000,
+                   account=first, time="11:00:00"),
+                tx("BUYSELL", "2025-03-10", "XYZ.US", 100, 4000,
+                   account=second, time="11:00:00")]
+
+    @staticmethod
+    def _cost(res):
+        return {i["account"]: round(i["total_cost"], 2)
+                for i in res["inventory"]}
+
+    @rule("US-WASH-20")
+    def test_row_order_not_label(self):
+        for first, second in (("z_first", "a_second"),
+                              ("a_first", "z_second")):
+            c = self._cost(_gains_one("usa", self._book(first, second)))
+            self.assertEqual((c[first], c[second]), (5000.0, 4000.0))
+
+    @rule("US-WASH-20")
+    def test_taxable_before_the_ira(self):
+        book = self._book("margin", "margin")[:3]
+        ira = [tx("BUYSELL", "2025-03-10", "XYZ.US", 100, 4000,
+                  account="ira", time="11:00:00")]
+        # Same moment as the taxable rebuy: the taxable lot takes it.
+        r = _gains_one("usa", book, sheltered=ira)
+        loss = [t for t in r["transactions"] if t.get("qty")][0]
+        self.assertAlmostEqual(loss["disallowed_amount"], 1000.0, places=2)
+        self.assertAlmostEqual(loss.get("permanently_disallowed") or 0.0,
+                               0.0, places=2)
+        self.assertIn("taxable accounts first", _text("usa", "US-WASH-20"))
+
+
+class TestUsStockDividendWithNothingHeld(unittest.TestCase):
+    """A2-1486: the $0-lot fallback is stated; it never washes a loss."""
+
+    @rule("US-STKDIV-03")
+    def test_zero_lot_is_warned_and_not_a_replacement(self):
+        from taxjson.lib.core import STOCK_DIVIDEND
+        r = _gains_one("usa", [
+            tx("BUYSELL", "2025-01-02", "XYZ.US", 100, 5000),
+            tx("BUYSELL", "2025-03-03", "XYZ.US", -100, 4000),
+            tx("BUYSELL", "2025-03-10", "XYZ.US", 5, 0,
+               type=STOCK_DIVIDEND)])
+        sale = [t for t in r["transactions"] if t.get("qty")][0]
+        self.assertAlmostEqual(sale["gain"], -1000.0, places=2)
+        self.assertAlmostEqual(sale["disallowed_amount"], 0.0, places=2)
+        self.assertEqual([(i["qty"], i["total_cost"])
+                          for i in r["inventory"]], [(5.0, 0.0)])
+        self.assertIn("warning: XYZ.US: stock dividend", r["_stderr"])
+        self.assertIn("$0 lot", _text("usa", "US-STKDIV-03"))
 
 
 if __name__ == "__main__":

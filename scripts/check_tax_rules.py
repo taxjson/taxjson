@@ -31,7 +31,10 @@ imports a test) and fails when:
      a COMMAND_COUNTRY command that is not a `taxjson` subcommand, a
      [settings] key the code reads that SETTING_COUNTRY does not list, or
      a CLI option whose help calls it "Canada only" / "US only" that is
-     in neither FLAG_COUNTRY nor FLAG_VALUE_COUNTRY.
+     in neither FLAG_COUNTRY nor FLAG_VALUE_COUNTRY, a source message
+     that refuses an option for one country ("--x ... is Canada-only",
+     "... does not apply with --country") for an option the tables do
+     not own, or a PLAN_COUNTRY plan with no valid owner.
 
 Usage: scripts/check_tax_rules.py [--summary]
 Exit 0 when clean; 1 with one line per problem.
@@ -208,6 +211,14 @@ def _taxjson_subcommands() -> Set[str]:
     return set(re.findall(r"""add_parser\(\s*["']([a-z0-9-]+)["']""", src))
 
 
+# A refusal message for one option, possibly over adjacent string
+# literals ("..." "..."): an ad-hoc gate the tables must own (A2-0719).
+_GATE_MSG_RE = re.compile(
+    r'(--[a-z][a-z0-9-]+)(?:[^\n"]|"\s*\n\s*[rf]?"){0,120}?'
+    r'(?:is (?:Canada|United States|US|USA)-only'
+    r'|does not apply (?:with|to) (?:--)?country)')
+
+
 def ownership_problems() -> List[str]:
     """Problems with lib/country's ownership tables (check 8)."""
     problems: List[str] = []
@@ -258,6 +269,20 @@ def ownership_problems() -> List[str]:
     for key in sorted(read - set(C.SETTING_COUNTRY)):
         problems.append(f"[settings] {key} is read by the code but is not "
                         f"in SETTING_COUNTRY (lib/country)")
+    for key, owner in C.PLAN_COUNTRY.items():
+        if owner not in valid:
+            problems.append(f"PLAN_COUNTRY[{key!r}]: owner {owner!r} is "
+                            f"not canada, usa or both")
+    for path in sorted((ROOT / "src" / "taxjson").rglob("*.py")):
+        if path.name == "country.py":
+            continue
+        for m in _GATE_MSG_RE.finditer(path.read_text(encoding="utf-8")):
+            opt = m.group(1)
+            if opt != "--country" and opt in options and opt not in flags:
+                problems.append(f"{path.relative_to(ROOT)}: refuses {opt} "
+                                f"for one country, but lib/country does "
+                                f"not own it (FLAG_COUNTRY / "
+                                f"FLAG_VALUE_COUNTRY)")
     return problems
 
 

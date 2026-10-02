@@ -628,9 +628,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Multi-year capital-loss carryforward/carryback ledger "
                     "over full-history taxjson books.")
-    parser.add_argument("files", nargs="+", type=Path, metavar="FILE",
+    parser.add_argument("files", nargs="*", type=Path, metavar="FILE",
                         help="TAXABLE <account>_base.json files (full "
-                             "history, base currency)")
+                             "history, base currency); a crypto-only "
+                             "project passes only --crypto books")
     parser.add_argument("--crypto", action="append", type=Path,
                         default=[], metavar="FILE",
                         help="Crypto base book(s). For USA these run "
@@ -745,7 +746,14 @@ def main(argv: Optional[List[str]] = None) -> int:
               , file=sys.stderr)
         return 2
 
-    for p in args.files + args.sheltered:
+    if not args.files and not args.crypto:
+        # A crypto-only project gives its books as --crypto only: fed
+        # positionally they lost the US no-wash pass (US-WASH-13; audit
+        # A2-0146, A2-0411, A2-0412).
+        print("taxjson-carryover: error: give at least one base book "
+              "(FILE or --crypto FILE)", file=sys.stderr)
+        return 2
+    for p in args.files + args.crypto + args.sheltered:
         if not p.exists():
             print(f"taxjson-carryover: no such file: {p}", file=sys.stderr)
             return 2
@@ -886,10 +894,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ValueError as exc:
         print(f"taxjson-carryover: {exc}", file=sys.stderr)
         return 2
-    if slip and country != 'canada':
-        print("taxjson-carryover: --slip-gains is Canada-only (T5 box 18)",
-              file=sys.stderr)
-        return 2
+    # --slip-gains in a US ledger is refused up front with the other
+    # one-country flags (FLAG_COUNTRY; refuse_foreign_flags).
     _zero = {'net': 0.0, 'st': 0.0, 'lt': 0.0, 'dispositions': 0}
     slip_by: Dict[int, float] = {}
     for y, v in slip:
