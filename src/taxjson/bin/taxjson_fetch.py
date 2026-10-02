@@ -201,6 +201,32 @@ def _qt_get(api_server: str, access_token: str, path: str,
                            f"{_masked_path(path.split('?')[0])}: {e}") from e
 
 
+def _eastern_dst(local: datetime) -> bool:
+    """True when an America/Toronto wall-clock time is in daylight time
+    (second Sunday of March 02:00 to first Sunday of November 02:00, the
+    rule since 2007) — the fallback when no tz database is installed."""
+    def _sunday(month: int, nth: int) -> datetime:
+        d = datetime(local.year, month, 1)
+        d += timedelta(days=(6 - d.weekday()) % 7 + 7 * (nth - 1))
+        return d.replace(hour=2)
+    return _sunday(3, 2) <= local < _sunday(11, 1)
+
+
+def _toronto_stamp(day: date, hms: str) -> str:
+    """ISO stamp of `hms` on `day` in America/Toronto local time, with
+    that moment's own UTC offset (-04:00 in summer, -05:00 in winter).
+    A fixed -05:00 asked from 01:00 EDT on a summer day, so a --from
+    window could miss its first day's midnight-stamped activities
+    (audit A2-0599)."""
+    local = datetime.fromisoformat(f"{day.isoformat()}T{hms}")
+    try:
+        from zoneinfo import ZoneInfo
+        return local.replace(tzinfo=ZoneInfo("America/Toronto")).isoformat()
+    except Exception:                       # no tz database installed
+        off = "-04:00" if _eastern_dst(local) else "-05:00"
+        return f"{local.isoformat()}{off}"
+
+
 def qt_activities(session: Dict[str, str], number: str,
                   start: date, end: date,
                   http_get: Callable[[str], bytes]) -> List[Dict[str, Any]]:
@@ -212,8 +238,8 @@ def qt_activities(session: Dict[str, str], number: str,
     while cur <= end:
         chunk_end = min(cur + timedelta(days=_QT_CHUNK_DAYS), end)
         qs = urllib.parse.urlencode({
-            "startTime": f"{cur.isoformat()}T00:00:00-05:00",
-            "endTime": f"{chunk_end.isoformat()}T23:59:59-05:00"})
+            "startTime": _toronto_stamp(cur, "00:00:00"),
+            "endTime": _toronto_stamp(chunk_end, "23:59:59")})
         doc = _qt_get(session["api_server"], session["access_token"],
                       f"/v1/accounts/{number}/activities?{qs}", http_get)
         # Boundary-day activities come back in BOTH adjacent chunks
@@ -259,14 +285,18 @@ def _money_cell(v: Any) -> Any:
 
 def qt_to_csv(activities: List[Dict[str, Any]], number: str) -> str:
     """Render API activities as a Questrade activity-export CSV — the
-    exact column set the existing parser reads. Rows sort by
-    transaction date so re-fetches are byte-stable."""
+    exact column set the existing parser reads. Rows sort by trade
+    date ONLY, a stable sort: rows of one day keep the API's order.
+    Questrade stamps every row at midnight, so that order is the only
+    record of a same-day sale before its rebuy (CA-DATE-14 /
+    US-DATE-13); sorting on (date, symbol, action) put every Buy ahead
+    of the Sell and moved gain into a later year (audit A2-0084). The
+    same download still renders the same bytes."""
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(_QT_COLUMNS)
     def _key(a):
-        return (str(a.get("tradeDate") or a.get("transactionDate") or ""),
-                str(a.get("symbol") or ""), str(a.get("action") or ""))
+        return str(a.get("tradeDate") or a.get("transactionDate") or "")[:10]
     for a in sorted(activities, key=_key):
         w.writerow([
             # tradeDate FIRST: the export's "Transaction Date" column

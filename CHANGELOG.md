@@ -22,6 +22,25 @@
   (A2-1037). A Corporate Actions `Ca` matches its original's currency
   and asset category too (a CAD leg undid a USD split, A2-0603).
 
+- **`taxjson fetch` (Questrade) keeps the API's order of one day's
+  rows.** The fetched file sorted each day's rows by symbol and action,
+  and every re-fetch merge sorted the whole file, so a same-day sale
+  listed before its rebuy was booked as rebuy-then-sale: the sale used
+  the averaged ACB and gain moved into a later year (CA-DATE-14 /
+  US-DATE-13). Rows now sort by trade date only, and the merge keeps
+  the download's order (audit A2-0084, A2-0598).
+- `taxjson fetch`: the overlap check and `--trim-overlap` read a UTF-16
+  or UTF-8-BOM Questrade export the way the parser does. A UTF-16
+  manual export showed no overlap, so it double-counted next to the
+  fetched file with no warning (audit A2-0256, A2-1040).
+- `taxjson fetch` (IBKR Flex): the guard that refuses a download which
+  would drop the tax year's activity takes the download's span from its
+  Statement Period (else its activity dates), not from any digits on any
+  row. An 8-decimal P/L such as -26.20190219 read as 2019-02-19 and
+  silenced the refusal (audit A2-0083).
+- `taxjson fetch` (Questrade): activity windows ask from local
+  (America/Toronto) midnight, -04:00 in summer, not a fixed -05:00 that
+  could miss the first day of a summer `--from` window (audit A2-0599).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

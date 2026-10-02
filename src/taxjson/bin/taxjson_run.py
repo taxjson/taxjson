@@ -12029,14 +12029,51 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
         raise ValueError("header mismatch between the existing fetch "
                          "file and the new download")
     ex_c, new_c = Counter(ex_rows[1:]), Counter(new_rows[1:])
-    merged_c = ex_c | new_c                    # per-row max count
     added = sum((new_c - ex_c).values())
+    # ORDER (audit A2-0598): rows of one moment keep the export's order
+    # (CA-DATE-14 / US-DATE-13) and Questrade stamps every row at
+    # midnight, so the row sequence is data. The new download is the
+    # API's own order for what it covers; an existing-only row (outside
+    # the window, a restated copy, an extra split fill) is slotted in
+    # after the row it followed in the existing file. Then a STABLE
+    # sort on the trade date keeps the file chronological (the parser
+    # reads a newest-first file bottom-up). Sorting the row tuples put
+    # every same-day Buy ahead of its Sell.
+    merged = list(new_rows[1:])
+    matched = [False] * len(merged)
+    anchor = -1
+    for row in ex_rows[1:]:
+        hit = next((i for i in range(anchor + 1, len(merged))
+                    if not matched[i] and merged[i] == row), None)
+        if hit is not None:
+            matched[hit] = True
+            anchor = hit
+            continue
+        earlier = next((i for i in range(0, anchor + 1)
+                        if not matched[i] and merged[i] == row), None)
+        if earlier is not None:          # same row, other place: a dup
+            matched[earlier] = True
+            continue
+        anchor += 1                      # existing-only: keep it
+        merged.insert(anchor, row)
+        matched.insert(anchor, True)
+    col = _qt_date_col(list(ex_rows[0]))
+
+    def _day(r):
+        try:
+            return datetime.strptime(r[col][:10], "%Y-%m-%d").strftime(
+                "%Y-%m-%d")
+        except (ValueError, IndexError):
+            return None
+    days = [_day(r) for r in merged]
+    if all(days):
+        merged = [r for _d, r in sorted(zip(days, merged),
+                                        key=lambda p: p[0])]
     buf = _io.StringIO()
     w = _csv.writer(buf, lineterminator="\n")
     w.writerow(ex_rows[0])
-    for row in sorted(merged_c):
-        for _ in range(merged_c[row]):
-            w.writerow(row)
+    for row in merged:
+        w.writerow(row)
     return buf.getvalue(), added
 
 
@@ -12115,6 +12152,7 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
     coexisting coverage double-counts the books."""
     hits: List[Tuple[Path, int]] = []
     import csv as _csv
+    import io as _io
     # input_files, not glob("*.csv"): `run` reads QT_MANUAL.CSV too, so
     # a case-sensitive glob let an overlapping upper-case export double
     # the books with no warning (S046-14).
@@ -12131,8 +12169,10 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
         try:
             if detect_broker(sib) != "questrade":
                 continue
-            with sib.open(encoding="utf-8", errors="replace") as f:
-                rows = list(_csv.reader(f))
+            # Decoded like detection and the parser (UTF-16, UTF-8 BOM):
+            # read as UTF-8 a UTF-16 export showed no rows, and the
+            # double-count warning was lost (audit A2-0256 / A2-1040).
+            rows = list(_csv.reader(_io.StringIO(_qt_sibling_text(sib))))
         except Exception:
             continue
         col = _qt_date_col(rows[0] if rows else [])
@@ -12141,6 +12181,14 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
         if n:
             hits.append((sib, n))
     return hits
+
+
+def _qt_sibling_text(path: Path) -> str:
+    """A Questrade CSV's text, decoded the way detection and the parser
+    read it (base.decode_broker_text: UTF-16 by its BOM, else UTF-8
+    with an optional BOM)."""
+    from taxjson.lib.brokerages.base import decode_broker_text
+    return decode_broker_text(path.read_bytes(), path.name)
 
 
 def _qt_date_col(header: List[str]) -> int:
@@ -12177,8 +12225,10 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
     import csv as _csv
     import io as _io
     from taxjson.bin import taxjson_fetch as F
-    with path.open(encoding="utf-8", errors="replace") as f:
-        rows = list(_csv.reader(f))
+    # Decoded like the parser (A2-1040): a UTF-16 export read as UTF-8
+    # matched no row. The trimmed copy is written as UTF-8 (the parser
+    # reads both); the original bytes stay in the .bak.
+    rows = list(_csv.reader(_io.StringIO(_qt_sibling_text(path))))
     for i, r in enumerate(rows, 1):
         if any("\n" in c or "\r" in c for c in r):
             # An unbalanced quote swallows the following lines into one
@@ -12212,34 +12262,93 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
     return removed
 
 
-_FLEX_DATE_RE = re.compile(r"(?<!\d)(20\d{2})-?(0[1-9]|1[0-2])-?"
-                           r"(0[1-9]|[12]\d|3[01])(?!\d)")
+# A cell that IS a date or date-time ("2025-03-05", "20250305",
+# "2025-03-05, 10:00:00", "20250305;100000"), never digits inside a
+# number: "-26.20190219" read as 2019-02-19 and widened the download's
+# span so the replace guard stayed silent (audit A2-0083).
+_FLEX_DATE_RE = re.compile(r"^\s*(20\d{2})-?(0[1-9]|1[0-2])-?"
+                           r"(0[1-9]|[12]\d|3[01])"
+                           r"(?:[,; T]\s*\d{1,2}:?\d{2}(?::?\d{2})?)?\s*$")
+# Sections whose rows are not activity (statement metadata, summaries,
+# performance figures): never dated from.
+_FLEX_SKIP_SECTIONS = ("Statement", "Account Information")
+# Activity sections whose dates bound what a download covers when its
+# Statement section names no Period.
+_FLEX_SPAN_SECTIONS = ("Trades", "Dividends", "Transfers")
+
+
+def _flex_rows(text: str):
+    """(section, date-cells) for each Data row of an IB section,Header/
+    Data CSV. With a section Header, only its date columns (a header
+    holding 'Date' — 'Date/Time', 'Date', 'Settle Date', ...) count;
+    without one, every cell that is a whole date counts."""
+    import csv as _csv
+    import io as _io
+    headers: Dict[str, List[str]] = {}
+    for row in _csv.reader(_io.StringIO(text)):
+        if len(row) < 3:
+            continue
+        sec, kind = row[0].lstrip("\ufeff").strip(), row[1].strip()
+        if kind == "Header":
+            headers[sec] = [h.strip() for h in row[2:]]
+            continue
+        if kind != "Data" or sec in _FLEX_SKIP_SECTIONS:
+            continue
+        cells = row[2:]
+        hdr = headers.get(sec)
+        if hdr:
+            cells = [c for h, c in zip(hdr, cells)
+                     if "date" in h.lower() and "ex date" not in h.lower()
+                     and "pay date" not in h.lower()]
+        out = []
+        for c in cells:
+            m = _FLEX_DATE_RE.match(c)
+            if m:
+                out.append(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+        yield sec, out
 
 
 def _flex_dates(text: str) -> List[str]:
-    """Sorted ISO dates found on an IB statement's data rows (the
-    Statement section — generation time, period — is skipped)."""
-    out = set()
-    for line in text.splitlines():
-        if line.lstrip('"').startswith("Statement"):
-            continue
-        for m in _FLEX_DATE_RE.finditer(line):
-            out.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
-    return sorted(out)
+    """Sorted ISO activity dates of an IB statement's data rows (the
+    Statement section — generation time, period — is skipped; with a
+    section Header only its date columns are read)."""
+    return sorted({d for _s, ds in _flex_rows(text) for d in ds})
+
+
+def _flex_span(text: str) -> Optional[Tuple[str, str]]:
+    """(first, last) ISO day a download covers: its Statement Period
+    when it names one, else the span of its Trades / Dividends /
+    Transfers dates (a late withholding-tax adjustment dated in an
+    earlier year does not stretch it). None when nothing is dated."""
+    import csv as _csv
+    import io as _io
+    from taxjson.lib.brokerages.ib_extractor import _ib_period
+    for row in _csv.reader(_io.StringIO(text)):
+        if (len(row) >= 4 and row[0].lstrip("\ufeff").strip() == "Statement"
+                and row[1].strip() == "Data"
+                and row[2].strip() == "Period"):
+            span = _ib_period(row[3])
+            if span:
+                return span[0].isoformat(), span[1].isoformat()
+    days = sorted({d for s, ds in _flex_rows(text)
+                   if s in _FLEX_SPAN_SECTIONS for d in ds})
+    if not days:
+        days = _flex_dates(text)
+    return (days[0], days[-1]) if days else None
 
 
 def _flex_lost_dates(existing: str, new: str, year: Any) -> List[str]:
     """Dates of `year` the existing ib_flex.csv covers but the new
-    download's date range does not: overwriting would delete those
-    rows. A Flex query set to 'Year to date' re-fetched in January
+    download's span (_flex_span) does not: overwriting would delete
+    those rows. A Flex query set to 'Year to date' re-fetched in January
     replaced a whole year of activity at exit 0 (S007-00)."""
     if not year or not existing:
         return []
     old = [d for d in _flex_dates(existing) if d[:4] == str(year)]
-    got = _flex_dates(new)
+    got = _flex_span(new)
     if not got:
         return old
-    return [d for d in old if not got[0] <= d <= got[-1]]
+    return [d for d in old if not got[0] <= d <= got[1]]
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -12493,7 +12602,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             _existing = (out.read_text(encoding="utf-8", errors="replace")
                          if out.exists() else "")
             _lost = _flex_lost_dates(_existing, text, _pyear)
-            _got = _flex_dates(text)
+            _got = _flex_span(text)
             _span = f"{_got[0]}..{_got[-1]}" if _got else "no dated rows"
             if _lost:
                 _new = out.with_name(out.name + ".new")
