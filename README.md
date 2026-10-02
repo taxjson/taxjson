@@ -978,7 +978,8 @@ not listing exchange — is what T1135 cares about, interlisted names can need a
 case-insensitively; an override follows the symbol through a ticker change,
 and one that matches nothing in the books is warned about; a COUNTRY that is
 neither an ISO 3166 alpha-3 code nor CA/CAN/CANADA/EXCLUDE is ignored with a
-did-you-mean warning):
+did-you-mean warning). A foreign listing whose rows carry a Canadian ISIN
+(IB stamps the issuer's country) is named in a warning until you map it:
 
 ```
 # t1135.map — SYMBOL COUNTRY (ISO-3 code, or CA/EXCLUDE for "not foreign")

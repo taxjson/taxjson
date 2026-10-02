@@ -820,7 +820,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "exceeds $100,000 at any time in the year."),
             Rule("CA-RPT-02",
                  "Country comes from the listing suffix (t1135.map "
-                 "overrides); crypto held on an exchange counts.",
+                 "overrides; a foreign listing whose rows carry a "
+                 "Canadian ISIN is named for a `SYMBOL CA` line, since a "
+                 "Canadian corporation's shares are not foreign "
+                 "property); crypto held on an exchange counts.",
                  cont=True),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
