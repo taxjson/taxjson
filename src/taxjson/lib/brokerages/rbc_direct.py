@@ -844,8 +844,14 @@ def _names_underlying(root: str, symbol: str) -> bool:
     from taxjson.lib.core import _root_matches_stock
     root = (root or '').strip().upper()
     stock = re.sub(r'\.(TO|US|V|CN|NE)$', '', (symbol or '').strip().upper())
-    return bool(root) and (root == stock
-                           or _root_matches_stock(root, stock))
+    if not root:
+        return False
+    if root == stock:
+        return True
+    # Only a listed CLASS share (RCI.B, BRK.B): Questrade's option rows
+    # carry 'AAPL.OPT'-shaped symbols, which must stay the option.
+    return (bool(re.fullmatch(r'[A-Z]+\.[A-Z]{1,2}', stock))
+            and _root_matches_stock(root, stock))
 
 
 # ------------------------------------------------------- account context

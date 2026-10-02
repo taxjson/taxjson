@@ -1,6 +1,6 @@
 """Re-audit 2 fixes for the RBC Direct and Questrade parsers (fix lists
 parsers-rbc and parsers-questrade). Every fixture is synthetic (fake
-account ids 55500001 / 55500002, made-up option codes)."""
+account ids 55500001 / 55500002, made-up option codes)."""  # pii-ok
 import contextlib
 import io
 import json
