@@ -4575,7 +4575,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                                   # the election only kept the books
                                   # consistent
             _mp = _manifest_path_for(inputs_dir / _name, cache, _name)
-            if not _mp.exists():
+            if not _mp.exists() and not _mp.is_symlink():
                 continue
             try:
                 _recs = list(Manifest.load(_mp).records.values())
@@ -4895,7 +4895,7 @@ def _manifest_path_for(acct_dir: Path, cache: Path, name: str) -> Path:
 def _print_elections(name: str, manifest_path: Path,
                      country: Optional[str] = None) -> int:
     from taxjson.lib.corp_actions import Manifest, election_keys
-    man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
+    man = Manifest.load(manifest_path)
     if not man.records:
         print(f"  {name}: no elections recorded.")
         return 0
@@ -5088,8 +5088,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         from taxjson.lib.corp_actions import Manifest
         for acct, adoc in sorted((doc.get("accounts") or {}).items()):
             mpath = _manifest_path_for(inputs_dir / acct, cache, acct)
-            man = (Manifest.load(mpath) if mpath.exists()
-                   else Manifest())
+            man = Manifest.load(mpath)
             for ev in adoc.get("pending", []):
                 head = f"{acct}: {ev['event_id']}  {ev.get('summary', '')}"
                 rec = man.get(ev.get("event_id", ""))
@@ -5130,7 +5129,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             doc: Dict[str, Any] = {}
             for name in accounts:
                 mp = _manifest_path_for(inputs_dir / name, cache, name)
-                if not mp.exists():
+                if not mp.exists() and not mp.is_symlink():
                     continue
                 try:
                     man = Manifest.load(mp)
@@ -5169,7 +5168,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
         # One account's SAVED elections — same shape as the
         # all-accounts listing (it printed the text listing before).
         doc_one: Dict[str, Any] = {}
-        if manifest_path.exists():
+        if manifest_path.exists() or manifest_path.is_symlink():
             try:
                 _man = Manifest.load(manifest_path)
                 doc_one[name] = {
@@ -5301,7 +5300,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                          f"hint(s) {', '.join(sorted(unknown))}"
                          + (f" (it takes: {', '.join(sorted(declared))})"
                             if declared else " (it takes none)"))
-        man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
+        man = Manifest.load(manifest_path)
         prior = man.get(event_id)
         # Best summary available: pending doc (the happy path — user
         # copied the id from `elect --pending`), else the prior
@@ -5365,7 +5364,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
                  "--pending` after a `run --no-input`).".format(name))
     manifest_backup = (manifest_path.read_bytes()
                        if manifest_path.exists() else None)
-    man = Manifest.load(manifest_path) if manifest_path.exists() else Manifest()
+    man = Manifest.load(manifest_path)
     # `is not None`: --event '' (e.g. an unset shell variable) must NOT
     # silently widen to ALL elections (REVIEW #34 wiped everything).
     if args.event is not None:
@@ -6445,7 +6444,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         entries, unpriced = CS.tt_entries(adoc)
         tt = Path(adoc["tt_file"])
         want = CS.render_tt(acct, entries, report["country"])
-        have = tt.read_text(encoding="utf-8") if tt.is_file() else None
+        have = CS.read_tt(tt)              # a BOM re-save (A2-1405)
         print()
         if unpriced:
             print(f"NOT BOOKED — no fair value for "
@@ -11090,9 +11089,10 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                       + (f" (recorded in {cl.STATE_FILE})." if changed
                          else "."))
     if args.reset:
-        _state = root / cl.STATE_FILE
-        existed = _state.exists()
-        _state.unlink(missing_ok=True)
+        try:
+            existed = cl.reset_state(root)
+        except cl.StateFileError as e:
+            sys.exit(f"taxjson checklist: {e}")
         recorded.append({"step": None, "mark": "reset", "changed": existed})
         if not args.json:
             print(f"taxjson checklist: {cl.STATE_FILE} removed." if existed
@@ -13176,15 +13176,13 @@ def cmd_handoff(args: argparse.Namespace) -> None:
                    f"`taxjson close-year` in the previous year's project, "
                    f"then set [settings] prior_year_record to its "
                    f"filed/<year>.json (or pass --prior).")
-    # A truncated, non-UTF-8, unreadable or wrong-shape record: one line
-    # naming it, exit 2 (re-audit A2-0162, A2-0473, A2-0475, A2-0476).
-    from taxjson.lib.json_input import InputFileError, read_json_doc
+    # A truncated, non-UTF-8, unreadable or wrong-shape record, or a field
+    # of the wrong type: one line naming it, exit 2 (re-audit A2-0162,
+    # A2-0473, A2-0475, A2-0476, A2-0803; a BOM is accepted, A2-0776).
     try:
-        record = read_json_doc(rp, list_key=None)
-    except InputFileError as e:
-        _die_input(f"{e} — restore the prior-year record (or re-close "
-                   f"that year with `taxjson close-year --force` in its "
-                   f"project).")
+        record = _handoff.load_record(rp)
+    except _handoff.RecordError as e:
+        _die_input(str(e))
     _rprob = _handoff.record_problem(record)
     if _rprob:
         _die_input(f"{rp}: not a usable close-year record: {_rprob} — "
@@ -14883,8 +14881,11 @@ def _fx_cash_doc(root: Path, cache: Path):
     if not found:
         sys.exit(f"taxjson fx-cash: no native transaction files in "
                  f"{cache} (run `taxjson run` first).")
-    fx = load_fx_history(cache / "to_base.csv", base)
-    ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
+    try:      # an unreadable rates file, a futures refusal (A2-1424/1434)
+        fx = load_fx_history(cache / "to_base.csv", base)
+        ledger = FX.build_ledger(txs, base, fx, int(year), country=country)
+    except (OSError, ValueError) as e:
+        sys.exit(f"taxjson fx-cash: error: {e}")
     verdict = FX.apply_jurisdiction(ledger["net_gain"], country)
     return ledger, verdict, base, int(year), country
 

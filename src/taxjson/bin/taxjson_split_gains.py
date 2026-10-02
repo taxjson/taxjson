@@ -254,9 +254,11 @@ def main(argv=None) -> int:
                          "blended account-less inventory rows)")
     args = ap.parse_args(argv)
 
-    from taxjson.lib.json_input import InputFileError, read_json_doc
+    # read_work_doc: rows of objects with numeric money fields — a text
+    # qty was a traceback further on (re-audit A2-0793).
+    from taxjson.lib.json_input import InputFileError, read_work_doc
     try:
-        combined = read_json_doc(args.combined_json)
+        combined = read_work_doc(args.combined_json)
     except InputFileError as e:
         cli_diag.error(PROG, f"could not read {e}")
         return 2
@@ -266,7 +268,7 @@ def main(argv=None) -> int:
         # an unreadable combined file is (audit S050-15: it emptied the
         # account's fee map and dropped its blended holdings, exit 0).
         try:
-            base_txs = read_json_doc(args.base).get("transactions", [])
+            base_txs = read_work_doc(args.base).get("transactions", [])
         except (InputFileError, AttributeError) as e:
             cli_diag.error(PROG, f"could not read --base {e}")
             return 2

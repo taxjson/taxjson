@@ -2624,14 +2624,26 @@ class Manifest:
 
     @classmethod
     def load(cls, path: Path) -> "Manifest":
-        if not path.exists():
+        path = Path(path)
+        if not path.exists() and not path.is_symlink():
             return cls({})
         try:
-            raw = path.read_text(encoding='utf-8').strip()
+            # utf-8-sig: a BOM from a Windows editor is dropped, as for
+            # taxjson.toml and the maps (re-audit A2-1449 / A2-0776).
+            raw = path.read_text(encoding='utf-8-sig').strip()
         except UnicodeDecodeError as exc:
             raise ManifestError(
                 f"manifest at {path} is not UTF-8 text (byte "
                 f"{exc.start}: {exc.reason}) — re-save it as UTF-8"
+            ) from None
+        except OSError as exc:
+            # A directory, no permission, a symlink loop or a dangling
+            # link: one line, never a traceback and never 'no elections'
+            # (re-audit A2-0160 / A2-0463 / A2-1402).
+            raise ManifestError(
+                f"manifest at {path} cannot be read "
+                f"({exc.strerror or exc}) — it holds this account's "
+                f"elections: restore it from git or a backup"
             ) from None
         if not raw:
             # Empty file behaves like a missing one — typical when a
@@ -2671,10 +2683,15 @@ class Manifest:
                     f"manifest at {path}: election {eid} must be a JSON "
                     f"object like {{\"election\": \"...\"}}; got "
                     f"{type(rec).__name__} {rec!r:.40}")
-            if not isinstance(rec.get('election', ''), str):
-                raise ManifestError(
-                    f"manifest at {path}: election {eid}: 'election' must "
-                    f"be a string; got {rec.get('election')!r:.40}")
+            for fld in ('election', 'summary', 'notes'):
+                # summary=7 was a TypeError in `taxjson spinoffs` (A2-0804).
+                val = rec.get(fld, '')
+                if fld != 'election' and val is None:
+                    val = ''
+                if not isinstance(val, str):
+                    raise ManifestError(
+                        f"manifest at {path}: election {eid}: '{fld}' "
+                        f"must be a string; got {rec.get(fld)!r:.40}")
             if not isinstance(rec.get('hints') or {}, dict):
                 raise ManifestError(
                     f"manifest at {path}: election {eid}: 'hints' must be "
@@ -2686,9 +2703,9 @@ class Manifest:
                                         f"{eid}: hint {prob}")
             records[eid] = ElectionRecord(
                 event_id=eid,
-                summary=rec.get('summary', ''),
+                summary=rec.get('summary') or '',
                 election=rec.get('election', ''),
-                notes=rec.get('notes', ''),
+                notes=rec.get('notes') or '',
                 hints=dict(rec.get('hints') or {}),
             )
         return cls(records)
@@ -2714,6 +2731,9 @@ class Manifest:
         # and on Windows (Python 3.3+).
         import os
         import tempfile
+        # A write failure (read-only folder, full disk) propagates as an
+        # OSError: the commands report it as one 'cannot write' line,
+        # exit 2 (re-audit A2-1418), and the old manifest is untouched.
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
             prefix=f".{path.name}.", suffix='.tmp', dir=str(path.parent),

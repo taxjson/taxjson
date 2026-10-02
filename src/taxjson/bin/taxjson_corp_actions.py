@@ -407,6 +407,12 @@ def main():
             print(f"taxjson-corp-actions: error: input CSV not found: {p}",
                   file=sys.stderr)
         raise SystemExit(2)
+    if args.ticker_map and not Path(args.ticker_map).exists():
+        # A named --ticker-map that does not exist is refused, not
+        # silently skipped (re-audit A2-1436).
+        print(f"taxjson-corp-actions: error: no such file: --ticker-map "
+              f"{args.ticker_map}", file=sys.stderr)
+        raise SystemExit(2)
 
     if args.manifest:
         manifest_path = Path(args.manifest)

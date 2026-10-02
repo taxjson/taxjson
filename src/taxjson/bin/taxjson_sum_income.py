@@ -46,10 +46,32 @@ def load_income_data(file_path: Path = None) -> List[Dict[str, Any]]:
 
     # taxjson_income outputs a dict with transactions list
     if isinstance(raw, dict) and "transactions" in raw:
-        return raw["transactions"]
+        rows = raw["transactions"]
     elif isinstance(raw, list):
-        return raw
-    return []
+        rows = raw
+    else:
+        return []
+    # The shared row funnel taxjson-gains reads the same book through:
+    # an impossible date, a NaN / inf amount or a text amount was summed
+    # at rc 0 (or a float() traceback) here while gains refused it in
+    # one line (A2-1448).
+    from taxjson.lib.core import coerce_transaction_row
+    where = str(file_path) if file_path is not None else "<stdin>"
+    if not isinstance(rows, list):
+        raise InputFileError(f'{where}: "transactions" must be a list')
+    for i, t in enumerate(rows):
+        if isinstance(t, dict):
+            # An absent (null) amount has its own refusal below
+            # ('no amount', S051-14); the funnel checks the rest.
+            t = {k: v for k, v in t.items()
+                 if not (k in _AMOUNT_KEYS and v is None)}
+        try:
+            coerce_transaction_row(t, i, where)
+        except (TypeError, ValueError) as e:
+            msg = str(e)
+            raise InputFileError(msg if where in msg
+                                 else f"{where}: {msg}") from None
+    return rows
 
 
 def get_base_ticker(symbol: str) -> str:

@@ -24,9 +24,11 @@ from typing import Any, Dict, Optional
 from taxjson.lib import cli_diag
 
 
-class InputFileError(ValueError):
+class InputFileError(cli_diag.InputContentError):
     """A named input file cannot be read or does not have the expected
-    shape. ``str(err)`` is a one-line message that names the file."""
+    shape. ``str(err)`` is a one-line message that names the file. A
+    ValueError (via InputContentError), so every guard_main-wrapped tool
+    reports it in one line with exit 2."""
 
 
 def read_json_doc(path, *, list_key: Optional[str] = "transactions",
@@ -47,7 +49,9 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
     except OSError as e:
         raise InputFileError(f"{p}: cannot read ({e.strerror or e})") from None
     try:
-        text = raw.decode("utf-8")
+        # A BOM is dropped: a hand-edited JSON file saved by Notepad is
+        # read like the TOML and text inputs (re-audit A2-0776).
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as e:
         raise InputFileError(f"{p}: not UTF-8 text ({e.reason} at byte "
                              f"{e.start})") from None

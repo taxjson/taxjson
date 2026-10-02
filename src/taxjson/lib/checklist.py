@@ -1931,14 +1931,18 @@ class StateFileError(ValueError):
 
 def load_state(root: Path) -> Dict[str, Any]:
     p = root / STATE_FILE
-    if not p.is_file():
+    if not p.exists() and not p.is_symlink():
         return {"overrides": {}}
     try:
-        doc = json.loads(p.read_text(encoding="utf-8"))
+        # A directory or a looping symlink is not "no marks": is_file()
+        # read it as absent and the marks were silently lost (A2-0789).
+        doc = json.loads(p.read_text(encoding="utf-8-sig"))   # A2-0776
     except (OSError, ValueError) as e:
         # S068-07: silently empty, then overwritten by the next --done.
+        why = (f"{e.strerror}" if isinstance(e, OSError) and e.strerror
+               else f"{e}")
         raise StateFileError(
-            f"{STATE_FILE} cannot be read ({e}) — fix it or restore it "
+            f"{STATE_FILE} cannot be read ({why}) — fix it or restore it "
             f"from git; nothing was written. `taxjson checklist --reset` "
             f"discards every mark.") from e
     if not isinstance(doc, dict) or not isinstance(
@@ -1946,17 +1950,62 @@ def load_state(root: Path) -> Dict[str, Any]:
         raise StateFileError(f"{STATE_FILE} is not a checklist state "
                              f"file (no overrides table) — fix it or "
                              f"`taxjson checklist --reset`.")
+    for sid, ov in doc["overrides"].items():
+        # A wrong-shape entry ("elections": "x") died later on ov.get
+        # in evaluate() with an AttributeError (A2-1393 / A2-1430).
+        if not isinstance(ov, dict) or not isinstance(
+                ov.get("status"), (str, type(None))) or not isinstance(
+                ov.get("note", ""), (str, type(None))):
+            raise StateFileError(
+                f"{STATE_FILE}: overrides entry {sid!r} is {ov!r}, not a "
+                f"{{\"status\": ..., \"note\": ...}} table — fix it, or "
+                f"`taxjson checklist --undo {sid}` / `--reset`.")
     return doc
 
 
 def save_state(root: Path, state: Dict[str, Any], year: int) -> None:
-    """Atomic: a reader never sees a half-written checklist.json."""
+    """Atomic: a reader never sees a half-written checklist.json. A file
+    that cannot be written (a directory, a read-only project, a full
+    disk) is a StateFileError line — the old file is kept and no .part
+    is left behind (A2-0768 / A2-1414)."""
     state["year"] = year
     path = root / STATE_FILE
+    text = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    if path.is_dir():
+        raise StateFileError(f"cannot write {STATE_FILE}: is a directory "
+                             f"— nothing was written")
     tmp = path.with_name(f"{path.name}.{os.getpid()}.part")
-    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n",
-                   encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:
+        raise StateFileError(f"cannot write {STATE_FILE}: "
+                             f"{e.strerror or e} — nothing was "
+                             f"written") from None
+    finally:
+        try:
+            if tmp.is_file():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def reset_state(root: Path) -> bool:
+    """`checklist --reset`: remove checklist.json. True when there was
+    one. A directory, or a project where the file cannot be removed, is
+    a StateFileError line rather than a traceback (A2-1414)."""
+    path = root / STATE_FILE
+    if not path.exists() and not path.is_symlink():
+        return False
+    if path.is_dir():
+        raise StateFileError(f"cannot remove {STATE_FILE}: is a directory "
+                             f"— remove it by hand")
+    try:
+        path.unlink()
+    except OSError as e:
+        raise StateFileError(f"cannot remove {STATE_FILE}: "
+                             f"{e.strerror or e}") from None
+    return True
 
 
 class _StateLock:

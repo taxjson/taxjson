@@ -1569,7 +1569,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not src.is_file():
             # A missing input is exit 2, never the `--check` finding
             # code 1 (re-audit A2-0164).
-            print(f"taxjson redact: {f}: not a file", file=sys.stderr); rc = 2; continue
+            print(f"taxjson redact: error: {f}: not a file", file=sys.stderr); rc = 2; continue
         if src.stem.endswith(".redacted"):
             print(f"taxjson redact: {f}: already a redacted copy — skipped", file=sys.stderr); continue
         try:

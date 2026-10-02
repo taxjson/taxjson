@@ -37,7 +37,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from taxjson.lib.cli_diag import warn
+from taxjson.lib.cli_diag import error, warn
 from taxjson.bin.taxjson_convert_currency import norm_currency
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.core import (is_option_symbol, parse_option_expiry,
@@ -107,6 +107,15 @@ def _inventory(doc: Dict[str, Any], p: Path) -> List[Dict[str, Any]]:
                                          for h in inv):
         from taxjson.lib.cli_diag import error
         error(PROG, f'{p}: "inventory" must be a list of JSON objects')
+        sys.exit(2)
+    # A text qty / total_cost is one line naming the file and row, like
+    # every other reader of a gains file (re-audit A2-0793).
+    from taxjson.lib.json_input import InputFileError, check_row_types
+    try:
+        check_row_types(inv, p, "inventory")
+    except InputFileError as e:
+        from taxjson.lib.cli_diag import error
+        error(PROG, str(e))
         sys.exit(2)
     return inv
 
@@ -673,6 +682,12 @@ def main(argv: Optional[List[str]] = None,
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Show per-tier price-chain diagnostics")
     args = p.parse_args(argv)
+    if args.ticker_map is not None and not Path(args.ticker_map).exists():
+        # A named input that does not exist is refused, not silently
+        # skipped (re-audit A2-1436).
+        from taxjson.lib.cli_diag import error as _error
+        _error(PROG, f"no such file: --ticker-map {args.ticker_map}")
+        return 2
 
     from taxjson.lib.country import is_usa as _country_is_usa
     from taxjson.lib.country import home_currency as _home_currency
@@ -803,7 +818,13 @@ def main(argv: Optional[List[str]] = None,
     # user's ETN.US loss by the full FX factor.
     base = args.base_currency.upper()
     rates_path = args.rates or (files[0].parent / "to_base.csv")
-    fx_history = load_fx_history(rates_path, base)
+    try:
+        fx_history = load_fx_history(rates_path, base)
+    except (OSError, ValueError) as e:
+        # An unreadable or damaged to_base.csv: one line, whether run
+        # as taxjson-harvest or `taxjson harvest` (re-audit A2-0790).
+        error(PROG, str(e))
+        return 2
     today_iso = date.today().isoformat()
     stale_warned: set = set()
 

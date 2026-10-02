@@ -633,8 +633,19 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
     if zone:
         from zoneinfo import ZoneInfo
         clock = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
-        local = clock.replace(tzinfo=ZoneInfo(_IB_CLOCK_TZ)).astimezone(
-            ZoneInfo(zone))
+        try:
+            local = clock.replace(tzinfo=ZoneInfo(_IB_CLOCK_TZ)).astimezone(
+                ZoneInfo(zone))
+        except Exception as e:      # ZoneInfoNotFoundError, no tz database
+            # An uncaught traceback where the platform has no tz database
+            # (Windows without `tzdata`, audit A2-1447). No DST-rule
+            # fallback for Sydney/Auckland: the exchange trade date would
+            # be guessed.
+            raise BrokerageParseError(
+                f"{symbol or cur} {date} {time}: the {cur} fill's exchange "
+                f"trade date needs the time zone {zone!r}, which this "
+                f"system's time-zone database does not have ({e}) — "
+                f"install it: pip install tzdata") from None
         ld, lt = local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S")
         if ld != date:
             return ld, lt, stamp
@@ -691,6 +702,43 @@ def _ib_income_ticker(description: str):
         if m:
             ticker = m.group(1)
     return ticker.replace(' ', '.'), isin
+
+
+_IB_INCOME_PHRASE_WORDS = frozenset((
+    'CASH', 'DIVIDEND', 'DIVIDENDS', 'PAYMENT', 'RETURN', 'WITHHOLDING',
+    'INTEREST', 'CHOICE', 'STOCK', 'TAX', 'PER', 'SHARE', 'USD', 'CAD',
+    'ORDINARY', 'SPECIAL', 'BONUS', 'CREDIT', 'DEBIT'))
+
+
+def _ib_income_ticker_strict(description: str, where: str,
+                             section: str):
+    """`_ib_income_ticker` for a row that is BOOKED: a Dividends or
+    Withholding Tax description with no leading `TICKER (ISIN)` token
+    is refused naming the file line. The fallback invented UNKNOWN.US or
+    a word of the text ('CASH.DIVIDEND...US') and a CAD-paid Canadian
+    eligible dividend was estimated as a foreign one (A2-0780). A
+    withholding row on credit interest (IB: 'Withholding @ 20% on Credit
+    Interest for MAY-2024') names no security: it is booked on CASH, the
+    symbol the Interest section books the interest itself on."""
+    if _IB_INCOME_TICKER_RE.search(description or ''):
+        return _ib_income_ticker(description)
+    # An older statement's 'QZNO Return of Capital USD 0.20 per Share':
+    # a leading upper-case ticker, then IB's mixed-case wording — kept
+    # as before (no ISIN: the issuer country stays unknown). A leading
+    # word of the income phrase itself ('CASH DIVIDEND ...') is not a
+    # ticker.
+    m = re.match(r'([A-Z][A-Z.\d\-]*)\s+(\S.*)$', description or '')
+    if (m and m.group(1) not in _IB_INCOME_PHRASE_WORDS
+            and re.search(r'[a-z]', m.group(2))):
+        return m.group(1), ''
+    if section == 'Withholding Tax' and 'interest' in (description
+                                                       or '').lower():
+        return 'CASH', ''
+    raise BrokerageParseError(
+        f"{where}: the Description {description!r} has no leading "
+        f"'TICKER (ISIN)' token, so the security this {section} row "
+        f"belongs to is unknown — restore the row from the original IB "
+        f"statement (or download it again)")
 
 
 def _ib_posted_dividends(rows) -> List[tuple]:
@@ -2789,7 +2837,8 @@ class IbBrokerage(BaseBrokerage):
                     self._cell(row, header_map, 'Amount'), field='Amount',
                     where=where)
 
-                ticker, isin = _ib_income_ticker(description)
+                ticker, isin = _ib_income_ticker_strict(description,
+                                                        where, section)
                 # Record (ticker, pay date) so the accrual diagnostic
                 # below can tell whether this dividend's cash has
                 # already been booked in this file.
@@ -3099,16 +3148,18 @@ class IbBrokerage(BaseBrokerage):
                 # from non-US dividends on the same security, so the
                 # foreign-tax-credit pairing broke for any non-US
                 # holding.
-                ticker, isin = _ib_income_ticker(description)
+                ticker, isin = _ib_income_ticker_strict(description,
+                                                        where, section)
 
-                ext = _isin_ext(isin, ticker, isin_fallback)
+                ext = (None if ticker == 'CASH'
+                       else _isin_ext(isin, ticker, isin_fallback))
 
                 transactions.append({
                     'action': 'TAX',
                     'date': date,
                     'time': '09:30:00',
                     'date_settle': date,
-                    'symbol': f"{ticker}.{ext}",
+                    'symbol': f"{ticker}.{ext}" if ext else ticker,
                     'quantity': 0.0,
                     'currency': currency,
                     'net_amount': amount,

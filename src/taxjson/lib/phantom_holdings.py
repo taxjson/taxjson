@@ -101,7 +101,12 @@ def _project_doc_near(path) -> Dict[str, Any]:
         except ImportError:
             return {}
     from taxjson.lib.cli_diag import InputReadError, read_text_utf8
-    p = Path(path).resolve()
+    try:
+        p = Path(path).resolve()
+    except (OSError, RuntimeError):
+        # A symlink loop: the reader of the file itself reports it in
+        # one line (re-audit A2-0791).
+        return {}
     for d in (p.parent, p.parent.parent):
         cfg = d / 'taxjson.toml'
         if cfg.is_file():

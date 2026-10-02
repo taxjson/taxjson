@@ -215,6 +215,20 @@ class WebullBrokerage(BaseBrokerage):
                     skipped_actions.setdefault(action_raw, []).append(
                         (where, cell(row, 'symbol').lstrip('@'),
                          cell(row, 'quantity'), cell(row, 'proceeds')))
+                elif any(cell(row, k) for k in ('date', 'quantity',
+                                                'price', 'proceeds')):
+                    # A blank Action cell on a row that carries a date,
+                    # quantity, price or proceeds is a damaged trade
+                    # row, not a continuation row: the sale vanished at
+                    # rc 0 (audit A2-0788; the blank-Date twin R1-97).
+                    raise BrokerageParseError(
+                        f"{where}: a row with a blank Action Code carries "
+                        f"trade cells (date {cell(row, 'date') or '-'}, "
+                        f"quantity {cell(row, 'quantity') or '-'}, "
+                        f"proceeds {cell(row, 'proceeds') or '-'}) — "
+                        f"refusing to drop the trade or guess BUY/SELL. "
+                        f"Restore the Action Code from the original "
+                        f"export.")
                 continue
             if not date_raw:
                 # A dated trade row with its Date cut off was reported as

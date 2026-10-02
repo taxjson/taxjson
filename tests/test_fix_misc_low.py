@@ -161,7 +161,8 @@ class TestLintCrosslistings(unittest.TestCase):
             _write_json(t, {"transactions": [_row("ZZQ.TO", 1, "2025-01-02")]})
             r = _run(self.MOD, "--taxable", str(t), "--map",
                      str(Path(d) / "missing.map"))
-            self.assertEqual(r.returncode, 1)
+            # Exit 2: an unreadable input, not a lint finding (A2-1435).
+            self.assertEqual(r.returncode, 2)
             self.assertIn("cannot read map", r.stderr)
             self.assertNotIn("Clean", r.stdout)
 

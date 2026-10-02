@@ -35,7 +35,6 @@ option year boundary (premiums are taxed at the close, §1234).
 """
 from __future__ import annotations
 
-import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -59,29 +58,22 @@ def _d(s: Optional[str]) -> Optional[date]:
         return None
 
 
-def _read(path: Path) -> Any:
-    """A work file's JSON; ValueError naming the file when it exists but
-    cannot be read — a truncated book used to print "None." for every
-    section at exit 0 (audit A2-1199)."""
+def _work_doc(path: Path) -> Dict[str, Any]:
+    """A work/ document through the shared reader (json_input.read_work_doc:
+    an object or a bare row list, row lists of objects, typed fields) —
+    `transactions: 5` or a row that is a string was a traceback here
+    (re-audit A2-0794 / A2-1408). ValueError naming the file."""
+    from taxjson.lib.json_input import InputFileError, read_work_doc
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise ValueError(f"work/{path.name} cannot be read "
-                         f"({str(e)[:120]}) — re-run `taxjson run`") from None
+        return read_work_doc(path)
+    except InputFileError as e:
+        raise ValueError(f"{e} — re-run `taxjson run`") from None
 
 
 def _rows(path: Path) -> List[Dict[str, Any]]:
-    doc = _read(path)
-    rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
-    if not isinstance(rows, list):
-        raise ValueError(f"work/{path.name} has no transactions list — "
-                         f"re-run `taxjson run`")
-    rows = [r for r in rows if isinstance(r, dict)]
     # The shared row funnel (A2-0330): a wrong-typed date or quantity
     # is a one-line error naming the file, not a traceback later on.
-    from taxjson.lib.json_input import check_row_types
-    check_row_types(rows, path)
-    return rows
+    return list(_work_doc(path).get("transactions") or [])
 
 
 def _is_future(sym: str) -> bool:
@@ -217,15 +209,8 @@ class Book:
         self.inventory: List[Dict[str, Any]] = []
         resolved = resolve_gains_files(self.cache, None) or {}
         for acct, f in resolved.items():
-            doc = _read(Path(f))
-            if not isinstance(doc, dict):
-                raise ValueError(f"work/{Path(f).name} is not a gains "
-                                 f"document — re-run `taxjson run`")
-            from taxjson.lib.json_input import check_row_types
-            for _k in ("transactions", "inventory"):
-                if isinstance(doc.get(_k), list):
-                    check_row_types(doc[_k], f, _k)
-            for t in doc.get("transactions", []):
+            doc = _work_doc(Path(f))
+            for t in doc.get("transactions") or []:
                 if t.get("gain") is None or t.get("action"):
                     continue
                 t = dict(t)
