@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **T1135 cost walk follows the engine.** A return of capital on a
+  sold-out position no longer lowers the next purchase's cost, and one
+  beyond the ACB leaves the cost nil (CA-ACB-07), so the maximum cost —
+  and the filing verdict — match the books (re-audit A2-0034, A2-0115,
+  A2-0321). An exercised or assigned option whose root drops the share
+  class (BRKB for BRK.B, RCI for RCI.B) folds its premium into the
+  shares, through the engine's own resolver (A2-0328, A2-1106). A long
+  option expiring on Dec 31 is named as still held (A2-1121); a s.260
+  payment in lieu counts in the income column (A2-0661); a foreign
+  listing whose rows carry a Canadian ISIN is named for a `SYMBOL CA`
+  t1135.map line (A2-0332). A non-CAD `--base-currency` is refused
+  instead of testing USD amounts against a "100,000 USD" threshold
+  (A2-0660).
+
 - **`taxjson audit` / `taxjson-explain` recompute the books the way the
   run does.** They now apply the Canadian trust ROC record date
   (CA-INC-DATE-ROC-TRUST, with the project's corporate_distributions),

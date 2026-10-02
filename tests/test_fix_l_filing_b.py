@@ -334,14 +334,18 @@ class TestT1135Inputs(unittest.TestCase):
         self.assertEqual(rc, 2, out + err)
         self.assertIn("USD", err)
 
-    def test_non_cad_base_warns(self):
+    def test_non_cad_base_is_refused(self):
+        # Re-audit A2-0660: a warning then 'below the 100,000.00 USD
+        # threshold' at rc 0 was the S051-15 verdict again; the T1135
+        # test is a CAD test, so a non-CAD base is refused.
         with tempfile.TemporaryDirectory() as td:
             b = _base(td, [_tx(qty=900, net=-90000.0, symbol="AAA.US",
                                currency="USD")])
             rc, out, err = _run(T1.main, [str(b), "--year", "2025",
                                           "--base-currency", "USD"])
-        self.assertEqual(rc, 0, out + err)
-        self.assertIn("thresholds are in CAD", err)
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn("in CAD", err)
+        self.assertNotIn("no T1135 required", out)
 
     def test_threshold_flags_are_validated(self):
         with tempfile.TemporaryDirectory() as td:
