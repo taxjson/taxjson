@@ -96,8 +96,13 @@ class TestPhantomLossNeverDenied(unittest.TestCase):
 
 
 class TestNothingButTheIdenticalContractReplacesAnOption(unittest.TestCase):
-    """CA-SL-06 (mutants SL06-shares-replace-option, SL06-series): a
-    long call's loss is replaced only by the identical contract."""
+    """CA-SL-06: a long call's loss is replaced only by the identical
+    contract. The audit's mutants (SL06-shares-replace-option: share buys
+    admitted as candidates for an option loss; SL06-series: the call scan
+    run for an option loss) are equivalent on the current engine — the
+    still-held walk counts the loss contract's own class only, and the
+    call scan compares the call's underlying with that class — so these
+    tests pin the behaviour itself."""
 
     CALL = "ZZQ260116C00050000.US"
 
@@ -175,9 +180,11 @@ class TestUsRocExcessTerm(unittest.TestCase):
 
 
 class TestUsTrustRocKeepsThePayDate(unittest.TestCase):
-    """US-INC-DATE-ROC (mutant USINCDATE-roc): a Canadian trust's return
-    of capital with a printed record date lowers US basis on its PAY
-    date (the record-date rule is Canada's, CA-INC-DATE-ROC-TRUST)."""
+    """US-INC-DATE-ROC: a Canadian trust's return of capital with a
+    printed record date lowers US basis on its PAY date (the record-date
+    rule is Canada's, CA-INC-DATE-ROC-TRUST). The audit's mutant
+    (USINCDATE-roc: roc_record_date's country gate removed) is
+    equivalent: is_canadian_trust is Canada-only too."""
 
     @rule("US-INC-DATE-ROC")
     def test_record_date_is_not_used(self):

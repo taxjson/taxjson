@@ -44,6 +44,16 @@ def _run(engine, txs, **kw):
     return res, err.getvalue()
 
 
+def _assign_orders(rows):
+    """`rows` as given and with its two ASSIGN rows swapped."""
+    lines = [l for l in rows.strip().splitlines() if l.strip()]
+    idx = [i for i, l in enumerate(lines) if l.split()[0] == 'ASSIGN']
+    assert len(idx) == 2, idx
+    swapped = list(lines)
+    swapped[idx[0]], swapped[idx[1]] = lines[idx[1]], lines[idx[0]]
+    return ["\n".join(lines), "\n".join(swapped)]
+
+
 def _rows(result, symbol):
     return [r for r in result['transactions'] if r['symbol'] == symbol]
 
@@ -99,13 +109,16 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
             BUYSELL 2025-12-19 16:20:00 QRS.TO -200 CAD 44 8800
             BUYSELL 2026-01-06 10:00:00 QRS.TO -500 CAD 50 25000
         """
-        res, _ = _run(CanadaTaxRules(), _tt(rows))
-        sale = [r for r in _rows(res, 'QRS.TO')
-                if r['date'] == '2025-12-19'][0]
-        self.assertAlmostEqual(sale['proceeds'], 8539.0, places=2)
-        yrs = _by_year(res)
-        self.assertAlmostEqual(yrs['2025'], 355.86, places=2)
-        self.assertAlmostEqual(yrs['2026'], 4542.14, places=2)
+        # Both ASSIGN row orders (re-audit A2-0484): with one order only,
+        # the test also passed with the direction filter removed.
+        for order in _assign_orders(rows):
+            res, _ = _run(CanadaTaxRules(), _tt(order))
+            sale = [r for r in _rows(res, 'QRS.TO')
+                    if r['date'] == '2025-12-19'][0]
+            self.assertAlmostEqual(sale['proceeds'], 8539.0, places=2)
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2025'], 355.86, places=2)
+            self.assertAlmostEqual(yrs['2026'], 4542.14, places=2)
 
     def test_us_put_spread(self):
         # S070-20: 2025 = 539 LT, 2026 = 3000 LT + 1359 ST.
@@ -119,10 +132,43 @@ class TestAssignmentPremiumPairing(unittest.TestCase):
             BUYSELL 2025-12-19 16:20:00 QRS.US -200 USD 44 8800
             BUYSELL 2026-01-06 10:00:00 QRS.US -500 USD 50 25000
         """
-        res, _ = _run(USATaxRules(), _tt(rows))
-        yrs = _by_year(res)
-        self.assertAlmostEqual(yrs['2025'], 539.0, places=2)
-        self.assertAlmostEqual(yrs['2026'], 4359.0, places=2)
+        for order in _assign_orders(rows):          # A2-0484
+            res, _ = _run(USATaxRules(), _tt(order))
+            yrs = _by_year(res)
+            self.assertAlmostEqual(yrs['2025'], 539.0, places=2)
+            self.assertAlmostEqual(yrs['2026'], 4359.0, places=2)
+
+    # Stock legs that cannot be paired by identity (off-strike, partial
+    # deliveries): the premium goes by DIRECTION — the put's to the
+    # purchase, the call's to the sale — whatever the ASSIGN row order
+    # (re-audit A2-0484: the put-spread books above are paired by strike
+    # first, so the direction filter needed its own case).
+    UNPAIRED_LEGS = """
+        BUYSELL 2024-06-03 10:00:00 QZX.US 300 USD 50 15000
+        BUYSELL 2025-11-03 10:00:00 QZX251219P00061000.US -2 USD 3 600
+        BUYSELL 2025-11-03 10:00:00 QZX251219C00060000.US -2 USD 2 400
+        ASSIGN 2025-12-19 16:20:00 QZX251219C00060000.US 2 USD 0 0
+        ASSIGN 2025-12-19 16:20:00 QZX251219P00061000.US 2 USD 0 0
+        BUYSELL 2025-12-19 16:21:00 QZX.US 150 USD 62 9300
+        BUYSELL 2025-12-19 16:22:00 QZX.US -150 USD 59 8850
+        BUYSELL 2026-02-02 10:00:00 QZX.US -300 USD 60 18000
+    """
+
+    def test_unpaired_legs_follow_direction_either_order(self):
+        for engine, y25, y26 in ((CanadaTaxRules(), 1350.0, 2200.0),
+                                 (USATaxRules(), 1750.0, 1800.0)):
+            for order in _assign_orders(self.UNPAIRED_LEGS):
+                with self.subTest(engine=type(engine).__name__,
+                                  order=order.splitlines()[3]):
+                    res, _ = _run(engine, _tt(order))
+                    sale = [r for r in _rows(res, 'QZX.US')
+                            if r['date'] == '2025-12-19'][0]
+                    # 8850 + the call premium 400.
+                    self.assertAlmostEqual(sale['proceeds'], 9250.0,
+                                           places=2)
+                    yrs = _by_year(res)
+                    self.assertAlmostEqual(yrs['2025'], y25, places=2)
+                    self.assertAlmostEqual(yrs['2026'], y26, places=2)
 
     SPLIT_LEGS = """
         BUYSELL 2026-01-05 10:00:00 ABC.TO 100 CAD 50 5000
