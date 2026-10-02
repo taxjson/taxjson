@@ -212,6 +212,19 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     except CountryError as e:
         return [str(e)]
     out: List[str] = []
+    # year: the one check every reader shares (the web UI accepted 1850,
+    # 2024.0, true or "2024" that every CLI command refuses; A2-1373).
+    # Same plausible range as `taxjson init` and --year (cli_diag).
+    year = settings.get("year")
+    if year is not None:
+        from datetime import date as _date
+        _hi = _date.today().year + 1
+        if isinstance(year, bool) or not isinstance(year, int):
+            out.append(f"[settings] year must be an integer tax year, "
+                       f"got {year!r}")
+        elif not 1900 <= year <= _hi:
+            out.append(f"[settings] year = {year} is not a plausible tax "
+                       f"year (expected 1900..{_hi})")
     tax_date = settings.get("tax_date")
     if tax_date is not None and tax_date not in TAX_DATES:
         out.append(f"[settings] tax_date must be settle|trade, "

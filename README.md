@@ -918,7 +918,8 @@ taxjson wash-sales --explain            # all accounts
 ```
 
 (For tracing an arbitrary non-wash disposition, the standalone `taxjson-explain
---symbol XYZ work/<account>_base.json` remains available.)
+--country canada --symbol XYZ work/<account>_base.json` remains available;
+`--country usa` in a US project.)
 
 **Options as replacement property** — a call option is "a right to
 acquire" the shares, which ITA s.54 (closing words, para (i)) deems
@@ -1596,7 +1597,8 @@ via `--incomplete-history` — editing the file re-runs gains. Entries are keyed
 by account name: after renaming an account in `taxjson.toml`, update the
 `"account"` of its entries too (`taxjson run` stops and names any entry whose
 account is not in `[accounts]`). In the manual
-pipeline, pass it yourself: `taxjson-gains --incomplete-history phantoms.json …`.
+pipeline, pass it yourself: `taxjson-gains --country canada --incomplete-history phantoms.json …`
+(`--country usa` in a US project).
 
 ## Quickstart (manual pipeline)
 

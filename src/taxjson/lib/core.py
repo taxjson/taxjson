@@ -4283,8 +4283,9 @@ class CanadaTaxRules(TaxRules):
         # knows the result may be inconsistent.
         if not solver_converged:
             print(
-                f"warning: CRA wash-sale solver did not converge within "
-                f"{solver_iterations_used} iterations — the wash-sale list "
+                f"warning: the superficial-loss solver did not converge "
+                f"within {solver_iterations_used} iterations — the "
+                f"superficial-loss list "
                 f"may be incomplete and ACB pools may be inconsistent. "
                 f"Check for unusual same-symbol activity in your input.",
                 file=sys.stderr,

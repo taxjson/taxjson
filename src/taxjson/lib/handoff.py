@@ -866,6 +866,13 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
         "boundary": [],
         "partial": [], "notes": []}
     issues["timing"] = _timing_issues(cache, cfg, record)
+    from taxjson.lib.country import CountryError, settings_country
+    try:
+        _usa = settings_country(settings) == "usa"
+    except CountryError:
+        _usa = False
+    _loss_words = ("wash-sale losses (§1091(d))" if _usa
+                   else "superficial losses")
     # A record closed on or before Dec 31 of its year (close-year
     # --force during the year) is a partial-year snapshot, not the
     # year-end: its positions miss the rest of that year's trades, and
@@ -944,8 +951,10 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                          f"{ry} books, {n['acb']:,.2f} here "
                          f"({da:+,.2f})"]
                 if p.get("deferred"):
+                    # §1091(d) in a US project, never Canada's term
+                    # (A2-1297).
                     parts.append(f"the {ry} books carry {p['deferred']:,.2f}"
-                                 f" of deferred superficial losses in it")
+                                 f" of deferred {_loss_words} in it")
                 if filed_diff:
                     parts.append(f"the {ry} return reported {filed_diff:+,.2f}"
                                  f" of gain on this security differently "
