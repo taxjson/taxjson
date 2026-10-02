@@ -61,7 +61,12 @@ SYMBOL_OVERRIDES = {
 # no network. A stablecoin staking reward (Kraken `earn/reward` in USDC)
 # used to reach this filler folded to the symbol `USD`, which the
 # phantom-cash guard below refuses to price, so the income booked at $0.
-_STABLE_ONE_TO_ONE = frozenset({'USDC', 'USDT', 'DAI'})
+# All five USD stablecoins (re-audit A2-1000 / A2-0593: PYUSD and GUSD
+# were priced from Yahoo here while crypto-sends valued them at par;
+# tax-logic US-CRYPTO-02). In a Canada project the parsers fold them
+# to USD before this filler sees them.
+from taxjson.lib.brokerages._crypto_common import (  # noqa: E402
+    USD_STABLECOINS as _STABLE_ONE_TO_ONE)
 
 
 def load_symbol_overrides(dirs):

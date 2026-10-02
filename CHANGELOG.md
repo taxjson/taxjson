@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- fill-crypto values PYUSD and GUSD at their 1.00 USD par like USDC
+  (a US Coinbase or Kraken PYUSD reward went to Yahoo, and an offline
+  run stopped); `run --fast` re-prices after a `work/crypto_ticker.map`
+  change, which fill-crypto reads (re-audit A2-1000, A2-0593, A2-0585).
+
 - **Crypto sends: pairing, decisions and prices (re-audit 2).** The
   send/arrival pairing is a minimum-loss assignment, not first come
   first served: a send no longer takes another send's arrival and books

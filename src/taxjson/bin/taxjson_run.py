@@ -2342,13 +2342,20 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # Its state (content, or absence) is a rebuild dep through a
         # stamp that changes only when the map does, so `run --fast`
         # re-prices after the map is added, edited, or deleted.
-        _cmap = inputs_dir.parent / "crypto_ticker.map"
-        try:
-            _cstate = ("sha256:" + hashlib.sha256(
-                _cmap.read_bytes()).hexdigest()) if _cmap.is_file() \
-                else "absent"
-        except OSError:
-            _cstate = "unreadable"
+        # fill-crypto also reads the map in its input file's folder
+        # (work/), later wins: that one is part of the stamp too
+        # (re-audit A2-0585).
+        _cparts = []
+        for _cmap in (inputs_dir.parent / "crypto_ticker.map",
+                      mapped.parent / "crypto_ticker.map"):
+            try:
+                _cparts.append(("sha256:" + hashlib.sha256(
+                    _cmap.read_bytes()).hexdigest()) if _cmap.is_file()
+                    else "absent")
+            except OSError:
+                _cparts.append("unreadable")
+        _cstate = (_cparts[0] if _cparts[1] == "absent"
+                   else " ".join(_cparts))
         _cstamp = cache / f"{name}_crypto_ticker_map.state"
         if (not _cstamp.exists()
                 or _cstamp.read_text(encoding="utf-8").strip() != _cstate):
