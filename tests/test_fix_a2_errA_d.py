@@ -462,5 +462,34 @@ class TestWebullBlankAction(unittest.TestCase):
         self.assertEqual(len(wb_parse(WB, encoding="utf-16")), 1)
 
 
+class TestGenericSidecar(unittest.TestCase):
+    """A2-0801 (already fixed by A2-1081; pinned), A2-1452."""
+
+    CSV = ("Date,Type,Ticker,Qty,Price,Amount,Fee,Currency\n"
+           "2024-11-04,BUY,XEI,50,20.00,-1009.95,9.95,CAD\n")
+
+    def test_non_string_date_format(self):
+        from test_fix_a2_generic import _parse, _toml
+        for bad in ("7", "[1]", "{a=1}", "true"):
+            for key in ("date", "settle"):
+                with self.assertRaisesRegex(
+                        ValueError, rf"\[formats\]\.{key} must be a "
+                                    r"quoted string"):
+                    _parse(self.CSV, _toml(extra=f"[formats]\n{key} = "
+                                                 f"{bad}\n"))
+
+    def test_non_utf8_mapping_named(self):
+        from test_fix_a2_generic import _toml
+        from taxjson.lib.brokerages.generic import GenericBrokerage
+        with tempfile.TemporaryDirectory() as td:
+            c = Path(td) / "generic_ws.csv"
+            c.write_text(self.CSV)
+            c.with_name(c.name + ".toml").write_bytes(
+                _toml().encode() + b"# \xff\xfe\n")
+            with self.assertRaisesRegex(ValueError,
+                                        r"generic_ws\.csv\.toml: not UTF-8"):
+                GenericBrokerage().parse_file(c)
+
+
 if __name__ == "__main__":
     unittest.main()

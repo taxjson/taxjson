@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Generic importer: a mapping .toml that is not UTF-8 is reported against
+  the .toml, not as the CSV being unreadable (A2-1452).
 - Webull parser: a row whose Action Code is blank but that carries a
   date, quantity, price or proceeds is refused naming the file line; the
   trade was dropped at rc 0 (A2-0788).

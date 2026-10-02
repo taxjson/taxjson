@@ -264,6 +264,13 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     except OSError as e:
         raise ValueError(f"generic importer: cannot read the mapping "
                          f"{path.name}: {e.strerror or e}")
+    except UnicodeDecodeError as e:
+        # It was reported against the CSV, at an offset in the .toml
+        # (A2-1452).
+        raise ValueError(
+            f"generic importer: {path.name}: not UTF-8 text (byte "
+            f"0x{e.object[e.start]:02x} at offset {e.start}) — save the "
+            f"mapping as UTF-8")
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"generic importer: {path.name}: bad TOML: {e}")
     for sec, val in mapping.items():
