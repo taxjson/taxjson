@@ -1150,7 +1150,13 @@ def d_handoff(ctx: Ctx) -> Result:
         parts = []
         for k, label in (("positions", "opening position(s) differ"),
                          ("missed", "trade(s) settling in January missing"),
-                         ("double", "sale(s) reported in both years")):
+                         ("double", "sale(s) reported in both years"),
+                         ("timing", "written option(s) on another premium "
+                                    "timing than the closed year"),
+                         ("boundary", "row(s) on different sides of "
+                                      "Dec 31 in the two projects"),
+                         ("partial", "the closed year's record is a "
+                                    "partial-year snapshot")):
             if doc.get(k):
                 parts.append(f"{len(doc[k])} {label}")
         return Result("handoff", "attention",

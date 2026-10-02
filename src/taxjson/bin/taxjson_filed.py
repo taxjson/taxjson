@@ -455,6 +455,13 @@ def recompute_year(cache: Path, account: str, year: int,
     return aggregates_from_gains(doc, crypto=crypto, year=int(year))
 
 
+# The per-account figures a lock records (any one makes the entry
+# comparable; a pre-upgrade lock may lack the later ones).
+_LOCKED_KEYS = ("realized", "disallowed", "dispositions", "income",
+                "dividend", "pil", "proceeds", "st_gain", "lt_gain",
+                "tainted", "form_lines")
+
+
 def diff_snapshot(snapshot: Dict[str, Any],
                   recomputed: Dict[str, Optional[Dict[str, Any]]],
                   unconfigured: Optional[set] = None
@@ -497,6 +504,21 @@ def diff_snapshot(snapshot: Dict[str, Any],
                          f"recompute (missing book — account renamed "
                          f"or removed?)")
             continue
+        # An entry that records NONE of the locked totals compared
+        # nothing, and a form_lines that is not a table compared no
+        # line: both said "OK (matches)" over real drift (A2-0347,
+        # A2-0668). A damaged lock is reported, never a match.
+        if not any(k in filed for k in _LOCKED_KEYS):
+            raise ValueError(
+                f"accounts.{acct} records none of the locked totals "
+                f"({', '.join(_LOCKED_KEYS[:3])}, ...) — the lock is "
+                f"damaged")
+        if "form_lines" in filed and not isinstance(
+                filed.get("form_lines"), dict):
+            raise ValueError(
+                f"accounts.{acct}.form_lines is "
+                f"{type(filed.get('form_lines')).__name__}, not a table "
+                f"of line amounts — the lock is damaged")
         for key in ("realized", "disallowed", "income", "dividend",
                     "pil", "proceeds", "st_gain", "lt_gain"):
             if key not in filed or key not in cur:
@@ -526,6 +548,95 @@ def diff_snapshot(snapshot: Dict[str, Any],
                 lines.append(f"{acct}: {key} filed {filed[key]} -> now "
                              f"{cur[key]}")
     return lines
+
+
+class PriorRecordError(ValueError):
+    """[settings] prior_year_record is not a path string."""
+
+
+def prior_record_setting(root: Path, settings: Dict[str, Any]
+                         ) -> Optional[Path]:
+    """The lock [settings] prior_year_record names (per-year project
+    layout: "../2025/filed/2025.json"), resolved against the project
+    root; None when the key is unset. A non-string value raises
+    PriorRecordError with the same text `taxjson run` refuses it with —
+    handoff read 5 as the path <root>/5 (A2-1135)."""
+    configured = (settings or {}).get("prior_year_record")
+    if configured is None or configured == "":
+        return None
+    if not isinstance(configured, str):
+        raise PriorRecordError(
+            f"[settings] prior_year_record must be a path string "
+            f"(got {configured!r}).")
+    p = Path(configured).expanduser()
+    return p if p.is_absolute() else (Path(root) / p)
+
+
+def _lock_year(path: Path) -> Optional[int]:
+    """The tax year a lock file records: its "year" key, else its
+    <year>.json name. None when neither says."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        if isinstance(doc, dict) and doc.get("year") is not None:
+            return int(doc["year"])
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        return int(Path(path).stem)
+    except ValueError:
+        return None
+
+
+def project_locks(root: Path, settings: Dict[str, Any]
+                  ) -> List[Tuple[int, Path, str]]:
+    """Every filed-year lock this project answers to, as (year, path,
+    where): the project's own filed/<year>.json ("local"), plus the lock
+    [settings] prior_year_record names ("prior_year_record") when no
+    local lock covers its year. In the documented per-year layout last
+    year's lock lives only in the previous project; readers that looked
+    only under <project>/filed/ (option-boundary, audit --year,
+    carryover, the grant-since hint) said "no filed-year locks" and gave
+    advice the lock contradicted (A2-0036, A2-0335, A2-0338, A2-0664).
+    A configured record that does not exist is left out (handoff and the
+    checklist report it); a non-string setting raises
+    PriorRecordError."""
+    out: List[Tuple[int, Path, str]] = [
+        (y, p, "local") for y, p in list_snapshots(root)]
+    pr = prior_record_setting(root, settings)
+    if pr is not None and pr.is_file():
+        try:
+            same = any(pr.resolve() == p.resolve() for _y, p, _w in out)
+        except OSError:
+            same = False
+        y = _lock_year(pr)
+        if y is None:
+            try:
+                y = int((settings or {}).get("year")) - 1
+            except (TypeError, ValueError):
+                y = None
+        if (y is not None and not same
+                and y not in {yy for yy, _p, _w in out}):
+            out.append((y, pr, "prior_year_record"))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def lock_for_year(root: Path, settings: Dict[str, Any], year: int
+                  ) -> Optional[Tuple[Path, str]]:
+    """(path, where) of the lock for `year` (project_locks), or None."""
+    for y, p, w in project_locks(root, settings):
+        if y == int(year):
+            return p, w
+    return None
+
+
+def lock_label(root: Path, path: Path) -> str:
+    """A short name for a lock in messages: filed/<year>.json for the
+    project's own, else the path as configured."""
+    try:
+        return str(Path(path).relative_to(Path(root)))
+    except ValueError:
+        return str(path)
 
 
 def list_snapshots(root: Path) -> List[Tuple[int, Path]]:

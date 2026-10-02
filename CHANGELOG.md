@@ -2,6 +2,79 @@
 
 ## Unreleased
 
+- close-year / handoff / option-boundary (re-audit filing locks):
+  close-year refuses books with no reports/ (a run that died before
+  writing them) and an unreadable work/<acct>_base.json instead of
+  locking empty year-end positions; handoff names an unreadable or
+  damaged base file instead of reporting every lot as missing or
+  naming a deleted /tmp merge file (A2-0035, A2-0346, A2-1137,
+  A2-1143). option-boundary reads last year's lock through
+  [settings] prior_year_record, as handoff does (A2-0036, A2-0335);
+  handoff flags a written option the closed year's record taxed on
+  another premium timing than this project (A2-0037); the
+  option_grant_timing_since hint quotes the since a lock records
+  (A2-1142); handoff refuses a non-string prior_year_record like run
+  (A2-1135).
+- close-year --force keeps the dispositions another tool filed (and
+  their totals) from the lock it replaces, and warns when the replaced
+  lock recorded other totals (A2-0119, A2-0345); --filed-dispositions
+  goes through the broker decode funnel (UTF-16 read; a directory or a
+  stray quote is one line, exit 2) (A2-1136, A2-1138); handoff flags a
+  record closed before its year ended as a partial-year snapshot
+  (A2-0349).
+- close-year's year-end cost places each superficial-loss addition
+  where the engine lands it (per replacement symbol, on its own trade
+  and settle date) instead of one lump on the first replacement, so a
+  January replacement's share is no longer in the Dec 31 cost; a US
+  record carries the §1091 basis addition `list` shows (A2-0669,
+  A2-0352, A2-1140, A2-0353).
+- handoff matching: a straddling trade matches only the same trade (same
+  trade date, or the same net within 3 days), so a distinct same-size
+  January sale no longer hides a sale missing from both years; a
+  date-basis change between the two projects is one item per sale (not
+  a position, two doubles and the wrong date); a closed-year sale that
+  is its own row in this project is not "reported in both years"; a
+  short cover matches another tool's filed short; a sub-unit (crypto
+  dust) quantity difference is reported (A2-0354, A2-0356, A2-0673,
+  A2-0122, A2-0674, A2-1133).
+- close-year records the December and January rows; handoff reports
+  rows the two projects date on different sides of Dec 31 — trust
+  income or a ROC its record date moves back into the closed year, a
+  row local_timezone re-dates to Dec 31, a RIC January dividend kept in
+  one project only, an overnight fill the closed project moved into
+  January — as in neither or both returns (A2-0120, A2-0343, A2-0344,
+  A2-0675, A2-0670).
+- check-filed / audit (re-audit filing locks): `audit --year` on a locked
+  year reads the lock `[settings] prior_year_record` names (per-year
+  layout) and recomputes on the date basis the lock recorded, with a note
+  (A2-0334, A2-0335, A2-0664, A2-1129). check-filed reports a lock whose
+  account entry records no totals, or whose `form_lines` is not a table,
+  as damaged instead of "OK (matches)" (A2-0347, A2-0668); notes when the
+  project's `tax_date` or `option_buyback_loss_superficial` differs from
+  the lock's (A2-0348, A2-0672); refuses a bad `[settings]` value as a
+  settings error, not a damaged lock (A2-1134); and shows the child's
+  one-line error, exit 2, when the recompute fails on an input (A2-0676).
+  audit and `wash-sales --explain` name a damaged `work/<acct>_base.json`
+  instead of a deleted /tmp merge file (A2-1143).
+- carryover: a year before the project year with a close-year lock
+  (filed/<year>.json or prior_year_record) uses the lock's filed figure
+  (filed_totals, else the gain lines) instead of the rebuilt books, so a
+  prior year's loss is carried and a carry-back to it is offered; a
+  later locked year is compared with the filed lines; an unreadable or
+  non-finite lock is named (re-audit A2-0121, A2-0336, A2-0338, A2-0666,
+  A2-1130, A2-1131, A2-1132, A2-1139).
+- carryover and t1135: the full-history engine pass applies
+  [settings] corporate_distributions (a listed corporation's ROC on its
+  pay date), as the run does (A2-0123, A2-0337, A2-0339, A2-0340,
+  A2-0341, A2-1141).
+- carryover: rows after the project year are partial (no T1A
+  suggestion, the carryforward stops at the project year); box-18
+  capital-gains dividends in capital_gains_dividends.map are netted; a
+  Canada ledger in USD or a book whose metadata.target_currency differs
+  is refused; a dangling claimed_losses.txt / t1135.map is refused; a
+  claimed amount '0,125' is refused; standalone carryover and audit
+  note the close-timing default (A2-0351, A2-0355, A2-0665, A2-0667,
+  A2-0677, A2-0678).
 - US form-export (8949, TXF) and `sum` FOR THE RETURN keep §1256
   contracts — futures, options on futures, broad-based index options
   such as SPX — off Form 8949 and list them for Form 6781 by hand; a
