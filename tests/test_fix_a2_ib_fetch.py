@@ -142,5 +142,44 @@ class TestFetchKeepsApiOrder(unittest.TestCase):
         self.assertAlmostEqual(gains[0]["gain"], 500.0, places=2)
 
 
+class TestOverlapReadsUtf16(unittest.TestCase):
+    """A2-0256 / A2-1040."""
+
+    _ROWS = _QT_HEADER + (
+        "2025-06-02 12:00:00 AM,2025-06-03 12:00:00 AM,Buy,XEI.TO,I,"
+        "10,10.00,-100.00,0.00,-100.00,CAD,55500001,Trades,Individual\n"  # pii-ok
+        "2025-07-02 12:00:00 AM,2025-07-03 12:00:00 AM,Buy,XEI.TO,I,"
+        "10,10.00,-100.00,0.00,-100.00,CAD,55500001,Trades,Individual\n"  # pii-ok
+        "2025-01-02 12:00:00 AM,2025-01-03 12:00:00 AM,Buy,XEI.TO,I,"
+        "10,10.00,-100.00,0.00,-100.00,CAD,55500001,Trades,Individual\n")  # pii-ok
+
+    def _check(self, raw):
+        from taxjson.bin.taxjson_run import _qt_trim_file, _qt_window_overlap
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            sib = d / "manual.csv"
+            sib.write_bytes(raw)
+            out = d / "questrade_2025.csv"
+            out.write_text(_QT_HEADER)
+            hits = _qt_window_overlap(d, out, "2025-06-01", "2025-12-31")
+            self.assertEqual([(p.name, n) for p, n in hits],
+                             [("manual.csv", 2)])
+            self.assertEqual(_qt_trim_file(sib, "2025-06-01", "2025-12-31"),
+                             2)
+            # The trimmed file is readable text the parser accepts, and
+            # the untouched original bytes are kept as the backup.
+            kept = sib.read_text(encoding="utf-8")
+            self.assertEqual((d / "manual.csv.bak").read_bytes(), raw)
+        rows = list(csv.reader(io.StringIO(kept)))
+        self.assertEqual(rows[0][0], "Transaction Date")
+        self.assertEqual([r[0][:10] for r in rows[1:]], ["2025-01-02"])
+
+    def test_utf16_sibling(self):
+        self._check(self._ROWS.encode("utf-16"))
+
+    def test_utf8_bom_sibling(self):
+        self._check(self._ROWS.encode("utf-8-sig"))
+
+
 if __name__ == "__main__":
     unittest.main()

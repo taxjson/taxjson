@@ -9,6 +9,10 @@
   the averaged ACB and gain moved into a later year (CA-DATE-14 /
   US-DATE-13). Rows now sort by trade date only, and the merge keeps
   the download's order (audit A2-0084, A2-0598).
+- `taxjson fetch`: the overlap check and `--trim-overlap` read a UTF-16
+  or UTF-8-BOM Questrade export the way the parser does. A UTF-16
+  manual export showed no overlap, so it double-counted next to the
+  fetched file with no warning (audit A2-0256, A2-1040).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

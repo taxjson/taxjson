@@ -12152,6 +12152,7 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
     coexisting coverage double-counts the books."""
     hits: List[Tuple[Path, int]] = []
     import csv as _csv
+    import io as _io
     # input_files, not glob("*.csv"): `run` reads QT_MANUAL.CSV too, so
     # a case-sensitive glob let an overlapping upper-case export double
     # the books with no warning (S046-14).
@@ -12168,8 +12169,10 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
         try:
             if detect_broker(sib) != "questrade":
                 continue
-            with sib.open(encoding="utf-8", errors="replace") as f:
-                rows = list(_csv.reader(f))
+            # Decoded like detection and the parser (UTF-16, UTF-8 BOM):
+            # read as UTF-8 a UTF-16 export showed no rows, and the
+            # double-count warning was lost (audit A2-0256 / A2-1040).
+            rows = list(_csv.reader(_io.StringIO(_qt_sibling_text(sib))))
         except Exception:
             continue
         col = _qt_date_col(rows[0] if rows else [])
@@ -12178,6 +12181,14 @@ def _qt_window_overlap(acct_dir: Path, out: Path,
         if n:
             hits.append((sib, n))
     return hits
+
+
+def _qt_sibling_text(path: Path) -> str:
+    """A Questrade CSV's text, decoded the way detection and the parser
+    read it (base.decode_broker_text: UTF-16 by its BOM, else UTF-8
+    with an optional BOM)."""
+    from taxjson.lib.brokerages.base import decode_broker_text
+    return decode_broker_text(path.read_bytes(), path.name)
 
 
 def _qt_date_col(header: List[str]) -> int:
@@ -12214,8 +12225,10 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
     import csv as _csv
     import io as _io
     from taxjson.bin import taxjson_fetch as F
-    with path.open(encoding="utf-8", errors="replace") as f:
-        rows = list(_csv.reader(f))
+    # Decoded like the parser (A2-1040): a UTF-16 export read as UTF-8
+    # matched no row. The trimmed copy is written as UTF-8 (the parser
+    # reads both); the original bytes stay in the .bak.
+    rows = list(_csv.reader(_io.StringIO(_qt_sibling_text(path))))
     for i, r in enumerate(rows, 1):
         if any("\n" in c or "\r" in c for c in r):
             # An unbalanced quote swallows the following lines into one
