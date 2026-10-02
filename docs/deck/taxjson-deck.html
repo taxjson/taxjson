@@ -120,7 +120,7 @@ ul { padding-left:18pt; margin:0 }
   <h2>Checked against the one thing that cannot lie</h2>
   <p class="lead">Internal reports can all agree and still be wrong. <code>taxjson sanity</code> compares the positions the books say you hold with the positions your broker's own export says you hold, account by account. Any difference is a trade that has not reached the CSV yet, or a booking problem — there is no third kind.</p>
   <div class="row">
-    <div class="card"><h3>2,100+ tests</h3><p>Every fix lands with a regression test that failed before it. No mocks for tax math.</p></div>
+    <div class="card"><h3>5,000+ tests</h3><p>Every fix lands with a regression test that failed before it. No mocks for tax math.</p></div>
     <div class="card"><h3>Three property fuzzers</h3><p>Conservation of gains under the wash rule, custody-transfer netting, split-during-settlement books — thousands of random ledgers per run.</p></div>
     <div class="card"><h3>Eight audit rounds</h3><p>Adversarial reviews, statutory scenarios by hand, parser coverage on real exports, a pre-release security audit. Every finding reproduced, fixed, pinned.</p></div>
     <div class="card"><h3>Published limits</h3><p>KNOWN_ISSUES.md lists what is out of scope and what to do by hand, with the citation.</p></div>
@@ -147,7 +147,7 @@ ul { padding-left:18pt; margin:0 }
   <p class="eyebrow">Privacy and security</p>
   <h2>Nothing personal leaves the machine</h2>
   <div class="row">
-    <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer. The pipeline's only network calls are FX rates (Bank of Canada; Yahoo before 2017) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
+    <div class="card"><h3>Local by construction</h3><p>Parsing, pooling and the wash pass run on your computer. The pipeline's only network calls are FX rates (Bank of Canada, its noon rate before March 2017; Yahoo only before May 2007) and crypto prices for unpriced rows — both switchable off with <code>TAXJSON_OFFLINE=1</code>. SECURITY.md lists every egress.</p></div>
     <div class="card"><h3>No credentials stored</h3><p>Broker fetch uses your own token file; it is never written into a project or sent anywhere but that broker.</p></div>
     <div class="card"><h3>The project guards itself</h3><p>A personal-data scan runs in every gate and as the pre-push hook, fails closed, and reads a private denylist kept outside the repository. Redacted exports keep every row shape and drop the identifiers <code>redact</code> recognises — review before sharing.</p></div>
   </div>
@@ -176,7 +176,7 @@ ul { padding-left:18pt; margin:0 }
     <tr><td class="k">Interactive Brokers</td><td>Activity / Flex statement CSV</td><td>Trades, options, corporate actions, transfers, fees, dividends; Flex auto-fetch</td></tr>
     <tr><td class="k">Questrade</td><td>Activity CSV</td><td>Trades, DRIP, cash-in-lieu, transfers; REST auto-fetch and live positions</td></tr>
     <tr><td class="k">RBC Direct Investing</td><td>Activity export</td><td>Trades, dividends with withholding</td></tr>
-    <tr><td class="k">Webull</td><td>Account statement CSV</td><td>Trades and options</td></tr>
+    <tr><td class="k">Webull</td><td>Trading Summary CSV</td><td>Trades and options (BUY/SELL rows only); no income &mdash; T5 interest and dividends go in as <code>.tt</code> lines</td></tr>
     <tr><td class="k">Kraken · Coinbase</td><td>Ledgers / transaction history</td><td>Trades, rewards, sends and withdrawals as custody evidence</td></tr>
     <tr><td class="k">Anything else</td><td><code>.tt</code> plain text · generic CSV mapping</td><td>Ten-line files a human can write and read</td></tr>
   </table>

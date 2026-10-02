@@ -568,7 +568,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "held on its record date — the settled position, each "
                  "ticker's own shares — and booked on those shares only "
                  "(a trade straddling the record date is not the "
-                 "holder's). Its "
+                 "holder's). The per-share amount is in the project's "
+                 "base currency (a US-listed fund's USD factor is "
+                 "converted by the user first). Its "
                  "income is on the T3/T5 slip; taxjson does not count "
                  "it. A return-of-capital row warns when the book already "
                  "has that ROC or still counts its cash as a dividend."),
@@ -1257,7 +1259,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "held on its record date — the settled position, each "
                  "ticker's own shares — and booked on those lots only "
                  "(a trade straddling the record date is not the "
-                 "holder's). Its "
+                 "holder's). The per-share amount is in the project's "
+                 "base currency (a US-listed fund's USD factor is "
+                 "converted by the user first). Its "
                  "income is on Form 1099-DIV; taxjson does not count it. "
                  "A return-of-capital row warns when the book already has "
                  "that ROC or still counts its cash as a dividend."),
