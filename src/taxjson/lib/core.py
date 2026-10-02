@@ -125,6 +125,12 @@ class TaxTransaction:
     # .plan_dedup, audit R1-296). NOT part of compute_id, omitted when
     # empty.
     source: str = ''
+    # When `source` is a MASKED name (an account-number token shown as
+    # 55***), a short hash of the real file name keeps two files whose
+    # names differ only in that token apart for dedup (sha256, first 10
+    # hex — never the name itself; audit A2-0159). Empty otherwise.
+    # NOT part of compute_id, omitted when empty.
+    source_key: str = ''
     # The broker account the row came from, HASHED (sha256 of the id the
     # export prints, first 10 hex — never the id itself), stamped by
     # taxjson-brokerage from the parser's per-row `broker_account` or
@@ -192,7 +198,7 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
                       'dealer_country', 'issuer_country')
 # The other optional evidence fields, omitted from to_dict() when empty.
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
-                   'broker_basis', 'multiplier', 'source',
+                   'broker_basis', 'multiplier', 'source', 'source_key',
                    'source_account', 'exercise_of')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]

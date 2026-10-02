@@ -17,8 +17,11 @@ What it changes, and nothing else:
     included, is replaced. Ids shorter than five characters and
     date-like numbers are never treated as ids, so quantities, prices
     and dates stay;
-  * holder identity — IB `Account Information` Name / Alias / address
-    rows (CSV, and the label/value cells of IB's .html statements) and
+  * holder identity — every IB `Account Information` field value
+    except a safe list (Account Type, Base Currency, ...; ids get
+    placeholders), every value cell after an identity label cell of
+    IB's .html statements (inline tags kept), every `Label:` cell of a
+    row and its value cells up to the next label, and
     the name/address columns of a columnar or flat AccountInformation
     section,
     `AccountAlias` / `AcctAlias` columns, a `Name` column beside an
@@ -34,15 +37,18 @@ What it changes, and nothing else:
   * crypto — wallet addresses (bc1…, legacy 1…/3… base58, 0x + 40 hex),
     on-chain transaction hashes and exchange transaction ids (Kraken
     txid/refid, Coinbase ids, UUIDs): each distinct value becomes a
-    stable same-shape pseudonym, so rows that shared an id still share
-    one and distinct rows stay distinct;
+    stable same-shape pseudonym, shared by every file of one run, so
+    rows that shared an id still share one (a Kraken trade's txid and
+    its ledger refid) and distinct rows stay distinct;
   * anything matching the private denylist (`~/.config/taxjson/
     pii-denylist`, or $TAXJSON_PII_DENYLIST — the same file
     scripts/check-pii.sh uses, matched the same way: case-insensitive,
     a 4+ digit run also matching with spaces or dashes between digits)
     or `--also`, in the text and in the output FILE NAME. An invalid
-    pattern, or a TAXJSON_PII_DENYLIST naming a missing file, FAILS
-    CLOSED on the command line (exit 2, nothing written).
+    pattern, a TAXJSON_PII_DENYLIST naming a missing file, or a
+    denylist that is a directory, unreadable or not UTF-8 (a leading
+    BOM is fine) FAILS CLOSED on the command line (exit 2, nothing
+    written).
 Binary input (.xlsx — Questrade's default export — .xls, .pdf, .zip) is
 REFUSED: export CSV (or run taxjson-xlsx-to-csv) and redact that.
 Encoding: UTF-8 (BOM kept), UTF-16 (BOM or NUL-stuffed; re-written as
@@ -92,7 +98,14 @@ _ACCOUNT_KEY = re.compile(
     r'|"' + _KEY_NAME + r'"[ \t]*:)'                          # JSON key
     r'[ \t]*"?([A-Za-z0-9][A-Za-z0-9-]{3,16}[A-Za-z0-9])"?'
     r'(?![A-Za-z0-9]|\.\d)', re.IGNORECASE)
-_COL_ID = re.compile(r"^[A-Z0-9][A-Z0-9-]{3,}[A-Z0-9]$")     # 5+ chars, mostly digits
+# 5+ chars, 5+ digits (checked in _is_id); any letter case — a
+# lower-case 'ab55500012' in an account column was never collected
+# (A2-1386).
+_COL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{3,}[A-Za-z0-9]$")
+# An IB id in a FILE NAME or an HTML element id, any case
+# ('u1234567_2025.csv', A2-0451). Content keeps the upper-case _IB_ID.
+_IB_ID_ANYCASE = re.compile(r"(?<![A-Za-z0-9])(?:DU|U|F|I)\d{7,8}(?![0-9])",
+                            re.IGNORECASE)
 _DATE8 = re.compile(r"^(19|20)\d{6}$")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -146,9 +159,52 @@ _PERSON_COL_RE = re.compile(
     re.IGNORECASE)
 
 
-def _is_person_col(h: str) -> bool:
+# Other parties a column or label can name (A2-0764, A2-0460): a fixed
+# plan-party list let 'Payee Name', 'Recipient', 'Policyholder',
+# 'Trustee', 'Authorized Trader' ... through with no REVIEW line. These
+# are blanked too, but (unlike the holder words above) do not make a
+# bare `Name` column the holder's name.
+_PARTY_COL_RE = re.compile(
+    r".*\b(?:payee|recipient|employee|policy[ _-]?holder|(?:co-?)?applicant"
+    r"|participant|contact|trustee|guardian|executor|attorney|signatory"
+    r"|nominee|remitter|co-?owner|co-?signer|joint[ _]holder"
+    r"|authori[sz]ed[ _-](?:trader|person|user|signer|signatory|agent)"
+    r"|ordering customer|mandataire|fiduciaire)s?\b.*",
+    re.IGNORECASE)
+# '<qualifier> Name' labels/columns that do NOT name a person. Any other
+# '<x> Name' is a person's name in a label, and a REVIEW column in a
+# table.
+_NONPERSON_NAME = re.compile(
+    r"(?:security|company|asset|instrument|financial instrument|fund"
+    r"|product|symbol|issuer|plan|bank|broker|brokerage|institution"
+    r"|currency|exchange|coin|token|network|file|event|sector|industry"
+    r"|market|contract|option|underlying|strategy|program|report"
+    r"|statement|stock|etf|bond|description|display|short|long|trade"
+    r"|order|transaction|type|class|series|venue|custodian|dealer|firm"
+    r"|branch|office|platform|wallet|chain|pair|sheet|table|column"
+    r"|field|section|tag|label|host|domain|server|app|device|model"
+    r"|city|street|country|province|state|region)[ _-]*name"
+    r"|nom (?:du |de la |de l['’]|des |de )?(?:titre|titres|soci[ée]t[ée]"
+    r"|fonds|[ée]metteur|produit|valeur|placement|courtier|instrument"
+    r"|fichier|r[ée]gime|march[ée])",
+    re.IGNORECASE)
+
+
+def _is_other_name(h: str) -> bool:
+    """'<x> Name' / '<x>name' / 'Nom <x>' that is not a known
+    non-person name (security, company, file ...)."""
+    return (len(h) > 4 and (h.endswith("name") or h.startswith("nom "))
+            and h != "name" and not _NONPERSON_NAME.fullmatch(h))
+
+
+def _is_holder_col(h: str) -> bool:
     h = h.strip().strip('"').strip().lower()
     return bool(h) and (h in _ALIAS_COLS or bool(_PERSON_COL_RE.fullmatch(h)))
+
+
+def _is_person_col(h: str) -> bool:
+    h = h.strip().strip('"').strip().lower()
+    return bool(h) and (_is_holder_col(h) or bool(_PARTY_COL_RE.fullmatch(h)))
 
 
 # `Label:` cells whose value (the next non-empty cell) is identity.
@@ -175,10 +231,28 @@ def _label_kind(cell: str) -> Optional[str]:
     t = t[:-1].strip().lower()
     if _is_account_col(t):
         return "account"
+    return "identity" if _is_identity_label(t) else None
+
+
+def _is_identity_label(t: str) -> bool:
+    """A label (CSV `Label:` cell, HTML label cell) whose value is a
+    person's identity: the fixed English / French list, any holder /
+    party word, and any '<x> Name' that is not a security / company /
+    file name (A2-0460, A2-0455). Bilingual 'English / Français' labels
+    match on either half."""
+    t = t.strip().strip('"').strip().rstrip(":").strip().lower()
+    if not t:
+        return False
     parts = [t] + [p.strip() for p in t.split("/") if p.strip()]
-    if any(p in _IDENTITY_LABELS for p in parts):
-        return "identity"
-    return None
+    return any(p in _IDENTITY_LABELS or p in _IDENTITY_ROWS
+               or _is_person_col(p) or _is_other_name(p) for p in parts)
+
+
+def _is_label_cell(c: str) -> bool:
+    """Any `Label:` cell (identity or not): where one label's value
+    cells end."""
+    t = c.strip().strip('"').strip()
+    return t.endswith(":") and len(t) <= 60 and any(ch.isalpha() for ch in t)
 
 
 _IDENTITY_ROWS = ("name", "account alias", "address", "street", "city",
@@ -186,8 +260,24 @@ _IDENTITY_ROWS = ("name", "account alias", "address", "street", "city",
                   "email", "customer id", "client name", "holder",
                   "owner", "primary owner", "customer", "province",
                   "address 1", "address 2", "mailing address")
+# IB `Account Information` fields whose value is NOT identity. Every
+# other field's value is blanked: a fixed identity list let Legal Name,
+# Joint Name, Master Name, Account Title, Beneficiary, Trustee, SIN,
+# Tax ID, Telephone ... through with no REVIEW line (A2-0046, A2-0455).
+# 'Account' / 'Accounts Included' hold ids, which get placeholders.
+_IB_INFO_SAFE = ("account", "accounts included", "account type",
+                 "customer type", "account capabilities", "capabilities",
+                 "trading permissions", "base currency", "currency",
+                 "account status", "status", "statement period", "period",
+                 "platform", "field name")
+# A comma-form identity line ('Name,Jane Sample'): the bilingual set of
+# _IDENTITY_LABELS' name labels (A2-1390). Never applied to a column
+# header row.
 _HEADER_LINE = re.compile(
-    r'^(\s*"?)((?:name|client|client name|account holder|owner|primary owner|customer|user)\s*"?\s*[:,]\s*)',
+    r'^(\s*"?)((?:name|nom|nom du client|nom complet|full name|client'
+    r'|client name|account holder|holder|titulaire|owner|primary owner'
+    r'|customer|customer name|user|user name|payee|beneficiary'
+    r'|b[ée]n[ée]ficiaire)\s*"?\s*[:,]\s*)',
     re.IGNORECASE)
 # `"Account: 12345678 - Margin, Jane Sample"` (RBC): the text after the
 # first comma of an Account: header line is the holder's name.
@@ -267,18 +357,48 @@ _STREET_FR = re.compile(
     re.IGNORECASE)
 _PO_BOX = re.compile(r"\b(?:P\.?\s*O\.?\s*Box|Postal Box)\s*#?\s*\d+", re.IGNORECASE)
 _SIN_SEP = re.compile(r"(?<![\d-])\d{3}([ -])\d{3}\1\d{3}(?![\d-])")
+# After a label, any separator form: a SIN 3-3-3 and an SSN 3-2-4 with
+# spaces, dashes, dots or none (a dotted SIN or a spaced / dotted SSN
+# were kept, A2-1389).
 _SIN_CTX = re.compile(
-    r"(\b(?:SIN|S\.I\.N\.?|social insurance(?: number)?|SSN|TIN|tax id)\b\s*[:#]?\s*)"
-    r"(\d{9})(?!\d)", re.IGNORECASE)
+    r"(\b(?:SIN|S\.I\.N\.?|NAS|social insurance(?: number)?|SSN|TIN|tax id)\b\s*[:#]?\s*)"
+    r"(\d{3}([ .-]?)\d{3}\3\d{3}|\d{3}([ .-]?)\d{2}\4\d{4})(?![\d.-]?\d)",
+    re.IGNORECASE)
+# The label in its own CSV cell, the value in the next one, no colon:
+# 'SIN,046…', 'Phone,416…', '"Tax ID","078…"', or both inside one
+# quoted cell ('"SIN,046…"') (A2-0456). The label must START the line
+# (or the quoted cell): a ticker cell mid-row ('…,USD,TEL,1000.0000')
+# is not a label. A date is never a value; digit counts are checked in
+# _redact_contact.
+_LABEL_NUM_WORDS = (r"(?:(sin|s\.i\.n\.?|nas|ssn|tin|tax id"
+                    r"|social insurance(?: number)?)"
+                    r"|phone|tel|telephone|mobile|cell|fax)")
+_LABEL_NUM_VALUE = (r"(?!\d{4}-\d{2}-\d{2}(?!\d))(\+?\d[\d ().-]{7,16}\d)")
+_LABEL_CELL_NUM = re.compile(
+    r'(^[ \t]*"?[ \t]*' + _LABEL_NUM_WORDS
+    + r'[ \t]*"?[ \t]*,[ \t]*"?[ \t]*)' + _LABEL_NUM_VALUE
+    + r'(?=[ \t]*"?[ \t]*(?:,|\r?$))', re.IGNORECASE)
+_QUOTED_LABEL_NUM = re.compile(
+    r'((?:^|,)[ \t]*"[ \t]*' + _LABEL_NUM_WORDS + r'[ \t]*[:,]?[ \t]*)'
+    + _LABEL_NUM_VALUE + r'(?=[ \t]*")', re.IGNORECASE)
+# A US address split across cells: 'Springfield,IL,62704' — the
+# capitalised city, the state code and the ZIP each a whole cell
+# (A2-0763).
+_US_ZIP_CELLS = re.compile(
+    r'^[ \t]*"?(?-i:[A-Z][A-Za-z.\'’-]*)(?:[ ](?-i:[A-Z][A-Za-z.\'’-]*)){0,3}"?'
+    r'[ \t]*,[ \t]*"?(?-i:(?:' + _US_STATES + r'))"?[ \t]*,[ \t]*'
+    r'"?\d{5}(?:-\d{4})?"?[ \t]*,*[ \t]*$')
 _SSN = re.compile(r"(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])")
 
 # Crypto wallets and transaction ids (pseudonymised, stable per value).
 _WALLET = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"(?:bc1|tb1|ltc1)[ac-hj-np-z02-9]{11,87}"                    # bech32
+    r"|(?:BC1|TB1|LTC1)[AC-HJ-NP-Z02-9]{11,87}"                   # BECH32 (A2-0452)
     r"|0x[0-9a-fA-F]{40}(?![0-9a-fA-F])"                          # EVM
     r"|[13][a-km-zA-HJ-NP-Z1-9]{25,34}"                           # base58
     r")(?![A-Za-z0-9])")
+_BECH32 = re.compile(r"(?:bc1|tb1|ltc1)[ac-hj-np-z02-9]{11,87}", re.IGNORECASE)
 _TXID = re.compile(
     r"(?<![A-Za-z0-9-])(?:"
     r"0x[0-9a-fA-F]{64}"                                          # EVM tx hash
@@ -327,6 +447,18 @@ class InputRefused(Exception):
     """Raised for input the redactor cannot safely handle (binary)."""
 
 
+class Pseudonyms:
+    """Wallet and transaction-id pseudonyms of one invocation. Per-file
+    tables restarted the counter in every file, so two Coinbase exports'
+    distinct ids both became ...0001 (and taxjson-sort --dedup dropped a
+    real trade) and a Kraken trades txid no longer equalled its ledger
+    refid (A2-0454, A2-0766) — the S036-18 fix shared account ids only."""
+
+    def __init__(self) -> None:
+        self.wallets: Dict[str, str] = {}
+        self.txids: Dict[str, str] = {}
+
+
 class Report:
     def __init__(self) -> None:
         self.accounts: Dict[str, str] = {}      # original -> placeholder
@@ -352,12 +484,16 @@ class Report:
         # (content and file names), so two files never share a
         # pseudonym (S036-18). Per-file when redact_text runs alone.
         self.known_ids: Dict[str, str] = {}
+        self.pseudonyms = Pseudonyms()
+        # Ids found only in the input's FILE NAME (an IB download is
+        # named after the account): masked shapes, never the id.
+        self.name_ids: List[str] = []
 
     def found_anything(self) -> bool:
         return bool(self.accounts or self.identity_rows or self.emails
                     or self.names or self.phones or self.postal_codes
                     or self.addresses or self.sins or self.wallets
-                    or self.txids or self.patterns)
+                    or self.txids or self.patterns or self.name_ids)
 
     @staticmethod
     def masked(s: str) -> str:
@@ -452,7 +588,7 @@ def _is_date(v: str) -> bool:
 
 def _is_id(v: str) -> bool:
     """An account-COLUMN value that is an id: 5+ characters, 5+ digits,
-    upper-case letters/digits/hyphens, not a date."""
+    letters/digits/hyphens, not a date."""
     v = v.strip()
     if _IB_ID.fullmatch(v):
         return True
@@ -476,13 +612,22 @@ def _collect_ids(lines: List[str]) -> List[str]:
 
     def add(v: str, check: Callable[[str], bool] = _is_id) -> None:
         v = v.strip()
-        if v and v not in seen and check(v):
-            seen.add(v); ids.append(v)
+        # One account whatever its case: the replacement is
+        # case-insensitive.
+        if v and v.upper() not in seen and check(v):
+            seen.add(v.upper()); ids.append(v)
 
     col_idx: Dict[str, List[int]] = {}
     for line in lines:
         for m in _IB_ID.finditer(line):
             add(m.group(0))
+        # A lower-case IB id inside an HTML element id
+        # (`tblaccountinformation_u1234567body`, A2-0762).
+        if "<" in line:
+            for m in re.finditer(r"(?:id|name|class)\s*=\s*\"[^\"]*\"",
+                                 line, re.IGNORECASE):
+                for t in _IB_ID_ANYCASE.finditer(m.group(0)):
+                    add(t.group(0))
         for m in _ACCOUNT_PHRASE.finditer(line):
             add(m.group(2), _is_phrase_id)
         for m in _ACCOUNT_KEY.finditer(line):
@@ -615,16 +760,28 @@ def _blank_cells(line: str) -> str:
     return line
 
 
-def _mapper(table: Dict[str, str],
+def _pseudo(v: str, shared: Dict[str, str], mine: Dict[str, str]) -> str:
+    """The invocation-wide pseudonym of `v` (recorded in this file's
+    table for the report). A bech32 address is case-insensitive
+    (BIP173): both spellings share one pseudonym, in the input's case."""
+    key = v.lower() if _BECH32.fullmatch(v) else v
+    if key not in shared:
+        shared[key] = _pseudonym(key, len(shared) + 1)
+    ph = shared[key]
+    if key != v and v.isupper():
+        ph = ph.upper()
+    mine[key] = ph
+    return ph
+
+
+def _mapper(shared: Dict[str, str], mine: Dict[str, str],
             accept: Callable[[str], bool] = lambda v: True
             ) -> Callable[[re.Match], str]:
     def repl(m: re.Match) -> str:
         v = m.group(0)
         if not accept(v):
             return v
-        if v not in table:
-            table[v] = _pseudonym(v, len(table) + 1)
-        return table[v]
+        return _pseudo(v, shared, mine)
     return repl
 
 
@@ -639,6 +796,22 @@ def _redact_contact(line: str, rep: Report, lineno: int = 0) -> str:
     rep.addresses += k
     line, k = _PO_BOX.subn("REDACTED", line)
     rep.addresses += k
+    def label_cell(m: re.Match) -> str:
+        v = m.group(3)
+        digits = sum(c.isdigit() for c in v)
+        if re.fullmatch(r"\d+\.\d+", v):
+            return m.group(0)                   # an amount, not a number
+        if m.group(2):
+            if digits != 9:
+                return m.group(0)
+            rep.sins += 1
+        else:
+            if not 10 <= digits <= 15:
+                return m.group(0)
+            rep.phones += 1
+        return m.group(1) + "REDACTED"
+    line = _LABEL_CELL_NUM.sub(label_cell, line)
+    line = _QUOTED_LABEL_NUM.sub(label_cell, line)
     line, k = _PHONE_CTX.subn(lambda m: m.group(1) + "REDACTED", line)
     rep.phones += k
     line, k = _PHONE.subn("REDACTED", line)
@@ -711,6 +884,16 @@ _ADDRESS_ANCHORS = ("street", "street1", "street 1", "address", "address1",
                     "zip code")
 
 
+def _name_review_cols(cells: List[str], low: List[str],
+                      blanked: List[int]) -> List[Tuple[int, str]]:
+    """'<x> Name' columns that are neither blanked nor a known non-person
+    name ('Agent Name'): their values go through the REVIEW pass, so a
+    person's name there is at least listed (A2-0764)."""
+    return [(i, cells[i].strip()) for i, c in enumerate(low)
+            if i not in blanked and _is_other_name(c)
+            and c not in _FREE_TEXT_COLS]
+
+
 def _identity_cols(low: List[str]) -> List[int]:
     """Header positions holding holder identity: alias columns always;
     a name column only beside an account or alias column; the address
@@ -720,7 +903,8 @@ def _identity_cols(low: List[str]) -> List[int]:
     Value layout was covered, so city, province and unit survived
     (S037-03)."""
     cols = [i for i, c in enumerate(low) if _is_person_col(c)]
-    if cols or any(_is_account_col(c) for c in low):
+    if (any(_is_holder_col(c) for c in low)
+            or any(_is_account_col(c) for c in low)):
         cols += [i for i, c in enumerate(low) if c in _HOLDER_NAME_COLS]
         if any(c in _ADDRESS_ANCHORS for c in low):
             cols += [i for i, c in enumerate(low) if c in _ADDRESS_COLS]
@@ -728,26 +912,57 @@ def _identity_cols(low: List[str]) -> List[int]:
 
 
 # HTML statements (IB's .html reports): a label cell naming an identity
-# field, then the value cell — on the same line or the next ones.
-_HTML_IDENTITY = re.compile(
-    r"(<t[dh][^>]*>\s*(?:" + "|".join(
-        re.escape(r).replace(r"\ ", r"\s+") for r in sorted(
-            set(_IDENTITY_ROWS) - {"country", "state", "province"},
-            key=len, reverse=True)) +
-    r")\s*:?\s*</t[dh]>\s*<td[^>]*>)([^<]*)(</td>)",
-    re.IGNORECASE)
+# field, then the value cell(s) — on the same line or the next ones.
+_HTML_LABEL = re.compile(r"<t([dh])\b[^>]*>\s*([^<>]{1,60}?)\s*:?\s*</t\1>",
+                         re.IGNORECASE)
+# One value cell: anything but another cell or row boundary inside
+# (inline tags like <b>…</b> are kept and their text redacted).
+_HTML_VALUE = re.compile(
+    r"\s*<td\b[^>]*>((?:(?!</?t[dhr]\b|</?table\b).)*?)</td>",
+    re.IGNORECASE | re.DOTALL)
+_HTML_TEXT = re.compile(r"(^|>)([^<]*[^<\s][^<]*)(?=<|$)")
+_HTML_NOT_PERSONAL = ("country", "state", "province")
 
 
 def _redact_html_identity(text: str, rep: "Report") -> str:
+    """Every value cell after an identity label cell, up to the end of
+    the row or the next label, has its text replaced — tags kept. Only
+    the first plain-text cell was replaced, so a multi-cell address kept
+    its city and province, a <b>name</b> was not replaced at all, and
+    the label list missed SIN / Tax ID / Telephone / Legal Name (A2-0457,
+    A2-0455, A2-0460)."""
     if "<td" not in text.lower():
         return text
-
-    def repl(m: re.Match) -> str:
-        if not m.group(2).strip():
-            return m.group(0)
-        rep.identity_rows += 1
-        return m.group(1) + "REDACTED" + m.group(3)
-    return _HTML_IDENTITY.sub(repl, text)
+    out: List[str] = []
+    pos = 0
+    for m in _HTML_LABEL.finditer(text):
+        if m.start() < pos:
+            continue
+        label = " ".join(m.group(2).split()).lower()
+        if (label in _HTML_NOT_PERSONAL or _is_account_col(label)
+                or not _is_identity_label(label)):
+            continue
+        out.append(text[pos:m.end()])
+        pos = m.end()
+        hit = False
+        while True:
+            v = _HTML_VALUE.match(text, pos)
+            if not v:
+                break
+            inner = v.group(1)
+            plain = re.sub(r"<[^>]*>", "", inner).strip()
+            if plain and (_is_identity_label(plain) or _is_account_col(plain)
+                          or plain.lower() in _IB_INFO_SAFE):
+                break                       # the next label/value pair
+            if plain:
+                inner = _HTML_TEXT.sub(lambda t: t.group(1) + "REDACTED", inner)
+                hit = True
+            out.append(text[pos:v.start(1)] + inner + text[v.end(1):v.end()])
+            pos = v.end()
+        if hit:
+            rep.identity_rows += 1
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _id_pattern(orig: str) -> re.Pattern:
@@ -755,23 +970,46 @@ def _id_pattern(orig: str) -> re.Pattern:
     collected with. An IB id is found when it is followed by letters
     (`tblAccountInformation_U1234567Heading`), so it is replaced
     there too; other ids keep the strict boundary (not inside a longer
-    token or a decimal)."""
-    if _IB_ID.fullmatch(orig):
-        return re.compile(r"(?<![A-Za-z0-9])" + re.escape(orig) + r"(?![0-9])")
+    token or a decimal). Case-insensitive: a lower-case copy of the
+    id (`tblaccountinformation_u1234567body`, a description quoting
+    `ab55500012`) was left in the copy while the report said every
+    occurrence was replaced (A2-0762, A2-1386)."""
+    if _IB_ID_ANYCASE.fullmatch(orig):
+        return re.compile(r"(?<![A-Za-z0-9])" + re.escape(orig) + r"(?![0-9])",
+                          re.IGNORECASE)
     return re.compile(r"(?<![A-Za-z0-9.])" + re.escape(orig)
-                      + r"(?![A-Za-z0-9]|\.\d)")
+                      + r"(?![A-Za-z0-9]|\.\d)", re.IGNORECASE)
+
+
+def _known_placeholder(table: Dict[str, str], orig: str) -> str:
+    """The invocation-wide placeholder of an id, matched
+    case-insensitively (U1234567 and u1234567 are one account)."""
+    if orig in table:
+        return table[orig]
+    up = orig.upper()
+    for k, v in table.items():
+        if k.upper() == up:
+            table[orig] = v
+            return v
+    table[orig] = _placeholder(orig, len(set(table.values())) + 1)
+    return table[orig]
 
 
 def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
-                known_ids: Optional[Dict[str, str]] = None
+                known_ids: Optional[Dict[str, str]] = None,
+                pseudonyms: Optional[Pseudonyms] = None
                 ) -> Tuple[str, Report]:
-    """Redact one export. `known_ids` (original -> placeholder) is
-    shared by every file of one invocation: an id seen in an earlier
-    file keeps its placeholder, and a new one gets the next number —
-    two accounts' files used to both become U9990001 (S036-18)."""
+    """Redact one export. `known_ids` (original -> placeholder) and
+    `pseudonyms` (wallets, transaction ids) are shared by every file of
+    one invocation: a value seen in an earlier file keeps its stand-in,
+    and a new one gets the next number — two accounts' files used to
+    both become U9990001 (S036-18), two files' distinct txids both
+    ...0001 (A2-0454)."""
     rep = Report()
     if known_ids is not None:
         rep.known_ids = known_ids
+    if pseudonyms is not None:
+        rep.pseudonyms = pseudonyms
     compiled, bad = compile_patterns(extra_patterns or [])
     rep.name_patterns = compiled
     for b in bad:
@@ -779,10 +1017,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     text = _redact_html_identity(text, rep)
     lines = text.splitlines(keepends=True)
     for orig in _collect_ids(lines):
-        if orig not in rep.known_ids:
-            rep.known_ids[orig] = _placeholder(orig,
-                                               len(rep.known_ids) + 1)
-        rep.accounts[orig] = rep.known_ids[orig]
+        rep.accounts[orig] = _known_placeholder(rep.known_ids, orig)
+    acct_upper = {a.upper() for a in rep.accounts}
     # Longest first so a shorter id that is a substring of a longer one
     # cannot pre-empt it.
     ordered = sorted(rep.accounts.items(), key=lambda kv: -len(kv[0]))
@@ -791,8 +1027,8 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     txid_cols: Dict[str, List[int]] = {}
     free_cols: Dict[str, List[Tuple[int, str]]] = {}
     in_preamble = True
-    wallet_repl = _mapper(rep.wallets, _plausible_wallet)
-    txid_repl = _mapper(rep.txids)
+    wallet_repl = _mapper(rep.pseudonyms.wallets, rep.wallets, _plausible_wallet)
+    txid_repl = _mapper(rep.pseudonyms.txids, rep.txids)
     out: List[str] = []
     for lineno, line in enumerate(lines, start=1):
         body = line.rstrip("\r\n")
@@ -809,10 +1045,15 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             txid_cols[low[0]] = [i for i, c in enumerate(low) if c in _TXID_COLS]
             free_cols[low[0]] = [(i, cells[i].strip()) for i, c in enumerate(low)
                                  if c in _FREE_TEXT_COLS]
-        elif low and len(nonempty) >= 3 and not is_ib_row and (
-                any(c in _TXID_COLS + _FREE_TEXT_COLS or _is_person_col(c)
+            free_cols[low[0]] += _name_review_cols(cells, low, alias_cols[low[0]])
+        elif low and len(nonempty) >= 3 and not is_ib_row and not any(
+                _is_label_cell(c) for c in nonempty) and (
+                any(c in _TXID_COLS + _FREE_TEXT_COLS or _is_holder_col(c)
                     or _is_account_col(c) for c in low)
                 or all(not any(ch.isdigit() for ch in c) for c in nonempty)):
+            # (A row of `Label:,value` pairs is never a header: four
+            # digit-free cells were read as one, and the label pass
+            # skipped them, A2-0765.)
             # A flat CSV's column header row.
             header_row = True
             alias_cols["__flat__"] = _identity_cols(low)
@@ -822,45 +1063,67 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             for _i, _name in free_cols["__flat__"]:
                 if _name not in rep.description_columns:
                     rep.description_columns.append(_name)
+            free_cols["__flat__"] += _name_review_cols(cells, low,
+                                                       alias_cols["__flat__"])
         if len(nonempty) >= 3:
             in_preamble = False
         sect = low[0] if is_ib_row else "__flat__"
         # Identity rows (IB Account Information) and alias columns.
         if (low and len(low) > 3 and low[0] == "account information"
-                and low[1] == "data" and low[2] in _IDENTITY_ROWS and cells[3].strip()):
-            line = _replace_field(line, cells, 3, "REDACTED")
-            rep.identity_rows += 1
+                and low[1] == "data" and low[2] not in _IB_INFO_SAFE):
+            # Every value cell: an unquoted multi-cell address kept its
+            # city and province (A2-1391).
+            hit = False
+            for i in range(3, len(cells)):
+                if cells[i].strip() and cells[i].strip().upper() not in acct_upper:
+                    line = _replace_field(line, cells, i, "REDACTED")
+                    cells = _split(line.rstrip("\r\n")) or []
+                    hit = True
+            rep.identity_rows += hit
         elif low and not header_row:
             for i in alias_cols.get(sect, []):
-                if i < len(cells) and cells[i].strip() and not _is_id(cells[i]):
+                # Blanked unless it is a COLLECTED account id (which gets
+                # its placeholder below): an id-SHAPED ZIP in a Zip
+                # column was skipped as if it were one (A2-0763).
+                if (i < len(cells) and cells[i].strip()
+                        and cells[i].strip().upper() not in acct_upper):
                     line = _replace_field(line, cells, i, "REDACTED")
+                    cells = _split(line.rstrip("\r\n")) or []
                     rep.identity_rows += 1
             for i in txid_cols.get(sect, []):
                 v = cells[i].strip() if i < len(cells) else ""
                 if len(v) >= 6 and any(c.isdigit() for c in v):
-                    if v not in rep.txids:
-                        rep.txids[v] = _pseudonym(v, len(rep.txids) + 1)
-                    line = _replace_field(line, cells, i, rep.txids[v])
+                    ph = _pseudo(v, rep.pseudonyms.txids, rep.txids)
+                    line = _replace_field(line, cells, i, ph)
+                    cells = _split(line.rstrip("\r\n")) or []
         label_done = False
         if cells and not is_ib_row and not header_row:
-            for i, c in enumerate(cells):
-                if c.strip() and _label_kind(c) == "identity":
-                    j = next((k for k in range(i + 1, len(cells))
-                              if cells[k].strip()), None)
-                    # The value is blanked unless it is a collected
-                    # account id (replaced by its placeholder below). An
-                    # id-SHAPED phone or SIN after 'Phone:' / 'SIN:' was
-                    # skipped as if it were one (S037-08).
-                    if (j is not None
-                            and cells[j].strip() not in rep.accounts):
-                        line = _replace_field(line, cells, j, "REDACTED")
-                        cells = _split(line.rstrip("\r\n")) or []
-                        rep.identity_rows += 1
+            # Every `Label:` cell of the row, wherever it sits: only the
+            # first non-empty cell was looked at, so 'Account Number:,X,
+            # Name:,Y' kept the name and 'Contact,Phone:,416…' the phone
+            # (A2-0759, A2-0765). An identity label's value is every
+            # non-empty cell up to the next `Label:` cell (a multi-cell
+            # address), except a collected account id (replaced by its
+            # placeholder below). An id-SHAPED phone or SIN after
+            # 'Phone:' / 'SIN:' is blanked like any value (S037-08).
+            i = 0
+            while i < len(cells):
+                if cells[i].strip() and _label_kind(cells[i]) == "identity":
                     label_done = True
-                    break
-                if c.strip():
-                    break
-        m = None if label_done else _HEADER_LINE.match(line)
+                    hit = False
+                    j = i + 1
+                    while j < len(cells) and not _is_label_cell(cells[j]):
+                        v = cells[j].strip()
+                        if v and v.upper() not in acct_upper:
+                            line = _replace_field(line, cells, j, "REDACTED")
+                            cells = _split(line.rstrip("\r\n")) or []
+                            hit = True
+                        j += 1
+                    rep.identity_rows += hit
+                    i = j
+                    continue
+                i += 1
+        m = None if label_done or header_row else _HEADER_LINE.match(line)
         if m and not is_ib_row:
             rest = line[m.end():]
             if rest.startswith('"'):
@@ -883,7 +1146,12 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
         # Statement preamble (before the first table): a line that is a
         # bare name, or that carries a street address / postal code, is
         # identity in its entirety (name, street, "City, PROV <postal code>").
-        if in_preamble and not is_ib_row and nonempty:
+        # A US address split across cells ('Springfield,IL,62704'),
+        # wherever it sits — three cells end the preamble (A2-0763).
+        if not is_ib_row and not header_row and _US_ZIP_CELLS.match(body):
+            line = _blank_cells(line)
+            rep.postal_codes += 1
+        elif in_preamble and not is_ib_row and nonempty:
             joined = " ".join(c.strip() for c in nonempty)
             kind = _name_line_kind(joined)
             if (kind == "name" or _STREET.search(joined)
@@ -895,8 +1163,9 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
             elif kind == "mixed":
                 rep.review.append((lineno, "name-like words (one of them a "
                                            "statement word) in a preamble line"))
+        lowline = line.lower()
         for orig, ph in ordered:
-            if orig in line:
+            if orig.lower() in lowline:
                 line = id_pats[orig].sub(ph, line)
         if _EMAIL.search(line):
             line, k = _EMAIL.subn("redacted@example.com", line)
@@ -922,9 +1191,10 @@ def redact_text(text: str, extra_patterns: Optional[List[str]] = None,
     # counted (and its lines listed for review) so the report cannot
     # claim a replacement it did not make.
     for orig in rep.accounts:
-        hits = [n for n, ln in enumerate(out, start=1) if orig in ln]
+        o = orig.lower()
+        hits = [n for n, ln in enumerate(out, start=1) if o in ln.lower()]
         if hits:
-            rep.unreplaced[orig] = sum(ln.count(orig) for ln in out)
+            rep.unreplaced[orig] = sum(ln.lower().count(o) for ln in out)
             for n in hits:
                 rep.review.append((n, "an account id the redactor "
                                       "could not replace"))
@@ -976,8 +1246,25 @@ def decode_export(raw: bytes) -> Tuple[str, str, bytes]:
         return raw.decode("cp1252", errors="replace"), "cp1252", b""
 
 
-class DenylistMissing(Exception):
+class DenylistError(Exception):
+    """The private denylist cannot be used as given — the command must
+    stop (exit 2, nothing written) rather than run without it."""
+
+
+class DenylistMissing(DenylistError):
     """TAXJSON_PII_DENYLIST names a file that does not exist."""
+
+    def __str__(self) -> str:
+        return (f"TAXJSON_PII_DENYLIST names {self.args[0]}, which does "
+                f"not exist")
+
+
+class DenylistUnreadable(DenylistError):
+    """The denylist exists but is not a readable UTF-8 text file (a
+    directory, no permission, UTF-16, cp1252). Read as plain UTF-8
+    with errors='replace', a BOM became part of the first pattern and a
+    UTF-16 or cp1252 save matched nothing — the guard turned itself off
+    without a word (A2-0045, A2-0158)."""
 
 
 def loosen(pattern: str) -> str:
@@ -1025,19 +1312,51 @@ def loosen(pattern: str) -> str:
     return "".join(out)
 
 
+def decode_denylist(raw: bytes, where: str) -> str:
+    """The denylist's text: UTF-8, a leading BOM stripped. Anything else
+    — UTF-16 (BOM or NUL-stuffed), cp1252, binary — raises
+    DenylistUnreadable: decoding it with replacement characters
+    silently disabled patterns (A2-0045, A2-0158). scripts/check-pii.sh
+    reads the same file the same way."""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")) or b"\x00" in raw:
+        raise DenylistUnreadable(
+            f"denylist {where} is UTF-16 (or holds NUL bytes); save it as "
+            f"UTF-8 text")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise DenylistUnreadable(
+            f"denylist {where} is not UTF-8 text (byte {e.start + 1}); "
+            f"save it as UTF-8") from None
+
+
 def load_denylist(path: Optional[str] = None) -> List[str]:
     """The private denylist's patterns, digit runs loosened exactly as
-    check-pii.sh loosens them. A TAXJSON_PII_DENYLIST (or `path`) that
-    names a missing file raises DenylistMissing — a typo must not turn
-    the denylist off silently. The default path may be absent."""
+    check-pii.sh loosens them. FAILS CLOSED: a TAXJSON_PII_DENYLIST (or
+    `path`) that names a missing file raises DenylistMissing, and a
+    denylist (explicit or the default path) that is a directory,
+    unreadable or not UTF-8 raises DenylistUnreadable — a guard must
+    never weaken silently. Only an ABSENT default path means 'no
+    denylist'."""
     explicit = path or os.environ.get("TAXJSON_PII_DENYLIST")
     p = Path(explicit or Path.home() / ".config" / "taxjson" / "pii-denylist")
-    if not p.is_file():
+    if not p.exists() and not p.is_symlink():
         if explicit:
             raise DenylistMissing(str(p))
         return []
+    if not p.is_file():
+        raise DenylistUnreadable(
+            f"denylist {p} is not a file (a directory, a dangling link or "
+            f"a device)")
+    try:
+        raw = p.read_bytes()
+    except OSError as e:
+        raise DenylistUnreadable(
+            f"denylist {p} cannot be read: {e.strerror or e}") from None
     pats = []
-    for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
+    for ln in decode_denylist(raw, str(p)).splitlines():
         s = ln.strip()
         if s and not s.startswith("#"):
             pats.append(loosen(s))
@@ -1058,25 +1377,39 @@ def redacted_name(src: Path, accounts: Dict[str, str],
         stem = pat.sub("REDACTED", stem)
     table = known_ids if known_ids is not None else dict(accounts)
     subs: Dict[str, str] = dict(accounts)
-    for m in (list(_IB_ID.finditer(stem))
+    for tok in name_only_ids(stem, accounts):
+        subs[tok] = _known_placeholder(table, tok)
+    if subs:
+        # Case-insensitive, like the content (A2-0451): an IB download
+        # saved as 'u1234567_2025.csv' kept the id in the copy's name.
+        bykey = {o.upper(): ph for o, ph in subs.items()}
+        alt = re.compile("|".join(re.escape(o) for o in sorted(
+            subs, key=len, reverse=True)), re.IGNORECASE)
+        stem = alt.sub(lambda m: bykey[m.group(0).upper()], stem)
+    return f"{stem}.redacted{src.suffix}"
+
+
+def name_only_ids(stem: str, accounts: Dict[str, str]) -> List[str]:
+    """Account-id tokens of a file NAME that the content did not
+    already supply: an IB id (any case) or an 8+ digit run that is not
+    a YYYYMMDD date."""
+    known = [o.upper() for o in accounts]
+    found: List[str] = []
+    for m in (list(_IB_ID_ANYCASE.finditer(stem))
               + list(re.finditer(r"(?<!\d)\d{8,}(?!\d)", stem))):
         tok = m.group(0)
-        if _DATE8.fullmatch(tok) or any(tok in o for o in subs):
+        if (_DATE8.fullmatch(tok) or any(tok.upper() in o for o in known)
+                or tok.upper() in (f.upper() for f in found)):
             continue
-        if tok not in table:
-            table[tok] = _placeholder(tok, len(table) + 1)
-        subs[tok] = table[tok]
-    if subs:
-        alt = re.compile("|".join(re.escape(o) for o in sorted(
-            subs, key=len, reverse=True)))
-        stem = alt.sub(lambda m: subs[m.group(0)], stem)
-    return f"{stem}.redacted{src.suffix}"
+        found.append(tok)
+    return found
 
 
 def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
                 check_only: bool, force: bool = False,
                 known_ids: Optional[Dict[str, str]] = None,
-                written: Optional[set] = None
+                written: Optional[set] = None,
+                pseudonyms: Optional[Pseudonyms] = None
                 ) -> Tuple[Optional[Path], Report]:
     """`known_ids` and `written` are shared by the files of one
     invocation: one pseudonym table, and no output path written twice
@@ -1089,10 +1422,22 @@ def redact_file(src: Path, out_dir: Optional[Path], extra: List[str],
             f"{src.name} is {why}, not a text export — nothing written. "
             f"Export CSV from the broker (or convert with "
             f"`taxjson-xlsx-to-csv`) and redact the CSV.")
-    text, enc, bom = decode_export(raw)
-    new, rep = redact_text(text, extra, known_ids)
+    try:
+        text, enc, bom = decode_export(raw)
+    except UnicodeDecodeError as e:
+        # A truncated UTF-16 file was a traceback that stopped the
+        # batch (A2-1392).
+        raise InputRefused(
+            f"{src.name} starts with a UTF-16 byte-order mark but is not "
+            f"valid UTF-16 (byte {e.start}: {e.reason}; a truncated "
+            f"file?) — nothing written. Re-export it.") from None
+    new, rep = redact_text(text, extra, known_ids, pseudonyms)
     # A denylisted string in the file NAME counts as a finding too.
     rep.patterns += sum(len(p.findall(src.stem)) for p in rep.name_patterns)
+    # So does an account id that only the NAME carries: --check said
+    # 'account ids: none found' and exited 0 while the write mode
+    # renamed the copy (A2-0459).
+    rep.name_ids = [Report.masked(t) for t in name_only_ids(src.stem, rep.accounts)]
     rep.encoding = enc
     if enc != "utf-8":
         rep.notes.append(f"input was {enc}; the copy is written as UTF-8 "
@@ -1146,6 +1491,9 @@ def print_report(src: Path, dst: Optional[Path], rep: Report) -> None:
             print(f"    {Report.masked(orig)} -> {ph}")
     else:
         print("  account ids: none found")
+    if rep.name_ids:
+        print(f"  account ids in the FILE NAME only: {len(rep.name_ids)} "
+              f"({', '.join(rep.name_ids)}) — the copy's name gets a placeholder")
     print(f"  identity rows/cells (name/alias/address): {rep.identity_rows}")
     print(f"  e-mail addresses: {rep.emails}")
     for label, n in (("names in free text", rep.names),
@@ -1195,9 +1543,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     _, bad_also = compile_patterns(list(args.also))
     try:
         deny = [] if args.no_denylist else load_denylist()
-    except DenylistMissing as e:
-        print(f"taxjson redact: TAXJSON_PII_DENYLIST names {e}, which does "
-              f"not exist — fix the path (or pass --no-denylist). "
+    except DenylistError as e:
+        print(f"taxjson redact: {e} — fix it (or pass --no-denylist). "
               f"Nothing written.", file=sys.stderr)
         return 2
     bad_deny = [i for i, p in enumerate(deny, 1) if compile_patterns([p])[1]]
@@ -1215,6 +1562,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     extra = list(args.also) + deny
     rc = 0
     known_ids: Dict[str, str] = {}
+    pseudonyms = Pseudonyms()
     written: set = set()
     for f in args.files:
         src = Path(f)
@@ -1225,7 +1573,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             dst, rep = redact_file(src, Path(args.out) if args.out else None,
                                    extra, args.check, args.force,
-                                   known_ids, written)
+                                   known_ids, written, pseudonyms)
         except InputRefused as e:
             print(f"taxjson redact: {e}", file=sys.stderr)
             rc = 1

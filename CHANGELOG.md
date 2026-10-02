@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+- `taxjson redact` and the generate-parser privacy gate no longer lose a
+  private-denylist pattern silently: a leading UTF-8 BOM is stripped,
+  and a denylist that is UTF-16, not UTF-8, unreadable or a directory
+  (at the default path too) stops the run with exit 2 and nothing
+  written (audit A2-0045, A2-0158, A2-0458, A2-0448).
+- `taxjson redact` covers more identity shapes: every Field Value of an
+  IB `Account Information` section except a safe list (Account Type,
+  Base Currency, ...), every value cell of a multi-cell address (CSV
+  and HTML, inline tags included), every `Label:` cell in a row
+  wherever it sits, uncoloned `SIN,` / `Phone,` / `Tax ID,` label
+  cells, holder / party labels and columns by pattern (Payee Name,
+  Recipient, Trustee, Legal Name ...; any other `X Name` column is
+  listed for REVIEW), French comma labels (`Nom du client,`), dotted
+  SINs and spaced / dotted SSNs, a US ZIP in its own cell, and
+  upper-case bech32 addresses. Account ids are matched
+  case-insensitively in the content and the file name, and a column
+  header row is no longer altered by the `Name,` line rule (audit
+  A2-0046, A2-0455, A2-0456, A2-0457, A2-0460, A2-0759, A2-0762,
+  A2-0763, A2-0764, A2-0765, A2-1386, A2-1389, A2-1390, A2-1391,
+  A2-0451, A2-0452).
+- `taxjson redact` shares transaction-id and wallet pseudonyms across
+  every file of one run, like account ids: two redacted Coinbase
+  exports no longer share an id (taxjson-sort --dedup dropped a real
+  trade) and a redacted Kraken trades + ledgers set still links each
+  trade to its ledger rows (audit A2-0454, A2-0766).
+- `taxjson redact --check` exits 1 when an account id appears only in
+  the file NAME (audit A2-0459); a truncated UTF-16 input is one
+  refusal line and the rest of the batch is still redacted (A2-1392).
+- `taxjson-generate-parser` no longer sends an account id from the
+  input's file name to the model API: the default brokerage, class and
+  DEFAULT_ACCOUNT names use a placeholder, and its messages mask the
+  file name (audit A2-0447).
+- Source comments, tests and this changelog no longer quote amounts or
+  positions from the maintainer's own books; the futures tests use a
+  synthetic CL round trip (A2-0758, A2-1382, A2-1383, A2-1385).
+- `scripts/check-pii.sh` no longer passes silently on a private denylist
+  saved with a UTF-8 BOM (the BOM is dropped, so the first pattern
+  works) and fails closed on a UTF-16, non-UTF-8 or directory denylist
+  instead of reporting clean (A2-0044, A2-0450, A2-0458). It now also
+  catches a lower-case IB account id (u + 7-8 digits, as IB HTML element
+  ids carry it) in content and file names (A2-0449), a labelled SIN in
+  any separator form including unspaced and dotted (A2-0760, A2-1387),
+  a labelled SSN / TIN / Tax ID (A2-1387), and an 8-9 digit value under
+  an Account column in the pre-push `--diff` scan of a .csv/.tsv
+  (A2-1388).
+- `taxjson sanity --json` and the file-given-twice / file-in-two-groups
+  messages mask an account id in a holdings file name, as the text
+  listing already did (audit A2-1380); a holdings argument that is a
+  symlink loop is a one-line error instead of a traceback (A2-1392).
+- Every parser message (Questrade, RBC, Webull, Kraken, Coinbase, the
+  generic importer, security-override and .tt errors) now names its file
+  the masked way IB's already did, so a download named after an account
+  number prints `55***_activity.csv`, not the number; the `run` stage
+  line for a .tt file too. The IB diagnostics and the other parsers are
+  now pinned by tests (audit A2-0461).
+- Two .tt files (or generic files) whose names differ only in an
+  account-number token (manual_55500001.tt / manual_55500002.tt) are two
+  sources again: dedup read both as `manual_55***.tt`, one file
+  repeating itself, and silently dropped one file's identical line. A
+  masked name now carries a short hash of the real name (`source_key`,
+  never the name itself) for dedup only (audit A2-0159).
+- Kraken notes, errors and skip summaries now mask every ledger refid
+  and txid to its first two characters + *** (the multi-leg instant-trade
+  note, the orphan-leg skip count, the both-sides-many-legs refusal and
+  the unparseable-cell errors printed it in full into the console, .sum
+  and .diag; audit A2-0756, A2-0757, A2-1381). The id itself stays the
+  work-JSON transaction id.
 - A warrant/right, adjusted-series or futures-option flag in a loss's
   window (warn-only: nothing is denied) now keeps the checklist's
   `wash-reviewed` step open and is listed by `taxjson wash-sales`
@@ -1575,7 +1642,7 @@
   `Code` (O opening, C closing, C;O both) is kept on each trade. A short
   IB declares (a sale coded O, or C;O that closed the long and opened the
   short) is listed as a real short, not "missing a buy — fix before
-  filing", and is never offered as a phantom (the owner's 2025 AMZN short
+  filing", and is never offered as a phantom (a declared real short
   no longer blocks the checklist). A sale coded C with no position in the
   data — a long option bought before the statements — is always flagged
   (options and futures included) with IB's Basis, and `option-boundary`
@@ -3736,8 +3803,8 @@
   close carries the realized native P/L (commissions included), converted
   at the closing leg's rate. Line 6 shows a gain as proceeds and a loss as
   ACB (the T5008 shape); `sum`, `form-export`, `audit` (which re-derives
-  the P/L from the broker rows) and `fx-cash` agree. Owner books: 2025
-  +241.09 (CL), 2026 -2,251.16. Options on futures are unchanged.
+  the P/L from the broker rows) and `fx-cash` agree. Real books moved
+  in both years. Options on futures are unchanged.
 - **T1135: a futures contract has no cost amount.** A long futures
   position was counted at its full notional (one CL contract added about
   80,000 CAD to the threshold test and could flip "filing required").
@@ -3881,8 +3948,8 @@
   `deductions`/`carrying_charges` in `[estimate]` (which `instalments`
   reads too), lower net and taxable income; the AMT base takes the
   deductions in full and carrying charges at 50%. Before, a year with
-  an RRSP deduction and little other income was overstated (the
-  owner's filed 2025 mix: +16,082 before, +1,354 after) and a binding
+  an RRSP deduction and little other income was overstated (by
+  thousands on a typical salary-plus-RRSP mix) and a binding
   AMT could read as not binding.
 - **A malformed `ticker.map` line stops the run.** A typo such as
   `TOBASE XYZ.US=XYZ.TO` or `TOBSE ...` dropped that rule, which changed
@@ -3962,7 +4029,7 @@
   loss in full: ten times the loss it could back. Replacement units are
   now claimed in a fixed order, each by one denied unit, across fills
   and across losses; a call that expires before day 30 is not held on
-  day 30. Owner books: 2025 -28.41, 2026 -86.53.
+  day 30. Real books moved by small amounts.
 - **Year-to-year hand-off (`taxjson handoff`).** `close-year` now also
   records every sale, the positions and cost at Dec 31 (with the
   superficial-loss deferrals the full history decided), and the trades
