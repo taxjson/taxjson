@@ -742,10 +742,9 @@ class TestListAsOf(unittest.TestCase):
 
 
 class TestListAsOfOwnerCalls(unittest.TestCase):
-    """OWNER-LIST-ASOF-WASH: on the owner's 2025 books `list --date
-    2025-12-31` gave two long-call lines (T ... calls) a cost below the
-    engine's by the in-account superficial-loss addition (14,817.50 vs
-    15,305.50). The same shape, synthetic: a long call sold at a loss
+    """OWNER-LIST-ASOF-WASH: on real books `list --date YYYY-12-31`
+    gave long-call lines a cost below the engine's by the in-account
+    superficial-loss addition. The same shape, synthetic: a long call sold at a loss
     and bought back within 30 days."""
 
     @rule("CA-SL-09")

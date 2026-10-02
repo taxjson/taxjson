@@ -358,7 +358,7 @@ _STREET_FR = re.compile(
 _PO_BOX = re.compile(r"\b(?:P\.?\s*O\.?\s*Box|Postal Box)\s*#?\s*\d+", re.IGNORECASE)
 _SIN_SEP = re.compile(r"(?<![\d-])\d{3}([ -])\d{3}\1\d{3}(?![\d-])")
 # After a label, any separator form: a SIN 3-3-3 and an SSN 3-2-4 with
-# spaces, dashes, dots or none ('SIN: 046.454.286', 'SSN: 078 05 1120'
+# spaces, dashes, dots or none (a dotted SIN or a spaced / dotted SSN
 # were kept, A2-1389).
 _SIN_CTX = re.compile(
     r"(\b(?:SIN|S\.I\.N\.?|NAS|social insurance(?: number)?|SSN|TIN|tax id)\b\s*[:#]?\s*)"

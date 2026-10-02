@@ -30,7 +30,14 @@
 # every path component, not just the basename (IB names downloads and
 # folders after the account id) — including the new path of a pure
 # rename. In a .csv/.tsv, an 8-9 digit value in a column headed
-# Account / Account # / Account Number is an account number. Denylist
+# Account / Account # / Account Number is an account number (the pre-push
+# --diff reads the header from the hunk or the working-tree file). An IB
+# id matches in either case (u1234567 in IB HTML element ids). A SIN
+# labelled SIN / NAS / social insurance matches in any separator form
+# (none, space, dash, dot) when its check digit holds; an SSN labelled
+# SSN / TIN / ITIN / Tax ID likewise. The denylist must be UTF-8 (a
+# leading BOM is dropped; NUL bytes, invalid UTF-8 or a directory fail
+# the scan, since no pattern of such a file could ever match). Denylist
 # matching is case-insensitive, and a run of 4+ literal digits in a
 # denylist pattern also matches with spaces or dashes between the digits
 # (1234 5678, 1234-5678). --identity reads "Name <email>" lines and
@@ -311,6 +318,52 @@ sin_filter() {
 # glyph-width arrays: '278 333 474') pass the check digit by chance.
 sin_text() { grep -av "(embedded text)$SEP" | sin_filter; }
 
+# A LABELLED SIN in any separator form — spaced, dashed, dotted or none
+# (A2-0760, A2-1387): the label makes an unspaced 9-digit run safe to
+# test, and the check digit still has to hold.
+sin_label_filter() {
+  grep -av "(embedded text)$SEP" | LC_ALL=C awk '
+  function luhn(d,   i, t, x) {
+    t = 0
+    for (i = 9; i >= 1; i--) {
+      x = substr(d, i, 1) + 0
+      if ((9 - i) % 2 == 1) { x *= 2; if (x > 9) x -= 9 }
+      t += x
+    }
+    return t % 10 == 0
+  }
+  {
+    s = $0; keep = 0
+    while (match(s, /[0-9][0-9][0-9][ .-]?[0-9][0-9][0-9][ .-]?[0-9][0-9][0-9]/)) {
+      pre = (RSTART > 1) ? substr(s, RSTART - 1, 1) : ""
+      post = substr(s, RSTART + RLENGTH, 1)
+      d = substr(s, RSTART, RLENGTH); gsub(/[ .-]/, "", d)
+      if (pre !~ /[0-9]/ && post !~ /[0-9]/ && luhn(d)) { keep = 1; break }
+      s = substr(s, RSTART + 1)
+    }
+    if (keep) print
+  }'
+}
+
+# A labelled US SSN / TIN (3-2-4, any separator) that could be issued:
+# area not 000, 666 or 9xx, group not 00, serial not 0000 (A2-1387).
+ssn_filter() {
+  grep -av "(embedded text)$SEP" | LC_ALL=C awk '
+  {
+    s = $0; keep = 0
+    while (match(s, /[0-9][0-9][0-9][ .-]?[0-9][0-9][ .-]?[0-9][0-9][0-9][0-9]/)) {
+      pre = (RSTART > 1) ? substr(s, RSTART - 1, 1) : ""
+      post = substr(s, RSTART + RLENGTH, 1)
+      d = substr(s, RSTART, RLENGTH); gsub(/[ .-]/, "", d)
+      a = substr(d, 1, 3); g = substr(d, 4, 2); r = substr(d, 6, 4)
+      if (pre !~ /[0-9]/ && post !~ /[0-9]/ && a != "000" && a != "666" \
+          && a !~ /^9/ && g != "00" && r != "0000") { keep = 1; break }
+      s = substr(s, RSTART + 1)
+    }
+    if (keep) print
+  }'
+}
+
 report() {   # report LABEL PATTERN [EXEMPT-REGEX [FILTER]]
   local out
   # -a throughout: a hit line with a stray non-UTF-8 byte must stay a
@@ -351,6 +404,11 @@ if [ -n "$NAMES" ]; then
     b="$f"
     if printf '%s\n' "$b" | grep -oE 'U[0-9]{7,8}' | grep -qvE '^U1234567[0-9]?$|^U9990'; then n="$n$f
 "; continue; fi
+    # A lower-case id (IB HTML names: u1234567.html) — not glued to a
+    # letter before it, so an ordinary word ending in 'u' is not one (A2-0449).
+    if printf '%s\n' "$b" | grep -oE '(^|[^A-Za-z])u[0-9]{7,8}' | sed -E 's/^[^u]//' \
+        | grep -qvE '^u1234567[0-9]?$|^u9990'; then n="$n$f
+"; continue; fi
     # 8+ digit runs: only a synthetic 9990… id or a REAL date (YYYYMMDD
     # that parses) is exempt — 20991399 is an id, not a date.
     while IFS= read -r tok; do
@@ -368,7 +426,8 @@ if [ "$mode" != identity ]; then
 # ---- generic patterns -------------------------------------------------
 # The IB id inside a token too (an HTML element id `tbl..._U<7 digits>Body`):
 # only a letter/digit right before the U, or a digit right after, ends it.
-report "IB account id (U + 7-8 digits)"                  '(^|[^A-Za-z0-9])U[0-9]{7,8}([^0-9]|$)' 'U1234567[0-9]?|U9990[0-9]+'
+# Either case: IB HTML element ids carry the id lower-cased (A2-0449).
+report "IB account id (U + 7-8 digits)"                  '(^|[^A-Za-z0-9])[Uu][0-9]{7,8}([^0-9]|$)' '[Uu]1234567[0-9]?|[Uu]9990[0-9]+'
 # 'Account Number / Numéro de compte:,,,,,,,,NNNNNNNN' (Webull) puts a
 # bilingual label and CSV padding between the two.
 report "8-digit number next to the word account"        '[Aa]ccount[^0-9]{0,20}[0-9]{8}|[Aa]ccount [Nn](umber|o\.?)[^0-9]{0,40}[0-9]{8}' '9990[0-9]{4,}|1234567[89]'
@@ -379,49 +438,83 @@ fi
 report "e-mail address not on the allowlist"            '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}' "$ALLOW_EMAILS"
 if [ "$mode" != identity ]; then
 report "social insurance number shape (3-3-3, valid check digit)" '\b[0-9]{3}[ -][0-9]{3}[ -][0-9]{3}\b' '' sin_text
+report "social insurance number (labelled SIN / NAS, valid check digit)" \
+  '(\b([Ss][Ii][Nn]|NAS)\b|[Ss]ocial [Ii]nsurance|[Aa]ssurance [Ss]ociale)[^0-9A-Za-z]{0,10}([Nn]umber|[Nn]o|[Nn]um.{1,2}ro)?[^0-9A-Za-z]{0,20}[0-9]{3}[ .-]?[0-9]{3}[ .-]?[0-9]{3}([^0-9]|$)' '' sin_label_filter
+report "social security number (labelled SSN / TIN / Tax ID)" \
+  '(\b(SSN|I?TIN)\b|\b[Tt]ax ?[Ii][Dd]\b|[Ss]ocial [Ss]ecurity)[^0-9A-Za-z]{0,10}([Nn]umber|[Nn]o)?[^0-9A-Za-z]{0,20}[0-9]{3}[ .-]?[0-9]{2}[ .-]?[0-9]{4}([^0-9]|$)' '' ssn_filter
 report "credential-looking string"                      'ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|(api[_-]?key|secret|token|passw(or)?d)["'"'"' ]*[=:]["'"'"' ]*[A-Za-z0-9_\-]{20,}' ''
 fi
-# ---- account-number columns (tree / ad hoc) ---------------------------
+# ---- account-number columns (tree / ad hoc / pre-push diff) ----------
 # A Questrade or RBC export names the account in a column ("Account #",
 # "Account"), far from the word on the line the regex above needs.
+# MARKED=1 (diff mode): each line starts with '+' (an added row, the only
+# kind reported) or ' ' (context, or the file's header row from the
+# working tree — a hunk rarely carries the header).
+ACCT_AWK='
+  function cells(line,   n, i, c, q, cur) {
+    n = 0; q = 0; cur = ""
+    for (i = 1; i <= length(line); i++) {
+      c = substr(line, i, 1)
+      if (c == "\"") { q = !q; continue }
+      if (c == fs && !q) { C[++n] = cur; cur = ""; continue }
+      cur = cur c
+    }
+    C[++n] = cur
+    return n
+  }
+  function trim(v) { gsub(/^[ \t]+|[ \t]+$/, "", v); return v }
+  BEGIN { fs = (tolower(FN) ~ /\.tsv$/) ? "\t" : "," }
+  {
+    line = $0; m = "+"
+    if (MARKED) { m = substr(line, 1, 1); line = substr(line, 2) }
+    sub(/\r$/, "", line); sub(/^\357\273\277/, "", line)
+    n = cells(line); hdr = 0
+    for (i = 1; i <= n; i++) {
+      v = tolower(trim(C[i]))
+      if (v ~ /^account( ?#| ?number| ?no\.?| ?id)?$/) { col[i] = 1; hdr = 1 }
+    }
+    if (hdr || m != "+") next
+    for (i in col) {
+      v = trim(C[i])
+      if (v ~ /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]?$/ \
+          && v !~ /^9990/ && v !~ /^1234567[89]$/) {
+        print FN SEP (MARKED ? "added row" : NR) ":" line; break
+      }
+    }
+  }'
+acct_out=""
 if [ "$mode" = tree ]; then
   acct_cols() {
     printf '%s\n' "$SCANLIST" | grep -iE '\.(csv|tsv)$' | while IFS= read -r f; do
       [ -f "$f" ] || continue
-      LC_ALL=C awk -v FN="$f" -v SEP="$SEP" '
-        function cells(line,   n, i, c, q, cur) {
-          n = 0; q = 0; cur = ""
-          for (i = 1; i <= length(line); i++) {
-            c = substr(line, i, 1)
-            if (c == "\"") { q = !q; continue }
-            if (c == fs && !q) { C[++n] = cur; cur = ""; continue }
-            cur = cur c
-          }
-          C[++n] = cur
-          return n
-        }
-        function trim(v) { gsub(/^[ \t]+|[ \t]+$/, "", v); return v }
-        BEGIN { fs = (tolower(FN) ~ /\.tsv$/) ? "\t" : "," }
-        {
-          sub(/\r$/, ""); n = cells($0); hdr = 0
-          for (i = 1; i <= n; i++) {
-            v = tolower(trim(C[i]))
-            if (v ~ /^account( ?#| ?number| ?no\.?| ?id)?$/) { col[i] = 1; hdr = 1 }
-          }
-          if (hdr) next
-          for (i in col) {
-            v = trim(C[i])
-            if (v ~ /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]?$/ \
-                && v !~ /^9990/ && v !~ /^1234567[89]$/) {
-              print FN SEP NR ":" $0; break
-            }
-          }
-        }' "$f"
+      LC_ALL=C awk -v FN="$f" -v SEP="$SEP" -v MARKED=0 "$ACCT_AWK" "$f"
     done
   }
-  out="$(acct_cols | grep -avE -e "$PII_OK" | sed "s#^${XT:-/nonexistent}/##" | tr "$SEP" ':')"
-  [ -z "$out" ] || fail "8-9 digit account number under an Account column" "$(printf '%s\n' "$out" | mask)"
+  acct_out="$(acct_cols | grep -avE -e "$PII_OK" | sed "s#^${XT:-/nonexistent}/##" | tr "$SEP" ':')"
+elif [ "$mode" = diff ]; then
+  # The pre-push diff (A2-1388): split the hunks of every .csv/.tsv per
+  # file, then read them with the file's header row in front.
+  DC="$(mktemp -d)"; trap 'rm -rf "$DC" "${RAWF:-}"' EXIT
+  printf '%s\n' "$RAW" | LC_ALL=C awk -v D="$DC" '
+    /^diff --git / { out = ""; next }
+    /^\+\+\+ / { p = substr($0, 5); sub(/^b\//, "", p); out = ""
+                 if (tolower(p) ~ /\.(csv|tsv)$/) { k++; out = D "/" k
+                   print p > (out ".path"); close(out ".path") }
+                 next }
+    out != "" && /^[+ ]/ { print > out }'
+  acct_diff() {
+    local pf f path
+    for pf in "$DC"/*.path; do
+      [ -f "$pf" ] || continue
+      f="${pf%.path}"; path="$(cat "$pf")"
+      [ -f "$f" ] || continue
+      { [ -f "$path" ] && head -n 1 "$path" | sed 's/^/ /'; cat "$f"; } \
+        | LC_ALL=C awk -v FN="$path" -v SEP="$SEP" -v MARKED=1 "$ACCT_AWK"
+    done
+  }
+  acct_out="$(acct_diff | grep -avE -e "$PII_OK" | tr "$SEP" ':')"
 fi
+[ -z "$acct_out" ] || fail "8-9 digit account number under an Account column" "$(printf '%s\n' "$acct_out" | mask)"
 
 # Show where a denylisted name is, never what: every path component the
 # pattern matches is hidden (and the whole path when no single one does).
@@ -440,6 +533,17 @@ hide_parts() {   # hide_parts PATTERN  (paths on stdin)
 }
 
 # ---- private denylist -------------------------------------------------
+# Valid UTF-8? iconv (glibc / macOS) or python3; with neither, the NUL
+# and BOM guards still apply.
+deny_utf8() {
+  if command -v iconv >/dev/null 2>&1; then
+    iconv -f UTF-8 -t UTF-8 < "$1" >/dev/null 2>&1
+  elif PYU="$(command -v "${PYTHON:-python3}" 2>/dev/null)" && [ -n "$PYU" ]; then
+    "$PYU" -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "$1" 2>/dev/null
+  else
+    return 0
+  fi
+}
 # A denylist that was asked for (TAXJSON_PII_DENYLIST) but is missing, or
 # one that exists but cannot be read, fails the scan: passing on the
 # generic patterns alone would drop the guard without a word.
@@ -450,9 +554,24 @@ if [ -e "$DENY" ] && [ ! -r "$DENY" ]; then
 elif [ ! -e "$DENY" ] && [ -n "${TAXJSON_PII_DENYLIST:-}" ]; then
   fail "private denylist $DENYSHOW (TAXJSON_PII_DENYLIST) does not exist"
   denynote="denylist missing"
+elif [ -e "$DENY" ] && [ ! -f "$DENY" ]; then
+  fail "private denylist $DENYSHOW is not a regular file (a directory?) — that guard is DISABLED until fixed"
+  denynote="denylist not a file"
+elif [ -f "$DENY" ] && ! LC_ALL=C tr -d '\0' < "$DENY" | cmp -s - "$DENY"; then
+  # A UTF-16 save (Notepad 'Unicode') reads as NUL-stuffed bytes: no
+  # pattern would ever match (A2-0044/A2-0450).
+  fail "private denylist $DENYSHOW contains NUL bytes (saved as UTF-16?) — save it as UTF-8; that guard is DISABLED until fixed"
+  denynote="denylist not UTF-8"
+elif [ -f "$DENY" ] && ! deny_utf8 "$DENY"; then
+  fail "private denylist $DENYSHOW is not valid UTF-8 (a cp1252 / Latin-1 save?) — save it as UTF-8; an accented pattern would never match"
+  denynote="denylist not UTF-8"
 elif [ -r "$DENY" ]; then
+  BOM=$'\xef\xbb\xbf'
   while IFS= read -r pat || [ -n "$pat" ]; do
     pat="${pat%$'\r'}"
+    # A UTF-8 BOM (Notepad's 'UTF-8 with BOM') glued to the first
+    # pattern would make it unmatchable (A2-0044/A2-0458).
+    pat="${pat#"$BOM"}"
     case "$pat" in ''|'#'*) continue ;; esac
     printf '' | grep -qE -e "$pat" -- - 2>/dev/null; rc=$?
     if [ "$rc" -eq 2 ]; then fail "denylist line is not a valid extended regex (that guard is DISABLED until fixed): $(printf '%s' "$pat" | mask)"; continue; fi
