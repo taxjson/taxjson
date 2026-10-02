@@ -297,7 +297,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
-                 "Remembrance Day, Truth and Reconciliation).", cont=True),
+                 "Remembrance Day, Truth and Reconciliation; elsewhere "
+                 "weekends only). The cycle and calendar are the listing's "
+                 "market, not the quote currency's: an IB US-dollar unit "
+                 "listed on the TSX settles on the Canadian calendar, and "
+                 "a US-dollar line listed on the LSE is an LSE security "
+                 "(.L) on the UK cycle.", cont=True),
             Rule("CA-DATE-06",
                  "The generic importer uses a mapped settle column, else "
                  "this cycle (settle_on_trade_date = true keeps the trade "
@@ -319,19 +324,30 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A trade is dated by its exchange's trade date, not the "
                  "broker's clock: IB stamps US Eastern time, so a US stock "
                  "or ETF filled in the overnight session (20:00 ET or "
-                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "later, Sunday to Thursday nights, and its after-midnight "
+                 "part on a day the NYSE is closed) trades on the NEXT "
                  "trading day and settles from it (a Dec 30 20:30 fill "
-                 "trades Dec 31 and settles in January), and an ASX fill "
-                 "is dated in Sydney time. The overnight fill sorts before "
-                 "that day's other trades; the broker's stamp is kept "
-                 "(broker_time)."),
+                 "trades Dec 31 and settles in January). So does a "
+                 "US-dollar futures or futures-option fill in the CME "
+                 "evening session (18:00 ET or later, Sunday to Thursday, "
+                 "or on a weekday the exchange is closed) and an SPX, "
+                 "SPXW, XSP or VIX option filled in Cboe Global Trading "
+                 "Hours (20:15 ET or later). A fill on the ASX, HKEX, "
+                 "Tokyo, Singapore or NZX exchanges (an AUD, HKD, JPY, SGD "
+                 "or NZD row, any asset class) is dated in the exchange's "
+                 "local time. Every other fill keeps the clock date. A "
+                 "moved fill sorts before that day's other trades; the "
+                 "broker's stamp is kept (broker_time)."),
             Rule("CA-DATE-14",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
                  "time, Questrade stamps midnight): a write listed before "
                  "its same-day buy-back is a write and a buy-back, and a "
                  "sale listed before a same-day rebuy is made from the "
-                 "shares held before it. A newest-first export is read "
+                 "shares held before it. A Questrade file written by "
+                 "`taxjson fetch` keeps the API's row order within a day, "
+                 "and a re-fetch merge keeps it too. A newest-first export "
+                 "is read "
                  "bottom-up; rows of different accounts at one moment "
                  "follow the accounts' order in taxjson.toml. Rows that "
                  "settle on the same day but traded on different days "
@@ -425,8 +441,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A futures contract is booked on its settled P/L: nothing "
                  "is paid to open one, so its notional is never converted. "
                  "Each close's P/L (commissions included, average cost of "
-                 "the open contracts) is converted at that closing leg's "
-                 "rate;"),
+                 "the open contracts; a negative price keeps its sign) is "
+                 "converted at that closing leg's rate;"),
             Rule("CA-FX-05",
                  "Schedule 3 shows a gain as proceeds and a loss as ACB.",
                  cont=True),
@@ -449,7 +465,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A commission refunded later (an IB Commission "
                  "Adjustments row naming the trade) is netted against that "
                  "trade's commission: a lower ACB for a purchase, a "
-                 "smaller outlay for a sale.", cont=True),
+                 "smaller outlay for a sale. The trade may be in another "
+                 "statement of the account (a December trade refunded in "
+                 "January); a refund naming one execution of an order "
+                 "nets against that order. A refund that names no single "
+                 "trade stays a separate fee, with a note.", cont=True),
             Rule("CA-ACB-03",
                  "The single pool needs a full `taxjson run` (not "
                  "`--account`, and no elections pending).", cont=True),
@@ -468,7 +488,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Its declared amount (a dividend, and by law also the new "
                  "shares' cost) is not in the broker's export: add it "
                  "(distributions.map or a .tt ADJUST). The new shares are "
-                 "an acquisition for the superficial-loss rule."),
+                 "an acquisition for the superficial-loss rule. Shares of "
+                 "ANOTHER security (another class) paid as a stock "
+                 "dividend are not booked: the parse says UNBOOKED; enter "
+                 "them by hand."),
             Rule("CA-DIST-01",
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gains distribution, a late return-of-capital "
@@ -841,7 +864,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
-                 "Remembrance Day, Truth and Reconciliation).", cont=True),
+                 "Remembrance Day, Truth and Reconciliation; elsewhere "
+                 "weekends only). The cycle and calendar are the listing's "
+                 "market, not the quote currency's: an IB US-dollar unit "
+                 "listed on the TSX settles on the Canadian calendar, and "
+                 "a US-dollar line listed on the LSE is an LSE security "
+                 "(.L) on the UK cycle.", cont=True),
             Rule("US-DATE-06",
                  "The generic importer uses a mapped settle column, else "
                  "this cycle (settle_on_trade_date = true keeps the trade "
@@ -863,18 +891,29 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A trade is dated by its exchange's trade date, not the "
                  "broker's clock: IB stamps US Eastern time, so a US stock "
                  "or ETF filled in the overnight session (20:00 ET or "
-                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "later, Sunday to Thursday nights, and its after-midnight "
+                 "part on a day the NYSE is closed) trades on the NEXT "
                  "trading day and settles from it (a Dec 30 20:30 fill "
-                 "trades Dec 31 and settles in January), and an ASX fill "
-                 "is dated in Sydney time. The overnight fill sorts before "
-                 "that day's other trades; the broker's stamp is kept "
-                 "(broker_time)."),
+                 "trades Dec 31 and settles in January). So does a "
+                 "US-dollar futures or futures-option fill in the CME "
+                 "evening session (18:00 ET or later, Sunday to Thursday, "
+                 "or on a weekday the exchange is closed) and an SPX, "
+                 "SPXW, XSP or VIX option filled in Cboe Global Trading "
+                 "Hours (20:15 ET or later). A fill on the ASX, HKEX, "
+                 "Tokyo, Singapore or NZX exchanges (an AUD, HKD, JPY, SGD "
+                 "or NZD row, any asset class) is dated in the exchange's "
+                 "local time. Every other fill keeps the clock date. A "
+                 "moved fill sorts before that day's other trades; the "
+                 "broker's stamp is kept (broker_time)."),
             Rule("US-DATE-13",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
                  "time, Questrade stamps midnight): a write listed before "
                  "its same-day buy-back is a short sale closed by the "
                  "buy-back, and FIFO takes same-moment lots in that order. "
+                 "A Questrade file written by `taxjson fetch` keeps the "
+                 "API's row order within a day, and a re-fetch merge keeps "
+                 "it too. "
                  "A newest-first export is read bottom-up; rows of "
                  "different accounts at one moment follow the accounts' "
                  "order in taxjson.toml. Fixed places at one moment: an "
@@ -950,7 +989,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A commission refunded later (an IB Commission "
                  "Adjustments row naming the trade) is netted against that "
                  "trade's commission: a lower basis for a purchase, higher "
-                 "proceeds for a sale.", cont=True),
+                 "proceeds for a sale. The trade may be in another "
+                 "statement of the account (a December trade refunded in "
+                 "January); a refund naming one execution of an order "
+                 "nets against that order. A refund that names no single "
+                 "trade stays a separate fee, with a note.", cont=True),
             Rule("US-HOLD-01",
                  "Long-term when held more than one year, otherwise "
                  "short-term"),
@@ -1018,7 +1061,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "wash-sale rule."),
             Rule("US-STKDIV-02",
                  "A taxable stock dividend (§305(b), e.g. one with a cash "
-                 "option) is not detected: enter it by hand.", cont=True),
+                 "option) is not detected: enter it by hand. Shares of "
+                 "ANOTHER security (another class) paid as a stock "
+                 "dividend are not booked: the parse says UNBOOKED; enter "
+                 "them and the §307 basis split by hand.", cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",
@@ -1178,7 +1224,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-FUT-01",
                  "A futures contract is booked on its settled P/L: nothing "
                  "is paid to open one, so its notional is never converted "
-                 "or reported. A close's P/L (commissions included) is "
+                 "or reported. A close's P/L (commissions included; a "
+                 "negative price keeps its sign) is "
                  "taken first in, first out from the open contracts, and "
                  "a non-USD contract's P/L is converted at the closing "
                  "leg's rate."),
