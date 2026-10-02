@@ -203,6 +203,80 @@ def write_lots(transactions: List[TaxTransaction],
     return out
 
 
+def filed_locks(root, settings: Optional[Dict[str, Any]] = None,
+                warn=None):
+    """Every filed-year lock this project can see: its own
+    ``filed/<year>.json`` files plus the previous year's record named by
+    ``[settings] prior_year_record`` (the per-year project layout keeps
+    the lock in the previous year's folder). Returns ``(years, timing)``:
+    the locked years, and for each lock that records it the option
+    timing its return used (``option_premium_timing``,
+    ``option_grant_since``) — what `straddling` takes as ``filed_years``
+    and ``filed_timing``. ``warn(text)`` is called for a lock that
+    cannot be read (its timing is then unknown). A ``prior_year_record``
+    that is not a path string or does not exist is skipped (the config
+    readers and `handoff` report it). Shared by option-boundary and
+    edge-cases, so the two give one verdict on the same contract
+    (audit A2-0390, A2-1205)."""
+    import json as _json
+    from pathlib import Path as _Path
+    root = _Path(root)
+    settings = settings or {}
+    paths: List[Any] = []
+    for f in sorted((root / "filed").glob("*.json")):
+        try:
+            paths.append((int(f.stem), f, f"filed/{f.name}"))
+        except ValueError:
+            continue
+    pyr = settings.get("prior_year_record")
+    if isinstance(pyr, str) and pyr.strip():
+        p = _Path(pyr.strip()).expanduser()
+        p = p if p.is_absolute() else root / p
+        if p.is_file() and not any(
+                q.resolve() == p.resolve() for _y, q, _l in paths):
+            paths.append((None, p, f"prior_year_record {pyr.strip()}"))
+    years: set = set()
+    timing: Dict[int, Dict[str, Any]] = {}
+    for fy, f, label in paths:
+        try:
+            doc = _json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            doc = None
+            if warn:
+                warn(f"cannot read {label} ({e}) — its recorded option "
+                     f"timing is unknown; `taxjson check-filed` checks "
+                     f"the lock.")
+        if fy is None:
+            y = doc.get("year") if isinstance(doc, dict) else None
+            if not (isinstance(y, int) and not isinstance(y, bool)):
+                try:
+                    y = int(settings.get("year")) - 1
+                except (TypeError, ValueError):
+                    continue
+            fy = y
+        years.add(fy)
+        ot = doc.get("option_timing") if isinstance(doc, dict) else None
+        if isinstance(ot, dict):
+            timing[fy] = ot
+    return years, timing
+
+
+def expiry_cutoff(transactions: List[TaxTransaction], year: int,
+                  today: Optional[date] = None,
+                  tax_date: Optional[str] = None) -> str:
+    """The date an option contract must have expired by to be MISSING
+    its expiry row: the later of the year end and the last date the
+    books cover (S075-00), but never after `today` (an expiry later than
+    the run date is simply open). An expiry ON the cutoff counts
+    (S075-03). One home for straddling, expired_open and `taxjson run`'s
+    per-account warning (audit A2-1210)."""
+    _date_of = date_basis_of(tax_date)
+    last = max((_date_of(t) for t in transactions if _date_of(t)),
+               default="")
+    return min(max(f"{year}-12-31", last[:10]),
+               (today or date.today()).isoformat())
+
+
 def _filed_on_close(wy: int, filed_timing: Optional[Dict[int, Dict[str, Any]]]) -> Optional[bool]:
     """True/False when the filed/<wy>.json lock RECORDS the timing its
     return used (close-year writes it) — True if a lot written in `wy`
@@ -237,11 +311,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
     # S075-00: the books may run past Dec 31 (January of the next year
     # is part of a frozen year's inputs) — a contract that expired by
     # the LAST date the books cover cannot still be open either.
-    _date_of = date_basis_of(tax_date)
-    last = max((_date_of(t) for t in transactions if _date_of(t)),
-               default="")
-    year_end = min(max(f"{year}-12-31", last[:10]),
-                   (today or date.today()).isoformat())
+    year_end = expiry_cutoff(transactions, year, today, tax_date)
     rows: List[Dict[str, Any]] = []
     for lot in write_lots(transactions, tax_date=tax_date):
         later = [c for c in lot.closes if int(c.date[:4]) > lot.write_year]
@@ -449,10 +519,7 @@ def expired_open(transactions: List[TaxTransaction], year: int,
         pos[key] = pos.get(key, 0.0) + q
         if abs(pos[key]) < 1e-9:
             closing.pop(key, None)
-    last = max((_date_of(t) for t in transactions if _date_of(t)),
-               default="")
-    cutoff = min(max(f"{year}-12-31", last[:10]),
-                 (today or date.today()).isoformat())
+    cutoff = expiry_cutoff(transactions, year, today, tax_date)
     out = []
     for (acct, sym), q in sorted(pos.items()):
         if abs(q) < 1e-9:

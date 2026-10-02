@@ -293,11 +293,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "earlier than the trade date is refused; one more than 7 "
                  "days after it is booked as printed and flagged)."),
             Rule("CA-DATE-04",
-                 "Otherwise: T+1 (from 2024-05-27 in CAD, 2024-05-28 in "
-                 "USD), T+2 from 2017-09-05, T+3 before; other markets "
-                 "T+2 (UK, EU and Swiss T+1 from 2027-10-11); options T+1, "
-                 "but an exercise or assignment takes its stock leg's "
-                 "date.", cont=True),
+                 "Otherwise: T+1 (from 2024-05-27 in CAD and MXN, "
+                 "2024-05-28 in USD), T+2 from 2017-09-05, T+3 before; "
+                 "other markets T+2 — from 2014-10-06 in the UK, the EU "
+                 "and Switzerland (T+1 from 2027-10-11 in every EU "
+                 "currency, sterling and the Swiss franc), 2016-03-07 in "
+                 "Australia and New Zealand, 2018-12-10 in Singapore and "
+                 "2019-07-16 in Japan (T+3 before each), always in Hong "
+                 "Kong, and on the North-American dates elsewhere; "
+                 "options T+1, but an exercise or assignment takes its "
+                 "stock leg's date.", cont=True),
             Rule("CA-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
@@ -849,7 +854,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "s.161 interest at CRA's prescribed rate."),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
-                 "superficial-loss verdict turns on a boundary."),
+                 "superficial-loss verdict turns on a boundary — window "
+                 "days counted on settlement dates as the engine counts "
+                 "them, whatever tax_date says; income in the year its "
+                 "dating rule gives it; crypto by its local and UTC "
+                 "dates in local_timezone; written options against the "
+                 "filed locks (prior_year_record included)."),
             Rule("CA-RPT-08",
                  "`taxjson close-year` records each closed year's sales, "
                  "year-end positions and cost, and trades settling in "
@@ -908,9 +918,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "earlier than the trade date is refused; one more than 7 "
                  "days after it is booked as printed and flagged). "
                  "Otherwise: T+1 (from 2024-05-28 in USD, 2024-05-27 in "
-                 "CAD), T+2 from 2017-09-05, T+3 before; other markets T+2 "
-                 "(UK, EU and Swiss T+1 from 2027-10-11); options T+1, but "
-                 "an exercise or assignment takes its stock leg's date."),
+                 "CAD and MXN), T+2 from 2017-09-05, T+3 before; other "
+                 "markets T+2 — from 2014-10-06 in the UK, the EU and "
+                 "Switzerland (T+1 from 2027-10-11 in every EU currency, "
+                 "sterling and the Swiss franc), 2016-03-07 in Australia "
+                 "and New Zealand, 2018-12-10 in Singapore and 2019-07-16 "
+                 "in Japan (T+3 before each), always in Hong Kong, and on "
+                 "the North-American dates elsewhere; options T+1, but an "
+                 "exercise or assignment takes its stock leg's date."),
             Rule("US-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
@@ -1359,9 +1374,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "claimed_losses.txt records otherwise."),
             Rule("US-RPT-05",
                  "`taxjson edge-cases`: every trade whose tax year or "
-                 "wash-sale verdict turns on a boundary, on trade dates; "
-                 "with no still-held test, a sale near day 30 decides "
-                 "nothing, and a long call is listed as a warning only."),
+                 "wash-sale verdict turns on a boundary, the window on "
+                 "trade dates whatever tax_date says; with no still-held "
+                 "test, a sale near day 30 decides nothing, a long call "
+                 "is listed as a warning only, and crypto has no "
+                 "window."),
             Rule("US-RPT-09",
                  "`taxjson checklist`'s slip step names Form 1099-B for "
                  "securities and, from tax year 2025, Form 1099-DA for a "

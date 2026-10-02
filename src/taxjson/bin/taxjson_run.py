@@ -841,22 +841,11 @@ def validate_config(cfg: Dict[str, Any],
                "CRA practice dates a disposition by its SETTLEMENT date "
                "(the Canadian default)")
             + " — keep it only if you mean to depart from that")
-    _opt = settings.get("option_premium_timing")
-    if _opt is not None and str(_opt).strip().lower() not in ("grant", "close"):
-        _die(f"[settings] option_premium_timing must be \"grant\" or "
-             f"\"close\" (got {_opt!r}).")
-    _since = settings.get("option_grant_timing_since")
-    # 1900 like [settings] year and `init --year`, which writes
-    # since = year: init --year 1989 produced a config the next run
-    # refused (S047-20).
-    if _since is not None and not (isinstance(_since, int)
-                                   and not isinstance(_since, bool)
-                                   and 1900 <= _since <= 2100):
-        _die(f"[settings] option_grant_timing_since must be a tax year "
-             f"(got {_since!r}).")
-    _bb = settings.get("option_buyback_loss_superficial")
-    if _bb is not None and not isinstance(_bb, bool):
-        _die(f"[settings] option_buyback_loss_superficial must be true/false (got {_bb!r}).")
+    # option_premium_timing, option_grant_timing_since (1900..2100, as
+    # S047-20 set) and option_buyback_loss_superficial are refused by
+    # load_config (lib/config_check.bool_setting_problems, every config
+    # reader) before this runs; the twin checks that stood here were
+    # dead code no test could reach (audit A2-1211).
     _froc = settings.get("foreign_return_of_capital")
     if _froc is not None and _froc not in ("dividend", "acb"):
         _die(f"[settings] foreign_return_of_capital must be \"dividend\" or \"acb\" (got {_froc!r}).")
@@ -1137,14 +1126,17 @@ def _warn_zero_value_spinoffs(name: str, is_taxable: bool,
 
 
 def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
-                               year: Any) -> None:
+                               year: Any,
+                               tax_date: Optional[str] = None) -> None:
     """An option still open in the books after its expiry date: the
     export dropped the expiry / assignment / exercise row. For a LONG
     contract the premium paid is a capital loss of the expiry year that
     the books never realize (R1-37); option-boundary covers written
     contracts only. Loud on every run and, through a `.diag` sidecar,
-    in the account's .sum. Cutoff: the earlier of the project's year end
-    and today — a contract expiring later is simply open."""
+    in the account's .sum. Cutoff: lib/option_boundary.expiry_cutoff,
+    the one its twin `expired_open` (checklist, option-boundary) uses —
+    the later of the year end and the last date the books cover, never
+    after today, an expiry ON the cutoff included (audit A2-1210)."""
     import json as _json
     from datetime import date as _date
     from taxjson.lib.core import is_option_symbol, parse_option_expiry
@@ -1156,6 +1148,17 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
             "inventory") or []
     except (OSError, ValueError, AttributeError):
         inv = []
+    _txs = None
+    if any(is_option_symbol(str(h.get("symbol") or "")) for h in inv):
+        try:
+            from taxjson.lib.core import load_transactions
+            from taxjson.lib.option_boundary import expiry_cutoff
+            _base = cache / f"{name}_base.json"
+            if _base.exists():
+                _txs = load_transactions(_base)
+                cutoff = expiry_cutoff(_txs, int(year), tax_date=tax_date)
+        except (OSError, ValueError, TypeError):
+            _txs = None
     # Positions the broker says were opened BEFORE the data (IB code C on
     # the trade that opened them in the books): the missing row is the
     # purchase, not the expiry (audit S013-00).
@@ -1166,15 +1169,13 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
     _redescribed: Dict[str, str] = {}
     if any(is_option_symbol(str(h.get("symbol") or "")) for h in inv):
         try:
-            from taxjson.lib.core import load_transactions
             from taxjson.lib.option_boundary import expired_open
             from taxjson.lib.option_close_check import (
                 unbacked_option_closes)
-            _base = cache / f"{name}_base.json"
-            if _base.exists():
-                _txs = load_transactions(_base)
+            if _txs is not None:
                 _closing = {x["symbol"] for x in expired_open(
-                    _txs, int(year)) if x.get("broker_closing")}
+                    _txs, int(year), tax_date=tax_date)
+                    if x.get("broker_closing")}
                 for _f in unbacked_option_closes(_txs):
                     if len(_f["partners"]) == 1:
                         _p = _f["partners"][0][0]
@@ -1192,7 +1193,7 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
         if abs(qty) < 1e-9 or not is_option_symbol(sym):
             continue
         exp = parse_option_expiry(sym)
-        if not exp or exp >= cutoff:
+        if not exp or exp > cutoff:
             continue
         side = "long" if qty > 0 else "written"
         if sym in _redescribed:
@@ -2694,7 +2695,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # option (A2-0637 / A2-0639). One call covers all.
     echo_attention_lines(gains_json)
     if is_taxable:
-        _warn_expired_open_options(name, gains_json, cache, year)
+        _warn_expired_open_options(name, gains_json, cache, year,
+                                   tax_date=_tax_date_basis(settings))
 
     # 5b. Raw holdings: merge + sort + dedup, NO currency conversion and
     # NO validation; then gains with no options. The same ticker.map is
@@ -9672,7 +9674,11 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         sys.exit("taxjson check-dates: no work/ — run `taxjson run` first.")
-    doc = analyze(root, cfg, account=args.account)
+    try:
+        doc = analyze(root, cfg, account=args.account)
+    except ValueError as e:
+        # [settings] futures_settle refused as `run` refuses it (A2-0697).
+        sys.exit(f"taxjson check-dates: {e}")
     if not doc["sources"]:
         sys.exit("taxjson check-dates: no parsed sources in work/ — run "
                  "`taxjson run` first.")
@@ -9698,7 +9704,17 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         sys.exit("taxjson edge-cases: no work/ directory — run `taxjson run` first.")
-    doc = analyze(root, cfg, margin=args.margin, account=args.account)
+    if args.margin < 0:
+        # A negative margin emptied the window-edge section at rc 0
+        # (audit A2-1198); winners --top refuses < 1 the same way.
+        sys.exit(f"taxjson edge-cases: --margin must be >= 0, got "
+                 f"{args.margin}")
+    try:
+        doc = analyze(root, cfg, margin=args.margin, account=args.account)
+    except ValueError as e:
+        # An unreadable work file or an invalid futures_settle: named,
+        # never a silent "None." (audit A2-1199, A2-0697).
+        sys.exit(f"taxjson edge-cases: {e}")
     if getattr(args, "json", False):
         _json_out(doc)
         return
@@ -10518,8 +10534,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
     if as_of:
         # Positions AS OF a date: recompute each account's books from
         # its base.json (already ticker.map-consolidated) up to the
-        # date. Deferred wash within the account is kept, but it is
-        # PER-ACCOUNT ACB (no s.47 blend across taxable accounts) and
+        # date. Deferred wash within the account is kept (the run's
+        # _wash_flags), but it is PER-ACCOUNT ACB (no s.47 blend across taxable accounts) and
         # before the cross-account wash pass (that exists only for full
         # runs) — the basis label says so (S044-21, R1-282).
         import re as _re
@@ -10579,15 +10595,21 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 continue
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
-                   "--as-of", as_of, "--no-wash"] + option_timing_flags(
+                   "--as-of", as_of] + option_timing_flags(
                        settings) + income_dating_flags(settings)
             # income_dating_flags: [settings] corporate_distributions
             # keeps a listed corporation's ROC on its pay date, as in
             # the run (audit A2-0995, A2-0996).
             if _asof_basis_set:
                 cmd += ["--tax-date", _asof_basis]
-            if accounts_cfg.get(n, {}).get("type") == "taxable":
-                cmd.append("--taxable")
+            # The run's own wash flags: --taxable, with the in-account
+            # superficial-loss / wash-sale deferral the README and the
+            # basis label promise (it ran --no-wash and dropped it,
+            # audit A2-0391, A2-0392, A2-0701); --no-wash only on a US
+            # crypto book, as in the run (§1091 does not reach it).
+            _acfg = accounts_cfg.get(n, {}) or {}
+            cmd += _wash_flags(_acfg.get("type") == "taxable",
+                               bool(_acfg.get("crypto")), country)
             # The same phantom openings every other recompute applies:
             # without them each phantom-backed position showed as a
             # large short (R1-187).
@@ -10750,17 +10772,41 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
 
 def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
-    """Latest transaction date across these accounts' base books."""
-    import json as _json
+    """Latest transaction date across these accounts' base books, on
+    the project's date basis: a settle-basis book has already applied
+    a Dec-31 trade's January settlement, so its horizon is that
+    settlement date (audit A2-0698). A base book that exists but cannot
+    be read is named on stderr instead of silently moving the date
+    earlier (A2-0702)."""
+    from taxjson.lib.country import (CountryError, resolve_tax_date,
+                                     settings_country)
+    try:
+        _s = _soft_settings(cache.parent)
+        settle = resolve_tax_date(settings_country(_s),
+                                  _s.get("tax_date")) == "settle"
+    except CountryError:
+        settle = False        # no usable config: the trade date
     last = None
     for a in accounts:
+        p = cache / f"{a}_base.json"
         try:
-            txs = _read_work_doc(cache / f"{a}_base.json").get(
-                "transactions", [])
-        except (OSError, ValueError, AttributeError):
+            doc = _read_work_doc(p)
+            txs = doc.get("transactions", []) if isinstance(doc, dict) \
+                else doc
+            if not isinstance(txs, list):
+                raise ValueError("no transactions list")
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"taxjson: warning: work/{p.name} cannot be read "
+                  f"({str(e)[:120]}) — the 'as of' date leaves account "
+                  f"{a} out; re-run `taxjson run`.", file=sys.stderr)
             continue
         for t in txs:
-            d = str(t.get("date") or "")[:10]
+            if not isinstance(t, dict):
+                continue
+            d = str((t.get("date_settle") if settle else None)
+                    or t.get("date") or "")[:10]
             if len(d) == 10 and (last is None or d > last):
                 last = d
     return last
@@ -15072,8 +15118,9 @@ def main() -> None:
                             "(settlement date unless tax_date = "
                             "\"trade\"); phantoms.json applied; "
                             "per-account ACB (no s.47 blend across "
-                            "taxable accounts), before the cross-account "
-                            "wash pass")
+                            "taxable accounts), with the in-account "
+                            "superficial-loss / wash-sale deferral but "
+                            "before the cross-account wash pass")
     p_pos.add_argument("--negative", action="store_true",
                        help="Show only positions with negative quantity "
                             "(short positions — or, in accounts that "
