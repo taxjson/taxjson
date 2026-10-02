@@ -108,6 +108,7 @@ class TestR1_214_OnePriorYearUnknown(unittest.TestCase):
         self.assertIn("not set", flat)
 
 
+@rule("CA-RPT-11")
 class TestR1_220_RatesBeforeTheTable(unittest.TestCase):
     """CRA's 2023 overdue-tax rates: Q1 8%, Q2-Q4 9% (prescribed-
     interest-rates/2023-q1..q4 pages); 10% from 2024-01-01."""
@@ -132,6 +133,7 @@ class TestR1_220_RatesBeforeTheTable(unittest.TestCase):
         self.assertIn(INST.PUBLISHED_RATES[0][0], text)
 
 
+@rule("CA-RPT-11")
 class TestS034_16_LeastCumulativePerDate(unittest.TestCase):
     """ITA 161(4.01): on each instalment day the deemed requirement is
     the method giving the LEAST total required BY THAT DAY."""

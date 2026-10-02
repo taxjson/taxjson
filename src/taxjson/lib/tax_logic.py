@@ -891,13 +891,24 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-RPT-01",
                  "`taxjson t1135`: Form T1135 is required when the total "
                  "cost of specified foreign property in taxable accounts "
-                 "exceeds $100,000 at any time in the year."),
+                 "exceeds $100,000 at any time in the year. The holdings "
+                 "are walked on the project's tax_date basis (settle "
+                 "dates by default: a Dec 31 sale that settles in January "
+                 "is still held at year end), rows at one moment in the "
+                 "gains engine's order."),
+            Rule("CA-RPT-13",
+                 "Below $250,000 at every time in the year the simplified "
+                 "method (Part A) is available; at $250,000 or more the "
+                 "detailed method (Part B) is required.", cont=True),
             Rule("CA-RPT-02",
                  "Country comes from the listing suffix (t1135.map "
                  "overrides; a foreign listing whose rows carry a "
                  "Canadian ISIN is named for a `SYMBOL CA` line, since a "
                  "Canadian corporation's shares are not foreign "
-                 "property); crypto held on an exchange counts.",
+                 "property); crypto held on an exchange counts. A "
+                 "t1135.map line follows its symbol through a rename, and "
+                 "a line that matches no symbol in the books is named in "
+                 "a warning.",
                  cont=True),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
@@ -941,7 +952,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "two previous years — due March, June, September and "
                  "December 15 (the next business day on a weekend), on the "
                  "current-year, prior-year or CRA-reminder basis, with "
-                 "s.161 interest at CRA's prescribed rate. A payment "
+                 "s.161 interest at CRA's prescribed rate: on each due "
+                 "date the least cumulative amount any supported method "
+                 "requires by then (s.161(4.01)), interest charged on "
+                 "each instalment from its due date less interest "
+                 "credited on each payment from its date (CRA's A - B "
+                 "offset method, nothing charged at $25 or less). A payment "
                  "made before January 1 counts only when its row says "
                  "`tax_year = YEAR`, and earns credit from January 1."),
             Rule("CA-RPT-07",

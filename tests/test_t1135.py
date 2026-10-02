@@ -307,6 +307,7 @@ class TestBuildReport(unittest.TestCase):
         self.assertIn("USA", rep["by_country"])
         self.assertIn("GBR", rep["by_country"])
 
+    @rule("CA-RPT-13")
     def test_detailed_method_threshold(self):
         with tempfile.TemporaryDirectory() as td:
             base = self._write(td, "base.json", {"transactions": [
@@ -315,6 +316,14 @@ class TestBuildReport(unittest.TestCase):
             rep = build_report([base], [], 2025, {}, "CAD")
         self.assertTrue(rep["filing_required"])
         self.assertFalse(rep["simplified_method_available"])
+        # A2-1503: the edge — 249,999.99 keeps Part A, 250,000 needs B.
+        for cost, simple in ((249999.99, True), (250000.0, False)):
+            with tempfile.TemporaryDirectory() as td:
+                base = self._write(td, "base.json", {"transactions": [
+                    tx(date="2025-01-10", qty=100, net=cost)]})
+                rep = build_report([base], [], 2025, {}, "CAD")
+            self.assertEqual(rep["simplified_method_available"], simple,
+                             cost)
 
     @rule("CA-RPT-01")
     def test_below_threshold(self):
