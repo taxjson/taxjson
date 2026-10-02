@@ -457,8 +457,8 @@ class IncomeRules:
         where = ("lowers the ACB in" if is_roc else "is income of")
         if year == py or year is None:
             tail = (f"it is NOT in {py}'s numbers: make sure the {iy} "
-                    f"return carries it (the {iy} books end before the "
-                    f"pay date)")
+                    f"return carries it (the {iy} project counts it only "
+                    f"if its exports reach the pay date)")
         else:
             tail = (f"it is counted in {iy} here; the {py} project leaves "
                     f"it out")
