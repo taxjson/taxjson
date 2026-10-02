@@ -12,6 +12,11 @@
   hole an earlier empty answer left is asked for again; a noon or Yahoo
   answer cut off before the range end records only the dates it reached
   and says so.
+- FX rates: a cached Bank of Canada (or Yahoo) rate that is not a
+  positive number (`"abc"`, `"1,3316"`, a list) is no longer copied into
+  the rates file, where the run then blamed the config ("no rates at
+  all for USD"): it is dropped, named with `~/.currency_price_cache.json`
+  and its date, and asked for again online (re-audit A2-1212).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

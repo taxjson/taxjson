@@ -189,5 +189,60 @@ class TestTruncatedAnswersAreAskedAgain(_Cache):
                          [["2000-01-01", "2016-12-30"]])
 
 
+class TestBadCachedRate(_Cache):
+    """A2-1212: a non-numeric cached Bank rate is named, never written."""
+
+    def _seed(self, value):
+        Path(T.CACHE_FILE).write_text(json.dumps({
+            "_boc": {"USDCAD": {"obs": {
+                "2024-01-02": "1.3316", "2024-01-03": value,
+                "2024-01-04": "1.3320", "2024-01-05": "1.3330"}}},
+            "_coverage": {"boc:USDCAD": [["2024-01-01", "2024-01-05"]]}}))
+
+    def test_bad_value_is_named_and_not_emitted_offline(self):
+        for value in ("abc", "1,3316", [1], "nan", "0", "-1.3"):
+            with self.subTest(value=value):
+                self._seed(value)
+                rows, errors, _ = T.build_rates(
+                    "USD", "CAD", "2024-01-02", "2024-01-05",
+                    today="2024-01-06", offline=True)
+                vals = {d: v for d, v, _s in rows}
+                self.assertNotIn(str(value), vals.values())
+                self.assertNotIn("2024-01-03", vals)    # asked again online
+                self.assertEqual(vals["2024-01-04"], "1.3320")
+                self.assertTrue(errors)
+                self.assertIsInstance(errors[0], T.CacheProblem)
+                self.assertIn(T.CACHE_FILE, errors[0])
+                self.assertIn("2024-01-03", errors[0])
+
+    def test_bad_value_is_asked_again_online(self):
+        self._seed("abc")
+        calls = []
+
+        def boc(c, a, b):
+            calls.append((a, b))
+            return {d: "1.3400" for d in _weekdays(a, b)}
+        rows, errors, _ = T.build_rates(
+            "USD", "CAD", "2024-01-02", "2024-01-05", today="2024-01-06",
+            fetch_boc_fn=boc)
+        self.assertTrue(any(a <= "2024-01-03" <= b for a, b in calls))
+        self.assertEqual({d: v for d, v, _s in rows}["2024-01-03"],
+                         "1.3400")
+        self.assertTrue(any(isinstance(e, T.CacheProblem) for e in errors))
+
+    def test_main_prints_the_cache_problem_not_a_download_failure(self):
+        self._seed("abc")
+        err, out = io.StringIO(), io.StringIO()
+        with mock.patch("taxjson.lib.offline.offline_enabled",
+                        return_value=True), \
+                redirect_stderr(err), redirect_stdout(out):
+            T.main(["USD", "CAD", "--start", "2024-01-02",
+                    "--end", "2024-01-05"])
+        self.assertNotIn(" abc ", out.getvalue())
+        self.assertIn("2024-01-03", err.getvalue())
+        self.assertIn(T.CACHE_FILE, err.getvalue())
+        self.assertNotIn("download failed", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

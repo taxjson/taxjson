@@ -118,6 +118,11 @@ _CCY_RE = re.compile(r"^[A-Z]{3}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+class CacheProblem(str):
+    """An entry of build_rates' `errors` that is a damaged cache value,
+    not a failed download (printed with its own wording)."""
+
+
 class SeriesNotFound(Exception):
     """The Bank of Canada does not publish this series — raised only on
     the Valet API's own definitive answer (a JSON 404 whose message is
@@ -309,6 +314,22 @@ def _coverage(cache: dict, key: str) -> List[List[str]]:
 def _add_coverage(cache: dict, key: str, lo: str, hi: str) -> None:
     cov = _coverage(cache, key) + [[lo, hi]]
     cache.setdefault("_coverage", {})[key] = _merge(cov)
+
+
+def _uncover(cache: dict, key: str, d: str) -> None:
+    """Remove date `d` from `key`'s coverage (asked again next fetch)."""
+    if key not in (cache.get("_coverage") or {}):
+        return
+    out: List[List[str]] = []
+    for lo, hi in _coverage(cache, key):
+        if lo <= d <= hi:
+            if lo < d:
+                out.append([lo, _shift(d, -1)])
+            if d < hi:
+                out.append([_shift(d, 1), hi])
+        else:
+            out.append([lo, hi])
+    cache["_coverage"][key] = out
 
 
 def _missing_ranges(cov: List[List[str]], start: str,
@@ -799,6 +820,62 @@ def _not_published_note(cache: dict, from_curr: str,
             f"Bank's rate, the rest use Yahoo Finance {from_curr}CAD=X.")
 
 
+def _good_rate(v) -> bool:
+    """A cached rate is a positive finite number (a string or a float;
+    never a bool, list or text such as "1,3316")."""
+    if isinstance(v, bool) or not isinstance(v, (str, int, float)):
+        return False
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return f > 0 and f != float("inf")      # NaN fails `f > 0`
+
+
+def _drop_bad_obs(cache: dict, pair: str, offline: bool) -> List[str]:
+    """Remove cached observations for `pair` that are not a positive
+    finite number, and the coverage of their dates (an online run asks
+    the source again). One CacheProblem per bad value, naming the cache
+    file and the date (re-audit A2-1212 — a value such as "abc" was
+    copied verbatim into the rates file, and the run then blamed the
+    config: "no rates at all for USD")."""
+    out: List[str] = []
+    then = ("that date has no row this run (TAXJSON_OFFLINE) and is asked "
+            "for again online" if offline else "that date is asked for again")
+    blocks = (("_boc", f"boc:{pair}", "Bank of Canada"),
+              ("_boc_noon", f"boc_noon:{pair}", "Bank of Canada noon"))
+    for top, key, label in blocks:
+        blk = (cache.get(top) or {}).get(pair)
+        obs = blk.get("obs") if isinstance(blk, dict) else None
+        if not isinstance(obs, dict):
+            continue
+        for d in sorted(obs):
+            if _good_rate(obs[d]):
+                continue
+            out.append(CacheProblem(
+                f"{CACHE_FILE} holds a {label} {pair} rate for {d} that "
+                f"is not a positive number ({obs[d]!r}) — dropped; "
+                f"{then}."))
+            del obs[d]
+            if _DATE_RE.match(str(d)):
+                _uncover(cache, key, d)
+    pre = f"{pair}-"
+    for k in sorted(k for k in cache if isinstance(k, str)
+                    and k.startswith(pre) and _DATE_RE.match(k[len(pre):])):
+        if _good_rate(cache[k]):
+            continue
+        d = k[len(pre):]
+        out.append(CacheProblem(
+            f"{CACHE_FILE} holds a Yahoo {pair} rate for {d} that is not "
+            f"a positive number ({cache[k]!r}) — dropped; {then}."))
+        if f"yahoo:{pair}" not in (cache.get("_coverage") or {}):
+            cache.setdefault("_coverage", {})[f"yahoo:{pair}"] = \
+                _yahoo_coverage(cache, pair)
+        del cache[k]
+        _uncover(cache, f"yahoo:{pair}", d)
+    return out
+
+
 def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
                 today: Optional[str] = None, offline: bool = False,
                 fetch_boc_fn: Optional[Callable] = None,
@@ -813,6 +890,7 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
     errors: List[str] = []
     notes: List[str] = []
     pair = f"{from_curr}{to_curr}"
+    errors += _drop_bad_obs(cache, pair, offline)
     if offline:
         notes.append("TAXJSON_OFFLINE is set — using cached rates only "
                      "(no download); a transaction whose date has no "
@@ -929,6 +1007,9 @@ def main(argv=None):
     for n in notes:
         print(f"{PROG}: note: {n}", file=sys.stderr)
     for e in errors:
+        if isinstance(e, CacheProblem):
+            print(f"{PROG}: warning: {e}", file=sys.stderr)
+            continue
         print(f"{PROG}: warning: download failed — {e}; dates it would "
               f"have covered have no rate this run.", file=sys.stderr)
     print(f"{PROG}: note: FX {from_curr}→{to_curr}: {summarize(rows)}",
