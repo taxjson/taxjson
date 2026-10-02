@@ -8153,6 +8153,15 @@ def cmd_summary(args: argparse.Namespace) -> None:
                     _die(f"could not read {p}: {e} — a taxable "
                          f"account's gains cannot be left out of the "
                          f"totals. Re-run `taxjson run` to rebuild it.")
+                if acct in acct_types:
+                    # A configured sheltered account dropped out of the
+                    # SHELTERED / ALL ACCOUNTS tables with rc 0 and a
+                    # stderr line, changing their totals (A2-1119).
+                    _die(f"could not read {p}: {e} — account {acct!r} "
+                         f"({acct_types[acct] or 'untyped'}) would be "
+                         f"left out of the account tables and the ALL "
+                         f"ACCOUNTS total. Re-run `taxjson run` to "
+                         f"rebuild it.")
                 print(f"taxjson: warning: could not read {p}: {e}", file=sys.stderr)
                 continue
             year = year or (data.get("summary") or {}).get("year")
@@ -8291,8 +8300,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
             try:
                 _parts = filing_parts_8949(_ents)
             except SystemExit as e:
-                print(f"taxjson sum: warning: {acct}: {e}", file=sys.stderr)
-                continue
+                # Dropping the account (and, below, every account's
+                # Part I/II lines) printed RETURN 0.00 next to a nonzero
+                # realized total with rc 0, where form-export fails and
+                # the Canada branch dies (A2-1120).
+                _die(f"{acct}: {e} — re-run `taxjson run` to rebuild "
+                     f"it (the FOR THE RETURN block cannot leave a "
+                     f"taxable account out).")
             filing_rows.append({"account": acct, **{
                 k: round(sum(x[k] for x in _parts), 2)
                 for k in ("proceeds", "cost", "adjustment", "gain")},
@@ -8302,10 +8316,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                                 **filing_totals(_ents, _fyear)})
     filing_line_rows: List[Dict[str, Any]] = []
     if _is_us:
-        try:
-            filing_line_rows = filing_parts_8949(_filing_ents)
-        except SystemExit:
-            filing_line_rows = []           # warned per account above
+        filing_line_rows = filing_parts_8949(_filing_ents)
         _fkeys = ("proceeds", "cost", "adjustment", "gain")
     else:
         filing_line_rows = filing_lines(_filing_ents, _fyear)

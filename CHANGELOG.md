@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `sum` / `estimate`: an unreadable sheltered account's gains file is
+  refused like a taxable one (it silently changed the SHELTERED and ALL
+  ACCOUNTS totals), and in a US project a disposition with no ST/LT
+  term stops `sum` the way it stops `form-export`, instead of printing
+  RETURN 0.00 for every account (re-audit A2-1119, A2-1120).
 - `sum`, `t1135`, `list` and the other report commands now print the
   "not the clean result of the current inputs" banner when a first
   `taxjson run` aborted after writing work/ (no reports yet), instead

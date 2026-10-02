@@ -216,5 +216,76 @@ class TestAbortedFirstRunBanner(unittest.TestCase):
             self.assertIn("not the clean result", err.getvalue())
 
 
+def _tt_project(root, accounts, *, year=2025, country="canada",
+                extra=""):
+    """accounts: {name: (type, tt text)}."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    cur = "CAD" if country == "canada" else "USD"
+    cfg = (f'[settings]\nyear = {year}\ncountry = "{country}"\n'
+           f'base_currency = "{cur}"\nsource_currencies = []\n' + extra)
+    for name, (typ, tt) in accounts.items():
+        cfg += f'[accounts.{name}]\ntype = "{typ}"\n'
+        d = root / "inputs" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "hist.tt").write_text(tt)
+    (root / "taxjson.toml").write_text(cfg)
+    return root
+
+
+class TestSumUnreadableAccount(unittest.TestCase):
+    """A2-1119, A2-1120: `sum` never drops an account it cannot read
+    with only a warning and rc 0."""
+
+    @rule("CA-ACB-05")
+    def test_a2_1119_unreadable_sheltered_gains_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _tt_project(Path(td) / "p", {
+                "margin": ("taxable",
+                           "BUYSELL 2025-01-06 10:00:00 AAA.TO 100 CAD 10.00"
+                           " 1000.00 0\n"
+                           "BUYSELL 2025-05-06 10:00:00 AAA.TO -100 CAD 9.00"
+                           " 900.00 0\n"),
+                "rrsp": ("sheltered",
+                         "BUYSELL 2025-01-06 10:00:00 BBB.TO 100 CAD 10.00"
+                         " 1000.00 0\n"
+                         "BUYSELL 2025-05-06 10:00:00 BBB.TO -100 CAD 15.00"
+                         " 1500.00 0\n")})
+            r = _taxjson(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            ok = _taxjson(root, "sum")
+            self.assertEqual(ok.returncode, 0, ok.stderr[-2000:])
+            for f in (root / "work").glob("rrsp_gains*.json"):
+                f.write_text(f.read_text()[:40])
+            s = _taxjson(root, "sum")
+            self.assertNotEqual(s.returncode, 0, s.stdout[-2000:])
+            self.assertIn("rrsp", s.stderr)
+
+    @rule("US-RPT-01")
+    def test_a2_1120_us_entry_without_term_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _tt_project(Path(td) / "p", {
+                "brkA": ("taxable",
+                         "BUYSELL 2025-01-06 10:00:00 AAA.US 100 USD 10.00"
+                         " 1000.00 0\n"
+                         "BUYSELL 2025-05-06 10:00:00 AAA.US -100 USD 15.00"
+                         " 1500.00 0\n"),
+                "brkB": ("taxable",
+                         "BUYSELL 2025-01-06 10:00:00 BBB.US 100 USD 10.00"
+                         " 1000.00 0\n"
+                         "BUYSELL 2025-05-06 10:00:00 BBB.US -100 USD 30.00"
+                         " 3000.00 0\n")}, country="usa")
+            r = _taxjson(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+            for f in (root / "work").glob("brkB_gains*.json"):
+                doc = json.loads(f.read_text())
+                for t in doc.get("transactions", []):
+                    t.pop("term", None)
+                f.write_text(json.dumps(doc))
+            s = _taxjson(root, "sum")
+            self.assertNotEqual(s.returncode, 0, s.stdout[-2000:])
+            self.assertIn("brkB", s.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
