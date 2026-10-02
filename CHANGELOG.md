@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- RBC: a USD row whose name reads as the US-dollar class of a TSX fund
+  ('... ETF US DOLLAR UNITS'), other than DLR, is an ATTENTION line with
+  the `GLOBAL X.US X.U.TO` map line; it was booked as a US listing
+  silently (re-audit A2-1043; RBC's spelling for these is unverified,
+  so it is not renamed automatically).
 - Questrade / RBC: the stock leg of an option assignment on a class
   share (RCI.B under the Montreal root RCI, BRK.B under BRKB) is booked
   as the stock; it was refused as a contract on another underlying or

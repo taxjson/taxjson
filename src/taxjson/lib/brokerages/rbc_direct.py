@@ -120,6 +120,11 @@ _TRADE_DESC_RE = re.compile(r'\b(?:Buy|Sell)\b')
 # ETF" (to ~2023) and "GLOBAL X US DLR CURRENCY ETF".
 _RBC_USD_DLR_RE = re.compile(r'\bU\s?\.?\s?S\.?\s+DLR\s+CURRENCY\s+ETF\b',
                              re.I)
+# Any other TSX ETF's US-dollar class ("BMO S&P 500 INDEX ETF US DOLLAR
+# UNITS"): RBC's spelling for these is unverified, so it is not renamed
+# — the row's .US listing is said out loud (re-audit A2-1043).
+_RBC_USD_UNITS_RE = re.compile(
+    r'\b(?:U\.?\s?S\.?\s+DOLLAR|USD)\s+(?:UNITS?|CLASS|SERIES)\b', re.I)
 
 # Option description as RBC writes it, with the codes that may prefix it
 # (EXP expiry, ASN assignment, XCH adjustment/exchange). Overrides the
@@ -1389,6 +1394,7 @@ class RbcBrokerage(BaseBrokerage):
         self._occ_own = ctx.occ_own
         self._untraded_income: Dict[str, set] = {}
         self._listing_warned: set = set()
+        self._usd_units_warned: set = set()
         self._rei_reversals: List[tuple] = []
 
         pairing = ctx.pairings[key]
@@ -1566,7 +1572,20 @@ class RbcBrokerage(BaseBrokerage):
             return 'DLR.U.TO'
         if market and r is not None:
             currency = self._income_currency(r) or currency
-        return self.apply_currency_suffix(symbol, currency)
+        out = self.apply_currency_suffix(symbol, currency)
+        if (r is not None and out.endswith('.US')
+                and _RBC_USD_UNITS_RE.search(f"{r.symdesc} {r.desc}")
+                and hasattr(self, '_usd_units_warned')
+                and symbol.upper() not in self._usd_units_warned):
+            self._usd_units_warned.add(symbol.upper())
+            self._warn(f"{symbol} ({' '.join(r.symdesc.split())!r}) reads "
+                       f"as the US-dollar class of a TSX-listed fund but is "
+                       f"booked as {out}, a US listing (off the T1135, one "
+                       f"pool with IB/Questrade's .U.TO only with a map "
+                       f"line). If it trades on the TSX, add to ticker.map:"
+                       f"  GLOBAL {out} {symbol.upper()}.U.TO",
+                       attention=True)
+        return out
 
     def _income_currency(self, r) -> str:
         """The listing (by currency) an income/withholding/ROC/fee row

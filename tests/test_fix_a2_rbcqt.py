@@ -787,6 +787,17 @@ class TestRbcSmallRowChecks(unittest.TestCase):
         self.assertIn("de-duplication decides", err)
 
 
+    def test_rbc_usd_class_of_a_tsx_etf_is_said(self):
+        # A2-1043: not renamed (RBC's spelling is unverified), but said.
+        txs, err, _ = parse_one(row(
+            "March 3, 2025", "Buy", "ZSP", "BMO S&P 500 INDEX ETF US DOLLAR "
+            "UNITS", "10", "50", "-509.95", "USD", "BMO S&P 500 INDEX ETF "
+            "US DOLLAR UNITS UNSOLICITED"))
+        self.assertEqual([t["symbol"] for t in txs], ["ZSP.US"])
+        self.assertTrue(any("GLOBAL ZSP.US ZSP.U.TO" in ln
+                            for ln in _attention(err)), err)
+
+
 
 class TestQuestradeDescriptionNumbers(unittest.TestCase):
     """A2-0278, A2-1058 (decimal commas refused) and A2-1061 (a BRW
