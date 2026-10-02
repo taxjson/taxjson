@@ -598,14 +598,16 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                      f"inputs/ — and may be partial (a missing export "
                      f"shows a smaller gain, or a loss that never "
                      f"happened). Verify each against the filed return "
-                     f"(Schedule 3 / Schedule D) before trusting a "
+                     f"({'Schedule D' if country == 'usa' else 'Schedule 3'}"
+                     f") before trusting a "
                      f"carryforward or carryback from it.")
     if first_tx_year is not None and rows and rows[0]['year'] <= first_tx_year:
         lines.append(f"  - warning: this history starts in {first_tx_year} — "
                      f"if you traded before then, earlier gains/losses (and "
                      f"any pre-{first_tx_year} carryforward) are NOT "
                      f"reflected. Reconcile the opening balance against "
-                     f"your CRA/IRS records.")
+                     f"your {'IRS' if country == 'usa' else 'CRA'} "
+                     f"records.")
     return "\n".join(lines)
 
 

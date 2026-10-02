@@ -69,6 +69,33 @@ class TestCarryoverCryptoOnly(unittest.TestCase):
         # held — superficial (CA-SL-13), the year's net is 0.
         self.assertAlmostEqual(float(nets["canada"]["net_gain"]), 0.0, places=2)
 
+    @rule("CA-RPT-10")
+    @rule("US-RPT-08")
+    def test_ledger_notes_name_one_country(self):
+        # A2-1333: the notes said "CRA/IRS" and "Schedule 3 / Schedule D"
+        # in either country.
+        import contextlib
+        import io
+        from taxjson.bin.taxjson_carryover import main
+        for c, cur, bad in (("usa", "USD", ("CRA", "Schedule 3")),
+                            ("canada", "CAD", ("IRS", "Schedule D"))):
+            with tempfile.TemporaryDirectory() as td:
+                b = Path(td) / "m_base.json"
+                b.write_text(_book([
+                    _row("BUYSELL", "2023-02-03", "ZZC.US", 10, -1000.0,
+                         currency=cur, account="m"),
+                    _row("BUYSELL", "2023-08-01", "ZZC.US", -10, 900.0,
+                         currency=cur, account="m")]))
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    rc = main([str(b), "--country", c,
+                               "--project-year", "2025"])
+            self.assertEqual(rc, 0)
+            txt = out.getvalue()
+            self.assertIn("Verify each against the filed return", txt)
+            for x in bad:
+                self.assertNotIn(x, txt, (c, x))
 
 TWO_TAXABLE = ('[accounts.acctA]\ntype = "taxable"\n'
                '[accounts.acctB]\ntype = "taxable"\n')
