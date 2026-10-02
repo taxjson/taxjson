@@ -153,6 +153,27 @@ class TestCaTradeBasisConsumers(unittest.TestCase):
         self.assertEqual(T1.walk_costs(rows, 2025, {}, "settle")
                          ["max_total_cost"], 60000.0)
 
+    @rule("CA-RPT-01")
+    def test_t1135_trade_order_needs_no_split_re_denomination(self):
+        # A split (dated Jun 2, settling Jun 3) and a buy of 10 made later
+        # that day (settling Jun 4): on trade dates the buy is after the
+        # split, already in post-split units — never scaled again.
+        from taxjson.bin import taxjson_t1135 as T1
+
+        def t(a, d, s, q, net, time="10:00:00"):
+            return {"action": a, "date": d, "date_settle": s, "time": time,
+                    "symbol": "ZZ.US", "quantity": q, "net_amount": net,
+                    "symbol_new": "", "currency": "CAD"}
+        rows = [t("BUYSELL", "2025-03-03", "2025-03-04", 100, -10000.0),
+                t("SPLIT", "2025-06-02", "2025-06-03", 2, 0.0,
+                  time="00:00:00"),
+                t("BUYSELL", "2025-06-02", "2025-06-04", 10, -1000.0),
+                t("BUYSELL", "2025-08-01", "2025-08-04", -100, 6000.0)]
+        w = T1.walk_costs(rows, 2025, {}, "trade")
+        # 210 units at 11,000; 100 sold -> 110/210 of the cost remains.
+        self.assertAlmostEqual(w["per_symbol"]["ZZ.US"]["year_end_cost"],
+                               5761.90, places=2)
+
     def test_checklist_wash_step(self):
         from taxjson.lib import checklist as cl
         with tempfile.TemporaryDirectory() as tmp:
