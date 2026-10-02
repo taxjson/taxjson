@@ -77,6 +77,127 @@
   crypto accounts no longer applies the wash-sale rule to the coins: the
   books go to the ledger's no-wash crypto pass, as in a mixed project
   (US-WASH-13; audit A2-0146, A2-0411, A2-0412).
+- Errors are one line with a consistent exit code in more places
+  (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
+  A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
+  as its `taxjson-<tool>` console script (in process and with
+  TAXJSON_DISPATCH=subprocess), so an unreadable ticker.map in
+  `taxjson reconcile-slips` is no longer a traceback; a symlink loop or
+  any other OS error on an input is `cannot read <file>: <reason>`
+  (exit 2); a ticker.map rename cycle is one line (exit 2) in
+  taxjson-ticker-map / merge2 / apply-distributions / reconcile-slips;
+  a missing or unreadable named input exits 2 in lint-crosslistings
+  --map (1 is a lint finding), brokerage --security-overrides,
+  wash-radar/safe-to-sell --incomplete-history, generate-parser and
+  `taxjson redact`; a `--ticker-map` that names a missing file is
+  refused by corp-actions, apply-distributions and harvest (it was
+  ignored); wash-radar --json-out under a file and gains
+  --suggest-phantoms into a folder say `cannot write`.
+- A tool that `taxjson` runs as a passthrough command (wash-radar,
+  harvest, fees-sum, find-missing-history) and whose output is piped
+  into `head` exits quietly (141) too; the in-process dispatcher turned
+  the BrokenPipeError into a traceback with exit 1 (A2-1417).
+- The elections manifest: a directory, an unreadable file, a symlink
+  loop or a dangling link is one `manifest ... cannot be read` line in
+  `elect`, `spinoffs` and run's FILING REQUIRED check (it was a
+  traceback or read as 'no elections'); a failed save is one line and
+  keeps the old file; a BOM is accepted; a non-string `summary` /
+  `notes` is refused (A2-0160, A2-0463, A2-1402, A2-0804, A2-1399,
+  A2-1401, A2-1449).
+- A UTF-8 BOM before hand-edited JSON is accepted by every transaction
+  book and JSON loader (taxjson-sort, merge, merge2, fill-crypto,
+  validate, json_input, phantoms.json) — it was refused with
+  'Unexpected UTF-8 BOM' (A2-0776, A2-1412).
+- edge-cases, check-dates, harvest, apply-distributions and split-gains
+  read work/ documents through the shared reader: a wrong-shape
+  document or a text number is one line naming the file and row
+  (A2-0794, A2-1408, A2-0793).
+- Damaged price caches no longer crash a run (re-audit A2-0772,
+  A2-0773, A2-1403, A2-1446, A2-0464, A2-0474, A2-0800). An entry in
+  ~/.crypto_price_cache.json that is null, text, true or Infinity is
+  now a cache miss: fill-crypto warns, naming the cache and the entry,
+  and looks the price up again. Before, it either crashed or priced the
+  coin at 1.0 or inf. crypto-sends does the same. A cache that is not a
+  JSON object is ignored. In ~/.currency_price_cache.json, a
+  `_coverage`, `_boc` or `_boc_noon` block of the wrong shape is
+  dropped with a warning naming the file, and its dates are fetched
+  again (offline they have no rate). It used to be a traceback in the
+  FX stage, or the cached Bank of Canada series was silently discarded.
+- Rates files (re-audit A2-0790, A2-1434, A2-1411, A2-1437, A2-1423,
+  A2-1424). A work/to_base.csv that is not UTF-8, is a directory or
+  cannot be read is now reported in one line naming the file. This
+  applies to fx-cash, harvest, fees-sum, audit, convert-currency and
+  crypto-sends, which all used to print a traceback. A UTF-8 BOM no
+  longer drops the first rate. `taxjson-convert-currency --rates FILE`
+  refuses a missing FILE (exit 2); before, it converted every row at
+  --default-rate. fees-sum reports a NaN rate in one line (exit 2), and
+  fx-cash reports a futures row it cannot settle in one line.
+- crypto-sends files (re-audit A2-0465, A2-0467, A2-0775, A2-1407,
+  A2-1405, A2-1406, A2-1404, A2-1415, A2-0776/A2-1449 for sends.json):
+  - The double-booking check now reads a hand-written .tt saved with a
+    BOM the way convert-tt does, so a duplicate sale on line 1 is
+    flagged.
+  - A generated crypto_sends.tt re-saved with a BOM is still recognized
+    as generated. It is no longer refused, and it no longer shows as
+    OUT OF DATE indefinitely.
+  - A transfer sidecar of the wrong shape is reported in one line
+    naming the file.
+  - An inputs/<acct>/sends.json that is a directory or cannot be read
+    is reported in one line. It is no longer read as "no decisions",
+    and `--set` no longer leaves sends.json.part behind.
+  - sends.json may start with a BOM, and a non-text `note` is refused
+    in one line.
+  - The error for a bad sends.json no longer suggests deleting the
+    file.
+
+- `taxjson export`: a gains / inventory file whose rows hold text in a
+  number field (or a non-text symbol) is a one-line error naming the file
+  and row, exit 2, instead of a float() traceback (A2-0793, export part).
+- `taxjson-sum-income` reads its rows through the same checks as
+  taxjson-gains: an impossible date, a NaN/inf amount or a text amount is
+  a one-line error with exit 2 instead of being summed (or a traceback)
+  (A2-1448).
+- `.tt` files: a symbol with no market suffix (MSFT for MSFT.US) on a
+  line of an account that is not `crypto = true` is now warned about in
+  the run diagnostics like an unknown suffix — it is its own ACB pool and
+  the broker's rows for the real listing go short (A2-0777).
+- IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
+  database is a one-line error saying to install `tzdata` (now a declared
+  dependency on Windows), not a ZoneInfoNotFoundError traceback
+  (A2-1447).
+- Generic importer: a mapping .toml that is not UTF-8 is reported against
+  the .toml, not as the CSV being unreadable (A2-1452).
+- Webull parser: a row whose Action Code is blank but that carries a
+  date, quantity, price or proceeds is refused naming the file line; the
+  trade was dropped at rc 0 (A2-0788).
+- IB parser: a Dividends or Withholding Tax row whose Description has
+  no leading `TICKER (ISIN)` token is refused naming the file line; it
+  was booked on UNKNOWN.US (or a word of the text) and a Canadian
+  eligible dividend was estimated as foreign. A withholding row on
+  credit interest is booked on CASH, like the interest (A2-0780).
+- `taxjson export`: a tv_exchange.map saved with a BOM keeps its first
+  rule, and a holdings TOML row whose quantity or total_cost is not a
+  number (or whose symbol is blank) is refused naming the row in every
+  mode (A2-0806, A2-1410, A2-1442, A2-1443, A2-1441).
+- Web UI: `accounts = 5` (or a list) in taxjson.toml is the one-line
+  config error `taxjson serve` gives for the other bad shapes, and a
+  dangling work/*_base.json symlink no longer breaks the wash-radar page
+  (A2-0807, A2-0787).
+- `taxjson handoff`: a prior-year lock whose fields are the wrong shape
+  (dispositions, settle_next_year, year_end, schema_version, ...) is one
+  `taxjson handoff: error:` line naming the file and field, exit 2; a
+  BOM'd lock loads. `close-year --filed-dispositions` refuses a short row
+  or a blank symbol naming file:line, and the hand-off reads the gains
+  and base books through the shared work-file check (A2-0769, A2-0803,
+  A2-1396, A2-1397, A2-0794 handoff part, A2-0776).
+- `taxjson checklist`: a checklist.json that is a directory or a looping
+  symlink, a wrong-shape mark entry, or a file that cannot be written or
+  removed (read-only project, full disk) is now one `taxjson checklist:`
+  line; a failed write keeps the old file and leaves no .part; a BOM'd
+  hand-edited file loads (A2-0768, A2-0789, A2-1393, A2-1414, A2-0776).
+- `taxjson watch`: a .watch_state.json whose inner radar entries or
+  harvest_now are the wrong shape records a new baseline with a warning
+  instead of crashing with exit 1 (A2-1430).
 - A message never cites the other country's law (re-audit partition
   lists 07/08). taxjson-brokerage passes the project's country to the
   parsers, which use it only to pick the citation: the Webull inferred

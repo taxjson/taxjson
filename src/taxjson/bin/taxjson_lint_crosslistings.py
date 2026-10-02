@@ -90,9 +90,11 @@ def _load_map(path):
     try:
         tmap = load_map_file(Path(path))
     except (OSError, UnicodeDecodeError) as e:
+        # Exit 2 (an unreadable input), not 1 (a lint finding), so a
+        # caller can tell the two apart (re-audit A2-1421 / A2-1435).
         print(f"taxjson-lint-crosslistings: error: cannot read map "
               f"{path}: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     tobase = {frozenset((a, b)) for a, b in tmap.tobase.items()}
     journal = {frozenset((a, b)) for a, b in tmap.journal.items()}
     distinct = {frozenset(p) for p in tmap.distinct}

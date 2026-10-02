@@ -36,7 +36,8 @@ def main():
             continue
 
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            # utf-8-sig: a BOM is dropped (re-audit A2-1412).
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             if not isinstance(data, dict) or "transactions" not in data:
                 # Read as an empty book at exit 0 (audit S033-01).

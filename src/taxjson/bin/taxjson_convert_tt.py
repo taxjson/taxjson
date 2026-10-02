@@ -672,9 +672,51 @@ def expand_acquired(line: str):
     ]
 
 
+def _equity_account(input_path: Path, account_name: str) -> bool:
+    """True when `input_path` sits in a project (inputs/<acct>/x.tt) whose
+    taxjson.toml declares `account_name` without `crypto = true`. False
+    outside a project or for a crypto account (unknown: no warning)."""
+    try:
+        from taxjson.lib.tomlcompat import tomllib
+    except ImportError:                                  # pragma: no cover
+        return False
+    p = Path(input_path).resolve()
+    for d in list(p.parents)[:3]:
+        cfg = d / 'taxjson.toml'
+        if cfg.is_file():
+            try:
+                doc = tomllib.loads(cfg.read_text(encoding='utf-8-sig'))
+            except (OSError, ValueError):
+                return False
+            accts = doc.get('accounts')
+            a = accts.get(account_name) if isinstance(accts, dict) else None
+            return isinstance(a, dict) and a.get('crypto') is not True
+    return False
+
+
+def _warn_bare_equity_symbol(tx: dict, line: str, source: str) -> None:
+    """A bare symbol on a .tt line of an equity (non-crypto) account
+    (MSFT for MSFT.US) is its own ACB pool: the broker's sale of MSFT.US
+    went short and its gain dropped out with nothing on the console
+    (A2-0777). The unknown-suffix check exempts bare symbols because
+    crypto symbols are bare; in an equity account they are not."""
+    from taxjson.lib.core import is_option_symbol
+    for key in ('symbol', 'symbol_new'):
+        sym = tx.get(key) or ''
+        if (not sym or '.' in sym or sym == 'CASH' or is_option_symbol(sym)
+                or sym.startswith(_FUTURES_PREFIXES)):
+            continue
+        print(f"warning: {_where(source)}symbol {sym} has no market suffix "
+              f"(e.g. {sym}.US, {sym}.TO) in an account that is not "
+              f"crypto = true — it is its own ACB pool, and the broker's "
+              f"rows for the real listing go short: {line.strip()!r}",
+              file=sys.stderr)
+
+
 def tt_to_json(input_path: Path, account_name: str) -> dict:
     from taxjson.lib.brokerages.base import shown_name, source_key
     transactions = []
+    equity = _equity_account(input_path, account_name)
     # utf-8-sig: an editor's byte-order mark used to reach the first
     # action as '\ufeffBUYSELL' ("unknown .tt action", R1-133).
     from taxjson.lib.cli_diag import read_text_utf8
@@ -700,6 +742,8 @@ def tt_to_json(input_path: Path, account_name: str) -> dict:
                 tx = parse_tt_line(one, account_name=account_name,
                                    source=source)
                 if tx:
+                    if equity:
+                        _warn_bare_equity_symbol(tx, one, source)
                     transactions.append(tx)
     # Per-file split-fill disambiguation, exactly as every brokerage
     # parser does: two byte-identical hand-entered lines (one order

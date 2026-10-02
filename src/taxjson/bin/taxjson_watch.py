@@ -206,7 +206,7 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
         return None
     why = ""
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e:
         doc, why = None, f"unreadable ({e})"
     # Valid JSON of the wrong shape (a list) is no baseline either — it

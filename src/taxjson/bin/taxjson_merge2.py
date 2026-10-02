@@ -315,7 +315,8 @@ def _load_json_files(paths, require_inputs=False):
             had_error = True
             continue
         try:
-            with path.open('r', encoding='utf-8') as f:
+            # utf-8-sig: a BOM is dropped (re-audit A2-1412).
+            with path.open('r', encoding='utf-8-sig') as f:
                 data = json.loads(strip_json_comments(f.read()))
         except Exception as e:
             print(f"error: reading {p}: {e}", file=sys.stderr)

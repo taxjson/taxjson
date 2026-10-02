@@ -268,7 +268,10 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
               f"phantoms.json). Write to a new file and merge by hand, or "
               f"delete it first.", file=sys.stderr)
         raise SystemExit(2)
-    _out.write_text(format_suggestions(candidates), encoding='utf-8')
+    # 'cannot write <path>: ...' for a directory or a missing folder,
+    # not 'cannot read' / 'no such file' (re-audit A2-1432).
+    from taxjson.lib.cli_diag import write_text_atomic
+    write_text_atomic(_out, format_suggestions(candidates))
     n_reg = sum(1 for c in candidates if c.registered)
     print(
         f"Wrote {len(candidates)} candidate(s) to {args.suggest_phantoms} "

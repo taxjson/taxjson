@@ -43,6 +43,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from taxjson.lib.report_model import fmt_money
+from taxjson.lib import cli_diag
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.bin.taxjson_convert_currency import (default_rate_for,
                                                   positive_rate)
@@ -514,7 +515,14 @@ def main():
 
     history = {}
     if args.to_curr:
-        history = load_exchange_rates(Path(args.rates), target_curr=args.to_curr)
+        try:
+            history = load_exchange_rates(Path(args.rates),
+                                          target_curr=args.to_curr)
+        except ValueError as e:
+            # A NaN/0/negative rate: one line, exit 2, as `taxjson
+            # audit` says it (re-audit A2-1423).
+            cli_diag.error(PROG, str(e))
+            sys.exit(2)
 
     reset_fallback_tally()
     # aggregate() and the renderers match dates by string prefix; --year is

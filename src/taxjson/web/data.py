@@ -144,11 +144,22 @@ def radar_staleness(ctx: ProjectContext, account: str) -> Optional[str]:
     have = [p for p in paths if p.is_file()]
     if not have:
         return None
-    built = min(p.stat().st_mtime for p in have)
+    def _mtime(p):
+        # A dangling work/*_base.json symlink raised FileNotFoundError,
+        # an HTTP 500 on /wash-radar (A2-0787).
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return None
+    _built = [m for m in map(_mtime, have) if m is not None]
+    if not _built:
+        return None
+    built = min(_built)
     books = ([p for p in ctx.cache.glob("*_base.json")
               if not p.name.startswith(".")]
              if ctx.cache.is_dir() else [])
-    newer = sorted(p.name for p in books if p.stat().st_mtime > built + 1)
+    newer = sorted(p.name for p in books
+                   if (_mtime(p) or 0) > built + 1)
     if not newer:
         return None
     return (f"The wash radar for {account} is older than the books "
