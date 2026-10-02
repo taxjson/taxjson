@@ -3,7 +3,7 @@ RBC and Webull parser dates and pairing, the MXN settlement cutover, the
 phantom-relevance split de-duplication and the config checks.
 
 Each test fails when the finding's surviving mutant is applied. All data
-is synthetic (fake tickers, account 55500001)."""
+is synthetic: fake tickers and a fake broker account id."""
 import os
 import subprocess
 import sys
