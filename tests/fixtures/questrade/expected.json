@@ -2,6 +2,7 @@
  {
   "account": "Questrade",
   "action": "BUYSELL",
+  "broker_account": "12345",
   "commission": 9.95,
   "currency": "USD",
   "date": "2025-01-15",
@@ -18,6 +19,7 @@
  {
   "account": "Questrade",
   "action": "BUYSELL",
+  "broker_account": "12345",
   "commission": 9.95,
   "currency": "USD",
   "date": "2025-03-20",
@@ -34,6 +36,7 @@
  {
   "account": "Questrade",
   "action": "DIVIDEND",
+  "broker_account": "12345",
   "currency": "USD",
   "date": "2025-04-01",
   "date_settle": "2025-04-01",
@@ -50,6 +53,7 @@
  {
   "account": "Questrade",
   "action": "ADJUST",
+  "broker_account": "12345",
   "currency": "CAD",
   "date": "2025-06-30",
   "date_settle": "2025-06-30",
@@ -64,6 +68,7 @@
  {
   "account": "Questrade",
   "action": "FEE",
+  "broker_account": "12345",
   "currency": "USD",
   "date": "2025-07-02",
   "date_settle": "2025-07-02",
