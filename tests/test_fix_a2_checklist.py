@@ -622,3 +622,27 @@ class TestStepWording(unittest.TestCase):
             r = cl.d_form_export(ctx(p, {"form-export": (0, json.dumps(rep), ""),
                                          "sum": (0, json.dumps(summ), "")}))
         self.assertEqual(r.status, "done", r.detail)
+
+
+class TestAuditPhantomBasis(unittest.TestCase):
+    def test_manual_reporting_rows_tie_out(self):
+        """A2-1150: a phantom-backed sale (manual_reporting_required) is
+        tied out as manual reporting, not 'not found' forever."""
+        with tempfile.TemporaryDirectory() as td:
+            p = make_project(Path(td), book=(
+                "BUYSELL 2025-03-03 10:00:00 XYZ.TO -100.00000000 CAD 14.48900000 1448.90000 0.00000\n"),
+                run=False)
+            (p / "phantoms.json").write_text('[{"symbol": "XYZ.TO", "account": "margin"}]')
+            tj(p, "run", "--no-input")
+            g = json.loads((p / "work" / "margin_gains.json").read_text())
+            self.assertTrue(g.get("manual_reporting_required"))
+            r = tj(p, "audit", "--summary", check=False)
+            self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr[-1500:])
+            self.assertIn("1 phantom basis — manual reporting", r.stdout)
+            self.assertNotIn("MISSING from the check", r.stdout + r.stderr)
+            c = cl.Ctx(root=p, cfg=ctx(p).cfg, year=2025, today=date(2026, 9, 1),
+                       run_sub=lambda argv, timeout=900: (lambda r: (r.returncode, r.stdout, r.stderr))(
+                           tj(p, *argv, check=False)))
+            res = cl.d_audit(c)
+            self.assertEqual(res.status, "done", res.detail)
+            self.assertIn("1 phantom-basis sale(s) routed to manual reporting", res.detail)

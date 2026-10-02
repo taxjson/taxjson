@@ -184,6 +184,24 @@ def build_check_index(paths: List[Path]) -> Tuple[
 NOID = "\x00no-id"
 
 
+def build_manual_ids(paths: List[Path]) -> set:
+    """Ids of the phantom-basis dispositions the saved gains files route
+    to manual reporting (`manual_reporting_required`): their cost is
+    unknown, so they are not in the rows the reports sum — the audit
+    names them instead of calling them missing (A2-1150)."""
+    out: set = set()
+    for p in paths:
+        try:
+            doc = _load_doc(p)
+        except SystemExit:
+            continue
+        for g in (doc.get("manual_reporting_required") or []
+                  if isinstance(doc, dict) else []):
+            if isinstance(g, dict) and g.get("id"):
+                out.add(str(g["id"]))
+    return out
+
+
 def _kind(g: Dict[str, Any]) -> Tuple[str, bool, bool]:
     """What kind of record a gains row is: one sell id can carry a LONG
     close and a grant WRITE (a cross-zero option fill) — two events
@@ -721,7 +739,9 @@ def render_reconciliation(events: List[Dict[str, Any]],
     tied = sum(1 for e in events if (e["tie_out"].get("ties") is True))
     untied = sum(1 for e in events if (e["tie_out"].get("ties") is False))
     nocheck = sum(1 for e in events if e["tie_out"].get("ties") is None
-                  and not e["tie_out"].get("out_of_scope"))
+                  and not e["tie_out"].get("out_of_scope")
+                  and not e["tie_out"].get("manual"))
+    manual = sum(1 for e in events if e["tie_out"].get("manual"))
     outside = sum(1 for e in events if e["tie_out"].get("out_of_scope"))
     fx_ok = sum(1 for e in events
                 if e.get("fx") and not e["fx"].get("native")
@@ -758,6 +778,10 @@ def render_reconciliation(events: List[Dict[str, Any]],
                    f"MISMATCHED, {nocheck:,} not found  "
                    + mark(untied + nocheck,
                           untied == 0 and nocheck == 0))
+        if manual:
+            out.append(f"                     {manual:,} phantom basis — "
+                       f"manual reporting (not in the saved rows: report "
+                       f"by hand, form-export MANUAL REPORTING)")
         if outside:
             out.append(f"                     {outside:,} outside the "
                        f"saved books' tax year — not tied out (the "
@@ -1018,6 +1042,23 @@ def main(argv=None) -> int:
                           futures_native=futures_native,
                           filled_index=filled_index)
               for g in merged]
+    if args.check:
+        # Phantom-basis dispositions routed to manual reporting: not in
+        # the saved rows by design, like form-export's MANUAL REPORTING
+        # section — tied out as such, not "MISSING" (A2-1150).
+        _manual = build_manual_ids([Path(c) for c in args.check])
+        for e in events:
+            if e["tie_out"].get("ties") is None and e["id"] in _manual:
+                e["tie_out"]["manual"] = True
+                e["warnings"] = [
+                    w for w in e.get("warnings") or []
+                    if not w.startswith("disposition not found in the "
+                                        "pipeline gains file")]
+                e["warnings"].append(
+                    "phantom basis — manual reporting: the cost is "
+                    "unknown, so the saved books route this sale to "
+                    "form-export's MANUAL REPORTING section; report it "
+                    "by hand.")
     if args.check and args.check_year:
         # The saved gains files hold ONE tax year; `audit --year Y`
         # for another year (or --all-years) reported every other
@@ -1073,7 +1114,8 @@ def main(argv=None) -> int:
                 f"produce — fabricated or double-counted record.")
         for e in events:
             if e["tie_out"].get("ties") is None and args.check \
-                    and not e["tie_out"].get("out_of_scope"):
+                    and not e["tie_out"].get("out_of_scope") \
+                    and not e["tie_out"].get("manual"):
                 reconciliation_failures.append(
                     f"engine disposition {e['id'][:12]} "
                     f"({e['symbol']} {e['date']}, gain "
@@ -1081,7 +1123,8 @@ def main(argv=None) -> int:
                     f"from the check file(s) — stale or truncated "
                     f"saved books.")
         eng_total = sum(float(e.get("gain") or 0) for e in events
-                        if not e["tie_out"].get("out_of_scope"))
+                        if not e["tie_out"].get("out_of_scope")
+                        and not e["tie_out"].get("manual"))
         _chk_rows = [c for recs in check_index.values() for c in recs
                      if _chk_in_scope(c)]
         chk_total = sum(float(c.get("gain") or 0.0) for c in _chk_rows)

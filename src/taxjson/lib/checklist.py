@@ -1213,15 +1213,22 @@ def d_audit(ctx: Ctx) -> Result:
         events += int(m.group(1).replace(",", ""))
         bad += int(m.group(2).replace(",", ""))
         notfound += int(m.group(3).replace(",", ""))
+    # Phantom-basis sales the books route to manual reporting are tied
+    # out as such by the audit (A2-1150); form-export's step asks for
+    # the hand-reported rows.
+    manual = sum(int(m.group(1).replace(",", "")) for m in re.finditer(
+        r"([\d,]+) phantom basis — manual reporting", out))
     if bad:
         return Result("audit", "attention", f"{bad} disposition(s) MISMATCHED")
     if notfound:
         return Result("audit", "attention",
                       f"{notfound} disposition(s) not found in the gains file "
-                      f"(phantom-backed sales show here; see KNOWN_ISSUES)")
+                      f"— stale books? re-run `taxjson run`")
     if code != 0:
         return Result("audit", "attention", _last_line(err) or f"exit {code}")
-    return Result("audit", "done", f"{events} disposition(s) tied")
+    return Result("audit", "done", f"{events} disposition(s) tied"
+                  + (f"; {manual} phantom-basis sale(s) routed to manual "
+                     f"reporting (see the form-export step)" if manual else ""))
 
 
 def d_wash_reviewed(ctx: Ctx) -> Result:

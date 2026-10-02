@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson audit`: a phantom-basis sale the books route to manual
+  reporting is tied out as "phantom basis — manual reporting" instead of
+  "MISSING from the check file(s)" (exit 1), so the checklist's audit
+  step can complete; the KNOWN_ISSUES entry is gone (re-audit A2-1150).
 - Checklist wording: the T1135 step's "below the threshold" (and
   `t1135 --json`, new `scope` / `scope_note`) says it covers these books
   only; a US project's slip step names Form 1099-DA for crypto sales from
