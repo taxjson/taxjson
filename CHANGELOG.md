@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Canada stock-dividend ATTENTION: printed only by a taxable run of the
+  dividend's own year, quiet once an ADJUST adds the cost, and worded
+  right — adding the cost books the ACB only; the dividend is reported
+  from the slip. Income-dating advice is no longer printed for sheltered
+  books, and a TRANSFER in a taxable account names the account instead
+  of a `--taxable` flag the user never passed (re-audit A2-0709,
+  A2-0711, A2-1220, A2-1224, A2-1218, A2-1221).
 - An output path that is a directory (or cannot be written) says
   "cannot write <path>" and leaves no `.part` file (taxjson-convert-tt,
   taxjson-brokerage sidecars, wash-radar --json-out); the --explain trace

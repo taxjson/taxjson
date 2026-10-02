@@ -802,5 +802,78 @@ class TestByTickerFollowsRowsWithoutYear(unittest.TestCase):
                 self.assertEqual(bt["total_div"], 12.0)
 
 
+# --------------------------- A2-0709 / A2-0711 / A2-1220 / A2-1224 / A2-1218
+class TestCanadaStockDividendNote(unittest.TestCase):
+
+    @staticmethod
+    def _book(adjust=None):
+        from tax_rules.dual import tx
+        b = [tx("BUYSELL", "2024-02-03", "QSC.TO", 1200, 12000,
+                currency="CAD"),
+             tx("BUYSELL", "2024-06-26", "QSC.TO", 180, 0.0, price=0.0,
+                currency="CAD", type="stock_dividend")]
+        if adjust:
+            b.append(tx("ADJUST", adjust, "QSC.TO", 0, 1332.0,
+                        currency="CAD"))
+        return b
+
+    @rule("CA-STKDIV-01")
+    def test_wording_year_and_quiet_once_added(self):
+        e24 = _gains_one(self._book(), "canada", year=2024)["_stderr"]
+        self.assertIn("stock dividend of 180", e24)
+        self.assertIn("books the ACB only", e24)
+        self.assertNotIn("ACB and income", e24)
+        # Another year's run: not this year's event.
+        e25 = _gains_one(self._book(), "canada", year=2025)["_stderr"]
+        self.assertNotIn("stock dividend of 180", e25)
+        # The cost added (distributions.map's record-date row): quiet.
+        e24b = _gains_one(self._book("2024-06-19"), "canada",
+                          year=2024)["_stderr"]
+        self.assertNotIn("stock dividend of 180", e24b)
+
+    @rule("CA-STKDIV-01")
+    def test_sheltered_book_is_quiet(self):
+        import copy, contextlib, io
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            run_gains(copy.deepcopy(self._book()), [], [],
+                      req=GainsRequest(country="canada", taxable=False,
+                                       year=2024))
+        self.assertNotIn("stock dividend of 180", err.getvalue())
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_income_dating_advice_not_for_a_sheltered_book(self):
+        import copy, contextlib, io
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        from tax_rules.dual import tx
+        book = [tx("BUYSELL", "2024-06-03", "ZZR.TO", 1000, 10000,
+                   currency="CAD"),
+                tx("ADJUST", "2025-01-08", "ZZR.TO", 0, -500.0, type="roc",
+                   currency="CAD")]
+        for taxable, want in ((True, True), (False, False)):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                run_gains(copy.deepcopy(book), [], [], req=GainsRequest(
+                    country="canada", taxable=taxable, year=2025))
+            self.assertEqual("no record date" in err.getvalue(), want,
+                             err.getvalue())
+
+
+# ---------------------------------------------------------------- A2-1221
+class TestTaxableTransferWording(unittest.TestCase):
+
+    def test_run_names_the_account_not_a_flag(self):
+        from taxjson.lib.pipeline import (TransferValidationError,
+                                          prepare_books)
+        from tax_rules.dual import tx
+        book = [tx("TRANSFER", "2025-03-03", "XYZ.TO", 100, 1000,
+                   currency="CAD", account="margin")]
+        with self.assertRaises(TransferValidationError) as cm:
+            prepare_books(book, taxable=True)
+        self.assertIn("taxable account margin", str(cm.exception))
+        self.assertNotIn("--taxable was set", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

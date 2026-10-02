@@ -805,10 +805,17 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
                 if len(sample) >= 5:
                     break
         more = "" if n_main <= 5 else f"\n  (+{n_main - 5} more)"
+        _accts = sorted({t.account for t in transactions
+                         if t.action == 'TRANSFER' and t.account})
+        # Worded for both callers: `taxjson run` never passes a flag the
+        # user typed (re-audit A2-1221, the S076-19 twin).
         raise TransferValidationError(
-            f"--taxable was set but the input contains {n_main} TRANSFER row(s). "
+            f"taxable account {', '.join(_accts) or '?'}: its input holds "
+            f"{n_main} TRANSFER row(s). "
             f"TRANSFER is not allowed in taxable accounts — replace each with "
-            f"the actual buy/sell history that established the position.\n"
+            f"the actual buy/sell history that established the position "
+            f"(standalone `taxjson-gains`: drop --taxable for a sheltered "
+            f"book).\n"
             + "\n".join(sample) + more
         )
 
@@ -1217,7 +1224,10 @@ def run_gains(transactions, sheltered_transactions=(),
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()
     _warn_year = int(req.year) if req.year else None
-    for _w in income_rules.warnings(transactions, _warn_year):
+    # Income-dating advice is about a return's income and ACB: none of
+    # it applies to a sheltered (registered) book (re-audit A2-1218).
+    for _w in (income_rules.warnings(transactions, _warn_year)
+               if req.taxable else ()):
         print(f"warning: {_w}", file=sys.stderr)
     _roc_moved = apply_trust_roc_record_dates(transactions, income_rules)
     if req.country == 'canada':
@@ -1227,15 +1237,41 @@ def run_gains(transactions, sheltered_transactions=(),
         # own rule (§305(a)/§307) when it spreads the basis.
         # An ATTENTION line, on the run console (re-audit A2-0265: the
         # NOTE sat in the .sum while the income and ACB were short).
-        for _t in transactions:
-            if is_stock_dividend(_t) and float(_t.quantity or 0) > 0:
-                print(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
-                      f"{float(_t.quantity):g} share(s) on {_t.date} "
-                      f"entered at $0 cost — in Canada it is a dividend "
-                      f"at its declared amount, which is also the new "
-                      f"shares' cost: add it (distributions.map or a .tt "
-                      f"ADJUST) for the correct ACB and income.",
-                      file=sys.stderr)
+        # Only for the run's own year and a taxable book, and quiet once
+        # the cost is in the books (an ADJUST on the symbol from 31 days
+        # before to 7 days after: a .tt line or distributions.map's
+        # record-date row). Adding it books the ACB only — the dividend
+        # is reported from the slip (re-audit A2-0709, A2-0711, A2-1220,
+        # A2-1224; CA-DIST-01).
+        from datetime import date as _d, timedelta as _td
+
+        def _cost_added(sd):
+            try:
+                d0 = _d.fromisoformat(str(sd.date)[:10])
+            except ValueError:
+                return False
+            lo, hi = (d0 - _td(days=31)).isoformat(), \
+                (d0 + _td(days=7)).isoformat()
+            return any(a.action == 'ADJUST' and a.symbol == sd.symbol
+                       and float(a.net_amount or 0) > 0
+                       and lo <= str(a.date)[:10] <= hi
+                       for a in transactions)
+        for _t in (transactions if req.taxable else ()):
+            if not (is_stock_dividend(_t) and float(_t.quantity or 0) > 0):
+                continue
+            if _warn_year is not None and not str(_t.date).startswith(
+                    str(_warn_year)):
+                continue
+            if _cost_added(_t):
+                continue
+            print(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
+                  f"{float(_t.quantity):g} share(s) on {_t.date} "
+                  f"entered at $0 cost — in Canada it is a dividend at its "
+                  f"declared amount, which is also the new shares' cost: "
+                  f"add that cost (distributions.map or a .tt ADJUST) for "
+                  f"the correct ACB. That books the ACB only: report the "
+                  f"dividend itself from the T5/T3 slip (taxjson does not "
+                  f"count it as income).", file=sys.stderr)
     _extra = {}
     if req.per_account_basis and req.country == 'usa':
         _extra['per_account_basis'] = True
