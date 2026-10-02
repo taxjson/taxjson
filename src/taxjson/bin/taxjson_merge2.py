@@ -56,7 +56,7 @@ from taxjson.lib.corporate_timeline import normalize_symbol_new
 from taxjson.lib.trade_cancel import pair_cancellations
 
 
-def warn_duplicate_splits(txs) -> int:
+def warn_duplicate_splits(txs, conflicts=None) -> int:
     """Say so when ONE account carries the same split twice — typically a
     broker parser that now books the event itself AND a manual .tt SPLIT
     line written as a workaround before it did. Identical rows (same
@@ -67,6 +67,10 @@ def warn_duplicate_splits(txs) -> int:
     2.333333333), on the same date or within the split-date window, are
     one event applied once — said as ATTENTION, which `taxjson run`
     echoes to the console (A2-0070).
+    Rows with ratios that really differ are a validation ERROR when the
+    caller passes a `conflicts` list (one (context, message) per event):
+    one of them is false, so `run --strict` stops, the console says so
+    and checklist run-clean is not done (A2-0040).
     Returns the number of duplicated events."""
     from taxjson.lib.corporate_timeline import (SPLIT_DATE_WINDOW_DAYS,
                                                 split_ratios_close)
@@ -100,10 +104,14 @@ def warn_duplicate_splits(txs) -> int:
             prod = 1.0
             for r in ratios:
                 prod *= r
-            print(f"warning: conflicting splits: {sym}{tgt} on {date} in "
-                  f"account {acct} has {len(rows)} SPLIT rows with different "
-                  f"ratios {ratios} — EACH is applied (x{prod:g} in total); "
-                  f"keep only the right one.", file=sys.stderr)
+            msg = (f"conflicting splits: {sym}{tgt} on {date} in "
+                   f"account {acct} has {len(rows)} SPLIT rows with "
+                   f"different ratios {ratios} — EACH is applied "
+                   f"(x{prod:g} in total); keep only the right one.")
+            # ATTENTION + "split: " — `taxjson run` echoes it.
+            print(f"warning: ATTENTION: split: {msg}", file=sys.stderr)
+            if conflicts is not None:
+                conflicts.append((f"SPLIT {sym}{tgt} {date} ({acct})", msg))
     # The same event booked on two dates a few days apart (a .tt line on
     # the ex-date next to the broker's row): applied once, on the earlier
     # date, by the engines' split dedup.
@@ -513,7 +521,8 @@ def main():
 
     # Post-mapping (a DELETE'd or renamed row is judged as the engine will
     # see it): one account carrying the same split twice.
-    warn_duplicate_splits(txs)
+    split_conflicts = []
+    warn_duplicate_splits(txs, split_conflicts)
     canonicalize_split_ratios(txs)
 
     # --- Stage 4: currency conversion ---------------------------------
@@ -605,6 +614,8 @@ def main():
         issues, warnings = _validate_dict_list(dict_txs, filename='<merged>')
         for _ctx, _errs in fx_issues.items():
             issues[_ctx].extend(_errs)
+        for _ctx, _msg in split_conflicts:
+            issues[_ctx].append(_msg)
         error_count = sum(len(v) for v in issues.values())
         if error_count:
             print(

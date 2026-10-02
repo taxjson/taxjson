@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Two SPLIT rows for one event with different ratios (both applied) are
+  now a validation ERROR named on the console: `run --strict` stops and
+  checklist run-clean is not done (re-audit A2-0040).
 - A `.tt` SPLIT or rename of a USD stock no longer stops `taxjson run`
   (exit 1, "Currency mismatch") in the native-holdings pass, in either
   country: a SPLIT carries no money, so its currency stamp is no longer
