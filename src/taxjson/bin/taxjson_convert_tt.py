@@ -864,7 +864,7 @@ def _main():
     if not input_path.exists():
         print(f"taxjson-convert-tt: error: input file not found: {input_path}",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)                 # a missing input (A2-0164)
 
     suffix = input_path.suffix.lower()
     if suffix == '.json':

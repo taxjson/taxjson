@@ -178,6 +178,25 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
                     f"{cur_now:,.2f} ({delta:+,.2f})"}
 
 
+def _state_shape_problem(doc: Dict[str, Any]) -> Optional[str]:
+    radar = doc.get("radar")
+    if radar is None:
+        return None
+    if not isinstance(radar, dict):
+        return '"radar" is not an object'
+    for t, rec in radar.items():
+        if not isinstance(rec, dict):
+            return f'"radar" entry {t!r} is not an object'
+        for k in ("category", "advisory", "clears_at"):
+            if rec.get(k) is not None and not isinstance(rec.get(k), str):
+                return f'"radar" entry {t!r}: {k} is not text'
+    h = doc.get("harvest_now")
+    if h is not None and (isinstance(h, bool)
+                          or not isinstance(h, (int, float))):
+        return '"harvest_now" is not a number'
+    return None
+
+
 def load_state(path: Path) -> Optional[Dict[str, Any]]:
     """The saved baseline, or None (the caller then records a new one).
     A state file that EXISTS but cannot be used re-baselined silently,
@@ -200,6 +219,12 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
         why = (f"schema_version {doc.get('schema_version')!r}, this "
                f"version reads {STATE_VERSION}")
         doc = None
+    if doc is not None:
+        # The inner shape too: a radar entry that is a string, or a
+        # radar that is a list, crashed diff_radar (re-audit A2-1460).
+        bad = _state_shape_problem(doc)
+        if bad:
+            doc, why = None, f"damaged ({bad})"
     if doc is None:
         print(f"taxjson watch: warning: state file {path.name} is {why} "
               f"— recording a NEW baseline; changes since the previous "

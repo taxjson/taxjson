@@ -194,25 +194,25 @@ class TestDuplicateSplits(unittest.TestCase):
 
 
 class TestInputErrors(unittest.TestCase):
-    def test_unreadable_json_is_a_clean_exit_1(self):
+    def test_unreadable_json_is_a_clean_exit_2(self):
         # m756: the file is skipped (no traceback), the run refuses.
         with tempfile.TemporaryDirectory() as tmp:
             code, doc, err = _merge(tmp, raw={"bad.json": "{not json"})
-            self.assertEqual(code, 1)
+            self.assertEqual(code, 2)   # unreadable input: exit 2 (A2-0164)
             self.assertIsNone(doc)
             self.assertIn("error: reading", err)
             self.assertIn("could not be read; refusing", err)
             self.assertNotIn("Traceback", err)
 
-    def test_no_transactions_list_is_a_clean_exit_1(self):
+    def test_no_transactions_list_is_a_clean_exit_2(self):
         # m740.
         with tempfile.TemporaryDirectory() as tmp:
             code, doc, err = _merge(
                 tmp, raw={"x.json": json.dumps({"transactions": 5})})
-            self.assertEqual(code, 1)
+            self.assertEqual(code, 2)   # unreadable input: exit 2 (A2-0164)
             self.assertIn("has no 'transactions' list", err)
 
-    def test_missing_required_input_exits_1(self):
+    def test_missing_required_input_exits_2(self):
         # m758: --require-inputs.
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "ok.json"
@@ -228,16 +228,16 @@ class TestInputErrors(unittest.TestCase):
                         M.main()
             finally:
                 sys.argv = saved
-            self.assertEqual(cm.exception.code, 1)
+            self.assertEqual(cm.exception.code, 2)   # A2-0164
             self.assertIn("refusing to emit a partial merge", err.getvalue())
 
-    def test_bad_row_exits_1(self):
+    def test_bad_row_exits_2(self):
         # m759.
         with tempfile.TemporaryDirectory() as tmp:
             code, _doc, err = _merge(tmp, [_row(quantity="lots")])
-            self.assertEqual(code, 1)
+            self.assertEqual(code, 2)   # unreadable input: exit 2 (A2-0164)
 
-    def test_all_inputs_missing_exits_1(self):
+    def test_all_inputs_missing_exits_2(self):
         # m760.
         with tempfile.TemporaryDirectory() as tmp:
             out, err = io.StringIO(), io.StringIO()
@@ -250,7 +250,7 @@ class TestInputErrors(unittest.TestCase):
                         M.main()
             finally:
                 sys.argv = saved
-            self.assertEqual(cm.exception.code, 1)
+            self.assertEqual(cm.exception.code, 2)   # A2-0164
             self.assertIn("none of the input files could be read",
                           err.getvalue())
 

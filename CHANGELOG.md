@@ -70,6 +70,33 @@
 - sell-check relays the radar's warn-only flags (warrant, adjusted-series
   call, futures option, US long call) on every verdict, and harvest stars
   the ADVISORY cell and lists them (A2-0434, A2-0445, A2-1341).
+- Errors are one line, never a traceback, with one exit-code rule:
+  2 for a named input or output that cannot be read or written, 1 for a
+  command's finding, 130 for Ctrl-C, 141 for a closed stdout pipe
+  (`taxjson trades | head`). Report text a non-UTF-8 terminal cannot
+  show degrades to `?` instead of crashing. Covers a damaged prior-year
+  record in `handoff`, a damaged `work/pending_elections.json` (`elect
+  --pending`, `elect --set`, `run --account`), a non-UTF-8 or directory
+  `ticker_extraction_overrides.txt`, damaged work/ bookkeeping files
+  (`run` rebuilds them), a damaged holdings snapshot, `estimate = 5`
+  where an `[estimate]` table belongs, unwritable `sends.json` /
+  `manifest.json` folders, a dangling `manifest.json` symlink (refused,
+  never written through), `init` under a C locale or with `inputs` as a
+  file, and Ctrl-C at `checklist --walk` prompts (re-audit lists
+  errors-02 / errors-05).
+- `taxjson.toml`, `phantoms.json` and holdings TOML files saved with a
+  UTF-8 BOM are read by wash-radar, watch, buy-check, sell-check,
+  sanity and taxjson-export too; fetch accepts a BOM'd IB Flex download
+  and a BOM'd Questrade fetch file.
+- An ACCOUNT argument must be an account name: a path (`./margin`,
+  `../other/work/margin`) or a pattern (`fees-sum '*'`) is refused.
+  spinoffs, splits, transfers, edge-cases and fees-sum say "run
+  `taxjson run` first" when there are no books, as their twins do.
+  `list --date` fails when an account's as-of recompute fails instead
+  of silently dropping it; `audit --json` exits 2 like `audit` on an
+  unreadable input, and prints the error once.
+- A second `taxjson run` in the same project refuses while one is in
+  progress (it used to crash on the shared work/ file names).
 
 - `taxjson redact` and the generate-parser privacy gate no longer lose a
   private-denylist pattern silently: a leading UTF-8 BOM is stripped,
