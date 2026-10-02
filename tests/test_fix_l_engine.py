@@ -62,11 +62,16 @@ class TestFxCashRateAge(unittest.TestCase):
         doc = build_ledger(rows, base, {cur: {"2024-01-02": 1.32}},
                            2025, country=country)
         self.assertEqual(doc["unrated"], {cur: 1})
-        # Within the 5-day lookback the rate is used.
-        rows[1]["date"] = "2024-01-05"
+        # Within the 5-day lookback the rate is used; 6 days is unrated
+        # (A2-1492: the boundary itself).
+        rows[1]["date"] = "2024-01-07"
         doc = build_ledger(rows, base, {cur: {"2024-01-02": 1.32}},
                            2024, country=country)
         self.assertEqual(doc["unrated"], {})
+        rows[1]["date"] = "2024-01-08"
+        doc = build_ledger(rows, base, {cur: {"2024-01-02": 1.32}},
+                           2024, country=country)
+        self.assertEqual(doc["unrated"], {cur: 1})
 
 
 class TestPriceCacheValues(unittest.TestCase):
