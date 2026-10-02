@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **.tt: a sale whose commission exceeds its gross keeps its negative
+  proceeds.** A .tt SELL line may now carry the negative total
+  qty×price − commission (a penny option close: `-8.95` with a 9.95
+  commission) when its own commission explains it; any other negative
+  sell total is still refused. The old advice (`enter 0`) left the
+  excess commission out of the loss and now warns. `taxjson-convert-tt`
+  json→tt and the `taxjson events`/`trades` single-account view wrote
+  that negative total already, so their output re-imports again, and the
+  view now carries a declared contract size (`x1000`, `x10`) like
+  convert-tt (audit A2-0292, A2-0620, A2-0621, A2-0622, A2-0623,
+  A2-1073, A2-1226, A2-1227).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

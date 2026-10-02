@@ -243,19 +243,31 @@ def parse_tt_line(line: str, account_name: str = 'default',
                 _fee = tx.get('fee', 0.0)
                 _expected = (abs(_q) * tx['price'] * _mult
                              + (_fee if _q > 0 else -_fee))
-                if _q < 0:
-                    # A sale whose commission exceeds its gross is
-                    # entered as 0 (a negative total is refused below),
-                    # so 0 is its correct total — comparing against the
-                    # negative figure warned on exactly that (S029-01).
-                    _expected = max(_expected, 0.0)
-                _total = abs(tx['net_amount'])
-                if (tx['price'] > 0 and abs(_q) > 0
+                # A sale whose commission exceeds its gross nets
+                # NEGATIVE proceeds (qty x price - fee < 0): that signed
+                # total is what the line carries now (A2-0622/A2-0623),
+                # so a SELL total is compared signed. The old `enter 0`
+                # dropped the excess commission from the loss — the
+                # check now says so instead of calling 0 correct.
+                _total = (tx['net_amount'] if _q < 0
+                          else abs(tx['net_amount']))
+                if (_q < 0 and _expected < 0 and tx['price'] > 0
+                        and abs(tx['net_amount']) < 0.005
+                        and (not _is_fut or tx.get('multiplier'))):
+                    print(
+                        f"warning: {_where(source)}.tt sell total 0 on a "
+                        f"sale whose commission {_fee:.2f} exceeds its "
+                        f"gross {abs(_q) * tx['price'] * _mult:.2f}: the "
+                        f"proceeds are {_expected:.2f}, and 0 leaves "
+                        f"{-_expected:.2f} of commission out of the loss "
+                        f"— write the negative total ({_expected:.2f}): "
+                        f"{line.strip()!r}", file=sys.stderr)
+                elif (tx['price'] > 0 and abs(_q) > 0
                         # A futures line is checked only with its size
                         # on the line (`x1000`).
                         and (not _is_fut or tx.get('multiplier'))
                         and abs(_total - _expected) >
-                        max(0.05, 0.01 * max(_expected, 1.0))):
+                        max(0.05, 0.01 * max(abs(_expected), 1.0))):
                     print(
                         f"warning: {_where(source)}.tt line total "
                         f"{_total:.2f} differs from "
@@ -299,26 +311,57 @@ def parse_tt_line(line: str, account_name: str = 'default',
             f"transaction the engine downstream needs."
         ) from e
 
-    # A SELL total is the POSITIVE net proceeds (qty x price - fee;
-    # direction lives in the qty sign). A negative one was booked as
-    # negative proceeds -- a +1,000 gain became a -3,000 loss with no
-    # word, because the net >= 0 schema rule never runs on .tt rows
-    # (audit R1-117). It is ambiguous (a cash-signed proceeds figure, or
-    # a commission larger than the proceeds), so refuse it. A negative
+    # A SELL total is the net proceeds (qty x price - fee; direction
+    # lives in the qty sign). A negative one is either a cash-signed
+    # proceeds figure typed with a '-' (booked as negative proceeds, a
+    # +1,000 gain became a -3,000 loss with no word: audit R1-117) or a
+    # sale whose commission exceeds its gross (a penny option close,
+    # S017-00). Only the second is unambiguous: the line's own fee is
+    # larger than qty x price (x size) and the total is qty x price -
+    # fee. That one is booked signed, like every parser books it (the
+    # whole commission is an outlay, CA-DISP-01); any other negative
+    # SELL total is refused. The .tt writers emit exactly that signed
+    # total, so json -> tt -> json round-trips (A2-0292, A2-0620,
+    # A2-0621, A2-0622, A2-0623, A2-1073, A2-1226, A2-1227). A negative
     # BUY total cannot mean anything but the cash sign (qty x price +
     # fee is never negative) and stays read as its magnitude.
     if (action in ('BUYSELL', 'ASSIGN') and tx.get('quantity', 0) < 0
-            and tx.get('net_amount', 0) < 0):
+            and tx.get('net_amount', 0) < 0
+            and not _excess_commission_sale(tx)):
         raise ValueError(
             f"{_where(source)}{action} sell total {parts[7]} is negative "
-            f"— a .tt total is the POSITIVE net proceeds (qty x price - "
+            f"— a .tt total is the net proceeds (qty x price - "
             f"commission); the sell direction lives in the negative qty. "
-            f"If you typed the cash sign, drop the '-'; if the commission "
-            f"exceeds the proceeds, enter 0. Line: {line.strip()!r}")
+            f"If you typed the cash sign, drop the '-'. A negative total "
+            f"is read only when the line's commission exceeds qty x "
+            f"price{' (add the contract size, e.g. x1000)' if str(tx.get('symbol') or '').startswith(_FUTURES_PREFIXES) and not tx.get('multiplier') else ''} "
+            f"and the total equals qty x price - commission. "
+            f"Line: {line.strip()!r}")
 
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
     return tx
+
+
+def _excess_commission_sale(tx: dict) -> bool:
+    """A SELL (or ASSIGN) line whose negative total is a commission
+    larger than its gross: fee > |qty| x price x size and the total is
+    |qty| x price x size - fee within the typo-check tolerance. A
+    futures line needs its size on the line (`x1000`) to tell."""
+    from taxjson.lib.core import is_option_symbol
+    sym = str(tx.get('symbol') or '')
+    is_fut = sym.startswith(_FUTURES_PREFIXES)
+    if is_fut and not tx.get('multiplier'):
+        return False
+    mult = (tx['multiplier'] if tx.get('multiplier')
+            else 100.0 if is_option_symbol(sym) else 1.0)
+    gross = abs(float(tx.get('quantity') or 0.0)) * float(
+        tx.get('price') or 0.0) * mult
+    fee = float(tx.get('fee') or 0.0)
+    expected = gross - fee
+    net = float(tx.get('net_amount') or 0.0)
+    return (fee > gross and expected < 0
+            and abs(net - expected) <= max(0.05, 0.01 * abs(expected)))
 
 
 def _warn_unknown_suffix(tx: dict, line: str, source: str) -> None:
@@ -420,8 +463,9 @@ def tx_to_tt_line(tx: dict, date_basis: str = 'settle'):
         # SIGNED total/fee: abs() re-inflated sign-preserved reversal
         # rows (and fee rebates) on a json→tt→json cycle — the exact
         # corruption the parser-level sign fixes removed. Direction
-        # still comes from qty. parse_tt_line refuses a negative SELL
-        # total (R1-117): a commission above the gross is written 0.
+        # still comes from qty. A sale whose commission exceeds its
+        # gross is written with its NEGATIVE total, which parse_tt_line
+        # reads back when the line's fee explains it (A2-0620).
         line = (f"{action} {date} {time} {symbol} {qty:.8f} {currency} "
                 f"{price:.8f} {net:.5f} {fee:.5f}")
         # A declared contract size other than the equity option's 100

@@ -4621,7 +4621,19 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     # negative proceeds as positive, so the "round-trippable" view
     # flipped both on re-import (audit S039-11).
     if action in ("BUYSELL", "ASSIGN"):
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
+        line = f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
+        # The declared contract size rides along as `x<size>`, as in
+        # tx_to_tt_line: without it a re-imported x10 mini or a CL
+        # future lost its multiplier (A2-0621).
+        from taxjson.lib.core import is_option_symbol
+        try:
+            _m = float(tx.get("multiplier") or 0.0)
+        except (TypeError, ValueError):
+            _m = 0.0
+        if _m > 0 and (str(sym).startswith(("F:", "/", "\\"))
+                       or (is_option_symbol(str(sym)) and _m != 100.0)):
+            line += f" x{_m:g}"
+        return line
     if action == "TRANSFER":
         return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)}"
     if action == "SPLIT":
