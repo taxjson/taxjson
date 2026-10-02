@@ -1942,12 +1942,23 @@ class TestDeferredLowTail(unittest.TestCase):
         self.assertAlmostEqual(back['net_amount'], 51.0, places=2)
         self.assertAlmostEqual(back['fee'], -1.0, places=2)
         # A NEGATIVE sell total used to round-trip as negative proceeds
-        # (audit R1-117: a +1,000 gain became a -3,000 loss). Trade
-        # net_amount must be >= 0 (schema), so it is now refused loudly
-        # on the way back in rather than preserved.
+        # (audit R1-117: a +1,000 gain became a -3,000 loss). The .tt
+        # reader takes a negative sell total only when the line's
+        # commission explains it (a commission-over-gross close,
+        # A2-0622); any other one is refused loudly on the way back in.
+        # (The schema accepts a negative SELL net since S017-00; the
+        # refusal is the reader's — re-audit A2-1483.)
         tx['net_amount'] = -50.0
         with self.assertRaises(ValueError):
             parse_tt_line(tx_to_tt_line(tx))
+        # ...while a commission-over-gross penny close round-trips.
+        penny = {'action': 'BUYSELL', 'date': '2025-06-16',
+                 'time': '09:30:00', 'symbol': 'ZZZ250620C00050000.US',
+                 'quantity': -1.0, 'currency': 'USD', 'price': 0.01,
+                 'net_amount': -8.95, 'commission': 9.95}
+        back = parse_tt_line(tx_to_tt_line(penny))
+        self.assertAlmostEqual(back['net_amount'], -8.95, places=2)
+        self.assertAlmostEqual(back['fee'], 9.95, places=2)
 
     def test_full_run_clears_orphaned_wash_artifacts(self):
         import shutil
