@@ -635,7 +635,6 @@ def read_rbc_rows(path: Path) -> RbcExport:
 # A2-1321, A2-1344, A2-1347). None (no --country): neutral words.
 RBC_TERMS: Dict[Optional[str], Dict[str, str]] = {
     'canada': {
-        'cost': 'ACB',
         'fund_slip': "the fund's T3",
         'fund_slips': "the funds' {y} T3 slips",
         'dist_income': "the fund's T3 (usually box 21)",
@@ -645,7 +644,6 @@ RBC_TERMS: Dict[Optional[str], Dict[str, str]] = {
         'rights_benefit': 'their FMV may be a taxable benefit',
     },
     'usa': {
-        'cost': 'basis',
         'fund_slip': 'Form 1099-DIV',
         'fund_slips': 'the {y} Forms 1099-DIV',
         'dist_income': 'Form 1099-DIV',
@@ -657,7 +655,6 @@ RBC_TERMS: Dict[Optional[str], Dict[str, str]] = {
         'rights_benefit': 'they may be a taxable distribution (§305(b))',
     },
     None: {
-        'cost': 'cost basis',
         'fund_slip': "the fund's tax slip",
         'fund_slips': "the funds' {y} tax slips",
         'dist_income': "the fund's tax slip",
@@ -670,8 +667,12 @@ RBC_TERMS: Dict[Optional[str], Dict[str, str]] = {
 
 
 def rbc_terms(country: Optional[str]) -> Dict[str, str]:
-    """The note words for `country` ('canada' | 'usa' | None)."""
-    return RBC_TERMS.get(country, RBC_TERMS[None])
+    """The note words for `country` ('canada' | 'usa' | None); the cost
+    noun is lib/country's COST_TERM, the one every report uses."""
+    from taxjson.lib.country import COST_TERM
+    terms = dict(RBC_TERMS.get(country, RBC_TERMS[None]))
+    terms['cost'] = COST_TERM.get(country, COST_TERM[None])
+    return terms
 
 
 # RBC posts year-end book-cost adjustments (a notional distribution, a
