@@ -542,8 +542,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "were your registered plan.)", cont=True),
             Rule("CA-SL-05",
                  "A long call on the shares is identical property to them "
-                 "(a right to acquire, s.54 para (i)), at 100 shares per "
-                 "contract."),
+                 "(a right to acquire, s.54 para (i)), at its contract size "
+                 "(100 shares for a standard equity option, the declared "
+                 "size of a mini). A root that drops the share class (RCI "
+                 "for RCI.B.TO) names that class line."),
             Rule("CA-SL-06",
                  "Shares never replace an option; an option is replaced "
                  "only by the identical contract; a put never replaces "
@@ -555,7 +557,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SL-15",
                  "So is a call on an adjusted option series (root + digit, "
                  "e.g. XYZ1) or a futures option on the loss's futures "
-                 "contract.", cont=True),
+                 "contract, however it is spelled (never sized as 100 "
+                 "units).", cont=True),
             Rule("CA-SL-07",
                  "Only purchases count: writing an option or shorting "
                  "again never replaces, including after a loss on covering "
@@ -1043,16 +1046,21 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-12",
                  "A long call bought in the window is flagged as a warning "
                  "only (\"option to acquire\" is not enforced by the US "
-                 "engine), sized at 100 shares per contract, each contract "
+                 "engine), sized at the contract's size (100 shares for a "
+                 "standard equity option, the declared size of a mini), "
+                 "each contract "
                  "flagged against one loss's shares only; a buy that "
-                 "closes a written call is not an acquisition."),
+                 "closes a written call is not an acquisition. A root "
+                 "that drops the share class (BRKB for BRK.B) names that "
+                 "class line."),
             Rule("US-WASH-14",
                  "A warrant or right bought in the window is flagged for a "
                  "manual wash-sale check only.", cont=True),
             Rule("US-WASH-15",
                  "So is a call on an adjusted option series (root + digit, "
                  "e.g. XYZ1) or a futures option on the loss's futures "
-                 "contract (a commodity future is usually outside §1091).",
+                 "contract, however it is spelled (a commodity future is "
+                 "usually outside §1091).",
                  cont=True),
             Rule("US-WASH-13",
                  "Accounts marked crypto are not subject to the wash-sale "

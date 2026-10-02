@@ -243,5 +243,106 @@ class TestCaCoinDustReplacement(unittest.TestCase):
                                    0.045, places=6, msg=str(k))
 
 
+def _gen(R, rows, **kw):
+    with contextlib.redirect_stderr(io.StringIO()):
+        return R().compute_gains(list(rows), **kw)
+
+
+def _t(d, sym, q, px, cur='USD', mult=0.0, acct='margin'):
+    m = mult or (100 if len(sym) > 12 and not sym.startswith('F:') else 1)
+    return TaxTransaction(action='BUYSELL', date=d, date_settle=d,
+                          time='10:00:00', symbol=sym, quantity=float(q),
+                          price=float(px), net_amount=round(abs(q * px * m), 2),
+                          currency=cur, account=acct, multiplier=mult)
+
+
+class TestFuturesOptionIsFlaggedNotSized(unittest.TestCase):
+    """A2-0014 / A2-0056: a call on the loss's own futures contract (same
+    spelling) is flagged, never enforced as a 100-unit call."""
+
+    def _book(self, n):
+        return [_t('2025-09-02', 'F:CLG6.US', n, 6000),
+                _t('2025-10-01', 'F:CLG6.US', -n, 5000),
+                _t('2025-10-06', 'F:CLG6260114C00060000.US', 1, 3)]
+
+    @rule("CA-SL-15")
+    def test_canada(self):
+        from taxjson.lib.core import CanadaTaxRules as R
+        for n in (1, 5):
+            res = _gen(R, self._book(n))
+            self.assertEqual(res['summary']['total_disallowed'], 0)
+            self.assertEqual([w['rule'] for w in
+                              res.get('option_replacement_warnings') or []],
+                             ['futures_option_vs_loss'])
+
+    @rule("US-WASH-15")
+    def test_usa(self):
+        from taxjson.lib.core import USATaxRules as R
+        res = _gen(R, self._book(1))
+        self.assertEqual([w['rule'] for w in
+                          res.get('option_replacement_warnings') or []],
+                         ['futures_option_vs_loss'])
+
+
+class TestClassShareRootCall(unittest.TestCase):
+    """A2-0015 / A2-0016 / A2-0207: a call booked under the option root
+    that drops the share class is a call on that class line."""
+
+    @rule("CA-SL-05")
+    def test_canada_rci_call_denies_the_rci_b_loss(self):
+        for root, stock in (('RCI', 'RCI.B.TO'), ('BCE', 'BCE.TO')):
+            rows = [_t('2025-01-02', stock, 100, 50, 'CAD'),
+                    _t('2025-05-01', stock, -100, 40, 'CAD'),
+                    _t('2025-05-06', f'{root}251219C00045000.TO', 1, 2,
+                       'CAD')]
+            res = _gen(CanadaTaxRules, rows)
+            self.assertAlmostEqual(res['summary']['total_disallowed'],
+                                   1000.0, msg=root)
+
+    @rule("CA-SL-05")
+    def test_canada_ambiguous_class_root_is_not_resolved(self):
+        # RCI names both RCI.A.TO and RCI.B.TO: no guess.
+        rows = [_t('2025-01-02', 'RCI.A.TO', 10, 50, 'CAD'),
+                _t('2025-01-02', 'RCI.B.TO', 100, 50, 'CAD'),
+                _t('2025-05-01', 'RCI.B.TO', -100, 40, 'CAD'),
+                _t('2025-05-06', 'RCI251219C00045000.TO', 1, 2, 'CAD')]
+        res = _gen(CanadaTaxRules, rows)
+        self.assertEqual(res['summary']['total_disallowed'], 0)
+
+    @rule("US-WASH-12")
+    def test_usa_brkb_call_warns_on_the_brk_b_loss(self):
+        from taxjson.lib.core import USATaxRules
+        rows = [_t('2026-01-05', 'BRK.B.US', 100, 50),
+                _t('2026-03-02', 'BRK.B.US', -100, 40),
+                _t('2026-03-10', 'BRKB270115C00046000.US', 1, 2)]
+        res = _gen(USATaxRules, rows)
+        ws = res.get('option_replacement_warnings') or []
+        self.assertEqual([w['rule'] for w in ws], ['call_vs_share_loss'])
+        self.assertEqual(res['summary']['total_disallowed'], 0)
+
+
+class TestDeclaredContractSize(unittest.TestCase):
+    """A2-0049 / A2-0957: a mini call (x10) replaces 10 shares."""
+
+    def _rows(self):
+        C = 'AAPL250620C00150000.US'
+        return [_t('2025-01-06', 'AAPL.US', 1000, 20),
+                _t('2025-03-03', 'AAPL.US', -1000, 10),
+                _t('2025-03-20', C, 1, 3, mult=10.0)]
+
+    @rule("CA-SL-05")
+    def test_canada_denies_ten_shares(self):
+        res = _gen(CanadaTaxRules, self._rows())
+        self.assertAlmostEqual(res['summary']['total_disallowed'], 100.0)
+
+    @rule("US-WASH-12")
+    def test_usa_warning_sizes_ten_shares(self):
+        from taxjson.lib.core import USATaxRules
+        res = _gen(USATaxRules, self._rows())
+        w = (res.get('option_replacement_warnings') or [])[0]
+        self.assertEqual((w['covered_shares'], w['option_qty'],
+                          w['at_risk_amount']), (10.0, 1.0, -100.0))
+
+
 if __name__ == '__main__':
     unittest.main()

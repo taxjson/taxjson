@@ -855,8 +855,10 @@ acquire" the shares, which ITA s.54 (closing words, para (i)) deems
 identical to them. So in the Canada engine a **long call** on the same
 shares, opened inside the ±30-day window of a loss on **long shares** and
 still held at the end of day 30 (in any of your accounts, registered ones
-included), is replacement property: the loss is denied at 100 shares per
-contract, and the denied amount is added to the **call's** cost (recovered
+included), is replacement property: the loss is denied at the contract's
+size (100 shares, or the declared size of a mini — `x10` in a `.tt`), and an
+option root that drops the share class (`RCI` calls for `RCI.B.TO`, `BRKB`
+for `BRK.B`) counts for that class line; the denied amount is added to the **call's** cost (recovered
 when the call is sold, or rolled into the shares if it is exercised). A call
 held in a registered account makes that part permanent. A buy-to-close of a
 written call acquires nothing and never counts.
@@ -882,9 +884,9 @@ countries (warn-only, the numbers do not change): a warrant or
 subscription right on the loss shares (`right_vs_share_loss`), a call on an
 **adjusted** option series (root + digit, e.g. `XYZ1` after a corporate
 action on XYZ: its deliverable is not 100 shares; `adjusted_option_vs_loss`),
-and a call on the loss's **futures** contract named by its family root
-(`F:CL` after a loss on `F:CLG6`) or another prefix spelling
-(`futures_option_vs_loss`; in a US project the note adds that a commodity
+and a call on the loss's **futures** contract, whatever its spelling
+(`F:CLG6` itself, its family root `F:CL`, or another prefix such as
+`/CLG6`; `futures_option_vs_loss`; in a US project the note adds that a commodity
 future is usually outside §1091). What these convert into is not in the
 books, so the engine cannot size a denial.
 

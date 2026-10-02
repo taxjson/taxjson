@@ -343,20 +343,33 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
     carries held_at_window_end for the OPTION's own position (across all
     scopes)."""
     canon = canonical or (lambda s: s)
-    acqs = [[canon(parse_option_underlying(ev.symbol)),
-             parse_option_right(ev.symbol), ev, opening]
-            for ev, opening in _opening_option_buys(events, date_of)]
+    # A class-share root (RCI for RCI.B.TO, BRKB for BRK.B.US) names the
+    # class line it delivers (A2-0016/0207).
+    _cls = class_root_aliases(
+        [ev.symbol for ev in events]
+        + [str(l.get('symbol') or '') for l in loss_entries])
+    acqs = []
+    for ev, opening in _opening_option_buys(events, date_of):
+        und = parse_option_underlying(ev.symbol)
+        # A futures option is never sized as shares: its own rule flags
+        # it for a manual check (futures_option_vs_loss, US-WASH-15 /
+        # CA-SL-15 — A2-0014/0056).
+        if not und or _FUTURES_PREFIX_RE.match(und):
+            continue
+        acqs.append([canon(_cls.get(und.upper(), und)),
+                     parse_option_right(ev.symbol), ev, opening])
     if not acqs:
         return []
 
     def _d(s):
         return datetime.strptime(s, '%Y-%m-%d')
 
-    # Each contract is a right to OPTION_CONTRACT_SHARES shares and backs
-    # one denial: it is used up across the losses in date order (audit
-    # S069-17 / S070-00 / S070-01 — one contract used to be cited as
-    # denying every loss in its window in full).
-    left = {id(a[2]): a[3] * OPTION_CONTRACT_SHARES for a in acqs}
+    # Each contract is a right to its contract size in shares (100, or
+    # the declared size of a mini / adjusted contract — A2-0957) and
+    # backs one denial: it is used up across the losses in date order
+    # (audit S069-17 / S070-00 / S070-01 — one contract used to be cited
+    # as denying every loss in its window in full).
+    left = {id(a[2]): a[3] * option_contract_size(a[2]) for a in acqs}
     out = []
     order = sorted(range(len(loss_entries)),
                    key=lambda n: str(loss_entries[n].get('date') or ''))
@@ -391,8 +404,9 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
                 continue
             left[id(ev)] -= take
             need -= take
-            rec = by_contract.setdefault(ev.symbol, {'shares': 0.0,
-                                                     'first': None})
+            rec = by_contract.setdefault(
+                ev.symbol, {'shares': 0.0, 'first': None,
+                            'size': option_contract_size(ev)})
             rec['shares'] += take
             if rec['first'] is None or date_of(ev) < rec['first']:
                 rec['first'] = date_of(ev)
@@ -421,7 +435,8 @@ def detect_option_replacement_matches(loss_entries, events, *, date_of,
                 'loss_qty': loss_qty or None,
                 'option_symbol': occ,
                 'option_acquired': rec['first'],
-                'option_qty': rec['shares'] / OPTION_CONTRACT_SHARES,
+                'option_qty': rec['shares'] / rec['size'],
+                'contract_size': rec['size'],
                 'covered_shares': rec['shares'],
                 'at_risk_amount': round(float(loss['amount']) * frac, 2),
                 'held_at_window_end': held,
@@ -528,9 +543,12 @@ def detect_unresolved_option_replacement_matches(
           loss on F:CLG6 and a call on F:CL or /CLG6).
 
     The root matching is the assignment resolver's (_root_matches_stock);
-    the market suffix must agree. A call whose underlying IS the loss
-    symbol is left to the engines' own rule (Canada enforces it, the US
-    warns: call_vs_share_loss), so nothing is reported twice. Puts never
+    the market suffix must agree. A futures option is flagged here even
+    when it names the loss's own contract (F:CLG6 call vs an F:CLG6
+    loss): the engines' call rule never sizes a futures option (A2-0014/
+    0056). Any other call whose underlying IS the loss symbol is left to
+    the engines' own rule (Canada enforces it, the US warns:
+    call_vs_share_loss), so nothing is reported twice. Puts never
     count (a right to sell). Same record shape as
     detect_right_replacement_matches."""
     canon = canonical or (lambda s: s)
@@ -572,7 +590,7 @@ def detect_unresolved_option_replacement_matches(
         s_base, s_ext = _base(loss_c)
         by_sym: Dict[str, Dict[str, Any]] = {}
         for kind, und_c, r_base, r_ext, ev, opening in acqs:
-            if und_c == loss_c:
+            if und_c == loss_c and kind != 'futures_option_vs_loss':
                 continue            # the engines' own call rule
             if r_ext != s_ext or not _root_matches_stock(r_base, s_base):
                 continue
@@ -638,8 +656,8 @@ def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
                        f"{w['loss_qty']:g} shares' loss "
                        f"({w['at_risk_amount']:+,.2f}) would be denied "
                        f"({w['option_qty']:g} contract(s) x "
-                       f"{OPTION_CONTRACT_SHARES:g} shares, each used "
-                       f"once)")
+                       f"{w.get('contract_size') or OPTION_CONTRACT_SHARES:g}"
+                       f" shares, each used once)")
         else:
             verdict = "this loss would be denied"
         print(
@@ -1223,6 +1241,59 @@ def _root_matches_stock(root_base: str, stock_base: str) -> bool:
         return True
     r_nodigit = root_base.rstrip('0123456789')
     return r_nodigit != root_base and r_nodigit in (stock_base, head)
+
+
+def _class_root_matches(root_base: str, stock_base: str) -> bool:
+    """The share-class subset of _root_matches_stock: an option root that
+    drops the class of a class-share line ('RCI' for RCI.B, 'BRKB' or
+    'BRK' for BRK.B, 'ABC' for ABC.UN). Never a futures root and never
+    an OCC-adjusted (digit) root — those are flagged, not resolved."""
+    if (_FUTURES_PREFIX_RE.match(root_base)
+            or _FUTURES_PREFIX_RE.match(stock_base)
+            or root_base[-1:].isdigit()):
+        return False
+    head = re.split(r'[.\-]', stock_base)[0]
+    if head == stock_base:
+        return False
+    return (root_base == head
+            or root_base == stock_base.replace('.', '').replace('-', ''))
+
+
+def class_root_aliases(symbols) -> Dict[str, str]:
+    """{option underlying: share line} for an option root that names no
+    share line among `symbols` but exactly ONE class share of that root
+    on the same market: RBC books Rogers' Montreal calls under the root
+    RCI (RCI251219C00045000.TO) while the shares are RCI.B.TO; OCC spells
+    Berkshire B calls BRKB. Used by both engines' call-replacement rules
+    (CA-SL-05 / US-WASH-12; audit A2-0015/0016/0207), the way the
+    assignment resolver and the reports already map the root (S030-02,
+    S040-11, S047-01). A root matching two class lines stays unresolved."""
+    syms = {str(x).strip().upper() for x in symbols if x}
+    shares = {x for x in syms if not is_option_symbol(x)}
+    out: Dict[str, str] = {}
+    for x in syms:
+        und = parse_option_underlying(x) if is_option_symbol(x) else None
+        if not und or und in shares or und in out:
+            continue
+        r_base, r_ext = _split_underlying(und)
+        cands = [sh for sh in shares
+                 if _split_underlying(sh)[1] == r_ext
+                 and _class_root_matches(r_base, _split_underlying(sh)[0])]
+        if len(cands) == 1:
+            out[und] = cands[0]
+    return out
+
+
+def option_contract_size(opt_tx) -> float:
+    """Units of the underlying one contract of `opt_tx` is a right to:
+    the declared contract size (` x10` mini, an adjusted deliverable),
+    else 100 for an equity option; one contract for a futures option
+    (its declared multiplier is the futures' dollar size, not a unit
+    count). Audit A2-0049/0957."""
+    if _FUTURES_PREFIX_RE.match(getattr(opt_tx, 'symbol', '') or ''):
+        return 1.0
+    m = float(getattr(opt_tx, 'multiplier', 0.0) or 0.0)
+    return m if m > 0 else float(OPTION_CONTRACT_SHARES)
 
 
 def _make_assign_underlying_resolver(transactions, date_of):
@@ -3091,6 +3162,13 @@ class CanadaTaxRules(TaxRules):
             # (audit A2-0059/0551/0058/0193/0192/0961/0965: a one-cent
             # price change used to move a denial).
             _pos = {id(_t): _i for _i, _t in enumerate(current_tx_list)}
+            # A class-share option root names its class line (RCI for
+            # RCI.B.TO — CA-SL-05; A2-0015/0016).
+            _cls_root = class_root_aliases(t.symbol for t in all_txs)
+
+            def _call_und(sym):
+                u = parse_option_underlying(sym)
+                return _cls_root.get(u.upper(), u) if u else u
 
             def _pkey(t):
                 return (_ev_key(t), _pos.get(id(t), -1))
@@ -3284,7 +3362,11 @@ class CanadaTaxRules(TaxRules):
                 # identical to the property". A LONG CALL on the loss
                 # shares, opened inside the window and still owned at
                 # day 30, is substituted property for a loss on LONG
-                # shares (100 shares per contract). Deliberately one-way
+                # shares (its contract size per contract: 100, or the
+                # declared size of a mini — A2-0049). A futures option
+                # is never sized as units here: it is flagged for a
+                # manual check (CA-SL-15; A2-0014/0056). A class-share
+                # root counts for its class line. Deliberately one-way
                 # (user policy, 2026-09-29): shares never replace an
                 # option, and a different option series never replaces
                 # an option — an option's own loss washes only against
@@ -3297,8 +3379,9 @@ class CanadaTaxRules(TaxRules):
                                 or t.quantity <= 0
                                 or parse_option_right(t.symbol) != 'C'):
                             continue
-                        _und = parse_option_underlying(t.symbol)
-                        if not _und or alias_of(_und) != loss_alias:
+                        _und = _call_und(t.symbol)
+                        if (not _und or _FUTURES_PREFIX_RE.match(_und)
+                                or alias_of(_und) != loss_alias):
                             continue
                         t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
                         if abs((t_date - loss_date).days) > 30:
@@ -3357,12 +3440,13 @@ class CanadaTaxRules(TaxRules):
 
                 def _call_units(t, q: float) -> float:
                     # q contracts of a call on the loss shares, in
-                    # loss-date loss-symbol SHARE units (100 per contract,
-                    # through the underlying's split lineage).
+                    # loss-date loss-symbol SHARE units (the contract
+                    # size per contract, through the underlying's split
+                    # lineage).
                     d = get_sort_date(t)
                     pre = bool(t.date and t.date < d)
-                    return q * OPTION_CONTRACT_SHARES * split_timeline.lineage_factor(
-                        parse_option_underlying(t.symbol), d, tx.symbol,
+                    return q * option_contract_size(t) * split_timeline.lineage_factor(
+                        _call_und(t.symbol), d, tx.symbol,
                         loss_sort, from_inclusive=pre, ref_inclusive=loss_pre)
 
                 def _avail_native(t) -> float:

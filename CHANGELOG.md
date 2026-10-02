@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Long calls as replacements: class-share roots, mini contracts and
+  futures options.** A call booked under the root that drops the share
+  class (RCI for RCI.B.TO, BRKB for BRK.B) is now a call on that class
+  line: Canada denies the loss and the US warns (A2-0015/0016/0207). A
+  call's replacement units are its declared contract size (a `x10` mini
+  replaces 10 shares, not 100) in both engines (A2-0049/0957). A futures
+  option on the loss's own futures contract is flagged for a manual
+  check in both countries instead of being enforced as a 100-unit call
+  in Canada (A2-0014/0056). tax-logic CA-SL-05/15, US-WASH-12/15.
+
 - Canada: a coin rebuy under a millionth of a unit now backs its share
   of a superficial loss; the solver's zero is the pool's own (relative
   for a coin) instead of a fixed 1e-6 (A2-0552; cents at most).
