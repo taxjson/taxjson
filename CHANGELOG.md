@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
+  database is a one-line error saying to install `tzdata` (now a declared
+  dependency on Windows), not a ZoneInfoNotFoundError traceback
+  (A2-1447).
 - Generic importer: a mapping .toml that is not UTF-8 is reported against
   the .toml, not as the CSV being unreadable (A2-1452).
 - Webull parser: a row whose Action Code is blank but that carries a

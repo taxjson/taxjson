@@ -630,8 +630,19 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
     if zone:
         from zoneinfo import ZoneInfo
         clock = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
-        local = clock.replace(tzinfo=ZoneInfo(_IB_CLOCK_TZ)).astimezone(
-            ZoneInfo(zone))
+        try:
+            local = clock.replace(tzinfo=ZoneInfo(_IB_CLOCK_TZ)).astimezone(
+                ZoneInfo(zone))
+        except Exception as e:      # ZoneInfoNotFoundError, no tz database
+            # An uncaught traceback where the platform has no tz database
+            # (Windows without `tzdata`, audit A2-1447). No DST-rule
+            # fallback for Sydney/Auckland: the exchange trade date would
+            # be guessed.
+            raise BrokerageParseError(
+                f"{symbol or cur} {date} {time}: the {cur} fill's exchange "
+                f"trade date needs the time zone {zone!r}, which this "
+                f"system's time-zone database does not have ({e}) — "
+                f"install it: pip install tzdata") from None
         ld, lt = local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S")
         if ld != date:
             return ld, lt, stamp

@@ -491,5 +491,29 @@ class TestGenericSidecar(unittest.TestCase):
                 GenericBrokerage().parse_file(c)
 
 
+class TestIbNoTzdata(unittest.TestCase):
+    """A2-1447: no tz database -> one-line parse error, not a traceback."""
+
+    def test_missing_zone_is_parse_error(self):
+        from unittest import mock
+        import zoneinfo
+        from taxjson.lib.brokerages import ib_extractor as ib
+        from taxjson.lib.brokerages.base import BrokerageParseError
+
+        def boom(name):
+            raise zoneinfo.ZoneInfoNotFoundError(f"No time zone found "
+                                                 f"with key {name}")
+        with mock.patch.object(zoneinfo, "ZoneInfo", boom):
+            with self.assertRaisesRegex(BrokerageParseError, "tzdata"):
+                ib._ib_market_trade_date("2025-06-30", "09:30:00",
+                                         "Stocks", "AUD", "AX", "QZBHP")
+
+    def test_with_zone_ok(self):
+        from taxjson.lib.brokerages import ib_extractor as ib
+        self.assertEqual(ib._ib_market_trade_date(
+            "2025-06-30", "21:30:00", "Stocks", "AUD", "AX", "QZBHP")[0],
+            "2025-07-01")
+
+
 if __name__ == "__main__":
     unittest.main()

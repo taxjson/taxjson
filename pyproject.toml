@@ -29,8 +29,11 @@ classifiers = [
 # falls back to `tomli` on older versions; declare it so 3.9/3.10
 # users get a working install instead of a "pip install tomli"
 # stderr at first invocation.
+# Windows ships no IANA time-zone database: zoneinfo needs `tzdata` for
+# the IB exchange-local trade dates (Sydney, Tokyo, ...; audit A2-1447).
 dependencies = [
     'tomli >= 1.2.0; python_version < "3.11"',
+    'tzdata; sys_platform == "win32"',
 ]
 
 [project.urls]
