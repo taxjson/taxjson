@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson checklist --done/--skip/--undo` are repeatable (only the last
+  of a repeated flag was recorded, silently), and concurrent marks no
+  longer lose each other or corrupt checklist.json (a lock around the
+  read-modify-write, an atomic write) (re-audit A2-1159, A2-1160).
 - `taxjson audit`: a phantom-basis sale the books route to manual
   reporting is tied out as "phantom basis — manual reporting" instead of
   "MISSING from the check file(s)" (exit 1), so the checklist's audit

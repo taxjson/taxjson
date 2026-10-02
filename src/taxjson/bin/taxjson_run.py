@@ -9868,7 +9868,15 @@ def cmd_checklist(args: argparse.Namespace) -> None:
     if args.note and not (args.done or args.skip):
         sys.exit("taxjson checklist: --note goes with --done or --skip "
                  "(it is stored with the mark).")
-    marks = [(args.done, "done"), (args.skip, "skipped"), (args.undo, None)]
+    # Every repeated --done/--skip/--undo is recorded (only the last one
+    # was, silently — A2-1159); an unknown id stops before any is written.
+    marks = ([(st, "done") for st in (args.done or [])]
+             + [(st, "skipped") for st in (args.skip or [])]
+             + [(st, None) for st in (args.undo or [])])
+    for step, _m in marks:
+        if step not in ids:
+            sys.exit(f"taxjson checklist: unknown step {step!r} "
+                     f"(ids: {', '.join(ids)})")
     recorded: List[Dict[str, Any]] = []
     for step, mark in marks:
         if step:
@@ -15187,9 +15195,12 @@ def main() -> None:
              "command can prove; --walk steps through the open ones")
     p_ck.add_argument("--walk", action="store_true",
                       help="Interactive: visit each open step in turn")
-    p_ck.add_argument("--done", metavar="ID", help="Mark a step done")
-    p_ck.add_argument("--skip", metavar="ID", help="Mark a step skipped (n/a for you)")
-    p_ck.add_argument("--undo", metavar="ID", help="Remove a manual mark")
+    p_ck.add_argument("--done", metavar="ID", action="append",
+                      help="Mark a step done (repeatable)")
+    p_ck.add_argument("--skip", metavar="ID", action="append",
+                      help="Mark a step skipped (n/a for you; repeatable)")
+    p_ck.add_argument("--undo", metavar="ID", action="append",
+                      help="Remove a manual mark (repeatable)")
     p_ck.add_argument("--note", metavar="TEXT", help="Note to store with --done/--skip")
     p_ck.add_argument("--reset", action="store_true",
                       help="Remove every manual mark (deletes checklist.json)")

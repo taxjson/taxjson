@@ -1838,9 +1838,45 @@ def load_state(root: Path) -> Dict[str, Any]:
 
 
 def save_state(root: Path, state: Dict[str, Any], year: int) -> None:
+    """Atomic: a reader never sees a half-written checklist.json."""
     state["year"] = year
-    (root / STATE_FILE).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n",
-                                   encoding="utf-8")
+    path = root / STATE_FILE
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.part")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n",
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
+class _StateLock:
+    """An exclusive lock around a read-modify-write of checklist.json:
+    two `checklist --done` at once lost a mark or left the file
+    unparseable (A2-1160). A POSIX flock on the project directory itself
+    (no lock file to commit or ignore); no lock where fcntl or a
+    directory descriptor is unavailable."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.fd = None
+
+    def __enter__(self):
+        try:
+            import fcntl
+            self.fd = os.open(str(self.root), os.O_RDONLY)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except (ImportError, OSError):                  # pragma: no cover
+            if self.fd is not None:
+                os.close(self.fd)
+            self.fd = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            import fcntl
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self.fd)
+        return False
 
 
 def set_override(root: Path, year: int, step: str, mark: Optional[str],
@@ -1850,6 +1886,13 @@ def set_override(root: Path, year: int, step: str, mark: Optional[str],
     ids = {s[0] for s in STEPS}
     if step not in ids:
         raise KeyError(step)
+    with _StateLock(root):
+        return _set_override_locked(root, year, step, mark, note, today)
+
+
+def _set_override_locked(root: Path, year: int, step: str,
+                         mark: Optional[str], note: str,
+                         today: Optional[date]) -> bool:
     state = load_state(root)
     if state.get("year") not in (None, year):
         # Another year's marks (a copied project, or `year` bumped):

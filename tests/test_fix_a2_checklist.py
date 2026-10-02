@@ -646,3 +646,38 @@ class TestAuditPhantomBasis(unittest.TestCase):
             res = cl.d_audit(c)
             self.assertEqual(res.status, "done", res.detail)
             self.assertIn("1 phantom-basis sale(s) routed to manual reporting", res.detail)
+
+
+class TestChecklistMarks(unittest.TestCase):
+    def test_repeated_flags_all_recorded(self):
+        """A2-1159: --done A --done B records both."""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            (p / "taxjson.toml").write_text(TOML)
+            r = tj(p, "checklist", "--done", "roc-entered", "--done", "t5-t3",
+                   "--skip", "fees", "--json")
+            doc = json.loads(r.stdout)
+            self.assertEqual([x["step"] for x in doc["recorded"]],
+                             ["roc-entered", "t5-t3", "fees"])
+            ov = json.loads((p / "checklist.json").read_text())["overrides"]
+            self.assertEqual(set(ov), {"roc-entered", "t5-t3", "fees"})
+            r = tj(p, "checklist", "--done", "fees", "--done", "bogus", check=False)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("unknown step 'bogus'", r.stderr)
+
+    def test_concurrent_marks_are_not_lost(self):
+        """A2-1160: simultaneous set_override calls keep every mark."""
+        import multiprocessing as mp
+        ids = [s[0] for s in cl.STEPS][:12]
+        with tempfile.TemporaryDirectory() as td:
+            ctxm = mp.get_context("fork")
+            procs = [ctxm.Process(target=cl.set_override,
+                                  args=(Path(td), 2025, sid, "done"))
+                     for sid in ids]
+            for pr in procs:
+                pr.start()
+            for pr in procs:
+                pr.join()
+            self.assertTrue(all(pr.exitcode == 0 for pr in procs))
+            ov = json.loads((Path(td) / "checklist.json").read_text())["overrides"]
+        self.assertEqual(set(ov), set(ids))
