@@ -6127,7 +6127,13 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     _aliases = class_share_aliases(
         t.get("symbol") for _a, _d in _docs
         for t in _d.get("transactions", []) or [])
+    from taxjson.lib.report_model import grant_write_closes
     for acct, data in _docs:
+        # An expired grant-timing write has no closing record: the
+        # WRITE stands for its close (A2-0693).
+        _gclose = grant_write_closes(
+            data.get("transactions") or [], data.get("inventory") or [],
+            (data.get("summary") or {}).get("year"))
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
         # tainted too — counted, never silent (audit S040-15 sibling).
@@ -6137,7 +6143,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             if (is_option_symbol(sym) and parse_option_right(sym) == "C"
                     and _ISO_DATE_RE.match(d) and keep(d)):
                 tainted_skipped += 1
-        for t in data.get("transactions", []):
+        for _ti, t in enumerate(data.get("transactions", [])):
             sym = str(t.get("symbol") or "")
             if not is_option_symbol(sym):
                 continue
@@ -6194,6 +6200,9 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
             if not t.get("grant"):
                 rec["contracts"] += 1
                 rec["qty"] += abs(float(t.get("qty") or 0.0))
+            elif _ti in _gclose:
+                rec["contracts"] += 1
+                rec["qty"] += _gclose[_ti]
             rec["proceeds"] += premium
             rec["cost"] += buyback
             rec["gain"] += gain
@@ -6275,7 +6284,11 @@ def cmd_winners(args: argparse.Namespace) -> None:
     _aliases = class_share_aliases(
         t.get("symbol") for _a, _d in _docs
         for t in _d.get("transactions", []) or [])
+    from taxjson.lib.report_model import grant_write_closes
     for _acct, data in _docs:
+        _gclose = grant_write_closes(
+            data.get("transactions") or [], data.get("inventory") or [],
+            (data.get("summary") or {}).get("year"))
         _settle = _settle_basis(root, data)
         # Pipeline files ROUTE phantom-basis rows out of transactions[]
         # into manual_reporting_required: count them too, or the
@@ -6285,7 +6298,7 @@ def cmd_winners(args: argparse.Namespace) -> None:
             d = _gains_row_date(t, keep, _settle)
             if _ISO_DATE_RE.match(d) and keep(d):
                 tainted_skipped += 1
-        for t in data.get("transactions", []):
+        for _ti, t in enumerate(data.get("transactions", [])):
             if t.get("action") in _INCOME:
                 continue
             d = _gains_row_date(t, keep, _settle)
@@ -6303,7 +6316,9 @@ def cmd_winners(args: argparse.Namespace) -> None:
             und = underlying_of(sym, _aliases)
             rec = agg.setdefault(und, {"closes": 0, "proceeds": 0.0,
                                        "cost": 0.0, "gain": 0.0})
-            if not t.get("grant"):          # a WRITE is not a close
+            # A WRITE is not a close — unless it expired, when it is the
+            # only record of that close (A2-0693).
+            if not t.get("grant") or _ti in _gclose:
                 rec["closes"] += 1
             # Real-world orientation, as ccd-sum and form-export show
             # it: a SHORT row carries the engine's signed legs (cost =
