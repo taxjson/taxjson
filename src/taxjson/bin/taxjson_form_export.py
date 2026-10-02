@@ -40,8 +40,11 @@ return reports). Column conventions:
   Schedule 3: broker proceeds in taxjson are net of sell-side
          commission/fee, so the report re-splits them: proceeds column =
          net + outlays, outlays column = commission + fee, leaving the gain
-         identical. Short-position rows show absolute amounts with a SHORT
-         marker (gain is exact; the column split is presentational).
+         identical. A short position's row shows what the short sale
+         (or write) brought in as PROCEEDS and the cover as ACB, with a
+         note (the engine's negated fields are un-negated AND swapped).
+         A net rebate (negative commission/fee) stays netted in the
+         proceeds: OUTLAYS is never negative.
          A written option's premium (grant timing) is shown GROSS, its
          write commission in outlays; a close-timing write's commission
          and a short sale's opening commission stay netted (the closing
@@ -59,9 +62,15 @@ silently: every one is listed in a MANUAL REPORTING section of the report
 named in a stderr warning with its proceeds — they must be reported by hand
 once their cost is known.
 
+  8949 / TXF: §1256 contracts (futures, options on futures, broad-
+         based index options) are kept off Form 8949 and listed for
+         Form 6781 by hand (tax-logic US-FUT-02 / US-OPT-04).
+
 Usage:
-    taxjson-form-export --form 8949 --year 2025 margin_gains.json [...]
-    taxjson-form-export --form schedule3 --year 2025 --csv out.csv ...
+    taxjson-form-export --form 8949 --country usa --year 2025 \
+        margin_gains_wash.json [...]
+    taxjson-form-export --form schedule3 --country canada --year 2025 \
+        --csv out.csv margin_gains_wash.json [...]
 
 Or through the project wrapper: `taxjson form-export` (form defaults from
 the project's country).
@@ -75,7 +84,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import is_option_symbol
-from taxjson.lib.futures import is_plain_future
+from taxjson.lib.futures import is_plain_future, section_1256_kind
+from taxjson.lib.numeric import round_half_up
 from typing import Any, Dict, List, Optional, Tuple
 
 _INCOME_ACTIONS = ("DIVIDEND", "DIVIDEND_IN_LIEU")
@@ -197,8 +207,17 @@ from taxjson.lib.report_model import fmt_qty as _qty_str  # noqa: E402
 
 # ---------------------------------------------------------------- 8949
 
+def _cents(x: float) -> float:
+    """One money cell: half-up to the cent on the stored value (lib/
+    numeric.round_half_up — the project's presentation rounding). The
+    binary round() put a half-cent denial on (g) as 530.42 while the
+    allowed gain elsewhere read -530.42 (A2-1105). `+ 0.0` kills -0.00."""
+    return round_half_up(float(x or 0.0), 2) + 0.0
+
+
 def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     parts: Dict[str, List[Dict[str, Any]]] = {"I": [], "II": []}
+    sec1256: List[Dict[str, Any]] = []
     drift_warned = 0
     for e in entries:
         term = e.get("term")
@@ -208,6 +227,27 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
                 f"{e.get('symbol')!r} on {e.get('date')!r} has no ST/LT "
                 "term — Form 8949 needs a country=usa gains file "
                 "(Canada has no term concept; use --form schedule3).")
+        _kind = section_1256_kind(str(e.get("symbol") or ""))
+        if _kind:
+            # A §1256 contract (a future, an option on one, a broad-
+            # based index option) is reported on Form 6781 — 60/40,
+            # marked to market at year end — never on Form 8949, and
+            # neither is modelled (tax-logic US-FUT-02 / US-OPT-04). It
+            # went on Part I as a covered short-term sale, a futures
+            # loss as NEGATIVE proceeds (A2-0118, A2-0322, A2-0323): a
+            # user following tax-logic reported it twice. Kept off the
+            # parts and their totals, listed for Form 6781 by hand.
+            sec1256.append({
+                "description": str(e.get("symbol") or ""),
+                "kind": _kind,
+                "date_acquired": (_acquired_date(e)
+                                  if (e.get("direction") or "LONG")
+                                  != "SHORT" else e.get("date") or ""),
+                "date_sold": e.get("date") or "",
+                "gain": _cents(e.get("gain")),
+                "account": e.get("account") or "",
+            })
+            continue
         part = "I" if term == "SHORT_TERM" else "II"
         proceeds = float(e.get("proceeds") or 0.0)
         cost = float(e.get("cost") or 0.0)
@@ -258,8 +298,8 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         # independently left rows (and the part totals, and the TXF
         # that carries only d/e/g) off by cents (S032-16); the engine
         # drift check above still compares the unrounded gain.
-        _d, _e = round(proceeds, 2) + 0.0, round(cost, 2) + 0.0
-        _g = round(adj, 2) if code else 0.0
+        _d, _e = _cents(proceeds), _cents(cost)
+        _g = _cents(adj) if code else 0.0
         parts[part].append({
             "description": desc,
             "date_acquired": acquired,
@@ -275,7 +315,7 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         print(f"warning: {drift_warned} row(s) where (d)-(e)+(g) differs "
               f"from the engine's allowed gain by more than $0.02 — "
               f"inspect before filing.", file=sys.stderr)
-    for rows in parts.values():
+    for rows in list(parts.values()) + [sec1256]:
         rows.sort(key=lambda r: (r["date_sold"], r["description"]))
 
     def totals(rows: List[Dict[str, Any]]) -> Dict[str, float]:
@@ -289,6 +329,20 @@ def build_8949(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         "form": "8949",
         "part_I": parts["I"], "part_I_totals": totals(parts["I"]),
         "part_II": parts["II"], "part_II_totals": totals(parts["II"]),
+        # The engine's unrounded sums over the same rows (the export
+        # rounds per row, as filed — A2-1108's note compares them).
+        "gain_unrounded": sum(float(e.get("gain") or 0.0)
+                              for e in entries
+                              if not section_1256_kind(
+                                  str(e.get("symbol") or ""))),
+        "adjustment_unrounded": sum(
+            float(e.get("disallowed_amount") or 0.0) for e in entries
+            if float(e.get("disallowed_amount") or 0.0) > _EPS
+            and not section_1256_kind(str(e.get("symbol") or ""))),
+        "section_1256": sec1256,
+        "section_1256_totals": {
+            "gain": round(sum(r["gain"] for r in sec1256), 2) + 0.0,
+            "dispositions": len(sec1256)},
     }
 
 
@@ -430,6 +484,29 @@ def _infer_year(entries: List[Dict[str, Any]]) -> Optional[int]:
     return max(ys) if ys else None
 
 
+def _foot_cells(proceeds_u: float, outlays_u: float,
+                gain_u: float) -> Tuple[float, float, float, float]:
+    """(proceeds, acb, outlays, gain) cents for one Schedule 3 row that
+    FOOT exactly: PROCEEDS − ACB − OUTLAYS = GAIN. Each cell is rounded
+    half-up on its own value (the .sum's convention — binary round()
+    put a 1,469.575 ACB at 1,469.57 here and 1,469.58 there, A2-1104);
+    the ACB is the residual. When the separately rounded cells leave the
+    residual a cent below zero (a premium-only write: 27.672 / 13.836 /
+    13.836 showed ACB -0.01, A2-0649), the ACB is 0.00 and the cent is
+    absorbed by OUTLAYS (else by the gain) — no cell goes negative."""
+    proceeds, outlays, gain = (_cents(proceeds_u), _cents(outlays_u),
+                               _cents(gain_u))
+    acb = round(proceeds - outlays - gain, 2) + 0.0
+    acb_u = proceeds_u - outlays_u - gain_u
+    if acb < 0 and acb_u > -_EPS:
+        acb = 0.0
+        if proceeds - gain >= 0:
+            outlays = round(proceeds - gain, 2) + 0.0
+        else:
+            gain = round(proceeds - outlays, 2) + 0.0
+    return proceeds, acb, outlays, gain
+
+
 def build_schedule3(entries: List[Dict[str, Any]],
                     year: Optional[int] = None) -> Dict[str, Any]:
     """Per-property rows grouped by Schedule 3 line. Every row FOOTS:
@@ -457,6 +534,13 @@ def build_schedule3(entries: List[Dict[str, Any]],
         cost = float(e.get("cost") or 0.0)
         gain = float(e.get("gain") or 0.0)
         outlays = float(e.get("commission") or 0.0) + float(e.get("fee") or 0.0)
+        if outlays < 0:
+            # A net REBATE (IB, Questrade: a negative commission/fee)
+            # is not an outlay or expense: it stays netted in the
+            # proceeds, so the OUTLAYS cell is never negative (A2-0653,
+            # A2-1053; tax software can reject a negative outlay). The
+            # gain is unchanged.
+            outlays = 0.0
         direction = e.get("direction") or "LONG"
         if pclass == "futures" and is_plain_future(symbol):
             # A futures contract is booked on its settled P/L
@@ -555,10 +639,8 @@ def build_schedule3(entries: List[Dict[str, Any]],
         if r["short"]:
             notes.append("includes short position(s) — PROCEEDS is the "
                          "short sale or write, ACB the cover")
-        # `+ 0.0` turns a rounded -0.0 into 0.0 (no "-0.00" cells).
-        proceeds = round(r["proceeds"], 2) + 0.0
-        outlays = round(r["outlays"], 2) + 0.0
-        gain = round(r["gain"], 2) + 0.0
+        proceeds, acb, outlays, gain = _foot_cells(
+            r["proceeds"], r["outlays"], r["gain"])
         pclass = sorted(r["classes"])[0] if len(r["classes"]) == 1 \
             else "mixed"
         rows.append({
@@ -575,10 +657,10 @@ def build_schedule3(entries: List[Dict[str, Any]],
             # The footing ACB: proceeds − outlays − allowed gain. For a
             # plain sale this IS the ACB; a superficial-loss row shows
             # it reduced by the denied amount.
-            "acb": round(proceeds - outlays - gain, 2) + 0.0,
+            "acb": acb,
             "outlays": outlays,
             "gain": gain,
-            "denied": round(r["denied"], 2),
+            "denied": _cents(r["denied"]),
             "dispositions": r["n"],
             "notes": "; ".join(notes),
         })
@@ -610,7 +692,8 @@ def build_schedule3(entries: List[Dict[str, Any]],
     # (R1-210: 100 rows of 100.004 export 10,000.00 against 10,000.40).
     return {"form": "schedule3", "year": year, "rows": rows,
             "lines": lines, "totals": totals,
-            "gain_unrounded": sum(r["gain"] for r in recs.values())}
+            "gain_unrounded": sum(r["gain"] for r in recs.values()),
+            "denied_unrounded": sum(r["denied"] for r in recs.values())}
 
 
 def filing_lines(entries: List[Dict[str, Any]],
@@ -625,17 +708,21 @@ def filing_lines(entries: List[Dict[str, Any]],
 def filing_totals(entries: List[Dict[str, Any]],
                   year: Optional[int] = None) -> Dict[str, float]:
     """The amounts a return's capital-gains entry asks for, summed over
-    `entries` (all Schedule 3 lines) on the Schedule 3 convention (short
-    sales as |amounts|, sell-side commissions split out as outlays), with
+    `entries` (all Schedule 3 lines) on the Schedule 3 convention (a
+    short sale's proceeds as PROCEEDS and its cover as ACB, sell-side
+    commissions split out as outlays, a rebate kept netted), with
     the ACB chosen so that PROCEEDS − ACB − OUTLAYS equals the ALLOWED
     gain: a denied superficial loss REDUCES the ACB shown here (the
     denied amount is added to the replacement property's ACB instead).
     `denied` reports how much that is."""
     rep = build_schedule3(entries, year)
-    agg = {k: round(sum(r[k] for r in rep["rows"]), 2)
-           for k in ("proceeds", "outlays", "gain", "denied")}
+    # Each column is the sum of its row cells, as the line totals are:
+    # re-deriving ACB as a residual of the sums was a second residual
+    # site that showed ACB -0.01 for a zero-ACB sale (A2-1107).
+    agg = {k: round(sum(r[k] for r in rep["rows"]), 2) + 0.0
+           for k in ("proceeds", "acb", "outlays", "gain", "denied")}
     return {"proceeds": agg["proceeds"],
-            "acb": round(agg["proceeds"] - agg["outlays"] - agg["gain"], 2),
+            "acb": agg["acb"],
             "outlays": agg["outlays"], "gain": agg["gain"],
             "denied": agg["denied"],
             "dispositions": len(entries)}
@@ -659,6 +746,58 @@ def filing_parts_8949(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "dispositions": len(rows)})
     return out
 
+
+def filing_6781(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The §1256 contracts `build_8949` keeps off Form 8949 (tax-logic
+    US-FUT-02 / US-OPT-04): {"dispositions": n, "gain": net P/L} for
+    `taxjson sum`'s US FOR THE RETURN note (A2-0324)."""
+    return dict(build_8949(entries)["section_1256_totals"])
+
+
+SEC1256_NOTE = ("§1256 contracts (futures, options on futures, broad-"
+                "based index options such as SPX) are NOT on Form 8949: "
+                "report them on Form 6781 by hand — the net is split 60% "
+                "long-term / 40% short-term, and contracts still open on "
+                "Dec 31 are marked to market (neither is modelled; tax-"
+                "logic US-FUT-02, US-OPT-04).")
+
+
+def section_1256_lines(rep: Dict[str, Any], cur: str) -> List[str]:
+    """The FORM 6781 block of the 8949 text report (empty when the
+    year has no §1256 contract)."""
+    rows = rep.get("section_1256") or []
+    if not rows:
+        return []
+    t = rep.get("section_1256_totals") or {}
+    lines = [f"FORM 6781 BY HAND — {len(rows)} §1256 contract "
+             f"disposition(s), net {t.get('gain', 0.0):,.2f} {cur}: NOT in "
+             f"the Form 8949 rows or totals above."]
+    table = [(r["description"], r["kind"], r["date_acquired"],
+              r["date_sold"], f"{r['gain']:,.2f}") for r in rows]
+    lines += _table(("CONTRACT", "KIND", "ACQUIRED", "CLOSED",
+                     "GAIN(LOSS)"), table, right={4})
+    lines.append("  " + SEC1256_NOTE)
+    lines.append("")
+    return lines
+
+def year_not_ended_note(year: Any, today: Optional[Any] = None) -> str:
+    """'' once `year` has ended; else a one-line note that the filing
+    figures are year-to-date (A2-1103: Schedule 3, Form 8949 and the
+    sum FOR THE RETURN block presented an unfinished year as a complete
+    return, while t1135 and close-year say so)."""
+    from datetime import date as _date
+    try:
+        y = int(year)
+    except (TypeError, ValueError):
+        return ""
+    today = today or _date.today()
+    if today > _date(y, 12, 31):
+        return ""
+    return (f"NOTE: tax year {y} has not ended (today {today.isoformat()}) "
+            f"— these are YEAR-TO-DATE figures, not a complete return; "
+            f"re-run after Dec 31.")
+
+
 # ---------------------------------------------------------------- render
 
 def _table(header: Tuple[str, ...], rows: List[Tuple[str, ...]],
@@ -675,10 +814,43 @@ def _table(header: Tuple[str, ...], rows: List[Tuple[str, ...]],
            [fmt(r) for r in rows]
 
 
+def _rounding_note(rep: Dict[str, Any]) -> List[str]:
+    """The note `taxjson sum` prints beside FOR THE RETURN (R1-166),
+    for the export too (A2-1108): rows are rounded to the cent as
+    filed, so the totals can differ from the gains files' unrounded
+    sums by a few cents."""
+    out = []
+    if rep.get("form") == "8949":
+        pairs = [("gain", sum(rep[f"part_{p}_totals"]["gain"]
+                              for p in ("I", "II")),
+                  rep.get("gain_unrounded")),
+                 ("adjustment (g)", sum(rep[f"part_{p}_totals"]["adjustment"]
+                                        for p in ("I", "II")),
+                  rep.get("adjustment_unrounded"))]
+    else:
+        pairs = [("gain", (rep.get("totals") or {}).get("gain_all", 0.0),
+                  rep.get("gain_unrounded")),
+                 ("denied", sum(r.get("denied", 0.0)
+                                for r in rep.get("rows") or []),
+                  rep.get("denied_unrounded"))]
+    for label, shown, raw in pairs:
+        if raw is None:
+            continue
+        gap = round(float(shown) - float(raw), 2)
+        if abs(gap) >= 0.005:
+            out.append(f"  - Rows are rounded to the cent, as filed: the "
+                       f"gains files' unrounded total {label} is "
+                       f"{float(raw):,.2f} ({gap:+,.2f} on the totals "
+                       f"above).")
+    return out
+
+
 def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
     lines = [f"FORM 8949 — Sales and Other Dispositions of Capital Assets "
-             f"(tax year {year or '?'}, amounts in {cur})",
-             ""]
+             f"(tax year {year or '?'}, amounts in {cur})"]
+    if rep.get("year_not_ended"):
+        lines.append(rep["year_not_ended"])
+    lines.append("")
     for part, label in (("I", "PART I — SHORT-TERM"),
                         ("II", "PART II — LONG-TERM")):
         rows = rep[f"part_{part}"]
@@ -698,6 +870,7 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
                          f"adjustments {t['adjustment']:,.2f} | gain "
                          f"{t['gain']:,.2f}")
         lines.append("")
+    lines += section_1256_lines(rep, cur)
     lines += manual_section(rep.get("manual_reporting_required") or [],
                             cur)
     lines.append("Notes:")
@@ -706,6 +879,7 @@ def render_8949(rep: Dict[str, Any], year: Optional[int], cur: str) -> str:
     lines.append("  - Check the correct 8949 box (A/B/C, D/E/F) against "
                  "whether your broker reported basis on the 1099-B.")
     lines.append("  - Short sales show the cover date in both date columns.")
+    lines += _rounding_note(rep)
     lines.append("  - Not tax advice; reconcile against your 1099-B before "
                  "filing.")
     return "\n".join(lines)
@@ -715,8 +889,10 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                      cur: str) -> str:
     year = year or rep.get("year")
     lines = [f"SCHEDULE 3 — Capital Gains (or Losses) (tax year "
-             f"{year or '?'}, amounts in {cur})",
-             ""]
+             f"{year or '?'}, amounts in {cur})"]
+    if rep.get("year_not_ended"):
+        lines.append(rep["year_not_ended"])
+    lines.append("")
     header = ("UNITS", "SYMBOL", "ACQ. YEAR", "PROCEEDS", "ACB",
               "OUTLAYS", "GAIN(LOSS)", "NOTES")
     by_line = rep.get("lines") or []
@@ -756,12 +932,16 @@ def render_schedule3(rep: Dict[str, Any], year: Optional[int],
                  "superficial loss was denied the ACB shown is reduced "
                  "by the denied amount, which is added to the ACB of "
                  "the replacement property instead — except a denial "
-                 "caused by a registered-account acquisition, which is "
-                 "lost for good with no ACB addition (noted per row).")
+                 "caused by a registered-account or affiliated-person "
+                 "acquisition, which is permanent for this return with "
+                 "no ACB addition here (an affiliated person adds it to "
+                 "their own ACB, s.53(1)(f); noted per row).")
     lines.append("  - Apply the inclusion rate on Schedule 3 itself; these "
                  "are 100% amounts.")
     lines.append("  - PROCEEDS re-adds sell-side commissions so OUTLAYS can "
-                 "be shown separately; the gain is unchanged.")
+                 "be shown separately (a commission rebate stays netted in "
+                 "PROCEEDS); the gain is unchanged.")
+    lines += _rounding_note(rep)
     lines.append("  - FX gains on foreign cash (s.39(1.1), `taxjson "
                  "fx-cash`) are not in these rows; T4037 puts them on "
                  "line 15300.")
@@ -805,6 +985,11 @@ def _write_csv(rep: Dict[str, Any], path: Path) -> None:
                                 r["date_sold"], r["proceeds"], r["cost"],
                                 r["code"], r["adjustment"], r["gain"],
                                 r["account"]])
+            # §1256 contracts: Form 6781 by hand, never an 8949 row.
+            for r in rep.get("section_1256") or []:
+                w.writerow(["6781", f"{r['description']} ({r['kind']})",
+                            r["date_acquired"], r["date_sold"], "", "",
+                            "", "", r["gain"], r["account"]])
             # Phantom-basis dispositions: cost unknown — flagged rows,
             # blank cost/gain, never mistaken for a computed row.
             for m in rep.get("manual_reporting_required") or []:
@@ -868,7 +1053,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Defensive year filter (pipeline gains files "
                              "are already year-scoped)")
     parser.add_argument("--base-currency", default="",
-                        help="Currency label for the header")
+                        help="The amounts' currency. Must be the return's "
+                             "own currency (CAD for Schedule 3, USD for "
+                             "8949/txf) — refused otherwise, as are rows in "
+                             "any other currency; not just a header label")
     parser.add_argument("--csv", type=Path, default=None,
                         help="Also write the rows as CSV to this path")
     parser.add_argument("--json", action="store_true",
@@ -939,10 +1127,22 @@ def _check_currency(paths: List[Path], base: str) -> None:
     base = (base or "").upper()
     for p in paths:
         other: Dict[str, int] = {}
+        blank = 0
         for e in load_json(p).get("transactions") or []:
+            if e.get("action") in _INCOME_ACTIONS:
+                continue
             c = str(e.get("currency") or "").upper()
-            if c and c != base and e.get("action") not in _INCOME_ACTIONS:
+            if c and c != base:
                 other[c] = other.get(c, 0) + 1
+            elif not c and "gain" in e and "qty" in e:
+                blank += 1
+        if blank:
+            # A disposition with no currency cannot be verified as in
+            # the return's currency (A2-0652): said, not skipped.
+            print(f"warning: {p}: {blank} disposition(s) carry no "
+                  f"currency — cannot verify they are in {base}; the "
+                  f"pipeline's converted gains files always carry it.",
+                  file=sys.stderr)
         if other:
             got = ", ".join(f"{n} {c}" for c, n in sorted(other.items()))
             print(f"taxjson-form-export: {p}: dispositions in another "
@@ -965,8 +1165,21 @@ def _main(args) -> int:
     else:
         date_key = "date" if args.form in ("8949", "txf") else "date_settle"
     _crypto = {p.resolve() for p in args.crypto}
-    _check_currency(list(args.files) + list(args.crypto),
-                    args.base_currency or _home_ccy(args))
+    _home = _home_ccy(args)
+    if args.base_currency and args.base_currency.strip().upper() != _home:
+        # --base-currency was compared with the rows only, so passing
+        # the rows' own currency exported a Canadian Schedule 3 in USD
+        # (or a Form 8949 in CAD) at exit 0 (A2-0652, A2-1118). The
+        # return is filed in the country's currency (tax-logic
+        # CA-CTRY-03; Form 8949 in USD).
+        print(f"taxjson-form-export: --base-currency "
+              f"{args.base_currency} does not match the {args.country} "
+              f"return's currency {_home} — the form is filed in {_home}: "
+              f"pass the converted <account>_gains(_wash).json "
+              f"(`taxjson run` converts them; `taxjson form-export` "
+              f"passes them).", file=sys.stderr)
+        raise SystemExit(2)
+    _check_currency(list(args.files) + list(args.crypto), _home)
     entries, tainted = load_dispositions(
         [p for p in args.files if p.resolve() not in _crypto],
         args.year, date_key)
@@ -985,8 +1198,16 @@ def _main(args) -> int:
             "terms — they were computed by the US engine; Schedule 3 needs "
             "a country=canada gains file (re-run `taxjson run` in the "
             "Canadian project).")
-    manual = load_manual_rows(list(args.files) + list(args.crypto),
-                              args.year, date_key)
+    # Each file once: the wrapper passes a crypto account's gains file
+    # positionally AND as --crypto, which listed every crypto phantom-
+    # basis disposition twice under MANUAL REPORTING (A2-0113).
+    _seen_manual: set = set()
+    _manual_paths = []
+    for _p in list(args.files) + list(args.crypto):
+        if _p.resolve() not in _seen_manual:
+            _seen_manual.add(_p.resolve())
+            _manual_paths.append(_p)
+    manual = load_manual_rows(_manual_paths, args.year, date_key)
     manual_proceeds = round(sum(abs(float(m.get("proceeds") or 0.0))
                                 for m in manual), 2)
     if tainted or manual:
@@ -1003,13 +1224,27 @@ def _main(args) -> int:
               f"(`taxjson find-missing-history`); they are listed in the "
               f"MANUAL REPORTING section.", file=sys.stderr)
 
+    rep_8949 = (build_8949(entries) if args.form in ("8949", "txf")
+                else None)
+    if rep_8949 is not None:
+        _s1256 = rep_8949["section_1256_totals"]
+        if _s1256["dispositions"]:
+            print(f"warning: {_s1256['dispositions']} §1256 contract "
+                  f"disposition(s) (net {_s1256['gain']:,.2f}) are NOT in "
+                  f"the {'TXF records' if args.form == 'txf' else 'Form 8949 rows'}"
+                  f" — {SEC1256_NOTE}"
+                  + (" `--form 8949` lists them." if args.form == "txf"
+                     else ""), file=sys.stderr)
     if args.form == "txf":
         if args.csv or args.json:
             print("warning: --csv/--json have no effect with "
                   "--form txf (TXF is its own format) — ignored.",
                   file=sys.stderr)
         # TXF rides on the 8949 model — same rows, same code-W math.
-        rep = build_8949(entries)
+        rep = rep_8949
+        _ynote = year_not_ended_note(args.year or _infer_year(entries))
+        if _ynote:
+            print(f"warning: {_ynote}", file=sys.stderr)
         doc = build_txf(rep, args.box)
         if args.out:
             tmp = args.out.with_name(args.out.name + ".part")
@@ -1028,13 +1263,17 @@ def _main(args) -> int:
         return 0
 
     if args.form == "8949":
-        rep = build_8949(entries)
-        rep["currency"] = args.base_currency or "USD"
+        rep = rep_8949
+        rep["currency"] = _home
     else:
         rep = build_schedule3(entries, args.year)
-        rep["currency"] = args.base_currency or "CAD"
+        rep["currency"] = _home
     rep["manual_reporting_required"] = manual
     rep["manual_proceeds"] = manual_proceeds
+    _ynote = year_not_ended_note(args.year or rep.get("year")
+                                 or _infer_year(entries))
+    if _ynote:
+        rep["year_not_ended"] = _ynote
     if args.form == "8949":
         text = render_8949(rep, args.year, rep["currency"])
     else:

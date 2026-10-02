@@ -1007,7 +1007,12 @@ FILE` writes importable rows, `--json` the raw report.
   gain in (h) = (d) − (e) + (g) (each row foots on its rounded cents, so
   the part totals and the TXF agree) — split into Part I (short-term) / Part II
   (long-term) with the Schedule D totals per part. Pick the 8949 box (A–F)
-  yourself from whether the broker reported basis on your 1099-B.
+  yourself from whether the broker reported basis on your 1099-B. §1256
+  contracts — futures, options on futures and broad-based index options
+  (SPX, XSP, NDX, RUT, VIX and their weekly roots) — are **not** on Form
+  8949: they are kept out of the rows, the totals and the TXF, and listed
+  in a **FORM 6781 BY HAND** section with their P/L (the 60/40 split and
+  year-end marking are not modelled). Cells are rounded half-up to the cent.
 - **`--form schedule3`** (Canada): per-security rows — units, acquisition
   year, proceeds of disposition, ACB, outlays, gain(loss) — routed to the
   Part 3 line for the property type: **line 4** publicly traded shares and
@@ -1035,11 +1040,20 @@ FILE` writes importable rows, `--json` the raw report.
   proceeds, the debit as an outlay; under grant timing it shows its premium
   and its commission). Units are the contracts or shares disposed of, at
   full precision: under grant timing a written option and its buy-back
-  count once.
+  count once. A net commission rebate (a negative IB or Questrade
+  commission) is not an outlay: it stays netted in the proceeds, so the
+  OUTLAYS column is never negative. Each cell is rounded half-up to the
+  cent and the ACB is the row's footing residual, never below 0.00.
 
-Both refuse rows in another currency than the export's (the native
-`*_raw_gains.json` beside the converted file) and a file that is not a gains
-file (no `transactions` list, or a pre-gains stage file). `--csv` is written
+Both refuse rows in another currency than the return's (CAD for Schedule 3,
+USD for 8949/TXF — the native `*_raw_gains.json` beside the converted file),
+a `--base-currency` other than that currency, and a file that is not a gains
+file (no `transactions` list, or a pre-gains stage file); a disposition with
+no currency is warned about. A row whose date is not a string or whose money
+field is not a number is refused with the file and row named (every report
+reader checks work/ rows this way). Before the tax year has ended the report
+says the figures are year-to-date (as `sum`'s FOR THE RETURN block does), and
+both print the per-row rounding note `sum` prints. `--csv` is written
 through a temporary file, so a failed write leaves the previous CSV intact.
 
 Both read the wash-adjusted gains (the allowed numbers a return reports).

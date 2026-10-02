@@ -592,6 +592,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the sale's trade date less the days held, counted on "
                  "trade dates: a buy traded in late December that settled "
                  "in January shows the December year."),
+            Rule("CA-DISP-08",
+                 "Each Schedule 3 cell is rounded half-up to the cent and "
+                 "the ACB is the row's footing residual, never below 0.00 "
+                 "(a cent of rounding goes to the outlays). A net "
+                 "commission rebate (a negative commission or fee) is not "
+                 "an outlay: it stays netted in the proceeds, so OUTLAYS "
+                 "is never negative."),
         ]),
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",
@@ -1311,7 +1318,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-OPT-03", "Cash-settled options realize on the option.",
                  cont=True),
             Rule("US-OPT-04",
-                 "Not modelled: §1256 60/40 contracts, §1233 and §1259."),
+                 "Not modelled: §1256 60/40 contracts, §1233 and §1259. A "
+                 "broad-based index option (SPX, XSP, NDX, RUT, VIX, DJX, "
+                 "OEX and their weekly roots) or an option on a future is "
+                 "a §1256 contract: kept off Form 8949 and listed for "
+                 "Form 6781, as futures are."),
         ]),
         ("Futures", [
             Rule("US-FUT-01",
@@ -1325,7 +1336,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "money (a buy then receives cash: a negative cost)."),
             Rule("US-FUT-02",
                  "Not modelled: §1256 year-end marking to market and the "
-                 "60/40 split; report them on Form 6781 by hand.",
+                 "60/40 split; report them on Form 6781 by hand. "
+                 "`form-export` (8949 and TXF) and `sum` leave every "
+                 "§1256 contract out of the Form 8949 rows and totals and "
+                 "list it, with its P/L, for Form 6781.",
                  cont=True),
         ]),
         ("Reports", [
@@ -1335,6 +1349,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-RPT-02", "wash sales as code W).", cont=True),
             Rule("US-RPT-03",
                  "`--form txf` writes a TurboTax TXF file.", cont=True),
+            Rule("US-RPT-09",
+                 "Form 8949 cells are rounded half-up to the cent and (h) "
+                 "= (d) - (e) + (g) on the rounded cells, so a half-cent "
+                 "wash-sale adjustment shows as the allowed gain the other "
+                 "reports print."),
             Rule("US-RPT-04",
                  "`taxjson estimate`: federal tax only (single filer, "
                  "standard deduction, NIIT), for planning."),

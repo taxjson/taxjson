@@ -196,9 +196,9 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### §1256 (60/40 mark-to-market) is not implemented
 - **Where:** `src/taxjson/lib/core.py` — documented out-of-scope in the US engine's docstring, alongside the §1233(b)(1)/(2) (long held ≤1 year) and §1233(d) (long held >1 year) short-sale rules and §1259 constructive sales.
-- **Current behavior:** futures and broad-based index options (SPX, NDX, futures) are run through the ordinary FIFO ST/LT engine — no year-end mark-to-market, no 60/40 split.
-- **Why deferred:** needs a contract-classification table (which symbols are §1256 contracts) plus a mark-to-market pass; no user data currently exercises it.
-- **Workaround:** report §1256 contracts from your broker's 1099-B (they're reported mark-to-market there) and exclude them from the tool's totals.
+- **Current behavior:** futures and broad-based index options (SPX, NDX, futures) are run through the ordinary FIFO ST/LT engine — no year-end mark-to-market, no 60/40 split. The US filing outputs (`form-export --form 8949` / `txf`, `sum` FOR THE RETURN, the close-year lock) recognise them (`lib/futures.section_1256_kind`: plain futures, options on futures, a short list of broad-based index option roots) and keep them OFF Form 8949, listing each with its P/L for Form 6781.
+- **Why deferred:** needs a mark-to-market pass for contracts open at year end; no user data currently exercises it.
+- **Workaround:** report §1256 contracts on Form 6781 from your broker's 1099-B (they're reported mark-to-market there); the export lists them but does not split or mark them. An index option whose root is not in the list is filed as an ordinary option — check it.
 
 ### US: January-paid Q4 fund dividends are dated in the pay year
 - **Where:** `src/taxjson/lib/pipeline.py` (income belongs to the year it was received — the pay date), shared by `divs-sum`, `sum-income` and the US estimate.

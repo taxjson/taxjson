@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- US form-export (8949, TXF) and `sum` FOR THE RETURN keep §1256
+  contracts — futures, options on futures, broad-based index options
+  such as SPX — off Form 8949 and list them for Form 6781 by hand; a
+  futures loss no longer shows as negative proceeds, and the close-year
+  lock records their net separately (re-audit A2-0118, A2-0322, A2-0323,
+  A2-0324).
+- Schedule 3: a commission rebate (IB, Questrade) stays netted in the
+  proceeds instead of a negative OUTLAYS cell; cells round half-up and
+  the ACB is never a negative rounding residual, in the rows, the line
+  totals and `sum` (re-audit A2-0653, A2-1053, A2-0649, A2-1107,
+  A2-1104). Form 8949 rounds a half-cent wash adjustment half-up so (h)
+  matches the allowed gain the other reports print (A2-1105).
+- form-export: a crypto account's phantom-basis dispositions are listed
+  once under MANUAL REPORTING, not twice (re-audit A2-0113); the export
+  prints the per-row rounding note `sum` prints (A2-1108) and says when
+  the tax year has not ended, as `sum` FOR THE RETURN now does too
+  (A2-1103).
+- form-export and carryover refuse a `--base-currency` other than the
+  return's currency (CAD / USD) instead of exporting a Canadian Schedule
+  3 in USD, or applying the US $3,000 offset to CAD amounts; a
+  disposition with no currency is warned about (re-audit A2-0652,
+  A2-1118).
+- `sum` FOR THE RETURN: the US footer names a loss denied for good by an
+  IRA repurchase and `--json` carries `permanently_denied` (A2-0647); the
+  Canadian footer says an affiliated person adds the denial to their own
+  ACB instead of "lost for good" (A2-0659), as form-export does.
+- Report readers: a work/ row whose date is not a string or whose money
+  or quantity field is not a number is refused with the file and row
+  named, instead of a traceback in whichever view read it (re-audit
+  A2-0330).
+- form-export docstrings describe the short-sale columns as the code
+  renders them and show `--country` in the usage lines (A2-0643).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

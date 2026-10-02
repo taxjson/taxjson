@@ -8224,11 +8224,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
     # options & other properties 15199/15300, crypto-assets 15200/15301).
     # USA: Form 8949's own part totals — (d) proceeds, (e) cost, (g)
     # adjustment, (h) gain.
-    from taxjson.bin.taxjson_form_export import (filing_lines,
+    from taxjson.bin.taxjson_form_export import (filing_6781,
+                                                 filing_lines,
                                                  filing_parts_8949,
                                                  filing_totals,
                                                  load_dispositions,
-                                                 mark_crypto)
+                                                 mark_crypto,
+                                                 year_not_ended_note)
     _settings = cfg.get("settings") or {}
     _fyear = year or _settings.get("year")
     _is_us = _country(_settings) \
@@ -8266,9 +8268,13 @@ def cmd_summary(args: argparse.Namespace) -> None:
             filing_rows.append({"account": acct,
                                 **filing_totals(_ents, _fyear)})
     filing_line_rows: List[Dict[str, Any]] = []
+    _filing_6781: Optional[Dict[str, Any]] = None
     if _is_us:
         try:
             filing_line_rows = filing_parts_8949(_filing_ents)
+            # §1256 contracts stay off Form 8949 (Form 6781 by hand,
+            # US-FUT-02 / US-OPT-04; A2-0324): shown beside the block.
+            _filing_6781 = filing_6781(_filing_ents)
         except SystemExit:
             filing_line_rows = []           # warned per account above
         _fkeys = ("proceeds", "cost", "adjustment", "gain")
@@ -8277,19 +8283,26 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _fkeys = ("proceeds", "acb", "outlays", "gain", "denied")
     filing_total = {k: round(sum(r[k] for r in filing_line_rows), 2)
                     for k in _fkeys}
-    if not _is_us:
-        # The part of DENIED that no replacement's ACB ever recovers: a
-        # registered-account (affiliated) acquisition (s.40(2)(g)(i)).
-        # The footer said every denied amount goes onto the
-        # replacement's ACB (S043-02, S048-04).
-        filing_total["permanently_denied"] = round(sum(
-            float(e.get("permanently_disallowed") or 0.0)
-            for e in _filing_ents), 2)
+    # The part of the denial that no replacement's basis/ACB ever
+    # recovers: Canada, a registered-account (or affiliated)
+    # acquisition (s.40(2)(g)(i)); USA, a repurchase in an IRA (US-
+    # WASH-11). The footer said every denied amount moves to the
+    # replacement (S043-02, S048-04; the US twin A2-0647).
+    from taxjson.lib.futures import section_1256_kind as _s1256k
+    _ents_8949 = ([e for e in _filing_ents
+                   if not _s1256k(str(e.get("symbol") or ""))]
+                  if _is_us else _filing_ents)
+    filing_total["permanently_denied"] = round(sum(
+        float(e.get("permanently_disallowed") or 0.0)
+        for e in _ents_8949), 2)
+    if _filing_6781 is not None:
+        filing_total["section_1256_gain"] = _filing_6781["gain"]
     # The RETURN row sums the per-row cents, as filed; the gains files,
     # wash-sales and audit total the unrounded engine values — a few
-    # cents apart on a large year (R1-166). Shown, not hidden.
+    # cents apart on a large year (R1-166). Shown, not hidden. (US: the
+    # §1256 contracts are not on the RETURN row, so not in this either.)
     _engine_gain = round(sum(float(e.get("gain") or 0.0)
-                             for e in _filing_ents), 2)
+                             for e in _ents_8949), 2)
     _round_gap = (round(filing_total.get("gain", 0.0) - _engine_gain, 2)
                   if filing_line_rows else 0.0)
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
@@ -8443,6 +8456,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
         if _is_us:
             print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Form 8949 → Schedule D, tax year {_fyear})")
+            _ynote = year_not_ended_note(_fyear)
+            if _ynote:
+                print(_ynote)
             _body = [[f"{r['label']} → {r['schedule_d']}",
                       money(r["proceeds"]), money(r["cost"]),
                       money(r["adjustment"]), money(r["gain"])]
@@ -8455,11 +8471,21 @@ def cmd_summary(args: argparse.Namespace) -> None:
                             "(g) ADJUSTMENT", "(h) GAIN"],
                            ["<", ">", ">", ">", ">"], _body, _foot):
                 print(_ln)
+            _permd = filing_total.get("permanently_denied") or 0.0
             print("(d) − (e) + (g) = (h). Column (g) is the code-W wash-"
                   "sale loss disallowed and added back, so (h) is the "
                   "allowed gain; the disallowed loss moves to the "
-                  "replacement shares' basis. Per-sale rows: `taxjson "
-                  "form-export`.")
+                  "replacement shares' basis"
+                  + (f", except {money(_permd)} from a repurchase in an "
+                     f"IRA, which is lost for good — no basis addition "
+                     f"(US-WASH-11)" if _permd > 0.005 else "")
+                  + ". Per-sale rows: `taxjson form-export`.")
+            if _filing_6781 and _filing_6781.get("dispositions"):
+                print(f"Not on Form 8949: {_filing_6781['dispositions']} "
+                      f"§1256 contract disposition(s), net "
+                      f"{money(_filing_6781['gain'])} — Form 6781 by hand "
+                      f"(60/40; year-end marking not modelled, US-FUT-02 / "
+                      f"US-OPT-04). `taxjson form-export` lists them.")
             if abs(_round_gap) >= 0.005:
                 print(f"Rows are rounded to the cent, as filed: the gains "
                       f"files' unrounded total gain is "
@@ -8468,6 +8494,9 @@ def cmd_summary(args: argparse.Namespace) -> None:
         else:
             print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
+            _ynote = year_not_ended_note(_fyear)
+            if _ynote:
+                print(_ynote)
             _body = [[f"Line {r['line']} {r['short']} "
                       f"({r['proceeds_code']}/{r['gain_code']})"
                       if r["line"] else
@@ -8493,8 +8522,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
                   "superficial loss was DENIED the ACB is REDUCED by it, "
                   "so the gain stays the allowed one; a deferred denial "
                   "is added to the ACB of the replacement property, but "
-                  "one caused by a registered-account (affiliated) "
-                  "acquisition is lost for good — no ACB addition"
+                  "one caused by a registered-account or affiliated-"
+                  "person acquisition is permanent for this return — no "
+                  "ACB addition here; an affiliated person adds it to "
+                  "their own ACB, s.53(1)(f)"
                   + (f" ({money(_permd)} of the DENIED total)"
                      if _permd > 0.005 else "")
                   + ". Per-security rows: `taxjson form-export`; "
@@ -9605,7 +9636,12 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         sys.exit("taxjson edge-cases: no work/ directory — run `taxjson run` first.")
-    doc = analyze(root, cfg, margin=args.margin, account=args.account)
+    try:
+        doc = analyze(root, cfg, margin=args.margin, account=args.account)
+    except ValueError as e:
+        # lib/json_input's row funnel (InputFileError): a damaged work/
+        # row is named, not a traceback (A2-0330).
+        _die(f"{e}")
     if getattr(args, "json", False):
         _json_out(doc)
         return
