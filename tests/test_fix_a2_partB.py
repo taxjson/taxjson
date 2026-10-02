@@ -481,5 +481,59 @@ class TestPlanKindsByCountry(unittest.TestCase):
         self.assertNotIn("tfsa", msg)
 
 
+
+class TestOneCountryHelpAndWarnings(unittest.TestCase):
+    """A2-0718 (elect example), A2-1241 / A2-1273 (retired cross_asset
+    warning), A2-0724 (taxjson-gains help)."""
+
+    @rule("CA-SL-05")
+    @rule("US-WASH-12")
+    def test_cross_asset_warning_states_each_countrys_rule(self):
+        from taxjson.bin.taxjson_run import validate_config
+        import contextlib
+        import io
+        out = {}
+        for c, cur in (("canada", "CAD"), ("usa", "USD")):
+            with contextlib.redirect_stderr(io.StringIO()):
+                w = validate_config({"settings": {
+                    "year": 2025, "country": c, "base_currency": cur,
+                    "cross_asset": True},
+                    "accounts": {"m": {"type": "taxable"}}})
+            out[c] = "\n".join(x for x in w if "cross_asset" in x)
+        self.assertIn("s.54", out["canada"])
+        self.assertNotIn("s.54", out["usa"])
+        self.assertIn("§1091", out["usa"])
+        self.assertIn("does not deny", out["usa"])
+
+    @rule("US-CORP-04")
+    @rule("CA-CORP-04")
+    def test_elect_example_names_this_countrys_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = projects_both(td)
+            for root in p.values():
+                (root / "inputs" / "margin").mkdir(parents=True)
+            r = cli_both(p, "elect", "margin", "--set", "abc")
+        self.assertIn("reorg_368", r["usa"].stderr)
+        self.assertNotIn("rollover_s_85_1_5", r["usa"].stderr)
+        self.assertIn("rollover_s_85_1_5", r["canada"].stderr)
+
+    @rule("CA-CTRY-02")
+    @rule("US-CTRY-02")
+    def test_gains_help_says_refused(self):
+        import subprocess
+        import sys
+        from tax_rules.dual import SRC
+        import os
+        h = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_gains", "--help"],
+            capture_output=True, text=True,
+            env=dict(os.environ, PYTHONPATH=str(SRC))).stdout
+        flat = " ".join(h.split())
+        self.assertNotIn("Ignored for the US engine", flat)
+        self.assertNotIn("No effect for Canada", flat)
+        self.assertIn("Refused with --country usa", flat)
+        self.assertIn("Refused with --country canada", flat)
+
+
 if __name__ == "__main__":
     unittest.main()

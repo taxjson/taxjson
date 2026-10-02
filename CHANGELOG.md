@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- One-country wording: `taxjson elect --set` names a US election key in
+  a US project (not the Canadian s.85.1 one), the retired `cross_asset`
+  warning states the US rule (a long call is only flagged) in a US
+  project, and `taxjson-gains --help` says `--option-premium-timing` /
+  `--per-account-basis` are refused in the other country, as they are
+  (audit A2-0718, A2-0724, A2-1241, A2-1273).
 - `[accounts.X] plan` kinds belong to one country (lib/country
   PLAN_COUNTRY): the other country's plan is refused (CA-CTRY-02 /
   US-CTRY-02), US `hsa`, `403b`, `457b`, `sep`, `529` and Canadian `lif`,

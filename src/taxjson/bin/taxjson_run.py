@@ -908,12 +908,23 @@ def validate_config(cfg: Dict[str, Any],
     except ValueError as e:
         _die(str(e))
     if "cross_asset" in settings:
+        # Each country's own rule (audit A2-1241, A2-1273): the US
+        # engine only flags a long call (US-WASH-12).
+        try:
+            _ca_usa = _country(settings) == "usa"
+        except SystemExit:
+            _ca_usa = False
         warnings.append(
-            "[settings] cross_asset is retired and ignored: a long call "
-            "on the same shares is always replacement property for a "
-            "share loss (s.54 'a right to acquire'); shares never replace "
-            "an option, and only the identical contract replaces an "
-            "option. Delete the line.")
+            "[settings] cross_asset is retired and ignored: "
+            + ("a long call bought in a share loss's window is always "
+               "flagged as a warning (§1091 'option to acquire'; the US "
+               "engine does not deny on it); the identical option is a "
+               "replacement for an option loss. Delete the line."
+               if _ca_usa else
+               "a long call on the same shares is always replacement "
+               "property for a share loss (s.54 'a right to acquire'); "
+               "shares never replace an option, and only the identical "
+               "contract replaces an option. Delete the line."))
     src = settings.get("source_currencies")
     if src is not None and (not isinstance(src, list)
                             or not all(isinstance(c, str) for c in src)):
@@ -5019,8 +5030,12 @@ def cmd_elect(args: argparse.Namespace) -> None:
         from taxjson.lib.corp_actions import (ElectionRecord,
                                               RULES_BY_COUNTRY)
         if "=" not in args.set:
-            sys.exit("taxjson elect --set expects EVENT_ID=ELECTION, e.g. "
-                     "--set 20251022-ssl-rgld-51d7=rollover_s_85_1_5")
+            # The example names a key this country accepts (a US
+            # project refuses the Canadian s.85.1 key; audit A2-0718).
+            _ex = "reorg_368" if country == "usa" else "rollover_s_85_1_5"
+            sys.exit(f"taxjson elect --set expects EVENT_ID=ELECTION, "
+                     f"e.g. --set 20251022-ssl-rgld-51d7={_ex} (`taxjson "
+                     f"elect {name}` lists each event's choices)")
         event_id, election = args.set.split("=", 1)
         event_id, election = event_id.strip(), election.strip()
         if not event_id:
@@ -16372,7 +16387,10 @@ def main() -> None:
                          action="append",
                          help="Write one election non-interactively "
                               "(headless/CI bootstrap), e.g. --set "
-                              "20251022-ssl-rgld-51d7=rollover_s_85_1_5")
+                              "20251022-ssl-rgld-51d7=rollover_s_85_1_5 "
+                              "(Canada) or =reorg_368 (USA); the "
+                              "event's own choices are listed by "
+                              "`taxjson elect ACCOUNT`")
     p_elect.add_argument("--hint", action="append", metavar="KEY=VALUE",
                          help="Hint for --set (repeatable), e.g. "
                               "--hint fmv_per_share=12.5")

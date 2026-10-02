@@ -85,8 +85,8 @@ def _parse_args():
         help="Canada: recognise a written option's premium on the write "
              "date (grant — ITA s.49(1)) or at the closing transaction "
              "(close). Default: close, with a note — `taxjson run` "
-             "defaults a Canada project to grant. Ignored for the US "
-             "engine.")
+             "defaults a Canada project to grant. Refused with "
+             "--country usa.")
     parser.add_argument(
         "--option-grant-since", type=tax_year, default=None, metavar="YEAR",
         help="With grant timing: contracts written before YEAR keep close "
@@ -114,8 +114,8 @@ def _parse_args():
         help="Blended multi-account mode (combined taxable input): US "
              "FIFO basis pools are kept per account while wash-sale "
              "matching spans all accounts. The US default (FIFO is per "
-             "account); kept for old scripts. No effect for Canada — its "
-             "ACB pools already blend per ITA s.47.")
+             "account); kept for old scripts. Refused with --country "
+             "canada — its ACB pools blend per ITA s.47.")
     parser.add_argument(
         "--no-wash",
         action="store_true",
