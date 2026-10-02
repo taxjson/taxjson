@@ -7566,9 +7566,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # US/TO line actually held is visible — the gains inventory is
     # already consolidated and would hide it).
     holdings: Dict[str, list] = {}
+    # Accounts the scan cannot read (no holdings report / raw book): a
+    # 'clean scan' over them was a false all-clear (re-audit A2-0404).
+    _skipped_no_inputs = _accounts_skipped_for_no_inputs(root)
+    unscanned: Dict[str, str] = {}
     for name in accounts:
         f = reports / f"{name}_holdings.toml"
         if not f.exists() or tomllib is None:
+            if (tomllib is not None and name not in _skipped_no_inputs
+                    and not (accounts.get(name) or {}).get("crypto")
+                    and _has_inputs(root, name)):
+                unscanned[name] = f"reports/{f.name}"
             continue
         try:
             holdings[name] = (tomllib.loads(f.read_text(encoding="utf-8"))
@@ -7597,6 +7605,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
     for name in accounts:
         f = cache / f"{name}_raw.json"
         if not f.exists():
+            if (name not in _skipped_no_inputs
+                    and not (accounts.get(name) or {}).get("crypto")
+                    and _has_inputs(root, name)):
+                unscanned.setdefault(name, f"work/{f.name}")
             continue
         # A truncated raw book turned a real finding into 'No findings —
         # clean scan.' with exit 0 (audit S042-05).
@@ -7962,9 +7974,11 @@ def cmd_scan(args: argparse.Namespace) -> None:
             {"check": c, "account": a, "symbol": sy, "message": m}
             for c, a, sy, m in findings],
             "notes": [{"check": "MAP-UNUSED", "rule": r}
-                      for r in map_unused]},
+                      for r in map_unused],
+            "unscanned": [{"account": n, "missing": w}
+                          for n, w in sorted(unscanned.items())]},
             indent=2, sort_keys=True))
-        raise SystemExit(1 if findings else 0)
+        raise SystemExit(1 if findings or unscanned else 0)
 
     print(f"SCAN — common tax-efficiency mistakes, {country}"
           f"{', online map probe' if getattr(args, 'online', False) else ''}")
@@ -7979,7 +7993,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
               f"{'; '.join(map_unused)}. Unused rules are harmless; "
               f"prune only if you know the symbol will not return.")
         print()
+    if unscanned:
+        print("taxjson scan: WARNING: not scanned (no "
+              + "; ".join(f"{n}: {w}" for n, w in sorted(unscanned.items()))
+              + ") — re-run `taxjson run` to rebuild them.",
+              file=sys.stderr)
     if not findings:
+        if unscanned:
+            print(f"No findings in the accounts scanned — NOT a clean "
+                  f"scan: {', '.join(sorted(unscanned))} could not be "
+                  f"read (see above).")
+            raise SystemExit(1)
         print("No findings — clean scan.")
         raise SystemExit(0)
     out_lines = ["CHECK ACCOUNT SYMBOL"]

@@ -577,5 +577,32 @@ class TestAffiliatedDenialWording(unittest.TestCase):
             self.assertIn("own ACB", r.stdout)
 
 
+# ---------------------------------------------------------------- A2-0404
+class TestScanIsNotCleanOverMissingBooks(unittest.TestCase):
+
+    def test_missing_holdings_or_raw_book(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [], accounts={
+                "margin": ("taxable", [
+                    "BUYSELL 2026-01-05 10:00:00 XYZ.TO 10 CAD 10 -100 0"]),
+                "tfsa": ("sheltered", [
+                    "BUYSELL 2026-01-05 10:00:00 ABC.TO 10 CAD 10 -100 0"])})
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            r = _cli(root, home, "scan")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            for f in (root / "reports" / "tfsa_holdings.toml",
+                      root / "work" / "tfsa_raw.json"):
+                with self.subTest(f=f.name):
+                    data = f.read_bytes()
+                    f.unlink()
+                    r = _cli(root, home, "scan")
+                    self.assertNotEqual(r.returncode, 0, r.stdout)
+                    self.assertNotIn("clean scan.", r.stdout.replace(
+                        "NOT a clean scan", ""))
+                    self.assertIn("tfsa", r.stderr)
+                    f.write_bytes(data)
+
+
 if __name__ == "__main__":
     unittest.main()

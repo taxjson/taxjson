@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `taxjson scan` no longer prints "No findings — clean scan." (exit 0)
+  when an account's holdings report or raw book is missing: it names
+  each account it could not scan and exits 1 (re-audit A2-0404).
 - `sum`, `list`, `winners` and `wash-sales` refuse a pipeline work-file
   name as an account (`margin_raw` printed native USD under a CAD
   header); `wash-sales`, `list` and `winners` carry the run-state banner
