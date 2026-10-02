@@ -768,31 +768,30 @@ def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
     income (5.5x on the auditor's fixture)."""
     _warn_config_tables(root)
     cfg = _soft_config(root).get("estimate") or {}
-    oi = getattr(args, "other_income", None)
-    ol = getattr(args, "other_losses", None)
-    if oi is None:
-        oi = cfg.get("other_income")
-    if ol is None:
-        ol = cfg.get("other_losses")
-    # float(True) is 1.0: `other_income = true` was read as $1 (R1-217).
-    for _k, _v in (("other_income", oi), ("other_losses", ol)):
-        if isinstance(_v, bool):
-            _die(f"[estimate] {_k} must be a number, got {_v!r}")
-    try:
-        oi_f, ol_f = float(oi or 0.0), float(ol or 0.0)
-    except (TypeError, ValueError):
-        _die("[estimate] other_income/other_losses must be numbers")
     import math as _math
-    # Same guard the CLI flags get: a NEGATIVE other_losses (the
-    # "-10,000 carryover" sign trap) fabricates taxable gains, and
-    # nan/inf poisons every downstream figure — the config path
-    # skipped both checks (2026-09 audit).
-    if not (_math.isfinite(oi_f) and _math.isfinite(ol_f)) \
-            or oi_f < 0 or ol_f < 0:
-        _die("other_income/other_losses must each be a non-negative "
-             "finite number (enter loss carryovers as positive "
-             "amounts) — check the flags and the [estimate] block in "
-             "taxjson.toml")
+    out = []
+    for key in ("other_income", "other_losses"):
+        v = getattr(args, key, None)
+        src = f"--{key.replace('_', '-')}"
+        if v is None:
+            v, src = cfg.get(key), f"[estimate] {key}"
+        # float(True) is 1.0: `other_income = true` was read as $1
+        # (R1-217).
+        if isinstance(v, bool):
+            _die(f"{src} must be a number, got {v!r}")
+        try:
+            f = float(v or 0.0)
+        except (TypeError, ValueError):
+            _die(f"{src} must be a number, got {v!r}")
+        # The ONE guard for flags and config alike (A2-1123: cmd_summary
+        # kept a second copy this one masked): a NEGATIVE other_losses
+        # (the "-10,000 carryover" sign trap) fabricates taxable gains,
+        # and nan/inf poisons every downstream figure (REVIEW #25/#42).
+        if not _math.isfinite(f) or f < 0:
+            _die(f"{src} must be a non-negative finite number (enter "
+                 f"loss carryovers as positive amounts), got {v!r}")
+        out.append(f)
+    oi_f, ol_f = out
     return oi_f, ol_f
 
 
@@ -8059,18 +8058,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
               f"--other-losses, or use `taxjson estimate`).",
               file=sys.stderr)
     if want_estimate:
-        import math as _math
-        for _flag in ("other_income", "other_losses"):
-            _v = getattr(args, _flag, None)
-            if _v is not None and (not _math.isfinite(_v) or _v < 0):
-                # nan/inf rendered contradictory estimates with rc 0;
-                # a NEGATIVE loss fabricated taxable gains — the
-                # natural sign trap for "my carryover is -10,000"
-                # (REVIEW #25/#42).
-                _die(f"--{_flag.replace('_', '-')} "
-                     f"must be a non-negative finite number "
-                     f"(enter losses as a positive amount), "
-                     f"got {_v!r}")
+        # --other-income/--other-losses were checked by _estimate_inputs
+        # above (one guard, A2-1123).
         _settings0 = cfg.get("settings") or {}
         if _country(_settings0) \
                 == "canada":

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `sum` / `estimate`: --other-income / --other-losses (and their
+  [estimate] keys) are checked by one guard that names the flag or key
+  it refuses (re-audit A2-1123); the --deductions / --carrying-charges
+  guard is pinned by a test that tells it from the library's check
+  (A2-1122).
 - `sum` / `estimate`: an unreadable sheltered account's gains file is
   refused like a taxable one (it silently changed the SHELTERED and ALL
   ACCOUNTS totals), and in a US project a disposition with no ST/LT

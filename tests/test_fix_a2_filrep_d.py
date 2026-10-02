@@ -287,5 +287,56 @@ class TestSumUnreadableAccount(unittest.TestCase):
             self.assertIn("brkB", s.stderr)
 
 
+class TestEstimateFlagGuards(unittest.TestCase):
+    """A2-1122, A2-1123: the estimate's flag guards are the ones that
+    fire (named flag, before the province check), so a test can tell
+    them from the later library checks."""
+
+    def _project(self, tmp, province=True):
+        root = Path(tmp)
+        (root / "work").mkdir()
+        (root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2025\ncountry = "canada"\n'
+            'base_currency = "CAD"\nsource_currencies = []\n'
+            + ('province = "ON"\n' if province else "")
+            + '[accounts.margin]\ntype = "taxable"\n')
+        (root / "work" / "margin_gains.json").write_text(json.dumps(
+            {"summary": {"year": "2025"}, "transactions": [
+                {"date": "2025-03-01", "symbol": "AAA.TO", "qty": 10,
+                 "proceeds": 500.0, "cost": 1000.0, "gain": -500.0,
+                 "currency": "CAD", "days_held": 30}]}))
+        return root
+
+    def test_a2_1122_deductions_flag_checked_before_province(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp, province=False)
+            for flag in ("--deductions", "--carrying-charges"):
+                for v in ("inf", "-5", "nan"):
+                    r = _taxjson(root, "estimate", flag, v)
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn(f"{flag} must be a non-negative finite "
+                                  f"number", r.stderr)
+                    self.assertNotIn("needs a province", r.stderr)
+
+    def test_a2_1123_other_income_flags_one_guard_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._project(tmp, province=False)
+            for cmd in ("sum", "estimate"):
+                for flag, v in (("--other-income", "nan"),
+                                ("--other-losses", "-5"),
+                                ("--other-income", "inf")):
+                    r = _taxjson(root, cmd, flag, v)
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn(f"{flag} must be a non-negative finite "
+                                  f"number", r.stderr)
+            (root / "taxjson.toml").write_text(
+                (root / "taxjson.toml").read_text()
+                + "[estimate]\nother_losses = -100\n")
+            r = _taxjson(root, "estimate")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("[estimate] other_losses must be a non-negative "
+                          "finite number", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
