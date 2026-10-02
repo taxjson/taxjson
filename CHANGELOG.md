@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- IB: a Trades clock time with an unpadded hour (`9:45:00`) is zero-padded
+  before the session rules compare it — it was read as an overnight fill
+  and a Dec 31 morning sale moved into January; an impossible time
+  (hour 24+, minute or second 60+) is refused naming the row (audit
+  A2-0082, A2-0260, A2-0607).
+- IB: fills outside the US regular session take their exchange's trade
+  date (tax-logic CA-/US-DATE-SESSION): US-dollar futures and
+  futures-option fills in the CME evening session (18:00 ET onward,
+  Sunday to Thursday, or on an exchange holiday) and SPX/SPXW/XSP/VIX
+  options in Cboe Global Trading Hours (20:15 ET onward) trade on the
+  next trading day; ASX options and warrants (not only stocks) and
+  HKEX, Tokyo, Singapore and NZX fills are dated in local time; the
+  after-midnight part of a US overnight session on an NYSE holiday
+  moves to the next trading day. A Sunday-evening futures fill is no
+  longer dated Sunday, and a Dec 30 evening futures close settles in
+  January under `futures_settle = "next_day"` (audit A2-0252, A2-0253,
+  A2-0254, A2-0255, A2-0595, A2-0596, A2-0597, A2-0608, A2-1027).
+- IB: a stock or warrant settles in its listing's market, not its quote
+  currency: a USD unit listed on the TSX (ZSP.U) on the Canadian
+  calendar, and a USD line listed on the LSE (a UCITS ETF) is booked as
+  `.L` on the UK T+2 cycle instead of a fictional `.US` security on
+  US T+1 (audit A2-0595, A2-0081). `check-dates` notes a Sunday-evening
+  GTH index-option fill instead of calling it an ERROR.
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

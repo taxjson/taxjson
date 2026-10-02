@@ -297,7 +297,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
-                 "Remembrance Day, Truth and Reconciliation).", cont=True),
+                 "Remembrance Day, Truth and Reconciliation; elsewhere "
+                 "weekends only). The cycle and calendar are the listing's "
+                 "market, not the quote currency's: an IB US-dollar unit "
+                 "listed on the TSX settles on the Canadian calendar, and "
+                 "a US-dollar line listed on the LSE is an LSE security "
+                 "(.L) on the UK cycle.", cont=True),
             Rule("CA-DATE-06",
                  "The generic importer uses a mapped settle column, else "
                  "this cycle (settle_on_trade_date = true keeps the trade "
@@ -319,12 +324,20 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A trade is dated by its exchange's trade date, not the "
                  "broker's clock: IB stamps US Eastern time, so a US stock "
                  "or ETF filled in the overnight session (20:00 ET or "
-                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "later, Sunday to Thursday nights, and its after-midnight "
+                 "part on a day the NYSE is closed) trades on the NEXT "
                  "trading day and settles from it (a Dec 30 20:30 fill "
-                 "trades Dec 31 and settles in January), and an ASX fill "
-                 "is dated in Sydney time. The overnight fill sorts before "
-                 "that day's other trades; the broker's stamp is kept "
-                 "(broker_time)."),
+                 "trades Dec 31 and settles in January). So does a "
+                 "US-dollar futures or futures-option fill in the CME "
+                 "evening session (18:00 ET or later, Sunday to Thursday, "
+                 "or on a weekday the exchange is closed) and an SPX, "
+                 "SPXW, XSP or VIX option filled in Cboe Global Trading "
+                 "Hours (20:15 ET or later). A fill on the ASX, HKEX, "
+                 "Tokyo, Singapore or NZX exchanges (an AUD, HKD, JPY, SGD "
+                 "or NZD row, any asset class) is dated in the exchange's "
+                 "local time. Every other fill keeps the clock date. A "
+                 "moved fill sorts before that day's other trades; the "
+                 "broker's stamp is kept (broker_time)."),
             Rule("CA-DATE-14",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
@@ -821,7 +834,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
-                 "Remembrance Day, Truth and Reconciliation).", cont=True),
+                 "Remembrance Day, Truth and Reconciliation; elsewhere "
+                 "weekends only). The cycle and calendar are the listing's "
+                 "market, not the quote currency's: an IB US-dollar unit "
+                 "listed on the TSX settles on the Canadian calendar, and "
+                 "a US-dollar line listed on the LSE is an LSE security "
+                 "(.L) on the UK cycle.", cont=True),
             Rule("US-DATE-06",
                  "The generic importer uses a mapped settle column, else "
                  "this cycle (settle_on_trade_date = true keeps the trade "
@@ -843,12 +861,20 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "A trade is dated by its exchange's trade date, not the "
                  "broker's clock: IB stamps US Eastern time, so a US stock "
                  "or ETF filled in the overnight session (20:00 ET or "
-                 "later, Sunday to Thursday nights) trades on the NEXT "
+                 "later, Sunday to Thursday nights, and its after-midnight "
+                 "part on a day the NYSE is closed) trades on the NEXT "
                  "trading day and settles from it (a Dec 30 20:30 fill "
-                 "trades Dec 31 and settles in January), and an ASX fill "
-                 "is dated in Sydney time. The overnight fill sorts before "
-                 "that day's other trades; the broker's stamp is kept "
-                 "(broker_time)."),
+                 "trades Dec 31 and settles in January). So does a "
+                 "US-dollar futures or futures-option fill in the CME "
+                 "evening session (18:00 ET or later, Sunday to Thursday, "
+                 "or on a weekday the exchange is closed) and an SPX, "
+                 "SPXW, XSP or VIX option filled in Cboe Global Trading "
+                 "Hours (20:15 ET or later). A fill on the ASX, HKEX, "
+                 "Tokyo, Singapore or NZX exchanges (an AUD, HKD, JPY, SGD "
+                 "or NZD row, any asset class) is dated in the exchange's "
+                 "local time. Every other fill keeps the clock date. A "
+                 "moved fill sorts before that day's other trades; the "
+                 "broker's stamp is kept (broker_time)."),
             Rule("US-DATE-13",
                  "Rows at the same date and time keep the export's row "
                  "order (Webull and the generic importer print no clock "
