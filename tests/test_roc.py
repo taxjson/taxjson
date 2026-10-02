@@ -381,6 +381,7 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         self.assertAlmostEqual(gains[0]['gain'], 500.0, places=2)
         self.assertNotIn("NEGATIVE", err)
 
+    @rule("US-ROC-01")
     def test_roc_apportions_per_share_across_lots(self):
         # 100 sh @ $10 and 300 sh @ $20: a -$400 ROC is $1/sh, so the
         # lots carry $900 and $5700. FIFO sale of 100 must consume $900.
@@ -435,6 +436,22 @@ class TestUsEngineRocAdjust(unittest.TestCase):
         text = repr(build_8949(deemed))
         self.assertIn("nondividend distribution in excess of basis", text)
         self.assertIn("200.0", text)
+
+    @rule("US-ROC-02")
+    def test_excess_over_basis_takes_the_lots_holding_period(self):
+        # A2-0838: the same excess on a lot held more than a year is
+        # long-term (the lot's own holding period, §301(c)(3)).
+        res, _ = self._run([
+            self._tx(action='BUYSELL', date='2024-01-10', symbol='PRFD.US',
+                     quantity=100, currency='USD', price=10.0,
+                     net_amount=1000.0),
+            self._tx(action='ADJUST', date='2025-06-30', symbol='PRFD.US',
+                     quantity=0, currency='USD', net_amount=-1200.0,
+                     type='roc'),
+        ])
+        deemed = [g for g in res['transactions'] if g.get('deemed')]
+        self.assertEqual([(round(g['gain'], 2), g['term']) for g in deemed],
+                         [(200.0, 'LONG_TERM')])
 
     @rule("US-ROC-03")
     def test_roc_after_full_exit_warns_and_skips(self):

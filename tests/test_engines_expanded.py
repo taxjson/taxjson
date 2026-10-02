@@ -111,6 +111,7 @@ class TestUSAHoldingPeriod(unittest.TestCase):
         self.assertAlmostEqual(inv[0]['total_cost'], 2000.0)
 
 
+@rule("US-WASH-02")
 class TestUSAWashSalePartialCoverage(unittest.TestCase):
     """Replacement BUY smaller than the loss qty → only partial disallowance."""
 

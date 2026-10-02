@@ -614,7 +614,7 @@ class TestReturnOfCapital(unittest.TestCase):
                               symbol=sym, currency='CAD', net_amount=amt,
                               account='margin', type='roc')
 
-    @rule("CA-ACB-07")
+    @rule("CA-ACB-06", "CA-ACB-07")
     def test_deemed_gain_has_no_proceeds(self):
         # R1-43: s.40(3) deemed gain -> 13199 = 0, 13200 = the gain.
         txs = _tt("BUYSELL 2013-05-01 10:00:00 RST.TO 100 CAD 10 1000")
