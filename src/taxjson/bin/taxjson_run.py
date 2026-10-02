@@ -3081,6 +3081,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             out.write(_diagnostics_banner(cache, name, post_pass=False))
             out.write(run_capture(_cmd("taxjson-sum-gains")
                                   + (["--staking"] if is_crypto else [])
+                                  + ["--country", country]
                                   + [str(gains_json)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(year), "--country", country,
@@ -3187,6 +3188,8 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
                            or {}).get(name) or {}).get("crypto"))
             out.write(run_capture(_cmd("taxjson-sum-gains")
                                   + (["--staking"] if _is_c else [])
+                                  + ["--country", _normalize_country(
+                                      settings["country"])]
                                   + [str(wash_gains)]))
             out.write(run_capture(_cmd("taxjson-sum-income") + [
                 "--year", str(settings["year"]),
@@ -7747,8 +7750,13 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                    "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
+    # Each country's own slip and cost word (A2-0735): a US fund's
+    # nondividend distribution is 1099-DIV box 3 and reduces basis.
+    _us = _country(_soft_settings(_root)) == "usa"
+    _cw = "basis" if _us else "ACB"
+    _slip = "1099-DIV box 3" if _us else "T3 box 42"
     if not agg:
-        print(f"No ACB adjustments in {scope}.")
+        print(f"No {_cw} adjustments in {scope}.")
         return
     out_lines = ["SYMBOL CUR CAPITAL_RETURNED ROC_ROWS MANUAL_ROWS "
                  "MAP_ROWS"]
@@ -7757,25 +7765,26 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                                    str(rec["roc_rows"]),
                                    str(rec["manual_rows"]),
                                    str(rec["dist_rows"])]))
-    print(f"RETURN OF CAPITAL / ACB ADJUSTMENTS — {scope}")
+    print(f"RETURN OF CAPITAL / {_cw.upper()} ADJUSTMENTS — {scope}")
     print()
     _print_report_table(out_lines)
     def _tot(d):
         return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
     print()
     if shel_accts:
-        print(f"TAXABLE (compare with T3 box 42): "
+        print(f"TAXABLE (compare with {_slip}): "
               f"{_tot(by_group['taxable']) or '0.00'}")
-        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — no ACB to "
-              f"track, no T3): {_tot(by_group['sheltered'])}")
+        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — no {_cw} to "
+              f"track, no {'1099-DIV' if _us else 'T3'}): "
+              f"{_tot(by_group['sheltered'])}")
         print(f"TOTAL CAPITAL RETURNED (all accounts): {_tot(totals)}")
     else:
-        print(f"TOTAL CAPITAL RETURNED (ACB reduced): {_tot(totals)}")
-    print("Positive = ACB reduced (capital returned). Negative rows are "
-          "reversals or manual ACB increases (MAP_ROWS: distributions.map "
-          "adjustments, a reinvested distribution shows negative). Enter "
-          "fund ROC from your T3 box 42 as .tt ADJUST lines OR in "
-          "distributions.map, never both — see the README's ROC section.")
+        print(f"TOTAL CAPITAL RETURNED ({_cw} reduced): {_tot(totals)}")
+    print(f"Positive = {_cw} reduced (capital returned). Negative rows are "
+          f"reversals or manual {_cw} increases (MAP_ROWS: distributions.map "
+          f"adjustments, a reinvested distribution shows negative). Enter "
+          f"fund ROC from your {_slip} as .tt ADJUST lines OR in "
+          f"distributions.map, never both — see the README's ROC section.")
 
 
 def cmd_trades_sum(args: argparse.Namespace) -> None:
@@ -7857,7 +7866,15 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
               f"sold {money(tot_sold.get(c, 0.0))}, "
               f"fees {money(tot_fees.get(c, 0.0))}")
     if shel_accts:
-        print(f"(all accounts, including registered "
+        # A US project's sheltered accounts are IRAs (A2-0735).
+        from taxjson.lib.country import CountryError, settings_country
+        try:
+            _usa_t = settings_country(_soft_settings(
+                Path(args.dir).resolve())) == "usa"
+        except CountryError:
+            _usa_t = False
+        _kind = "retirement (IRA)" if _usa_t else "registered"
+        print(f"(all accounts, including {_kind} "
               f"{', '.join(sorted(shel_accts))}; sold in taxable accounts "
               f"only: " + (", ".join(f"{money(v)} {c}" for c, v
                                      in sorted(tax_sold.items()))
@@ -11767,13 +11784,39 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
               "GAIN", "DENIED", "ALLOWED"]
     rows = []
     year = None
+    # Warn-only manual-check flags (CA-SL-14/15, US-WASH-14/15): they
+    # deny nothing, so the table never showed them and the command said
+    # "no losses were denied" over them (A2-0413).
+    flags: Dict[str, str] = {}
+    _usa = _country(_soft_settings(root)) == "usa"
     for acct, f in files:
         data = _load_json_or_die(f)
         year = year or (data.get("summary") or {}).get("year")
         for t in data.get("transactions", []):
             if t.get("is_wash_sale"):
                 rows.append((t.get("date") or "", acct, t))
+        for w in data.get("option_replacement_warnings") or []:
+            if not isinstance(w, dict):
+                continue
+            try:
+                from taxjson.lib.core import \
+                    format_option_replacement_warning as _fmt_orw
+                _txt = _fmt_orw(w, country="usa" if _usa else "canada")
+            except (KeyError, TypeError, ValueError):
+                _txt = (f"{w.get('loss_symbol')} loss on "
+                        f"{w.get('loss_date')}: {w.get('option_symbol')} "
+                        f"[{w.get('rule')}]")
+            flags.setdefault(_txt, acct)
     rows.sort(key=lambda r: (r[0], r[1], str(r[2].get("symbol") or "")))
+
+    def _print_flags():
+        if not flags:
+            return
+        print()
+        print(f"MANUAL CHECK — {len(flags)} warn-only flag(s); the books "
+              f"deny nothing for them, decide each by hand:")
+        for _txt in sorted(flags):
+            print(f"  {_txt}")
 
     # Deferred amounts still embedded in OPEN positions (across the
     # same canonical files): ties the historical denials to the present.
@@ -11797,12 +11840,17 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
                               "permanently_denied": round(jp, 2),
                               "embedded_in_open": round(embedded, 2)},
                    "year": year, "currency": _base_currency(root),
-                   "basis": gains_basis_label(resolved)})
+                   "basis": gains_basis_label(resolved),
+                   "manual_check_flags": sorted(flags)})
         return
 
     if not rows:
         scope = f" for account {args.account!r}" if args.account else ""
-        print(f"No wash sales{scope} — no losses were denied.")
+        # Each country's own term (A2-1366): a Canadian project has
+        # superficial losses, not wash sales.
+        print(f"No {'wash sales' if _usa else 'superficial losses'}"
+              f"{scope} — no losses were denied.")
+        _print_flags()
         return
 
     out_lines = [" ".join(header)]
@@ -11822,7 +11870,6 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         total_perm += perm
 
     base = _base_currency(root)
-    _usa = _country(_soft_settings(root)) == "usa"
     print(f"WASH SALES — {base}, tax year {year}, basis: "
           f"{gains_basis_label(resolved)}  "
           f"(losses denied under "
@@ -11845,6 +11892,7 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
              ": a repurchase in a registered account loses it for good; "
              "one bought by an affiliated person is added to that "
              "person's own ACB (s.53(1)(f)), not yours."))
+    _print_flags()
 
 
 def cmd_t1135(args: argparse.Namespace) -> None:
@@ -15686,7 +15734,7 @@ def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
     dropped when two books were merged)."""
     if len(docs) == 1:
         return docs[0]
-    from taxjson.bin.taxjson_audit import TOTALS_NOTE
+    from taxjson.bin.taxjson_audit import totals_note
     events = [e for d in docs for e in d.get("events") or []]
 
     def _total(ev_key: str, doc_key: str) -> float:
@@ -15702,7 +15750,7 @@ def _merge_audit_json(docs: List[Dict[str, Any]], base_currency: str,
             "total_gain": _total("gain", "total_gain"),
             "total_disallowed": _total("disallowed_amount",
                                        "total_disallowed"),
-            "totals_note": TOTALS_NOTE,
+            "totals_note": totals_note(country),
             "reconciliation_failures": [
                 f for d in docs
                 for f in d.get("reconciliation_failures") or []],

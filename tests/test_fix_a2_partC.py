@@ -470,8 +470,8 @@ class TestHoldingsTomlBasisNote(unittest.TestCase):
         for text in (us, neutral):
             for w in ("s.47", "superficial", "ACB"):
                 self.assertNotIn(w, text, w)
-        self.assertIn("wash-sale (§1091)", us)
-        self.assertIn("FIFO", us)
+        self.assertIn("wash-sale", us)
+        self.assertIn("§1091", us)
 
 
 # ---------------------------------------------------- harvest (06)

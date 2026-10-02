@@ -21,12 +21,11 @@
   states each country's own rule: in Canada only units the registered
   account still holds 30 days after the sale deny the loss (re-audit
   A2-1298, A2-1299).
-- In a US project the web holdings pages, the what-if basis note and
-  `reports/<account>_holdings.toml` describe the basis as FIFO per
-  account before the wash-sale pass; they used to cite the s.47 blend,
-  the filing ACB and superficial-loss adjustments (re-audit A2-0755,
-  A2-1248, A2-1250, A2-1289, A2-1290, A2-1291, A2-1300, A2-1327,
-  A2-1328, A2-1336, A2-1339, A2-1353, A2-1374, A2-1375, A2-1376).
+- In a US project the web holdings pages and the what-if basis note
+  describe the basis as FIFO per account before the wash-sale pass;
+  they used to cite the s.47 blend and the filing ACB (re-audit
+  A2-0755, A2-1250, A2-1300, A2-1327, A2-1339, A2-1353, A2-1374,
+  A2-1375, A2-1376).
 - Standalone `taxjson-brokerage` without `--country` books Kraken /
   Coinbase USD stablecoins as property (the neutral answer, as a
   foreign return of capital already defaults to a cost reduction) and
@@ -60,6 +59,38 @@
   with a rate from the send's day or the 5 days before it, as the
   conversion stage does; an older rate (a January rate for a June send)
   leaves it unpriced instead (re-audit A2-0414).
+- A warrant/right, adjusted-series or futures-option flag in a loss's
+  window (warn-only: nothing is denied) now keeps the checklist's
+  `wash-reviewed` step open and is listed by `taxjson wash-sales`
+  (text and `--json` `manual_check_flags`); both said "no superficial
+  losses / no losses were denied" over it (CA-SL-15 / US-WASH-15,
+  audit A2-0413). A Canada project's `wash-sales` says "No superficial
+  losses", a US one "No wash sales" (A2-1366).
+- US projects no longer see Canadian forms and terms (audit A2-0735 and
+  siblings): the account `.sum` points to Form 8949 / basis (Schedule
+  3 / ACB in Canada; `taxjson-sum-gains --country`), `taxjson audit`'s
+  totals note names Form 8949 rows, `roc-sum` names 1099-DIV box 3 and
+  basis, `trades-sum` and `find-missing-history` call a sheltered
+  account an IRA, `carryover` names the IRS only, `handoff` speaks of
+  deferred wash-sale losses (§1091(d)), the holdings TOML cost note has
+  no s.47 blend (`taxjson-export --country`), and the checklist's
+  estimate, sheltered-inputs, run-clean, elections and n/a steps use
+  US wording. A US crypto book's audit trace no longer says "wash sale
+  §1091". The Canada engine's non-convergence warning says
+  "superficial-loss solver" (it said "CRA wash-sale solver").
+- Spin-off warnings from the broker parsers (IB, RBC, Questrade) and the
+  rows the shared corporate-action emitters write (the parent's cost
+  reduction, a ticker rename) use country-neutral words instead of
+  s.86.1 / ACB / wash-sale (A2-1242, A2-1278). The row descriptions
+  changed, so those generated rows get new ids (no amount changes).
+- `taxjson-apply-distributions` without `--country` writes "(cost up)"
+  instead of Canada's "(ACB up)" into the book row (A2-1234).
+- `[settings] year` is checked in the shared settings check, so `taxjson
+  serve` refuses 1850, 2024.0, true or "2024" as every CLI command does
+  (A2-1373).
+- Printed standalone commands (`taxjson-gains --suggest-phantoms`,
+  `taxjson-explain`, `taxjson-corp-actions`) carry the required
+  `--country` (A2-1287).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

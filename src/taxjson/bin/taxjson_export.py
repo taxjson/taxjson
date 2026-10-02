@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.country import country_arg
 from taxjson.lib.numeric import nonneg_float_arg
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib import cli_diag
@@ -41,7 +42,7 @@ def _read_json(path, **kw):
         return read_json_doc(path, **kw)
     except InputFileError as e:
         _die(str(e))
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from taxjson.lib.tomlcompat import tomllib
 
@@ -635,31 +636,6 @@ def _load_trade_events(paths, mapping=None, drops=None,
     return by_symbol
 
 
-# What the holdings file's base cost leaves out, in the project's words
-# (re-audit A2-1248, A2-1289, A2-1290, A2-1291, A2-1328, A2-1336,
-# A2-1353): a US book has no superficial loss and no s.47 blend — its
-# basis is FIFO per account, adjusted by the cross-account wash-sale
-# pass (US-BASIS-01). No country (a standalone run): neutral words.
-_BASE_COST_BASIS = {
-    "canada": ("per-account, per-listing, before superficial-loss "
-               "adjustments, the s.47 blend and distributions.map "
-               "adjustments (total_cost excludes those too; the filing "
-               "ACB is `taxjson list`)"),
-    "usa": ("per-account FIFO, per-listing, before wash-sale (§1091) "
-            "basis adjustments and distributions.map adjustments "
-            "(total_cost excludes those too; the filing basis is "
-            "`taxjson list`)"),
-    None: ("per-account, per-listing, before the loss-deferral and "
-           "cross-account adjustments of the run and distributions.map "
-           "adjustments (total_cost excludes those too; the filing cost "
-           "is `taxjson list`)"),
-}
-
-
-def base_cost_basis_text(country: Optional[str]) -> str:
-    return _BASE_COST_BASIS.get(country, _BASE_COST_BASIS[None])
-
-
 def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
                          base_agg: Dict[str, Dict[str, Any]] = None,
                          trades_by_symbol: Dict[str, List[Dict[str, Any]]] = None) -> List[str]:
@@ -713,8 +689,19 @@ def render_holdings_toml(agg: Dict[str, Dict[str, Any]], args,
         # distributions.map adjustments are booked in the base books
         # only (amounts in the base currency), so neither cost here has
         # them (audit A2-0226): said too.
-        lines.append(f"base_cost_basis = "
-                     f"{_toml_str(base_cost_basis_text(getattr(args, 'country', None)))}")
+        # Each country's own words (re-audit A2-0745): a US project has
+        # wash-sale adjustments and no s.47 blend.
+        _c = getattr(args, 'country', None)
+        _adj = {'canada': 'superficial-loss adjustments, the s.47 blend',
+                'usa': 'wash-sale basis adjustments (§1091(d))',
+                None: 'loss-denial adjustments, any cross-account '
+                      'pooling'}[_c]
+        from taxjson.lib.country import COST_TERM
+        lines.append(f'base_cost_basis = "per-account, per-listing, before '
+                     f'{_adj} and '
+                     f'distributions.map adjustments (total_cost excludes '
+                     f'those too; the filing {COST_TERM[_c]} is '
+                     f'`taxjson list`)"')
     lines.append("")
 
     held_stock = [s for s in agg
@@ -865,14 +852,6 @@ def main():
              "them: quantities the broker's transfer rows prove moved "
              "between listings of one security (per the --map identity "
              "classes) are re-symboled — and only those quantities.")
-    from taxjson.lib.country import country_arg
-    parser.add_argument(
-        "--country", type=country_arg, default=None,
-        metavar="{canada,ca,usa,us}",
-        help="The project's country: the words of the holdings file's "
-             "base_cost_basis note (superficial loss / s.47 blend vs "
-             "wash sale / FIFO per account). Neutral words without it. "
-             "`taxjson run` passes it.")
     parser.add_argument(
         "inputs", nargs="*",
         help="Input files: taxjson_gains.py JSON, or holdings TOML "
@@ -903,6 +882,12 @@ def main():
     parser.add_argument(
         "--account-name", default=None,
         help="Account name to stamp into the --holdings-toml output.",
+    )
+    parser.add_argument(
+        "--country", type=country_arg, default=None,
+        metavar="{canada,ca,usa,us}",
+        help="Words the --holdings-toml cost note in the country's terms "
+             "(neutral without it); `taxjson run` passes it.",
     )
     parser.add_argument(
         "--map", dest="map_file", metavar="FILE", default=None,

@@ -27,8 +27,10 @@ transaction history, not the year-filtered gains file:
   taxjson-missing-history work/margin_base.json     # no year scope
 
 To actually fix an AFFECTS row, generate a phantom-opening file and re-run:
-  taxjson-gains --year <year> --suggest-phantoms phantoms.json <base.json>
-  # review/prune, then: taxjson-gains --incomplete-history phantoms.json ...
+  taxjson-gains --country canada --year <year> \
+      --suggest-phantoms phantoms.json <base.json>
+  # review/prune, then: taxjson-gains --country canada \
+  #     --incomplete-history phantoms.json ...   (usa for a US project)
 """
 
 import argparse
@@ -124,7 +126,11 @@ def _sheltered_title(yr, country) -> str:
     the year's gain. The loss rule is named by the project's country."""
     rule = {"canada": "superficial-loss", "usa": "wash-sale"}.get(
         country or "", "cross-account loss")
-    return (f"SHELTERED {yr} - registered-account positions: no reportable "
+    # A US project's sheltered accounts are IRAs / retirement accounts,
+    # not Canada's registered accounts (A2-1319).
+    kind = {"usa": "retirement-account (IRA)"}.get(country or "",
+                                                   "registered-account")
+    return (f"SHELTERED {yr} - {kind} positions: no reportable "
             f"gain there; the missing history matters only to the "
             f"{rule} walk:")
 
@@ -250,6 +256,9 @@ def main(argv=None):
     country = (settings_country(_project_doc_near(args.files[0])
                                 .get('settings') or {})
                if basis is not None else None)
+    # The cost word in the hints: each country's own (A2-1319).
+    from taxjson.lib.country import COST_TERM
+    _cost = COST_TERM[country]
     if basis is None:
         basis = "settle"
         print("taxjson-missing-history: note: no taxjson.toml beside the "
@@ -416,7 +425,7 @@ def main(argv=None):
                   f"({l.new_company or '?'}){ratio}")
             print(f"      {l.old_qty:g} {l.old_symbol} removed; "
                   f"{l.new_qty:g} {l.new_symbol} received at $0 basis.")
-            print(f"      The old shares' ACB is missing (their purchase isn't "
+            print(f"      The old shares' {_cost} is missing (their purchase isn't "
                   f"in your data). Supply it so {l.new_symbol} carries the "
                   f"correct basis - otherwise {l.new_symbol}'s sale gain is "
                   f"overstated by that amount.")
@@ -509,11 +518,12 @@ def main(argv=None):
         print(f"\nTo fix truncated history: `taxjson find-missing-history "
               "--gen-phantoms phantoms.json` in the project, review/prune "
               "it, then `taxjson run` (it picks phantoms.json up). "
-              f"Standalone: taxjson-gains --year {yr} --suggest-phantoms "
+              f"Standalone: taxjson-gains --country "
+              f"{country or 'canada|usa'} --year {yr} --suggest-phantoms "
               "phantoms.json <base.json>, then --incomplete-history "
               "phantoms.json.\nTo fix a $0-cost "
               "corp action: declare it (merger/spinoff basis) so the received "
-              "shares carry the correct ACB.")
+              f"shares carry the correct {_cost}.")
     return _incomplete(0)
 
 

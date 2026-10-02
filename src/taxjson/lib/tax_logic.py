@@ -671,7 +671,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "So is a call on an adjusted option series (root + digit, "
                  "e.g. XYZ1) or a futures option on the loss's futures "
                  "contract, however it is spelled (never sized as 100 "
-                 "units).", cont=True),
+                 "units). Nothing is denied for a flag, so `taxjson "
+                 "wash-sales` lists each one and the checklist's "
+                 "wash-reviewed step stays open until you decide them.",
+                 cont=True),
             Rule("CA-SL-07",
                  "Only purchases count: writing an option or shorting "
                  "again never replaces, including after a loss on covering "
@@ -1333,7 +1336,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "So is a call on an adjusted option series (root + digit, "
                  "e.g. XYZ1) or a futures option on the loss's futures "
                  "contract, however it is spelled (a commodity future is "
-                 "usually outside §1091).",
+                 "usually outside §1091). Nothing is disallowed for a "
+                 "flag, so `taxjson wash-sales` lists each one and the "
+                 "checklist's wash-reviewed step stays open until you "
+                 "decide them.",
                  cont=True),
             Rule("US-WASH-19",
                  "Not modelled: a SALE of the same stock within 30 days of "
