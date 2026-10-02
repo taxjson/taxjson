@@ -9386,6 +9386,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
                              for e in _ents_8949), 2)
     _round_gap = (round(filing_total.get("gain", 0.0) - _engine_gain, 2)
                   if filing_line_rows else 0.0)
+    # The DENIED column (US: the code-W adjustment) has the same per-row
+    # rounding gap; R1-166's headline mismatch was a denied total, and
+    # form-export already names it (A2-0912).
+    _denied_key = "adjustment" if _is_us else "denied"
+    _engine_denied = round(sum(
+        float(e.get("disallowed_amount") or 0.0) for e in _ents_8949
+        # Form 8949 adds back only a positive disallowance (code W).
+        if not _is_us or float(e.get("disallowed_amount") or 0.0) > 1e-9),
+        2)
+    _denied_gap = (round(filing_total.get(_denied_key, 0.0)
+                         - _engine_denied, 2)
+                   if filing_line_rows else 0.0)
+    _denied_label = "adjustment (g)" if _is_us else "denied"
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
     # (T4037) but lives outside the engine's dispositions; show the
     # estimate beside the block when the ledger builds, else a pointer.
@@ -9473,6 +9486,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                            filing_line_rows,
                        "fx_cash": _fx_note,
                        "engine_gain_unrounded": _engine_gain,
+                       "engine_denied_unrounded": _engine_denied,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "run_state_problems": _run_state,
@@ -9572,6 +9586,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"files' unrounded total gain is "
                       f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
                       f"RETURN row).")
+            if abs(_denied_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total {_denied_label} is "
+                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
+                      f"the RETURN row).")
         else:
             print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
@@ -9617,6 +9636,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"files' unrounded total gain is "
                       f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
                       f"RETURN row).")
+            if abs(_denied_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total {_denied_label} is "
+                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
+                      f"the RETURN row).")
             if _fx_note is not None:
                 print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
                       f"the rows above): net {money(_fx_note['net_gain'])}, "
