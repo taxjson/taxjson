@@ -565,7 +565,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "REI or \"Reinvest @\") is the income row plus a purchase "
                  "of the new units at the amount reinvested — their cost, "
                  "and an acquisition for the superficial-loss rule."),
-            Rule("CA-ACB-06", "Return of capital lowers the ACB."),
+            Rule("CA-ACB-06", "Return of capital lowers the ACB "
+                 "(`roc-sum` totals it against T3 box 42)."),
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
                  "capital gain and the ACB is nil (s.40(3)).", cont=True),
@@ -1242,7 +1243,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-ROC-01",
                  "A return of capital (nondividend distribution, "
                  "§301(c)(2)) lowers the basis of the shares held, pro rata "
-                 "over the open lots, for every issuer."),
+                 "over the open lots, for every issuer (`roc-sum` totals it "
+                 "against Form 1099-DIV box 3)."),
             Rule("US-ROC-02",
                  "The part beyond a lot's basis is a capital gain in the "
                  "year received (§301(c)(3)), short- or long-term by that "

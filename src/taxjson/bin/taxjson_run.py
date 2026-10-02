@@ -6532,7 +6532,7 @@ def cmd_leaps(args: argparse.Namespace) -> None:             # `leaps` view
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
-    _print_scope_split(_split, base_cur)
+    _print_scope_split(_split, base_cur, root)
     print(f"Amounts are the engine's allowed figures — lot-matched, "
           f"basis: {basis}. Partial closes of a contract "
           f"appear as they are realized; still-open contracts are absent.")
@@ -6553,13 +6553,17 @@ def _scope_split(root: Path, pairs) -> Dict[str, float]:
     return {k: round(v, 2) for k, v in out.items()}
 
 
-def _print_scope_split(split: Dict[str, float], base_cur: str) -> None:
+def _print_scope_split(split: Dict[str, float], base_cur: str,
+                       root: Optional[Path] = None) -> None:
     if abs(split.get("sheltered", 0.0)) < 0.005:
         return
     money = fmt_money
+    # An IRA is not "registered" (a Canadian term; audit A2-1324).
+    _kind = ("IRA / tax-advantaged" if root is not None
+             and _country(_soft_settings(root)) == "usa" else "registered")
     print(f"  TAXABLE accounts:   {money(split['taxable'])} {base_cur}")
     print(f"  SHELTERED accounts: {money(split['sheltered'])} {base_cur}"
-          f"  (registered — not taxable events; the return uses the "
+          f"  ({_kind} — not taxable events; the return uses the "
           f"taxable figure)")
 
 
@@ -6713,7 +6717,7 @@ def cmd_leaps_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL REALIZED GAIN: {money(total)} {base_cur}")
-    _print_scope_split(_split, base_cur)
+    _print_scope_split(_split, base_cur, root)
     print(f"Engine-allowed amounts (lot-matched, basis: {basis}, "
           f"base currency); closed portions only — still-open "
           f"contracts carry no mark-to-market here.")
@@ -6883,7 +6887,7 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     print()
     _print_report_table(out_lines)
     print(f"\nTOTAL COVERED-CALL GAIN: {money(total)} {base_cur}")
-    _print_scope_split(_scope_split(root, _ccd_pairs), base_cur)
+    _print_scope_split(_scope_split(root, _ccd_pairs), base_cur, root)
     print("PREMIUM = proceeds of the sold calls; BUYBACK = cost to "
           "close (0 for expiries); assignments' share gains are NOT "
           "here — they land in the stock's own rows. CLOSES/QTY count "
@@ -7586,11 +7590,15 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     def _tot(d):
         return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
     print()
+    # The slips a dividend ties to: T5/T3 in Canada, Form 1099-DIV in the
+    # US (audit A2-0741, A2-1354).
+    _usa_v = _country(_soft_settings(Path(args.dir).resolve())) == "usa"
+    _slips_w = "Form 1099-DIV" if _usa_v else "T5/T3 slips"
     if shel_accts or staking_taxable:
         # Registered accounts get no T5/T3 and their dividends are not
         # income: the slip tie-out figure is the TAXABLE line (audit
         # S041-04), without crypto staking (S048-24).
-        print(f"TAXABLE (compare with T5/T3 slips"
+        print(f"TAXABLE (compare with {_slips_w}"
               + ("; crypto staking excluded" if staking_taxable else "")
               + f"): {_tot(slips) or '0.00'}")
         if shel_accts:
@@ -7603,7 +7611,8 @@ def cmd_divs_sum(args: argparse.Namespace) -> None:
     if staking_accts:
         print(f"  of which crypto staking rewards "
               f"({', '.join(sorted(staking_accts))} — other income, not "
-              f"dividends; no T5/T3 slip): {_tot(staking)}")
+              f"dividends; no {'1099-DIV' if _usa_v else 'T5/T3 slip'})"
+              f": {_tot(staking)}")
     if cg_agg:
         print()
         print("CAPITAL-GAINS DIVIDENDS (T5 box 18, line 17400 — a capital "
@@ -7792,8 +7801,14 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                    "sheltered_included": sorted(shel_accts),
                    "scope": scope})
         return
+    # US wording: basis and Form 1099-DIV box 3 (nondividend
+    # distributions, §301(c)(2)), never ACB / T3 box 42 (audit A2-0439,
+    # A2-0741, A2-1269, A2-1271, A2-1358, A2-1359).
+    _usa_v = _country(_soft_settings(_root)) == "usa"
+    _acb = "basis" if _usa_v else "ACB"
+    _slip = "Form 1099-DIV box 3" if _usa_v else "T3 box 42"
     if not agg:
-        print(f"No ACB adjustments in {scope}.")
+        print(f"No {_acb} adjustments in {scope}.")
         return
     out_lines = ["SYMBOL CUR CAPITAL_RETURNED ROC_ROWS MANUAL_ROWS "
                  "MAP_ROWS"]
@@ -7802,25 +7817,31 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
                                    str(rec["roc_rows"]),
                                    str(rec["manual_rows"]),
                                    str(rec["dist_rows"])]))
-    print(f"RETURN OF CAPITAL / ACB ADJUSTMENTS — {scope}")
+    print(f"RETURN OF CAPITAL / {_acb.upper()} ADJUSTMENTS — {scope}"
+          + ("  (nondividend distributions, §301(c)(2))" if _usa_v
+             else ""))
     print()
     _print_report_table(out_lines)
     def _tot(d):
         return ", ".join(f"{money(v)} {c}" for c, v in sorted(d.items()))
     print()
     if shel_accts:
-        print(f"TAXABLE (compare with T3 box 42): "
+        print(f"TAXABLE (compare with {_slip}): "
               f"{_tot(by_group['taxable']) or '0.00'}")
-        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — no ACB to "
-              f"track, no T3): {_tot(by_group['sheltered'])}")
+        print(f"SHELTERED ({', '.join(sorted(shel_accts))} — no {_acb} "
+              f"to track, no {'1099-DIV' if _usa_v else 'T3'}): "
+              f"{_tot(by_group['sheltered'])}")
         print(f"TOTAL CAPITAL RETURNED (all accounts): {_tot(totals)}")
     else:
-        print(f"TOTAL CAPITAL RETURNED (ACB reduced): {_tot(totals)}")
-    print("Positive = ACB reduced (capital returned). Negative rows are "
-          "reversals or manual ACB increases (MAP_ROWS: distributions.map "
-          "adjustments, a reinvested distribution shows negative). Enter "
-          "fund ROC from your T3 box 42 as .tt ADJUST lines OR in "
-          "distributions.map, never both — see the README's ROC section.")
+        print(f"TOTAL CAPITAL RETURNED ({_acb} reduced): {_tot(totals)}")
+    print(f"Positive = {_acb} reduced (capital returned). Negative rows "
+          f"are reversals or manual {_acb} increases (MAP_ROWS: "
+          f"distributions.map adjustments, a reinvested distribution "
+          f"shows negative). Enter fund "
+          + ("nondividend distributions" if _usa_v else "ROC")
+          + f" from your {_slip} as .tt ADJUST lines OR in "
+          f"distributions.map, never both — see the README's ROC "
+          f"section.")
 
 
 def cmd_trades_sum(args: argparse.Namespace) -> None:
@@ -7902,7 +7923,12 @@ def cmd_trades_sum(args: argparse.Namespace) -> None:
               f"sold {money(tot_sold.get(c, 0.0))}, "
               f"fees {money(tot_fees.get(c, 0.0))}")
     if shel_accts:
-        print(f"(all accounts, including registered "
+        # "registered" is the Canadian term (audit A2-1265, A2-1324,
+        # A2-1354).
+        _usa_v = _country(_soft_settings(Path(args.dir).resolve())) \
+            == "usa"
+        print(f"(all accounts, including "
+              f"{'tax-advantaged (IRA)' if _usa_v else 'registered'} "
               f"{', '.join(sorted(shel_accts))}; sold in taxable accounts "
               f"only: " + (", ".join(f"{money(v)} {c}" for c, v
                                      in sorted(tax_sold.items()))
@@ -16427,8 +16453,9 @@ def main() -> None:
 
     p_roc = sub.add_parser(
         "roc",
-        help="Like `events` but only ADJUST rows — return-of-capital ACB "
-             "reductions (broker-classified) and manual .tt adjustments")
+        help="Like `events` but only ADJUST rows — return-of-capital "
+             "ACB / basis reductions (broker-classified) and manual .tt "
+             "adjustments")
     p_roc.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_roc.add_argument("account", nargs="?", help="Account (default: all)")
     p_roc.add_argument("--json", action="store_true",
@@ -16585,8 +16612,9 @@ def main() -> None:
 
     p_rsum = sub.add_parser(
         "roc-sum",
-        help="Return-of-capital / ACB-adjustment total per ticker over a "
-             "window (default: tax year)")
+        help="Return-of-capital total per ticker over a window "
+             "(default: tax year): the ACB (Canada, T3 box 42) or basis "
+             "(USA, Form 1099-DIV box 3) adjustments")
     p_rsum.add_argument("period", nargs="?", help=_PERIOD_HELP)
     p_rsum.add_argument("account", nargs="?", help="Account (default: all)")
     p_rsum.add_argument("--json", action="store_true",

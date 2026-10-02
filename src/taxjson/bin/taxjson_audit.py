@@ -766,7 +766,8 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
 def render_reconciliation(events: List[Dict[str, Any]],
                           check_labels: List[str],
                           checks_supplied: bool,
-                          use_color: bool = False) -> List[str]:
+                          use_color: bool = False,
+                          country: str = "canada") -> List[str]:
     W = 86
     paint = _mk_paint(use_color)
     OK = paint("\u2713", "ok")
@@ -827,7 +828,7 @@ def render_reconciliation(events: List[Dict[str, Any]],
         out.append("  pipeline tie-out   " + paint(
             "(no gains files supplied — engine re-run stands alone)",
             "dim"))
-    out.append(paint(f"  {TOTALS_NOTE}", "dim"))
+    out.append(paint(f"  {totals_note(country)}", "dim"))
     out.append(paint("\u2550" * W, "dim"))
     return out
 
@@ -837,6 +838,12 @@ def render_reconciliation(events: List[Dict[str, Any]],
 TOTALS_NOTE = ("Totals are unrounded engine sums; Schedule 3 rows "
                "(form-export, sum FOR THE RETURN) are rounded to the cent "
                "first, so those totals can differ by a few cents.")
+# The US return's rows are Form 8949's (audit A2-1271, A2-1354).
+TOTALS_NOTE_USA = TOTALS_NOTE.replace("Schedule 3 rows", "Form 8949 rows")
+
+
+def totals_note(country: str) -> str:
+    return TOTALS_NOTE_USA if country in ("us", "usa") else TOTALS_NOTE
 
 
 # ---------------------------------------------------------------------------
@@ -1257,7 +1264,7 @@ def main(argv=None) -> int:
                    "total_disallowed": round(
                        sum(float(e.get("disallowed_amount") or 0)
                            for e in events), 2),
-                   "totals_note": TOTALS_NOTE,
+                   "totals_note": totals_note(country),
                    "reconciliation_failures": reconciliation_failures,
                    "failed": failed},
                   sys.stdout, indent=2, default=str)
@@ -1298,7 +1305,8 @@ def main(argv=None) -> int:
 
     for ln in render_reconciliation(events, check_labels,
                                     bool(args.check),
-                                    use_color=use_color):
+                                    use_color=use_color,
+                                    country=country):
         print(ln)
     for f in reconciliation_failures:
         print(f"FAILED: {f}")

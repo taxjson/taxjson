@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- US projects' `roc-sum` (and the roc/roc-sum help), `divs-sum`,
+  `trades-sum`, `leaps` / `leaps-sum` / `ccd-sum`, `audit` and
+  `missing-history` name basis, Form 1099-DIV (box 3 for nondividend
+  distributions), Form 8949 and IRA / tax-advantaged accounts instead of
+  ACB, T3 box 42, T5/T3 slips, Schedule 3 and "registered" (audit
+  A2-0439, A2-0741, A2-1265, A2-1269, A2-1271, A2-1324, A2-1354,
+  A2-1358, A2-1359).
 - A Canadian project's `wash-sales` report is titled SUPERFICIAL LOSSES,
   counts "superficial loss(es)", says the denial goes onto the ACB of the
   substituted property (s.53(1)(f)), and its `--explain` trace and the

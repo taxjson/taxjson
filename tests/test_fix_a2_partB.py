@@ -343,5 +343,54 @@ class TestWashSalesNamesTheRule(unittest.TestCase):
         self.assertIn("No wash sales", n["usa"].stdout)
 
 
+
+class TestIncomeViewsWording(unittest.TestCase):
+    """A2-0439, A2-0741, A2-1269, A2-1271, A2-1324, A2-1354, A2-1358,
+    A2-1359, A2-1265: roc-sum / divs-sum / trades-sum / audit printed
+    T3 box 42, T5/T3 slips, 'ACB', 'registered' and 'Schedule 3 rows'
+    in US projects."""
+
+    ACCOUNTS = ('[accounts.margin]\ntype = "taxable"\n'
+                '[accounts.ira]\ntype = "sheltered"\n')
+    MARGIN = ("BUYSELL 2025-01-10 10:00:00 ZZF.US 100 USD 10.00 -1000.00 0.00\n"
+              "DIVIDEND 2025-03-15 09:30:00 ZZF.US 0 USD 0.00 25.00\n"
+              "ADJUST 2025-06-30 09:30:00 ZZF.US USD -50\n"
+              "BUYSELL 2025-08-10 10:00:00 ZZF.US -50 USD 12.00 600.00 0.00\n")
+    IRA = ("BUYSELL 2025-01-10 10:00:00 ZZF.US 10 USD 10.00 -100.00 0.00\n"
+           "DIVIDEND 2025-03-15 09:30:00 ZZF.US 0 USD 0.00 2.50\n"
+           "ADJUST 2025-06-30 09:30:00 ZZF.US USD -5\n")
+
+    @rule("CA-ACB-06")
+    @rule("US-ROC-01")
+    def test_us_views_use_us_terms(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = projects_both(td, accounts=self.ACCOUNTS, files={
+                "inputs/margin/m.tt": self.MARGIN,
+                "inputs/ira/i.tt": self.IRA})
+            for c, root in p.items():
+                r = cli(root, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, (c, r.stderr[-2000:]))
+            roc = cli_both(p, "roc-sum")
+            divs = cli_both(p, "divs-sum")
+            trades = cli_both(p, "trades-sum")
+            aud = cli_both(p, "audit")
+            empty = cli_both(p, "roc-sum", "2024")
+        us = roc["usa"].stdout + divs["usa"].stdout + trades["usa"].stdout
+        for bad in ("T3", "T5", "ACB", "registered"):
+            self.assertNotIn(bad, us, bad)
+        self.assertIn("Form 1099-DIV box 3", roc["usa"].stdout)
+        self.assertIn("Form 1099-DIV", divs["usa"].stdout)
+        self.assertIn("tax-advantaged (IRA)", trades["usa"].stdout)
+        self.assertIn("Form 8949 rows", aud["usa"].stdout)
+        self.assertNotIn("Schedule 3", aud["usa"].stdout)
+        self.assertIn("basis adjustments", empty["usa"].stdout)
+        # Canada keeps its own terms.
+        self.assertIn("T3 box 42", roc["canada"].stdout)
+        self.assertIn("T5/T3 slips", divs["canada"].stdout)
+        self.assertIn("registered", trades["canada"].stdout)
+        self.assertIn("Schedule 3 rows", aud["canada"].stdout)
+        self.assertIn("No ACB adjustments", empty["canada"].stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -124,7 +124,8 @@ def _sheltered_title(yr, country) -> str:
     the year's gain. The loss rule is named by the project's country."""
     rule = {"canada": "superficial-loss", "usa": "wash-sale"}.get(
         country or "", "cross-account loss")
-    return (f"SHELTERED {yr} - registered-account positions: no reportable "
+    kind = "IRA / tax-advantaged" if country == "usa" else "registered"
+    return (f"SHELTERED {yr} - {kind}-account positions: no reportable "
             f"gain there; the missing history matters only to the "
             f"{rule} walk:")
 
