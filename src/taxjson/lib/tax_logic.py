@@ -448,7 +448,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Identical property is the same symbol with its currency "
                  "suffix (.TO, .US, .V). Two listings are one security "
                  "only when ticker.map joins them. Renames and splits "
-                 "carry the pool forward."),
+                 "carry the pool forward; a renamed ticker that trades "
+                 "again after its rename stays identical to the new "
+                 "symbol for the superficial-loss rule and is flagged "
+                 "(ATTENTION) — it may be another company reusing it."),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -976,7 +979,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-BASIS-06",
                  "Identical property is the same symbol with its listing "
                  "suffix (.US, .TO); two listings are one security only "
-                 "when ticker.map joins them."),
+                 "when ticker.map joins them. A renamed ticker that "
+                 "trades again after its rename stays identical to the "
+                 "new symbol for the wash-sale rule and is flagged "
+                 "(ATTENTION) — it may be another company reusing it."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "

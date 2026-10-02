@@ -679,5 +679,42 @@ class TestLastAcquisitionSettleDate(unittest.TestCase):
         self.assertEqual(agg['XYZ.US']['last_add'], '2025-06-23')
 
 
+def _reuse_book():
+    def T(action, date, symbol, q, net, new='', settle=None):
+        return TaxTransaction(action=action, date=date, symbol=symbol,
+                              quantity=q, net_amount=net, currency='USD',
+                              time='10:00:00', date_settle=settle or date,
+                              account='m', symbol_new=new)
+    return [T('BUYSELL', '2024-01-10', 'OLD.US', 100, 1000),
+            T('SPLIT', '2024-06-01', 'OLD.US', 1.0, 0, 'NEW.US'),
+            T('BUYSELL', '2025-03-03', 'NEW.US', -100, 500),
+            T('BUYSELL', '2025-03-10', 'OLD.US', 100, 2000)]
+
+
+class TestTickerReusedAfterRename(unittest.TestCase):
+    """A2-0197: a ticker trading after its rename is flagged (it may be
+    another company); the identical-property class is unchanged."""
+
+    def _attn(self, R):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            R().compute_gains(_reuse_book())
+        return [l for l in err.getvalue().splitlines()
+                if 'ATTENTION' in l and 'after its rename' in l]
+
+    @rule("CA-ACB-04")
+    def test_canada_flags_the_reuse(self):
+        lines = self._attn(CanadaTaxRules)
+        self.assertEqual(len(lines), 1)
+        self.assertIn('OLD.US trades on 2025-03-10', lines[0])
+
+    @rule("US-BASIS-06")
+    def test_usa_flags_the_reuse(self):
+        from taxjson.lib.core import USATaxRules
+        lines = self._attn(USATaxRules)
+        self.assertEqual(len(lines), 1)
+        self.assertIn('OLD.US trades on 2025-03-10', lines[0])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A ticker that trades again after a rename moved it to a new symbol is
+  flagged (`warning: ATTENTION: ... after its rename ...`) in both
+  countries: the superficial-loss / wash-sale rule treats it as the
+  renamed security, which is wrong if another company now uses the
+  ticker. The class is unchanged — the export cannot tell the two cases
+  apart (A2-0197; CA-ACB-04 / US-BASIS-06).
+
 - The JSON input path (`taxjson-gains` on a hand-written file, the core
   loader) refuses a trade whose settle date is before its trade date, as
   the parsers do (CA-DATE-03 / US-DATE-04); `taxjson-validate` reports it

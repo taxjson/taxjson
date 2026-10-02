@@ -1419,6 +1419,42 @@ def _currency_mismatch_advice(tx, pool_cur: str) -> str:
             "filing books.")
 
 
+def _warn_ticker_reused_after_rename(txs, date_of, *, rule_text: str
+                                     ) -> None:
+    """ATTENTION (audit A2-0197): a symbol that TRADES after a SPLIT
+    renamed it away. The rename class is date-blind, so such a row is
+    treated as identical property to the renamed holding for the
+    superficial-loss / wash-sale rule. That is right when a broker keeps
+    booking the old ticker, wrong when another company reuses it — the
+    export cannot tell which, so the engines keep the class and say so.
+    One line per (symbol, rename)."""
+    renamed: Dict[str, Tuple[str, str]] = {}
+    for t in txs:
+        if t.action != 'SPLIT':
+            continue
+        new = (getattr(t, 'symbol_new', '') or '').strip()
+        if new and new != t.symbol:
+            d = str(date_of(t) or '')
+            if t.symbol not in renamed or d < renamed[t.symbol][0]:
+                renamed[t.symbol] = (d, new)
+    if not renamed:
+        return
+    seen = set()
+    for t in txs:
+        if t.action not in ('BUYSELL', 'ASSIGN') or t.symbol not in renamed:
+            continue
+        d_r, new = renamed[t.symbol]
+        d = str(date_of(t) or '')
+        if d > d_r and t.symbol not in seen:
+            seen.add(t.symbol)
+            print(f"warning: ATTENTION: {t.symbol} trades on {d}, after "
+                  f"its rename to {new} on {d_r}: taxjson treats it as "
+                  f"the same security as {new} for {rule_text}. If "
+                  f"{t.symbol} now names a different company, book its "
+                  f"rows under a distinct symbol and re-run.",
+                  file=sys.stderr)
+
+
 def _place_wash_adjusts(stream):
     """Move each pre-loss superficial-loss ADJUST (marked `_wash_after`
     = the loss row's id) to immediately after its loss row. s.53(1)(f)
@@ -2022,6 +2058,10 @@ class CanadaTaxRules(TaxRules):
         # per-loss unit conversions below all query it.
         split_timeline = SplitTimeline.from_transactions(
             all_txs, date_of=get_sort_date)
+        _warn_ticker_reused_after_rename(
+            all_txs, lambda t: t.date,      # trade dates: a settle-lagged
+            #                                 pre-rename sale is no reuse
+            rule_text="the superficial-loss rule (CA-ACB-04)")
 
         # Ordering (phase ladder + tie-break priorities) is centralized in
         # lib/corporate_timeline.event_sort_key — profile 'ca_main' for the
@@ -4625,6 +4665,9 @@ class USATaxRules(TaxRules):
         # pre-pass loop's own skip.
         split_timeline = SplitTimeline.from_transactions(
             ev for ev in all_events if not non_capital(ev.action, ev.type))
+        _warn_ticker_reused_after_rename(
+            all_events, lambda ev: ev.date,
+            rule_text="the wash-sale rule (US-BASIS-06)")
 
         for ev in all_events:
             if (ev.action == 'TRANSFER'
