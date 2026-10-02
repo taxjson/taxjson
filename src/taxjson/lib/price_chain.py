@@ -641,18 +641,13 @@ def _cached_price(rec) -> Optional[float]:
 
 
 def _save_cache(path: Path, cache: Dict[str, dict]) -> None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".part")
-        # allow_nan=False: a NaN/Inf that slipped past a tier guard
-        # must fail the cache write loudly, not fossilize forever.
-        tmp.write_text(json.dumps(cache, indent=1, sort_keys=True,
-                                  allow_nan=False),
-                       encoding="utf-8")
-        tmp.replace(path)
-    except (OSError, ValueError) as exc:
-        print(f"warning: could not write price cache {path}: {exc}",
-              file=sys.stderr)
+    # allow_nan=False: a NaN/Inf that slipped past a tier guard must
+    # fail the cache write loudly, not fossilize forever. A unique temp
+    # file under a lock (re-audit A2-0233); not merged — a stale entry
+    # this run replaced must not come back.
+    from taxjson.lib.json_cache import save_json_cache
+    save_json_cache(path, cache, label="price cache ", indent=1,
+                    sort_keys=True, allow_nan=False)
 
 
 def fetch_prices(pairs: Dict[str, str], *,

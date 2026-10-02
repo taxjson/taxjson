@@ -23,6 +23,25 @@ from typing import Optional
 
 DEFAULT_LOCAL_TZ = 'America/Toronto'
 
+# The USD-pegged stablecoins, ONE list for every crypto consumer (the
+# Coinbase and Kraken parsers, crypto-sends, fx-cash, fill-crypto). In a
+# Canada project they are US-dollar cash (tax-logic CA-CRYPTO-02); a US
+# project books them as property. Copies of this list drifted apart
+# (PYUSD/GUSD missing in some, audit S060-24 / re-audit A2-0589).
+USD_STABLECOINS = frozenset({'USDC', 'USDT', 'DAI', 'PYUSD', 'GUSD'})
+
+# Fiat currencies an exchange row can be priced or quoted in, ONE list
+# for the Coinbase and Kraken parsers. Anything else is a crypto-asset:
+# erring toward "crypto" books a visible phantom position, while a coin
+# wrongly taken for cash would drop a disposition silently. Kraken knew
+# only USD/CAD/EUR/GBP, so an AUD/JPY/CHF bank deposit became a crypto
+# send and an XBT/AUD fill a coin-for-coin swap (re-audit A2-0579).
+FIAT_CURRENCIES = frozenset({
+    'USD', 'CAD', 'EUR', 'GBP', 'AUD', 'NZD', 'JPY', 'CHF', 'SGD', 'HKD',
+    'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'BRL', 'MXN', 'INR', 'ZAR', 'TRY',
+    'KRW', 'CNY', 'AED', 'ILS',
+})
+
 # Currency markers an exchange may glue to an amount. Longest first so
 # `CA$` is not half-eaten by `A$`/`$`.
 _MONEY_PREFIXES = ('CA$', 'US$', 'C$', 'A$', '$', '€', '£')
@@ -166,7 +185,11 @@ def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
         return False
     if not price or abs(price - 1.0) <= DEPEG_TOLERANCE:
         return False
-    print(f"warning: {where}: {coin} traded at {price:.4f} USD on {date} "
+    # The ATTENTION channel: `taxjson run` echoes it on the console
+    # (it was only in the .sum, re-audit A2-1001) — money the books
+    # leave out.
+    print(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD "
+          f"on {date} "
           f"— stablecoins are booked as US-dollar cash (an "
           f"approximation), so the {abs(price - 1.0) * qty:,.2f} USD "
           f"de-peg difference on {qty:g} {coin} is not in the gains; "
