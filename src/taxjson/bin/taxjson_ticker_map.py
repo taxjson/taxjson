@@ -369,9 +369,14 @@ def generate_summary(transactions: List[TaxTransaction]) -> Dict[str, Any]:
         if tx.symbol:
             unique_tickers.add(tx.symbol)
     
+    # Only the symbol's own normalisation (a dotted option string to
+    # OCC form): the summary used to "map" every .US listing to .TO
+    # (a hard-coded CAD target), a rename that is not a listing in a
+    # Canadian book and never applies in a US one (re-audit A2-1367).
+    # Cross-listing renames are ticker.map lines the user writes.
     mappings = {}
     for ticker in sorted(unique_tickers):
-        mapped = map_ticker(ticker, "CAD")
+        mapped = map_ticker(ticker, target_currency="")
         mappings[ticker] = mapped
         
     return {

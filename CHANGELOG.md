@@ -151,6 +151,63 @@
 - A second `taxjson run` in the same project refuses while one is in
   progress (it used to crash on the shared work/ file names).
 
+- Standalone `taxjson-t1135` says when it falls back to close timing
+  for written options (as `taxjson-gains` does), and `taxjson
+  find-missing-history --gen-phantoms` runs the gains engine with the
+  project's option timing and income dating (re-audit A2-1361).
+- `taxjson-ticker-map` summary mode no longer "maps" every `.US`
+  listing to `.TO` (a hard-coded CAD target, wrong beside a US project
+  and not a real listing in a Canadian one); it lists the symbols with
+  only their option-string normalisation (re-audit A2-1367).
+- An invalid `ric_january_dividends` / `corporate_distributions` entry
+  is refused with an example listing of the setting's own country
+  (XYZ.US for the US-only RIC list), and a bad `--ric-january-dividend`
+  flag is named as the flag, not as a `[settings]` key (re-audit
+  A2-1306).
+- `taxjson harvest` in a US project shows an IRA purchase made within
+  the window in SH_ADD even after the IRA sold it (an IRA buy washes a
+  loss for good whether or not it is still held), and the SH_ADD legend
+  states each country's own rule: in Canada only units the registered
+  account still holds 30 days after the sale deny the loss (re-audit
+  A2-1298, A2-1299).
+- In a US project the web holdings pages and the what-if basis note
+  describe the basis as FIFO per account before the wash-sale pass;
+  they used to cite the s.47 blend and the filing ACB (re-audit
+  A2-0755, A2-1250, A2-1300, A2-1327, A2-1339, A2-1353, A2-1374,
+  A2-1375, A2-1376).
+- Standalone `taxjson-brokerage` without `--country` books Kraken /
+  Coinbase USD stablecoins as property (the neutral answer, as a
+  foreign return of capital already defaults to a cost reduction) and
+  prints a note naming `--country`; it used to take Canada's US-dollar
+  cash model. Its help lists every choice `--country` makes (re-audit
+  A2-0742, A2-1238). `taxjson run` always passes the country.
+- RBC parse notes in a US project name Form 1099-DIV, basis and
+  §305/§307 for rights, not the fund's T3 (box 21 / 42), the ACB or ITA
+  s.15(1)(c); a Canada project's notes are unchanged and the booking is
+  the same in both (taxjson-brokerage --country picks the words; none
+  given: neutral words) (re-audit A2-0729, A2-0731, A2-0733, A2-0736,
+  A2-1254, A2-1309, A2-1313, A2-1314, A2-1315, A2-1321, A2-1344,
+  A2-1345, A2-1346, A2-1347).
+- Standalone `taxjson-reconcile-slips` requires `--country` (a missing
+  one silently meant Canada: CAD amounts and settlement-date year
+  scope), and `--date-basis` defaults to the country's (trade date for
+  the USA, so a Dec-31 sale is on its 1099-B year). In a US run the
+  notes and the currency refusal name the 1099-B, FIFO basis per
+  account and the project's own rates — never the T5008, its boxes,
+  the Bank of Canada or a blended ACB (re-audit A2-0423, A2-0744,
+  A2-0747, A2-0753, A2-1292, A2-1294, A2-1295, A2-1331, A2-1337,
+  A2-1348, A2-1349, A2-1350, A2-1351). `taxjson reconcile-slips` is
+  unchanged.
+- A `taxjson.toml` saved with a UTF-8 byte-order mark (Notepad) is read
+  by `find-missing-history`, `gains --suggest-phantoms`, `convert-tt`
+  and the wash radar the way `taxjson run` reads it; one that does not
+  parse stops those commands instead of being treated as "no project"
+  (which fell back to settle dates and guessed account types in a US
+  project) (re-audit A2-0419, A2-0424, A2-0429, A2-0430, A2-0438).
+- `taxjson crypto-sends` prices a send, and values the stablecoin pool,
+  with a rate from the send's day or the 5 days before it, as the
+  conversion stage does; an older rate (a January rate for a June send)
+  leaves it unpriced instead (re-audit A2-0414).
 - `taxjson redact` and the generate-parser privacy gate no longer lose a
   private-denylist pattern silently: a leading UTF-8 BOM is stripped,
   and a denylist that is UTF-16, not UTF-8, unreadable or a directory

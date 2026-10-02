@@ -791,10 +791,12 @@ when the pipeline built it, else `<account>_gains.json`) — i.e. **after** `tic
 (cross-listings like `AEM.US`/`AEM.TO` merged) and base-currency conversion, so
 quantity and cost basis match the canonical pipeline (unlike
 `reports/<account>_holdings.toml`, which keeps listings separate and native for
-live-pricing tools — its `base_total_cost` is per-account and before any
-superficial-loss adjustment, s.47 blend or `distributions.map` ACB
-adjustment, as its `meta.base_cost_basis` says; its native `total_cost`
-leaves the map adjustments out too). One row per (account, symbol) with quantity, base-currency
+live-pricing tools — its `base_total_cost` is per-account and before the
+run's cross-account and loss-deferral adjustments and any
+`distributions.map` adjustment (Canada: superficial-loss adjustments and the
+s.47 blend; USA: wash-sale basis adjustments on per-account FIFO), as its
+`meta.base_cost_basis` says in the project's own terms; its native
+`total_cost` leaves the map adjustments out too). One row per (account, symbol) with quantity, base-currency
 book cost, cost/share (per SHARE for an equity option — 100 a contract, as
 harvest and the holdings report show it), and the position's start date;
 fully-closed positions are omitted. Pass an account to scope to one.
@@ -1137,6 +1139,11 @@ rows, "Various") cannot be compared — transcribe a per-security CSV. Books
 built for another tax year are refused with a rebuild message. Exits 1 when anything doesn't reconcile — cron and pre-filing
 checklist friendly. Slip cost differences are reported as *notes*, not
 mismatches, because they're often correct (document them, don't "fix" them).
+A US project's notes name the 1099-B and FIFO basis per account, a Canada
+project's the T5008 and the blended ACB. The standalone
+`taxjson-reconcile-slips` needs `--country` (it sets the base currency the
+slip amounts must be in and the default `--date-basis`: settlement date for
+Canada, trade date for the USA); `taxjson reconcile-slips` passes both.
 
 **`taxjson carryover`** — a multi-year **capital-loss carryforward /
 carryback ledger** over the taxable accounts' full history (same engine as

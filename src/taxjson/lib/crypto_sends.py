@@ -647,6 +647,12 @@ def load_rates(path: Path) -> Dict[str, Dict[str, Tuple[float, str]]]:
     return out
 
 
+# The days before a send's date a rate row may come from: the
+# conversion stage's own lookback (taxjson_convert_currency, 5 days on
+# top of the rates file's 7-day carry-forward).
+RATE_LOOKBACK_DAYS = 5
+
+
 class Rates:
     def __init__(self, table, base: str):
         self.table = table
@@ -654,7 +660,11 @@ class Rates:
         self._sorted: Dict[str, List[str]] = {}
 
     def get(self, cur: str, on: str) -> Optional[Tuple[float, str, str]]:
-        """(rate, rate date, label) of the latest rate on/before `on`."""
+        """(rate, rate date, label) of the latest rate on `on` or in the
+        RATE_LOOKBACK_DAYS before it — convert-currency's lookback
+        (CA-FX-02 / US-FX-02). None (the send stays unpriced, the pool
+        row unrated) when there is none: an unbounded "latest before"
+        priced a June send at a January rate (re-audit A2-0414)."""
         cur = cur.upper()
         if cur == self.base:
             return 1.0, on, ""
@@ -667,6 +677,14 @@ class Rates:
         if i == 0:
             return None
         d = keys[i - 1]
+        try:
+            oldest = (datetime.strptime(on[:10], "%Y-%m-%d")
+                      - timedelta(days=RATE_LOOKBACK_DAYS)
+                      ).strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+        if d < oldest:
+            return None
         rate, src = days[d]
         label = {"boc": "Bank of Canada", "irs": "IRS"}.get(src, src or "")
         return rate, d, label

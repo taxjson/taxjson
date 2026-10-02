@@ -46,7 +46,8 @@ Exit codes: 0 = everything reconciled; 1 = at least one mismatch or missing
 symbol; 2 = usage error.
 
 Usage:
-    taxjson-reconcile-slips t5008.csv --gains margin_gains.json [--gains ...]
+    taxjson-reconcile-slips t5008.csv --country canada \
+        --gains margin_gains.json [--gains ...]
         [--year 2025] [--tolerance 1.00] [--json]
 
 Or through the project wrapper: `taxjson reconcile-slips t5008.csv`.
@@ -62,6 +63,30 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.bin.taxjson_form_export import grant_buyback_units, load_json
 from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.lib.country import CANADA, USA
+
+
+# The slip wording each country's run prints (re-audit A2-0423, A2-0744,
+# A2-0753, A2-1295, A2-1337, A2-1348, A2-1351): a US run never cites the
+# T5008, its boxes, the Bank of Canada or a blended ACB; the basis is
+# FIFO per account (US-BASIS-01) and the rates are the project's own
+# (US-FX-02).
+_WORDS = {
+    CANADA: {
+        "amount_boxes": "boxes 20/21",
+        "rate": "the Bank of Canada rate for each row's settlement date "
+                "(the rate taxjson used)",
+        "cost_note": "per-broker book value vs blended ACB / lot method",
+    },
+    USA: {
+        "amount_boxes": "the 1099-B proceeds and cost (boxes 1d/1e)",
+        "rate": "the rate taxjson used for each row (the project's rates "
+                "file, work/to_base.csv)",
+        "cost_note": "the broker's basis for the lots it sold vs "
+                     "taxjson's FIFO basis per account — a wash sale "
+                     "across accounts or a transfer-in",
+    },
+}
 from taxjson.lib.numeric import nonneg_float_arg
 
 _SUFFIX_RE = re.compile(r"\.(US|TO|AX|L|V|CN|NE)$", re.IGNORECASE)
@@ -298,8 +323,8 @@ def _norm_currency(raw: str) -> str:
 
 
 def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
-              base_currency: Optional[str] = None
-              ) -> Dict[str, Dict[str, Any]]:
+              base_currency: Optional[str] = None,
+              country: str = CANADA) -> Dict[str, Dict[str, Any]]:
     """Aggregate the slip CSV per symbol root:
     {ROOT: {qty, proceeds, cost (or None), rows, listings}}, where
     listings splits the root by the listing suffix the slip wrote
@@ -389,14 +414,16 @@ def load_slip(path: Path, renames: Optional[Dict[str, str]] = None,
         if foreign:
             got = ", ".join(f"{n} row(s) in {c}"
                             for c, n in sorted(foreign.items()))
+            w = _WORDS[country]
+            col = ("Box 13 / currency column" if country == CANADA
+                   else "currency column")
             raise SlipRefused(
                 f"taxjson-reconcile-slips: {path}: the slip reports "
-                f"amounts in another currency (Box 13 / currency column: "
+                f"amounts in another currency ({col}: "
                 f"{got}) but the books are in {base_currency.upper()}. "
                 f"reconcile-slips cannot convert slip amounts: convert "
-                f"boxes 20/21 to {base_currency.upper()} at the Bank of "
-                f"Canada rate for each row's settlement date (the rate "
-                f"taxjson used) and blank the currency column, or leave "
+                f"{w['amount_boxes']} to {base_currency.upper()} at "
+                f"{w['rate']} and blank the currency column, or leave "
                 f"this slip out.")
         if dropped:
             out["__dropped_rows__"] = dropped   # consumed (popped) in main
@@ -543,7 +570,7 @@ def _sum_listings(recs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
-             tolerance: float) -> Dict[str, Any]:
+             tolerance: float, country: str = CANADA) -> Dict[str, Any]:
     problems: List[str] = []
     notes: List[str] = []
     d_gross = s["proceeds"] - c["proceeds_gross"]
@@ -600,8 +627,8 @@ def _compare(label: str, s: Dict[str, Any], c: Dict[str, Any],
         d_cost = s["cost"] - c["cost"]
         if abs(d_cost) > tolerance:
             notes.append(f"slip cost differs by {d_cost:+,.2f} — often "
-                         f"legitimate (per-broker book value vs blended "
-                         f"ACB / lot method); document the reason")
+                         f"legitimate ({_WORDS[country]['cost_note']}); "
+                         f"document the reason")
     if c.get("tainted_rows"):
         notes.append(f"{int(c['tainted_rows'])} tainted disposition(s) with "
                      f"phantom basis included")
@@ -645,7 +672,7 @@ def _label(root: str, sfx: str) -> str:
 
 def reconcile(slip: Dict[str, Dict[str, Any]],
               computed: Dict[str, Dict[str, Any]],
-              tolerance: float) -> Dict[str, Any]:
+              tolerance: float, country: str = CANADA) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     for root in sorted(set(slip) | set(computed)):
         s, c = slip.get(root), computed.get(root)
@@ -671,7 +698,7 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
             label = _label(root, sfx)
             if sfx in c_list:
                 rows.append(_compare(label, s_list[sfx], c_list[sfx],
-                                     tolerance))
+                                     tolerance, country))
             else:
                 rows.append({"symbol": label,
                              "status": "MISSING_FROM_COMPUTED",
@@ -692,7 +719,7 @@ def reconcile(slip: Dict[str, Dict[str, Any]],
                                        f"{s_list['']['proceeds']:,.2f} — "
                                        f"nothing computed"})
                 continue
-            row = _compare(root, s_list[""], agg, tolerance)
+            row = _compare(root, s_list[""], agg, tolerance, country)
             if len(rest) > 1:
                 # Two securities that share a root (a CDR and its US
                 # parent, EFX.TO vs EFX.US) folded into one bare slip
@@ -756,12 +783,18 @@ def render(rep: Dict[str, Any], tolerance: float,
                  + f" (tolerance ±{tolerance:,.2f}).")
     lines.append("")
     lines.append("Notes:")
-    lines.append("  - MISSING_FROM_SLIP can be benign: corp-action "
-                 "dispositions don't always get T5008/1099-B rows. "
-                 "Worthless option expiries, and options written "
-                 "this year under grant timing and still open at the "
-                 "year end, are listed as NO_SLIP_EXPECTED and do not "
-                 "fail the check.")
+    if country == "usa":
+        lines.append("  - MISSING_FROM_SLIP can be benign: corp-action "
+                     "dispositions don't always get 1099-B rows. "
+                     "Worthless option expiries are listed as "
+                     "NO_SLIP_EXPECTED and do not fail the check.")
+    else:
+        lines.append("  - MISSING_FROM_SLIP can be benign: corp-action "
+                     "dispositions don't always get T5008 rows. "
+                     "Worthless option expiries, and options written "
+                     "this year under grant timing and still open at "
+                     "the year end, are listed as NO_SLIP_EXPECTED and "
+                     "do not fail the check.")
     lines.append("  - A slip symbol without a listing suffix matches every "
                  "listing of that root; when the books hold two (AMZN.TO "
                  "CDR and AMZN.US), write the suffix in the slip CSV.")
@@ -779,9 +812,15 @@ def render(rep: Dict[str, Any], tolerance: float,
                      "difference from blended ACB is expected when you hold the "
                      "security at more than one broker — document it, don't "
                      "'fix' it.")
-    lines.append("  - Amounts are compared in the project base currency; "
-                 "a slip whose currency column (T5008 Box 13) names "
-                 "another currency is refused, not converted.")
+    if country == "usa":
+        lines.append("  - Amounts are compared in the project base "
+                     "currency; a slip whose currency column names "
+                     "another currency is refused, not converted.")
+    else:
+        lines.append("  - Amounts are compared in the project base "
+                     "currency; a slip whose currency column (T5008 Box "
+                     "13) names another currency is refused, not "
+                     "converted.")
     return "\n".join(lines)
 
 
@@ -806,17 +845,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--year", type=tax_year, default=None,
                         help="Defensive year filter")
     parser.add_argument("--date-basis", choices=("settle", "trade"),
-                        default="settle",
+                        default=None,
                         help="Which date the --year filter scopes on: "
-                             "'settle' (CRA/T5008, the default) or "
-                             "'trade' (IRS/1099-B). The `taxjson "
+                             "'settle' (CRA/T5008) or 'trade' "
+                             "(IRS/1099-B). Default: the country's "
+                             "(canada: settle, usa: trade). The `taxjson "
                              "reconcile-slips` wrapper passes the "
                              "project's convention automatically.")
-    from taxjson.lib.country import country_arg
-    parser.add_argument("--country", type=country_arg, default=None,
-                        help="The project's country (wording of the "
-                             "slip notes only: T5008 vs 1099-B). The "
-                             "`taxjson reconcile-slips` wrapper passes it.")
+    from taxjson.lib.country import add_country_argument
+    # Required (re-audit A2-0747, A2-1294, A2-1349, A2-1350): it sets
+    # the base currency the slip amounts must be in, the default
+    # --date-basis and the slip wording (T5008 vs 1099-B) — a missing
+    # one silently became Canada (CAD, settle dates).
+    add_country_argument(
+        parser, help="The project's country (required): canada | usa. "
+                     "It sets the base currency slip amounts must be "
+                     "in (CAD / USD), the default --date-basis and the "
+                     "slip wording (T5008 vs 1099-B). The `taxjson "
+                     "reconcile-slips` wrapper passes it.")
     parser.add_argument("--tolerance", type=nonneg_float_arg, default=1.00,
                         help="Absolute per-symbol amount tolerance "
                              "(default: 1.00)")
@@ -853,13 +899,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                     merge_renames)
         renames = merge_renames(load_map_file(args.ticker_map),
                                 to_base=True)
-    from taxjson.lib.country import home_currency
-    base_ccy = home_currency(args.country or "canada")
+    from taxjson.lib.country import default_tax_date, home_currency
+    base_ccy = home_currency(args.country)
+    if args.date_basis is None:
+        # IRS/1099-B scope by trade date, CRA/T5008 by settlement
+        # (re-audit A2-1292, A2-1331).
+        args.date_basis = default_tax_date(args.country)
     slip: Dict[str, Dict[str, Any]] = {}
     dropped_rows = 0
     try:
         for sp in args.slip_csv:
-            one = load_slip(sp, renames, base_currency=base_ccy)
+            one = load_slip(sp, renames, base_currency=base_ccy,
+                            country=args.country)
             dropped_rows += int(one.pop("__dropped_rows__", 0) or 0)
             for root, rec in one.items():
                 acc = slip.setdefault(root, {"qty": 0.0, "proceeds": 0.0,
@@ -879,7 +930,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # One line naming the gains file, not a traceback (S079-11).
         print(f"taxjson-reconcile-slips: error: {e}", file=sys.stderr)
         return 2
-    rep = reconcile(slip, computed, args.tolerance)
+    rep = reconcile(slip, computed, args.tolerance, args.country)
     if dropped_rows:
         # Unreadable rows mean the slip was NOT fully reconciled —
         # exit 0 here certified agreement the tool never checked

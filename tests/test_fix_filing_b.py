@@ -44,7 +44,7 @@ def _reconcile(td, slip_text, entries, *extra, encoding="utf-8"):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = main([str(s), "--gains", str(g), "--year", "2025",
-                     "--json", *extra])
+                     "--json", "--country", "canada", *extra])
     rep = json.loads(out.getvalue()) if out.getvalue().strip() else None
     return code, rep, err.getvalue()
 

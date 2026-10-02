@@ -38,7 +38,7 @@ import json
 import sys
 from pathlib import Path
 
-from taxjson.lib.cli_diag import tax_year
+from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import load_transactions
 from taxjson.lib.phantom_holdings import (
     detect_phantoms, assess_tax_year_relevance, detect_zero_basis_acquisitions,
@@ -164,6 +164,7 @@ def _rename_sources(map_path, symbols):
     return out
 
 
+@guard_main("taxjson-missing-history")
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__,
