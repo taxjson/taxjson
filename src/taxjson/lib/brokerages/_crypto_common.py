@@ -173,7 +173,11 @@ def warn_depeg(coin: str, usd_price: float, qty: float, date: str,
         return False
     if not price or abs(price - 1.0) <= DEPEG_TOLERANCE:
         return False
-    print(f"warning: {where}: {coin} traded at {price:.4f} USD on {date} "
+    # The ATTENTION channel: `taxjson run` echoes it on the console
+    # (it was only in the .sum, re-audit A2-1001) — money the books
+    # leave out.
+    print(f"warning: ATTENTION: {where}: {coin} traded at {price:.4f} USD "
+          f"on {date} "
           f"— stablecoins are booked as US-dollar cash (an "
           f"approximation), so the {abs(price - 1.0) * qty:,.2f} USD "
           f"de-peg difference on {qty:g} {coin} is not in the gains; "

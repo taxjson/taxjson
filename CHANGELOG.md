@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The stablecoin de-peg warning ("not in the gains; report it by hand")
+  is an ATTENTION line, so `taxjson run` shows it on the console, not
+  only in the .sum (re-audit A2-1001).
+
 - fill-crypto values PYUSD and GUSD at their 1.00 USD par like USDC
   (a US Coinbase or Kraken PYUSD reward went to Yahoo, and an offline
   run stopped); `run --fast` re-prices after a `work/crypto_ticker.map`

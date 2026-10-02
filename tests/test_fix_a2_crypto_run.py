@@ -77,5 +77,27 @@ class TestFastSeesTheWorkMap(unittest.TestCase):
             self.assertEqual(price(), 100.0)
 
 
+class TestDepegReachesTheConsole(unittest.TestCase):
+    @rule("CA-CRYPTO-02")
+    def test_depeg_warning_is_an_attention_line(self):
+        # A2-1001: the warning reached only the .sum.
+        from taxjson.bin.taxjson_run import ATTENTION_PREFIX, echo_parse_stats
+        from taxjson.lib.brokerages._crypto_common import warn_depeg
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertTrue(warn_depeg("USDC", 0.88, 1000, "2025-03-01",
+                                       "cb.csv"))
+        line = err.getvalue().strip()
+        self.assertTrue(line.startswith(ATTENTION_PREFIX), line)
+        self.assertIn("120.00 USD de-peg", line)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "a_coinbase.json"
+            (Path(tmp) / "a_coinbase.json.diag").write_text(line + "\n")
+            con = io.StringIO()
+            with contextlib.redirect_stdout(con):
+                echo_parse_stats(out)
+        self.assertIn("de-peg", con.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
