@@ -1429,13 +1429,16 @@ def _currency_mismatch_advice(tx, pool_cur: str) -> str:
 
 def _warn_ticker_reused_after_rename(txs, date_of, *, rule_text: str
                                      ) -> None:
-    """ATTENTION (audit A2-0197): a symbol that TRADES after a SPLIT
-    renamed it away. The rename class is date-blind, so such a row is
-    treated as identical property to the renamed holding for the
-    superficial-loss / wash-sale rule. That is right when a broker keeps
-    booking the old ticker, wrong when another company reuses it — the
-    export cannot tell which, so the engines keep the class and say so.
-    One line per (symbol, rename)."""
+    """A symbol that TRADES after the date a SPLIT renamed it away
+    (audit A2-0197). Renames are dated (owner decision): such a row is
+    NOT the renamed security — it is its own identical-property class
+    for the superficial-loss / wash-sale rule (SplitTimeline.class_at).
+    Right when another company reuses the ticker; wrong when the broker
+    still books the renamed shares under the old ticker — ticker.map's
+    `RENAME OLD NEW <date> late=fold` folds those rows into NEW (and
+    `late=separate` records the other case). `taxjson renames` lists
+    the rows and `run --strict` stops until each is declared. One line
+    per (symbol, rename)."""
     renamed: Dict[str, Tuple[str, str]] = {}
     for t in txs:
         if t.action != 'SPLIT':
@@ -1455,12 +1458,14 @@ def _warn_ticker_reused_after_rename(txs, date_of, *, rule_text: str
         d = str(date_of(t) or '')
         if d > d_r and t.symbol not in seen:
             seen.add(t.symbol)
-            print(f"warning: ATTENTION: {t.symbol} trades on {d}, after "
-                  f"its rename to {new} on {d_r}: taxjson treats it as "
-                  f"the same security as {new} for {rule_text}. If "
-                  f"{t.symbol} now names a different company, book its "
-                  f"rows under a distinct symbol and re-run.",
-                  file=sys.stderr)
+            print(f"warning: {t.symbol} trades on {d}, after its "
+                  f"rename to {new} on {d_r}: renames are dated, so "
+                  f"taxjson treats these rows as a DIFFERENT security "
+                  f"from {new} for {rule_text}. If the broker still books "
+                  f"the renamed shares under {t.symbol}, declare it in "
+                  f"ticker.map (RENAME {t.symbol} {new} {d_r} late=fold); "
+                  f"if another company now uses the ticker, `late=separate`"
+                  f" (`taxjson renames`).", file=sys.stderr)
 
 
 def _place_wash_adjusts(stream):
@@ -2105,6 +2110,15 @@ class CanadaTaxRules(TaxRules):
         # its own copy — one more hand-maintained duplicate of the rename
         # chain, now deleted.
         alias_of = split_timeline.canonical
+        # Identical-property matching is DATED (A2-0197, owner decision):
+        # OLD before its rename date and NEW after it are one security;
+        # an OLD row after the rename date is its own (another
+        # company reusing the ticker, or a broker still booking the
+        # renamed shares — ticker.map's `RENAME ... late=fold` folds
+        # those into NEW before the engine runs). Same classes as
+        # alias_of for every book with no such row. alias_of stays for
+        # the warn-only replacement detectors.
+        row_cls = split_timeline.class_of_row
 
         # Running affiliated balance per tx — same definition the wash test
         # uses (BUYSELL/ASSIGN/TRANSFER summed across all_txs, multiplicative
@@ -2116,9 +2130,9 @@ class CanadaTaxRules(TaxRules):
         # this, post-rename RGLD.US buys wouldn't show up in the 30-day
         # affiliated check for an SSL.TO loss.
         running_bal_by_tx: Dict[str, float] = {}
-        for rep in set(alias_of(t.symbol) for t in all_txs):
+        for rep in set(row_cls(t) for t in all_txs):
             txs_sym = sorted(
-                [t for t in all_txs if alias_of(t.symbol) == rep],
+                [t for t in all_txs if row_cls(t) == rep],
                 key=lambda t: event_sort_key(t, profile='ca_balance',
                                               date_of=get_sort_date),
             )
@@ -3376,10 +3390,10 @@ class CanadaTaxRules(TaxRules):
                 # on equivalence-class representative instead of raw
                 # symbol. `alias_of` is identity for symbols never
                 # renamed, so this is a no-op for the common case.
-                loss_alias = alias_of(tx.symbol)
+                loss_alias = row_cls(tx)
                 potential_triggers = []
                 for t in all_txs:
-                    if alias_of(t.symbol) != loss_alias:
+                    if row_cls(t) != loss_alias:
                         continue
                     # The loss row itself is a candidate only when it is
                     # a cover that also OPENS a long (buy 150 while short
@@ -3469,7 +3483,7 @@ class CanadaTaxRules(TaxRules):
                             continue
                         _und = _call_und(t.symbol)
                         if (not _und or _FUTURES_PREFIX_RE.match(_und)
-                                or alias_of(_und) != loss_alias):
+                                or split_timeline.class_at(_und, t.date) != loss_alias):
                             continue
                         t_date = datetime.strptime(get_sort_date(t), '%Y-%m-%d')
                         if abs((t_date - loss_date).days) > 30:
@@ -3553,7 +3567,7 @@ class CanadaTaxRules(TaxRules):
                 bal_at_end = sum(
                     _row_loss_units(t, t.quantity)
                     for t in current_tx_list
-                    if alias_of(t.symbol) == loss_alias
+                    if row_cls(t) == loss_alias
                     and not _gone_by_end(t)
                     and get_sort_date(t) <= end_window_date
                     # OPENING_BALANCE counts — phantom shares are held
@@ -3591,7 +3605,7 @@ class CanadaTaxRules(TaxRules):
                             else 1 if t.id in sheltered_ids else 0)
                 _bal_end_h: Dict[Any, float] = {}
                 for t in current_tx_list:
-                    if (alias_of(t.symbol) == loss_alias
+                    if (row_cls(t) == loss_alias
                             and not _gone_by_end(t)
                             and get_sort_date(t) <= end_window_date
                             and t.action in ('BUYSELL', 'ASSIGN',
@@ -3783,7 +3797,7 @@ class CanadaTaxRules(TaxRules):
                     # A key after every row of the window's last day.
                     _eow_key = (end_window_date, 99, '99:99:99', 99)
                     for t in current_tx_list:
-                        if (alias_of(t.symbol) == loss_alias
+                        if (row_cls(t) == loss_alias
                                 and get_sort_date(t) <= end_window_date
                                 and t.id not in sheltered_ids
                                 and t.id not in affiliated_ids
@@ -4639,7 +4653,7 @@ class USATaxRules(TaxRules):
         long_replacements: Dict[str, List[Dict[str, Any]]] = {}
         short_replacements: Dict[str, List[Dict[str, Any]]] = {}
 
-        def _rep_key(sym: str) -> str:
+        def _rep_key(sym: str, on_date: str) -> str:
             """Replacement records are keyed by the rename-chain
             CANONICAL symbol (FUZZ #C): keying by raw symbol made a
             pre-rename loss look up 'OLD.TO' while the post-rename
@@ -4647,8 +4661,10 @@ class USATaxRules(TaxRules):
             mergers (the SPLIT-time migration ran too late for losses
             processed before the SPLIT row). Canada already
             canonicalizes via alias_of; this is the USA twin. Unit
-            conversion stays with _rep_units_factor."""
-            return split_timeline.canonical(sym)
+            conversion stays with _rep_units_factor. The class is
+            DATED (A2-0197): an OLD row after its rename date is
+            its own security (SplitTimeline.class_at)."""
+            return split_timeline.class_at(sym, on_date)
         net_qty_state: Dict[Any, float] = {}
 
         def _nkey(acct, s):
@@ -4808,7 +4824,7 @@ class USATaxRules(TaxRules):
                 else:
                     open_qty = ev.quantity - min(ev.quantity, max(0.0, -prev))
                 if open_qty > epsilon:
-                    long_replacements.setdefault(_rep_key(sym), []).append({
+                    long_replacements.setdefault(_rep_key(sym, ev.date), []).append({
                         'tx': ev,
                         'date': ev.date,
                         'open_qty': open_qty,
@@ -4854,7 +4870,7 @@ class USATaxRules(TaxRules):
                 else:
                     open_qty = abs(ev.quantity) - min(abs(ev.quantity), max(0.0, prev))
                 if open_qty > epsilon:
-                    short_replacements.setdefault(_rep_key(sym), []).append({
+                    short_replacements.setdefault(_rep_key(sym, ev.date), []).append({
                         'tx': ev,
                         'date': ev.date,
                         'open_qty': open_qty,
@@ -5111,7 +5127,7 @@ class USATaxRules(TaxRules):
             now, before any of the disposition's losses is matched."""
             lots = inv.get(ikey_, [])
             reps = (long_replacements if ref_key == 'lot_ref'
-                    else short_replacements).get(_rep_key(sym), [])
+                    else short_replacements).get(_rep_key(sym, on_date), [])
             left = q
             i = 0
             while left > epsilon and i < len(lots):
@@ -5610,7 +5626,7 @@ class USATaxRules(TaxRules):
                         # against this rep would otherwise silently mutate
                         # the detached dict and lose the disallowance — see
                         # `fully_consumed` branch in the wash-match below.
-                        for r in short_replacements.get(_rep_key(symbol), []):
+                        for r in short_replacements.get(_rep_key(symbol, tx.date), []):
                             if r.get('short_lot_ref') is short_lot:
                                 r['fully_consumed'] = True
                                 r['short_lot_ref'] = None
@@ -5633,7 +5649,7 @@ class USATaxRules(TaxRules):
                             short_lot['wash_deferred'] = _swd - (
                                 D(chunk_qty)
                                 / D(short_lot['qty'] + chunk_qty)) * _swd
-                        for r in short_replacements.get(_rep_key(symbol), []):
+                        for r in short_replacements.get(_rep_key(symbol, tx.date), []):
                             if r.get('short_lot_ref') is short_lot:
                                 # remaining_qty is denominated in the
                                 # rep's own trade-date units; chunk_qty
@@ -5699,7 +5715,7 @@ class USATaxRules(TaxRules):
                         chunk_loss = abs(raw_gain)
                         loss_per_share_d = D(chunk_loss) / D(chunk_qty)
                         candidates = find_replacements_in_window(
-                            short_replacements.get(_rep_key(symbol), []),
+                            short_replacements.get(_rep_key(symbol, tx.date), []),
                             tx.date,
                         )
                         if _outside_1091(symbol):
@@ -5884,7 +5900,7 @@ class USATaxRules(TaxRules):
                 # --- buy-to-open: any leftover quantity opens a new long lot ---
                 if qty_remaining > epsilon:
                     rep_record = next(
-                        (r for r in long_replacements.get(_rep_key(symbol), [])
+                        (r for r in long_replacements.get(_rep_key(symbol, tx.date), [])
                          if r['tx'].id == tx.id and not r['is_sheltered']),
                         None,
                     )
@@ -5995,7 +6011,7 @@ class USATaxRules(TaxRules):
                     # future wash-sale bump would otherwise hit a detached
                     # dict and disappear. Mark `fully_consumed` so the
                     # match falls through to permanent disallowance.
-                    for r in long_replacements.get(_rep_key(symbol), []):
+                    for r in long_replacements.get(_rep_key(symbol, tx.date), []):
                         if r.get('lot_ref') is lot:
                             r['fully_consumed'] = True
                             r['lot_ref'] = None
@@ -6015,7 +6031,7 @@ class USATaxRules(TaxRules):
                             D(chunk_qty) / D(lot['qty'])) * _wd
                     lot['qty'] -= chunk_qty
                     lot['cost_basis'] -= chunk_cost_d
-                    for r in long_replacements.get(_rep_key(symbol), []):
+                    for r in long_replacements.get(_rep_key(symbol, tx.date), []):
                         if r.get('lot_ref') is lot:
                             # Same unit conversion as the short side
                             # above: consume the rep's capacity in ITS
@@ -6060,7 +6076,7 @@ class USATaxRules(TaxRules):
                     chunk_loss = abs(raw_gain)
                     loss_per_share_d = D(chunk_loss) / D(chunk_qty)
                     candidates = find_replacements_in_window(
-                        long_replacements.get(_rep_key(symbol), []),
+                        long_replacements.get(_rep_key(symbol, tx.date), []),
                         tx.date,
                     )
                     if _outside_1091(symbol):
@@ -6264,7 +6280,7 @@ class USATaxRules(TaxRules):
             # --- sell-to-open: any leftover quantity opens a new short lot ---
             if qty_remaining > epsilon:
                 rep_record = next(
-                    (r for r in short_replacements.get(_rep_key(symbol), [])
+                    (r for r in short_replacements.get(_rep_key(symbol, tx.date), [])
                      if r['tx'].id == tx.id and not r['is_sheltered']),
                     None,
                 )

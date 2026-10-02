@@ -470,9 +470,13 @@ def main():
     # under the new one showed COOLING + EXITABLE while the engine
     # denied the loss (2026-09 audit). Pools stay keyed by raw symbol
     # (rows print per ticker); only the MATCHING is class-level.
-    alias_of = SplitTimeline.from_transactions(
-        [t for t in transactions if _booked(t)],
-        date_of=_tax_day).canonical
+    # DATED (A2-0197): an old ticker's row after its rename date
+    # is its own security (SplitTimeline.class_at); `date` None = now.
+    _rename_tl = SplitTimeline.from_transactions(
+        [t for t in transactions if _booked(t)], date_of=_tax_day)
+
+    def alias_of(sym, date=None, before=False):
+        return _rename_tl.class_at(sym, date, before=before)
 
     account_pool_qty = {} # (symbol, group, account) -> qty
     account_pool_acb = {} # (symbol, group, account) -> total_cost
@@ -496,11 +500,11 @@ def main():
     from taxjson.lib.core import (OPTION_CONTRACT_SHARES, parse_option_expiry,
                                   parse_option_right, parse_option_underlying)
 
-    def _call_underlying_cls(sym):
+    def _call_underlying_cls(sym, date=None):
         if parse_option_right(sym) != 'C':
             return None
         und = parse_option_underlying(sym)
-        return alias_of(und) if und else None
+        return alias_of(und, date) if und else None
     seen_splits = set()   # (symbol, account, date, ratio, symbol_new) dedup
 
     def _holder(group, pool_acct):
@@ -514,7 +518,8 @@ def main():
               'tx_obj': id(tx),
               'symbol': tx.symbol}
         acq_events.setdefault(cls, []).append(ev)
-        _u = _call_underlying_cls(tx.symbol) if direction == 'LONG' else None
+        _u = (_call_underlying_cls(tx.symbol, tx.date)
+              if direction == 'LONG' else None)
         if _u:
             call_acq.setdefault(_u, []).append(ev)
 
@@ -589,7 +594,8 @@ def main():
             continue
 
         ticker = tx.symbol
-        cls = alias_of(ticker)     # rename-class key for the matching maps
+        cls = alias_of(ticker, tx.date,      # rename-class key for the
+                       tx.action == 'SPLIT')  # matching maps
         # Pool per (ticker, group, account) — NOT per file. All sheltered
         # accounts share one --sheltered file, so a per-file pool would apply a
         # split that happened in ONE registered account (e.g. a 10:1 in the
@@ -781,7 +787,7 @@ def main():
             if not v or str(t.id) in _seen_ids:
                 continue
             _seen_ids.add(str(t.id))
-            _record_loss(alias_of(t.symbol), t, {
+            _record_loss(alias_of(t.symbol, t.date), t, {
                 'date': t.date,
                 'epoch': t._epoch,
                 'qty': v['qty'],

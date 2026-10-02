@@ -184,7 +184,7 @@ def parse_tt_line(line: str, account_name: str = 'default',
             if action == 'SPLIT':
                 tx['symbol_new'] = parts[4].upper()
                 tx['quantity'] = _tt_num(parts[5])
-                tx['currency'] = 'CAD'
+                tx['currency'] = ''     # no money: a ratio (a US project has no CAD rates)
                 tx['price'] = 0.0
                 tx['net_amount'] = 0.0
             else:

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Renames are dated events (owner decision, audit A2-0197). On its date
+  a ticker change carries the position, the ACB / basis lots and the
+  acquisition dates from the old symbol to the new one, and the
+  superficial-loss / wash-sale rule treats the old symbol before the
+  date and the new one after it as one security — in both engines, the
+  wash radar and buy/sell-check. A trade in the old ticker after the
+  rename date is now a separate security (it used to be pooled with
+  the renamed holding for the window): `taxjson run` prints an
+  ATTENTION line, `run --strict` stops, and ticker.map declares which it
+  is — `RENAME OLD NEW YYYY-MM-DD late=fold` (the broker still books the
+  renamed shares under the old ticker: booked as NEW) or `late=separate`
+  (another company reuses the ticker). A dated `RENAME OLD NEW
+  YYYY-MM-DD` line also books the rename itself when no broker row does;
+  `RENAME OLD NEW` without a date means `GLOBAL OLD NEW`, as before.
+  New `taxjson renames [ACCOUNT] [--json]`: every rename with its date,
+  source, the position and book cost it carried, and the late trades;
+  in the checklist (`renames`) and `taxjson edge-cases` (CA-ACB-RENAME /
+  US-BASIS-RENAME).
+- A `.tt` SPLIT line carries no currency (it was labelled CAD, and a US
+  project with no CAD rates refused the account); a split row with no
+  money is relabelled, not converted.
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

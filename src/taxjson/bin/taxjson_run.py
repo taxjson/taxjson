@@ -3858,6 +3858,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         if getattr(args, "strict", False):
             raise SystemExit(1)
         return
+    if not pending_accounts:
+        _check_renamed_late(root, strict=getattr(args, "strict", False))
     if _blend_names and not args.account and not pending_accounts:
         _check_own_account_moves(_blend_names, settings, cache,
                                  strict=getattr(args, "strict", False))
@@ -4326,9 +4328,16 @@ _TEMPLATE_TICKER_MAP = """\
 #                     is a fractional CAD-hedged receipt over UNH.US,
 #                     never map it). Changes no symbol; silences the
 #                     scan's MAP-GAP nag for the pair.
+#   RENAME  from to YYYY-MM-DD [late=fold|late=separate]
+#                     A ticker change ON THAT DATE (an event: the position
+#                     and cost carry over on the date). A trade in `from`
+#                     after the date is another security unless
+#                     late=fold (the broker kept the old ticker). See
+#                     `taxjson renames`. Without a date it is GLOBAL.
 #
 # Examples — uncomment and edit:
-# GLOBAL   FB.US      META.US
+# RENAME   FB.US      META.US   2022-06-09
+# GLOBAL   BRK-B.US   BRK.B.US
 # TOBASE   AEM.US     AEM.TO
 # JOURNAL  DLR.U.TO   DLR.TO
 # DELETE   CASH.US
@@ -9568,6 +9577,54 @@ def cmd_splits(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_renames(args: argparse.Namespace) -> None:
+    """`taxjson renames`: every ticker change in the books as a dated
+    event (date, source, position and book cost carried), every trade in
+    an old ticker after its rename with how ticker.map resolves it,
+    and the undated ticker.map renames (lib/renames). Exit 1 while a late
+    trade is unresolved."""
+    from taxjson.lib.renames import render, report
+    root = Path(args.dir).resolve()
+    try:
+        doc = report(root, load_config(root), args.account)
+    except ValueError as e:
+        _die(str(e))
+    if getattr(args, "json", False):
+        _json_out(doc)
+    else:
+        for ln in render(doc):
+            print(ln)
+    if doc["unresolved"]:
+        raise SystemExit(1)
+
+
+def _check_renamed_late(root: Path, *, strict: bool) -> None:
+    """A trade in a renamed ticker after its rename date that no
+    ticker.map line declares (lib/renames, A2-0197): ATTENTION, and
+    --strict stops."""
+    from taxjson.lib.renames import unresolved_late
+    try:
+        rows = unresolved_late(root, load_config(root))
+    except ValueError as e:
+        print(f"  warning: {e}", file=sys.stderr)
+        return
+    seen: Dict[Tuple[str, str], int] = {}
+    for x in rows:
+        k = (x["symbol"], x["rename_date"])
+        seen[k] = seen.get(k, 0) + 1
+    for (sym, d), n in sorted(seen.items()):
+        new = next(x["renamed_to"] for x in rows
+                   if (x["symbol"], x["rename_date"]) == (sym, d))
+        print(f"  warning: ATTENTION: {n} trade(s) in {sym} after "
+              f"its rename to {new} on {d} — booked as a separate "
+              f"security until ticker.map says which it is (`taxjson "
+              f"renames`).", file=sys.stderr)
+    if rows and strict:
+        sys.exit(f"taxjson run --strict: {len(rows)} trade(s) in a renamed "
+                 f"ticker after its rename are not declared in ticker.map "
+                 f"(ATTENTION above; `taxjson renames`) — aborting.")
+
+
 def cmd_check_dates(args: argparse.Namespace) -> None:
     """`taxjson check-dates`: every trade and settlement date the parsers
     produced, checked against the trading calendar of what was traded
@@ -13300,19 +13357,31 @@ def _wash_class_context(root: Path, cache: Path, prog: str):
     # a NEW.TO rebuy is a violation that `sell-check OLD.TO` must
     # find under NEW.TO's radar row. Same union condition as
     # SplitTimeline.from_transactions (non-empty, non-self symbol_new).
+    # Renames are DATED (A2-0197): a ticker that trades again on or
+    # after its rename names a different security NOW, so it is not
+    # joined to the renamed holding (lib/renames).
+    from taxjson.lib.renames import late_rows as _late_rows
+    from taxjson.lib.renames import rename_events as _rename_events
+    _all_rows: List[Dict[str, Any]] = []
     for _bp in bases + ([sheltered_base] if sheltered_base.exists()
                         else []):
         try:
             _bdoc = _json.loads(_bp.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for _t in _bdoc.get("transactions", []) or []:
-            if (_t.get("action") or "").upper() != "SPLIT":
+        _all_rows += [_t for _t in _bdoc.get("transactions", []) or []
+                      if isinstance(_t, dict)]
+    _late_old = {e["old"] for _r, e in _late_rows(
+        _all_rows, _rename_events(_all_rows))}
+    for _t in _all_rows:
+        if (_t.get("action") or "").upper() != "SPLIT":
+            continue
+        _new = (_t.get("symbol_new") or "").strip()
+        _old = (_t.get("symbol") or "").strip()
+        if _new and _old and _new.upper() != _old.upper():
+            if _old in _late_old:
                 continue
-            _new = (_t.get("symbol_new") or "").strip()
-            _old = (_t.get("symbol") or "").strip()
-            if _new and _old and _new.upper() != _old.upper():
-                _union(_old, _new, f"SPLIT-rename in {_bp.name}")
+            _union(_old, _new, "SPLIT-rename in the books")
 
     # An option root that names no share listing in the books but
     # matches exactly ONE class share of that root on the same exchange
@@ -15052,6 +15121,16 @@ def main() -> None:
     p_split.add_argument("--json", action="store_true",
                          help="Emit JSON instead of text")
     p_split.set_defaults(func=cmd_splits)
+
+    p_ren = sub.add_parser(
+        "renames",
+        help="Every ticker change as a dated event (source, position and "
+             "cost carried) and every trade in an old ticker after its "
+             "rename; exit 1 while one is not declared in ticker.map")
+    p_ren.add_argument("account", nargs="?", help="Account (default: all)")
+    p_ren.add_argument("--json", action="store_true",
+                       help="Emit JSON instead of text")
+    p_ren.set_defaults(func=cmd_renames)
 
     p_logic = sub.add_parser(
         "tax-logic",

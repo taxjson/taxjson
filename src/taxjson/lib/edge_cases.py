@@ -719,7 +719,19 @@ def analyze(root: Path, cfg: Dict[str, Any], *, margin: int = 3,
         },
         "window_edges": window_edges(book, margin),
         "calls_in_windows": calls_in_windows(book),
+        "renamed_late": _renamed_late(root, cfg, account),
     }
+
+
+def _renamed_late(root: Path, cfg: Dict[str, Any],
+                  account: Optional[str]) -> List[Dict[str, Any]]:
+    """Trades in a ticker after the date it was renamed away
+    (lib/renames): a different security unless ticker.map folds them."""
+    from taxjson.lib.renames import report
+    try:
+        return report(root, cfg, account)["late"]
+    except ValueError:
+        return []
 
 
 def _money(x: Optional[float]) -> str:
@@ -824,6 +836,18 @@ def render_text(doc: Dict[str, Any], verbose: bool = False) -> List[str]:
                  f"({r['qty']:g} units): {r['verdict']}")
         for it in r["items"]:
             L.append(f"      - {it['why']}")
+    L.append("")
+    rl = doc.get("renamed_late") or []
+    L.append(f"== Trades in an old ticker after its rename ({len(rl)}): "
+             f"a separate security unless ticker.map folds them "
+             f"(`taxjson renames`)")
+    if not rl:
+        L.append("   None.")
+    for r in rl:
+        L.append(f"   {r['account']:<8} {str(r['symbol']):<24} "
+                 f"{r['qty']:>+12g}  {r['date']}  renamed to "
+                 f"{r['renamed_to']} on {r['rename_date']}: "
+                 f"{r['resolution']}")
     L.append("")
     flips = sum(1 for r in we for it in r["items"] if it.get("basis_flip"))
     if usa:

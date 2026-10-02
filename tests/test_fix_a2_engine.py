@@ -692,15 +692,16 @@ def _reuse_book():
 
 
 class TestTickerReusedAfterRename(unittest.TestCase):
-    """A2-0197: a ticker trading after its rename is flagged (it may be
-    another company); the identical-property class is unchanged."""
+    """A2-0197: a ticker trading after its rename is flagged. Renames are
+    dated (owner decision): the late OLD row is a separate security
+    (tests/test_fix_a2_renames.py pins the class)."""
 
     def _attn(self, R):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             R().compute_gains(_reuse_book())
         return [l for l in err.getvalue().splitlines()
-                if 'ATTENTION' in l and 'after its rename' in l]
+                if 'after its rename' in l and 'DIFFERENT security' in l]
 
     @rule("CA-ACB-04")
     def test_canada_flags_the_reuse(self):

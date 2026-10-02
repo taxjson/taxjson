@@ -500,6 +500,16 @@ def main():
         # deleted FOO, so one map file meant two things (stage-tools
         # audit). DELETE lines nuke a ticker's transactions (audited).
         txs = apply_drops(txs, tmap.delete)
+        # Dated RENAME lines are EVENTS (lib/renames): a SPLIT row on the
+        # date in every account holding the old symbol, and `late=fold`
+        # rows re-booked under the new one — on the RAW symbols, before
+        # the undated renames below map both (A2-0197).
+        from taxjson.lib.renames import RenameConflict, apply_dated_renames
+        try:
+            txs = apply_dated_renames(txs, tmap.dated)
+        except RenameConflict as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
         # An option the underlying rule would move onto a contract the
         # book already trades natively keeps its own symbol (R1-16).
         renames = guard_option_listing_collisions(
