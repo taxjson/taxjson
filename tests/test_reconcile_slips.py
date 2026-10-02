@@ -155,7 +155,7 @@ class TestCli(unittest.TestCase):
             s = write_slip(td, "symbol,quantity,proceeds\nAAPL,100,12000\n")
             out = io.StringIO()
             with redirect_stdout(out):
-                rc = main([str(s), "--gains", str(g), "--year", "2025"])
+                rc = main([str(s), "--gains", str(g), "--country", "canada", "--year", "2025"])
             self.assertEqual(rc, 0)
             self.assertIn("1 OK", out.getvalue())
 
@@ -165,7 +165,7 @@ class TestCli(unittest.TestCase):
             s = write_slip(td, "symbol,quantity,proceeds\nAAPL,100,15000\n")
             out = io.StringIO()
             with redirect_stdout(out):
-                rc = main([str(s), "--gains", str(g)])
+                rc = main([str(s), "--gains", str(g), "--country", "canada"])
             self.assertEqual(rc, 1)
             self.assertIn("MISMATCH", out.getvalue())
 
@@ -175,7 +175,7 @@ class TestCli(unittest.TestCase):
             s = write_slip(td, "symbol,proceeds\nAAPL,12000\n")
             out = io.StringIO()
             with redirect_stdout(out):
-                rc = main([str(s), "--gains", str(g), "--json"])
+                rc = main([str(s), "--gains", str(g), "--country", "canada", "--json"])
             self.assertEqual(rc, 0)
             rep = json.loads(out.getvalue())
             self.assertEqual(rep["counts"]["ok"], 1)
@@ -184,7 +184,7 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             g = write_gains(td, [sell()])
             with redirect_stderr(io.StringIO()):
-                rc = main(["/nonexistent.csv", "--gains", str(g)])
+                rc = main(["/nonexistent.csv", "--gains", str(g), "--country", "canada"])
             self.assertEqual(rc, 2)
 
 

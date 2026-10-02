@@ -154,5 +154,100 @@ class TestProjectTomlBom(unittest.TestCase):
             self.assertNotIn("Traceback", r.stderr)
 
 
+# ------------------------------------------------ reconcile-slips (06)
+
+def _rs_sell(symbol="QZQ.US", date="2025-05-02", settle=None, qty=-100,
+             proceeds=12000.0, cost=10000.0):
+    return {"date": date, "date_settle": settle or date, "symbol": symbol,
+            "qty": qty, "proceeds": proceeds, "cost": cost,
+            "gain": proceeds - cost, "disallowed_amount": 0.0,
+            "days_held": 100, "direction": "LONG", "commission": 0.0,
+            "fee": 0.0, "account": "margin"}
+
+
+def _reconcile(td, slip_text, entries, *argv):
+    import contextlib
+    from taxjson.bin.taxjson_reconcile_slips import main
+    s = Path(td) / "slip.csv"
+    s.write_text(slip_text, encoding="utf-8")
+    g = Path(td) / "margin_gains.json"
+    g.write_text(json.dumps({"transactions": entries, "summary": {}}))
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = main([str(s), "--gains", str(g), *argv])
+        except SystemExit as e:
+            code = e.code
+    return code, out.getvalue(), err.getvalue()
+
+
+_CA_ONLY = ("T5008", "Box 13", "boxes 20/21", "Bank of Canada",
+            "blended ACB")
+
+
+class TestReconcileSlipsCountry(unittest.TestCase):
+    """A2-0423, A2-0744, A2-0747, A2-0753, A2-1292, A2-1294, A2-1295,
+    A2-1331, A2-1337, A2-1348, A2-1349, A2-1350, A2-1351."""
+
+    def test_country_is_required(self):
+        with tempfile.TemporaryDirectory() as td:
+            code, out, err = _reconcile(
+                td, "Symbol,Proceeds\nQZQ,12000\n", [_rs_sell()])
+        self.assertEqual(code, 2)
+        self.assertIn("--country", err)
+
+    def test_wording_per_country(self):
+        slip = "Symbol,Quantity,Proceeds,Cost\nQZQ,100,12000,9900\n"
+        got = {}
+        for c in ("canada", "usa"):
+            with tempfile.TemporaryDirectory() as td:
+                code, out, err = _reconcile(td, slip, [_rs_sell()],
+                                            "--country", c)
+            self.assertEqual(code, 0, err)
+            got[c] = out
+        for w in ("T5008 Box 13", "blended ACB"):
+            self.assertIn(w, got["canada"])
+        for w in _CA_ONLY:
+            self.assertNotIn(w, got["usa"])
+        self.assertIn("FIFO basis per account", got["usa"])
+
+    def test_foreign_currency_refusal_per_country(self):
+        got = {}
+        for c, cur in (("canada", "USD"), ("usa", "CAD")):
+            with tempfile.TemporaryDirectory() as td:
+                code, out, err = _reconcile(
+                    td, f"Symbol,Proceeds,Currency\nQZQ,12000,{cur}\n",
+                    [_rs_sell()], "--country", c)
+            self.assertEqual(code, 2)
+            got[c] = err
+        self.assertIn("Bank of Canada", got["canada"])
+        self.assertIn("boxes 20/21", got["canada"])
+        for w in _CA_ONLY:
+            self.assertNotIn(w, got["usa"])
+        self.assertIn("1099-B", got["usa"])
+        self.assertIn("books are in USD", got["usa"])
+
+    @rule("US-DATE-01")
+    def test_usa_scopes_the_year_on_the_trade_date(self):
+        # Traded 2024-12-31, settled 2025-01-02: on the 2024 1099-B.
+        sale = _rs_sell(date="2024-12-31", settle="2025-01-02")
+        with tempfile.TemporaryDirectory() as td:
+            code, out, err = _reconcile(
+                td, "Symbol,Proceeds\nQZQ,12000\n", [sale],
+                "--country", "usa", "--year", "2024")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("MISSING_FROM_COMPUTED", out)
+
+    @rule("CA-DATE-01")
+    def test_canada_scopes_the_year_on_the_settle_date(self):
+        sale = _rs_sell(date="2024-12-31", settle="2025-01-02")
+        with tempfile.TemporaryDirectory() as td:
+            code, out, err = _reconcile(
+                td, "Symbol,Proceeds\nQZQ,12000\n", [sale],
+                "--country", "canada", "--year", "2025")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("MISSING_FROM_COMPUTED", out)
+
+
 if __name__ == "__main__":
     unittest.main()

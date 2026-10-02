@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Standalone `taxjson-reconcile-slips` requires `--country` (a missing
+  one silently meant Canada: CAD amounts and settlement-date year
+  scope), and `--date-basis` defaults to the country's (trade date for
+  the USA, so a Dec-31 sale is on its 1099-B year). In a US run the
+  notes and the currency refusal name the 1099-B, FIFO basis per
+  account and the project's own rates — never the T5008, its boxes,
+  the Bank of Canada or a blended ACB (re-audit A2-0423, A2-0744,
+  A2-0747, A2-0753, A2-1292, A2-1294, A2-1295, A2-1331, A2-1337,
+  A2-1348, A2-1349, A2-1350, A2-1351). `taxjson reconcile-slips` is
+  unchanged.
 - A `taxjson.toml` saved with a UTF-8 byte-order mark (Notepad) is read
   by `find-missing-history`, `gains --suggest-phantoms`, `convert-tt`
   and the wash radar the way `taxjson run` reads it; one that does not
