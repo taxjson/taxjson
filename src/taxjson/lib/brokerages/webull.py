@@ -790,9 +790,10 @@ class WebullBrokerage(BaseBrokerage):
                       f"Description {desc!r} with {prev_sym} — likely a "
                       f"ticker change Webull reported without a "
                       f"reorganization row. If so, add the dated change "
-                      f"`RENAME {prev_sym} {sym} <YYYY-MM-DD>` (the day "
-                      f"{sym} started trading) to ticker.map so both are "
-                      f"one position (`taxjson renames`).",
+                      f"`RENAME {prev_sym} {sym} {rows[0]['date']}` (the "
+                      f"first {sym} row here; use the broker's change date "
+                      f"if you know it) to ticker.map so both are one "
+                      f"position (`taxjson renames`).",
                       file=sys.stderr)
 
     @staticmethod

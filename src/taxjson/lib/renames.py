@@ -430,7 +430,8 @@ def _walk_states(rows: List[Dict[str, Any]]):
 
 
 def report(root: Path, cfg: Dict[str, Any],
-           account: Optional[str] = None) -> Dict[str, Any]:
+           account: Optional[str] = None, *,
+           undated: bool = True) -> Dict[str, Any]:
     """`taxjson renames`: every rename event with its date, source and
     the position / book cost it carried per account; every late trade
     in an old ticker with its resolution; the undated ticker.map renames
@@ -481,8 +482,8 @@ def report(root: Path, cfg: Dict[str, Any],
             "qty": float(r.get("quantity") or 0.0),
             "renamed_to": e["new"], "rename_date": e["date"],
             "resolution": choice or "unresolved"})
-    undated = []
-    if tmap is not None:
+    want_undated, undated = undated, []
+    if tmap is not None and want_undated:
         raw: List[Dict[str, Any]] = []
         for acct in sorted(accounts):
             if account and acct != account:
@@ -509,7 +510,7 @@ def report(root: Path, cfg: Dict[str, Any],
 
 def unresolved_late(root: Path, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The late trades no ticker.map line declares (`run --strict`)."""
-    return [x for x in report(root, cfg)["late"]
+    return [x for x in report(root, cfg, undated=False)["late"]
             if x["resolution"] == "unresolved"]
 
 

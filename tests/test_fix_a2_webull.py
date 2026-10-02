@@ -226,7 +226,8 @@ class TestTickerChange(unittest.TestCase):
             'USD,10-01-2025,BUY,QQOL,QQ HOLDINGS,SHS,500,10.00,,"(5,001.00)"\n'
             'USD,10-03-2025,BUY,QQNW,QQ HOLDINGS,SHS,10,10.00,,(101.00)\n'
             'USD,12-03-2025,SELL,QQNW,QQ HOLDINGS,SHS,-510,11.00,,"5,609.00"\n')
-        self.assertIn("GLOBAL QQOL.US QQNW.US", err)
+        # Renames are dated (A2-0197): the dated ticker.map line.
+        self.assertIn("RENAME QQOL.US QQNW.US 2025-03-07", err)
 
     def test_rename_across_yearly_exports_warns_once(self):
         files = {
@@ -235,8 +236,8 @@ class TestTickerChange(unittest.TestCase):
         }
         _, err25 = _parse_folder(files, "wb_2025.csv")
         _, err24 = _parse_folder(files, "wb_2024.csv")
-        self.assertIn("GLOBAL QQOL.US QQNW.US", err25)
-        self.assertNotIn("GLOBAL", err24)
+        self.assertIn("RENAME QQOL.US QQNW.US 2025-03-11", err25)
+        self.assertNotIn("RENAME", err24)
 
     def test_other_broker_account_is_not_a_rename(self):
         other = _PRE.replace("55500001", "55500009")  # pii-ok
@@ -245,7 +246,7 @@ class TestTickerChange(unittest.TestCase):
             "wb_b.csv": (other, 'USD,12-03-2025,SELL,QQNW,QQ HOLDINGS,SHS,-500,11.00,,"5,499.00"\n'),
         }
         _, err = _parse_folder(files, "wb_b.csv")
-        self.assertNotIn("GLOBAL", err)
+        self.assertNotIn("RENAME", err)
 
 
 _PUT_ASSIGN = (
