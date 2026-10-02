@@ -1003,10 +1003,13 @@ def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
     print(
         f"warning: {len(undrained)} unconsumed option-assignment "
         f"adjustment(s) at end of {engine} gains run — {detail}. An ASSIGN "
-        f"option leg staged this premium for a stock leg that never "
-        f"arrived (missing rows or symbol mismatch); that premium is NOT "
-        f"reflected in any gain. Check the underlying's buy/sell rows "
-        f"around the assignment date.",
+        f"option leg staged this premium, but no stock trade in its "
+        f"account could be paired with it: none on that symbol in the "
+        f"assignment's direction from 3 days before to "
+        f"{_MARKED_LEG_MAX_LAG_DAYS} days after the option row (missing "
+        f"rows, a symbol mismatch, or a leg dated outside that window); "
+        f"that premium is NOT reflected in any gain. Check the "
+        f"underlying's buy/sell rows around the assignment date.",
         file=sys.stderr,
     )
 
@@ -1018,65 +1021,163 @@ def _warn_undrained_adjustments(pending: Dict[str, float], engine: str) -> None:
 _MARKED_LEG_MAX_LAG_DAYS = 7
 
 
-def _marked_leg_gate_windows(transactions, key_of, underlying_of=None):
-    """Windows during which a staged option premium is RESERVED for a
-    marked assignment stock leg (action='ASSIGN' on a non-option
-    symbol), per (account, underlying).
+# An assignment's stock leg dated BEFORE its option row (a broker that
+# books the shares on the assignment notice and the option on the next
+# business day, or the reverse posting order) — up to a weekend apart.
+_ASSIGN_LEG_LEAD_DAYS = 3
 
-    Each taxable option ASSIGN is paired with the first unclaimed marked
-    stock leg on its own (account, underlying) that sorts at or after it
-    and whose trade date is within _MARKED_LEG_MAX_LAG_DAYS of the
-    option leg's. The window [option key, leg key] is the only span in
-    which a plain same-symbol trade must NOT consume the premium (an
-    unrelated BUYSELL sorted between the pair used to hijack it). An
-    option ASSIGN with no paired marked leg (IB/RBC plain convention)
-    opens no window, so its own plain BUYSELL stock leg pops the premium
-    even when an unrelated marked leg exists later (audit R1-33: a 2026
-    Webull leg used to pull a 2025 IB premium a year forward).
 
-    `key_of(tx)` returns the engine's (date, time) ordering key.
-    Returns {(account, symbol): [(lo_key, hi_key), ...]}."""
+def _assign_delivery_shares(opt_tx) -> Optional[float]:
+    """Units an option ASSIGN delivers: contracts x the declared contract
+    size (a mini x10, an adjusted deliverable — audit A2-0196), else 100
+    per equity option; one futures contract per futures option (its
+    declared multiplier is the futures' dollar size, not a unit count)."""
+    q = abs(float(opt_tx.quantity or 0.0))
+    if q < 1e-12:
+        return None
+    if _FUTURES_PREFIX_RE.match(opt_tx.symbol or ''):
+        return q
+    m = float(getattr(opt_tx, 'multiplier', 0.0) or 0.0)
+    return q * (m if m > 0 else OPTION_CONTRACT_SHARES)
+
+
+def _assign_direction(opt_tx) -> Optional[int]:
+    """+1 when the assignment makes the account BUY the underlying (short
+    put assigned / long call exercised), -1 when it SELLS."""
+    right = parse_option_right(opt_tx.symbol)
+    q = float(opt_tx.quantity or 0.0)
+    if right not in ('C', 'P') or abs(q) < 1e-12:
+        return None
+    return 1 if (right == 'P') == (q > 0) else -1
+
+
+def _signed_day_gap(a: str, b: str) -> Optional[int]:
+    """b - a in days, or None when either date is unparsable."""
+    try:
+        return (datetime.strptime(b, '%Y-%m-%d')
+                - datetime.strptime(a, '%Y-%m-%d')).days
+    except (TypeError, ValueError):
+        return None
+
+
+def _pair_assign_legs(stream, in_scope, underlying_of=None):
+    """Pair each option ASSIGN in `stream` with ITS OWN stock leg(s), by
+    identity rather than by position (audit A2-0050/0051/0052/0195/0203,
+    the R1-33 and S019-00 intents).
+
+    A candidate leg is a stock BUYSELL or marked ASSIGN row on the
+    option's own (account, underlying), in the assignment's share
+    direction, dated within _ASSIGN_LEG_LEAD_DAYS before to
+    _MARKED_LEG_MAX_LAG_DAYS after the option row. A leg that sorts
+    BEFORE its option row is accepted only on strong identity (a marked
+    ASSIGN leg, or the delivered quantity at the strike); a leg after it
+    needs one identity sign (marked, at the strike, or the delivered
+    quantity) — a bare unrelated trade is left to the ledger's proximity
+    rule. Pairs are chosen best-first: the strike as the leg's price,
+    then a marked leg, then the delivered quantity, then the nearest
+    date (after before before), so a plain-convention assignment keeps
+    its own BUYSELL leg and never claims another option's marked leg,
+    and two same-moment assignments are told apart by strike — never by
+    staging order. An assignment filled in several legs takes extra legs
+    at its strike (or marked) until its delivered quantity is covered.
+
+    Returns {option id: [leg id, ...]} (ids are unique after
+    _disambiguate_duplicate_ids)."""
+    pos = {}
     legs: Dict[Any, list] = {}
-    for t in transactions:
-        if t.action == 'ASSIGN' and not is_option_symbol(t.symbol):
-            legs.setdefault((t.account, t.symbol), []).append(
-                [key_of(t), t.date or '', False])
-    for v in legs.values():
-        v.sort(key=lambda r: r[0])
-    windows: Dict[Any, list] = {}
-    if not legs:
-        return windows
-    opts = sorted((t for t in transactions
-                   if t.action == 'ASSIGN' and is_option_symbol(t.symbol)),
-                  key=key_of)
+    opts = []
+    for i, t in enumerate(stream):
+        if not in_scope(t) or t.action not in ('BUYSELL', 'ASSIGN'):
+            continue
+        if is_option_symbol(t.symbol):
+            if t.action == 'ASSIGN':
+                opts.append(t)
+                pos[t.id] = i
+        elif abs(float(t.quantity or 0.0)) > 1e-12:
+            legs.setdefault((t.account, t.symbol), []).append(t)
+            pos[t.id] = i
+    if not opts or not legs:
+        return {}
+    cands = []
     for o in opts:
         und = (underlying_of(o) if underlying_of
                else parse_option_underlying(o.symbol))
-        cands = legs.get((o.account, und)) if und else None
-        if not cands:
+        lst = legs.get((o.account, und)) if und else None
+        if not lst:
             continue
-        ok = key_of(o)
-        try:
-            od = datetime.strptime(o.date, '%Y-%m-%d')
-        except (TypeError, ValueError):
+        d = _assign_direction(o)
+        size = _assign_delivery_shares(o)
+        strike = parse_option_strike(o.symbol)
+        for l in lst:
+            q = float(l.quantity)
+            if d is not None and (1 if q > 0 else -1) != d:
+                continue
+            gap = _signed_day_gap(o.date or '', l.date or '')
+            if gap is None or not (-_ASSIGN_LEG_LEAD_DAYS <= gap
+                                   <= _MARKED_LEG_MAX_LAG_DAYS):
+                continue
+            after = pos[l.id] > pos[o.id]
+            marked = l.action == 'ASSIGN'
+            at_strike = bool(strike and strike > 0 and abs(
+                float(l.price or 0.0) - strike) <= max(0.005, 1e-6 * strike))
+            sized = size is not None and abs(abs(q) - size) < 1e-6
+            if after:
+                if not (marked or at_strike or sized):
+                    continue
+            elif not (marked or (at_strike and sized)):
+                continue
+            score = (0 if at_strike else 1, 0 if marked else 1,
+                     0 if sized else 1, abs(gap), 0 if after else 1,
+                     abs(pos[l.id] - pos[o.id]))
+            cands.append((score, pos[o.id], o, l, abs(q), size,
+                          marked or at_strike))
+    cands.sort(key=lambda c: (c[0], c[1]))
+    pairs: Dict[str, list] = {}
+    covered: Dict[str, float] = {}
+    used = set()
+    for _sc, _p, o, l, q, _size, _strong in cands:
+        if o.id in pairs or l.id in used:
             continue
-        for leg in cands:
-            if leg[2] or leg[0] < ok:
-                continue
-            try:
-                gap = (datetime.strptime(leg[1], '%Y-%m-%d') - od).days
-            except (TypeError, ValueError):
-                continue
-            if gap > _MARKED_LEG_MAX_LAG_DAYS:
-                break
-            leg[2] = True
-            windows.setdefault((o.account, und), []).append((ok, leg[0]))
-            break
-    return windows
+        pairs[o.id] = [l.id]
+        covered[o.id] = q
+        used.add(l.id)
+    for _sc, _p, o, l, q, size, strong in cands:
+        if (not strong or l.id in used or o.id not in pairs
+                or size is None or covered[o.id] >= size - 1e-6):
+            continue
+        pairs[o.id].append(l.id)
+        covered[o.id] += q
+        used.add(l.id)
+    return pairs
 
 
-def _in_marked_leg_window(windows, acct, sym, key) -> bool:
-    return any(lo <= key <= hi for lo, hi in windows.get((acct, sym), ()))
+def _place_assign_options(stream, pairs):
+    """Move each paired option ASSIGN row to just before its first stock
+    leg when that leg sorts earlier (a leg dated a day or two before the
+    option row, A2-0051/0195): the premium is only known once the option
+    leg closes, so the option must be processed first. Only the option's
+    own row moves; every stock row keeps its place."""
+    if not pairs:
+        return stream
+    pos = {t.id: i for i, t in enumerate(stream)}
+    before: Dict[str, list] = {}
+    moved = set()
+    for oid, lids in pairs.items():
+        first = min(lids, key=lambda lid: pos.get(lid, 0))
+        if oid in pos and first in pos and pos[first] < pos[oid]:
+            before.setdefault(first, []).append(oid)
+            moved.add(oid)
+    if not moved:
+        return stream
+    by_id = {t.id: t for t in stream if t.id in moved}
+    out = []
+    for t in stream:
+        if t.id in moved:
+            continue
+        for oid in sorted(before.get(t.id, ()), key=lambda x: pos[x]):
+            out.append(by_id[oid])
+        out.append(t)
+    return out
 
 
 def _day_gap(a: str, b: str) -> Optional[int]:
@@ -1245,43 +1346,52 @@ def _place_wash_adjusts(stream):
 
 class _AssignPremiumLedger:
     """Staged option-assignment premiums, each paired with ITS OWN stock
-    leg(s) (audit R1-28/32/34/178, S070-18/20, S071-11).
+    leg(s) (audit R1-28/32/34/178, S070-18/20, S071-11, A2-0050/0052/
+    0196/0203).
 
     An option ASSIGN stages the amount its stock leg must absorb (the
     negative of the option's would-be gain: a BUY subtracts it from cost,
     a SELL adds it to proceeds) with the share direction the assignment
     implies (short put assigned / long call exercised -> the account
     BUYS; short call assigned / long put exercised -> it SELLS) and the
-    share count (contracts x 100; x 1 for a futures option).
+    share count it delivers (_assign_delivery_shares: the declared
+    contract size, else 100; one per futures option).
 
-    A stock trade takes only entries on its own (account, symbol) whose
-    option leg traded within _MARKED_LEG_MAX_LAG_DAYS, in its own
-    direction, per share: a spread's put premium goes to the put's
-    shares and the call premium to the call's; two legs of one
-    assignment split it; an exact-size leg later in the window keeps
-    its entry from a smaller unrelated trade sorted in between. The
-    last matching leg in the window takes any residual (mini / adjusted
-    deliverables). An entry no leg claims in its window is never folded
-    into an unrelated trade months later — it stays undrained and the
-    end-of-run warning names it."""
+    `pairs` ({option id: [leg id, ...]}, from _pair_assign_legs) names
+    each assignment's own stock leg(s). A paired leg takes its own
+    option's entry first; an entry whose paired leg is still to come is
+    RESERVED — no other trade may take it (an unrelated trade sorted in
+    between, a same-moment leg of another strike, or a plain-convention
+    leg next to another option's marked leg).
 
-    def __init__(self, stream, is_leg):
+    Unpaired entries keep the proximity rule: a stock trade takes only
+    entries on its own (account, symbol) whose option leg traded within
+    _MARKED_LEG_MAX_LAG_DAYS, in its own direction, per share: a
+    spread's put premium goes to the put's shares and the call premium
+    to the call's; two legs of one assignment split it; an exact-size
+    leg later in the window keeps its entry from a smaller unrelated
+    trade sorted in between. The last matching leg in the window takes
+    any residual (mini / adjusted deliverables). An entry no leg claims
+    in its window is never folded into an unrelated trade months later —
+    it stays undrained and the end-of-run warning names it."""
+
+    def __init__(self, stream, is_leg, pairs=None):
         self._pos: Dict[int, int] = {}
+        self._id_pos: Dict[str, int] = {}
         self._legs: Dict[Any, list] = {}
         for i, t in enumerate(stream):
             self._pos[id(t)] = i
+            if t.id is not None:
+                self._id_pos.setdefault(t.id, i)
             if is_leg(t):
                 self._legs.setdefault((t.account, t.symbol), []).append(
                     (i, t.date or '', float(t.quantity or 0.0)))
+        self._pairs = {o: list(ls) for o, ls in (pairs or {}).items()}
+        self._leg_owner = {l: o for o, ls in self._pairs.items()
+                           for l in ls}
         self._e: Dict[Any, list] = {}
 
-    @staticmethod
-    def _direction(opt_tx) -> Optional[int]:
-        right = parse_option_right(opt_tx.symbol)
-        q = float(opt_tx.quantity or 0.0)
-        if right not in ('C', 'P') or abs(q) < 1e-12:
-            return None
-        return 1 if (right == 'P') == (q > 0) else -1
+    _direction = staticmethod(_assign_direction)
 
     def stage(self, opt_tx, underlying: str, amount: float) -> None:
         key = (opt_tx.account, underlying)
@@ -1290,18 +1400,21 @@ class _AssignPremiumLedger:
             if e['src'] == opt_tx.id:
                 e['amt'] += amount
                 return
-        fut = bool(_FUTURES_PREFIX_RE.match(opt_tx.symbol or ''))
-        shares = abs(float(opt_tx.quantity or 0.0)) * (
-            1.0 if fut else OPTION_CONTRACT_SHARES)
+        shares = _assign_delivery_shares(opt_tx)
         lst.append({'src': opt_tx.id, 'amt': amount,
                     'dir': self._direction(opt_tx),
-                    'shares': shares if shares > 1e-9 else None,
-                    'date': opt_tx.date or ''})
+                    'shares': shares if shares and shares > 1e-9 else None,
+                    'date': opt_tx.date or '',
+                    'legs': self._pairs.get(opt_tx.id, [])})
 
     @staticmethod
     def _in_window(e, date: str) -> bool:
         g = _day_gap(e['date'], date)
         return g is None or g <= _MARKED_LEG_MAX_LAG_DAYS
+
+    def _reserved(self, e, idx) -> bool:
+        """Is this entry held for a paired leg that has not traded yet?"""
+        return any(self._id_pos.get(l, -1) > idx for l in e['legs'])
 
     def _later_legs(self, e, acct, sym, idx):
         out = []
@@ -1314,6 +1427,20 @@ class _AssignPremiumLedger:
                 out.append(abs(q))
         return out
 
+    def _take_entry(self, lst, e, need, later) -> Tuple[float, float]:
+        """Take up to `need` shares of entry `e`: (amount, shares)."""
+        if e['shares'] is None:
+            lst.remove(e)
+            return e['amt'], 0.0
+        take_sh = min(need, e['shares'])
+        if take_sh >= e['shares'] - 1e-9 or not later:
+            lst.remove(e)
+            return e['amt'], take_sh
+        part = e['amt'] * take_sh / e['shares']
+        e['amt'] -= part
+        e['shares'] -= take_sh
+        return part, take_sh
+
     def take(self, tx) -> float:
         key = (tx.account, tx.symbol)
         lst = self._e.get(key)
@@ -1324,7 +1451,19 @@ class _AssignPremiumLedger:
         need = abs(q)
         sign = 1 if q > 0 else -1
         date = tx.date or ''
-        cands = [e for e in lst if self._in_window(e, date)]
+        total = 0.0
+        # 1. This leg's own assignment (paired by identity).
+        owner = self._leg_owner.get(tx.id)
+        if owner is not None:
+            for e in [e for e in lst if e['src'] == owner]:
+                later = [l for l in e['legs']
+                         if self._id_pos.get(l, -1) > idx]
+                amt, took = self._take_entry(lst, e, need, later)
+                total += amt
+                need -= took
+        # 2. Unpaired (or no-longer-reserved) entries by proximity.
+        cands = [e for e in lst if self._in_window(e, date)
+                 and not self._reserved(e, idx)]
         same = [e for e in cands if e['dir'] in (None, sign)]
         # An opposite-direction entry is taken only when no leg of its
         # own direction is still coming in its window (a parser whose
@@ -1334,28 +1473,17 @@ class _AssignPremiumLedger:
         chosen = same or other
         chosen.sort(key=lambda e: 0 if (e['shares'] is not None and abs(
             e['shares'] - need) < 1e-6) else 1)
-        total = 0.0
         for e in chosen:
             if need <= 1e-9:
                 break
-            if e['shares'] is None:
-                total += e['amt']
-                lst.remove(e)
-                continue
             later = self._later_legs(e, tx.account, tx.symbol, idx)
-            if (abs(e['shares'] - need) > 1e-6
+            if (e['shares'] is not None
+                    and abs(e['shares'] - need) > 1e-6
                     and any(abs(l - e['shares']) < 1e-6 for l in later)):
                 continue    # reserved for its exact-size leg
-            take_sh = min(need, e['shares'])
-            if take_sh >= e['shares'] - 1e-9 or not later:
-                total += e['amt']
-                lst.remove(e)
-            else:
-                part = e['amt'] * take_sh / e['shares']
-                e['amt'] -= part
-                e['shares'] -= take_sh
-                total += part
-            need -= take_sh
+            amt, took = self._take_entry(lst, e, need, later)
+            total += amt
+            need -= took
         if not lst:
             self._e.pop(key, None)
         return total
@@ -1754,37 +1882,21 @@ class CanadaTaxRules(TaxRules):
                 sheltered_transactions = all_txs[_n1:_n2]
                 affiliated_transactions = all_txs[_n2:]
 
-        # Sort keys of explicitly-marked assignment STOCK legs
-        # (action='ASSIGN' on a non-option symbol — the parsers' two-row
-        # convention), per symbol, TAXABLE book only (re-audit: a
-        # sheltered/affiliated marked leg must not gate the taxable
-        # book's own consumption — only taxable rows can pop the staged
-        # premium). When an UPCOMING marked leg exists, only it may
-        # consume the premium; an unrelated same-symbol BUYSELL sorted
-        # between the option leg and the stock leg used to hijack it.
-        # Time-scoped on purpose: once a marked leg has passed, later
-        # plain-convention trades pop normally — a mixed-convention
-        # book (two brokers) would otherwise strand every later premium
-        # behind a long-gone marked leg.
-        # Keyed per (ACCOUNT, symbol): in a combined multi-account book
-        # (the blended pass) one account's marked leg must neither gate
-        # nor absorb another account's premium — assignment legs and
-        # their stock legs always share an account. Single-account
-        # books behave identically (the account component is constant).
-        # Scoped to each option ASSIGN's OWN paired marked leg (audit
-        # R1-33): see _marked_leg_gate_windows.
+        # Each option ASSIGN's own stock leg is paired by identity in
+        # the premium ledger (_pair_assign_legs: same account and
+        # underlying, delivered quantity, strike, date window), TAXABLE
+        # book only (re-audit: a sheltered/affiliated marked leg must
+        # neither gate nor absorb the taxable premium). Keyed per
+        # (ACCOUNT, symbol): in a combined multi-account book (the
+        # blended pass) one account's leg never absorbs another
+        # account's premium. A marked leg reserves only its own
+        # option's premium (audit R1-33, A2-0052); an unrelated trade
+        # sorted between the option and its leg cannot take it.
         # Option root -> the stock line its assignment delivers (the
         # root can differ from the ticker: RCI for RCI.B.TO, F:CL for
         # F:CLG6.US); see _make_assign_underlying_resolver.
         _assign_underlying = _make_assign_underlying_resolver(
             transactions, get_sort_date)
-        _marked_windows = _marked_leg_gate_windows(
-            transactions, lambda _t: (get_sort_date(_t), _t.time or ''),
-            underlying_of=_assign_underlying)
-
-        def _upcoming_marked_leg(acct, sym, d, tm):
-            return _in_marked_leg_window(_marked_windows, acct, sym,
-                                         (d, tm or ''))
 
         # (ACCOUNT, underlying) pairs that actually trade as STOCK in
         # the taxable book. An option ASSIGN whose underlying is absent
@@ -2102,6 +2214,17 @@ class CanadaTaxRules(TaxRules):
                 key=lambda x: event_sort_key(x, profile='ca_main',
                                              date_of=get_sort_date))
             current_tx_list = _place_wash_adjusts(current_tx_list)
+
+            # Each option ASSIGN paired with its own stock leg; a leg
+            # dated before its option row gets the option moved in front
+            # of it (A2-0051/0195).
+            def _taxable_scope(_t):
+                return (_t.id not in sheltered_ids
+                        and _t.id not in affiliated_ids)
+            _assign_pairs = _pair_assign_legs(
+                current_tx_list, _taxable_scope, _assign_underlying)
+            current_tx_list = _place_assign_options(current_tx_list,
+                                                    _assign_pairs)
             
             # Pools indexed by symbol
             global_pools = {}  # symbol -> {'qty', 'total_cost', 'last_acq_date', 'currency', 'tainted'}
@@ -2112,8 +2235,8 @@ class CanadaTaxRules(TaxRules):
                 current_tx_list,
                 lambda _t: (not is_option_symbol(_t.symbol)
                             and _t.action in ('BUYSELL', 'ASSIGN')
-                            and _t.id not in sheltered_ids
-                            and _t.id not in affiliated_ids))
+                            and _taxable_scope(_t)),
+                _assign_pairs)
             iteration_realized_gains = []
             iteration_losses = []
             iteration_trace = []
@@ -2203,15 +2326,10 @@ class CanadaTaxRules(TaxRules):
                     # ADJUST / SPLIT / OB row on the underlying used to
                     # pop — and drop — the staged premium).
                     internal_adj = 0.0
-                elif (tx.action == 'ASSIGN'
-                      or not _upcoming_marked_leg(
-                          tx.account, symbol, get_sort_date(tx), tx.time)):
-                    internal_adj = pending_adjustments.take(tx)
                 else:
-                    # A marked ASSIGN stock leg exists in the stream —
-                    # the premium belongs to it, not to this unrelated
-                    # trade on the same underlying.
-                    internal_adj = 0.0
+                    # The ledger keeps a premium whose own (paired) leg
+                    # is still to come away from this trade.
+                    internal_adj = pending_adjustments.take(tx)
                 
                 action = tx.action
                 qty = tx.quantity
@@ -4622,27 +4740,12 @@ class USATaxRules(TaxRules):
             return out
 
         # === MAIN PASS ===
-        # Underlyings whose assignment STOCK leg is explicitly marked
-        # (action='ASSIGN' on a non-option symbol). When one exists,
-        # only it may consume the staged option premium — see the
-        # Canada engine's twin set for the hijack rationale.
-        # Time-scoped marked-leg keys (trade-date basis, matching this
-        # engine's us_main sort), keyed per (ACCOUNT, symbol) — in a
-        # blended combined book one account's marked leg must neither
-        # gate nor absorb another account's premium; see the Canada
-        # twin for the full rationale. Single-book callers behave
-        # identically.
-        # Scoped to each option ASSIGN's OWN paired marked leg (audit
-        # R1-33): see _marked_leg_gate_windows.
+        # Each option ASSIGN's own stock leg is paired by identity in
+        # the premium ledger (_pair_assign_legs; see the Canada twin),
+        # keyed per (ACCOUNT, symbol) so in a blended combined book one
+        # account's leg never absorbs another account's premium.
         _assign_underlying = _make_assign_underlying_resolver(
             transactions, lambda _t: _t.date)
-        _marked_windows = _marked_leg_gate_windows(
-            transactions, lambda _t: (_t.date, _t.time or ''),
-            underlying_of=_assign_underlying)
-
-        def _upcoming_marked_leg(acct, sym, d, tm):
-            return _in_marked_leg_window(_marked_windows, acct, sym,
-                                         (d, tm or ''))
         # (ACCOUNT, underlying) pairs that trade as STOCK in the
         # taxable book — an ASSIGN whose underlying is absent for ITS
         # OWN account is cash-settled; see the Canada twin (OB
@@ -4656,20 +4759,23 @@ class USATaxRules(TaxRules):
             transactions,
             key=lambda x: event_sort_key(x, profile='us_main',
                                          date_of=get_sort_date))
+        # A leg dated before its option row gets the option moved in
+        # front of it (A2-0051/0195).
+        _assign_pairs = _pair_assign_legs(
+            taxable_sorted, lambda _t: True, _assign_underlying)
+        taxable_sorted = _place_assign_options(taxable_sorted,
+                                               _assign_pairs)
         pending_option_adjustments = _AssignPremiumLedger(
             taxable_sorted,
             lambda _t: (not is_option_symbol(_t.symbol)
-                        and _t.action in ('BUYSELL', 'ASSIGN')))
+                        and _t.action in ('BUYSELL', 'ASSIGN')),
+            _assign_pairs)
 
         def _take_option_adj(tx) -> float:
             if (is_option_symbol(tx.symbol)
                     or tx.action not in ('BUYSELL', 'ASSIGN')):
                 return 0.0
-            if (tx.action == 'ASSIGN'
-                    or not _upcoming_marked_leg(tx.account, tx.symbol,
-                                                tx.date, tx.time)):
-                return pending_option_adjustments.take(tx)
-            return 0.0
+            return pending_option_adjustments.take(tx)
 
         # Blended (combined multi-account) mode: FIFO basis pools are
         # per-(account, symbol) — the IRS keys basis per account — while
