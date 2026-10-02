@@ -599,7 +599,7 @@ class TestLowItems(unittest.TestCase):
     def test_assignment_rows_share_one_time(self):
         # The ASN option leg is listed ABOVE its stock leg; file order would
         # put the stock sale first and the engine would miss the s.49(3)
-        # premium fold (seen on real 2025 books: gains moved by ~1,950).
+        # premium fold (seen on real books: gains moved noticeably).
         txs, _, _ = parse(
             row("May 16, 2025", "Other", "9ZZCOI1", "", "1", "", "0", "USD",
                 "ASN - CALL COIX   05/16/25   197.50 COIX GLOBAL INC ASSIGNMENT "

@@ -322,6 +322,12 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 - **Which one do I file from?** **`<account>_wash.sum` is canonical** for the gains and the wash treatment: it includes the full cross-account wash treatment. `<account>.sum` is the pre-comparison baseline. Its TOTAL PROCEEDS / TOTAL COST lines are the engine's signed figures (short covers and written-option buy-backs count as negative proceeds), not Schedule 3 proceeds/ACB — take those from `taxjson form-export` (or the FOR THE RETURN block of `taxjson sum`).
 - **Why not collapse them:** the pre/post comparison is the design's value-add. Future change candidate: bake the "POST-WASH (FILE FROM THIS)" / "PRE-WASH (DIAGNOSTIC)" label into a header line at the top of each file so the role is unambiguous when a user opens one in isolation.
 
+
+### `taxjson audit` and the gains traces show a row's own id (owner decision open)
+- **Where:** `src/taxjson/bin/taxjson_audit.py` (the EVENT header `#<id>`), `src/taxjson/lib/trace_format.py` (`id=` on the trace line, first 16 characters).
+- **Current behavior:** the id is printed so it can be pasted into `--id` (the `--summary` column is meant for that). For most brokers it is a content hash, but a Kraken row's id is the exchange's own ledger txid (`LG1GGG-...-fee`), so audit and the traces show it in full while the Kraken parser's own messages mask it as `LG***` (audit A2-1379).
+- **Options:** (a) keep it — a txid is an exchange reference, not an account number, and the id is the `--id` handle; (b) mask a broker-issued id in the printed output and accept a masked prefix (`LG1***`) in `--id`; (c) show a short stable hash of the id instead and let `--id` match on it. Until the owner chooses, review audit/trace output before sharing it.
+
 ---
 
 ### T1135 cost amounts follow the books — custody transfer-ins carry only declared cost

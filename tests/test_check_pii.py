@@ -422,6 +422,110 @@ class TestLowRoundGaps(_Sandbox):
         self.assertIn("BINARY", r.stderr)
 
 
+class TestReaudit2Gaps(_Sandbox):
+    """A2-0044/0450/0458 (denylist encodings), A2-0449 (lower-case IB id),
+    A2-0760/1387 (labelled SIN / SSN forms), A2-1388 (account column in
+    --diff mode)."""
+
+    def _deny_bytes(self, data):
+        self.deny.write_bytes(data)
+
+    def test_bom_denylist_keeps_its_first_pattern(self):   # A2-0044/0450/0458
+        self._deny_bytes(b"\xef\xbb\xbf" + f"{_NAME}\n{_ACCT}\n".encode())
+        for text in (f"contact {_NAME}", f"acct {_ACCT}"):
+            r = self.scan("--text", stdin=text + "\n")
+            self.assertEqual(r.returncode, 1, text + r.stdout)
+            self.assertIn("private denylist match", r.stdout)
+        # a BOM before a comment line keeps it a comment (no bogus pattern)
+        self._deny_bytes(b"\xef\xbb\xbf# header\n" + f"{_NAME}\n".encode())
+        self.assertEqual(self.scan("--text", stdin="nothing private\n").returncode, 0)
+        self.assertEqual(self.scan("--text", stdin=f"x {_NAME}\n").returncode, 1)
+
+    def test_utf16_or_non_utf8_denylist_fails_closed(self):   # A2-0044/0450
+        for data in (("\ufeff" + f"{_NAME}\n").encode("utf-16-le"),
+                     f"{_NAME}\n".encode("utf-16-be"),
+                     "Z\u00e9br\u00e9" .encode("cp1252") + b"\n"):
+            self._deny_bytes(data)
+            r = self.scan("--text", stdin="nothing private here\n")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("denylist", r.stdout)
+            self.assertIn("UTF-8", r.stdout)
+            self.assertNotIn("check-pii: clean", r.stdout)
+        self.deny.unlink()
+        self.deny.mkdir()                               # a directory: refused too
+        r = self.scan("--text", stdin="nothing private here\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("not a regular file", r.stdout)
+
+    def test_lower_case_ib_id_in_content_and_names(self):   # A2-0449
+        low = _REAL_U.lower()
+        r = self.scan("--text", stdin=f'id="tblaccountinformation_{low}Heading"\n')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("IB account id", r.stdout)
+        self.assertEqual(self.scan("--text", stdin=f"fixture {_FIX_U.lower()}\n").returncode, 0)
+        self.assertEqual(self.scan("--text", stdin="fixture u9990" + "001\n").returncode, 0)
+        (self.repo / f"{low}.html").write_text("clean\n")
+        r = self.scan()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("file NAME carries an account-id shape", r.stdout)
+        self.assertNotIn(low, r.stdout)
+        (self.repo / f"{low}.html").unlink()
+        (self.repo / ("u9990" + "0001.html")).write_text("clean\n")
+        self.assertEqual(self.scan().returncode, 0)
+
+    def test_labelled_sin_any_separator(self):   # A2-0760 / A2-1387
+        sin = "046" + "454" + "286"                     # CRA's published sample
+        dotted = ".".join((sin[:3], sin[3:6], sin[6:]))
+        for text in (f"SIN {sin}", f"SIN: {dotted}", f"social insurance number: {sin}",
+                     f"NAS {sin}", f"sin,{sin}"):
+            r = self.scan("--text", stdin=text + "\n")
+            self.assertEqual(r.returncode, 1, text + r.stdout)
+            self.assertIn("social insurance number", r.stdout)
+            self.assertNotIn(sin, r.stdout)
+        # bad check digit, or no label: not a SIN
+        for text in ("SIN 123" + "456789", f"order {sin}", f"using {sin}x"):
+            self.assertEqual(self.scan("--text", stdin=text + "\n").returncode, 0, text)
+
+    def test_labelled_ssn(self):   # A2-1387
+        ssn = "078" + "05" + "1120"
+        forms = ("-".join((ssn[:3], ssn[3:5], ssn[5:])), " ".join((ssn[:3], ssn[3:5], ssn[5:])),
+                 ".".join((ssn[:3], ssn[3:5], ssn[5:])), ssn)
+        for label in ("SSN", "SSN:", "TIN", "Tax ID:", "ITIN"):
+            for f in forms:
+                r = self.scan("--text", stdin=f"{label} {f}\n")
+                self.assertEqual(r.returncode, 1, f"{label} {f}" + r.stdout)
+                self.assertIn("social security number", r.stdout)
+        # impossible SSNs (area 000/666/9xx, group 00, serial 0000) are not hits
+        for bad in ("000" + "-12-3456", "666" + "-12-3456", "912" + "-12-3456",
+                    "123" + "-00-4567", "123" + "-45-0000"):
+            self.assertEqual(self.scan("--text", stdin=f"SSN {bad}\n").returncode, 0, bad)
+        self.assertEqual(self.scan("--text", stdin="ref 123" + "-45-6789\n").returncode, 0)
+
+    def test_account_column_in_diff_mode(self):   # A2-1388
+        acct = "5551" + "2345"
+        diff = ("diff --git a/acct.csv b/acct.csv\nnew file mode 100644\n"
+                "--- /dev/null\n+++ b/acct.csv\n@@ -0,0 +1,2 @@\n"
+                f"+Date,Account #,Amount\n+2025-01-02,{acct},10\n")
+        r = self.scan("--diff", stdin=diff)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("under an Account column", r.stdout)
+        self.assertNotIn(acct, r.stdout)
+        # the header lives in the file, the hunk adds only a data row
+        (self.repo / "acct.csv").write_text(
+            "Date,Account #,Amount\n" + "2025-01-01,99901234,5\n" * 10
+            + f"2025-01-02,{acct},10\n")
+        diff = ("diff --git a/acct.csv b/acct.csv\n--- a/acct.csv\n+++ b/acct.csv\n"
+                "@@ -9,3 +9,4 @@\n 2025-01-01,99901234,5\n 2025-01-01,99901234,5\n"
+                f" 2025-01-01,99901234,5\n+2025-01-02,{acct},10\n")
+        r = self.scan("--diff", stdin=diff)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        # a context (unchanged) row is not re-reported, a synthetic id passes
+        diff = ("diff --git a/acct.csv b/acct.csv\n--- a/acct.csv\n+++ b/acct.csv\n"
+                f"@@ -1,2 +1,3 @@\n Date,Account #,Amount\n 2025-01-02,{acct},10\n"
+                "+2025-01-03,99901234,7\n")
+        self.assertEqual(self.scan("--diff", stdin=diff).returncode, 0, self.scan("--diff", stdin=diff).stdout)
+
+
 class TestReleaseAndCiGates(unittest.TestCase):
     """S025-06, S024-23, S023-00: static checks of the gate wiring."""
 

@@ -384,9 +384,14 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
         # file holds the same content (`<id>~<n>`, bin/taxjson_sort.
         # plan_dedup): its source row carries the plain id — pick the
         # file the book row came from.
-        _src = (base_index.get(gid) or {}).get("source")
+        _b = base_index.get(gid) or {}
+        _src = _b.get("source")
+        # The source key keeps two files shown alike apart (A2-0159).
+        _key = _b.get("source_key") or ""
         hits = [h for h in source_index.get(str(gid).split("~")[0]) or []
-                if not _src or h["row"].get("source") == _src]
+                if not _src or (h["row"].get("source") == _src
+                                and (h["row"].get("source_key") or "")
+                                == _key)]
     ev["sources"] = [{"file": h["label"], "row": h["row"]} for h in hits]
     if not hits:
         ev["warnings"].append(

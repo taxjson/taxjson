@@ -149,7 +149,9 @@ class TestRedactAuditFindings(unittest.TestCase):
 
     def test_bytes_it_promises_to_keep(self):
         out, rep = redact_text('"Account Information","Data","Country","Canada","x"\n')
-        self.assertEqual(out, '"Account Information","Data","Country","REDACTED","x"\n')
+        # Quoting kept; every value cell of an identity row is blanked
+        # (a multi-cell address kept its city, A2-1391).
+        self.assertEqual(out, '"Account Information","Data","Country","REDACTED","REDACTED"\n')
         out, rep = redact_text("Account #,Qty\r\n55512345,5\r\n")  # pii-ok (synthetic fixture)
         self.assertTrue(out.endswith("\r\n"))              # CRLF preserved
         from taxjson.bin.taxjson_redact import decode_export
