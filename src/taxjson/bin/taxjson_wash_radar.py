@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.cli_diag import guard_main
-from taxjson.lib.core import TaxTransaction
+from taxjson.lib.core import TaxTransaction, is_stock_dividend
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.corporate_timeline import (SplitTimeline, radar_priority,
                                             split_seen)
@@ -894,7 +894,15 @@ def main():
                 # value still moved above.
                 _move(key, tx, qty_raw)
                 continue
-            
+            if us_mode and is_stock_dividend(tx) and qty_raw > 0:
+                # US-STKDIV-01: a stock dividend is not a purchase for
+                # §1091 (the US engine never matches it), so it is not a
+                # "Recent buy" either — the position just grows (audit
+                # A2-0550). Canada keeps it: a $0 acquisition that counts
+                # for s.54 (CA-STKDIV-01).
+                _move(key, tx, qty_raw)
+                continue
+
             # Record EVERY opening (not just the last 30 days from today):
             # the trigger test is against the ±30-day window around the
             # LOSS SALE, anchored to the sale date, not to today. Holder
