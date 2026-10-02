@@ -1124,8 +1124,9 @@ class QuestradeBrokerage(BaseBrokerage):
 
             opt = self.parse_option_from_description(desc)
             _sym_col = (row.get('Symbol') or '').strip().upper()
-            if opt and _sym_col and re.sub(
-                    r'\.TO$', '', _sym_col) == opt['base'].upper():
+            from taxjson.lib.brokerages.rbc_direct import _names_underlying
+            if opt and _sym_col and _names_underlying(opt['base'],
+                                                      _sym_col):
                 # The Symbol column names the UNDERLYING's listed ticker:
                 # this is the stock leg of an assignment/exercise whose
                 # description quotes the contract ("ABC CORP ASSIGNMENT

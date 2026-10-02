@@ -830,6 +830,19 @@ def classify_rbc_row(r) -> str:
     return 'unknown'
 
 
+def _names_underlying(root: str, symbol: str) -> bool:
+    """Does the Symbol column name the stock the option ROOT is on?
+    Exactly, or by the class / adjustment spelling the engine accepts
+    (core._root_matches_stock: RCI for RCI.B, BRKB for BRK.B) — the
+    stock leg of an assignment on a class share was refused (re-audit
+    A2-1059)."""
+    from taxjson.lib.core import _root_matches_stock
+    root = (root or '').strip().upper()
+    stock = re.sub(r'\.(TO|US|V|CN|NE)$', '', (symbol or '').strip().upper())
+    return bool(root) and (root == stock
+                           or _root_matches_stock(root, stock))
+
+
 # ------------------------------------------------------- account context
 #
 # `taxjson run` hands every RBC export of one account to ONE
@@ -1522,8 +1535,8 @@ class RbcBrokerage(BaseBrokerage):
             opt = self.parse_option_from_description(text or '')
             if opt:
                 sym = (r.symbol or '').strip().upper()
-                if sym and sym == opt['base'].upper() \
-                        and not rbc_is_option_code(sym):
+                if sym and not rbc_is_option_code(sym) \
+                        and _names_underlying(opt['base'], sym):
                     return None
                 return self.format_occ_symbol(opt['right'], opt['base'],
                                               opt['expiry'], opt['strike'])

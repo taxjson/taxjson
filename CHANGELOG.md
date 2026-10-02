@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Questrade / RBC: the stock leg of an option assignment on a class
+  share (RCI.B under the Montreal root RCI, BRK.B under BRKB) is booked
+  as the stock; it was refused as a contract on another underlying or
+  a 100x gross mismatch (re-audit A2-1059).
 - Questrade: deposit, contribution and withdrawal rows are recognised
   cash non-events (they were 'unclassified ... needs a new branch'),
   INT rows are booked as interest with their sign (credit interest was

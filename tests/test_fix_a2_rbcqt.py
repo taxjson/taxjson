@@ -931,5 +931,31 @@ class TestQuestradeCashRows(unittest.TestCase):
         self.assertIn("warning: UNBOOKED:", err)
 
 
+
+class TestClassShareAssignmentStockLeg(unittest.TestCase):
+    """A2-1059: the stock leg of an assignment on a class share (RCI.B
+    under root RCI, BRK.B under BRKB) is the stock, not 100x contracts."""
+
+    def test_questrade(self):
+        for sym, desc, cur, want in (
+                ("RCI.B.TO", "ROGERS COMMUNICATIONS INC CL B ASSIGNMENT OF "
+                 "OPTION CALL RCI 05/16/25 50", "CAD", "RCI.B.TO"),
+                ("BRK.B", "BERKSHIRE HATHAWAY INC CL B ASSIGNMENT OF OPTION "
+                 "CALL BRKB 05/16/25 50", "USD", "BRK.B.US")):
+            txs, err, _ = qt_parse(q(action="Sell", sym=sym, desc=desc,
+                                     qty="-100", price="50", gross="5000",
+                                     comm="0", net="5000", cur=cur))
+            self.assertEqual([(t["symbol"], t["quantity"]) for t in txs],
+                             [(want, -100.0)], err)
+
+    def test_rbc(self):
+        txs, err, _ = parse_one(row(
+            "May 16, 2025", "Sell", "RCI.B", "ROGERS COMM CL B", "-100", "50",
+            "4990.05", "CAD", "ROGERS COMM CL B ASSIGNMENT OF OPTION CALL "
+            "RCI 05/16/25 50"))
+        self.assertEqual([(t["symbol"], t["quantity"]) for t in txs],
+                         [("RCI.B.TO", -100.0)], err)
+
+
 if __name__ == "__main__":
     unittest.main()
