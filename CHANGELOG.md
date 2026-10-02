@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- FX rates: a transient failure is no longer cached as a permanent
+  answer (re-audit A2-0136, A2-0393). A failed Yahoo download counts as
+  "no data" only when Yahoo, asked again right then, answers for the
+  dates after the range (later dates already in the cache are no proof);
+  a second empty Bank of Canada answer is no longer read as a stopped
+  series (a series counts as stopped only after 45 silent days with
+  nothing cached after the range), and when the Bank answers again the
+  hole an earlier empty answer left is asked for again; a noon or Yahoo
+  answer cut off before the range end records only the dates it reached
+  and says so.
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
