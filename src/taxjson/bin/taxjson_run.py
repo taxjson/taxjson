@@ -661,11 +661,19 @@ def _normalize_settings(cfg: Dict[str, Any]) -> None:
     # The zone crypto UTC stamps are dated in (the parsers and
     # crypto-sends read TAXJSON_LOCAL_TZ): the project's setting wins
     # over the environment, so every command and stage of this project
-    # dates a crypto row the same way (partition INPUTS-09).
-    _tz = settings.get("local_timezone")
-    if _tz:
-        import os as _os
-        _os.environ["TAXJSON_LOCAL_TZ"] = _tz
+    # dates a crypto row the same way (partition INPUTS-09). With no
+    # setting the project uses the default zone, never the environment
+    # (CA-DATE-12 / US-DATE-11: the variable applies OUTSIDE a project,
+    # and tax-logic names the zone in force — re-audit A2-0165).
+    import os as _os
+    from taxjson.lib.brokerages._crypto_common import DEFAULT_LOCAL_TZ
+    _tz = settings.get("local_timezone") or DEFAULT_LOCAL_TZ
+    _env_tz = (_os.environ.get("TAXJSON_LOCAL_TZ") or "").strip()
+    if _env_tz and _env_tz != _tz and not settings.get("local_timezone"):
+        print(f"note: TAXJSON_LOCAL_TZ={_env_tz} is ignored inside a "
+              f"project: crypto rows are dated in {_tz}; set [settings] "
+              f"local_timezone to change it.", file=sys.stderr)
+    _os.environ["TAXJSON_LOCAL_TZ"] = _tz
     srcs = settings.get("source_currencies")
     if isinstance(srcs, list) and all(isinstance(c, str) for c in srcs):
         settings["source_currencies"] = [c.strip().upper() for c in srcs]

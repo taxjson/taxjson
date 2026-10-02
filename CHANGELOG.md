@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- tax-logic states the date rules the parsers already apply: an expiry
+  posted at most 7 days late is moved back to the contract's expiry
+  date, a same-contract trade on the expiry day settles no later than
+  the expiry, Webull's printed date is the settle date with the trade
+  date walked back one cycle, and same-moment rows of one account from
+  two input files follow the files' name order (CA-DATE-15..18, US-
+  DATE-14..17; re-audit A2-0483, A2-1478, A2-0823).
+- Inside a project with no [settings] local_timezone, crypto rows are
+  dated in the default zone tax-logic names: the TAXJSON_LOCAL_TZ
+  environment variable applies only outside a project, as documented,
+  and a project run says so when it is set (re-audit A2-0165).
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard

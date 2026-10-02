@@ -323,6 +323,22 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-DATE-08", "an option expiry is dated its expiry day.",
                  cont=True),
+            Rule("CA-DATE-15",
+                 "An expiry the broker posts later (Questrade and RBC post "
+                 "it the next business day) is moved back to the "
+                 "contract's expiry date when posted at most 7 days after "
+                 "it; one posted later keeps its posting date.",
+                 cont=True),
+            Rule("CA-DATE-16",
+                 "A trade in the same contract on its expiry day settles "
+                 "no later than the expiry, even when the broker prints a "
+                 "later settle date.", cont=True),
+            Rule("CA-DATE-17",
+                 "Webull prints the SETTLE date: it is the row's settle "
+                 "date and the trade date is walked back one settlement "
+                 "cycle over business days (a sale printed Jan 2 traded "
+                 "Dec 31); an option expiry row's date is the expiry "
+                 "itself.", cont=True),
             (Rule("CA-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "
@@ -370,6 +386,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "moment: an opening balance first, then a split (effective "
                  "at the open), an assignment's option leg before its "
                  "stock leg, then the trades; cost adjustments last."),
+            Rule("CA-DATE-18",
+                 "Rows of ONE account at one moment that come from "
+                 "different input files follow the files' name order "
+                 "(a.tt before b.tt); give such rows distinct times or "
+                 "put them in one file.", cont=True),
             Rule("CA-DATE-11",
                  "Interest and other income belong to the year they are "
                  "PAID."),
@@ -1065,6 +1086,23 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-DATE-08", "an option expiry is dated its expiry day.",
                  cont=True),
+            Rule("US-DATE-14",
+                 "An expiry the broker posts later (Questrade and RBC post "
+                 "it the next business day) is moved back to the "
+                 "contract's expiry date when posted at most 7 days after "
+                 "it; one posted later keeps its posting date.",
+                 cont=True),
+            Rule("US-DATE-15",
+                 "A trade in the same contract on its expiry day settles "
+                 "no later than the expiry, even when the broker prints a "
+                 "later settle date.", cont=True),
+            Rule("US-DATE-16",
+                 "Webull prints the SETTLE date: it is the row's settle "
+                 "date and the trade date is walked back one settlement "
+                 "cycle over business days (a sale printed Jan 2 traded "
+                 "Dec 31, so under trade dates it is the earlier year's); "
+                 "an option expiry row's date is the expiry itself.",
+                 cont=True),
             (Rule("US-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "
@@ -1108,6 +1146,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "balance first, an assignment's option leg before its "
                  "stock leg, a split before the trades; basis adjustments "
                  "last."),
+            Rule("US-DATE-17",
+                 "Rows of ONE account at one moment that come from "
+                 "different input files follow the files' name order "
+                 "(a.tt before b.tt), which decides which lot FIFO "
+                 "takes; give such rows distinct times or put them in "
+                 "one file.", cont=True),
             Rule("US-DATE-03",
                  "Interest and other income belong to the year they are "
                  "paid."),
