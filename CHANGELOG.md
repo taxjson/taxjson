@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **US: wash-sale replacement lots keep the right shares, units and
+  holding periods.** A replacement bought before a split got the
+  disallowed loss on the pre-split share count (half the matched
+  shares), creating a fake loss and an inflated gain at its sale
+  (A2-0054); a later purchase matched by two losses became one merged
+  block with an averaged bump and the earliest tacked date, so a
+  short-term block was reported long-term (A2-0060: now one block per
+  matched loss); a short-side replacement bigger than the loss spread
+  the proceeds reduction over every share of the new short, moving loss
+  into a later year (A2-0206: now share for share, as on the long side).
 - **US: shares closed by one sale never wash each other.** A sale that
   closed an old lot together with shares bought in the last 30 days
   washed the old lot's loss into the very shares it was selling, split
