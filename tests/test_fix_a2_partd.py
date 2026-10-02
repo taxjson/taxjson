@@ -408,5 +408,27 @@ class TestRbcRightsWording(unittest.TestCase):
         self.assertIn("§305(a)", us)
 
 
+class TestCryptoSendsRunNote(unittest.TestCase):
+    """A2-1378 (run note): a US run never offers `gift` or calls it a
+    disposition (US-SEND-02)."""
+
+    @rule("US-SEND-02")
+    def test_us_run_note_offers_self_or_payment(self):
+        from test_fix_sends import _cad_usd_rates_file, _cli, _project
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _project(td, country="usa")
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2026\ncountry = "usa"\n'
+                'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
+                '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
+            _cad_usd_rates_file(root / "work" / "to_base.csv")
+            (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
+            r = _cli(root, home, "run", "--no-input")
+        err = r.stderr + r.stdout
+        self.assertEqual(r.returncode, 0, err[-2000:])
+        self.assertIn("not yet classified as self / payment", err)
+        self.assertNotIn("gift or payment is a disposition", err)
+
+
 if __name__ == "__main__":
     unittest.main()
