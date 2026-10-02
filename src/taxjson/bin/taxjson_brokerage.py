@@ -387,7 +387,12 @@ Examples:
     _prepare = getattr(extractor_class, 'prepare_files', None)
     if _prepare is not None:
         try:
-            shared_context = _prepare(input_paths)
+            # The tax year, for a parser whose account-level coverage
+            # check needs it (IB statement periods, audit A2-0262).
+            shared_context = (
+                _prepare(input_paths, tax_year=args.tax_year)
+                if 'tax_year' in inspect.signature(_prepare).parameters
+                else _prepare(input_paths))
         except csv.Error as e:
             print(f"taxjson-brokerage: error: the CSV module refused an "
                   f"input file ({e}) — see the per-file error below by "
@@ -478,28 +483,14 @@ Examples:
                       f"--country canada (ITA s.90(1): a dividend).",
                       file=sys.stderr)
 
-    # A Corporate Actions `Ca` cancellation whose original sits in
-    # ANOTHER of the account's statements (IB: booked in the 2025
-    # statement, cancelled and rebooked in the 2026 one) undoes it there
-    # (audit S059-04); the rest are warned about once.
-    for _i, (_p, _ex, _txs) in enumerate(parsed_files):
-        for _ca in getattr(_ex, 'unmatched_ca', None) or ():
-            _done = False
-            for _j in range(len(parsed_files) - 1, -1, -1):
-                _other = parsed_files[_j][1]
-                if _j != _i and getattr(_other, 'ca_undo', None) \
-                        and _other.ca_undo(_ca):
-                    print(f"note: {shown_name(_p)}: IB cancelled (Ca) "
-                          f"{_ca['desc']!r} ({_ca['qty']:g} on "
-                          f"{_ca['date']}); its original in "
-                          f"{shown_name(parsed_files[_j][0])} is undone.",
-                          file=sys.stderr)
-                    _done = True
-                    break
-            if not _done and getattr(_ex, 'account_context', None) \
-                    is not None:
-                print(ib_extractor.unmatched_ca_warning(_ca),
-                      file=sys.stderr)
+    # Cross-statement pass (IB): a `Ca` cancellation, commission refund
+    # or cash in lieu whose row sits in ANOTHER of the account's
+    # statements is applied there, and an overlapping statement that
+    # holds the unadjusted original gets the same adjustment, so dedup
+    # keeps one row (audit S059-04, A2-0023 / A2-0024 / A2-0088).
+    _reconcile = getattr(extractor_class, 'reconcile_files', None)
+    if _reconcile is not None and shared_context is not None:
+        _reconcile(parsed_files)
 
     # An option trade on its expiry day is clamped to the expiry by each
     # parser — but only against the expiry rows of ITS file. The expiry
