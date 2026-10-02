@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Checklist inputs-frozen: an RBC export is judged per RBC account (the
+  Account column), so another account's later export in the same folder
+  no longer certifies an export taken before the year ended (re-audit
+  A2-1147; the IB statement-period half was fixed by A2-0262).
 - `run --strict` / checklist run-clean: a crypto send recorded as a gift
   or payment that could not be priced (not booked), a send booked twice
   (a hand-written .tt line next to crypto_sends.tt), an undecided send

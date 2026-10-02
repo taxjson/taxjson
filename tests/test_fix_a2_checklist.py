@@ -337,3 +337,60 @@ class TestCryptoSendsGates(unittest.TestCase):
         r = self.cli("run", "--no-input")
         self.assertEqual(r.returncode, 0)
         self.assertIn("counted twice", (self.root / "work" / "crypto_crypto_sends.diag").read_text())
+
+
+# --------------------------------------------------------------- inputs-frozen
+def _frozen_project(root, margin_to, crypto_to):
+    (root / 'taxjson.toml').write_text(
+        '[settings]\nyear = 2025\ncountry = "canada"\nbase_currency = "CAD"\n'
+        '[accounts.margin]\ntype = "taxable"\n[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
+    for a in ('margin', 'crypto'):
+        (root / 'inputs' / a).mkdir(parents=True)
+    (root / 'inputs' / 'crypto' / 'cb_x.csv').write_text('x\n')
+    (root / 'work').mkdir()
+    for a, to in (('margin', margin_to), ('crypto', crypto_to)):
+        rows = [{'action': 'BUYSELL', 'date': to, 'date_settle': to, 'symbol': 'X.TO',
+                 'quantity': 1, 'account': a}]
+        (root / 'work' / f'{a}_base.json').write_text(json.dumps({'transactions': rows}))
+
+
+_RBC_HDR = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+            '"Price","Settlement Date","Account","Value","Currency","Description"\n')
+
+
+def _rbc(as_of, acct, d):
+    c = [d, 'Buy', 'QZF', 'QZ FUND UNITS', '100', '10', d, acct, '-1000', 'CAD', 'QZ FUND UNITS']
+    return f'"Activity Export as of {as_of}"\n\n' + _RBC_HDR + ','.join('"%s"' % x for x in c) + '\n'
+
+
+class TestInputsFrozenPerStatement(unittest.TestCase):
+    T = date(2026, 3, 1)
+
+    def test_rbc_per_account(self):
+        """A2-1147 (a): another RBC account's later export in the same
+        folder does not certify this account's early one."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _frozen_project(root, '2025-12-02', '2026-02-02')
+            (root / 'inputs' / 'margin' / 'rbc_a.csv').write_text(
+                _rbc('Dec 15, 2025', '55500001', 'December 1, 2025'))  # pii-ok
+            (root / 'inputs' / 'margin' / 'rbc_b.csv').write_text(
+                _rbc('Feb 2, 2026', '55500002', 'December 2, 2025'))  # pii-ok
+            r = cl.d_inputs_frozen(ctx(root, today=self.T))
+        self.assertEqual(r.status, "attention", r.detail)
+        self.assertIn("of account 55***", r.detail)
+        self.assertIn("2025-12-15", r.detail)
+
+    def test_ib_statement_period(self):
+        """A2-0125, A2-1147 (b): an IB statement ending Dec 15 is not
+        certified by another source's later rows (fixed by A2-0262)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _frozen_project(root, '2025-12-10', '2026-02-02')
+            (root / 'inputs' / 'margin' / 'ib.csv').write_text(
+                'Statement,Header,Field Name,Field Value\n'
+                'Statement,Data,Title,Activity Statement\n'
+                'Statement,Data,Period,"January 1, 2025 - December 15, 2025"\n')
+            r = cl.d_inputs_frozen(ctx(root, today=self.T))
+        self.assertEqual(r.status, "attention", r.detail)
+        self.assertIn("IB statements", r.detail)

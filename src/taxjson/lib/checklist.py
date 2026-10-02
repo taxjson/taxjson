@@ -411,6 +411,36 @@ def _accounts_of(ctx: Ctx, kind: str) -> List[str]:
     return out
 
 
+def _rbc_as_of_by_account(paths: List[Path]) -> List[Tuple[str, str]]:
+    """[(' of account 12***' or '', latest as-of ISO)] for the RBC
+    exports among `paths`: the latest "Activity Export as of" date per
+    RBC account (rows' Account column; a file without one counts for
+    every account of the folder)."""
+    from taxjson.lib.brokerages.rbc_direct import (
+        _mask_account, _norm_account, rbc_export_as_of, read_rbc_rows)
+    per: Dict[str, str] = {}
+    shared: List[str] = []                 # as-of of files with no Account
+    for p in paths:
+        asof = rbc_export_as_of(p)
+        if not asof:
+            continue
+        try:
+            exp = read_rbc_rows(p)
+            accts = {_norm_account(r.account) for r in exp.rows
+                     if r.account.strip()}
+        except Exception:                               # noqa: BLE001
+            accts = set()
+        if not accts:
+            shared.append(asof)
+        for a in accts:
+            per[a] = max(per.get(a, ""), asof)
+    if not per:
+        return [("", max(shared))] if shared else []
+    many = len(per) > 1
+    return [((f" of account {_mask_account(a)}" if many else ""),
+             max([v] + shared)) for a, v in sorted(per.items())]
+
+
 # ---------------------------------------------------------------- detectors
 def d_inputs_frozen(ctx: Ctx) -> Result:
     missing = [n for n in ctx.accounts
@@ -441,14 +471,16 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
     # ..."), and an account whose latest export predates the cutoff
     # cannot hold the rest of the year — another broker's later rows
     # used to certify it.
-    from taxjson.lib.brokerages.rbc_direct import rbc_export_as_of
     early = []
     for n in _accounts_of(ctx, "taxable"):
-        _asof = [a for a in (rbc_export_as_of(p) for p in
-                             _data_files(ctx.root / "inputs" / n)
-                             if p.suffix.lower() == ".csv") if a]
-        if _asof and max(_asof) < cutoff.isoformat():
-            early.append(f"{n} (RBC export as of {max(_asof)})")
+        # Per RBC ACCOUNT (the Account column), as the parser judges it:
+        # one label may hold two RBC accounts' exports, and B's later
+        # export certified A's early one (A2-1147).
+        for who, asof in _rbc_as_of_by_account(
+                [p for p in _data_files(ctx.root / "inputs" / n)
+                 if p.suffix.lower() == ".csv"]):
+            if asof < cutoff.isoformat():
+                early.append(f"{n} (RBC export{who} as of {asof})")
     # IB statements carry their Period: an account whose statements stop
     # before Dec 31 of the year — or hold none of it — cannot hold the
     # rest of it (audit A2-0262, the RBC twin above).
