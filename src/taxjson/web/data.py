@@ -744,7 +744,9 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # blended books so cost, gain and the denial match the filing
     # (R1-258). Crypto blends with crypto (two or more exchanges), as
     # the pipeline does. The US keeps per-account FIFO basis.
-    basis_label = "per-account, pre-blend"
+    # The US basis is FIFO per account; "pre-blend" is the Canadian
+    # s.47 pool's word (re-audit A2-1376).
+    basis_label = "FIFO per account" if is_usa else "per-account, pre-blend"
     if (is_usa and detect_wash and acct_cfg is not None
             and acct_cfg.type == "taxable"):
         # US: basis stays FIFO per account, but §1091 reaches every

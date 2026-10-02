@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- In a US project the web holdings pages, the what-if basis note and
+  `reports/<account>_holdings.toml` describe the basis as FIFO per
+  account before the wash-sale pass; they used to cite the s.47 blend,
+  the filing ACB and superficial-loss adjustments (re-audit A2-0755,
+  A2-1248, A2-1250, A2-1289, A2-1290, A2-1291, A2-1300, A2-1327,
+  A2-1328, A2-1336, A2-1339, A2-1353, A2-1374, A2-1375, A2-1376).
 - Standalone `taxjson-brokerage` without `--country` books Kraken /
   Coinbase USD stablecoins as property (the neutral answer, as a
   foreign return of capital already defaults to a cost reduction) and

@@ -369,5 +369,110 @@ class TestBrokerageStablecoinDefault(unittest.TestCase):
         self.assertIn("--foreign-roc", flat)
 
 
+# ------------------------------- holdings basis notes: web + export (05/06)
+
+try:
+    from fastapi.testclient import TestClient  # noqa: F401
+    _HAVE_WEB = True
+except Exception:          # pragma: no cover - extra not installed
+    _HAVE_WEB = False
+
+
+def _web_project(tmp, country):
+    root = Path(tmp)
+    (root / "work").mkdir()
+    (root / "reports").mkdir()
+    sfx, cur = ((".US", "USD") if country == "usa" else (".TO", "CAD"))
+    (root / "taxjson.toml").write_text(
+        f'[settings]\nyear = 2026\ncountry = "{country}"\n'
+        f'base_currency = "{cur}"\n[accounts.margin]\ntype = "taxable"\n')
+    (root / "work" / "margin_base.json").write_text(json.dumps(
+        {"transactions": [{"action": "BUYSELL", "date": "2026-06-01",
+                           "date_settle": "2026-06-01",
+                           "symbol": f"QZQ{sfx}", "quantity": 10,
+                           "price": 10.0, "net_amount": 100.0,
+                           "currency": cur, "account": "margin"}]}))
+    (root / "reports" / "margin_holdings.toml").write_text(
+        f'[[holding]]\nsymbol = "QZQ{sfx}"\nquantity = 10.0\n'
+        f'total_cost = 100.0\ncost_per_share = 10.0\ncurrency = "{cur}"\n')
+    return root, f"QZQ{sfx}"
+
+
+_CA_BASIS = ("s.47", "ACB", "superficial", "pre-blend", "Canadian")
+
+
+@unittest.skipUnless(_HAVE_WEB, "web extra not installed")
+class TestWebHoldingsBasisNote(unittest.TestCase):
+    """A2-0755, A2-1250, A2-1327, A2-1339, A2-1374, A2-1375, A2-1376,
+    A2-1300, A2-1353 (web half)."""
+
+    def _pages(self, country):
+        from taxjson.web.app import create_app
+        from taxjson.web.context import ProjectContext
+        with tempfile.TemporaryDirectory() as tmp:
+            root, sym = _web_project(tmp, country)
+            c = TestClient(create_app(ProjectContext.load(root)),
+                           base_url="http://127.0.0.1")
+            with redirect_stderr(io.StringIO()):
+                pages = [c.get("/holdings"),
+                         c.get(f"/holdings/margin/{sym}"),
+                         c.post("/whatif", data={
+                             "account": "margin", "symbol": sym,
+                             "qty": "5", "price": "8"})]
+        for r in pages:
+            self.assertEqual(r.status_code, 200, r.text[:500])
+        return [r.text for r in pages]
+
+    @rule("CA-ACB-01")
+    @rule("US-BASIS-01")
+    def test_dual_country_basis_notes(self):
+        ca = self._pages("canada")
+        us = self._pages("usa")
+        self.assertIn("s.47 blended", ca[0])
+        self.assertIn("s.47 blended", ca[1])
+        self.assertIn("Canadian project", ca[2])
+        for page in us:
+            for w in _CA_BASIS:
+                self.assertNotIn(w, page, w)
+        self.assertIn("FIFO", us[0])
+        self.assertIn("FIFO", us[1])
+        self.assertIn("FIFO per account", us[2])
+
+
+class TestHoldingsTomlBasisNote(unittest.TestCase):
+    """A2-1248, A2-1289, A2-1290, A2-1291, A2-1328, A2-1336, A2-1300 /
+    A2-1353 (export half)."""
+
+    def _toml(self, *flags):
+        gains = {"transactions": [], "inventory": [
+            {"account": "margin", "currency": "USD", "symbol": "QZQ.US",
+             "qty": 10, "total_cost": 100.0,
+             "position_start_date": "2026-06-01"}]}
+        with tempfile.TemporaryDirectory() as td:
+            g = Path(td) / "g.json"
+            g.write_text(json.dumps(gains))
+            r = _module("taxjson.bin.taxjson_export", "--holdings-toml",
+                        "--base-gains", str(g), *flags, str(g))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        line = [ln for ln in r.stdout.splitlines()
+                if ln.startswith("base_cost_basis")]
+        self.assertEqual(len(line), 1, r.stdout)
+        return line[0]
+
+    @rule("CA-ACB-01")
+    @rule("US-BASIS-01")
+    def test_dual_country_wording(self):
+        ca = self._toml("--country", "canada")
+        us = self._toml("--country", "usa")
+        neutral = self._toml()
+        self.assertIn("s.47 blend", ca)
+        self.assertIn("superficial-loss", ca)
+        for text in (us, neutral):
+            for w in ("s.47", "superficial", "ACB"):
+                self.assertNotIn(w, text, w)
+        self.assertIn("wash-sale (§1091)", us)
+        self.assertIn("FIFO", us)
+
+
 if __name__ == "__main__":
     unittest.main()

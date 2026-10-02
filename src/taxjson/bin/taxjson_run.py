@@ -3039,6 +3039,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
             # actually held, futures included.
             export_cmd = _cmd("taxjson-export") + [
                 "--holdings-toml", "--account-name", name, "--futures",
+                "--country", country,
             ]
             if ticker_map:
                 export_cmd += ["--map", str(ticker_map)]
