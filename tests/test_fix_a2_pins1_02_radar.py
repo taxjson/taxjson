@@ -635,6 +635,41 @@ class TestRadarGainsCoverageOnTradeBasis(unittest.TestCase):
                               date_settle="2026-01-05")
         self.assertIsNone(eng.rows_for(tx2))
 
+@rule("CA-STKDIV-01")
+@rule_absent("CA-STKDIV-01", country="usa")
+@rule("US-STKDIV-01")
+@rule_absent("US-STKDIV-01", country="canada")
+class TestRadarStockDividendByCountry(unittest.TestCase):
+    """A2-0550 (bug): a stock dividend is not a purchase for §1091
+    (US-STKDIV-01), so the US radar (and sell-check / buy-check / harvest,
+    which read it) must not call it a 'Recent buy' that makes a partial
+    loss sale a wash sale. Canada keeps it: a $0 acquisition that counts
+    for s.54 (CA-STKDIV-01)."""
+
+    BOOK = [_row("2026-01-05", "XYZ.US", 100, 50),
+            _row("2026-09-21", "XYZ.US", 5, 0.0, net=0.0,
+                 type="stock_dividend")]
+
+    def test_held_position_with_a_recent_stock_dividend(self):
+        r = {c: _rows(c, self.BOOK, as_of="2026-09-25")["XYZ.US"]
+             for c in ("canada", "usa")}
+        self.assertEqual(r["canada"]["category"], "EXITABLE")
+        self.assertIn("Recent buy in 'margin' on 2026-09-21",
+                      r["canada"]["advisory"])
+        self.assertEqual(r["usa"]["category"], "CLEAR", r["usa"]["advisory"])
+        self.assertNotIn("Recent buy", r["usa"]["advisory"])
+        self.assertEqual(r["usa"]["taxable_qty"], 105.0)
+
+    def test_partial_loss_sale_after_a_stock_dividend(self):
+        # The engines agree with their radar: the Canada loss is denied
+        # on the 5 dividend shares; the US loss is not washed.
+        book = self.BOOK + [_row("2026-09-24", "XYZ.US", -50, 38)]
+        r = {c: _rows(c, book, as_of="2026-09-25")["XYZ.US"]
+             for c in ("canada", "usa")}
+        self.assertEqual(r["canada"]["category"], "VIOLATION")
+        self.assertEqual(r["canada"]["denied_qty"], 5.0)
+        self.assertEqual(r["usa"]["category"], "BLOCKED", r["usa"]["advisory"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1275,7 +1275,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "the shares held is spread over the old and new shares "
                  "(§307), the new shares keep the old shares' purchase "
                  "dates (§1223(5)), and they are not a purchase for the "
-                 "wash-sale rule."),
+                 "wash-sale rule (nor a \"recent buy\" in the wash "
+                 "radar, sell-check, buy-check or harvest)."),
             Rule("US-STKDIV-02",
                  "A taxable stock dividend (§305(b), e.g. one with a cash "
                  "option) is not detected: enter it by hand. Shares of "
