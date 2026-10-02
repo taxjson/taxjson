@@ -7,6 +7,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.webull import WebullBrokerage
@@ -103,6 +104,8 @@ class TestAssignmentPairingOrder(unittest.TestCase):
         self.assertEqual(stock["date"], "2025-12-15")
 
 
+@rule("CA-OPT-06")
+@rule("US-OPT-02")
 class TestAssignmentUnderlyingFromSymbolColumn(unittest.TestCase):
     """S066-02: pair by the row's own @Symbol, not the description
     root (an adjusted contract's root ZZS1 differs from the ticker)."""
