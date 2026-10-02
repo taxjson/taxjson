@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `taxjson watch` states its scope like the other planning tools
+  (tax-logic CA-PLAN-04 / US-PLAN-04, re-audit A2-0909): a change report
+  ends with the country's scope line (a CLEAR is safe only as far as
+  the project's accounts show — a spouse's or controlled corporation's
+  purchase is not seen), and `--json` carries `scope_note`. A quiet run
+  stays silent.
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard

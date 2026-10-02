@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -497,3 +497,79 @@ class TestRenameFallbacks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ------------------------------------------------- watch / sell-check scope
+class TestWatchStatesItsScope(unittest.TestCase):
+    """A2-0909: tax-logic CA-PLAN-04 / US-PLAN-04 name `watch` among the
+    planning tools whose verdicts say they cover the project's accounts
+    only, but watch printed "CLEAR — safe to sell at a loss" with no
+    scope line (text or JSON). Also pins sell-check's text scope line
+    (taxjson_run `print(_scope)`)."""
+
+    def _project(self, tmp, country):
+        d = lambda n: (date.today() - timedelta(days=n)).isoformat()  # noqa: E731
+        sym, ccy = (("XYZ.US", "USD") if country == "usa"
+                    else ("XYZ.TO", "CAD"))
+        root = Path(tmp) / country
+        (root / "inputs" / "margin").mkdir(parents=True)
+        (root / "taxjson.toml").write_text(
+            f'[settings]\nyear = {date.today().year}\ncountry = '
+            f'"{country}"\nbase_currency = "{ccy}"\n'
+            f'source_currencies = []\n'
+            f'[accounts.margin]\ntype = "taxable"\n')
+        tt = root / "inputs" / "margin" / "m.tt"
+        tt.write_text(f"BUYSELL {d(60)} 10:00:00 {sym} 100 {ccy} 10.00 "
+                      f"1000.00 0.00\n")
+        return root, d, sym, ccy, tt
+
+    def _tj(self, root, *a):
+        return subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_run", "-C",
+             str(root), *a], cwd=REPO_ROOT, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "TAXJSON_OFFLINE": "1", "NO_COLOR": "1",
+                 "PYTHONPATH": str(REPO_ROOT / "src")})
+
+    def _check(self, country, must, must_not):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, d, sym, ccy, tt = self._project(tmp, country)
+            r = self._tj(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            j = json.loads(self._tj(root, "watch", "--json").stdout)
+            self.assertTrue(j["baseline"])
+            self.assertIn(must, j["scope_note"])
+            # Quiet when nothing changed (cron): no scope line either.
+            self.assertEqual(self._tj(root, "watch").stdout, "")
+            with tt.open("a") as f:
+                f.write(f"BUYSELL {d(1)} 10:00:00 {sym} 50 {ccy} 9.00 "
+                        f"450.00 0.00\n")
+            r = self._tj(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            w = self._tj(root, "watch")
+            self.assertEqual(w.returncode, 0, w.stderr)
+            self.assertIn("change(s) since the last run", w.stdout)
+            last = w.stdout.strip().splitlines()[-1]
+            self.assertTrue(last.startswith("Scope:"), w.stdout)
+            self.assertIn(must, last)
+            self.assertNotIn(must_not, last)
+            s = self._tj(root, "sell-check", sym)
+            last = s.stdout.strip().splitlines()[-1]
+            self.assertTrue(last.startswith("Scope:"), s.stdout)
+            self.assertIn(must, last)
+            self.assertNotIn(must_not, last)
+
+    @rule("CA-PLAN-04")
+    def test_canada_watch_and_sell_check_scope(self):
+        self._check("canada", "s.251.1", "Pub. 550")
+
+    @rule("US-PLAN-04")
+    def test_usa_watch_and_sell_check_scope(self):
+        self._check("usa", "Pub. 550", "s.251.1")
+
+    def test_render_report_closes_with_the_scope(self):
+        from taxjson.bin.taxjson_watch import render_report
+        ch = [{"line": "AAA.TO: LOCKED -> CLEAR — safe to sell at a loss"}]
+        out = render_report(ch, "2026-09-01", scope="Scope: x")
+        self.assertEqual(out.splitlines()[-1], "Scope: x")
+        self.assertNotIn("Scope", render_report(ch, "2026-09-01"))
