@@ -1113,10 +1113,20 @@ dispositions, the ledger warns that pre-history balances aren't reflected,
 and rows before the project year are flagged as rebuilt from this
 project's books (opening `*_start.tt` lots plus whatever prior-year exports
 are in `inputs/`) and possibly partial — check them against the filed
-returns. The net per year counts dispositions only: slip capital gains
-(lines 17400/17600, US Schedule D line 13) and the line-15300 FX gain on
-foreign cash (`taxjson fx-cash`) are not in it. `--json` for machine
-output.
+returns. A year before the project year that has a close-year lock — the
+project's own `filed/<year>.json` or the `[settings] prior_year_record` of
+the per-year layout — takes the lock's **filed** figure instead (Canada: the
+total filed with another tool when the lock has one, else the Schedule 3
+gain lines; US: the Form 8949 Part I / Part II gains); a later locked year
+is compared with its lock, and an unreadable lock is named. Rows after the
+project year (a few January trades in this year's inputs) are partial:
+they offer no T1A carry-back and the carryforward stops at the project
+year. Every year uses the project's settings, its income dating
+(`corporate_distributions`) included. The net per year counts dispositions
+plus the T5 box 18 dividends named in `capital_gains_dividends.map`; other
+slip capital gains (lines 17400/17600, US Schedule D line 13) and the
+line-15300 FX gain on foreign cash (`taxjson fx-cash`) are not in it.
+`--json` for machine output.
 
 ### Option premiums across a year end (`option_premium_timing`)
 

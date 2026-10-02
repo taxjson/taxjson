@@ -10884,8 +10884,14 @@ def cmd_t1135(args: argparse.Namespace) -> None:
              # project's tax_date, like the gains files.
              "--tax-date", _tax_date_basis(settings)]
     t1135_map = root / "t1135.map"
-    if t1135_map.exists():
+    # A dangling link (or a directory) is not "no map": the domicile
+    # overrides it holds change the filing verdict (A2-0355).
+    if t1135_map.is_file():
         argv += ["--map", str(t1135_map)]
+    elif t1135_map.is_symlink() or t1135_map.exists():
+        sys.exit(f"taxjson t1135: cannot read {t1135_map.name} (a broken "
+                 f"link or not a file) — fix or remove it; its country "
+                 f"overrides change the verdict.")
     # The same phantom openings the gains stage applies (R1-321): without
     # them a phantom-backed position read as a short that later real
     # buys covered at zero cost.
@@ -10899,9 +10905,44 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
     argv += option_timing_flags(settings)
+    # ...and its income dating: a listed corporation's ROC on its pay
+    # date in that pass (audit A2-0339).
+    argv += income_dating_flags(settings)
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_t1135.main(argv))
+
+
+def _box18_by_year(root: Path, accounts) -> Dict[int, float]:
+    """{tax year: T5 box 18 capital-gains dividends} named in
+    capital_gains_dividends.map, in the base currency, dated as the
+    estimate dates them (_box18_into_estimate). {} without the map."""
+    fr = _box18_fractions(root)
+    if not fr:
+        return {}
+    from taxjson.lib.cg_dividends import row_amount
+    rules = _view_income_rules(root)
+    out: Dict[int, float] = {}
+    for acct in sorted(accounts):
+        p = root / "work" / f"{acct}_base.json"
+        if not p.exists():
+            continue
+        try:
+            data = _read_work_doc(p)
+        except (OSError, ValueError) as e:
+            _die(f"could not read {p.name} ({e}) for the capital-gains "
+                 f"dividends in capital_gains_dividends.map — re-run "
+                 f"`taxjson run`.")
+        for t in data.get("transactions", []):
+            f = fr.get((acct, str(t.get("id"))))
+            if not f or t.get("action") != "DIVIDEND":
+                continue
+            d = rules.income_date(t) if rules is not None \
+                else str(t.get("date") or "")
+            if len(str(d)) >= 4 and str(d)[:4].isdigit():
+                y = int(str(d)[:4])
+                out[y] = out.get(y, 0.0) + row_amount(t) * f
+    return out
 
 
 def cmd_carryover(args: argparse.Namespace) -> None:
@@ -10960,6 +11001,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
         # The same year attribution as run / close-year (R1-192).
         "--tax-date", _tax_date_basis(settings),
     ] + option_timing_flags(settings)       # same timing as the returns
+    # ...and the same income dating: a listed corporation's ROC on its
+    # pay date (audit A2-0123, A2-0339, A2-0341, A2-1141).
+    argv += income_dating_flags(settings)
     if settings.get("year") is not None:
         # Rows before the project year are flagged as possibly partial.
         argv += ["--project-year", str(int(settings["year"]))]
@@ -10970,23 +11014,31 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     if phantoms.exists():
         argv += ["--incomplete-history", str(phantoms)]
     claimed = Path(args.claimed) if args.claimed else root / "claimed_losses.txt"
-    if claimed.exists():
+    # A dangling symlink or a directory is not "no file": the ledger
+    # without the user's claims overstates the carryforward (A2-0355).
+    if claimed.is_file():
         argv += ["--claimed", str(claimed)]
-    elif args.claimed:
-        sys.exit(f"taxjson carryover: no such claimed file: {claimed}")
-    # Each locked year's filed realized total: the ledger recomputes
-    # every year with THIS project's option timing, and a locked year it
-    # disagrees with is flagged (S047-21, S048-20).
+    elif args.claimed or claimed.is_symlink() or claimed.exists():
+        sys.exit(f"taxjson carryover: cannot read the claimed file "
+                 f"{claimed} (missing, a broken link or not a file) — "
+                 f"fix or remove it; the carryforward depends on it.")
+    # Each filed-year lock — this project's filed/<year>.json and the
+    # prior_year_record lock of the per-year layout (A2-0338, A2-0121):
+    # a year before the project year takes what the lock says was
+    # filed; a later one is compared (S047-21, S048-20). An unreadable
+    # lock is named, never skipped (A2-0336).
     from taxjson.bin import taxjson_filed
-    import json as _json
-    for _yr, _lp in taxjson_filed.list_snapshots(root):
-        try:
-            _lock = _json.loads(_lp.read_text(encoding="utf-8"))
-            _real = float((_lock.get("totals") or {})["realized"])
-        except (OSError, ValueError, KeyError, TypeError,
-                AttributeError):
-            continue
-        argv += ["--filed", f"{_yr}={_real!r}"]
+    try:
+        _locks = taxjson_filed.project_locks(root, settings)
+    except taxjson_filed.PriorRecordError as e:
+        _die(str(e))
+    for _yr, _lp, _where in _locks:
+        argv += ["--filed-lock", f"{_yr}={_lp}"]
+    # T5 box 18 capital-gains dividends named in
+    # capital_gains_dividends.map are capital gains of their year: the
+    # estimate nets them, so the ledger does too (A2-0678).
+    for _y, _amt in sorted(_box18_by_year(root, taxable).items()):
+        argv += ["--slip-gains", f"{_y}={_amt!r}"]
     _w = _grant_since_warning(settings)
     if _w:
         print(f"taxjson carryover: warning: {_w}", file=sys.stderr)
