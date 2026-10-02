@@ -509,5 +509,33 @@ class TestUsEstimateSection1256(unittest.TestCase):
                                  for n in est.get("notes") or []))
 
 
+class TestInterestAndSlipWording(unittest.TestCase):
+    """A2-0644, A2-1153, A2-1101: the estimate, the checklist and
+    docs/filing.md no longer say no taxjson output totals interest (each
+    .sum prints a NET 'CASH INTEREST' line), and the Canada Assumes line
+    says mapped T5 box 18 amounts are included."""
+
+    @rule("CA-RPT-06")
+    def test_ca_assumptions_point_at_cash_interest_and_box18(self):
+        from taxjson.lib.tax_estimate import CA_ASSUMPTIONS
+        self.assertNotIn("no taxjson view totals", CA_ASSUMPTIONS)
+        self.assertIn("CASH INTEREST", CA_ASSUMPTIONS)
+        self.assertNotIn("capital gains on T3/T5 slips are not included",
+                         CA_ASSUMPTIONS)
+        self.assertIn("T5 box 18 amounts not named in "
+                      "capital_gains_dividends.map", CA_ASSUMPTIONS)
+
+    def test_checklist_and_filing_doc_wording(self):
+        import inspect
+        from taxjson.lib import checklist
+        src = inspect.getsource(checklist)
+        self.assertNotIn("command totals the interest", src)
+        self.assertNotIn("command totals it", src)
+        self.assertEqual(src.count("CASH INTEREST"), 2)
+        doc = (REPO_ROOT / "docs" / "filing.md").read_text()
+        self.assertNotIn("no taxjson command totals", doc)
+        self.assertIn("CASH INTEREST", doc)
+
+
 if __name__ == "__main__":
     unittest.main()

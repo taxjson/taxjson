@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Wording: the Canada estimate, the checklist walk (both countries) and
+  docs/filing.md no longer say that no taxjson output totals interest —
+  they point at the .sum's net CASH INTEREST line and say why it is not
+  the interest paid; the estimate's Assumes line says mapped T5 box 18
+  capital-gains dividends are included (re-audit A2-0644, A2-1153,
+  A2-1101).
 - `estimate` (USA): §1256 P/L (futures, futures options, broad-based
   index options) is still taxed as short-term, but the estimate now
   names the amount in a NOTE (`section_1256_gain` in --json) and its

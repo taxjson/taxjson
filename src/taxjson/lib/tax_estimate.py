@@ -7,7 +7,7 @@ what makes the bracket placement honest.
 
 ESTIMATES ONLY — never filing numbers. Simplifications are deliberate
 and disclosed by the caller:
-  - Canada: all Canadian-listed dividends treated as ELIGIBLE
+  - Canada: all Canadian issuers' dividends treated as ELIGIBLE
     (38% gross-up + federal/provincial DTC; non-eligible dividends are
     NOT modelled); foreign dividends are ordinary income with a 15%
     treaty-withholding FTC assumed already paid (actual TAX rows when
@@ -594,15 +594,19 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
 
 
 CA_ASSUMPTIONS = (
-    "Assumes: Canadian-listed dividends are all ELIGIBLE (non-eligible "
+    "Assumes: Canadian issuers' dividends are all ELIGIBLE (non-eligible "
     "dividends would be taxed higher) except the T5 box 18 capital-gains "
-    "dividends named in capital_gains_dividends.map; foreign withholding creditable "
+    "dividends named in capital_gains_dividends.map (taxed as capital "
+    "gains); foreign withholding creditable "
     "up to 15%; crypto staking is ordinary income; no QC abatement or "
     "low-income reductions; interest income and interest paid are "
-    "not included and no taxjson view totals them — take them from the "
-    "broker statements (the rows are listed by `taxjson events`); "
+    "not included — each account's .sum shows only a NET 'CASH "
+    "INTEREST' (credit less debit interest), so take interest income "
+    "and the margin interest paid (line 22100: --carrying-charges) "
+    "from the broker statements (`taxjson events` lists the rows); "
     "FX gains/losses on foreign cash (s.39(1.1), line 15300 — `taxjson "
-    "fx-cash`) and capital gains on T3/T5 slips are not included; "
+    "fx-cash`), T3 box 21 capital gains and T5 box 18 amounts not "
+    "named in capital_gains_dividends.map are not included; "
     "deductions below line 15000 only as entered (--deductions, "
     "--carrying-charges); no prior-year minimum tax carryover; the basic "
     "personal amount is the only non-refundable credit (no CPP/EI, "

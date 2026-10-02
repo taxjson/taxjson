@@ -131,8 +131,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("fees", 4, "Carrying charges (margin interest) for line 22100 taken from the statements",
      "broker statements (`taxjson events` lists the INTEREST rows)",
      "Interest on money borrowed to invest is deductible on line 22100; trade "
-     "commissions are not (they are already in the ACB and proceeds) and no "
-     "taxjson command totals the interest."),
+     "commissions are not (they are already in the ACB and proceeds). The "
+     "account .sum's CASH INTEREST line nets credit against debit interest, "
+     "so it is not the interest paid."),
     ("estimate", 4, "Tax estimate and instalment position checked",
      "taxjson estimate, taxjson instalments",
      "A sanity check on the tax owed and on what was already paid."),
@@ -194,8 +195,10 @@ US_STEPS: Dict[str, Any] = {
                 "personal-transaction exclusion is not modelled)."),
     "fees": ("Margin interest collected (Form 4952, if itemizing)",
              "broker statements (`taxjson events` lists the INTEREST rows)",
-             "Investment interest is deductible only when itemizing; no taxjson "
-             "command totals it, and trade commissions are not investment interest."),
+             "Investment interest is deductible only when itemizing; the account "
+             ".sum's CASH INTEREST line nets credit against debit interest, so it "
+             "is not the interest paid, and trade commissions are not investment "
+             "interest."),
     "estimate": ("Tax estimate and estimated payments checked", "taxjson estimate",
                  "A sanity check on the tax owed."),
     "filed-lock": ("Return filed and the year locked", "taxjson close-year",
