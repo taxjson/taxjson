@@ -193,6 +193,14 @@ def _classify_header(header_line: str) -> str:
     return ''
 
 
+def _mask(ref: Any) -> str:
+    """A Kraken txid/refid as shown in a message: first 2 characters +
+    *** (the privacy rule for ids, A2-0756/A2-1381). The raw id stays
+    the work-JSON transaction id, which is data, not a message."""
+    s = str(ref or '').strip()
+    return f"{s[:2]}***" if s else "''"
+
+
 def _lower_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {(k or '').strip().lower(): v for k, v in row.items()}
 
@@ -441,7 +449,7 @@ class KrakenBrokerage(BaseBrokerage):
         Any disagreement between the two exports (legs missing, amounts
         not matching vol/cost, direction reversed, a third asset) raises:
         a mis-joined ledger must never silently rewrite a trade."""
-        ctx = f"trade {row.get('txid')!r} ({pair}, {row.get('time')!r})"
+        ctx = f"trade {_mask(row.get('txid'))} ({pair}, {row.get('time')!r})"
         by_asset: Dict[str, list] = {}
         kfee_paid = False
         for lg in legs:
@@ -582,7 +590,7 @@ class KrakenBrokerage(BaseBrokerage):
                 pair = row.get('pair') or ''
                 time_raw = row.get('time') or ''
                 dt = self._local_dt(time_raw, f"trades row (pair={pair!r})")
-                ctx = f"trades {path.name} txid={row.get('txid')!r}"
+                ctx = f"trades {path.name} txid={_mask(row.get('txid'))}"
 
                 price = self._num(row, 'price', ctx, required=True)
                 cost = abs(self._num(row, 'cost', ctx, required=True))
@@ -906,7 +914,7 @@ class KrakenBrokerage(BaseBrokerage):
                               f"asset={asset_raw!r})")
                 date = dt.strftime("%Y-%m-%d")
                 time = dt.strftime("%H:%M:%S")
-                ctx = f"ledger {path.name} txid={txid!r}"
+                ctx = f"ledger {path.name} txid={_mask(txid)}"
                 amount = self._num(row, 'amount', ctx, required=True)
                 fee = self._num(row, 'fee', ctx)
                 asset = self._norm(asset_raw)
@@ -1453,14 +1461,14 @@ class KrakenBrokerage(BaseBrokerage):
                           f"counter-leg (truncated export?) or enter the "
                           f"trade manually via a .tt file.",
                           file=sys.stderr)
-                    self.count_skip(f"orphan {leg_type} (refid {refid})")
+                    self.count_skip(f"orphan {leg_type} (refid {_mask(refid)})")
             return []
         if len(spends) == 1 and len(recvs) == 1:
             return self._build_instant_trade(
                 {'spend': spends[0], 'receive': recvs[0]}, refid)
         if len(spends) > 1 and len(recvs) > 1:
             raise ValueError(
-                f"Kraken ledger refid {refid!r}: {len(spends)} spend and "
+                f"Kraken ledger refid {_mask(refid)}: {len(spends)} spend and "
                 f"{len(recvs)} receive legs — no defensible way to pair "
                 f"them. Enter this conversion via a .tt file{_TT_REMOVE}.")
         many, one, many_side = ((spends, recvs[0], 'spend')
@@ -1474,7 +1482,7 @@ class KrakenBrokerage(BaseBrokerage):
         else:
             shares = [1.0 / len(many)] * len(many)
             basis = 'equal shares (no amountusd in this export)'
-        print(f"note: Kraken ledger refid {refid!r}: {len(many)} "
+        print(f"note: Kraken ledger refid {_mask(refid)}: {len(many)} "
               f"{many_side} legs ({', '.join(l['asset'] for l in many)}) "
               f"share one {one['asset']} {'receipt' if many_side == 'spend' else 'payment'} "
               f"— split by {basis}; each asset is booked separately.",
@@ -1529,7 +1537,7 @@ class KrakenBrokerage(BaseBrokerage):
                       f"counter-leg (truncated export?) or enter the "
                       f"trade manually via a .tt file.",
                       file=sys.stderr)
-                self.count_skip(f"orphan {leg_type} (refid {refid})")
+                self.count_skip(f"orphan {leg_type} (refid {_mask(refid)})")
             return []
         spend = trade['spend']
         recv = trade['receive']

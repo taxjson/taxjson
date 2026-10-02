@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Kraken notes, errors and skip summaries now mask every ledger refid
+  and txid to its first two characters + *** (the multi-leg instant-trade
+  note, the orphan-leg skip count, the both-sides-many-legs refusal and
+  the unparseable-cell errors printed it in full into the console, .sum
+  and .diag; audit A2-0756, A2-0757, A2-1381). The id itself stays the
+  work-JSON transaction id.
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the
