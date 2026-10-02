@@ -741,13 +741,18 @@ def kraken_pool_flows(path: Path) -> List[Dict[str, Any]]:
         _FIAT_CURRENCIES)
     from taxjson.lib.brokerages._crypto_common import (strict_money,
                                                        utc_to_local)
-    with open(path, "r", encoding="utf-8-sig") as f:
+    import io
+    from taxjson.lib.brokerages.base import read_broker_text
+    from taxjson.lib.brokerages.kraken import _dict_rows
+    # The parser's reader: UTF-16 re-saves, a duplicated column and a
+    # cell holding a line break are handled as the parser handles them.
+    with io.StringIO(read_broker_text(path)) as f:
         if _classify_header(f.readline()) != "ledgers":
             return []
         f.seek(0)
         groups: Dict[str, Dict[str, Any]] = {}
         order: List[str] = []
-        for n, raw in enumerate(csv.DictReader(f)):
+        for n, (raw, _line) in enumerate(_dict_rows(f, path, "ledger")):
             row = _lower_row(raw)
             type_ = (row.get("type") or "").strip().lower()
             sub = (row.get("subtype") or "").strip().lower()
@@ -791,7 +796,9 @@ def coinbase_pool_flows(path: Path) -> List[Dict[str, Any]]:
     from taxjson.lib.brokerages._crypto_common import (strict_money,
                                                        utc_to_local)
     out: List[Dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8-sig") as f:
+    import io
+    from taxjson.lib.brokerages.base import read_broker_text
+    with io.StringIO(read_broker_text(path)) as f:
         rows = list(csv.reader(f))
     hmap: Dict[str, int] = {}
     start = None
