@@ -1062,6 +1062,9 @@ class QuestradeBrokerage(BaseBrokerage):
                 # IB/RBC/Webull trade rows already do; Questrade's was the gap.
                 'description': desc,
             }
+            if not opt and not is_expired and not is_assigned:
+                self.warn_zero_cost_buy(self._where(lineno), symbol, qty,
+                                        price, net)
             transactions.append(_tx)
             if is_expired and not is_assigned:
                 expiries.append(_tx)

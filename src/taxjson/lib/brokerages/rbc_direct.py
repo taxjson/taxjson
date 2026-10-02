@@ -1709,6 +1709,8 @@ class RbcBrokerage(BaseBrokerage):
             price = round(abs(net) / abs(qty), 6)
         self._check_trade_money(r, qty, price, net, bool(occ),
                                 is_retraction)
+        if not occ and activity.strip().lower() == 'buy':
+            self.warn_zero_cost_buy(self._at(r), r.symbol, qty, price, net)
 
         is_option_symbol = bool(occ)
         action = 'BUYSELL'

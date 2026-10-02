@@ -661,3 +661,27 @@ class TestWebullAndGenericAccountsThroughBrokerage(unittest.TestCase):
         txs = json.loads(r.stdout)["transactions"]
         self.assertEqual(len({t["source_account"] for t in txs}), 2)
         self.assertEqual(plan_dedup(txs).drop, [])
+
+
+class TestZeroCostBuy(unittest.TestCase):
+    """A2-0619 (Questrade and RBC halves; Webull refuses it): a share buy
+    at $0 price and $0 cash is flagged, as the generic importer refuses
+    it."""
+
+    def test_questrade(self):
+        row = ("2025-03-03 12:00:00 AM,2025-03-04 12:00:00 AM,Buy,XEI.TO,"
+               "XEI CORP,100,0,0,0,0,CAD,55500001,Trades,"  # pii-ok
+               "Individual margin")
+        r, txs = _brokerage("questrade", {"q.csv": _QH + "\n" + row + "\n"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("at ZERO cost", r.stderr)
+        r, txs = _brokerage("questrade", {"q.csv": _QH + "\n" + _qbuy(
+            "2025-03-03", "2025-03-04", "55500001") + "\n"})  # pii-ok
+        self.assertNotIn("at ZERO cost", r.stderr)
+
+    def test_rbc(self):
+        r, txs = _brokerage("rbc_direct", {"rbc.csv": _rbc([_rrow(
+            "March 3, 2025", "March 4, 2025", "XEI", 100, 0, 0,
+            "55500001")])})  # pii-ok
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("at ZERO cost", r.stderr)

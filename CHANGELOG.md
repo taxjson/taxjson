@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A Questrade or RBC share buy at $0 price and $0 cash (almost always a
+  transfer or journal row booked with no cost) is flagged ATTENTION
+  (audit A2-0619; Webull refuses it, the generic importer already did).
+
 - Parse checks (audit A2-0104, A2-0110, A2-0109, A2-0632, A2-0633):
   a broker-printed settle date more than 7 days after the trade is
   booked as printed but flagged ATTENTION (CA-DATE-03 / US-DATE-04); an

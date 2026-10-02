@@ -967,6 +967,22 @@ class BaseBrokerage:
                       f"the cell (blank it for the standard cycle).",
                       file=sys.stderr)
 
+    @staticmethod
+    def warn_zero_cost_buy(where: str, symbol: str, qty: float,
+                           price: float, net: float) -> None:
+        """A share BUY at $0 price and $0 cash is almost always a
+        transfer or journal row, booked with no cost (the generic
+        importer refuses it). Booked as printed, flagged on the console
+        (audit A2-0619)."""
+        if (qty or 0) > 0 and abs(price or 0) < 1e-9 \
+                and abs(net or 0) < 0.005:
+            import sys
+            print(f"warning: ATTENTION: {where}: a buy of {qty:g} "
+                  f"{symbol} at ZERO cost (price and cash both 0) — "
+                  f"booked with no cost basis. If it is a transfer or a "
+                  f"journal, book its real cost (a .tt BUYSELL) instead.",
+                  file=sys.stderr)
+
     def settlement_date_t1(self, date_str: str, *formats: str,
                            currency: str = 'USD') -> str:
         """Add one settlement day (holiday-aware for USD and CAD) to the
