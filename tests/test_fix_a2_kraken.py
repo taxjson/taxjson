@@ -489,5 +489,37 @@ class TestStakedCodesSameProperty(unittest.TestCase):
         self.assertEqual(txs, [])
 
 
+class TestDepegOnSwaps(unittest.TestCase):
+    """A2-1003 (Kraken half): a stablecoin swap whose ledger amountusd
+    implies a price far off 1.00 USD is warned about."""
+
+    @rule("CA-CRYPTO-02")
+    def test_ledger_instant_swap_off_peg_warns(self):
+        led = _ledger([
+            "L1,R1,2025-03-01 12:00:00,spend,,currency,USDC,spot,-1000,0,0,"
+            "880,,",
+            "L2,R1,2025-03-01 12:00:00,receive,,currency,XETH,spot,0.4,0,"
+            "0.4,880,,"], header=_KL_H2)
+        _txs, err = _parse({"kr_ledgers.csv": led}, "kr_ledgers.csv")
+        self.assertIn("USDC traded at 0.8800", err)
+        _txs, err = _parse({"kr_ledgers.csv": led.replace(",880,,\nL2",
+                                                          ",1000,,\nL2")},
+                           "kr_ledgers.csv")
+        self.assertNotIn("traded at", err)
+
+    @rule("CA-CRYPTO-02")
+    def test_trades_eth_usdc_off_peg_warns(self):
+        t = _KT_H + ("T1,O1,ETH/USDC,2025-06-02 16:00:00,buy,limit,2500,"
+                     "1000,0,0.4,,,\n")
+        led = _ledger([
+            "L1,T1,2025-06-02 16:00:00,trade,,currency,XETH,spot,0.4,0,0.4,"
+            "880,,",
+            "L2,T1,2025-06-02 16:00:00,trade,,currency,USDC,spot,-1000,0,0,"
+            "880,,"], header=_KL_H2)
+        _txs, err = _parse({"kr_trades.csv": t, "kr_ledgers.csv": led},
+                           "kr_trades.csv")
+        self.assertIn("USDC traded at 0.8800", err)
+
+
 if __name__ == "__main__":
     unittest.main()

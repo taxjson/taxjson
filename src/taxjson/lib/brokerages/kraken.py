@@ -653,6 +653,21 @@ class KrakenBrokerage(BaseBrokerage):
                         self._ledger_trade_legs(
                             row, legs, base, quote, type_, pair, vol,
                             cost, fee))
+                    if (self.stablecoins_as_cash and _rq in _CASH_STABLECOINS
+                            and _rb != 'USD'):
+                        # ETH/USDC: the joined ledger's amountusd on the
+                        # stablecoin leg implies its price (A2-1003).
+                        for _lg in legs:
+                            _au = _lg.get('amountusd')
+                            _am = abs(strict_money(_lg.get('amount'),
+                                                   'amount', ctx))
+                            if (_normalize_asset(_lg.get('asset') or '',
+                                                 fold_stable=False) == _rq
+                                    and _au not in (None, '') and _am):
+                                warn_depeg(_rq, abs(strict_money(
+                                    _au, 'amountusd', ctx)) / _am, _am,
+                                    dt.strftime('%Y-%m-%d'),
+                                    f"Kraken trades {path.name}")
                 else:
                     base_coins, base_fee, quote_fee = abs(vol), 0.0, fee
                     unverified += 1
@@ -1021,6 +1036,15 @@ class KrakenBrokerage(BaseBrokerage):
                     usd = row.get('amountusd')
                     usd_v = (abs(strict_money(usd, 'amountusd', ctx))
                              if usd not in (None, '') else None)
+                    if (self.stablecoins_as_cash and usd_v and amount
+                            and asset_name in _CASH_STABLECOINS):
+                        # The ledger's own USD value of a stablecoin leg
+                        # implies its price: a swap far off the peg is
+                        # said, as a stablecoin/USD fill is (CA-CRYPTO-02;
+                        # re-audit A2-1003).
+                        warn_depeg(asset_name, usd_v / abs(amount),
+                                   abs(amount), date,
+                                   f"Kraken ledger {path.name}")
                     if asset in side:
                         # Split settlement: a refid can carry two rows
                         # of the same leg — assignment silently

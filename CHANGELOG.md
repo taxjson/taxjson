@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Kraken: a stablecoin swap far off the peg is warned about.** A
+  ledger instant swap or an ETH/USDC fill whose ledger `amountusd`
+  implies a stablecoin price more than 2% from 1.00 USD now prints the
+  de-peg warning a USDC/USD fill does (tax-logic CA-CRYPTO-02; re-audit
+  A2-1003, Kraken half).
 - **tax-logic states the Kraken staked-code fold.** CA-CRYPTO-01 and
   US-CRYPTO-01 now say that Kraken's staked and bonded wallet codes
   (DOT.S, DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) are the
