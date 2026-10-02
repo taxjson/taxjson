@@ -749,7 +749,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "or its pay date, amount or `all`) and divs-sum shows it "
                  "apart while "
                  "the estimate taxes it as a capital gain (50% inclusion, "
-                 "no gross-up or credit). ACB is unchanged."),
+                 "no gross-up or credit) and `taxjson carryover` adds it "
+                 "to its year's net capital gain or loss. ACB is "
+                 "unchanged."),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",
@@ -839,7 +841,15 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson carryover`: the net-capital-loss ledger in 100% "
                  "amounts (the inclusion rate is applied on the return); a "
                  "loss carries forward with no time limit and back up to 3 "
-                 "years (form T1A)."),
+                 "years (form T1A). Every year is recomputed with the "
+                 "project's own settings (option timing, tax_date, income "
+                 "dating); a year before the project year that has a "
+                 "close-year lock (filed/<year>.json or prior_year_record) "
+                 "takes the lock's FILED gain instead — the total filed "
+                 "with another tool, else the Schedule 3 gain lines — and "
+                 "a locked later year is compared with it. A year after "
+                 "the project year is partial: no carry-back is offered "
+                 "and the carryforward stops at the project year."),
             Rule("CA-RPT-11",
                  "`taxjson instalments`: CRA instalments (ITA s.156) when "
                  "net tax owing exceeds $3,000 this year and in one of the "
@@ -1365,7 +1375,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "
                  "$3,000 ordinary offset is used each year unless "
-                 "claimed_losses.txt records otherwise."),
+                 "claimed_losses.txt records otherwise. A year before the "
+                 "project year that has a close-year lock (filed/<year>.json "
+                 "or prior_year_record) takes the lock's filed Form 8949 "
+                 "Part I / Part II gains instead of the rebuilt ones; a "
+                 "year after the project year is partial and the carryover "
+                 "stops at the project year."),
             Rule("US-RPT-05",
                  "`taxjson edge-cases`: every trade whose tax year or "
                  "wash-sale verdict turns on a boundary, on trade dates; "

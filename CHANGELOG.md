@@ -56,6 +56,25 @@
   one-line error, exit 2, when the recompute fails on an input (A2-0676).
   audit and `wash-sales --explain` name a damaged `work/<acct>_base.json`
   instead of a deleted /tmp merge file (A2-1143).
+- carryover: a year before the project year with a close-year lock
+  (filed/<year>.json or prior_year_record) uses the lock's filed figure
+  (filed_totals, else the gain lines) instead of the rebuilt books, so a
+  prior year's loss is carried and a carry-back to it is offered; a
+  later locked year is compared with the filed lines; an unreadable or
+  non-finite lock is named (re-audit A2-0121, A2-0336, A2-0338, A2-0666,
+  A2-1130, A2-1131, A2-1132, A2-1139).
+- carryover and t1135: the full-history engine pass applies
+  [settings] corporate_distributions (a listed corporation's ROC on its
+  pay date), as the run does (A2-0123, A2-0337, A2-0339, A2-0340,
+  A2-0341, A2-1141).
+- carryover: rows after the project year are partial (no T1A
+  suggestion, the carryforward stops at the project year); box-18
+  capital-gains dividends in capital_gains_dividends.map are netted; a
+  Canada ledger in USD or a book whose metadata.target_currency differs
+  is refused; a dangling claimed_losses.txt / t1135.map is refused; a
+  claimed amount '0,125' is refused; standalone carryover and audit
+  note the close-timing default (A2-0351, A2-0355, A2-0665, A2-0667,
+  A2-0677, A2-0678).
 
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
