@@ -3122,7 +3122,8 @@ class CanadaTaxRules(TaxRules):
                             # Only the OPENING portion is replacement
                             # property; a pure cover/close is not a
                             # trigger (FUZZ #B).
-                            if _opening_qty(t, 'LONG') > 1e-6:
+                            if _opening_qty(t, 'LONG') > pool_qty_eps(
+                                    t.symbol, t.quantity):
                                 if getattr(t, 'type', '') \
                                         == 'transfer_rewrite':
                                     raise AmbiguousTransferDateError(
@@ -3375,7 +3376,11 @@ class CanadaTaxRules(TaxRules):
                     for _k, a in _call_acq.items():
                         _held_h[_k] = max(0.0, min(a, _call_end.get(_k, 0.0)))
                 held_substituted = sum(_held_h.values())
-                if held_substituted > 1e-6:
+                # Zero is the pool's own tolerance: 1e-6 for shares, float
+                # noise for a coin — a 0.0000009 BTC rebuy the pool keeps
+                # as a holding backs a denial too (CA-CRYPTO-09/CA-SL-13;
+                # A2-0552).
+                if held_substituted > pool_qty_eps(tx.symbol, loss['qty']):
                     disallowed_qty = min(loss['qty'], held_substituted)
                     disallowed_amt = disallowed_qty * (loss['loss_amount'] / loss['qty'])
 
@@ -3661,7 +3666,8 @@ class CanadaTaxRules(TaxRules):
                         elif (t.action in ('BUYSELL', 'ASSIGN', 'TRANSFER')
                               and t.quantity > 0
                               and loss['direction'] == 'LONG'
-                              and _opening_qty(t, 'LONG') <= 1e-6):
+                              and _opening_qty(t, 'LONG') <= pool_qty_eps(
+                                  t.symbol, t.quantity)):
                             # A buy that only closes a short (a written
                             # call bought back) acquires nothing: never
                             # a trigger (audit S069-24 — it read

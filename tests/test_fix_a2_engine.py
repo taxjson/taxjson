@@ -223,5 +223,25 @@ class TestCaTaintedLossNeverFeedsTheSolver(unittest.TestCase):
         self.assertFalse(res.get('wash_sales'))
 
 
+class TestCaCoinDustReplacement(unittest.TestCase):
+
+    @rule("CA-SL-13")
+    def test_sub_millionth_coin_rebuy_backs_its_share(self):
+        # A2-0552: the solver's zero is the pool's (relative for a coin):
+        # a 0.0000009 BTC rebuy denies 4.5% of the loss at any scale.
+        def tx(d, q, p):
+            return TaxTransaction(action='BUYSELL', date=d, date_settle=d,
+                                  time='10:00:00', symbol='BTC', quantity=q,
+                                  price=p, net_amount=abs(q * p),
+                                  currency='CAD', account='coinbase')
+        for k in (1000.0, 1.0):
+            rows = [tx('2025-01-06', 0.00002 * k, 150000),
+                    tx('2025-03-03', -0.00002 * k, 100000),
+                    tx('2025-03-10', 0.0000009 * k, 100000)]
+            e = [e for e in _ca(rows)['transactions'] if 'proceeds' in e][0]
+            self.assertAlmostEqual(e['disallowed_amount'] / -e['raw_gain'],
+                                   0.045, places=6, msg=str(k))
+
+
 if __name__ == '__main__':
     unittest.main()

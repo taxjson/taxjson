@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Canada: a coin rebuy under a millionth of a unit now backs its share
+  of a superficial loss; the solver's zero is the pool's own (relative
+  for a coin) instead of a fixed 1e-6 (A2-0552; cents at most).
+
 - **Canada superficial loss: one held unit backs one denial, and
   same-moment rows follow the export order.** A registered account's
   units claimed by an earlier loss, or a call contract claimed through a
