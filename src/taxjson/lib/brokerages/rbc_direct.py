@@ -1085,13 +1085,33 @@ def _plan_overlaps(ctx: RbcAccountContext, name_of: Dict[str, str]) -> None:
                     f"column).")
 
 
+def _short_reach(events) -> Tuple[float, str, float]:
+    """(deepest running short, the date it is first reached, the first
+    nonzero quantity) of one listing's event timeline — a new listing
+    whose first row is a BUY can still go short past its own buys
+    (re-audit A2-0270 / A2-0099)."""
+    run = low = 0.0
+    when = ''
+    first = 0.0
+    for e in events:
+        q = e[-1]
+        if not first and abs(q) > 1e-9:
+            first = q
+        run += q
+        if run < low - 1e-9:
+            low, when = run, e[0]
+    return low, when, first
+
+
 def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
     """A ticker change RBC applied WITHOUT a reorganization row
     (ORCC → OBDC in 2023): the old symbol stops with shares still open
-    and a new symbol with the same Symbol Description and currency opens
-    with a SALE those shares cover. The export carries no CUSIP, so this
-    is not certain enough to merge silently: warn with the ticker.map
-    line that merges them."""
+    and a new symbol with the same Symbol Description and currency goes
+    SHORT by no more than those shares (its first row a sale, or a buy
+    followed by a larger sale). The export carries no CUSIP, so this is
+    not certain enough to merge silently: an ATTENTION line (on the run
+    console — re-audit A2-0096 / A2-0613) with the ticker.map line that
+    merges them, on the first line so the console shows it."""
     by_name: Dict[Tuple[str, str], List[_Listing]] = {}
     for per in ctx.listings.values():
         for li in per.values():
@@ -1106,25 +1126,28 @@ def _detect_ticker_changes(ctx: RbcAccountContext, helper) -> None:
                 if not a.events or not b.events or a.last > b.first:
                     continue
                 open_a = a.position_on(a.last)
-                first_b = next((q for d, _k, _f, q in b.events
-                                if abs(q) > 1e-9), 0.0)
-                if open_a <= 1e-9 or first_b >= -1e-9 \
-                        or -first_b > open_a + 1e-6:
+                low_b, when_b, first_b = _short_reach(b.events)
+                if open_a <= 1e-9 or low_b >= -1e-9 \
+                        or -low_b > open_a + 1e-6:
                     continue
                 seen.add((a.symbol, b.symbol, cur))
                 sa = helper.apply_currency_suffix(a.symbol, cur)
                 sb = helper.apply_currency_suffix(b.symbol, cur)
                 fb = ctx.exports[ctx.files[b.events[0][2]]].path.name
+                how = (f"first appears on {b.first} with a SALE of "
+                       f"{-first_b:g}" if first_b < 0 else
+                       f"first appears on {b.first} and goes {-low_b:g} "
+                       f"short on {when_b}")
                 ctx.messages.append(
-                    f"warning: {fb}: RBC symbol {a.symbol} ({cur}) stops on "
-                    f"{a.last} with {open_a:g} share(s) still open, and "
-                    f"{b.symbol} — same Symbol Description "
-                    f"{a.names[nm]!r} — first appears on {b.first} with a "
-                    f"SALE of {-first_b:g}. That is a ticker change RBC "
-                    f"booked without a reorganization row: as exported it is "
-                    f"a stranded long {sa} and a short {sb}. If they are the "
-                    f"same security, add this line to ticker.map:\n"
-                    f"    GLOBAL {sa} {sb}")
+                    f"warning: ATTENTION: {fb}: RBC symbol {a.symbol} "
+                    f"({cur}) looks renamed to {b.symbol} — if they are "
+                    f"one security add to ticker.map:  GLOBAL {sa} {sb}  "
+                    f"— {a.symbol} stops on {a.last} with {open_a:g} "
+                    f"share(s) still open, and {b.symbol} (same Symbol "
+                    f"Description {a.names[nm]!r}) {how}. That is a "
+                    f"ticker change RBC booked without a reorganization "
+                    f"row: as exported it is a stranded long {sa} and a "
+                    f"short {sb}.")
 
 
 # ------------------------------------------------------------------ parser
@@ -1137,15 +1160,20 @@ class RbcBrokerage(BaseBrokerage):
 
     # ----------------------------------------------------------- warnings
     def _warn(self, msg: str, *, lint: bool = False,
-              unbooked: bool = False) -> None:
+              unbooked: bool = False, attention: bool = False) -> None:
         """`unbooked`: a real row the parser did NOT book. The
         'warning: UNBOOKED:' prefix is what `taxjson run` echoes to the
         console and what `run --strict` refuses on — a lint finding
         alone reached only the .sum banner, and run never passes --lint
-        (audit S016-00 / S064-17)."""
-        tag = 'UNBOOKED: ' if unbooked else ''
+        (audit S016-00 / S064-17). `attention`: booked, but on a guess
+        or with money the books leave out (a listing, a temporary code,
+        a notional distribution's income) — the 'warning: ATTENTION:'
+        prefix `taxjson run` prints on the console (re-audit A2-0005,
+        A2-0007, A2-0612; owner decision S065-12: not an error)."""
+        tag = ('UNBOOKED: ' if unbooked
+               else 'ATTENTION: ' if attention else '')
         print(f"warning: {tag}{self._fname}: {msg}", file=sys.stderr)
-        if lint or unbooked:
+        if lint or unbooked or attention:
             self.lint_findings.append(msg)
 
     def _note(self, msg: str) -> None:
@@ -1442,12 +1470,17 @@ class RbcBrokerage(BaseBrokerage):
                    f"the payment currency's listing. Only if the position "
                    f"is really held under the other listing (a TSX stock "
                    f"paying USD, bought in an export or .tt outside these "
-                   f"inputs), add to ticker.map:  GLOBAL "
-                   f"{self.apply_currency_suffix(sym, curs[0])} "
+                   f"inputs), add to ticker.map:  TOBASE "
+                   f"{self.apply_currency_suffix(sym, 'USD' if 'USD' in curs else curs[0])} "
                    f"{sym}.{alt}")
             if acb and curs != ['CAD']:
+                # On the console (re-audit A2-0005): the gain it makes
+                # is fileable. TOBASE, not GLOBAL: the USD row must be
+                # converted before it meets the CAD pool (a GLOBAL
+                # rename stopped the run with a currency mismatch).
                 self._warn(msg + " — a return of capital on the wrong "
-                           "listing hits an empty pool and becomes a gain.")
+                           "listing hits an empty pool and becomes a gain.",
+                           attention=True)
             elif curs != ['CAD']:
                 self._note(msg)
 
@@ -1962,7 +1995,7 @@ class RbcBrokerage(BaseBrokerage):
                    f"{r.currency} on {symbol} raises its ACB; the "
                    f"distribution itself is income reported on the fund's "
                    f"T3 (usually box 21) and is NOT in taxjson's income "
-                   f"totals — take it from the slip.")
+                   f"totals — take it from the slip.", attention=True)
         return {
             'action': 'ADJUST',
             'date': r.date, 'time': '09:30:00', 'date_settle': r.date,
@@ -2167,7 +2200,7 @@ class RbcBrokerage(BaseBrokerage):
                         f"{tgt_guess} sale goes short. Fix: add the export "
                         f"holding its buys, or add to ticker.map:  GLOBAL "
                         f"<old ticker>.{tgt_guess.rsplit('.', 1)[-1]} "
-                        f"{tgt_guess}   — {rem.label()}", lint=True)
+                        f"{tgt_guess}   — {rem.label()}", attention=True)
         src = self._equity_symbol(src_raw, rem.currency, rem)
         tgt = self._equity_symbol(rc.symbol, rc.currency, rc)
         time = rbc_time(max(rem.k, rc.k))

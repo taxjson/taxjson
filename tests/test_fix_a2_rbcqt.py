@@ -16,7 +16,9 @@ from taxjson.lib.core import TaxTransaction
 from taxjson.lib.option_close_check import (unbacked_option_closes,
                                             unbacked_option_close_messages)
 
-from test_fix_rbc import HDR, parse_files, parse_one, row
+from test_fix_rbc import (ABC_REC, ABC_REM, ABC_SELL, HDR, ORCX_ROWS, OWL,
+                          parse_files, parse_one, row)
+from test_fix_rbcqt import q, qdiv, qt_parse
 
 REPO = Path(__file__).resolve().parent.parent
 ACCT = "55500001"  # pii-ok (synthetic)
@@ -216,6 +218,110 @@ class TestRbcCloseContractEndToEnd(unittest.TestCase):
                       out)
         self.assertNotIn("missing its expiry", out)
         self.assertNotIn("add the missing purchase", out)
+
+
+ATT = "warning: ATTENTION:"
+
+
+def _attention(err):
+    return [ln for ln in err.splitlines() if ln.startswith(ATT)]
+
+
+class TestMoneyWarningsReachTheConsole(unittest.TestCase):
+    """A2-0005, A2-0007, A2-0027, A2-0096, A2-0612, A2-0613, A2-0276,
+    A2-0279, A2-0282, A2-0283: parser warnings about money the books
+    get wrong (a guessed listing or code, income left out, shares with
+    no cost) carry the ATTENTION prefix `taxjson run` prints on the
+    console; plain warnings reached only the .sum."""
+
+    def test_rbc_temporary_code_assumption(self):
+        _txs, err, _ = parse_files({"rbc_2026.csv": ABC_SELL + ABC_REC
+                                    + ABC_REM})
+        self.assertTrue(any("A012345" in ln for ln in _attention(err)), err)
+
+    def test_rbc_ticker_change_puts_the_map_line_first(self):
+        _txs, err, _ = parse_one("".join(ORCX_ROWS))
+        (ln,) = [x for x in _attention(err) if "ORCX" in x]
+        self.assertIn("GLOBAL ORCX.US OBDX.US", ln)
+
+    def test_rbc_ticker_change_with_a_buy_first(self):
+        # A2-0270: the new symbol opens with a small buy, then sells more.
+        body = (row("August 23, 2023", "Sell", "OBDX", OWL, "-1578", "15",
+                    "23650.05", "USD", "BLUE OWLX UNSOLICITED CA")
+                + row("August 22, 2023", "Buy", "OBDX", OWL, "10", "15",
+                      "-150.05", "USD", "BLUE OWLX UNSOLICITED DA")
+                + "".join(ORCX_ROWS[1:]))
+        _txs, err, _ = parse_one(body)
+        self.assertTrue(any("GLOBAL ORCX.US OBDX.US" in ln
+                            for ln in _attention(err)), err)
+
+    def test_rbc_notional_distribution(self):
+        nd = row("December 31, 2025", "Distribution", "VDX", "VANGUARD X",
+                 "", "", "0", "CAD", "VANGUARD X 2025 NOTIONAL DISTRIBUTION "
+                 "ADJUSTMENT TO BOOK COST $2000.00")
+        _txs, err, _ = parse_one(nd)
+        self.assertTrue(any("notional distribution" in ln
+                            for ln in _attention(err)), err)
+
+    def test_qt_internal_code_roc(self):
+        _txs, err, _ = qt_parse(
+            qdiv("A020626", "OTHERCO INC RETURN OF CAPITAL ON 100 SHS REC "
+                 "01/15/26 PAY 02/01/26", "700.00", cur="CAD"))
+        self.assertTrue(any("A020626" in ln for ln in _attention(err)), err)
+
+    def test_qt_net_of_tax_dividend_and_no_book_value(self):
+        div = qdiv("AAPL", "APPLE INC CASH DIV ON 100 SHS NON-RES TAX "
+                   "WITHHELD", "21.25")
+        tfi = q(action="TF6", sym="QZT.TO", desc="QZT CORP TRANSFER IN",
+                qty="100", price="0", gross="0", comm="0", net="0",
+                cur="CAD", act="Transfers")
+        _txs, err, _ = qt_parse(div + tfi, taxable=True)
+        att = _attention(err)
+        self.assertTrue(any("NON-RES TAX WITHHELD" in ln for ln in att), err)
+        self.assertTrue(any("TRANSFER BOOK VALUE" in ln for ln in att), err)
+
+    def test_qt_ticker_change_buy_first_and_console(self):
+        # A2-0099 / A2-0279.
+        d = "QQ HOLDINGS CORP WE ACTED AS AGENT"
+        body = (q(sym="QQOL", desc=d, qty="500", price="20", gross="-10000",
+                  comm="0", net="-10000")
+                + q(td="2025-05-01", sym="QQNW", desc=d, qty="100",
+                    price="25", gross="-2500", comm="0", net="-2500")
+                + q(td="2025-06-01", action="Sell", sym="QQNW", desc=d,
+                    qty="-600", price="30", gross="18000", comm="0",
+                    net="18000"))
+        _txs, err, _ = qt_parse(body)
+        self.assertTrue(any("GLOBAL QQOL.US QQNW.US" in ln
+                            for ln in _attention(err)), err)
+
+    def test_run_echoes_the_continuation_line(self):
+        # A2-0613: an indented continuation under an echoed line.
+        from taxjson.bin.taxjson_run import echo_parse_stats
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "x.json"
+            Path(d, "x.json.diag").write_text(
+                "warning: ATTENTION: a.csv: head\n    GLOBAL A.US B.US\n"
+                "  a.csv: 3 tax objects\nwarning: plain\n    hidden\n")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                echo_parse_stats(out)
+        got = buf.getvalue()
+        self.assertIn("GLOBAL A.US B.US", got)
+        self.assertIn("\n  a.csv: 3 tax objects", got)
+        self.assertNotIn("hidden", got)
+
+    def test_canada_stock_dividend_is_on_the_console(self):
+        # A2-0265: the Canadian $0-cost stock dividend (CA-STKDIV-01).
+        buy = row("March 3, 2025", "Buy", "TDQ", "TDQ SPLIT CORP", "100",
+                  "10", "-1000", "CAD", "TDQ SPLIT CORP UNSOLICITED")
+        sd = row("June 2, 2025", "Reorganization", "TDQ", "TDQ SPLIT CORP",
+                 "5", "", "0", "CAD", "DIS - TDQ SPLIT CORP STK DIV ON 100 "
+                 "SHS")
+        with tempfile.TemporaryDirectory() as d:
+            p = _project(Path(d) / "p", 2025, {"rbc.csv": HDR + sd + buy})
+            r = _cli_run(p, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ATTENTION: TDQ.TO: stock dividend of 5", r.stdout)
 
 
 if __name__ == "__main__":

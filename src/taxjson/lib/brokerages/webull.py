@@ -552,7 +552,9 @@ class WebullBrokerage(BaseBrokerage):
             ordered = list(syms.values())
             for prev, t in zip(ordered, ordered[1:]):
                 if float(t['quantity']) < 0:
-                    print(f"warning: Webull {source}: {t['symbol']} "
+                    # ATTENTION: on the run console (re-audit A2-0279;
+                    # the plain warning reached only the .sum).
+                    print(f"warning: ATTENTION: Webull {source}: {t['symbol']} "
                           f"opens with a SALE on {t['date']} and shares "
                           f"the Security Description {desc!r} with "
                           f"{prev['symbol']} — likely a ticker change "

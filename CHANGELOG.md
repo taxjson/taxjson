@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **RBC / Questrade / Webull: money-affecting parser warnings reach the
+  run console.** A guessed listing for a USD return of capital on an
+  untraded symbol (now suggesting `TOBASE`, which works, instead of
+  `GLOBAL`, which stopped the run), an RBC temporary code assumed to be
+  the receipt's ticker, a ticker change without a reorganization row
+  (now also when the new symbol opens with a buy and then goes short,
+  with the `GLOBAL` line on the first line), an RBC notional
+  distribution whose income is left to the T3, a Questrade internal
+  code, a dividend booked net of non-resident tax and a transfer-in
+  with no book value are `ATTENTION` lines now; they sat in the .sum
+  only. In a Canada project the $0-cost stock-dividend note is an
+  ATTENTION line too, and `taxjson run` echoes an echoed warning's
+  indented continuation lines (re-audit A2-0005, A2-0007, A2-0027,
+  A2-0096, A2-0099, A2-0265, A2-0270, A2-0276, A2-0279, A2-0282,
+  A2-0283, A2-0612, A2-0613).
 - **RBC: a CLOSE CONTRACT row the books cannot back is said out loud.**
   RBC re-describes an option between yearly exports (.RCI in 2024,
   .RCI.B in 2025; an adjusted .TRX1). With the opening position in a

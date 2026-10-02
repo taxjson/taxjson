@@ -223,7 +223,15 @@ def echo_parse_stats(out_path: Path) -> None:
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
         return
+    echoing = False
     for line in diag_path.read_text(errors="replace").splitlines():
+        if (echoing and line[:1] in (" ", "\t") and line.strip()
+                and not _PARSE_COUNT_RE.match(line)):
+            # An echoed warning's indented continuation (the GLOBAL line
+            # under a ticker-change hint, re-audit A2-0613).
+            print(f"  {line}")
+            continue
+        echoing = line.startswith((UNBOOKED_PREFIX, ATTENTION_PREFIX))
         if _PARSE_COUNT_RE.match(line):
             # Keep the parser's own leading indent — it visually nests
             # the per-file counts under the `parse {broker}: …` header.
@@ -260,8 +268,13 @@ def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
         lines = diag_path.read_text(errors="replace").splitlines()
     except OSError:
         return
+    echoing = False
     for line in lines:
-        if line.startswith(ATTENTION_PREFIX + " " + prefix):
+        if echoing and line[:1] in (" ", "\t") and line.strip():
+            print(f"  {line}")
+            continue
+        echoing = line.startswith(ATTENTION_PREFIX + " " + prefix)
+        if echoing:
             print(f"  {line}")
 
 

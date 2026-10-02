@@ -1103,9 +1103,11 @@ def run_gains(transactions, sheltered_transactions=(),
         # Canadian cost is its declared amount, which the export does
         # not carry (tax-logic CA-STKDIV-01). The US engine words its
         # own rule (§305(a)/§307) when it spreads the basis.
+        # An ATTENTION line, on the run console (re-audit A2-0265: the
+        # NOTE sat in the .sum while the income and ACB were short).
         for _t in transactions:
             if is_stock_dividend(_t) and float(_t.quantity or 0) > 0:
-                print(f"NOTE: {_t.symbol}: stock dividend of "
+                print(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
                       f"{float(_t.quantity):g} share(s) on {_t.date} "
                       f"entered at $0 cost — in Canada it is a dividend "
                       f"at its declared amount, which is also the new "

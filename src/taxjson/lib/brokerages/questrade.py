@@ -290,10 +290,12 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
 def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
     """A ticker change with no corporate-action row (audit S062-06 /
     S063-12): the old symbol stops with shares still open and a symbol
-    with the same Description and currency opens with a SALE those
-    shares cover. As exported that is a stranded long and a short, and
-    the year's gain drops out. The export has no CUSIP, so this is not
-    certain enough to merge silently: warn with the ticker.map line."""
+    with the same Description and currency goes SHORT by no more than
+    those shares — its first row a sale, or a buy followed by a larger
+    sale (re-audit A2-0099). As exported that is a stranded long and a
+    short, and the year's gain drops out. The export has no CUSIP, so
+    this is not certain enough to merge silently: an ATTENTION line (on
+    the run console, re-audit A2-0279) with the ticker.map line first."""
     for (key, _cur), listings in sorted(by_name.items()):
         if len(listings) < 2:
             continue
@@ -303,20 +305,30 @@ def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
                 if a == b or not ta or not tb or ta[-1][0] > tb[0][0]:
                     continue
                 open_a = sum(q for _d, q in ta)
+                run = low = 0.0
+                when = ''
+                for d, q in tb:
+                    run += q
+                    if run < low - 1e-9:
+                        low, when = run, d
                 first_b = next((q for _d, q in tb if abs(q) > 1e-9), 0.0)
-                if (open_a <= 1e-9 or first_b >= -1e-9
-                        or -first_b > open_a + 1e-6):
+                if (open_a <= 1e-9 or low >= -1e-9
+                        or -low > open_a + 1e-6):
                     continue
+                how = (f"first appears on {tb[0][0]} with a SALE of "
+                       f"{-first_b:g}" if first_b < 0 else
+                       f"first appears on {tb[0][0]} and goes {-low:g} "
+                       f"short on {when}")
                 ctx.messages.append(
-                    f"warning: {where.get(b, '?')}: Questrade symbol {a} "
+                    f"warning: ATTENTION: {where.get(b, '?')}: Questrade "
+                    f"symbol {a} looks renamed to {b} — if they are one "
+                    f"security add to ticker.map:  GLOBAL {a} {b}  — {a} "
                     f"stops on {ta[-1][0]} with {open_a:g} share(s) still "
-                    f"open, and {b} — same Description {key!r} — first "
-                    f"appears on {tb[0][0]} with a SALE of {-first_b:g}. "
+                    f"open, and {b} (same Description {key!r}) {how}. "
                     f"That looks like a ticker change booked without a "
                     f"corporate-action row: as exported it is a stranded "
                     f"long {a} and a short {b} (the sale's gain drops "
-                    f"out). If they are the same security, add this line "
-                    f"to ticker.map:\n    GLOBAL {a} {b}")
+                    f"out).")
 
 
 class QuestradeBrokerage(BaseBrokerage):
@@ -490,7 +502,9 @@ class QuestradeBrokerage(BaseBrokerage):
                    f"GLOBAL {_key} "
                    f"<TICKER>.{self.apply_currency_suffix('X', currency)[2:]}"
                    f" or the position will fragment.")
-            print(f"warning: {msg}", file=sys.stderr)
+            # ATTENTION: on the run console (re-audit A2-0027 — a ROC
+            # on the code is a phantom gain with rc 0).
+            print(f"warning: ATTENTION: {msg}", file=sys.stderr)
             self.lint_findings.append(msg)
         return sym, currency
 
@@ -1067,7 +1081,10 @@ class QuestradeBrokerage(BaseBrokerage):
                   file=sys.stderr)
         taxable = self._is_taxable()
         if net_of_tax and taxable is not False:
-            print(f"warning: {path.name}: {len(net_of_tax)} dividend(s) "
+            # ATTENTION (re-audit A2-0276 / A2-0282): income and the
+            # foreign tax credit are wrong until the slip is used.
+            print(f"warning: ATTENTION: {path.name}: {len(net_of_tax)} "
+                  f"dividend(s) "
                   f"marked NON-RES TAX WITHHELD are booked at the NET "
                   f"amount — the export gives neither the gross nor the "
                   f"tax ({'; '.join(net_of_tax[:6])}"
@@ -1085,7 +1102,9 @@ class QuestradeBrokerage(BaseBrokerage):
             # accepts is the real acquisition as a backdated .tt BUYSELL
             # (or phantoms.json); a .tt TRANSFER is refused in a taxable
             # account and there is no OPENING_BALANCE .tt action.
-            print(f"warning: {path.name}: {len(no_book_value)} "
+            # ATTENTION (re-audit A2-0276 / A2-0283): the sale reads
+            # as a short and the year's gain is missing.
+            print(f"warning: ATTENTION: {path.name}: {len(no_book_value)} "
                   f"transfer-in(s) carry no TRANSFER BOOK VALUE "
                   f"({'; '.join(no_book_value[:6])}"
                   f"{'; ...' if len(no_book_value) > 6 else ''}). In a "
