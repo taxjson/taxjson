@@ -131,8 +131,9 @@ STEPS: List[Tuple[str, int, str, str, str]] = [
     ("fees", 4, "Carrying charges (margin interest) for line 22100 taken from the statements",
      "broker statements (`taxjson events` lists the INTEREST rows)",
      "Interest on money borrowed to invest is deductible on line 22100; trade "
-     "commissions are not (they are already in the ACB and proceeds) and no "
-     "taxjson command totals the interest."),
+     "commissions are not (they are already in the ACB and proceeds). The "
+     "account .sum's CASH INTEREST line nets credit against debit interest, "
+     "so it is not the interest paid."),
     ("estimate", 4, "Tax estimate and instalment position checked",
      "taxjson estimate, taxjson instalments",
      "A sanity check on the tax owed and on what was already paid."),
@@ -194,8 +195,10 @@ US_STEPS: Dict[str, Any] = {
                 "personal-transaction exclusion is not modelled)."),
     "fees": ("Margin interest collected (Form 4952, if itemizing)",
              "broker statements (`taxjson events` lists the INTEREST rows)",
-             "Investment interest is deductible only when itemizing; no taxjson "
-             "command totals it, and trade commissions are not investment interest."),
+             "Investment interest is deductible only when itemizing; the account "
+             ".sum's CASH INTEREST line nets credit against debit interest, so it "
+             "is not the interest paid, and trade commissions are not investment "
+             "interest."),
     "estimate": ("Tax estimate and estimated payments checked", "taxjson estimate",
                  "A sanity check on the tax owed."),
     "filed-lock": ("Return filed and the year locked", "taxjson close-year",
@@ -824,8 +827,11 @@ def d_crypto_sends(ctx: Ctx) -> Result:
     except ValueError as e:
         return Result("crypto-sends", "attention", str(e))
     undecided, stale, total, refused = [], [], 0, []
+    overridden, cross = [], []
     for n, a in rep["accounts"].items():
         total += len(a["sends"])
+        overridden += [o["id"] for o in a.get("overridden") or []]
+        cross += [c["id"] for c in a.get("cross_account_moves") or []]
         if a["undecided"]:
             undecided.append(f"{n}: {a['undecided']}")
         refused += [e["id"] for e in cs.refused_entries(a)]
@@ -839,6 +845,20 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                       f"booked): {', '.join(refused)} — record each as "
                       f"self or payment (`taxjson crypto-sends ACCOUNT "
                       f"--set ID=self`)")
+    if overridden:
+        # A saved gift/payment the pairing overrode is not booked
+        # (re-audit A2-0004): never "every send arrived".
+        return Result("crypto-sends", "attention",
+                      f"saved gift/payment now paired with an arrival "
+                      f"(booked as your own move, NOT as the decision): "
+                      f"{', '.join(overridden)} — `taxjson crypto-sends "
+                      f"ACCOUNT` says how to unpair or confirm it")
+    if cross:
+        return Result("crypto-sends", "attention",
+                      f"US: coins moved between two crypto accounts "
+                      f"(basis is not carried across accounts): "
+                      f"{', '.join(cross)} — keep both exchanges in one "
+                      f"crypto account")
     if undecided:
         return Result("crypto-sends", "attention",
                       f"undecided send(s) — {', '.join(undecided)}; "
@@ -1130,7 +1150,13 @@ def d_handoff(ctx: Ctx) -> Result:
         parts = []
         for k, label in (("positions", "opening position(s) differ"),
                          ("missed", "trade(s) settling in January missing"),
-                         ("double", "sale(s) reported in both years")):
+                         ("double", "sale(s) reported in both years"),
+                         ("timing", "written option(s) on another premium "
+                                    "timing than the closed year"),
+                         ("boundary", "row(s) on different sides of "
+                                      "Dec 31 in the two projects"),
+                         ("partial", "the closed year's record is a "
+                                    "partial-year snapshot")):
             if doc.get(k):
                 parts.append(f"{len(doc[k])} {label}")
         return Result("handoff", "attention",

@@ -53,9 +53,8 @@ from taxjson.lib.core import (get_tax_rules, is_option_symbol,
                               load_transactions)
 from taxjson.lib.country import (add_country_argument, canonical_country,
                                  refuse_foreign_flags)
-from taxjson.lib.pipeline import (add_income_dating_args,
-                                  apply_trust_roc_record_dates,
-                                  income_rules_from_args, prepare_books)
+from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
+                                  engine_options, prepare_books)
 from taxjson.lib.trace_format import render_gain_block
 
 # Money agreement threshold for every cross-check in this tool: the
@@ -168,7 +167,7 @@ def build_check_index(paths: List[Path]) -> Tuple[
         doc = _load_doc(p)
         labels.append(p.name)
         for g in doc.get("transactions") or []:
-            if not g.get("qty") or "gain" not in g:
+            if not _is_disposition_record(g):
                 continue
             # Same scope as the engine side (in_scope): income records
             # (PIL carries qty and gain 0.0) are not dispositions —
@@ -184,6 +183,41 @@ def build_check_index(paths: List[Path]) -> Tuple[
 
 
 NOID = "\x00no-id"
+
+
+def build_manual_index(paths: List[Path]) -> Dict[str, List[Dict[str, Any]]]:
+    """id -> [rows] of the saved gains files' MANUAL REPORTING REQUIRED
+    list (`manual_reporting_required`: dispositions drawn from a phantom
+    or transferred-in opening, reported by hand with no computed gain).
+    The audit ties the engine's tainted re-run rows to this list; it
+    used to call them MISSING — "stale or truncated saved books" — and
+    exit 1 on a fresh run (re-audit A2-0640, A2-1098)."""
+    index: Dict[str, List[Dict[str, Any]]] = {}
+    seen: set = set()
+    for p in paths:
+        try:
+            key = Path(p).resolve()
+        except OSError:
+            key = Path(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        for g in _load_doc(p).get("manual_reporting_required") or []:
+            if isinstance(g, dict):
+                index.setdefault(g.get("id") or NOID, []).append(g)
+    return index
+
+
+def _is_disposition_record(g: Dict[str, Any]) -> bool:
+    """A gains row the audit traces: a disposition (it has a quantity)
+    or a deemed gain with none — a return of capital on an empty pool
+    or beyond the ACB (s.40(3), CA-ACB-07; US §301(c)(3)), which the
+    return reports like a sale. The audit skipped those and printed
+    "total 0.00 ✓" for a year whose return shows the gain (re-audit
+    A2-0316)."""
+    if "gain" not in g:
+        return False
+    return bool(g.get("qty")) or bool(g.get("deemed"))
 
 
 def _kind(g: Dict[str, Any]) -> Tuple[str, bool, bool]:
@@ -365,6 +399,12 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
     # --- ticker mapping ----------------------------------------------
     base_row = base_index.get(gid)
     ev["base_row"] = base_row
+    try:
+        _mult = float((base_row or {}).get("multiplier") or 0.0)
+    except (TypeError, ValueError):
+        _mult = 0.0
+    if _mult > 0:
+        ev["multiplier"] = _mult
     if raw is not None and base_row is not None:
         ev["mapping"] = _map_note(str(raw.get("symbol") or ""),
                                   str(base_row.get("symbol") or ""), tmap)
@@ -605,9 +645,13 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
         if qty and abs(qty) > 1e-9:
             if is_opt:
                 n = abs(qty)
+                # The row's declared contract size (a x10 mini, a
+                # futures option's 1000) — the fixed 100 printed a
+                # wrong per-share price (re-audit A2-1099).
+                m = float(ev.get("multiplier") or 0) or OPTION_MULTIPLIER
                 return paint(f"   ({n:,g} contract{'s' if n != 1 else ''}"
-                             f" \u00d7 {OPTION_MULTIPLIER} sh @ "
-                             f"{abs(v) / (n * OPTION_MULTIPLIER):,.4f})",
+                             f" \u00d7 {m:g} sh @ "
+                             f"{abs(v) / (n * m):,.4f})",
                              "dim")
             return paint(f"   ({abs(qty):,g} sh @ "
                          f"{abs(v) / abs(qty):,.4f})", "dim")
@@ -684,7 +728,15 @@ def render_event(ev: Dict[str, Any], n: int, total: int,
 
     # ---- tie-out -----------------------------------------------------
     tie = ev.get("tie_out") or {}
-    if tie.get("ties") is not None:
+    if ev.get("manual_reporting"):
+        _sec(out, paint, "MANUAL", paint(
+            "phantom (pre-data) basis — the gain above is not computed "
+            "on the return; report this sale by hand", "warn"))
+    if tie.get("manual"):
+        _sec(out, paint, "TIE-OUT",
+             "saved gains file: listed under MANUAL REPORTING REQUIRED  "
+             + OK)
+    elif tie.get("ties") is not None:
         _sec(out, paint, "TIE-OUT",
              f"saved gains file: gain {_fmt(tie['pipeline_gain'])}, "
              f"disallowed {_fmt(tie['pipeline_disallowed'])}  "
@@ -718,12 +770,15 @@ def render_reconciliation(events: List[Dict[str, Any]],
     W = 86
     paint = _mk_paint(use_color)
     OK = paint("\u2713", "ok")
-    total_gain = sum(float(e.get("gain") or 0) for e in events)
+    total_gain = sum(float(e.get("gain") or 0) for e in events
+                     if not e.get("manual_reporting"))
     total_dis = sum(float(e.get("disallowed_amount") or 0) for e in events)
     tied = sum(1 for e in events if (e["tie_out"].get("ties") is True))
     untied = sum(1 for e in events if (e["tie_out"].get("ties") is False))
+    manual = sum(1 for e in events if e["tie_out"].get("manual"))
     nocheck = sum(1 for e in events if e["tie_out"].get("ties") is None
-                  and not e["tie_out"].get("out_of_scope"))
+                  and not e["tie_out"].get("out_of_scope")
+                  and not e["tie_out"].get("manual"))
     outside = sum(1 for e in events if e["tie_out"].get("out_of_scope"))
     fx_ok = sum(1 for e in events
                 if e.get("fx") and not e["fx"].get("native")
@@ -760,6 +815,10 @@ def render_reconciliation(events: List[Dict[str, Any]],
                    f"MISMATCHED, {nocheck:,} not found  "
                    + mark(untied + nocheck,
                           untied == 0 and nocheck == 0))
+        if manual:
+            out.append(f"                     {manual:,} phantom-basis "
+                       f"disposition(s) tied to MANUAL REPORTING "
+                       f"REQUIRED — reported by hand, not in the total")
         if outside:
             out.append(f"                     {outside:,} outside the "
                        f"saved books' tax year — not tied out (the "
@@ -801,14 +860,25 @@ def parse_args(argv=None):
                         "context; repeatable, as in taxjson-gains.")
     p.add_argument("--affiliated")
     p.add_argument("--incomplete-history", metavar="FILE")
-    p.add_argument("--per-account-basis", action="store_true")
+    # None -> the country default (GainsRequest): per-account FIFO on a
+    # US book (US-BASIS-01), as taxjson-gains does — the standalone
+    # audit pooled every account's lots (re-audit A2-0318).
+    p.add_argument("--per-account-basis", action="store_true", default=None)
+    p.add_argument("--corporate-distribution", action="append",
+                   default=None, metavar="SYMBOL",
+                   help="Canada: as in taxjson-gains ([settings] "
+                        "corporate_distributions) — the same income "
+                        "dating the books used.")
+    p.add_argument("--ric-january-dividend", action="append",
+                   default=None, metavar="\"SYMBOL [YYYY-01-DD]\"",
+                   help="USA: as in taxjson-gains ([settings] "
+                        "ric_january_dividends).")
     p.add_argument("--cross-asset", action="store_true",
                    help=argparse.SUPPRESS)    # retired, ignored
     p.add_argument("--option-premium-timing", choices=["grant", "close"],
                    default=None, help="Canada only (default: close)")
     p.add_argument("--option-grant-since", type=tax_year, default=None)
     p.add_argument("--option-buyback-wash", action="store_true")
-    add_income_dating_args(p)
     p.add_argument("--no-wash", action="store_true",
                    help="Disable wash detection (US crypto: digital "
                         "assets are property, not securities — §1091 "
@@ -881,6 +951,10 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     country = _norm_country(args.country)
     refuse_foreign_flags(args, "taxjson-audit")
+    # Close timing by default, while a Canada project uses grant timing:
+    # say so, as taxjson-gains does (R1-177, A2-0677).
+    from taxjson.bin.taxjson_gains import _timing_default_note
+    _timing_default_note(args, "taxjson-audit")
     if args.tax_date is None:
         args.tax_date = "trade" if country == "usa" else "settle"
 
@@ -932,6 +1006,7 @@ def main(argv=None) -> int:
     source_index = build_source_index([Path(s) for s in args.source])
     check_index, check_labels = build_check_index(
         [Path(c) for c in args.check])
+    manual_index = build_manual_index([Path(c) for c in args.check])
 
     # Same load-side preprocessing as the pipeline and explain, so the
     # audit cannot contradict the .sum it justifies.
@@ -940,23 +1015,29 @@ def main(argv=None) -> int:
         incomplete_history=(Path(args.incomplete_history)
                             if args.incomplete_history else None),
         phantom_hint=False)
-    # The record-date move run_gains applies (CA-INC-DATE-ROC-TRUST): the
-    # audit used the pay date and failed its own tie-out (A2-0139).
-    apply_trust_roc_record_dates(transactions,
-                                 income_rules_from_args(args, country))
 
+    # The engine options and the income re-dating run_gains applies
+    # (lib/pipeline: one builder): the trust ROC record date
+    # (CA-INC-DATE-ROC-TRUST, A2-0033/A2-0315/A2-0327), the grant-timing
+    # since-year on the tax-date basis (A2-0314/A2-0317) and US
+    # per-account FIFO (A2-0318). Without them the re-run differed from
+    # the books and the tie-out failed a correct project.
+    req = GainsRequest(
+        country=country, tax_date=args.tax_date,
+        per_account_basis=args.per_account_basis,
+        option_premium_timing=args.option_premium_timing or "close",
+        option_grant_since=args.option_grant_since,
+        option_buyback_loss_superficial=args.option_buyback_wash,
+        corporate_distributions=tuple(args.corporate_distribution or ()),
+        ric_january_dividends=tuple(args.ric_january_dividend or ()))
+    apply_roc_record_dates(transactions, req)
     rules = get_tax_rules(country)
     kwargs: Dict[str, Any] = dict(
         sheltered_transactions=sheltered,
         affiliated_transactions=affiliated,
         trace=True,
         detect_wash_sales=not args.no_wash)
-    if country == "usa":
-        kwargs["per_account_basis"] = args.per_account_basis
-    else:
-        kwargs["option_premium_timing"] = args.option_premium_timing or "close"
-        kwargs["option_grant_since"] = args.option_grant_since
-        kwargs["option_buyback_loss_superficial"] = args.option_buyback_wash
+    kwargs.update(engine_options(req))
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
         results = rules.compute_gains(transactions, **kwargs)
@@ -979,7 +1060,7 @@ def main(argv=None) -> int:
 
     def in_scope(g) -> bool:
         if g.get("action") in ("DIVIDEND", "DIVIDEND_IN_LIEU") \
-                or not g.get("qty") or "gain" not in g:
+                or not _is_disposition_record(g):
             return False
         eff = g.get(date_key) or g.get("date") or ""
         if args.year and not eff.startswith(str(args.year)):
@@ -1025,6 +1106,30 @@ def main(argv=None) -> int:
                           futures_native=futures_native,
                           filled_index=filled_index)
               for g in merged]
+    # Phantom-basis dispositions: the books list them under MANUAL
+    # REPORTING REQUIRED with no gain; the re-run's figure is fabricated
+    # (cost 0 on the synthetic opening). Tie them to that list, never to
+    # the gains total (A2-0640, A2-1098).
+    _tainted_ids = {g.get("id") for g in merged if g.get("tainted")}
+    for e in events:
+        if e["id"] not in _tainted_ids:
+            continue
+        e["manual_reporting"] = True
+        e["warnings"] = [
+            w for w in e.get("warnings") or []
+            if not w.startswith("disposition not found in the "
+                                "pipeline gains file")]
+        if not args.check:
+            continue
+        if e["id"] in manual_index:
+            e["tie_out"] = {"records": len(manual_index[e["id"]]),
+                            "ties": None, "manual": True}
+        else:
+            e["tie_out"] = {"records": 0, "ties": None}
+            e["warnings"].append(
+                "phantom-basis disposition not found under MANUAL "
+                "REPORTING REQUIRED in the pipeline gains file(s) — "
+                "cannot tie out.")
     if args.check and args.check_year:
         # The saved gains files hold ONE tax year; `audit --year Y`
         # for another year (or --all-years) reported every other
@@ -1078,7 +1183,19 @@ def main(argv=None) -> int:
                 f"({scoped[0].get('symbol')} {scoped[0].get('date')}, "
                 f"gain {_g:,.2f}) that the engine re-run did not "
                 f"produce — fabricated or double-counted record.")
+        for gid, recs in sorted(manual_index.items()):
+            if gid in _tainted_ids:
+                continue
+            scoped = [c for c in recs if _chk_in_scope(c)]
+            if scoped:
+                reconciliation_failures.append(
+                    f"check file lists {scoped[0].get('symbol')} "
+                    f"{scoped[0].get('date')} (id {str(gid)[:12]}) under "
+                    f"MANUAL REPORTING REQUIRED, but the engine re-run "
+                    f"has no phantom-basis disposition with that id.")
         for e in events:
+            if e["tie_out"].get("manual"):
+                continue
             if e["tie_out"].get("ties") is None and args.check \
                     and not e["tie_out"].get("out_of_scope"):
                 reconciliation_failures.append(
@@ -1088,7 +1205,8 @@ def main(argv=None) -> int:
                     f"from the check file(s) — stale or truncated "
                     f"saved books.")
         eng_total = sum(float(e.get("gain") or 0) for e in events
-                        if not e["tie_out"].get("out_of_scope"))
+                        if not e["tie_out"].get("out_of_scope")
+                        and not e.get("manual_reporting"))
         _chk_rows = [c for recs in check_index.values() for c in recs
                      if _chk_in_scope(c)]
         chk_total = sum(float(c.get("gain") or 0.0) for c in _chk_rows)
@@ -1132,7 +1250,9 @@ def main(argv=None) -> int:
         json.dump({"base_currency": base_currency, "country": country,
                    "events": slim,
                    "total_gain": round(sum(float(e.get("gain") or 0)
-                                           for e in events), 2),
+                                           for e in events
+                                           if not e.get(
+                                               "manual_reporting")), 2),
                    "total_disallowed": round(
                        sum(float(e.get("disallowed_amount") or 0)
                            for e in events), 2),
@@ -1155,6 +1275,8 @@ def main(argv=None) -> int:
                 flags += "  " + paint("FAILED", "bad")
             elif e["warnings"]:
                 flags += "  " + paint("warn", "warn")
+            if e.get("manual_reporting"):
+                flags += "  " + paint("MANUAL", "warn")
             if float(e.get("disallowed_amount") or 0) > TIE:
                 flags += "  " + paint(
                     f"WASH+{float(e['disallowed_amount']):.2f}",

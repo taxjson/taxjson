@@ -401,7 +401,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "distribution (\"DIST ON\", RBC \"Distribution\") on a "
                  "Canadian issuer (a Canadian listing or a CA ISIN) is "
                  "dated by its printed record date — in divs-sum, the "
-                 ".sum, the estimate and instalments. Split-share "
+                 ".sum, the estimate, instalments and the divs / roc / "
+                 "events views' windows (each row still shows its pay "
+                 "date). Split-share "
                  "corporations say \"Distribution\" too but are "
                  "corporations (paid date): "
                  + ", ".join(sorted(_split_share_roots())) + ", any row "
@@ -442,13 +444,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "currency the Bank does not publish, or a series it "
                  "stopped.", cont=True),
             Rule("CA-FX-02",
-                 "A day with no rate uses the latest rate of the 5 days "
-                 "before; a longer gap converts the row at a placeholder "
-                 "rate and is a validation ERROR (the .sum DIAGNOSTICS, "
-                 "`taxjson checklist`; `run --strict` stops), and a "
-                 "currency with no rates at all stops the run. `taxjson "
-                 "fx-cash` counts a cash event with no rate in those 5 "
-                 "days as unrated (named in its report).",
+                 "The rates file carries each rate over weekends and "
+                 "holidays for up to 7 days, and a day with no row there "
+                 "uses the latest row of the 5 days before, so a rate up "
+                 "to 12 days old is used (real Bank of Canada gaps are 4 "
+                 "days or less); a longer gap converts the row at a "
+                 "placeholder rate and is a validation ERROR (the .sum "
+                 "DIAGNOSTICS, `taxjson checklist`; `run --strict` "
+                 "stops), and a currency with no rates at all stops the "
+                 "run. `taxjson fx-cash` counts a cash event with no rate "
+                 "row in those 5 days as unrated (named in its report).",
                  cont=True),
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
@@ -463,8 +468,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-FX-07",
                  "Gains on holding foreign cash (s.39(1.1)) are NOT in the "
-                 "Schedule 3 totals: `taxjson fx-cash` estimates the net "
-                 "gain beyond the $200 annual exemption.",
+                 "Schedule 3 totals: `taxjson fx-cash` estimates the "
+                 "year's net gain or net loss beyond the $200 annual "
+                 "exemption (a net gain or loss within $200 is nil), from "
+                 "a pooled average cost per currency. Cash moves only on "
+                 "a trade for cash, income, withholding and fees; a "
+                 "coin-for-coin swap, a fee paid in a coin and a reward "
+                 "in a coin move none (a USD stablecoin is US-dollar "
+                 "cash, CA-CRYPTO-02).",
                  keys=("fx_cash_gains",)),
         ]),
         ("Cost base (ACB)", [
@@ -602,6 +613,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "the sale's trade date less the days held, counted on "
                  "trade dates: a buy traded in late December that settled "
                  "in January shows the December year."),
+            Rule("CA-DISP-08",
+                 "Each Schedule 3 cell is rounded half-up to the cent and "
+                 "the ACB is the row's footing residual, never below 0.00 "
+                 "(a cent of rounding goes to the outlays). A net "
+                 "commission rebate (a negative commission or fee) is not "
+                 "an outlay: it stays netted in the proceeds, so OUTLAYS "
+                 "is never negative."),
         ]),
         ("Superficial loss (s.54)", [
             Rule("CA-SL-01",
@@ -762,13 +780,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "or its pay date, amount or `all`) and divs-sum shows it "
                  "apart while "
                  "the estimate taxes it as a capital gain (50% inclusion, "
-                 "no gross-up or credit). ACB is unchanged."),
+                 "no gross-up or credit) and `taxjson carryover` adds it "
+                 "to its year's net capital gain or loss. ACB is "
+                 "unchanged."),
         ]),
         ("Crypto", [
             Rule("CA-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value."),
+                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
+                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
+                 "name the same coin as the bare code, so a 1:1 swap "
+                 "between them is not a sale."),
             Rule("CA-CRYPTO-09",
                  "Any amount of a coin is property: a residue left after a "
                  "sale, however small, stays in the holdings with its "
@@ -780,11 +803,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are treated as US-dollar "
                  "cash, an approximation (their own gain or loss, a "
-                 "de-peg, is not computed; a fill more than 2% off 1.00 "
-                 "USD is warned about)."),
+                 "de-peg, is not computed; a fill valued in US dollars "
+                 "more than 2% off 1.00 USD is warned about — a fill "
+                 "valued in another currency is not checked)."),
             Rule("CA-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin is a sale of that coin: on a "
+                 "move of coins (a withdrawal, a deposit, a transfer to "
+                 "another Kraken user or a Hybrid Earn withdrawal), on a "
+                 "fiat deposit or withdrawal, or on a staking reward."),
             Rule("CA-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
@@ -792,9 +818,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Moving coins between your own wallets is not a sale. A "
                  "gift or a payment in crypto is a sale at fair value."),
             Rule("CA-CRYPTO-06",
-                 "A send that arrives on another of your exchanges within "
-                 "3 days, with 90% to 100% of the coins sent, is treated as "
-                 "your own move. When fewer coins arrive and the sending "
+                 "A send that arrives on another of your exchanges (or the "
+                 "same exchange in another crypto account) from 10 minutes "
+                 "before it (exchange clocks disagree) to 3 days after it, "
+                 "with 90% to 100% of the coins sent — also as two deposits, "
+                 "or two sends landing as one deposit — is treated as your "
+                 "own move. Sends and arrivals are paired to pair the most "
+                 "sends, then lose the fewest coins, then the closest in "
+                 "time. A Kraken Hybrid Earn withdrawal is never paired (the "
+                 "coins stay on Kraken: your own, decided automatically). A "
+                 "saved gift or payment for a send that pairs is not booked "
+                 "and is warned about (`run --strict` stops) until you "
+                 "confirm it as `self` or unpair it (`--unpair`). When fewer "
+                 "coins arrive and the sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "
                  "arrive paid the network fee: a sale of them at fair "
@@ -808,7 +844,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "writes a sale at fair value for each gift or payment to "
                  "crypto_sends.tt: the exchange's price when the row has "
                  "one, otherwise the Yahoo daily close times the Bank of "
-                 "Canada rate of the send date.", cont=True),
+                 "Canada rate of the send date, or a price you give "
+                 "(`--price`, finite and at least 0.00000001; a network fee "
+                 "takes one too). A sale that cannot be priced is not "
+                 "booked: it is warned about and `run --strict` stops.",
+                 cont=True),
             Rule("CA-CRYPTO-08",
                  "A gift or payment of a stablecoin is not written as a "
                  "sale (stablecoins are cash in the books). It is a "
@@ -826,7 +866,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "exceeds $100,000 at any time in the year."),
             Rule("CA-RPT-02",
                  "Country comes from the listing suffix (t1135.map "
-                 "overrides); crypto held on an exchange counts.",
+                 "overrides; a foreign listing whose rows carry a "
+                 "Canadian ISIN is named for a `SYMBOL CA` line, since a "
+                 "Canadian corporation's shares are not foreign "
+                 "property); crypto held on an exchange counts.",
                  cont=True),
             Rule("CA-RPT-12",
                  "A property's cost amount is its adjusted cost base as "
@@ -840,7 +883,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "AB) with AMT on top of your other income, for planning "
                  "only.", keys=("province",)),
             Rule("CA-RPT-04",
-                 "Canadian dividends are treated as eligible (38% gross-up "
+                 "Canadian dividends (a Canadian issuer: its CA ISIN when "
+                 "the export gives one, else a Canadian listing) are "
+                 "treated as eligible (38% gross-up "
                  "and credit; a capital-gains dividend in "
                  "capital_gains_dividends.map as a capital gain),",
                  cont=True),
@@ -852,23 +897,42 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson carryover`: the net-capital-loss ledger in 100% "
                  "amounts (the inclusion rate is applied on the return); a "
                  "loss carries forward with no time limit and back up to 3 "
-                 "years (form T1A)."),
+                 "years (form T1A). Every year is recomputed with the "
+                 "project's own settings (option timing, tax_date, income "
+                 "dating); a year before the project year that has a "
+                 "close-year lock (filed/<year>.json or prior_year_record) "
+                 "takes the lock's FILED gain instead — the total filed "
+                 "with another tool, else the Schedule 3 gain lines — and "
+                 "a locked later year is compared with it. A year after "
+                 "the project year is partial: no carry-back is offered "
+                 "and the carryforward stops at the project year."),
             Rule("CA-RPT-11",
                  "`taxjson instalments`: CRA instalments (ITA s.156) when "
                  "net tax owing exceeds $3,000 this year and in one of the "
                  "two previous years — due March, June, September and "
                  "December 15 (the next business day on a weekend), on the "
                  "current-year, prior-year or CRA-reminder basis, with "
-                 "s.161 interest at CRA's prescribed rate."),
+                 "s.161 interest at CRA's prescribed rate. A payment "
+                 "made before January 1 counts only when its row says "
+                 "`tax_year = YEAR`, and earns credit from January 1."),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary."),
             Rule("CA-RPT-08",
                  "`taxjson close-year` records each closed year's sales, "
-                 "year-end positions and cost, and trades settling in "
-                 "January; `taxjson handoff` checks the next year starts "
+                 "year-end positions and cost (each superficial-loss "
+                 "addition where the engine lands it, so a January "
+                 "replacement's share is not in the Dec 31 cost), and "
+                 "trades settling in January; `taxjson handoff` checks the next year starts "
                  "from exactly that, so no sale is reported twice or "
-                 "never."),
+                 "never. It also flags a written option carried out of "
+                 "the closed year that this project puts on another "
+                 "premium timing than the record (taxed twice, or in no "
+                 "return), and income or a sale the two projects date "
+                 "on different sides of Dec 31 (a trust's record date, a "
+                 "local_timezone re-dating), so it is reported once; "
+                 "`option-boundary` and `handoff` read last year's record "
+                 "through prior_year_record."),
             Rule("CA-RPT-09",
                  "The record states its country: `check-filed` and "
                  "`handoff` refuse one closed under US rules instead of "
@@ -1029,13 +1093,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  keys=("base_currency",)),
             Rule("US-FX-02",
                  "Other currencies are converted at the Yahoo Finance "
-                 "daily rate for the settle date. A day with no rate uses "
-                 "the latest rate of the 5 days before; a longer gap "
-                 "converts the row at a placeholder rate and is a "
-                 "validation ERROR (`run --strict` stops), and a currency "
-                 "with no rates at all stops the run. `taxjson fx-cash` "
-                 "counts a cash event with no rate in those 5 days as "
-                 "unrated (named in its report).", cont=True),
+                 "daily rate for the settle date. The rates file carries "
+                 "each rate over weekends and holidays for up to 7 days, "
+                 "and a day with no row there uses the latest row of the "
+                 "5 days before, so a rate up to 12 days old is used; a "
+                 "longer gap converts the row at a placeholder rate and "
+                 "is a validation ERROR (`run --strict` stops), and a "
+                 "currency with no rates at all stops the run. `taxjson "
+                 "fx-cash` counts a cash event with no rate row in those "
+                 "5 days as unrated (named in its report).", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
@@ -1271,25 +1337,43 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-CRYPTO-01",
                  "Each coin is its own property. A coin-for-coin trade is "
                  "a sale of one and a purchase of the other at fair "
-                 "value."),
+                 "value. Kraken's staked and bonded wallet codes (DOT.S, "
+                 "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
+                 "name the same coin as the bare code, so a 1:1 swap "
+                 "between them is not a sale."),
             Rule("US-CRYPTO-02",
-                 "USD stablecoins (USDC, USDT, DAI; also PYUSD and GUSD on "
-                 "Coinbase) are property like any coin: buying one is a "
-                 "purchase, selling or spending one is a sale (a de-peg "
-                 "is a gain or loss), and a payment in one is written as "
-                 "a sale. A swap against a stablecoin, a reward or a fee "
-                 "in one is valued at its 1.00 USD par; a sale for "
-                 "dollars at the fill's price."),
+                 "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
+                 "Kraken and Coinbase alike) are property like any coin: "
+                 "buying one is a purchase, selling or spending one is a "
+                 "sale (a de-peg is a gain or loss), and a payment in one "
+                 "is written as a sale. A swap against a stablecoin, a "
+                 "reward or a fee in one is valued at its 1.00 USD par "
+                 "(on Kraken ahead of any USD value the export states; a "
+                 "Coinbase row keeps the value Coinbase states for it, "
+                 "par when it states none); a sale for dollars at the "
+                 "fill's price."),
             Rule("US-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin is a sale of that coin: on a "
+                 "move of coins (a withdrawal, a deposit, a transfer to "
+                 "another Kraken user or a Hybrid Earn withdrawal), on a "
+                 "fiat deposit or withdrawal, or on a staking reward."),
             Rule("US-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
             Rule("US-CRYPTO-05",
-                 "A send that arrives on another of your exchanges within "
-                 "3 days, with 90% to 100% of the coins sent, is treated as "
-                 "your own move. When fewer coins arrive and the sending "
+                 "A send that arrives on another of your exchanges (or the "
+                 "same exchange in another crypto account) from 10 minutes "
+                 "before it to 3 days after it, with 90% to 100% of the "
+                 "coins sent — also as two deposits, or two sends landing "
+                 "as one deposit — is treated as your own move; sends and "
+                 "arrivals are paired to pair the most sends, then lose the "
+                 "fewest coins, then the closest in time, and a Kraken "
+                 "Hybrid Earn withdrawal is never paired. Basis stays per "
+                 "account and is not carried from one crypto account to "
+                 "another: a move paired between two accounts is warned "
+                 "about and `run --strict` stops (keep both exchanges in "
+                 "one crypto account). When fewer coins arrive and the "
+                 "sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "
                  "arrive paid the network fee: a sale of them at fair "
@@ -1327,7 +1411,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-OPT-03", "Cash-settled options realize on the option.",
                  cont=True),
             Rule("US-OPT-04",
-                 "Not modelled: §1256 60/40 contracts, §1233 and §1259."),
+                 "Not modelled: §1256 60/40 contracts, §1233 and §1259. A "
+                 "broad-based index option (SPX, XSP, NDX, RUT, VIX, DJX, "
+                 "OEX and their weekly roots) or an option on a future is "
+                 "a §1256 contract: kept off Form 8949 and listed for "
+                 "Form 6781, as futures are."),
         ]),
         ("Futures", [
             Rule("US-FUT-01",
@@ -1341,7 +1429,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "money (a buy then receives cash: a negative cost)."),
             Rule("US-FUT-02",
                  "Not modelled: §1256 year-end marking to market and the "
-                 "60/40 split; report them on Form 6781 by hand.",
+                 "60/40 split; report them on Form 6781 by hand. "
+                 "`form-export` (8949 and TXF) and `sum` leave every "
+                 "§1256 contract out of the Form 8949 rows and totals and "
+                 "list it, with its P/L, for Form 6781.",
                  cont=True),
         ]),
         ("Reports", [
@@ -1351,13 +1442,20 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-RPT-02", "wash sales as code W).", cont=True),
             Rule("US-RPT-03",
                  "`--form txf` writes a TurboTax TXF file.", cont=True),
+            Rule("US-RPT-09",
+                 "Form 8949 cells are rounded half-up to the cent and (h) "
+                 "= (d) - (e) + (g) on the rounded cells, so a half-cent "
+                 "wash-sale adjustment shows as the allowed gain the other "
+                 "reports print."),
             Rule("US-RPT-04",
                  "`taxjson estimate`: federal tax only (single filer, "
                  "standard deduction, NIIT), for planning."),
             Rule("US-RPT-07",
                  "It treats every dividend as qualified, payments in lieu "
                  "and staking as ordinary income, gains with no term as "
-                 "short-term, and a net capital loss as offsetting up to "
+                 "short-term, §1256 P/L as short-term (no 60/40 split; "
+                 "it names the amount), and a net capital loss as "
+                 "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
             Rule("US-EST-NIIT-LOSS",
@@ -1372,7 +1470,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "
                  "$3,000 ordinary offset is used each year unless "
-                 "claimed_losses.txt records otherwise."),
+                 "claimed_losses.txt records otherwise. A year before the "
+                 "project year that has a close-year lock (filed/<year>.json "
+                 "or prior_year_record) takes the lock's filed Form 8949 "
+                 "Part I / Part II gains instead of the rebuilt ones; a "
+                 "year after the project year is partial and the carryover "
+                 "stops at the project year."),
             Rule("US-RPT-05",
                  "`taxjson edge-cases`: every trade whose tax year or "
                  "wash-sale verdict turns on a boundary, on trade dates; "
@@ -1380,8 +1483,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "nothing, and a long call is listed as a warning only."),
             Rule("US-RPT-06",
                  "`taxjson close-year` records each closed year's sales, "
-                 "year-end positions and basis, its country and date "
-                 "basis; `check-filed` and `handoff` refuse a record "
+                 "year-end positions and basis (a disallowed loss "
+                 "included in the replacement's basis, as `list` shows), "
+                 "its country and date basis; `handoff` also flags "
+                 "income the two projects date on different sides of "
+                 "Dec 31 (a RIC January dividend kept in one and not the "
+                 "other); `check-filed` and `handoff` refuse a record "
                  "closed under Canadian rules instead of recomputing it "
                  "under US law."),
         ]),

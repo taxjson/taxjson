@@ -420,7 +420,10 @@ class TestEstimateDeductions(unittest.TestCase):
         self.assertIn("Deductions", txt)
         self.assertIn("ESTIMATE ONLY", txt)
         self.assertNotEqual(bad.returncode, 0)
-        self.assertIn("non-negative", bad.stderr)
+        # The CLI guard's own message (naming the flag), not the
+        # library's 'deductions must be ... amount' (A2-1122).
+        self.assertIn("--deductions must be a non-negative finite number",
+                      bad.stderr)
 
 
 if __name__ == "__main__":

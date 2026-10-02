@@ -7,7 +7,8 @@ The parsers record neutral facts on a row (lib/core.TaxTransaction:
 tax consequence, gated on the project's country. Every consumer — the
 gains run (lib/pipeline.run_gains), the .sum income section
 (taxjson-sum-income), the machine report, and the views (`divs-sum`,
-`dil-sum`, `roc-sum`) — asks the same ``IncomeRules`` object, so the
+`dil-sum`, `roc-sum`, and the tax-year window of the `divs` / `roc` /
+`events` row views) — asks the same ``IncomeRules`` object, so the
 numbers cannot disagree. tax-logic states each rule (ids in brackets).
 
 Canada

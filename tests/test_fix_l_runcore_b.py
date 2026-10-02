@@ -269,10 +269,12 @@ class TestSumTable(unittest.TestCase):
             self.assertEqual(j["filing"]["totals"]["permanently_denied"],
                              200.0)
             t = _run_cli(root, "sum").stdout
-            # (re-audit A2-1233: an affiliated person's part goes to
-            # their own ACB, so the wording names both.)
-            self.assertIn("no ACB addition on your return (200.00 of the "
-                          "DENIED total)", " ".join(t.split()))
+            # A2-0659: the registered-account part is lost for good,
+            # an affiliated person's is theirs to add to their own ACB.
+            self.assertIn("is lost for good, and one caused by an "
+                          "affiliated person's acquisition is permanent "
+                          "for this return", " ".join(t.split()))
+            self.assertIn("(200.00 of the DENIED total)", " ".join(t.split()))
 
 
 class TestEstimatePins(unittest.TestCase):

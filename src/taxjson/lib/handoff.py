@@ -44,13 +44,51 @@ ACB_REL_TOL = 1e-4
 RunGains = Callable[[List[str], Path], None]
 
 
+class BooksError(ValueError):
+    """A work/ book the hand-off reads exists but cannot be read."""
+
+
+def _label(path: Path) -> str:
+    p = Path(path)
+    return f"{p.parent.name}/{p.name}"
+
+
 def _rows(path: Path) -> List[Dict[str, Any]]:
-    try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    """The rows of a work/<acct>_base.json; [] when the file does not
+    exist (an account with no inputs). An unreadable or damaged file is
+    a BooksError naming it: close-year wrote a lock with no year-end
+    positions, and handoff reported every lot as missing from the
+    opening file, at rc 0 and with nothing on stderr (A2-0346,
+    A2-1137)."""
+    p = Path(path)
+    if not p.exists():
         return []
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
+                         f"`taxjson run` to rebuild it")
     rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        raise BooksError(f"could not read {_label(p)} (no transaction "
+                         f"list) — re-run `taxjson run` to rebuild it")
     return [r for r in rows if isinstance(r, dict)]
+
+
+def _check_books(path: Path) -> None:
+    """Validate one source book with the engine's own loader BEFORE it is
+    merged into a temporary file: a damaged row was reported against
+    /tmp/taxjson-handoff-*/equity_full.json, a file the user never saw
+    and that is gone when the message is read (A2-1143)."""
+    p = Path(path)
+    if not p.exists():
+        return
+    from taxjson.lib.core import load_transactions
+    try:
+        load_transactions(p)
+    except Exception as e:                          # noqa: BLE001
+        raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
+                         f"`taxjson run` to rebuild it")
 
 
 def _d(s: Any) -> Optional[date]:
@@ -98,6 +136,41 @@ def _parse_adjust(cmd: str) -> Optional[Dict[str, Any]]:
             "amount": amt}
 
 
+def _landings(w: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Where a superficial-loss record's s.53(1)(f) additions land: the
+    engine's own `adjusts` (one per taxable replacement, each with its
+    pool symbol, trade and settle stamps), else — a gains file written
+    before `adjusts` existed — the single lump `adjust_cmd`. The lump
+    put a multi-symbol allocation on the first symbol (A2-0352), a
+    January landing at Dec 31 (A2-0669), and on settle basis a bump
+    dated the trade day before the losing sale settled (A2-1140)."""
+    out: List[Dict[str, Any]] = []
+    if isinstance(w.get("adjusts"), list):
+        for a in w["adjusts"]:
+            try:
+                amt = float(a.get("amount") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if not a.get("symbol") or not a.get("date") or abs(amt) < 1e-9:
+                continue
+            out.append({"symbol": a["symbol"], "date": a["date"],
+                        "date_settle": a.get("date_settle") or a["date"],
+                        "time": a.get("time") or "00:00:00",
+                        "currency": a.get("currency") or "",
+                        "account": a.get("account") or "",
+                        "amount": amt})
+        if out:
+            cur = _parse_adjust(w.get("adjust_cmd") or "")
+            for a in out:
+                a["currency"] = a["currency"] or (cur or {}).get(
+                    "currency", "")
+        return out
+    a = _parse_adjust(w.get("adjust_cmd") or "")
+    if a:
+        out.append(dict(a, date_settle=a["date"], account=""))
+    return out
+
+
 def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
              run_gains: RunGains, common_flags: List[str],
              phantoms: Optional[Path] = None) -> Dict[str, Any]:
@@ -111,6 +184,11 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
         _ir = IncomeRules.from_settings(settings)
     except ValueError:          # no country: no record-date rule to apply
         _ir = IncomeRules(country="")
+    from taxjson.lib.country import settings_country
+    try:
+        us = settings_country(settings) == "usa"
+    except Exception:                               # noqa: BLE001
+        us = False
     sheltered = cache / "sheltered_base.json"
     sheltered_ids = {r.get("id") for r in _rows(sheltered)} \
         if sheltered.exists() else set()
@@ -120,35 +198,43 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
         for g, names in groups(cfg).items():
             rows = []
             for n in names:
+                _check_books(cache / f"{n}_base.json")
                 rows += _rows(cache / f"{n}_base.json")
             if not rows:
                 continue
-            full = tdp / f"{g}_full.json"
-            full.write_text(json.dumps({"transactions": rows}))
-            tail = ["--taxable"] + common_flags
-            if sheltered.exists() and g == "equity":
-                tail += ["--sheltered", str(sheltered)]
-            if phantoms is not None and phantoms.exists():
-                tail += ["--incomplete-history", str(phantoms)]
-            full_out = tdp / f"{g}_full_gains.json"
-            run_gains(tail + [str(full)], full_out)
-            fdoc = json.loads(full_out.read_text(encoding="utf-8"))
+            fdoc: Dict[str, Any] = {}
+            if not us:          # §1091: the US engine re-runs below
+                full = tdp / f"{g}_full.json"
+                full.write_text(json.dumps({"transactions": rows}))
+                tail = ["--taxable"] + common_flags
+                if sheltered.exists() and g == "equity":
+                    tail += ["--sheltered", str(sheltered)]
+                if phantoms is not None and phantoms.exists():
+                    tail += ["--incomplete-history", str(phantoms)]
+                full_out = tdp / f"{g}_full_gains.json"
+                run_gains(tail + [str(full)], full_out)
+                fdoc = json.loads(full_out.read_text(encoding="utf-8"))
             deferred: Dict[str, float] = {}
             adjust_rows = []
             for i, w in enumerate(fdoc.get("wash_sales") or []):
                 if w.get("trigger_lot_id") in sheltered_ids:
                     continue            # permanent: lands in no taxable pool
-                a = _parse_adjust(w.get("adjust_cmd") or "")
-                if not a or not _d(a["date"]) or _d(a["date"]) > cut:
-                    continue
-                deferred[a["symbol"]] = deferred.get(a["symbol"], 0.0) \
-                    + a["amount"]
-                adjust_rows.append({
-                    "action": "ADJUST", "date": a["date"],
-                    "date_settle": a["date"], "time": a["time"],
-                    "symbol": a["symbol"], "currency": a["currency"],
-                    "net_amount": a["amount"], "quantity": 0.0,
-                    "account": names[0], "id": f"HANDOFF_WASH_{i}"})
+                for j, a in enumerate(_landings(w)):
+                    d = (_d(a.get("date_settle")) or _d(a.get("date"))
+                         if basis == "settle" else _d(a.get("date")))
+                    if d is None or d > cut:
+                        continue        # lands after Dec 31 (A2-0669)
+                    deferred[a["symbol"]] = deferred.get(a["symbol"], 0.0) \
+                        + a["amount"]
+                    adjust_rows.append({
+                        "action": "ADJUST", "date": a["date"],
+                        "date_settle": a.get("date_settle") or a["date"],
+                        "time": a.get("time") or "00:00:00",
+                        "symbol": a["symbol"],
+                        "currency": a.get("currency") or "",
+                        "net_amount": a["amount"], "quantity": 0.0,
+                        "account": a.get("account") or names[0],
+                        "id": f"HANDOFF_WASH_{i}_{j}"})
             # A trust ROC counts on its record date, as the engine books
             # it (CA-INC-DATE-ROC-TRUST; A2-0202).
             kept = [r for r in rows
@@ -157,7 +243,18 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                     and d <= cut]
             trunc = tdp / f"{g}_asof.json"
             trunc.write_text(json.dumps({"transactions": kept + adjust_rows}))
-            tail = ["--taxable", "--no-wash"] + common_flags
+            if us:
+                # The US engine adds a disallowed loss to the
+                # replacement lot's basis itself (§1091(d)) and records
+                # no ADJUST landing: the Dec-31 rows are re-run WITH the
+                # wash rule, so the year-end basis carries it, as `list`
+                # shows (A2-0353). A replacement after Dec 31 is not in
+                # a Dec-31 lot either way.
+                tail = ["--taxable"] + common_flags
+                if sheltered.exists() and g == "equity":
+                    tail += ["--sheltered", str(sheltered)]
+            else:
+                tail = ["--taxable", "--no-wash"] + common_flags
             if phantoms is not None and phantoms.exists():
                 tail += ["--incomplete-history", str(phantoms)]
             trunc_out = tdp / f"{g}_asof_gains.json"
@@ -167,12 +264,15 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
             for h in tdoc.get("inventory") or []:
                 sym = h.get("symbol")
                 q = float(h.get("qty") or 0.0)
-                if not sym or abs(q) < QTY_TOL:
+                if not sym or abs(q) < 1e-12:
                     continue
                 p = pos.setdefault(sym, {"qty": 0.0, "acb": 0.0,
                                          "deferred": 0.0})
                 p["qty"] += q
                 p["acb"] += float(h.get("total_cost") or 0.0)
+                if us:
+                    deferred[sym] = deferred.get(sym, 0.0) + float(
+                        h.get("deferred_wash") or 0.0)
             for sym, amt in deferred.items():
                 if sym in pos:
                     pos[sym]["deferred"] = round(amt, 2)
@@ -238,30 +338,130 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
     with another tool. CSV with a header: symbol,date,qty,proceeds,cost,
     gain (account optional; date = the date the return used; amounts in
     the base currency; qty positive)."""
+    import io
+    from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                             decode_broker_text)
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"{path}: not a file")
+    # The decode funnel every broker export goes through: a UTF-16
+    # (Excel "Unicode Text") save is read, any other encoding is one
+    # line naming the file, not a codec message (A2-1138).
+    try:
+        text = decode_broker_text(p.read_bytes(), str(path))
+    except BrokerageParseError as e:
+        raise ValueError(str(e))
+    except OSError as e:
+        raise ValueError(f"{path}: cannot read ({e})")
+    first = text.split("\n", 1)[0]
+    delim = "\t" if ("\t" in first and "," not in first) else ","
     rows = []
-    with open(path, newline="", encoding="utf-8-sig") as fh:
-        rd = csv.DictReader(fh)
-        missing = [c for c in _FILED_COLS
-                   if c not in (rd.fieldnames or [])]
-        if missing:
-            raise ValueError(f"{path}: missing column(s) "
-                             f"{', '.join(missing)} (need "
-                             f"{', '.join(_FILED_COLS)})")
-        for i, r in enumerate(rd, start=2):
-            try:
-                rows.append({
-                    "account": (r.get("account") or "").strip(),
-                    "symbol": r["symbol"].strip(),
-                    "date": str(_d(r["date"]) or ""),
-                    "qty": abs(float(r["qty"])),
-                    "proceeds": round(float(r["proceeds"]), 2),
-                    "cost": round(float(r["cost"]), 2),
-                    "gain": round(float(r["gain"]), 2)})
-            except (KeyError, ValueError) as e:
-                raise ValueError(f"{path}:{i}: bad row ({e})")
-            if not rows[-1]["date"]:
-                raise ValueError(f"{path}:{i}: bad date {r['date']!r}")
+    fh = io.StringIO(text, newline="")
+    rd = csv.DictReader(fh, delimiter=delim)
+    missing = [c for c in _FILED_COLS
+               if c not in (rd.fieldnames or [])]
+    if missing:
+        raise ValueError(f"{path}: missing column(s) "
+                         f"{', '.join(missing)} (need "
+                         f"{', '.join(_FILED_COLS)})")
+    for i, r in enumerate(rd, start=2):
+        # A stray quote merges the following rows into one cell and
+        # a filed disposition vanished from the record in silence
+        # (A2-1136): a record wider than the header or a cell
+        # holding a line break is refused, naming the line.
+        if r.get(None) or any(
+                isinstance(v, str) and ("\n" in v or "\r" in v)
+                for k, v in r.items() if k is not None):
+            raise ValueError(
+                f"{path}: the record ending on line {rd.line_num} "
+                f"holds a line break or more cells than the header — "
+                f"an unescaped quote swallowed the next row(s). Fix "
+                f"the quoting (double an inner quote: \"\") and "
+                f"re-run.")
+        try:
+            rows.append({
+                "account": (r.get("account") or "").strip(),
+                "symbol": r["symbol"].strip(),
+                "date": str(_d(r["date"]) or ""),
+                "qty": abs(float(r["qty"])),
+                "proceeds": round(float(r["proceeds"]), 2),
+                "cost": round(float(r["cost"]), 2),
+                "gain": round(float(r["gain"]), 2)})
+        except (KeyError, ValueError) as e:
+            raise ValueError(f"{path}:{i}: bad row ({e})")
+        import math
+        if not all(math.isfinite(rows[-1][k])
+                   for k in ("qty", "proceeds", "cost", "gain")):
+            raise ValueError(f"{path}:{i}: bad row (an amount is not a "
+                             f"finite number)")
+        if not rows[-1]["date"]:
+            raise ValueError(f"{path}:{i}: bad date {r['date']!r}")
     return rows
+
+
+_TRADES = ("BUYSELL", "ASSIGN")
+_INCOME = ("DIVIDEND", "DIVIDEND_IN_LIEU", "INTEREST", "ADJUST")
+
+
+def _income_rules(settings: Dict[str, Any]):
+    from taxjson.lib.income_dating import IncomeRules
+    try:
+        return IncomeRules.from_settings(settings)
+    except ValueError:
+        return IncomeRules(country="")
+
+
+def _eff_date(r: Dict[str, Any], basis: str, ir) -> Optional[date]:
+    """The date a row counts on in the books: a trade's trade or settle
+    date (the date basis), an income row's income date (a Canadian
+    trust's record date, a US RIC January dividend's Dec 31), a return
+    of capital's record date (lib/income_dating)."""
+    a = str(r.get("action") or "").upper()
+    if a in _TRADES:
+        return _bdate(r, basis)
+    try:
+        return _d(ir.row_date(r)) or _d(r.get("date"))
+    except Exception:                               # noqa: BLE001
+        return _d(r.get("date"))
+
+
+def boundary_rows(cache: Path, cfg: Dict[str, Any], year: int
+                  ) -> List[Dict[str, Any]]:
+    """Every taxable trade and income row of December `year` and January
+    `year + 1` (by its own date or the date the books count it on), with
+    that tax date: the next project's `handoff` checks rows the two
+    projects put on different sides of Dec 31 — income a trust record
+    date, a RIC January dividend or a local_timezone re-dating moves
+    across the boundary, and a fill the overnight shift moved into
+    January (A2-0120, A2-0343, A2-0344, A2-0670, A2-0675)."""
+    settings = cfg.get("settings", {}) or {}
+    basis = _basis(settings)
+    ir = _income_rules(settings)
+    lo, hi = date(year, 12, 1), date(year + 1, 1, 31)
+    out = []
+    for g, names in groups(cfg).items():
+        for n in names:
+            for r in _rows(cache / f"{n}_base.json"):
+                a = str(r.get("action") or "").upper()
+                if a not in _TRADES + _INCOME:
+                    continue
+                eff, raw = _eff_date(r, basis, ir), _d(r.get("date"))
+                if not ((eff and lo <= eff <= hi)
+                        or (raw and lo <= raw <= hi)):
+                    continue
+                out.append({"group": g, "account": n, "action": a,
+                            "symbol": r.get("symbol"), "date": str(raw),
+                            "date_settle": str(_d(r.get("date_settle"))
+                                               or raw),
+                            # Full precision: a coin reward of
+                            # 0.000135313637 rounded to 8 places no
+                            # longer matched its own row.
+                            "quantity": float(r.get("quantity") or 0.0),
+                            "net": round(float(r.get("net_amount")
+                                               or 0.0), 2),
+                            "tax_date": str(eff) if eff else None})
+    out.sort(key=lambda x: (x["date"], x["symbol"] or "", x["action"]))
+    return out
 
 
 def record_fields(root: Path, cfg: Dict[str, Any], year: int,
@@ -277,6 +477,7 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
         "year_end": snapshot(cache, cfg, f"{year}-12-31", run_gains,
                              common_flags, phantoms),
         "settle_next_year": straddlers(cache, cfg, year),
+        "boundary_rows": boundary_rows(cache, cfg, year),
     }
     if filed_csv is not None:
         fd = load_filed_dispositions(filed_csv)
@@ -341,6 +542,16 @@ def _redescribed_options(prev: Dict[str, Any], now: Dict[str, Any]
     return out
 
 
+def _qty_eq(a: float, b: float) -> bool:
+    """Quantities equal within QTY_TOL, relative for sub-unit amounts: the
+    absolute floor called 9.4e-7 BTC and 5.6e-7 (or 0) equal, so a dust
+    difference between the closed year and the opening was "no
+    difference" (A2-1133; taxjson-diff's values_equal, S029-18)."""
+    d = abs(float(a) - float(b))
+    return (d <= QTY_TOL * max(1.0, abs(a), abs(b))
+            and d <= QTY_TOL * max(abs(a), abs(b), 1e-12))
+
+
 def _acb_close(a: float, b: float) -> bool:
     return abs(a - b) <= max(ACB_ABS_TOL, ACB_REL_TOL * max(abs(a), abs(b)))
 
@@ -358,6 +569,216 @@ def _filed_by_symbol(rec: Dict[str, Any]) -> Tuple[Dict[str, float],
     return book, filed
 
 
+def _grant_in(timing: Dict[str, Any], wy: int) -> bool:
+    """Whether a contract written in `wy` is on grant timing (premium
+    taxed in the write year, ITA s.49(1)) under `timing`."""
+    if str(timing.get("option_premium_timing") or "close").lower() \
+            != "grant":
+        return False
+    since = timing.get("option_grant_since")
+    try:
+        return since is None or wy >= int(since)
+    except (TypeError, ValueError):
+        return True
+
+
+def _timing_issues(cache: Path, cfg: Dict[str, Any],
+                   record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Written options carried out of the closed year that the record
+    and this project put on DIFFERENT premium timing (Canada): the
+    closed return taxed the premium at the write (grant) and this
+    project taxes it again at the close, or the closed return left it to
+    the close (close timing) and this project puts it back in the closed
+    year, where no return reports it. handoff said "Everything ... is
+    here, once" over a premium taxed twice (A2-0037)."""
+    rec_t = record.get("option_timing")
+    if not isinstance(rec_t, dict) or "option_premium_timing" not in rec_t:
+        return []
+    settings = cfg.get("settings", {}) or {}
+    from taxjson.lib.pipeline import option_timing_from_settings
+    try:
+        here_t = option_timing_from_settings(settings) or {}
+    except ValueError:
+        return []
+    if not here_t:
+        return []                       # no written-option timing (US)
+    ry = int(record["year"])
+    from taxjson.lib.core import load_transactions
+    from taxjson.lib.option_boundary import write_lots
+    out: List[Dict[str, Any]] = []
+    for g, names in groups(cfg).items():
+        if g != "equity":
+            continue
+        txs = []
+        for n in names:
+            p = cache / f"{n}_base.json"
+            if p.exists():
+                txs += load_transactions(p)
+        for lot in write_lots(txs, tax_date=_basis(settings)):
+            wy = lot.write_year
+            if lot.broker_closing or wy > ry:
+                continue
+            carried = (lot.open_units > 1e-9
+                       or any(int(c.date[:4]) > ry for c in lot.closes))
+            if not carried:
+                continue
+            was, now = _grant_in(rec_t, wy), _grant_in(here_t, wy)
+            if was == now:
+                continue
+            _since = rec_t.get("option_grant_since")
+            if was:
+                why = (f"written {lot.write_date} for {lot.premium:,.2f}: "
+                       f"the {ry} record is on grant timing since "
+                       f"{_since}, so the {wy} return taxed this premium; "
+                       f"this project keeps the contract on close timing "
+                       f"(option_grant_timing_since = "
+                       f"{here_t.get('option_grant_since')}) and taxes it "
+                       f"again when it closes. Set "
+                       f"option_grant_timing_since = {_since} in this "
+                       f"project, as the {ry} record has it.")
+            else:
+                why = (f"written {lot.write_date} for {lot.premium:,.2f}: "
+                       f"the {ry} record is on "
+                       + (f"grant timing since {_since}"
+                          if str(rec_t.get("option_premium_timing"))
+                          == "grant" else "close timing")
+                       + f", so the {wy} return left this premium to the "
+                       f"close; this project puts it back in {wy} "
+                       f"(grant timing since "
+                       f"{here_t.get('option_grant_since')}), where no "
+                       f"return reports it. Set option_grant_timing_since "
+                       f"= {ry + 1} (keep the closed year's contracts on "
+                       f"close timing, as filed) or T1-ADJ {wy} to add the "
+                       f"premium.")
+            out.append({"group": g, "symbol": lot.symbol,
+                        "account": lot.account, "written": lot.write_date,
+                        "write_year": wy,
+                        "premium": round(lot.premium, 2),
+                        "closed_year_timing": "grant" if was else "close",
+                        "timing_here": "grant" if now else "close",
+                        "why": why})
+    return out
+
+
+def _same_row(r: Dict[str, Any], x: Dict[str, Any]) -> bool:
+    """A base row of this project and a record's boundary row are the
+    same row: action, symbol, own date, quantity and amount."""
+    if str(r.get("action") or "").upper() != x.get("action") \
+            or r.get("symbol") != x.get("symbol"):
+        return False
+    if str(_d(r.get("date"))) != str(x.get("date")):
+        return False
+    if not _qty_eq(float(r.get("quantity") or 0.0),
+                   float(x.get("quantity") or 0.0)):
+        return False
+    n, xn = float(r.get("net_amount") or 0.0), float(x.get("net") or 0.0)
+    return abs(n - xn) <= max(0.01, 0.005 * abs(xn))
+
+
+def _boundary_issues(cache: Path, cfg: Dict[str, Any],
+                     record: Dict[str, Any], basis: str,
+                     section2: set) -> List[Dict[str, Any]]:
+    """Rows reported in neither year or in both because this project and
+    the closed one date them on different sides of Dec 31 (see
+    boundary_rows). Three cases:
+      (a) this project counts a row in the closed year that the closed
+          books never had — income its trust record date (or a RIC entry)
+          moves back, or a row local_timezone re-dates to Dec 31 — so it
+          is in neither return;
+      (b) the closed books counted an income row in the closed year and
+          this project counts it again in the next;
+      (c) the closed project's inputs held an early-January row (an
+          overnight fill moved past Dec 31) that this project lacks."""
+    settings = cfg.get("settings", {}) or {}
+    ir = _income_rules(settings)
+    ry = int(record["year"])
+    ye = date(ry, 12, 31)
+    rec_rows = [x for x in record.get("boundary_rows") or []
+                if isinstance(x, dict)]
+    here = []
+    for _g, names in groups(cfg).items():
+        for n in names:
+            here += [r for r in _rows(cache / f"{n}_base.json")
+                     if str(r.get("action") or "").upper()
+                     in _TRADES + _INCOME]
+    out: List[Dict[str, Any]] = []
+    used: set = set()
+
+    def _match(r):
+        for i, x in enumerate(rec_rows):
+            if i not in used and _same_row(r, x):
+                used.add(i)
+                return x
+        return None
+
+    for r in here:
+        if r.get("id") not in (None, "") and str(r["id"]) in section2:
+            continue                    # section 2 already judges it
+        a = str(r.get("action") or "").upper()
+        eff, raw = _eff_date(r, basis, ir), _d(r.get("date"))
+        if eff is None or eff > ye:
+            continue
+        q = float(r.get("quantity") or 0.0)
+        if a in _INCOME:
+            if not ((raw and raw > ye) or eff >= date(ry, 12, 30)):
+                continue
+        elif not (q < 0 and eff >= date(ry, 12, 30)):
+            continue
+        if _match(r) is not None:
+            continue
+        what = ("sale" if a in _TRADES else
+                "return of capital" if a == "ADJUST" else "income")
+        out.append({"symbol": r.get("symbol"), "action": a,
+                    "date": str(raw), "tax_date": str(eff),
+                    "amount": round(float(r.get("net_amount") or 0.0), 2),
+                    "why": (f"this project counts this {what} on {eff} "
+                            f"(in {ry})"
+                            + (f", though it is dated {raw}" if raw != eff
+                               else "")
+                            + f", but the {ry} books never had it (their "
+                            f"inputs did not hold it): it is in neither "
+                            f"return. It belongs on the {ry} return — "
+                            f"amend {ry} (or confirm the slip reported "
+                            f"it).")})
+    for i, x in enumerate(rec_rows):
+        a = x.get("action")
+        xd = _d(x.get("tax_date"))
+        if xd is None:
+            continue
+        hit = None
+        for r in here:
+            if _same_row(r, x):
+                hit = r
+                break
+        if a in _INCOME and xd <= ye:
+            if hit is None:
+                continue
+            eff = _eff_date(hit, basis, ir)
+            if eff is not None and eff > ye:
+                out.append({"symbol": x.get("symbol"), "action": a,
+                            "date": x.get("date"), "tax_date": str(eff),
+                            "amount": x.get("net"),
+                            "why": (f"the {ry} books counted this row "
+                                    f"(dated {x.get('date')}) in {ry} "
+                                    f"(on {xd}); this project counts it "
+                                    f"again on {eff}. Report it in one "
+                                    f"year only (a RIC January dividend "
+                                    f"or a trust's record date: keep the "
+                                    f"same entry in this project).")})
+        elif (xd > ye and xd <= date(ry + 1, 1, 10) and hit is None
+              and not (a in _TRADES
+                       and (_d(x.get("date")) or date.max) <= ye)):
+            out.append({"symbol": x.get("symbol"), "action": a,
+                        "date": x.get("date"), "tax_date": str(xd),
+                        "amount": x.get("net"),
+                        "why": (f"the {ry} project's inputs hold this row "
+                                f"dated {x.get('date')}, which counts in "
+                                f"{ry + 1}, so the {ry} return left it "
+                                f"out — but this project does not have it: "
+                                f"it is in neither return. Add it here.")})
+    return out
+
+
 def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
           opening: Dict[str, Any]) -> Dict[str, Any]:
     """Compare a closed year's record with this project's books.
@@ -368,7 +789,37 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     basis = _basis(settings)
     rbasis = record.get("date_basis") or basis
     issues: Dict[str, List[Dict[str, Any]]] = {
-        "positions": [], "missed": [], "double": [], "notes": []}
+        "positions": [], "missed": [], "double": [], "timing": [],
+        "boundary": [],
+        "partial": [], "notes": []}
+    issues["timing"] = _timing_issues(cache, cfg, record)
+    # A record closed on or before Dec 31 of its year (close-year
+    # --force during the year) is a partial-year snapshot, not the
+    # year-end: its positions miss the rest of that year's trades, and
+    # "Everything the closed year carried forward is here, once" was
+    # printed over it (A2-0349).
+    _ca = _d(record.get("closed_at"))
+    if _ca is not None and _ca <= date(ry, 12, 31):
+        issues["partial"].append({
+            "closed_at": str(record.get("closed_at")),
+            "why": (f"the {ry} record was closed on {_ca} (close-year "
+                    f"--force before the year ended): a partial-year "
+                    f"snapshot, not the {ry} year-end — its positions, "
+                    f"sales and January settlements miss everything "
+                    f"after {_ca}. Re-close {ry} in its project now that "
+                    f"the year has ended (after filing).")})
+
+    # A trade that straddles Dec 31 sits on different sides of the
+    # year-end in two projects on different date bases: the quantity
+    # difference it causes is that sale, reported once in section 2 as
+    # a date-basis change, not "a lot or a sale is missing" here too
+    # (A2-0356, A2-0673).
+    basis_dq: Dict[str, float] = {}
+    if rbasis != basis:
+        for st in record.get("settle_next_year") or []:
+            q = float(st.get("qty") or 0.0)
+            basis_dq[st["symbol"]] = basis_dq.get(st["symbol"], 0.0) + (
+                -q if rbasis == "trade" else q)
 
     # 1. Opening positions and cost.
     book_by, filed_by = _filed_by_symbol(record)
@@ -391,9 +842,12 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             n = now.get(sym, {"qty": 0.0, "acb": 0.0, "deferred": 0.0})
             dq = n["qty"] - p["qty"]
             da = n["acb"] - p["acb"]
-            if abs(dq) <= QTY_TOL * max(1.0, abs(p["qty"])) \
+            if _qty_eq(n["qty"], p["qty"]) \
                     and _acb_close(n["acb"], p["acb"]):
                 continue
+            if sym in basis_dq and abs(basis_dq[sym]) > QTY_TOL \
+                    and _qty_eq(dq, basis_dq[sym]):
+                continue                # the straddling trade (section 2)
             k = _root_sym(sym)
             filed_diff = None
             if record.get("filed_dispositions") is not None:
@@ -405,7 +859,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     "opening_qty": n["qty"], "opening_acb": n["acb"],
                     "qty_diff": round(dq, 8), "acb_diff": round(da, 2),
                     "filed_gain_diff": filed_diff}
-            if abs(dq) > QTY_TOL * max(1.0, abs(p["qty"])):
+            if not _qty_eq(n["qty"], p["qty"]):
                 item["why"] = (
                     f"{ry} books hold {p['qty']:g} on Dec 31; this "
                     f"project opens with {n['qty']:g}. A lot or a sale is "
@@ -475,18 +929,40 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                 if r.get("action") in ("BUYSELL", "ASSIGN"):
                     here.append(dict(r, _acct=n))
 
+    used_here: set = set()
+
     def _found(s: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        for r in here:
-            if r.get("symbol") != s["symbol"]:
+        """This project's row for the record's straddling trade `s`: the
+        same symbol and quantity, and the same trade date — or, within
+        3 days (an opening .tt dates a row on its settlement day), the
+        same net amount. Symbol + quantity + 3 days let a DISTINCT
+        same-size January sale clear a sale missing from both years, or
+        raise a false "double" (A2-0354). A row answers one item."""
+        sd = _d(s.get("date"))
+        for idx, r in enumerate(here):
+            if idx in used_here or r.get("symbol") != s["symbol"]:
                 continue
-            if abs(float(r.get("quantity") or 0) - s["qty"]) > \
-                    QTY_TOL * max(1.0, abs(s["qty"])):
+            if not _qty_eq(float(r.get("quantity") or 0), s["qty"]):
                 continue
             rd = _d(r.get("date"))
-            if rd and abs((rd - _d(s["date"])).days) <= 3:
-                return r
+            if rd is None or sd is None:
+                continue
+            if rd != sd:
+                if abs((rd - sd).days) > 3:
+                    continue
+                if s.get("net") is not None:
+                    rn = abs(float(r.get("net_amount") or 0.0))
+                    if abs(rn - abs(float(s["net"]))) > max(
+                            1.0, 0.005 * abs(float(s["net"]))):
+                        continue
+            used_here.add(idx)
+            return r
         return None
 
+    _bc = (f" (a date-basis change: the {ry} record is on "
+           f"{rbasis} dates, this project on {basis} dates)"
+           if rbasis != basis else "")
+    reported_double: set = set()
     for s in record.get("settle_next_year") or []:
         hit = _found(s)
         if rbasis == "settle":
@@ -497,20 +973,59 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                     f"the {ry} books leave it to {ry + 1} (settlement "
                     f"basis), but it is not in this project"
                     + (" as a " + str(ry + 1) + " trade" if hit else "")
+                    + _bc
                     + ". Add it (dated its settlement day in a .tt file, "
                     "or keep the broker row) so it is reported once.")))
         else:
             if hit is not None and (_bdate(hit, basis) or date.min).year \
                     > ry:
+                reported_double.add((_root_sym(s["symbol"]),
+                                     round(abs(float(s["qty"])), 6),
+                                     str(s.get("date"))))
                 issues["double"].append(dict(s, why=(
                     f"the {ry} return used trade dates, so this "
                     f"{s['date']} trade was reported in {ry}; this "
-                    f"project books it again in {ry + 1}.")))
+                    f"project books it again in {ry + 1}" + _bc + ".")))
 
     # 3. Dispositions reported by the closed year and again here.
     closed = (record.get("filed_dispositions")
               if record.get("filed_dispositions") is not None
               else record.get("dispositions")) or []
+    # The closed year's sales this project's own books ALSO hold as
+    # closed-year rows: a same-size sale in early January is then a
+    # distinct sale, not the closed one again (A2-0122).
+    # Only a sale out of a LONG position is a disposition: the row that
+    # opens a short is not the closed year's sale (its cover is, A2-0674).
+    own_closed: List[Tuple[str, float, Optional[date], Optional[date],
+                           float]] = []
+    _pos: Dict[str, float] = {}
+    for r in sorted(here, key=lambda x: (_bdate(x, basis) or date.max,
+                                         str(x.get("time") or ""))):
+        sym = r.get("symbol") or ""
+        q = float(r.get("quantity") or 0.0)
+        before = _pos.get(sym, 0.0)
+        _pos[sym] = before + q
+        if q >= 0 or before <= QTY_TOL:
+            continue
+        if (_bdate(r, basis) or date.max) > date(ry, 12, 31):
+            continue
+        own_closed.append((_root_sym(sym), min(abs(q), before),
+                           _d(r.get("date")), _d(r.get("date_settle")),
+                           abs(float(r.get("net_amount") or 0.0))))
+
+    def _is_own(c: Dict[str, Any]) -> bool:
+        k, cq = _root_sym(c["symbol"]), abs(float(c["qty"]))
+        cds = {_d(c.get("date")), _d(c.get("date_settle"))} - {None}
+        cp = abs(float(c.get("proceeds") or 0.0))
+        for ok, oq, otd, osd, onet in own_closed:
+            if ok != k or not _qty_eq(oq, cq):
+                continue
+            if not ({otd, osd} & cds):
+                continue
+            if abs(onet - cp) <= max(1.0, 0.01 * cp):
+                return True
+        return False
+
     from taxjson.lib.report_model import resolve_gains_files
     taxable = {n for ns in groups(cfg).values() for n in ns}
     for acct, p in resolve_gains_files(cache).items():
@@ -518,8 +1033,10 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             continue
         try:
             doc = json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as e:
+            # A skipped gains file hid every double in it (A2-1137).
+            raise BooksError(f"could not read {_label(Path(p))} ({e}) — "
+                             f"re-run `taxjson run` to rebuild it")
         for t in doc.get("transactions", []):
             if t.get("gain") is None or t.get("action"):
                 continue
@@ -528,27 +1045,66 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
                 continue
             k = _root_sym(t.get("symbol"))
             q = abs(float(t.get("qty") or 0.0))
+            tp = float(t.get("proceeds") or 0.0)
+            # A short cover: the engine's proceeds are the negated cover
+            # cost and its cost the negated short-sale proceeds; another
+            # tool's CSV reports the short-sale proceeds (A2-0674).
+            # Only against another tool's CSV: the record's own
+            # dispositions use the engine's convention, and a grant-timed
+            # premium row (proceeds 0) matched every buy-back otherwise.
+            tc = float(t.get("cost") or 0.0)
+            tp_alt = (-tc if (record.get("filed_dispositions") is not None
+                              and (t.get("direction") == "SHORT" or tp < 0)
+                              and abs(tc) > 0.005) else None)
+            tol = max(1.0, 0.01 * abs(tp))
             for c in closed:
                 if _root_sym(c["symbol"]) != k:
                     continue
                 if abs(abs(c["qty"]) - q) > max(QTY_TOL, 0.005 * q):
                     continue
-                cd = _d(c.get("date_settle") or c.get("date"))
-                tp = float(t.get("proceeds") or 0.0)
-                if abs(c["proceeds"] - tp) > max(5.0, 0.01 * abs(tp)):
+                cp = float(c["proceeds"])
+                if abs(cp - tp) > tol and (
+                        tp_alt is None
+                        or abs(cp - tp_alt) > max(1.0, 0.01 * abs(tp_alt))
+                        or abs(float(c.get("cost") or 0.0) + tp) > max(
+                            1.0, 0.01 * abs(tp))):
                     continue            # a different sale of the same size
-                if cd and abs((cd - td).days) <= 5:
-                    issues["double"].append({
-                        "symbol": t.get("symbol"), "date": str(td),
-                        "qty": q, "gain": round(float(t.get("gain") or 0),
-                                                2),
-                        "closed_date": str(cd),
-                        "why": (f"a {q:g}-unit sale of "
-                                f"{t.get('symbol')} on {td} is in this "
-                                f"year's totals, and the {ry} record "
-                                f"has the same sale on {cd}. Report it "
-                                f"in one year only.")})
-                    break
+                cds = [x for x in (_d(c.get("date")),
+                                   _d(c.get("date_settle"))) if x]
+                if not cds or min(abs((x - td).days) for x in cds) > 5:
+                    continue
+                if (_root_sym(c["symbol"]), round(abs(float(c["qty"])), 6),
+                        str(c.get("date"))) in reported_double:
+                    break               # already one item in section 2
+                if _is_own(c):
+                    continue            # the closed sale is its own row here
+                # The date the closed RETURN used (its record's basis).
+                cd = (_d(c.get("date")) if rbasis == "trade"
+                      else (_d(c.get("date_settle")) or _d(c.get("date"))))
+                issues["double"].append({
+                    "symbol": t.get("symbol"), "date": str(td),
+                    "qty": q, "gain": round(float(t.get("gain") or 0),
+                                            2),
+                    "closed_date": str(cd),
+                    "why": (f"a {q:g}-unit sale of "
+                            f"{t.get('symbol')} on {td} is in this "
+                            f"year's totals, and the {ry} record "
+                            f"has the same sale on {cd}. Report it "
+                            f"in one year only.")})
+                break
+    # 4. Rows the two projects put on different sides of Dec 31.
+    if isinstance(record.get("boundary_rows"), list):
+        issues["boundary"] = _boundary_issues(
+            cache, cfg, record, basis,
+            {str(here[i].get("id")) for i in used_here
+             if here[i].get("id") not in (None, "")})
+    else:
+        issues["notes"].append(
+            f"The {ry} record predates the Dec-31 row list: income or a "
+            f"trade that this project dates in {ry} (a trust's record "
+            f"date, a RIC January dividend, a local_timezone re-dating) "
+            f"is not checked. Re-close {ry} with the current taxjson to "
+            f"check it.")
     if record.get("filed_dispositions") is None:
         issues["notes"].append(
             f"The {ry} record holds taxjson's own dispositions. If that "
@@ -558,7 +1114,8 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     return {"year": ry, "record_basis": rbasis, "basis": basis,
             **issues,
             "problems": sum(len(issues[k]) for k in
-                            ("positions", "missed", "double"))}
+                            ("positions", "missed", "double", "timing",
+                             "boundary", "partial"))}
 
 
 def render(rep: Dict[str, Any], record_path: str) -> List[str]:
@@ -575,6 +1132,9 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
             L.append("      " + it["why"])
         L.append("")
 
+    if rep.get("partial"):
+        sec(f"The {y} record itself", rep["partial"],
+            lambda i: f"closed at {i['closed_at']}")
     sec(f"Opening positions vs the {y} year-end books",
         rep["positions"],
         lambda i: (f"{i['symbol']:<26} {y}: {i['closed_qty']:>12g} "
@@ -586,6 +1146,16 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
                    f"{i['date']}  settles {i['date_settle']}"))
     sec("Sales reported in both years", rep["double"],
         lambda i: f"{i['symbol']:<26} {i.get('qty', 0):>12g}  {i['date']}")
+    sec(f"Rows on different sides of Dec 31 in the two projects",
+        rep.get("boundary") or [],
+        lambda i: (f"{i['symbol']:<26} {i['action']:<10} dated "
+                   f"{i['date']}  counted {i['tax_date']}  "
+                   f"{float(i.get('amount') or 0):>12,.2f}"))
+    sec(f"Written options on another premium timing than the {y} record",
+        rep.get("timing") or [],
+        lambda i: (f"{i['symbol']:<26} written {i['written']}  "
+                   f"{y}: {i['closed_year_timing']}  here: "
+                   f"{i['timing_here']}"))
     for n in rep["notes"]:
         L.append("note: " + n)
     L.append("")

@@ -241,7 +241,11 @@ class TestSumReturnBlock(unittest.TestCase):
             want = {k: round(rep["part_I_totals"][k]
                              + rep["part_II_totals"][k], 2)
                     for k in ("proceeds", "cost", "adjustment", "gain")}
-            self.assertEqual(f["totals"], want)
+            # A2-0647 / A2-0324 added the IRA permanent denial and the
+            # §1256 (Form 6781) total beside the 8949 part sums.
+            self.assertEqual({k: f["totals"][k] for k in want}, want)
+            self.assertEqual(f["totals"]["permanently_denied"], 0.0)
+            self.assertEqual(f["totals"]["section_1256_gain"], 0.0)
             self.assertEqual(f["parts_8949"], filing_parts_8949(us))
             t = _cli(root, "sum")
             self.assertIn("(g) ADJUSTMENT", t.stdout)

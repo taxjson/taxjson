@@ -1322,7 +1322,7 @@ def option_contract_size(opt_tx) -> float:
     return m if m > 0 else float(OPTION_CONTRACT_SHARES)
 
 
-def _make_assign_underlying_resolver(transactions, date_of):
+def _make_assign_underlying_resolver(transactions, date_of, quiet=False):
     """Return resolve(option_tx) -> underlying stock symbol for an option
     ASSIGN, or None when no stock line in the option's own account
     matches (a cash-settled index option, or a missing stock leg).
@@ -1335,7 +1335,9 @@ def _make_assign_underlying_resolver(transactions, date_of):
     S019-01, S070-17, R1-176: RCI for RCI.B.TO, BRKB for BRK.B.US,
     F:CL for F:CLG6.US used to be treated as cash-settled, realizing the
     premium in the wrong year). An ambiguous match is left unresolved
-    with a warning naming the candidates."""
+    with a warning naming the candidates. `quiet` drops the per-match
+    "resolved" note (a report that re-derives the engine's pairing,
+    e.g. option-boundary, A2-0114; the engine run already printed it)."""
     dates: Dict[Any, list] = {}
     for t in transactions:
         if is_option_symbol(t.symbol) or t.action not in ('BUYSELL', 'ASSIGN'):
@@ -1368,10 +1370,11 @@ def _make_assign_underlying_resolver(transactions, date_of):
         out = None
         if len(near) == 1:
             out = near[0]
-            print(f"note: {tx.symbol}: option root {und} resolved to "
-                  f"{out}, the stock line this account trades at the "
-                  f"assignment — the premium rolls into its cost/proceeds.",
-                  file=sys.stderr)
+            if not quiet:
+                print(f"note: {tx.symbol}: option root {und} resolved to "
+                      f"{out}, the stock line this account trades at the "
+                      f"assignment — the premium rolls into its "
+                      f"cost/proceeds.", file=sys.stderr)
         elif len(near) > 1:
             print(f"warning: {tx.symbol}: option root {und} matches "
                   f"several stock lines traded at the assignment "
@@ -2202,11 +2205,7 @@ class CanadaTaxRules(TaxRules):
                 return _n if float(tx.quantity or 0.0) < 0 else -_n
             return _n if float(tx.quantity or 0.0) < 0 else abs(_n)
 
-        def _grant_applies(tx) -> bool:
-            if not _grant_mode or not is_option_symbol(tx.symbol or ''):
-                return False
-            if option_grant_since is None:
-                return True
+        def _write_year(tx) -> str:
             # The write's YEAR on the project's tax_date basis — the
             # same date the return's year filter uses (audit S068-21:
             # with tax_date = "trade", a 2024-12-31 write settling in
@@ -2214,8 +2213,15 @@ class CanadaTaxRules(TaxRules):
             # on close timing, and no year's return taxed it).
             _d = (tx.date if str(option_grant_basis).lower() == 'trade'
                   else get_sort_date(tx))
+            return str(_d or '')[:4]
+
+        def _grant_applies(tx) -> bool:
+            if not _grant_mode or not is_option_symbol(tx.symbol or ''):
+                return False
+            if option_grant_since is None:
+                return True
             try:
-                return int(str(_d)[:4]) >= int(option_grant_since)
+                return int(_write_year(tx)) >= int(option_grant_since)
             except (TypeError, ValueError):
                 return True
 
@@ -2226,15 +2232,23 @@ class CanadaTaxRules(TaxRules):
             lot = {'tx_id': tx.id, 'seq': _lot_seq[0], 'units': units,
                    'per_unit': (premium / units) if units > 1e-12 else 0.0,
                    'rec': bool(recognise), 'rec_ref': None,
-                   'loss_ref': None, 'date': tx.date}
+                   'loss_ref': None, 'date': tx.date,
+                   'year': _write_year(tx)}
             pool.setdefault('grants', []).append(lot)
             return lot
 
         def _short_lot_close(pool, closing_qty, is_assign):
             """Consume `closing_qty` units of a SHORT option pool's lots
-            FIFO. Returns (cost_removed, recognised, grant_units_closed)
-            where cost_removed is the premium leaving the pool (positive
-            = premium), recognised the part already booked at grant."""
+            FIFO. Returns (cost_removed, recognised, grant_units_closed,
+            by_year) where cost_removed is the premium leaving the pool
+            (positive = premium), recognised the part already booked at
+            grant, and by_year {write year: {'units', 'premium'}} the
+            recognised lots this close consumed — Schedule 3 and
+            reconcile-slips count a buy-back of a SAME-year write once
+            with its write, but a buy-back of an earlier year's write
+            is a disposition of its own (A2-0320/0650/0651), and a
+            broker's close-year slip carries that earlier premium
+            (A2-0657)."""
             lots = pool.get('grants') or []
             qabs = abs(pool['qty'])
             total = float(pool['total_cost'])
@@ -2253,6 +2267,7 @@ class CanadaTaxRules(TaxRules):
             cost = 0.0
             recognised = 0.0
             g_units = 0.0
+            by_year: Dict[str, Dict[str, float]] = {}
             rem = closing_qty
             for lot in lots:
                 if rem <= 1e-9:
@@ -2294,10 +2309,15 @@ class CanadaTaxRules(TaxRules):
                 else:
                     recognised += take * lot['per_unit']
                     g_units += take
+                    _by = by_year.setdefault(
+                        lot.get('year') or '', {'units': 0.0,
+                                                'premium': 0.0})
+                    _by['units'] += take
+                    _by['premium'] += take * lot['per_unit']
             if rem > 1e-9:
                 cost += rem * other_avg
             pool['grants'] = [l for l in lots if l['units'] > 1e-9]
-            return cost, recognised, g_units
+            return cost, recognised, g_units, by_year
 
         def _open_short_option(pool, tx, units, premium, fee_share):
             """A taxable short opening of `units` option contracts for a
@@ -2976,11 +2996,13 @@ class CanadaTaxRules(TaxRules):
                             closing_qty = min(abs(qty), abs(pool['qty']))
                             _recognized = 0.0
                             _grant_units_closed = 0.0
+                            _grant_closed = None
                             if pool['qty'] < 0 and pool.get('grants'):
                                 # Short option lots (grant timing): FIFO
                                 # by write; recognised lots leave at
                                 # their own premium (see _short_lot_close).
-                                cost_basis, _recognized, _grant_units_closed = \
+                                (cost_basis, _recognized,
+                                 _grant_units_closed, _grant_closed) = \
                                     _short_lot_close(pool, closing_qty,
                                                      is_option_assign)
                             else:
@@ -3074,7 +3096,13 @@ class CanadaTaxRules(TaxRules):
                                     'fee': float(tx.fee or 0) * fee_share,
                                     'direction': 'LONG' if pool['qty'] > 0 else 'SHORT',
                                     'tainted': is_tainted,
-                                    'trace': rg_trace
+                                    'trace': rg_trace,
+                                    # {} when the close consumed only
+                                    # close-timing lots; absent when the
+                                    # pool kept no lots (a long close).
+                                    **({'grant_closed': _grant_closed}
+                                       if _grant_closed is not None
+                                       else {}),
                                 })
                                 
                                 # Tainted losses never feed the superficial-
@@ -4257,6 +4285,13 @@ class CanadaTaxRules(TaxRules):
                 'grant': bool(g.get('grant', False)),
                 'deemed': bool(g.get('deemed', False)),
             }
+            if g.get('grant_closed') is not None:
+                # A buy-back of grant-timed lots: {write year: {units,
+                # premium}} of the lots it closed (see _short_lot_close).
+                gain_entry['grant_closed'] = {
+                    y: {'units': round(v['units'], 9),
+                        'premium': round(v['premium'], 6)}
+                    for y, v in g['grant_closed'].items()}
             if 'trace' in g:
                 gain_entry['trace'] = g['trace']
 

@@ -343,9 +343,18 @@ class TestCloseYearStalenessGuard(unittest.TestCase):
         from taxjson.bin.taxjson_run import cmd_close_year
         with tempfile.TemporaryDirectory() as td:
             root = _project(td)
+            # A finished run's reports: close-year now refuses work/
+            # books with no reports/ first (re-audit A2-0035).
+            (root / "reports").mkdir()
+            (root / "reports" / "margin.sum").write_text(
+                "validation: 0 error(s)\n")
             work = root / "work"
             (work / "margin_gains_wash.json").write_text(
                 json.dumps(_GAINS))
+            # A finished run leaves a .sum: without one, close-year now
+            # stops first on "the last run did not finish" (A2-0658).
+            (root / "reports").mkdir(exist_ok=True)
+            (root / "reports" / "margin.sum").write_text("TOTAL 0\n")
             time.sleep(0.02)
             # Plain gains rebuilt AFTER the wash file.
             now = time.time()

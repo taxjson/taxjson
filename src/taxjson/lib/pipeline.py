@@ -1150,18 +1150,6 @@ def add_income_dating_args(parser) -> None:
              "([settings] ric_january_dividends).")
 
 
-def income_rules_from_args(args, country):
-    """The IncomeRules an engine CLI's flags select (refuses a flag of
-    the other country, as GainsRequest does)."""
-    return GainsRequest(
-        country=country,
-        corporate_distributions=tuple(
-            getattr(args, "corporate_distribution", None) or ()),
-        ric_january_dividends=tuple(
-            getattr(args, "ric_january_dividend", None) or ()),
-    ).income_rules()
-
-
 def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
     """A trust ROC paid in one year with a record date in the year before
     lowers the ACB of a sale made between the two dates in that earlier
@@ -1192,6 +1180,40 @@ def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
               f"{rec}) lowers the ACB of the {rec[:4]} sale on {what}. If "
               f"{rec[:4]} was filed without this ROC, that return needs an "
               f"adjustment (T1-ADJ) for the gain.", file=sys.stderr)
+
+def apply_roc_record_dates(transactions, req: GainsRequest) -> list:
+    """Canada: a Canadian trust's return of capital lowers the ACB when
+    it becomes payable (s.53(2)(h)): an ADJUST with a printed record
+    date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row
+    keeps its id; only its dates move (in place).
+
+    Every engine entry point calls this — run_gains, taxjson-audit and
+    taxjson-explain — so an audit or a trace cannot re-run the engine
+    on the pay date the books did not use (re-audit A2-0033). Returns
+    the rows moved, as apply_trust_roc_record_dates does."""
+    if req.country != 'canada':
+        return []
+    return apply_trust_roc_record_dates(transactions, req.income_rules())
+
+
+def engine_options(req: GainsRequest) -> Dict[str, Any]:
+    """The country's engine keyword arguments for `req` (the ones
+    run_gains passes to compute_gains beyond the books and the wash
+    switch): US per-account FIFO (US-BASIS-01); Canadian option premium
+    timing, its since-year and the date basis that year is tested on
+    (SPEC-13: the tax date, not always the settlement date). One
+    builder for run_gains, taxjson-audit and taxjson-explain
+    (re-audit A2-0314/A2-0318)."""
+    extra: Dict[str, Any] = {}
+    if req.per_account_basis and req.country == 'usa':
+        extra['per_account_basis'] = True
+    if req.country == 'canada':
+        extra['option_premium_timing'] = req.option_premium_timing or 'close'
+        extra['option_grant_since'] = req.option_grant_since
+        extra['option_buyback_loss_superficial'] = \
+            req.option_buyback_loss_superficial
+        extra['option_grant_basis'] = req.effective_tax_date()
+    return extra
 
 
 def run_gains(transactions, sheltered_transactions=(),
@@ -1233,7 +1255,7 @@ def run_gains(transactions, sheltered_transactions=(),
     for _w in (income_rules.warnings(transactions, _warn_year)
                if req.taxable else ()):
         print(f"warning: {_w}", file=sys.stderr)
-    _roc_moved = apply_trust_roc_record_dates(transactions, income_rules)
+    _roc_moved = apply_roc_record_dates(transactions, req)
     if req.country == 'canada':
         # The parsers book a stock dividend as a neutral $0 event; the
         # Canadian cost is its declared amount, which the export does
@@ -1276,14 +1298,7 @@ def run_gains(transactions, sheltered_transactions=(),
                   f"the correct ACB. That books the ACB only: report the "
                   f"dividend itself from the T5/T3 slip (taxjson does not "
                   f"count it as income).", file=sys.stderr)
-    _extra = {}
-    if req.per_account_basis and req.country == 'usa':
-        _extra['per_account_basis'] = True
-    if req.country == 'canada':
-        _extra['option_premium_timing'] = req.option_premium_timing or 'close'
-        _extra['option_grant_since'] = req.option_grant_since
-        _extra['option_buyback_loss_superficial'] = req.option_buyback_loss_superficial
-        _extra['option_grant_basis'] = tax_date
+    _extra = engine_options(req)
     # The engine's option/right-replacement warnings are printed below,
     # after the year filter: printed by the engine they put a prior
     # year's warning in this year's .sum DIAGNOSTICS (audit S070-04).

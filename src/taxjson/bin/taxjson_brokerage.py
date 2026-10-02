@@ -73,7 +73,10 @@ _CANONICAL_ID = {'interactive_brokers': 'ib', 'rbc': 'rbc_direct',
 # Parser fields that are evidence only (not TaxTransaction fields): kept
 # on the raw rows (the --transfers-out sidecar carries them) and dropped
 # quietly from the book rows. 'qty' is the legacy alias of 'quantity'.
-_EVIDENCE_KEYS = frozenset({'qty', 'book_value', 'broker_account'})
+# fee_qty / fee_currency: a crypto withdrawal's fee paid in coins
+# (Kraken), shown by `taxjson transfers` (A2-0663).
+_EVIDENCE_KEYS = frozenset({'qty', 'book_value', 'broker_account',
+                            'fee_qty', 'fee_currency'})
 
 
 def hash_broker_account(acct) -> str:
