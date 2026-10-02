@@ -128,6 +128,17 @@ def _row_date(t: dict, date_basis: str) -> str:
     return str(t.get("date") or "")
 
 
+def moment_rank(t: dict) -> int:
+    """Fixed places of a dict row among rows executed on the same date
+    (CA-DATE-14 / US-DATE-13): an opening balance first, then a split
+    (effective at the open, whatever its clock stamp), then everything
+    else in the export's row order (the sort is stable). Without it a
+    buy listed before a same-stamp split was doubled in one walk and not
+    in the engine (audit A2-0013)."""
+    a = t.get("action")
+    return 0 if a == "OPENING_BALANCE" else 1 if a == "SPLIT" else 2
+
+
 def balance_on(transactions: List[dict], symbol: str, date: str,
                date_basis: str = "settle") -> float:
     """Shares of `symbol` held at end of `date`, from the book's own
@@ -168,6 +179,7 @@ def balance_on(transactions: List[dict], symbol: str, date: str,
     rows = sorted(transactions,
                   key=lambda t: (_row_date(t, date_basis),
                                  str(t.get("date") or ""),
+                                 moment_rank(t),
                                  str(t.get("time") or "")))
     # One corporate event = one application: an account fed by two
     # brokers carries the same SPLIT once per broker CSV (distinct ids,

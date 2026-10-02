@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Canada blended books: a split and a trade at the same stamp are walked
+  split first in the per-account split of the blended pass (and in the
+  distribution balance walk), as the engine does (CA-DATE-14): a buy
+  listed before a same-stamp 2:1 split showed 300 shares in `list` /
+  `shares` where the books held 250, with a false "likely phantom"
+  warning (A2-0013).
+
 - Canada: `taxjson list --date` and the close-year `year_end` snapshot
   judge a trust's return of capital by its record date, as the books do
   (CA-INC-DATE-ROC-TRUST): a January-paid ROC with a December record

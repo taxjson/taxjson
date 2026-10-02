@@ -478,5 +478,54 @@ class TestAsOfTrustRocRecordDate(unittest.TestCase):
         self.assertIn('r1', [r.get('id') for r in kept])
 
 
+class TestSplitGainsSameStampSplitFirst(unittest.TestCase):
+    """A2-0013: the blended split walks put a same-stamp SPLIT before the
+    trades (CA-DATE-14), as the engine does."""
+
+    ROWS = [
+        {'action': 'BUYSELL', 'date': '2025-02-03', 'date_settle': '2025-02-04',
+         'time': '09:30:00', 'symbol': 'XYZ.TO', 'quantity': 100.0,
+         'net_amount': 1000.0, 'account': 'margin'},
+        {'action': 'BUYSELL', 'date': '2025-03-03', 'date_settle': '2025-03-03',
+         'time': '09:30:00', 'symbol': 'XYZ.TO', 'quantity': 50.0,
+         'net_amount': 250.0, 'account': 'margin'},
+        {'action': 'SPLIT', 'date': '2025-03-03', 'date_settle': '2025-03-03',
+         'time': '09:30:00', 'symbol': 'XYZ.TO', 'symbol_new': 'XYZ.TO',
+         'quantity': 2.0, 'net_amount': 0.0, 'account': 'margin'},
+    ]
+
+    @rule("CA-DATE-14")
+    def test_apportioned_quantity_matches_the_engine(self):
+        from taxjson.bin.taxjson_apply_distributions import balance_on
+        from taxjson.bin.taxjson_split_gains import split_for_account
+        self.assertEqual(balance_on(self.ROWS, 'XYZ.TO', '9999-12-31'), 250.0)
+        combined = {'transactions': [], 'wash_sales': [],
+                    'summary': {'tax_date_basis': 'settle'},
+                    'inventory': [{'symbol': 'XYZ.TO', 'qty': 250.0,
+                                   'total_cost': 1250.0,
+                                   'position_start_date': '2025-02-03'}]}
+        out = split_for_account(combined, 'margin', self.ROWS)
+        inv = out['inventory'][0]
+        self.assertEqual((inv['qty'], inv['total_cost']), (250.0, 1250.0))
+
+    @rule("CA-DATE-14")
+    def test_position_start_after_a_same_stamp_split(self):
+        # Sell-then-rebuy book: a same-stamp split must not reorder the
+        # walk (the account's SINCE follows the engine's order).
+        from taxjson.bin.taxjson_split_gains import _position_starts
+        rows = [dict(self.ROWS[0]),
+                {'action': 'BUYSELL', 'date': '2025-03-03',
+                 'date_settle': '2025-03-03', 'time': '09:30:00',
+                 'symbol': 'XYZ.TO', 'quantity': -200.0, 'account': 'm'},
+                {'action': 'BUYSELL', 'date': '2025-06-02',
+                 'date_settle': '2025-06-03', 'time': '09:30:00',
+                 'symbol': 'XYZ.TO', 'quantity': 10.0, 'account': 'm'},
+                dict(self.ROWS[2])]
+        # The split (listed last) applies first: 100 -> 200, the sale
+        # empties the position, the June buy opens a new one.
+        self.assertEqual(_position_starts(rows, 'settle'),
+                         {'XYZ.TO': '2025-06-02'})
+
+
 if __name__ == '__main__':
     unittest.main()
