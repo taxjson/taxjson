@@ -2471,6 +2471,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    # A phantoms.json entry on a broker-marked real short or a written
+    # option is applied, but its ATTENTION line used to reach only the
+    # .sum DIAGNOSTICS (audit A2-0637 / A2-0639): echoed every run.
+    echo_attention_lines(gains_json, prefix="phantoms.json")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 
@@ -13817,6 +13821,22 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
         import json
         import tempfile
 
+        out = Path(args.gen_phantoms)
+        # A reviewed phantoms.json is a user record (real shorts pruned,
+        # pairs added by hand): rewriting it brought pruned shorts back
+        # and dropped the hand-added pairs, silently (audit A2-0312).
+        # Refused up front — before the per-account work — unless
+        # --force, which keeps a .bak like `init --force`.
+        if out.exists() and not out.is_dir():
+            if not getattr(args, "force", False):
+                sys.exit(f"taxjson find-missing-history --gen-phantoms: "
+                         f"{out} already exists — not overwritten (a "
+                         f"reviewed file keeps your prunes and hand-added "
+                         f"pairs). Write the candidates to a new file "
+                         f"(e.g. phantoms.new.json) and merge by hand, or "
+                         f"pass --force to replace it (a .bak copy is "
+                         f"kept).")
+
         merged: Dict[Tuple[str, str], dict] = {}
         for f in files:
             with tempfile.NamedTemporaryFile(
@@ -13863,8 +13883,47 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
             for e in entries:
                 merged[(e.get("symbol"), e.get("account"))] = e
 
-        out = Path(args.gen_phantoms)
+        # A short that a same-day JOURNAL leg covers (Norbert's gambit,
+        # RBC's ordinal times put the sale first) is not missing
+        # history: an entry for it pulled the sale off Schedule 3 and
+        # invented the shares (audit A2-0309). taxjson-gains has no
+        # ticker.map, so the JOURNAL symbols are re-checked here with
+        # the walk that knows them.
+        _tm_path = root / "ticker.map"
+        if _tm_path.exists() and merged:
+            from taxjson.lib.phantom_holdings import (detect_phantoms,
+                                                      journal_targets)
+            from taxjson.lib.core import load_transactions
+            try:
+                _journal = journal_targets(_tm_path)
+            except (OSError, ValueError):
+                _journal = set()
+            _js = {k for k in merged
+                   if str(k[0] or "").upper() in _journal}
+            if _js:
+                _txs = []
+                for f in files:
+                    try:
+                        _txs.extend(load_transactions(f))
+                    except (OSError, ValueError):
+                        pass
+                _still = {(c.symbol, c.account) for c in detect_phantoms(
+                    _txs, include_options=True, include_broker_shorts=True,
+                    journal_symbols=_journal)}
+                for k in sorted(_js - _still):
+                    del merged[k]
+                    print(f"  left out {k[0]} / {k[1]}: its short is the "
+                          f"same-day leg of a ticker.map JOURNAL pair "
+                          f"(Norbert's gambit), not missing history.",
+                          file=sys.stderr)
+
         rows = list(merged.values())
+        if out.exists() and not out.is_dir():
+            import shutil as _sh
+            _bak = out.with_name(out.name + ".bak")
+            _sh.copy2(out, _bak)
+            print(f"  kept the previous {out.name} as {_bak.name}",
+                  file=sys.stderr)
         try:
             out.write_text(json.dumps(rows, indent=2) + "\n",
                            encoding="utf-8")
@@ -15011,6 +15070,10 @@ def main() -> None:
     p_fmh.add_argument("--all-history", action="store_true",
                        help="With --gen-phantoms, emit every candidate, not "
                             "just those affecting the tax year")
+    p_fmh.add_argument("--force", action="store_true",
+                       help="With --gen-phantoms, replace an existing FILE "
+                            "(a reviewed phantoms.json is otherwise "
+                            "refused; the old file is kept as FILE.bak)")
     p_fmh.set_defaults(func=cmd_find_missing_history)
 
     p_fees = sub.add_parser(
