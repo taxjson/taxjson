@@ -6298,7 +6298,10 @@ def _box18_fractions(root: Path, rules=None
     taxable accounts."""
     from taxjson.lib.cg_dividends import (MAP_NAME, CgDividendMapError,
                                           allocate, load_map)
-    if not (root / MAP_NAME).is_file():
+    # lexists: a directory or dangling symlink is refused by load_map,
+    # not taken as "no map" (audit A2-0994).
+    import os as _os
+    if not _os.path.lexists(root / MAP_NAME):
         return None
     settings = _soft_settings(root)
     country = _country(settings)

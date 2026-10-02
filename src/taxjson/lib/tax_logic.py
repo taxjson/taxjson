@@ -658,8 +658,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "share or mutual-fund corporation's, ITA s.130.1(4)/"
                  "s.131(1)) is a capital gain, not a dividend. No export "
                  "labels it, so the books carry it as a dividend; list it "
-                 "in capital_gains_dividends.map (symbol, year or pay "
-                 "date, amount or `all`) and divs-sum shows it apart while "
+                 "in capital_gains_dividends.map (symbol — a bare root "
+                 "covers only its Canadian listings, never a preferred "
+                 "series or a foreign listing —, the year of its tax date "
+                 "or its pay date, amount or `all`) and divs-sum shows it "
+                 "apart while "
                  "the estimate taxes it as a capital gain (50% inclusion, "
                  "no gross-up or credit). ACB is unchanged."),
         ]),

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **capital_gains_dividends.map reads what it documents.** A bare root
+  (`FTN`, `T`) also claimed the issuer's preferred series (FTN.PR.A.TO)
+  and a same-root foreign listing (AT&T's T.US), turning their
+  dividends into box-18 capital gains; it now covers only the root's
+  Canadian listings. An AMOUNT with a decimal comma (`17,11` read as
+  1711) or an underscore is refused, a map that is a directory or a
+  dangling symlink is an error instead of "no map", and a date entry
+  matches the pay date of a distribution the books date by its record
+  date (the documented `XTD.TO 2025-09-10 5.50` example was refused)
+  (A2-0075, A2-0227, A2-0228, A2-0560, A2-0987, A2-0990, A2-0994).
+
 - **distributions.map adjustments reach the holder of record's lots in
   the US.** The ADJUST was stamped at the end of the record date, so in
   a trade-date engine a sale traded on the record date (still the

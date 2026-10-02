@@ -276,5 +276,70 @@ class TestRocDoubleEntry(unittest.TestCase):
         self.assertIn("still counted IN FULL as income", err)
 
 
+def _cgdiv(sym, date, amt, rec="", cur="CAD"):
+    return {"action": "DIVIDEND", "symbol": sym, "date": date,
+            "gross_amount": amt, "net_amount": amt, "currency": cur,
+            "record_date": rec, "id": f"{sym}-{date}"}
+
+
+class TestCgDividendsMap(unittest.TestCase):
+    """A2-0075, A2-0228 (bare root), A2-0227/0987/0990 (amount),
+    A2-0994 (unreadable file), A2-0560 (pay date)."""
+
+    @rule("CA-INC-06")
+    def test_bare_root_matches_canadian_listings_only(self):
+        from taxjson.lib.cg_dividends import allocate, parse_map
+        rows = [("m", _cgdiv("FTN.TO", "2025-03-10", 100.0)),
+                ("m", _cgdiv("FTN.PR.A.TO", "2025-03-10", 50.0)),
+                ("m", _cgdiv("T.TO", "2025-04-01", 40.0)),
+                ("m", _cgdiv("T.US", "2025-05-01", 27.75, cur="USD")),
+                ("m", _cgdiv("LFE.PR.B.TO", "2025-03-10", 40.0)),
+                ("m", _cgdiv("LFE.TO", "2025-03-10", 100.0))]
+        for text, want in (("FTN 2025 all\n", {"FTN.TO-2025-03-10"}),
+                           ("T 2025 all\n", {"T.TO-2025-04-01"}),
+                           ("LFE 2025 all\n", {"LFE.TO-2025-03-10"})):
+            f = allocate(parse_map(text), rows, date_of=lambda t: t["date"],
+                         default_accounts={"m"})
+            self.assertEqual({k[1] for k in f}, want, text)
+
+    def test_amount_refuses_decimal_comma_and_underscore(self):
+        from taxjson.lib.cg_dividends import CgDividendMapError, parse_map
+        for amt in ("17,11", "0,125", "1_0", "1,23", "12,34", "1,2,3",
+                    "1_000", "5,50", "1234,56"):
+            with self.assertRaises(CgDividendMapError, msg=amt):
+                parse_map(f"FFN.TO 2024 {amt}\n")
+        for amt, want in (("1,711.05", 1711.05), ("17.11", 17.11),
+                          (".5", 0.5), ("5", 5.0)):
+            self.assertEqual(parse_map(f"FFN.TO 2024 {amt}\n")[0].amount,
+                             want)
+
+    def test_directory_or_dangling_symlink_is_an_error(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from taxjson.lib.cg_dividends import (MAP_NAME, CgDividendMapError,
+                                              load_map)
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(load_map(Path(d)))
+            (Path(d) / MAP_NAME).mkdir()
+            with self.assertRaises(CgDividendMapError):
+                load_map(Path(d))
+        with tempfile.TemporaryDirectory() as d:
+            os.symlink(Path(d) / "missing", Path(d) / MAP_NAME)
+            with self.assertRaises(CgDividendMapError):
+                load_map(Path(d))
+
+    @rule("CA-INC-06")
+    def test_date_entry_matches_pay_date_of_record_dated_row(self):
+        from taxjson.lib.cg_dividends import allocate, parse_map
+        rows = [("m", _cgdiv("XTD.TO", "2025-09-10", 100.0,
+                             rec="2025-08-29"))]
+        for when in ("2025-09-10", "2025-08-29"):
+            f = allocate(parse_map(f"XTD.TO {when} 5.50\n"), rows,
+                         date_of=lambda t: t["record_date"],
+                         default_accounts={"m"})
+            self.assertAlmostEqual(f[("m", "XTD.TO-2025-09-10")], 0.055)
+
+
 if __name__ == "__main__":
     unittest.main()
