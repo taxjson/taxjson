@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Web what-if: an option is priced at the contract size the book's rows
+  declare (a x10 mini option was priced at x100, a 10 loss shown as a
+  350 gain), and a plain futures contract is refused instead of priced
+  at x1 and dated as an equity T+1 sale; the simulated sale settles on
+  the listing's market calendar, not the calendar of the currency the
+  price was typed in; a Canadian trust's return of capital is booked on
+  its record date first, as the run does; a registered account with
+  inputs but no built book is named in the warnings; and the engine's
+  warn-only option-replacement flag (a call bought in the window) is
+  listed in the result (re-audit A2-0131, A2-0384, A2-0132, A2-0375,
+  A2-0437, A2-1189, A2-1175, A2-0383, A2-0687).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

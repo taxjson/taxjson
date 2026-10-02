@@ -403,12 +403,29 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # and double-loading it made its own buys act as their own wash
     # triggers (2026-07b audit, web §1).
     sheltered_raw: List[TaxTransaction] = []
+    missing_sheltered = []
     for a in ctx.sheltered():
         if a.name == account:
             continue
         f = ctx.cache / f"{a.name}_base.json"
         if f.exists():
             sheltered_raw.extend(load_transactions(f))
+        elif _has_inputs(ctx, a.name):
+            # A registered account with activity files but no book (a
+            # deleted work/ file, a run that stopped before it): its
+            # purchases are missing from the wash context, so a loss
+            # they deny PERMANENTLY showed as fully allowed with no
+            # warning (audit A2-0383; the taxable twins below warn).
+            missing_sheltered.append(a.name)
+    if missing_sheltered:
+        warnings.append(
+            f"no work/<account>_base.json for registered account(s) "
+            f"{', '.join(missing_sheltered)} although they have inputs — "
+            f"their purchases are NOT in this "
+            f"{'wash-sale' if ctx.country == 'usa' else 'superficial-loss'}"
+            f" check, so a loss they make "
+            f"{'a wash sale' if ctx.country == 'usa' else 'superficial'} "
+            f"can show as allowed; run `taxjson run`.")
 
     # Shared preprocessing: TRANSFER handling (incl. stripping sheltered
     # TRANSFERs so they can't act as wash triggers) + the root
@@ -466,41 +483,61 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
 
     # Contract multiplier: the form asks for the per-share QUOTE (the
     # price brokers show, and what the trade table lists), and the
-    # books store an equity option at qty x price x 100 (core.py's
-    # convention; every broker parser). proceeds = qty x price dropped
-    # the x100 and showed a ~99% loss on every option (2026-09 audit).
-    # A futures option's multiplier depends on the contract — refuse
-    # rather than guess.
+    # books store an option at qty x price x its contract size. The
+    # size is the one the book's rows declare (a mini option's x10, a
+    # futures option's CL 1000 / ES 50 — audit S026-22, A2-0131,
+    # A2-0384); an equity option with none declared is the standard
+    # 100. A futures option with no declared size is refused rather
+    # than guessed.
     from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.futures import is_plain_future
     from taxjson.lib.pipeline import declared_multipliers
+    if is_plain_future(symbol):
+        # A plain future's gain is its settled P/L (lib/futures: the
+        # notional is never paid, the base book carries the P/L of each
+        # close), which a sale price alone cannot reproduce: priced at
+        # x1 the what-if showed a +83.71 gain for a -1,418.80 loss
+        # (A2-0131) and dated it as an equity T+1 sale (A2-0132).
+        return {"ok": False, "warnings": warnings,
+                "reason": f"{symbol} is a plain futures contract — its gain "
+                          f"is the settled P/L of the contract, which the "
+                          f"what-if does not simulate; use "
+                          f"`taxjson-explain` on a booked close."}
+    _declared = declared_multipliers(txs).get(symbol)
     multiplier = 1
-    is_futopt = False
-    if is_option_symbol(symbol):
-        if symbol.upper().startswith(("F:", "/", "\\")):
-            # The contract size the book's rows declare (IB's
-            # instrument list: CL 1000, ES 50 — audit S026-22); never
-            # the equity 100.
-            _declared = declared_multipliers(txs).get(symbol)
-            if not _declared:
-                return {"ok": False, "warnings": warnings,
-                        "reason": f"{symbol} is a futures option whose "
-                                  f"contract multiplier no booked row "
-                                  f"declares — the what-if cannot price "
-                                  f"it; use `taxjson-explain` on a booked "
-                                  f"sale."}
-            multiplier = _declared
-            is_futopt = True
-        else:
-            multiplier = 100
+    is_option = is_option_symbol(symbol)
+    is_futopt = is_option and symbol.upper().startswith(("F:", "/", "\\"))
+    if is_futopt and not _declared:
+        return {"ok": False, "warnings": warnings,
+                "reason": f"{symbol} is a futures option whose "
+                          f"contract multiplier no booked row "
+                          f"declares — the what-if cannot price "
+                          f"it; use `taxjson-explain` on a booked "
+                          f"sale."}
+    if is_option:
+        multiplier = _declared or 100
+        if multiplier == int(multiplier):
+            multiplier = int(multiplier)
     proceeds = abs(qty) * price * multiplier
+    acct_cfg = ctx.account(account)
     # The simulated trade settles like a real one (era- and holiday-
     # aware, T+1 today): the superficial-loss window and the tax year
     # both run on the settle date for a Canadian project. A Dec-31 sale
     # settles in January — a loss the what-if called "deductible now"
-    # lands in the NEXT tax year (R1-197).
-    from taxjson.lib.dates import settlement_date
-    mkt_cur = (price_currency or ctx.base_currency or "CAD").strip().upper()
-    settle_on = settlement_date(on, mkt_cur, multiplier == 100)
+    # lands in the NEXT tax year (R1-197). The calendar is the LISTING's
+    # market (AEM.US on the US one, DLR.U.TO on the Canadian one),
+    # never the currency the price was typed in: the same sale flipped
+    # between superficial and allowed with the price currency (A2-0375,
+    # A2-0437, A2-1189).
+    from taxjson.lib.dates import listing_market_currency, settlement_date
+    mkt_cur = listing_market_currency(
+        symbol, (price_currency or ctx.base_currency or "CAD")
+        .strip().upper())
+    settle_on = settlement_date(on, mkt_cur, is_option)
+    if acct_cfg is not None and acct_cfg.crypto:
+        # A crypto trade settles when it fills (the parsers' date_settle
+        # = date; the radar's same-day bound, R1-240).
+        settle_on = on
     if is_futopt:
         # A futures option settles as the project's futures_settle says
         # (the parser's rule: the trade date, or the next business day).
@@ -532,14 +569,13 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         quantity=(-abs(qty) if side == "sell" else abs(qty)),
         price=price, net_amount=proceeds, proceeds=proceeds,
         currency=ctx.base_currency, account=account,
-        multiplier=float(multiplier) if is_futopt else 0.0,
+        multiplier=float(_declared) if _declared else 0.0,
         id=f"whatif-simulated-{symbol}-{on}")
 
     # Same wash policy as the CLI (GainsRequest.effective_detect_wash +
     # the usa-crypto carve-out): only taxable accounts get wash detection,
     # and US crypto is property — §1091 doesn't reach it. Previously
     # hard-set True, so sheltered simulations wash-checked themselves.
-    acct_cfg = ctx.account(account)
     is_usa = ctx.country == "usa"
     detect_wash = (acct_cfg is not None and acct_cfg.type == "taxable"
                    and not (acct_cfg.crypto and is_usa))
@@ -555,7 +591,28 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     if _timing_kw:
         _timing_kw["option_grant_basis"] = basis
 
+    # Canada: a trust ROC with a printed record date lowers the ACB on
+    # it, as run_gains books it (CA-INC-DATE-ROC-TRUST); the what-if
+    # priced a sale between the record and pay dates on the unreduced
+    # ACB (A2-1175). IncomeRules answers '' outside Canada.
+    from taxjson.lib.income_dating import IncomeRules
+    from taxjson.lib.pipeline import apply_roc_record_dates
+    try:
+        _income = IncomeRules.from_settings(ctx.settings)
+    except Exception as exc:
+        _income = None
+        warnings.append(
+            f"income-dating settings could not be applied ({exc}) — a "
+            f"trust return of capital stays on its pay date here.")
+    # The engine's option/right-replacement flags (US-WASH-12/14/15,
+    # CA-SL-14/15: warn-only, numbers unchanged) for the simulated sale
+    # go into the result, not the server's stderr (A2-0687).
+    rules.emit_replacement_stderr = False
+    replacement_flags: List[str] = []
+
     def _simulate(main_rows, context_rows, **extra_kw):
+        if _income is not None:
+            apply_roc_record_dates(main_rows, _income)
         try:
             after = rules.compute_gains(
                 main_rows + [synth], sheltered_transactions=context_rows,
@@ -564,6 +621,14 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         except AmbiguousTransferDateError as e:
             # Surface as a structured error instead of a 500.
             raise ValueError(str(e))
+        from taxjson.lib.core import format_option_replacement_warning
+        for _w in after.get("option_replacement_warnings") or []:
+            if (_w.get("loss_symbol") == symbol
+                    and _w.get("loss_date") in (on, settle_on)):
+                _txt = format_option_replacement_warning(
+                    _w, country=ctx.country)
+                if _txt not in replacement_flags:
+                    replacement_flags.append(_txt)
         # The US (FIFO) engine emits ONE gain entry PER CLOSED LOT, all
         # sharing the selling tx's id — reading only the first falsely
         # rejected any sell spanning multiple lots. Aggregate them.
@@ -700,6 +765,10 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
                     "the blended (s.47) simulation produced no matching "
                     "disposition — showing this account's own book.")
 
+    for _txt in replacement_flags:
+        if _txt not in warnings:
+            warnings.append(_txt)
+
     def _sum(key, alt=None):
         return sum(float(t.get(key, (t.get(alt, 0) if alt else 0)) or 0)
                    for t in entries)
@@ -744,7 +813,7 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         "price_base": round(price, 6),             # converted to base
         "fx_rate": round(fx_rate, 6),
         "fx_note": fx_note,
-        "multiplier": multiplier,                  # 100 per option contract
+        "multiplier": multiplier,                  # declared, else 100
         "proceeds": round(proceeds, 2),            # base-currency
         "cost_basis": round(_sum("cost"), 2),
         "economic_gain": round(economic, 2),      # true gain/loss on the sale
@@ -769,6 +838,13 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         "days_held": entry.get("days_held"),
         "currency": ctx.base_currency,
     }
+
+
+def _has_inputs(ctx: ProjectContext, account: str) -> bool:
+    """The account has activity files `taxjson run` reads (so a missing
+    book is a gap, not an account that never traded)."""
+    from taxjson.lib.checklist import _data_files
+    return bool(_data_files(ctx.root / "inputs" / account))
 
 
 def _scope_note(country):
