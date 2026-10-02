@@ -20,6 +20,13 @@
   source, the position and book cost it carried, and the late trades;
   in the checklist (`renames`) and `taxjson edge-cases` (CA-ACB-RENAME /
   US-BASIS-RENAME).
+- Exercising a warrant or right is no longer a disposal at 0 (owner
+  decision, audit A2-0090 / A2-0274): the warrant's cost and the
+  exercise price become the shares' cost (ITA s.49(3); US basis
+  carryover, holding period from the exercise). IB pairs a Warrants leg
+  coded `Ex` with the same-day share leg coded `Ex`; RBC pairs an
+  `Exercise` of the warrants with the same-day `Exercise` of the shares
+  and refuses an exercise with no share leg (CA-OPT-09 / US-OPT-06).
 - A `.tt` SPLIT line carries no currency (it was labelled CAD, and a US
   project with no CAD rates refused the account); a split row with no
   money is relabelled, not converted.

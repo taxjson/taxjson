@@ -740,16 +740,26 @@ class TestShortTradesRowIsRefused(unittest.TestCase):
 
 
 class TestWarrantExerciseIsSaid(unittest.TestCase):
-    """A2-0090 (deferred: the engines do not roll a warrant's cost into
-    the shares yet): the exercise leg booked as a disposal at 0 is an
-    ATTENTION line, not silent."""
+    """A2-0090: the exercise leg names the shares it delivers (the owner
+    decision: no disposition, the engines roll the warrant's cost into
+    the shares — tests/test_fix_a2_warrants.py); an exercise leg with no
+    share leg to pair stays an ATTENTION line, not silent."""
 
-    def test_warrant_exercise_leg_is_an_attention_line(self):
+    def test_warrant_exercise_leg_names_its_shares(self):
+        _, txs, err = _parse_ib(HEAD + TRADES_H
+                                + _trade('QZYW', '2025-05-02, 16:20:00',
+                                         -100, 0, 0, code='C;Ex',
+                                         cat='Warrants')
+                                + _trade('QZY', '2025-05-02, 16:20:00', 100,
+                                         11.5, -1150, code='Ex;O'))
+        w = [t for t in txs if t['symbol'] == 'QZYW.US']
+        self.assertEqual(w[0].get('exercise_of'), 'QZY.US')
+        self.assertIn('warrant QZYW.US exercised into QZY.US', err)
+
+    def test_unpaired_warrant_exercise_leg_is_an_attention_line(self):
         _, _, err = _parse_ib(HEAD + TRADES_H
                               + _trade('QZYW', '2025-05-02, 16:20:00', -100,
-                                       0, 0, code='C;Ex', cat='Warrants')
-                              + _trade('QZY', '2025-05-02, 16:20:00', 100,
-                                       11.5, -1150, code='Ex;O'))
+                                       0, 0, code='C;Ex', cat='Warrants'))
         self.assertRegex(err, r'warning: ATTENTION: .*warrant QZYW')
 
 

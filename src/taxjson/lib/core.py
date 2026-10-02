@@ -132,6 +132,13 @@ class TaxTransaction:
     # two rows of different broker accounts (audit A2-0008, R1-296).
     # NOT part of compute_id, omitted when empty.
     source_account: str = ''
+    # The share listing a WARRANT or RIGHT exercise delivers, set by the
+    # parser on the warrant leg (an ASSIGN of the warrant): exercising is
+    # not a disposition — the warrant's cost goes into the shares' cost
+    # like an option's premium (CA s.49(3) / US basis carryover; owner
+    # decision on audit A2-0090 / A2-0274). NOT part of compute_id,
+    # omitted from to_dict() when empty.
+    exercise_of: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -186,7 +193,7 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
 # The other optional evidence fields, omitted from to_dict() when empty.
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
                    'broker_basis', 'multiplier', 'source',
-                   'source_account')
+                   'source_account', 'exercise_of')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or
@@ -776,7 +783,8 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                  'symbol_new', 'corp_event_id', 'corp_election', 'id',
                  'record_date', 'ex_date', 'income_label',
                  'dealer_country', 'issuer_country', 'broker_time',
-                 'security_name', 'open_close', 'broker_basis'):
+                 'security_name', 'open_close', 'broker_basis',
+                 'exercise_of'):
         if _fld not in clean_t:
             continue
         _v = clean_t[_fld]
@@ -1071,14 +1079,41 @@ _MARKED_LEG_MAX_LAG_DAYS = 7
 _ASSIGN_LEG_LEAD_DAYS = 3
 
 
+def exercise_target(tx) -> str:
+    """The share listing a warrant/right exercise leg delivers: an ASSIGN
+    row the parser marked with `exercise_of` ('' for anything else). The
+    engines treat it exactly like a long call's exercise — no
+    disposition; its cost rolls into the shares (tax-logic CA-OPT-09 /
+    US-OPT-06)."""
+    if getattr(tx, 'action', '') != 'ASSIGN':
+        return ''
+    tgt = (getattr(tx, 'exercise_of', '') or '').strip()
+    if not tgt or is_option_symbol(getattr(tx, 'symbol', '') or ''):
+        return ''
+    return tgt
+
+
+def is_assign_premium_leg(tx) -> bool:
+    """An ASSIGN whose cost or premium rolls into a stock leg: an option
+    ASSIGN, or a marked warrant/right exercise leg."""
+    return (getattr(tx, 'action', '') == 'ASSIGN'
+            and (is_option_symbol(getattr(tx, 'symbol', '') or '')
+                 or bool(exercise_target(tx))))
+
+
 def _assign_delivery_shares(opt_tx) -> Optional[float]:
     """Units an option ASSIGN delivers: contracts x the declared contract
     size (a mini x10, an adjusted deliverable — audit A2-0196), else 100
     per equity option; one futures contract per futures option (its
-    declared multiplier is the futures' dollar size, not a unit count)."""
+    declared multiplier is the futures' dollar size, not a unit count).
+    A warrant exercise delivers warrants x the declared shares per
+    warrant (`multiplier`); unknown (None) when none is declared."""
     q = abs(float(opt_tx.quantity or 0.0))
     if q < 1e-12:
         return None
+    if exercise_target(opt_tx):
+        m = float(getattr(opt_tx, 'multiplier', 0.0) or 0.0)
+        return q * m if m > 0 else None
     if _FUTURES_PREFIX_RE.match(opt_tx.symbol or ''):
         return q
     m = float(getattr(opt_tx, 'multiplier', 0.0) or 0.0)
@@ -1088,8 +1123,12 @@ def _assign_delivery_shares(opt_tx) -> Optional[float]:
 def _assign_direction(opt_tx) -> Optional[int]:
     """+1 when the assignment makes the account BUY the underlying (short
     put assigned / long call exercised), -1 when it SELLS."""
-    right = parse_option_right(opt_tx.symbol)
     q = float(opt_tx.quantity or 0.0)
+    if exercise_target(opt_tx):
+        # A warrant is a long call: exercising it (the leg closes the
+        # holding, q < 0) buys the shares.
+        return 1 if q < 0 else None
+    right = parse_option_right(opt_tx.symbol)
     if right not in ('C', 'P') or abs(q) < 1e-12:
         return None
     return 1 if (right == 'P') == (q > 0) else -1
@@ -1133,7 +1172,7 @@ def _pair_assign_legs(stream, in_scope, underlying_of=None):
     for i, t in enumerate(stream):
         if not in_scope(t) or t.action not in ('BUYSELL', 'ASSIGN'):
             continue
-        if is_option_symbol(t.symbol):
+        if is_option_symbol(t.symbol) or exercise_target(t):
             if t.action == 'ASSIGN':
                 opts.append(t)
                 pos[t.id] = i
@@ -1151,7 +1190,8 @@ def _pair_assign_legs(stream, in_scope, underlying_of=None):
             continue
         d = _assign_direction(o)
         size = _assign_delivery_shares(o)
-        strike = parse_option_strike(o.symbol)
+        strike = (None if exercise_target(o)
+                  else parse_option_strike(o.symbol))
         for l in lst:
             q = float(l.quantity)
             if d is not None and (1 if q > 0 else -1) != d:
@@ -1347,6 +1387,11 @@ def _make_assign_underlying_resolver(transactions, date_of):
     cache: Dict[Any, Optional[str]] = {}
 
     def resolve(tx):
+        _ex = exercise_target(tx)
+        if _ex:
+            # A warrant/right exercise names its shares (the parser
+            # paired the legs): no root matching.
+            return _ex if (tx.account, _ex) in dates else None
         und = parse_option_underlying(tx.symbol)
         if not und:
             return None
@@ -2400,6 +2445,7 @@ class CanadaTaxRules(TaxRules):
             pending_adjustments = _AssignPremiumLedger(
                 current_tx_list,
                 lambda _t: (not is_option_symbol(_t.symbol)
+                            and not exercise_target(_t)
                             and _t.action in ('BUYSELL', 'ASSIGN')
                             and _taxable_scope(_t)),
                 _assign_pairs)
@@ -2486,6 +2532,7 @@ class CanadaTaxRules(TaxRules):
                 # leaving a later taxable trade on the same underlying
                 # with no premium roll.
                 if (is_other_scope or is_option_symbol(symbol)
+                        or exercise_target(tx)
                         or tx.action not in ('BUYSELL', 'ASSIGN')):
                     # Only a stock trade can be an assignment's leg (an
                     # ADJUST / SPLIT / OB row on the underlying used to
@@ -2507,7 +2554,7 @@ class CanadaTaxRules(TaxRules):
                 adjustment_shown = 0.0
                 
                 is_option_assign = False
-                if action == 'ASSIGN' and is_option_symbol(symbol):
+                if is_assign_premium_leg(tx):
                     _und = (None if is_other_scope
                             else _assign_underlying(tx))
                     if (_und and (tx.account, _und)
@@ -2531,7 +2578,7 @@ class CanadaTaxRules(TaxRules):
                         # keeps the missing-data case diagnosable.
                         print(f"note: {symbol}: assignment treated as "
                               f"cash-settled ("
-                              f"{parse_option_underlying(symbol) or '?'}"
+                              f"{parse_option_underlying(symbol) or exercise_target(tx) or '?'}"
                               f" never trades as stock in this book) — "
                               f"option P&L realized directly. If a stock "
                               f"leg is missing from your input, add it "
@@ -5077,11 +5124,12 @@ class USATaxRules(TaxRules):
         pending_option_adjustments = _AssignPremiumLedger(
             taxable_sorted,
             lambda _t: (not is_option_symbol(_t.symbol)
+                        and not exercise_target(_t)
                         and _t.action in ('BUYSELL', 'ASSIGN')),
             _assign_pairs)
 
         def _take_option_adj(tx) -> float:
-            if (is_option_symbol(tx.symbol)
+            if (is_option_symbol(tx.symbol) or exercise_target(tx)
                     or tx.action not in ('BUYSELL', 'ASSIGN')):
                 return 0.0
             return pending_option_adjustments.take(tx)
@@ -5566,11 +5614,15 @@ class USATaxRules(TaxRules):
             # would-be gain is staged in pending_option_adjustments[underlying]
             # and consumed by the stock-leg BUYSELL processed next.
             is_option_assign = (tx.action == 'ASSIGN')
+            # A marked warrant/right exercise leg rolls its cost into the
+            # shares like a long call's premium (US-OPT-06).
+            _assign_und_named = (option_underlying(symbol)
+                                 or exercise_target(tx))
             underlying_for_assign = (_assign_underlying(tx)
                                      if is_option_assign
-                                     and option_underlying(symbol)
+                                     and _assign_und_named
                                      else None)
-            if not is_option_assign or not option_underlying(symbol):
+            if not is_option_assign or not _assign_und_named:
                 is_option_assign = False
                 underlying_for_assign = None
             elif (underlying_for_assign is None
@@ -5582,7 +5634,7 @@ class USATaxRules(TaxRules):
                 # option's own P&L via normal disposition accounting
                 # (mirrors the Canada engine, note and all).
                 print(f"note: {symbol}: assignment treated as "
-                      f"cash-settled ({option_underlying(symbol)} never "
+                      f"cash-settled ({_assign_und_named} never "
                       f"trades as stock in this book) — option P&L "
                       f"realized directly. If a stock leg is missing "
                       f"from your input, add it and re-run.",

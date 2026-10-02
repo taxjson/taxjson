@@ -128,9 +128,13 @@ class UsPriority(IntEnum):
 
 
 def _is_option_leg(tx: Any) -> bool:
+    """The premium-staging leg of an assignment: an option, or a warrant
+    exercise leg the parser marked (`exercise_of`) — it must sort before
+    its stock leg like an option's."""
     # Lazy: core imports this module at load time.
-    from taxjson.lib.core import is_option_symbol
-    return is_option_symbol(getattr(tx, 'symbol', '') or '')
+    from taxjson.lib.core import exercise_target, is_option_symbol
+    return (is_option_symbol(getattr(tx, 'symbol', '') or '')
+            or bool(exercise_target(tx)))
 
 
 def _settle_first(tx: Any) -> str:

@@ -698,6 +698,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-OPT-07",
                  "If the premium's year was already filed, `taxjson "
                  "option-boundary` flags the T1-ADJ.", cont=True),
+            Rule("CA-OPT-09",
+                 "Exercising a warrant or right is not a disposition: its "
+                 "cost and the exercise price paid become the shares' ACB "
+                 "(s.49(3)). The parser names the shares on the warrant "
+                 "leg (IB `Ex` legs, RBC `Exercise` rows, paired by date); "
+                 "IB leaves a leg it cannot pair a disposal at 0 with an "
+                 "ATTENTION line, RBC refuses the file.", cont=True),
         ]),
         ("Corporate actions (elections in the account manifest)", [
             Rule("CA-CORP-01",
@@ -1332,6 +1339,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "never by row order.", cont=True),
             Rule("US-OPT-03", "Cash-settled options realize on the option.",
                  cont=True),
+            Rule("US-OPT-06",
+                 "Exercising a warrant or right is not a sale: its basis "
+                 "and the exercise price paid become the shares' basis, "
+                 "and the shares' holding period starts at the exercise. "
+                 "The parser names the shares on the warrant leg (IB `Ex` "
+                 "legs, RBC `Exercise` rows, paired by date); IB leaves a "
+                 "leg it cannot pair a disposal at 0 with an ATTENTION "
+                 "line, RBC refuses the file.", cont=True),
             Rule("US-OPT-04",
                  "Not modelled: §1256 60/40 contracts, §1233 and §1259."),
         ]),
