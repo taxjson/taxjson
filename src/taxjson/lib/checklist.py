@@ -727,7 +727,9 @@ def d_missing_history(ctx: Ctx) -> Result:
         # was checked, so it is never "nothing affects the year".
         return Result("missing-history", "blocked", _last_line(err) or _last_line(out) or f"exit {code}")
     syms: List[str] = []
+    remove: List[str] = []
     in_affects = False
+    in_remove = False
     # Every table row printed under an AFFECTS heading counts — a strict
     # symbol/currency pattern dropped 'BRK/B', a '?' currency, 'USDT'
     # and lower-case coins, and the step said "nothing affects the
@@ -738,6 +740,11 @@ def d_missing_history(ctx: Ctx) -> Result:
         if ln.startswith("AFFECTS"):
             in_affects = True
             continue
+        # phantoms.json entries on a real short / a written option
+        # (A2-0639): the run applies them, so they are work to do.
+        if ln.startswith("REMOVE from phantoms.json"):
+            in_remove = True
+            continue
         if (not ln.strip() or ln.startswith(("##", "NOT relevant",
                                               "To fix", "SHELTERED",
                                               "COVERED"))):
@@ -745,14 +752,23 @@ def d_missing_history(ctx: Ctx) -> Result:
             # no reportable gain: never counted as affecting the year
             # (audit S035-08); pairs phantoms.json covers are not work
             # to do (R1-339).
-            in_affects = False
+            in_affects = in_remove = False
             continue
-        if not in_affects or ln[:1].isspace() or ln.startswith("-") \
-                or ln.startswith("Symbol "):
+        if (not (in_affects or in_remove) or ln[:1].isspace()
+                or ln.startswith("-") or ln.startswith("Symbol ")):
             continue
         parts = ln.split()
         if len(parts) >= 2:
-            syms.append(f"{parts[0]} ({parts[1]})")
+            (remove if in_remove else syms).append(
+                f"{parts[0]} ({parts[1]})")
+    if remove:
+        shown = ", ".join(remove[:4]) + (" ..." if len(remove) > 4 else "")
+        return Result("missing-history", "attention",
+                      f"{len(remove)} phantoms.json entr"
+                      f"{'y is' if len(remove) == 1 else 'ies are'} a real "
+                      f"short or a written option — remove: {shown}"
+                      + (f"; {len(syms)} position(s) with missing basis "
+                         f"affect {ctx.year}" if syms else ""))
     if syms:
         shown = ", ".join(syms[:4]) + (" ..." if len(syms) > 4 else "")
         return Result("missing-history", "attention",

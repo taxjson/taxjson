@@ -348,6 +348,11 @@ missing-history report now lists broker-marked shorts apart). Reading fix: the a
 recognise the manual-reporting rows and tie them out as "phantom basis —
 reported manually" instead of counting them as missing.
 
+### US: a move between two of your own taxable accounts does not carry the lot
+- **Where:** `taxjson run` with `transfers = false` (the default) in a US project.
+- **Current behaviour:** a security moved from one of your taxable accounts to another keeps its basis and purchase date (the move is not a sale), but the US books keep FIFO lots per account and the move's TRANSFER rows sit in the transfer sidecar, so the receiving account's sale of those shares reads as a short with no basis and the sending account still holds them. Since the re-audit (A2-0032) the run prints an `ATTENTION` line naming each such move (paired out/in legs of one symbol and quantity within 10 days) and `run --strict` stops; report those sales by hand. Canada pools the ACB across the accounts (s.47), so it is not affected.
+- **Fix sketch:** for each paired move, replay the sender's FIFO lots up to the move date, hand the consumed lots (date, cost) to the receiver as carried lots, and remove them from the sender without a disposition (a lot-transfer row both US engines understand), then drop the ATTENTION.
+
 ### RESP accounts are treated as affiliated for the superficial-loss rule
 - **Where:** every account with `type = "sheltered"` is an affiliated person in `lib/core.py`'s wash pass.
 - **Question:** s.251.1(1)(g) affiliates a trust with its majority-interest beneficiary. CRA's T4037 treats an RRSP or TFSA as affiliated with its annuitant/holder, but an RESP subscriber is usually not a beneficiary, so whether an RESP purchase can deny the subscriber's loss is not settled.
