@@ -58,6 +58,14 @@ def unbacked_option_closes(transactions: Iterable[Any]) -> List[Dict[str, Any]]:
     pos: Dict[Tuple[str, str], float] = {}
     orders = OrderStarts()
     out: List[Dict[str, Any]] = []
+    # Rows coded OPEN later the same day (RBC prints no clock time, so a
+    # day's write and its buy-back can sort either way): the close is
+    # backed when the day's own openings back it.
+    later_open: Dict[Tuple[str, str, str], List[Any]] = {}
+    for t in txs:
+        if 'O' in open_close_codes(t):
+            later_open.setdefault((t.account or '', t.symbol, t.date),
+                                  []).append(t)
     for t in txs:
         acct = t.account or ''
         key = (acct, t.symbol)
@@ -71,7 +79,13 @@ def unbacked_option_closes(transactions: Iterable[Any]) -> List[Dict[str, Any]]:
             continue
         prev = pos.get(key, 0.0)
         order_prev = orders.prev(key, t, prev)
-        if 'C' in open_close_codes(t) and unbacked_close(t, prev, order_prev):
+        day = later_open.get((acct, t.symbol, t.date), [])
+        if t in day:
+            day.remove(t)
+        pending = sum(float(o.quantity or 0.0) for o in day
+                      if (float(o.quantity or 0.0) > 0) != (q > 0))
+        if 'C' in open_close_codes(t) and unbacked_close(t, prev, order_prev) \
+                and unbacked_close(t, prev + pending, order_prev + pending):
             root, block, sfx = _contract(t.symbol)
             want_long = q < 0          # a sale closes a long
             partners = []

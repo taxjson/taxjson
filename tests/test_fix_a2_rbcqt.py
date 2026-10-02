@@ -145,6 +145,18 @@ class TestRbcOpenCloseMarker(unittest.TestCase):
         ]
         self.assertEqual(unbacked_option_close_messages(books), [])
 
+    def test_same_day_write_and_buy_back_in_either_order_is_backed(self):
+        # RBC prints no time: a day's write (O) and its buy-back (C) can
+        # sort buy first (seen on real books).
+        sym = "NVDA240719C00135000.US"
+        books = [
+            _tx(date="2024-07-05", symbol=sym, quantity=4, net_amount=998.0,
+                open_close="C"),
+            _tx(date="2024-07-05", symbol=sym, quantity=-4,
+                net_amount=1347.0, open_close="O"),
+        ]
+        self.assertEqual(unbacked_option_closes(books), [])
+
     def test_unrelated_root_is_not_a_partner(self):
         books = [
             _tx(date="2024-12-24", symbol="ABC270115C00046000.TO",
