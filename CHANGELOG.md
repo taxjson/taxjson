@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Standalone `taxjson-t1135` says when it falls back to close timing
+  for written options (as `taxjson-gains` does), and `taxjson
+  find-missing-history --gen-phantoms` runs the gains engine with the
+  project's option timing and income dating (re-audit A2-1361).
 - `taxjson-ticker-map` summary mode no longer "maps" every `.US`
   listing to `.TO` (a hard-coded CAD target, wrong beside a US project
   and not a real listing in a Canadian one); it lists the symbols with

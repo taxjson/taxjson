@@ -590,5 +590,56 @@ class TestTickerMapSummaryNoSuffixGuess(unittest.TestCase):
         self.assertEqual(m["U.19SEP25.26.P"], "U250919P00026000")
 
 
+# ------------------------------- standalone timing defaults (A2-1361)
+
+class TestStandaloneTimingDefaults(unittest.TestCase):
+
+    def _t1135(self, *flags):
+        import contextlib
+        from taxjson.bin.taxjson_t1135 import main as t1135_main
+        with tempfile.TemporaryDirectory() as td:
+            b = Path(td) / "margin_base.json"
+            b.write_text(json.dumps({
+                "metadata": {"target_currency": "CAD"},
+                "transactions": [{
+                    "date": "2025-01-05", "date_settle": "2025-01-06",
+                    "symbol": "XYZ.TO", "action": "BUY", "quantity": 10,
+                    "price": 10.0, "net_amount": -100.0,
+                    "currency": "CAD", "fees": 0.0}]}))
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    redirect_stderr(err):
+                rc = t1135_main(["--year", "2025", *flags, str(b)])
+        self.assertEqual(rc, 0, err.getvalue())
+        return err.getvalue()
+
+    def test_t1135_says_it_defaults_to_close_timing(self):
+        self.assertIn("--option-premium-timing not given", self._t1135())
+        self.assertNotIn("not given", self._t1135(
+            "--option-premium-timing", "grant",
+            "--option-grant-since", "2025"))
+
+    def test_gen_phantoms_passes_the_project_timing(self):
+        root = None
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "work").mkdir()
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\noption_grant_timing_since = 2025\n'
+                '[accounts.margin]\ntype = "taxable"\n')
+            (root / "work" / "margin_base.json").write_text(json.dumps(
+                {"transactions": [{
+                    "action": "BUYSELL", "date": "2025-03-03",
+                    "date_settle": "2025-03-04", "symbol": "QZQ.TO",
+                    "quantity": -10, "price": 10.0, "net_amount": 100.0,
+                    "currency": "CAD", "account": "margin"}]}))
+            r = _module("taxjson.bin.taxjson_run", "-C", str(root),
+                        "find-missing-history", "--gen-phantoms",
+                        str(root / "phantoms.new.json"))
+        self.assertNotIn("--option-premium-timing not given", r.stderr,
+                         r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

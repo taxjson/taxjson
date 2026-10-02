@@ -15775,6 +15775,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
             # certain phantom, and `run` applies phantoms.json to every
             # account's gains stage.)
             cmd += ["--country", _country(_soft_settings(root))]
+            # The project's written-option timing and income dating,
+            # as the gains stage runs (re-audit A2-1361: the standalone
+            # close-timing default and its note leaked in here).
+            cmd += option_timing_flags(_soft_settings(root))
+            cmd += income_dating_flags(_soft_settings(root))
             if year:
                 cmd += ["--year", str(year)]
             if args.include_options:

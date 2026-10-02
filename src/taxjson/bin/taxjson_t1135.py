@@ -1339,9 +1339,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "context only — never counted as foreign "
                              "property); repeatable")
     parser.add_argument("--option-premium-timing", choices=["grant", "close"],
-                        default="close",
+                        default=None,
                         help="Written-option premium timing the gains "
-                             "files use (default close)")
+                             "files use (default close, with a note: "
+                             "`taxjson t1135` passes the project's)")
     parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR",
                         help="With grant timing: contracts written before "
@@ -1373,6 +1374,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     overrides = load_overrides(args.map)
+    if args.option_premium_timing is None:
+        # The T1135 test is Canadian; a Canada project's run uses grant
+        # timing from the project year — say so instead of silently
+        # disagreeing with it, as taxjson-gains does (re-audit A2-1361).
+        print("taxjson-t1135: note: --option-premium-timing not given — "
+              "using close timing. `taxjson run` on a Canada project uses "
+              "grant timing from the project year; pass "
+              "--option-premium-timing grant --option-grant-since YEAR "
+              "to match it.", file=sys.stderr)
+        args.option_premium_timing = "close"
     if args.base_currency.upper() != "CAD":
         # The thresholds are CAD amounts (ITA s.233.3): a USD book
         # tested against "100,000 USD" read 80,000 USD (about 110,000
