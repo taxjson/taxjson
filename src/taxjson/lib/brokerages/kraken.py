@@ -887,6 +887,11 @@ class KrakenBrokerage(BaseBrokerage):
                         'account': self.DEFAULT_ACCOUNT,
                         'description': desc,
                     }
+                    if fee:
+                        # The coin fee as data for `taxjson transfers`
+                        # (its FEE column was empty, audit A2-0663).
+                        tx['fee_qty'] = abs(fee)
+                        tx['fee_currency'] = fee_ccy
                     if txid:
                         tx['id'] = f'{txid}-xfer'
                     transactions.append(tx)

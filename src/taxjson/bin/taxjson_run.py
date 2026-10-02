@@ -5336,6 +5336,27 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
         # in the sidecar; the view dropped it (S039-21).
         return float(t.get("fee") or 0) + float(t.get("commission") or 0)
 
+    _COIN_FEE_RE = re.compile(r"\(fee ([0-9.eE+-]+) ([A-Za-z0-9.]+)\)")
+
+    def _coin_fee(t: Dict[str, Any]) -> Tuple[float, str]:
+        # A fee paid IN COINS (Kraken: fee_qty/fee_currency; never the
+        # money `fee` field, S061-17), else the "(fee 0.002 TAO)" the
+        # description of a sidecar from an older parse carries — the
+        # FEE column was empty on every real withdrawal (A2-0663).
+        try:
+            q = float(t.get("fee_qty") or 0)
+        except (TypeError, ValueError):
+            q = 0.0
+        if q:
+            return q, str(t.get("fee_currency") or "")
+        m = _COIN_FEE_RE.search(str(t.get("description") or ""))
+        if m:
+            try:
+                return float(m.group(1)), m.group(2)
+            except ValueError:
+                pass
+        return 0.0, ""
+
     rows: List[Dict[str, Any]] = []
     for p in sorted(cache.glob("*_transfers.json")):
         try:
@@ -5360,6 +5381,8 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "value": float(t.get("net_amount")
                                         or t.get("book_value") or 0),
                          "fee": _fee(t),
+                         "fee_qty": _coin_fee(t)[0],
+                         "fee_currency": _coin_fee(t)[1],
                          "currency": t.get("currency") or "",
                          "where": "sidecar"})
     for name in (cfg.get("accounts") or {}):
@@ -5396,6 +5419,8 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "type": t.get("description") or "",
                          "value": _value,
                          "fee": _fee(t),
+                         "fee_qty": _coin_fee(t)[0],
+                         "fee_currency": _coin_fee(t)[1],
                          "currency": t.get("currency") or "",
                          "where": "book"})
     if want:
@@ -5426,7 +5451,9 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
             r["date"], r["account"], r["symbol"],
             fmt_qty(r["quantity"]), _ty,
             fmt_money(r["value"]),
-            (f"{r['fee']:g}" if r["fee"] else "-"),
+            (f"{r['fee']:g}" if r["fee"]
+             else (f"{r['fee_qty']:g}_{r['fee_currency']}".rstrip("_")
+                   if r["fee_qty"] else "-")),
             r["currency"], r["where"]]))
     _print_report_table(out_lines)
     print(f"\n{len(rows)} transfer row(s).")
@@ -6143,9 +6170,21 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     tainted_skipped = 0
     from taxjson.lib.ticker_map import class_share_aliases, underlying_of
     _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
-    _aliases = class_share_aliases(
-        t.get("symbol") for _a, _d in _docs
-        for t in _d.get("transactions", []) or [])
+    # The class share is found among every listing the accounts hold or
+    # traded (inventory and native books), not only the year's sales: a
+    # Rogers call written on held, unsold RCI.B.TO shares was headed
+    # RCI.TO while the holdings TOML said RCI.B.TO (audit A2-1115).
+    _alias_syms = [t.get("symbol") for _a, _d in _docs
+                   for t in (_d.get("transactions", []) or [])
+                   + (_d.get("inventory", []) or [])
+                   if isinstance(t, dict)]
+    for _a in resolved:
+        _nf = _native_tx_file(cache, _a)
+        if _nf is not None:
+            _alias_syms += [t.get("symbol") for t in
+                            (_load_json_or_die(_nf).get("transactions")
+                             or []) if isinstance(t, dict)]
+    _aliases = class_share_aliases(_alias_syms)
     for acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
