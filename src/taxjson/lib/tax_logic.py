@@ -1402,6 +1402,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "say so: a purchase by your spouse or by a corporation "
                  "you control also makes a loss a wash sale (IRS Pub. "
                  "550), and those accounts are not in the project."),
+            Rule("US-PLAN-05",
+                 "harvest counts a loss in an account marked crypto as "
+                 "claimable now, with no wash-sale advice: those "
+                 "accounts are outside the wash-sale rule (US-WASH-13)."),
         ]),
         ("Project country", _ownership(c)),
     ]

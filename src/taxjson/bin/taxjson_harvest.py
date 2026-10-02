@@ -38,20 +38,36 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.cli_diag import warn
+from taxjson.bin.taxjson_convert_currency import norm_currency
 from taxjson.lib.country import add_country_argument
 from taxjson.lib.core import (is_option_symbol, parse_option_expiry,
                               parse_option_underlying)
 from taxjson.lib.price_chain import (DEFAULT_IBKR_HOST, DEFAULT_IBKR_PORT,
                                      DEFAULT_MAX_CACHE_AGE_DAYS,
                                      fetch_option_prices, fetch_prices,
-                                     latest_rate, load_fx_history,
-                                     load_yf_map, quote_currency,
+                                     latest_rate, load_crypto_overrides,
+                                     load_fx_history, load_yf_map,
+                                     minor_unit_listing, quote_currency,
                                      yf_symbol_for)
 from taxjson.lib.ticker_map import is_future_ticker
 
-# Equity options premium-quote in per-share terms; a contract covers
-# 100 shares and the books carry the x100 amounts.
+# Equity options premium-quote in per-share terms; a standard contract
+# covers 100 shares and the books carry the x100 amounts. A contract
+# size the rows DECLARED (the inventory's `multiplier`, e.g. a x10 mini)
+# wins — the same rule as `taxjson list` and the holdings export
+# (audit A2-0367 / A2-1177).
 OPTION_MULTIPLIER = 100.0
+
+
+def _declared_multiplier(h: Dict[str, Any]) -> Optional[float]:
+    """The contract size an inventory line declares, or None."""
+    if h.get("multiplier_conflict"):
+        return None
+    try:
+        m = float(h.get("multiplier") or 0)
+    except (TypeError, ValueError):
+        return None
+    return m if m > 0 else None
 from taxjson.lib.report_model import (fmt_money,
                                       gains_basis_label, load_report_json)
 
@@ -144,6 +160,8 @@ def load_positions(files: List[Path],
                     h.get("recognised_premium", 0) or 0),
                 "start": str(h.get("position_start_date") or "") or None,
                 "is_option": is_opt,
+                "multiplier": ((_declared_multiplier(h) or OPTION_MULTIPLIER)
+                               if is_opt else 1.0),
             })
     return out
 
@@ -353,6 +371,11 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
             continue
         loss = abs(float(r.get("unrealized") or 0.0))
         rec = r.get("radar")
+        if r.get("wash_exempt"):
+            # US crypto account: outside §1091 (US-WASH-13, US-PLAN-05)
+            # — claimable now, whatever any radar says.
+            out["now"] += loss
+            continue
         cat = (rec or {}).get("category") or ""
         clears = (rec or {}).get("clears_at")
         if rec is None:
@@ -374,6 +397,18 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
             loss *= frac
             if loss <= 1e-9:
                 continue
+        if cat == "VIOLATION" and _deadline_passed(clears, t):
+            # The rescue deadline has passed: the earlier loss is denied
+            # and no sale rescues it. A loss sale TODAY is itself
+            # superficial while a registered buy from the past 30 days
+            # is still held — claimable once that buy ages out (the
+            # radar's LOCKED rule: last add + 31 days). Counting it
+            # 'now' contradicted the advisory cell (audit A2-0365).
+            age_out = _registered_age_out(r)
+            if age_out is None:
+                out["no_clear"] += loss
+                continue
+            clears, cat = age_out, "LOCKED-AGE-OUT"
         if cat in ("CLEAR", "RISK", "VIOLATION", "EXITABLE", "CAUTION",
                    "BLOCKED", "WASHED"):
             # RISK = sellable now with a forward-window caveat — the
@@ -420,6 +455,31 @@ def _recovery_schedule(rows: List[Dict[str, Any]],
     out["30d"] += out["14d"]
     out["later"] += out["30d"]
     return {k: round(v, 2) for k, v in out.items()}
+
+
+def _deadline_passed(clears: Optional[str], today: date) -> bool:
+    """A VIOLATION's clears_at is the LAST trade date that rescues the
+    loss (inclusive); past it, no sale does."""
+    try:
+        return bool(clears) and date.fromisoformat(clears) < today
+    except ValueError:
+        return False
+
+
+def _registered_age_out(row: Dict[str, Any]) -> Optional[str]:
+    """The date a sale today stops being superficial on account of the
+    registered side's last buy (last add + 31 days; today or earlier =
+    already clear). None when the registered side is unknown (no
+    --sheltered input)."""
+    if not row.get("sheltered_known"):
+        return None
+    add = row.get("sheltered_last_add")
+    if not add:
+        return date.min.isoformat()          # nothing registered: clear
+    try:
+        return (date.fromisoformat(add) + timedelta(days=31)).isoformat()
+    except ValueError:
+        return None
 
 
 def _advisory_display(rec: Optional[Dict[str, Any]],
@@ -535,6 +595,7 @@ def main(argv: Optional[List[str]] = None,
     add_country_argument(p, help="Project country (required; adds the LT "
                                  "IN column for usa)")
     p.add_argument("--base-currency", default="CAD", metavar="CURR",
+                   type=norm_currency,
                    help="Base currency of the books (default: %(default)s). "
                         "Quotes in other currencies convert via --rates")
     p.add_argument("--rates", type=Path, default=None, metavar="FILE",
@@ -562,13 +623,29 @@ def main(argv: Optional[List[str]] = None,
                         "contract actually held — found in the "
                         "account's <acct>_raw_gains.json — in its own "
                         "currency")
+    p.add_argument("--crypto-account", action="append", default=[],
+                   metavar="ACCOUNT",
+                   help="An input account marked `crypto = true` "
+                        "(repeatable). In a usa project its losses are "
+                        "outside the wash-sale rule (US-WASH-13) and "
+                        "count as claimable now; in a canada project "
+                        "the superficial-loss rule applies to crypto as "
+                        "to shares, so this changes nothing")
     p.add_argument("--json", action="store_true",
                    help="Emit the report as JSON instead of text")
     p.add_argument("--verbose", "-v", action="store_true",
                    help="Show per-tier price-chain diagnostics")
     args = p.parse_args(argv)
 
-    is_usa = args.country == "usa"
+    from taxjson.lib.country import is_usa as _country_is_usa
+    is_usa = _country_is_usa(args.country)
+    # US-PLAN-05: a US crypto account is outside §1091 (US-WASH-13).
+    # Canada has no such carve-out (crypto is property under s.54), so
+    # the set stays empty there — the two countries never mix.
+    wash_exempt_accounts = (set(args.crypto_account) if is_usa
+                            else set())
+    from taxjson.lib.wash_scope import scope_note
+    _scope = scope_note(args.country)
 
     files = [Path(f) for f in args.files]
     positions = load_positions(files, include_options=args.options,
@@ -592,7 +669,8 @@ def main(argv: Optional[List[str]] = None,
     if not positions:
         scope = (f" for {', '.join(args.symbol)}" if args.symbol else "")
         if args.json:
-            print(json.dumps({"rows": [], "totals": {}}, indent=2,
+            print(json.dumps({"rows": [], "totals": {},
+                              "scope_note": _scope}, indent=2,
                              sort_keys=True))
         else:
             print(f"No open positions{scope}.")
@@ -627,12 +705,17 @@ def main(argv: Optional[List[str]] = None,
             if d not in _dirs:
                 _dirs.append(d)
     external_map = load_yf_map(_dirs + [Path(".")])
+    # The coin spellings the books were priced with: fill-crypto's
+    # built-ins plus the project's crypto_ticker.map (audit A2-0364).
+    # Project root first — `taxjson run` reads the map from there.
+    crypto_overrides = load_crypto_overrides(
+        [d for d in reversed(_dirs)])
     yf_map: Dict[str, str] = {}
     for t in tickers:
         if t in external_map:
             yf_map[t] = external_map[t][0]      # spelling only: positions
             continue                            # are in CURRENT tickers
-        yf = yf_symbol_for(t)
+        yf = yf_symbol_for(t, crypto_overrides)
         if yf is not None:
             yf_map[t] = yf
 
@@ -703,8 +786,18 @@ def main(argv: Optional[List[str]] = None,
             # The source's own currency when it reports one (Yahoo's
             # metadata; minor units already normalized), else the quote
             # spelling's (audit S077-00/-04, R1-150).
-            qcur = q.currency or quote_currency(
-                yf_map.get(r["symbol"], r["symbol"]))
+            _spelled = yf_map.get(r["symbol"], r["symbol"])
+            if q.currency is None and minor_unit_listing(_spelled):
+                # An LSE line's quote may be in pence: one that does not
+                # say (a cache entry written before S077-04, or a tier
+                # with no unit) is never valued as pounds (audit
+                # A2-0379 / A2-0692).
+                warn(PROG, f"the {q.source} quote for {r['symbol']} "
+                           f"({_spelled}) does not say whether it is in "
+                           f"pence or pounds — omitted. Refresh it online "
+                           f"(Yahoo names the unit).")
+                continue
+            qcur = q.currency or quote_currency(_spelled)
         if qcur is None:
             warn(PROG, f"cannot tell which currency the quote for "
                        f"{r['symbol']} ({yf_map.get(r['symbol'], r['symbol'])}"
@@ -724,7 +817,8 @@ def main(argv: Optional[List[str]] = None,
                 stale_warned.add(qcur)
                 warn(PROG, f"{qcur}->{base} rate is {age}d old "
                            f"({rate_date}) — run `taxjson run` to refresh.")
-        mult = OPTION_MULTIPLIER if r.get("is_option") else 1.0
+        mult = (float(r.get("multiplier") or OPTION_MULTIPLIER)
+                if r.get("is_option") else 1.0)
         value = r["qty"] * q.price * mult * fx
         # A written option's premium already recognised at the write
         # (grant timing) is not recovered by the buy-back: the close
@@ -783,9 +877,14 @@ def main(argv: Optional[List[str]] = None,
             "unrealized": unreal,
             "pct": pct,
             "verdict": verdict,
+            # A stand-alone short sale is short-term whenever it is
+            # covered (US-HOLD-03): no countdown to LT (audit A2-1176).
             "days_to_long_term": (_days_to_long_term(r["start"])
-                                  if is_usa else None),
+                                  if is_usa and r["qty"] > 0 else None),
+            "short": r["qty"] < 0,
             "radar": radar.get(r["symbol"]),
+            "sheltered_known": show_sheltered,
+            "wash_exempt": r["account"] in wash_exempt_accounts,
         })
         tot_cost += cost_basis
         tot_gross += abs(cost_basis)
@@ -804,7 +903,9 @@ def main(argv: Optional[List[str]] = None,
         "harvestable": schedule,
     }
     if args.json:
-        print(json.dumps({"rows": rows, "totals": totals}, indent=2,
+        # CA-PLAN-04 / US-PLAN-04 in the JSON too (audit A2-1171).
+        print(json.dumps({"rows": rows, "totals": totals,
+                          "scope_note": _scope}, indent=2,
                          sort_keys=True))
         return 0
 
@@ -864,12 +965,14 @@ def main(argv: Optional[List[str]] = None,
                          else ("EXP" if d <= 0 else f"{d}d"))
         if is_usa:
             d = r["days_to_long_term"]
-            cells.append("LT" if d == 0 else (f"{d}d" if d is not None
+            cells.append("ST" if r.get("short") else
+                         "LT" if d == 0 else (f"{d}d" if d is not None
                                               else "-"))
         cells.append(_add_display(taxable_agg.get(r["symbol"])))
         if show_sheltered:
             cells.append(_add_display(sheltered.get(r["symbol"])))
-        cells.append(_advisory_display(r["radar"])
+        cells.append(("no-wash-rule(crypto)" if r.get("wash_exempt")
+                      else _advisory_display(r["radar"]))
                      if r["verdict"] == "LOSS" else "-")
         body.append([str(c) for c in cells])
     total_cells = ["TOTAL", "-", "-", "-", "-", "-",
@@ -949,10 +1052,16 @@ def main(argv: Optional[List[str]] = None,
                       "was taxed when the option was written, so COST "
                       "leaves it out and UNREALIZED is the capital loss "
                       "a buy-back books today (the whole buy-back cost).")
+    if any(r.get("wash_exempt") for r in rows):
+        legend.append("no-wash-rule(crypto): a crypto account is not "
+                      "subject to the wash-sale rule (US-WASH-13) — its "
+                      "losses are claimable now and a rebuy does not "
+                      "defer them; TX_ADD does not apply to those rows.")
     if show_options:
         legend.append("Options: PRICE and COST/SH are per-share premium "
-                      "(UNREALIZED carries the x100 contract "
-                      "multiplier); DTE = days to expiry. The radar "
+                      "(UNREALIZED carries the contract size the rows "
+                      "declare, x100 when none is declared); DTE = days "
+                      "to expiry. The radar "
                       "does not track option contracts — rebuying the "
                       "SAME contract within 30 days of a loss sale "
                       "still triggers the wash/superficial rule.")
@@ -974,12 +1083,12 @@ def main(argv: Optional[List[str]] = None,
                       f"includes recycled loss, not only new loss "
                       f"(per-row amounts in --json / `taxjson list`).")
     # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
-    from taxjson.lib.wash_scope import scope_note
-    legend.append(scope_note(args.country))
+    legend.append(_scope)
     print("\n" + "\n".join(legend))
     if is_usa:
         print("\nLT_IN approximates from the position start date; per-lot "
-              "ST/LT is decided by the engine at sale time.")
+              "ST/LT is decided by the engine at sale time. An open short "
+              "shows ST: covering it is short-term (US-HOLD-03).")
     return 0
 
 

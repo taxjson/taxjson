@@ -1330,7 +1330,21 @@ the radar live. With `--options`, a contract that ticker.map renamed
 onto another listing's code is quoted as the contract actually held.
 Accounts marked `crypto = true` are **excluded by default** (the price
 chain serves stock snapshots; crypto symbols mostly fail to price) —
-pass `--crypto` to include them.
+pass `--crypto` to include them. A coin is quoted under the same Yahoo
+spelling the books were priced with (the built-ins plus the project's
+`crypto_ticker.map`). In a **US** project a crypto account's losses are
+outside the wash-sale rule (US-WASH-13): they count as claimable now and
+the ADVISORY reads `no-wash-rule(crypto)`; a Canadian crypto loss stays
+under the superficial-loss rule like a share. A `VIOLATION` whose rescue
+deadline has passed (`VIOLATION(deadline-passed:…)`) is not claimable
+now: a sale today waits until the registered account's last in-window
+buy ages out (31 days), or has no clear date without the sheltered
+books. An LSE (`.L`) quote that does not say whether it is in pence or
+pounds — a price-cache entry written before the unit was recorded, or a
+tier that reports no unit — is left out with a warning, never valued as
+pounds. In a US project an open short shows `ST` under `LT_IN`: covering
+it is short-term (US-HOLD-03). `--json` carries the scope note
+(`scope_note`) like the radar's.
 
 `EXIT@` is the **native-currency price at which a full exit today books no
 base-currency loss** — the position's base book cost converted back at today's
@@ -1344,7 +1358,8 @@ Option positions (e.g. LEAPS) are also excluded by default. Pass
 illiquid strikes, so with no TWS/Gateway running the contracts are
 listed as unpriced rather than marked from a bad source. Option rows
 show `PRICE` and `COST/SH` in per-share premium terms (`UNREALIZED`
-carries the ×100 contract multiplier), a `DTE` days-to-expiry column
+carries the contract size the rows declare — a `.tt` line's `xN`, a
+broker's multiplier — and ×100 when none is declared), a `DTE` days-to-expiry column
 appears, and premium currency follows the underlying's listing. Note
 the radar does not track option contracts — rebuying the *same*
 contract within 30 days of a loss sale still triggers the
