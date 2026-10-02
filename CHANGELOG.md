@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- harvest --options values an option at the contract size its rows
+  declare (a x10 mini contract is no longer valued at x100), as `list`
+  and the holdings export do (re-audit A2-0367, A2-1177).
+- harvest: a VIOLATION whose rescue deadline has passed is no longer
+  counted as harvestable now; it waits for the registered buy to age
+  out (re-audit A2-0365).
+- harvest quotes a coin under the project's crypto_ticker.map spelling,
+  the one the books were priced with (re-audit A2-0364).
+- harvest / price chain: an LSE (.L) quote that does not state its unit
+  (pence or pounds) is left out with a warning instead of valued as
+  pounds; a live tier's unit-less quote falls through to the next tier
+  and is never cached (re-audit A2-0379, A2-0692).
+- price cache: a cached quote's currency is checked like its price —
+  'usd' is read as USD, a non-text value is ignored with a warning
+  instead of a traceback (re-audit A2-1170).
+- harvest, t1135, form-export and carryover strip and upper-case
+  --base-currency (' CAD' no longer drops every row or refuses the
+  books; re-audit A2-1169).
+- harvest --json carries the planning-tool scope note (re-audit
+  A2-1171).
+- US harvest: a crypto account's losses are claimable now with no
+  wash-sale advice (US-WASH-13, new US-PLAN-05); an open short shows ST,
+  never LT (US-HOLD-03) (re-audit A2-1173, A2-1176).
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

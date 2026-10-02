@@ -11167,6 +11167,11 @@ def cmd_harvest(args: argparse.Namespace) -> None:
     # ignored the flag (round-five audit finding 8).
     if getattr(args, "options", False):
         cmd.append("--options")
+    # Crypto accounts are named to the tool, which decides by country
+    # (US-PLAN-05: outside §1091 in a usa project; Canada unchanged).
+    for name in taxable:
+        if accounts_cfg.get(name, {}).get("crypto", False):
+            cmd += ["--crypto-account", name]
     rates = cache / "to_base.csv"
     if rates.exists():
         cmd += ["--rates", str(rates)]
