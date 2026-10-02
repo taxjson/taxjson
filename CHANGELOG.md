@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Crypto sends in a US project: `taxjson run`'s note, the parse NOTE in
+  the crypto .sum, and `crypto-sends`' hints, listing and decision error
+  no longer say a gift is a disposition or offer `gift` (refused there):
+  a payment is a sale, a gift is not a sale for a US donor (US-SEND-02;
+  audit A2-0721, A2-0740, A2-1283, A2-1285, A2-1286, A2-1329).
 - `taxjson run` stops when sends.json cannot be read while a
   crypto_sends.tt generated from earlier decisions exists: it used to
   book the old file with a warning (a gift since changed to self, or a

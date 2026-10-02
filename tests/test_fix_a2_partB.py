@@ -149,5 +149,55 @@ class TestStaleSendsFileWithUnreadableDecisions(unittest.TestCase):
         self._check("usa")
 
 
+
+def _sends_project(td, country):
+    from test_fix_sends import _project, _cad_usd_rates_file
+    root, home = _project(td, country=country)
+    if country == "usa":
+        (root / "taxjson.toml").write_text(
+            '[settings]\nyear = 2026\ncountry = "usa"\n'
+            'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
+            '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
+        _cad_usd_rates_file(root / "work" / "to_base.csv")
+        (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
+    return root, home
+
+
+class TestCryptoSendsGiftWording(unittest.TestCase):
+    """A2-0721, A2-0740, A2-1286, A2-1283, A2-1285, A2-1329: a US project
+    was told a gift is a disposition at fair value and offered `gift`
+    in hints that the same command refuses (US-SEND-02)."""
+
+    @rule("US-SEND-02")
+    @rule_absent("US-SEND-02", country="canada")
+    @rule("CA-CRYPTO-07")
+    def test_us_wording_offers_payment_only(self):
+        from test_fix_sends import _cli
+        out = {}
+        for country in ("canada", "usa"):
+            with tempfile.TemporaryDirectory() as td:
+                root, home = _sends_project(td, country)
+                r = _cli(root, home, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+                lst = _cli(root, home, "crypto-sends", "crypto")
+                bad = _cli(root, home, "crypto-sends", "crypto", "--set",
+                           "kr-20260504T185014-TAO-0.1=donate")
+                summ = (root / "reports" / "crypto.sum").read_text()
+                out[country] = (r.stderr, lst.stdout, bad.stderr, summ)
+        run_err, listing, err, summ = out["usa"]
+        self.assertIn("a gift is not a sale for a US donor", run_err)
+        self.assertNotIn("gift or payment is a disposition", run_err)
+        self.assertIn(".tt if payment:", listing)
+        self.assertNotIn("gift/payment", listing)
+        self.assertIn("expected one of self, payment.", err)
+        self.assertNotIn("(gift or payment), each is a taxable", summ)
+        run_err, listing, err, summ = out["canada"]
+        self.assertIn("a gift or payment is a disposition at fair value",
+                      run_err)
+        self.assertIn(".tt if gift/payment:", listing)
+        self.assertIn("expected one of self, gift, payment.", err)
+        self.assertIn("(gift or payment), each is a taxable", summ)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1858,8 +1858,9 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
               "the price is not cached) — NOT booked. Re-run online, or "
               f"give the value per coin in {report['base_currency']}: "
             + "; ".join(
-                ([f"`taxjson crypto-sends {acct} --set {i}=gift|payment "
-                  f"--price P`" for i in _dec[:1]] if _dec else [])
+                ([f"`taxjson crypto-sends {acct} --set {i}="
+                  f"{_disposing_word(report['country']).replace('/', '|')}"
+                  f" --price P`" for i in _dec[:1]] if _dec else [])
                 + ([f"`taxjson crypto-sends {acct} --set {i}=fee "
                     f"--price P` (the network fee hidden in a send that "
                     f"arrived short)" for i in _fee[:1]] if _fee else []))
@@ -1869,6 +1870,23 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
         _exc.status = status
         raise _exc
     return status, CS.duplicate_lines(root / "inputs" / acct, entries)
+
+
+def _send_decisions(country: str) -> List[str]:
+    """The crypto-sends decisions the project's country accepts (a US
+    project refuses `gift`, lib/country COMMAND_COUNTRY
+    "crypto-sends:gift"; US-SEND-02)."""
+    from taxjson.lib import crypto_sends as CS
+    return [d for d in CS.DECISIONS
+            if command_country_problem("crypto-sends", country, d) is None]
+
+
+def _disposing_word(country: str) -> str:
+    """'gift/payment' in Canada, 'payment' in the US: the decisions that
+    write a sale (audit A2-1283, A2-1285, A2-1329)."""
+    from taxjson.lib import crypto_sends as CS
+    return "/".join(d for d in _send_decisions(country)
+                    if d in CS.DISPOSING)
 
 
 def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
@@ -1989,17 +2007,24 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                 f"current, so a send to it may look unmatched (or a "
                 f"network fee be missed) — run without --account."))
         if adoc["undecided"]:
+            # A US donor's gift is not a sale (US-SEND-02; audit A2-0721,
+            # A2-0740, A2-1286): the US note names payments only.
+            _ctry = _country(cfg.get("settings"))
+            _decs = " / ".join(_send_decisions(_ctry))
+            _why = ("a payment is a sale at fair value; a gift is not a "
+                    "sale for a US donor" if _ctry == "usa" else
+                    "a gift or payment is a disposition at fair value")
             print(f"  note: {adoc['undecided']} crypto send(s) not yet "
-                  f"classified as self / gift / payment — `taxjson "
-                  f"crypto-sends {name}` lists them (a gift or payment is "
-                  f"a disposition at fair value).", file=sys.stderr)
+                  f"classified as {_decs} — `taxjson "
+                  f"crypto-sends {name}` lists them ({_why}).",
+                  file=sys.stderr)
             if strict and not unparsed:
                 # A pending decision, like a pending election: a send
                 # that may be a disposition is not in the books (A2-0362).
                 _diag.unlink(missing_ok=True)
                 sys.exit(f"taxjson run --strict: {name}: "
                          f"{adoc['undecided']} crypto send(s) not yet "
-                         f"classified as self / gift / payment — decide "
+                         f"classified as {_decs} — decide "
                          f"each with `taxjson crypto-sends {name} --set "
                          f"ID=...` — aborting.")
         if adoc.get("orphans"):
@@ -5946,7 +5971,8 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
     if (sets or unsets or args.write) and not acct:
         if len(accts) != 1:
             _die(f"--set/--unset/--write need an account: `taxjson "
-                 f"crypto-sends <{'|'.join(accts)}> --set ID=gift`.")
+                 f"crypto-sends <{'|'.join(accts)}> --set ID="
+                 f"{'|'.join(_send_decisions(_country(cfg.get('settings'))))}`.")
         acct = accts[0]
     if (args.note is not None or args.price is not None
             or getattr(args, "unpair", False)) and not sets:
@@ -6023,7 +6049,7 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                     continue
                 if dec not in CS.DECISIONS:
                     _die(f"decision {dec!r} for {sid} — expected one of "
-                         f"{', '.join(CS.DECISIONS)}.")
+                         f"{', '.join(_send_decisions(_country(cfg.get('settings'))))}.")
                 _gift_no = command_country_problem(
                     "crypto-sends", _country(cfg.get("settings")), dec)
                 if _gift_no:
@@ -6171,7 +6197,7 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                           "sale line (FX gain unavailable: no USD rate)")
             elif e["tt"]:
                 lead = ".tt" if e["decision"] in CS.DISPOSING else \
-                    ".tt if gift/payment"
+                    f".tt if {_disposing_word(report['country'])}"
                 print(f"  {lead}: {e['tt']}")
             if e["note"]:
                 print(f"  note: {e['note']}")
@@ -6185,12 +6211,15 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         if unpriced:
             print(f"NOT BOOKED — no fair value for "
                   f"{', '.join(e['id'] for e in unpriced)}: give it with "
-                  f"`--set ID=gift|payment --price P` (a `-fee` id: "
+                  f"`--set ID="
+                  f"{_disposing_word(report['country']).replace('/', '|')}"
+                  f" --price P` (a `-fee` id: "
                   f"`--set ID=fee --price P`).")
         if want == have:
             print(f"inputs/{acct}/{CS.TT_NAME}: up to date "
                   f"({len(entries)} line(s))." if have else
-                  "No gift/payment or network fee needs a sale line.")
+                  f"No {_disposing_word(report['country'])} or network "
+                  f"fee needs a sale line.")
         else:
             print(f"inputs/{acct}/{CS.TT_NAME}: OUT OF DATE — run "
                   f"`taxjson crypto-sends {acct} --write` (or `taxjson "
@@ -16217,7 +16246,8 @@ def main() -> None:
              "journals, broker migrations, and crypto "
              "withdrawals/sends (matched pairs read as self-custody "
              "moves; unmatched out-legs are gift/payment candidates "
-             "— dispositions at FMV if they left your ownership). "
+             "— dispositions at FMV if they left your ownership; in a "
+             "US project only a payment is a sale). "
              "The TRANSFER rows the books deliberately exclude; "
              "sidecar rows from taxable parses + in-book rows from "
              "sheltered accounts.")
@@ -16230,20 +16260,23 @@ def main() -> None:
     p_csend = sub.add_parser(
         "crypto-sends",
         help="Crypto withdrawals/sends that did not arrive on another of "
-             "your exchanges: decide self (own wallet) / gift / payment, "
+             "your exchanges: decide self (own wallet) / gift "
+             "(Canada only) / payment, "
              "see the fair value and the .tt BUYSELL line; --write "
              "generates inputs/<acct>/crypto_sends.tt. Stablecoins get "
              "the currency-gain calculation instead of a sale line.")
     p_csend.add_argument("account", nargs="?",
                          help="Crypto account (default: all)")
     p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
-                         help="Record a decision (self | gift | payment) "
+                         help="Record a decision (self | gift | payment; "
+                              "a US project refuses gift) "
                               "for a send id from the listing; "
                               "repeatable. A `-fee` id (a network fee "
                               "hidden in a send that arrived short) takes "
                               "`ID-fee=fee --price P`")
     p_csend.add_argument("--unpair", action="store_true",
-                         help="With --set ID=gift|payment on a send the "
+                         help="With --set ID=gift|payment (US: payment) "
+                              "on a send the "
                               "tool paired with an arrival: keep it "
                               "unpaired (that arrival was unrelated)")
     p_csend.add_argument("--unset", action="append", metavar="ID",
