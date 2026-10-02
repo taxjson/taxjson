@@ -13904,10 +13904,13 @@ def cmd_watch(args: argparse.Namespace) -> None:
     bases = _radar_taxable_bases(root, cache, "taxjson watch")
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
-    cmd += _radar_engine_args(
-        bases, root / "phantoms.json",
-        _country(_radar_config(root, "taxjson watch").get(
-            "settings", {})))
+    _wcountry = _country(_radar_config(root, "taxjson watch").get(
+        "settings", {}))
+    cmd += _radar_engine_args(bases, root / "phantoms.json", _wcountry)
+    # A CLEAR is "safe as far as this project's accounts show"
+    # (CA-PLAN-04 / US-PLAN-04, re-audit A2-0909).
+    from taxjson.lib.wash_scope import scope_note as _scope_note
+    _scope = _scope_note(_wcountry)
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -13982,7 +13985,8 @@ def cmd_watch(args: argparse.Namespace) -> None:
         if getattr(args, "json", False):
             _json_out({"baseline": True, "changes": [],
                        "tracked": len(cur_radar),
-                       "actionable": actionable, "as_of": as_of})
+                       "actionable": actionable, "as_of": as_of,
+                       "scope_note": _scope})
         else:
             print(f"watch: baseline recorded — {len(cur_radar)} "
                   f"ticker(s) tracked, {actionable} actionable "
@@ -14011,10 +14015,12 @@ def cmd_watch(args: argparse.Namespace) -> None:
         _json_out({"baseline": False, "changes": changes,
                    "tracked": len(cur_radar),
                    "actionable": actionable,
-                   "as_of": as_of, "since": state.get("as_of")})
+                   "as_of": as_of, "since": state.get("as_of"),
+                   "scope_note": _scope})
     elif changes:
         print(_watch.render_report(changes, as_of,
-                                   since=state.get("as_of")))
+                                   since=state.get("as_of"),
+                                   scope=_scope))
     if changes and getattr(args, "exit_code", False):
         raise SystemExit(1)
 
