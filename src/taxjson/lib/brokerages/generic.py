@@ -203,7 +203,7 @@ _KEY_ALIASES = {
 # symbol is the LISTING and is kept; the row currency is only the
 # settlement currency (DLR.U.TO bought in USD is still DLR.U.TO).
 _KNOWN_SUFFIXES = ("TO", "V", "CN", "NE", "US", "AX", "L")
-_CA_SUFFIXES = (".TO", ".V", ".CN", ".NE")
+_CA_SUFFIXES = (".TO", ".V", ".VN", ".CN", ".NE")
 # Futures symbol prefixes (lib/futures.py): the contract size is not in
 # the row, so it is never guessed.
 _FUTURES_PREFIXES = ("F:", "/", "\\")
