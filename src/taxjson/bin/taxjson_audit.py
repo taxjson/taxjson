@@ -951,6 +951,10 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     country = _norm_country(args.country)
     refuse_foreign_flags(args, "taxjson-audit")
+    # Close timing by default, while a Canada project uses grant timing:
+    # say so, as taxjson-gains does (R1-177, A2-0677).
+    from taxjson.bin.taxjson_gains import _timing_default_note
+    _timing_default_note(args, "taxjson-audit")
     if args.tax_date is None:
         args.tax_date = "trade" if country == "usa" else "settle"
 

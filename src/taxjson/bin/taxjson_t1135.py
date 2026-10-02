@@ -786,7 +786,8 @@ def full_history_wash_sales(base_paths: List[Path],
                             sheltered_paths: List[Path] = (),
                             phantoms: Optional[Path] = None,
                             tax_date: str = "settle",
-                            option_timing: Optional[Dict[str, Any]] = None
+                            option_timing: Optional[Dict[str, Any]] = None,
+                            income_rules: Optional[Dict[str, Any]] = None
                             ) -> List[Dict[str, Any]]:
     """Every superficial loss the Canada engine denies over the books'
     FULL history: one `run_gains` pass (year=None) over the taxable
@@ -806,7 +807,11 @@ def full_history_wash_sales(base_paths: List[Path],
         sheltered.extend(load_transactions_or_exit("taxjson-t1135", p))
     req = GainsRequest(country="canada", year=None, taxable=True,
                        tax_date=tax_date, incomplete_history=phantoms,
-                       phantom_hint=False, **(option_timing or {}))
+                       phantom_hint=False, **(option_timing or {}),
+                       # The project's income dating (a listed
+                       # corporation's ROC on its pay date), as in the
+                       # filing run (audit A2-0339).
+                       **(income_rules or {}))
     # The engine's diagnostics belong to `taxjson run` (they would repeat
     # here); this pass only reads where each denial's addition lands. A
     # solver that did not converge is still said.
@@ -925,7 +930,9 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
                  today: Optional[str] = None,
                  sheltered_paths: List[Path] = (),
                  option_timing: Optional[Dict[str, Any]] = None,
-                 full_history: bool = True) -> Dict[str, Any]:
+                 full_history: bool = True,
+                 income_rules: Optional[Dict[str, Any]] = None
+                 ) -> Dict[str, Any]:
     """The T1135 report model. `today` (ISO date, default the real
     date) decides whether the year is complete: before Dec 31 the
     figures run to the last date in the books and a negative verdict is
@@ -947,7 +954,8 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
     # losses denied before the project year.
     if full_history:
         wash_sales = full_history_wash_sales(
-            base_paths, sheltered_paths, phantoms, tax_date, option_timing)
+            base_paths, sheltered_paths, phantoms, tax_date, option_timing,
+            income_rules)
     else:
         wash_sales = _read_wash_sales(gains_paths)
     year_end_key = f"{year}-12-31"
@@ -1339,6 +1347,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--option-buyback-wash", action="store_true",
                         help="Grant timing: a written option's buy-back "
                              "loss can be superficial")
+    parser.add_argument("--corporate-distribution", action="append",
+                        default=None, metavar="SYMBOL",
+                        help="A Canadian issuer whose distributions are a "
+                             "corporation's (ROC dated when paid) in the "
+                             "full-history pass; repeatable ([settings] "
+                             "corporate_distributions)")
     parser.add_argument("--year-wash-only", action="store_true",
                         help="Skip the full-history engine pass: only the "
                              "gains files' (project-year) denied losses "
@@ -1382,7 +1396,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                                option_grant_since=args.option_grant_since,
                                option_buyback_loss_superficial=(
                                    args.option_buyback_wash)),
-                           full_history=not args.year_wash_only)
+                           full_history=not args.year_wash_only,
+                           income_rules=dict(corporate_distributions=tuple(
+                               args.corporate_distribution or ())))
     except (UnreadableGains, CurrencyMismatch) as e:
         print(e.code, file=sys.stderr)
         return 2

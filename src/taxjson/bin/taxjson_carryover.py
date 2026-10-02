@@ -62,7 +62,11 @@ _INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE')
 US_ORDINARY_OFFSET = 3000.0
 
 
-_AMOUNT_RE = re.compile(r"\$?(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?|\$?\.\d+")
+# A grouped amount's lead group has no leading zero ('0,125' is not
+# 125): the same rule the S055-08 fix put in the broker parsers
+# (audit A2-0667).
+_AMOUNT_RE = re.compile(
+    r"\$?([1-9]\d{0,2}(?:,\d{3})+|\d+)(\.\d+)?|\$?\.\d+")
 
 
 def _parse_amount(text: str) -> float:
@@ -349,12 +353,104 @@ def build_usa_ledger(nets: Dict[int, Dict[str, float]],
 
 _money = fmt_money                  # shared report-layer formatter
 
+
+# ------------------------------------------------------- filed-year locks
+
+class LockUnreadable(ValueError):
+    """A filed-year lock that could not be read or holds no usable
+    figure."""
+
+
+# The gain lines a return carries (close-year's form_lines keys).
+_GAIN_LINES = {'canada': ('13200', '15300', '15301'),
+               'usa': ('I_gain', 'II_gain')}
+
+LOCK_SOURCE_TEXT = {
+    'filed_totals': "the total filed with another tool: filed_totals",
+    'form_lines': "the filed gain lines: form_lines",
+    'realized': "the lock's realized total",
+}
+
+
+def _finite(v: Any, what: str) -> float:
+    import math
+    x = float(v)
+    if not math.isfinite(x):
+        raise ValueError(f"{what} is not a finite number ({v!r})")
+    return x
+
+
+def lock_figure(path: Path, country: str) -> Dict[str, Any]:
+    """What a close-year lock says was FILED for its year: {figure,
+    source, st, lt, dispositions}. The figure is, by preference, the
+    gain the return reported with another tool (filed_totals.gain;
+    Canada — it has no term split), else the sum of the return's gain
+    lines (form_lines: Schedule 3 13200/15300/15301, Form 8949 Part I/II
+    — per-row rounded, what the return carries; audit A2-1132), else
+    the lock's realized total. A lock that cannot be read, or whose
+    numbers are missing or not finite (NaN, Infinity), raises
+    LockUnreadable — it never silently matches (A2-0336, A2-1131)."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        raise LockUnreadable(str(e)) from None
+    if not isinstance(doc, dict):
+        raise LockUnreadable("not a close-year lock (not a JSON object)")
+    try:
+        totals = doc.get('totals')
+        if not isinstance(totals, dict):
+            raise ValueError("no totals table")
+        realized = _finite(totals['realized'], 'totals.realized')
+        accts = doc.get('accounts')
+        lines: Optional[Dict[str, float]] = None
+        if isinstance(accts, dict) and accts and all(
+                isinstance(a, dict) and isinstance(a.get('form_lines'), dict)
+                for a in accts.values()):
+            lines = {}
+            for a in accts.values():
+                for k, v in a['form_lines'].items():
+                    lines[str(k)] = lines.get(str(k), 0.0) + _finite(
+                        v, f"form_lines {k}")
+        ft = doc.get('filed_totals')
+        ft_gain = (_finite(ft['gain'], 'filed_totals.gain')
+                   if isinstance(ft, dict) and ft.get('gain') is not None
+                   else None)
+        out: Dict[str, Any] = {
+            'dispositions': int(totals.get('dispositions') or 0),
+            'realized': realized, 'filed_totals_gain': ft_gain}
+        if country == 'usa':
+            if lines is not None:
+                st = lines.get('I_gain', 0.0)
+                lt = lines.get('II_gain', 0.0)
+                source = 'form_lines'
+            else:
+                st = _finite(totals.get('st_gain') or 0.0, 'totals.st_gain')
+                lt = _finite(totals.get('lt_gain') or 0.0, 'totals.lt_gain')
+                # A gain with no term counts short-term (US-RPT-07).
+                st += realized - (st + lt)
+                source = 'realized'
+            out.update(figure=st + lt, st=st, lt=lt, source=source)
+        else:
+            if ft_gain is not None:
+                fig, source = ft_gain, 'filed_totals'
+            elif lines is not None:
+                fig = sum(lines.get(k, 0.0) for k in _GAIN_LINES['canada'])
+                source = 'form_lines'
+            else:
+                fig, source = realized, 'realized'
+            out.update(figure=fig, st=0.0, lt=0.0, source=source)
+    except (KeyError, TypeError, ValueError) as e:
+        raise LockUnreadable(f"{type(e).__name__}: {e}") from None
+    return out
+
 # S028-03: what NET GAIN(LOSS) leaves out. A net capital loss nets
 # every taxable capital gain of the year (ITA 111(8) "net capital
 # loss"), including slip gains and the s.39(1.1) FX gain.
 SCOPE_NOTE = {
     'canada': ("NET GAIN(LOSS) counts the dispositions in these books "
-               "only. Capital gains reported on slips (T3 box 21, T5 "
+               "(plus the T5 box 18 dividends capital_gains_dividends.map "
+               "names, when `taxjson carryover` passes them). Other "
+               "capital gains reported on slips (T3 box 21, T5 "
                "box 18 -> lines 17400/17600) and the ITA s.39(1.1) FX "
                "gain or loss on foreign cash (line 15300, `taxjson "
                "fx-cash`) are NOT included; in a loss year they change "
@@ -414,9 +510,10 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
     lines.append("-+-".join("-" * w for w in widths))
     lines.extend(fmt(row) for row in table)
     lines.append("")
+    _final_year = ledger.get('final_year', rows[-1]['year'])
     if country == 'canada':
         lines.append(f"  Net-capital-loss carryforward after "
-                     f"{rows[-1]['year']}: {_money(ledger['final_carryforward'])}")
+                     f"{_final_year}: {_money(ledger['final_carryforward'])}")
         if ledger.get('unmatched_claims'):
             lines.append(f"  warning: {_money(ledger['unmatched_claims'])} "
                          f"of --claimed amounts exceed the losses this "
@@ -429,7 +526,7 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                          f"from losses before this history, so it does "
                          f"not reduce the carryforward shown.")
     else:
-        lines.append(f"  Carryover after {rows[-1]['year']}: "
+        lines.append(f"  Carryover after {_final_year}: "
                      f"ST {_money(ledger['final_st_carryover'])} + "
                      f"LT {_money(ledger['final_lt_carryover'])}")
     lines.append("")
@@ -468,6 +565,28 @@ def render(ledger: Dict[str, Any], cur: str, first_tx_year: Optional[int],
                      + "; ".join(ledger['claimed_ignored'][:3])
                      + (" ..." if len(ledger['claimed_ignored']) > 3
                         else ""))
+    after = [r['year'] for r in rows if r.get('after_project_year')]
+    if after:
+        lines.append(f"  - warning: the rows after {ledger.get('project_year')}"
+                     f" ({', '.join(str(y) for y in after)}) are partial —"
+                     f" only the trades of that year this project's inputs"
+                     f" happen to hold. They offer no T1A carry-back and the"
+                     f" carryforward above stops at "
+                     f"{ledger.get('project_year')}; that year's own "
+                     f"project computes its ledger.")
+    seeded = [r for r in rows if r.get('from_lock')]
+    if seeded:
+        lines.append("  - " + "; ".join(
+            f"{r['year']} is the filed figure from {r['filed_lock']} "
+            f"({LOCK_SOURCE_TEXT.get(r['filed_source'], r['filed_source'])})"
+            for r in seeded)
+            + " — not rebuilt from this project's books.")
+    slips = [r for r in rows if r.get('slip_gains')]
+    if slips:
+        lines.append("  - Includes the capital-gains dividends named in "
+                     "capital_gains_dividends.map (T5 box 18): "
+                     + ", ".join(f"{r['year']} {_money(r['slip_gains'])}"
+                                 for r in slips) + ".")
     prior = [r['year'] for r in rows if r.get('prior_year')]
     if prior:
         py = ledger.get('project_year')
@@ -538,6 +657,32 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "them): a ledger row that disagrees is "
                              "flagged — the return, not this recompute, "
                              "is what CRA's balance is built on.")
+    parser.add_argument("--filed-lock", action="append", default=[],
+                        metavar="YEAR=PATH",
+                        help="A filed year's close-year lock (the wrapper "
+                             "passes filed/<year>.json and the "
+                             "prior_year_record lock). A year before "
+                             "--project-year takes the lock's FILED "
+                             "figure instead of the rebuilt one; a later "
+                             "year is compared with it. An unreadable "
+                             "lock is named.")
+    parser.add_argument("--slip-gains", action="append", default=[],
+                        metavar="YEAR=AMOUNT",
+                        help="Canada: capital gains from slips (T5 box 18 "
+                             "dividends in capital_gains_dividends.map) "
+                             "that year — added to the year's net (the "
+                             "wrapper passes them).")
+    parser.add_argument("--corporate-distribution", action="append",
+                        default=None, metavar="SYMBOL",
+                        help="Canada: a Canadian issuer whose "
+                             "distributions are a corporation's (ROC "
+                             "dated when paid); repeatable ([settings] "
+                             "corporate_distributions).")
+    parser.add_argument("--ric-january-dividend", action="append",
+                        default=None, metavar="\"SYMBOL [YYYY-01-DD]\"",
+                        help="USA: a January fund/REIT dividend received "
+                             "Dec 31 of the prior year; repeatable "
+                             "([settings] ric_january_dividends).")
     parser.add_argument("--base-currency", default=None,
                         help="The books' currency: must be the country's "
                              "own (CAD for canada, USD for usa — the "
@@ -564,9 +709,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "written option can be superficial.")
     args = parser.parse_args(argv)
     refuse_foreign_flags(args, "taxjson-carryover")
-    if args.option_premium_timing is None:
-        args.option_premium_timing = "close"
-
+    # Standalone runs default to close timing while a Canada project
+    # uses grant timing: say so, as taxjson-gains does (R1-177, A2-0677).
+    from taxjson.bin.taxjson_gains import _timing_default_note
+    _timing_default_note(args, "taxjson-carryover")
+    from taxjson.lib.country import base_currency_problem, home_currency
+    if args.base_currency in (None, ""):
+        args.base_currency = home_currency(args.country)
+    # A Canada ledger in USD feeds T1A / line 25300 in the wrong
+    # currency (audit A2-0351; t1135 refuses the same).
+    _bp = base_currency_problem(args.country, args.base_currency)
+    if _bp:
+        print(f"taxjson-carryover: error: --base-currency "
+              f"{args.base_currency}: "
+              + _bp.replace("[settings] base_currency is", "the books are")
+                   .replace('set base_currency', 'pass books converted to')
+              , file=sys.stderr)
+        return 2
 
     for p in args.files + args.sheltered:
         if not p.exists():
@@ -597,6 +756,21 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def _load_base(p: Path):
         txs = _ltx("taxjson-carryover", p)
+        # metadata.target_currency names the book's currency for rows
+        # that carry none (t1135.check_currency honours it; A2-0351).
+        try:
+            _doc = json.loads(Path(p).read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            _doc = None
+        _meta = _doc.get("metadata") if isinstance(_doc, dict) else None
+        _tgt = str((_meta or {}).get("target_currency") or "").strip().upper() \
+            if isinstance(_meta, dict) else ""
+        if _tgt and _tgt != base_cur:
+            raise ValueError(
+                f"{p} is in {_tgt} (metadata.target_currency) but "
+                f"--base-currency is {base_cur} — pass the base-currency "
+                f"books (work/<account>_base.json, or `taxjson carryover` "
+                f"in the project)")
         bad = sorted({str(t.currency).strip().upper() for t in txs
                       if str(t.currency or "").strip()
                       and str(t.currency).strip().upper() != base_cur})
@@ -634,7 +808,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # loses §1091 entirely).
     _opt = dict(option_premium_timing=args.option_premium_timing,
                 option_grant_since=args.option_grant_since,
-                option_buyback_loss_superficial=args.option_buyback_wash)
+                option_buyback_loss_superficial=args.option_buyback_wash,
+                # The project's income dating, as every filing run uses
+                # it: a listed corporation's ROC on its pay date
+                # (CA-INC-DATE-ROC; audit A2-0123, A2-0339, A2-0341).
+                corporate_distributions=tuple(
+                    args.corporate_distribution or ()),
+                ric_january_dividends=tuple(
+                    args.ric_january_dividend or ()))
     req = GainsRequest(country=country, year=None, taxable=True,
                        tax_date=args.tax_date,
                        incomplete_history=args.incomplete_history,
@@ -672,6 +853,68 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{args.claimed}: {exc}", file=sys.stderr)
         return 2
 
+    def _year_amount(item: str, flag: str):
+        try:
+            y, v = item.split("=", 1)
+            return int(y), _finite(v, flag)
+        except ValueError:
+            raise ValueError(f"{flag} expects YEAR=AMOUNT (a finite "
+                             f"number), got {item!r}") from None
+
+    try:
+        slip = [_year_amount(i, "--slip-gains") for i in args.slip_gains]
+        filed: Dict[int, float] = dict(
+            _year_amount(i, "--filed") for i in args.filed)
+    except ValueError as exc:
+        print(f"taxjson-carryover: {exc}", file=sys.stderr)
+        return 2
+    if slip and country != 'canada':
+        print("taxjson-carryover: --slip-gains is Canada-only (T5 box 18)",
+              file=sys.stderr)
+        return 2
+    _zero = {'net': 0.0, 'st': 0.0, 'lt': 0.0, 'dispositions': 0}
+    slip_by: Dict[int, float] = {}
+    for y, v in slip:
+        slip_by[y] = slip_by.get(y, 0.0) + v
+    # Filed-year locks: a year before the project year is rebuilt from
+    # this project's books and may be partial (a later project holds
+    # last year only as a start .tt), so the ledger takes what the lock
+    # says was FILED — the return CRA's balance is built on (A2-0121,
+    # A2-0338, A2-0666). The project year (and later) is compared.
+    seeded: Dict[int, Dict[str, Any]] = {}
+    lock_info: Dict[int, Dict[str, Any]] = {}
+    for item in args.filed_lock:
+        try:
+            y_s, lp = item.split("=", 1)
+            y = int(y_s)
+        except ValueError:
+            print(f"taxjson-carryover: --filed-lock expects YEAR=PATH, got "
+                  f"{item!r}", file=sys.stderr)
+            return 2
+        try:
+            info = lock_figure(Path(lp), country)
+        except LockUnreadable as exc:
+            print(f"warning: {y}: the filed-year lock {lp} could not be "
+                  f"read ({exc}) — the {y} row is not checked against the "
+                  f"filed return. Fix or restore the lock (it is the "
+                  f"record of that return).", file=sys.stderr)
+            continue
+        info['path'] = lp
+        lock_info[y] = info
+        if args.project_year is not None and y < args.project_year:
+            rebuilt = dict(nets.get(y, _zero))
+            nets[y] = {'net': info['figure'], 'st': info['st'],
+                       'lt': info['lt'],
+                       'dispositions': max(int(rebuilt.get('dispositions')
+                                               or 0),
+                                           int(info['dispositions']))}
+            seeded[y] = {'rebuilt': float(rebuilt.get('net') or 0.0),
+                         'had_rows': bool(rebuilt.get('dispositions')),
+                         **info}
+    for y, v in slip_by.items():
+        rec = nets.setdefault(y, dict(_zero))
+        rec['net'] = rec.get('net', 0.0) + v
+
     if country == 'canada':
         ledger = build_canada_ledger(nets, claimed)
     else:
@@ -692,27 +935,82 @@ def main(argv: Optional[List[str]] = None) -> int:
         # a 2024 row that held 52k of a filed 731k).
         ledger['project_year'] = args.project_year
         for r in ledger['rows']:
-            r['prior_year'] = r['year'] < args.project_year
-    filed: Dict[int, float] = {}
-    for item in args.filed:
-        try:
-            y, v = item.split("=", 1)
-            filed[int(y)] = float(v)
-        except ValueError:
-            print(f"taxjson-carryover: --filed expects YEAR=AMOUNT, got "
-                  f"{item!r}", file=sys.stderr)
-            return 2
+            r['prior_year'] = (r['year'] < args.project_year
+                               and r['year'] not in seeded)
+            # A row after the project year holds only the trades this
+            # project's inputs happen to carry into it (a few January
+            # rows): partial, no T1A suggestion, and the carryforward
+            # stops at the project year (audit A2-0665).
+            if r['year'] > args.project_year:
+                r['after_project_year'] = True
+                if 'carryback_candidates' in r:
+                    r['carryback_candidates'] = []
+        done = [r for r in ledger['rows']
+                if r['year'] <= args.project_year]
+        if len(done) < len(ledger['rows']):
+            last = done[-1] if done else None
+            ledger['final_year'] = args.project_year
+            if country == 'canada':
+                ledger['final_carryforward'] = (
+                    last['carryforward_balance'] if last else 0.0)
+            else:
+                st = last['st_carryover'] if last else 0.0
+                lt = last['lt_carryover'] if last else 0.0
+                ledger.update(final_st_carryover=st,
+                              final_lt_carryover=lt,
+                              final_carryforward=round(st + lt, 2))
     for r in ledger['rows']:
-        if r['year'] not in filed:
+        y = r['year']
+        if slip_by.get(y):
+            r['slip_gains'] = round(slip_by[y], 2)
+        if y in seeded:
+            sd = seeded[y]
+            r.update(from_lock=True, filed_lock=sd['path'],
+                     filed_source=sd['source'],
+                     filed_realized=round(sd['figure'], 2),
+                     rebuilt_net_gain=round(sd['rebuilt'], 2))
+            if abs(sd['rebuilt'] - sd['figure']) > 0.01:
+                print(f"note: {y}: the ledger uses the filed figure "
+                      f"{sd['figure']:,.2f} from {sd['path']} "
+                      f"({LOCK_SOURCE_TEXT[sd['source']]}); this "
+                      f"project's books rebuild {sd['rebuilt']:,.2f} for "
+                      f"{y}" + ("" if sd['had_rows'] else
+                                " (no disposition of that year here)")
+                      + " — a year before the project year is rebuilt "
+                        "from opening lots and whatever prior exports "
+                        "are in inputs/, so the lock is what CRA's loss "
+                        "balance is built on.", file=sys.stderr)
+            if (country == 'usa' and sd.get('filed_totals_gain') is not None
+                    and abs(sd['filed_totals_gain'] - sd['figure']) > 0.01):
+                print(f"warning: {y}: {sd['path']} records "
+                      f"{sd['filed_totals_gain']:,.2f} filed with another "
+                      f"tool, which has no short/long-term split; the "
+                      f"ledger uses the lock's own Part I/II split "
+                      f"({sd['figure']:,.2f}) — enter the filed "
+                      f"carryover with --claimed if they differ.",
+                      file=sys.stderr)
             continue
-        net = float(r.get('net_gain') or 0.0)
-        r['filed_realized'] = round(filed[r['year']], 2)
-        if abs(float(net) - filed[r['year']]) > 0.01:
+        if y in lock_info:
+            info = lock_info[y]
+            fig, src, where = info['figure'], info['source'], info['path']
+        elif y in filed:
+            fig, src, where = filed[y], 'realized', f"filed/{y}.json"
+        else:
+            continue
+        net = float(r.get('net_gain') or 0.0) - slip_by.get(y, 0.0)
+        r['filed_realized'] = round(fig, 2)
+        r['filed_source'] = src
+        # The return's lines are rounded per row; the ledger is not.
+        tol = 0.01 if src == 'realized' else max(
+            0.01, 0.005 * int(r.get('dispositions') or 0))
+        if abs(net - fig) > tol:
             r['differs_from_filed'] = True
-            print(f"warning: {r['year']}: the ledger's net "
-                  f"{float(net):,.2f} differs from the filed lock's "
-                  f"realized {filed[r['year']]:,.2f} "
-                  f"(filed/{r['year']}.json). This ledger recomputes "
+            print(f"warning: {y}: the ledger's net "
+                  f"{net:,.2f} differs from the filed lock's "
+                  f"{fig:,.2f} — {LOCK_SOURCE_TEXT[src]}"
+                  + (", as filed with another tool"
+                     if src == 'filed_totals' else "")
+                  + f" ({where}). This ledger recomputes "
                   f"every year with this project's settings (option "
                   f"premium timing and option_grant_timing_since, "
                   f"tax_date); the lock is what was filed and what "

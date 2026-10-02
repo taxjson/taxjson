@@ -722,8 +722,9 @@ class TestGrantSinceGate(unittest.TestCase):
                 self.assertNotIn("option_grant_timing_since is not set", r.stderr, cmd)
             from taxjson.bin.taxjson_run import _grant_since_warning
             st = {"year": 2025, "country": "canada"}
-            self.assertIsNotNone(_grant_since_warning(st, {"m": {"type": "taxable"}}))
-            self.assertIsNone(_grant_since_warning(st, {"c": {"type": "taxable", "crypto": True}}))
+            self.assertIsNotNone(_grant_since_warning(st, accounts={"m": {"type": "taxable"}}))
+            self.assertIsNone(_grant_since_warning(
+                st, accounts={"c": {"type": "taxable", "crypto": True}}))
 
 
 class TestOptionBoundaryPriorYearRecord(unittest.TestCase):

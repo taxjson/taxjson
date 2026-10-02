@@ -127,7 +127,8 @@ def run_to_file(cmd: List[str], out_path: Path, *, capture_diag: bool = True,
         if result.returncode != 0:
             if stderr_text:
                 sys.stderr.write(stderr_text)
-            raise subprocess.CalledProcessError(result.returncode, cmd)
+            raise subprocess.CalledProcessError(result.returncode, cmd,
+                                                stderr=stderr_text)
         tmp_path.replace(out_path)
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -3664,7 +3665,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
-    _since_warn = _grant_since_warning(settings, accounts)
+    _since_warn = _grant_since_warning(settings, root, accounts)
     if _since_warn:
         # (a crypto-only project writes no options — nothing to warn about)
         print(f"taxjson: warning: {_since_warn}", file=sys.stderr)
@@ -10037,7 +10038,36 @@ def cmd_redact(args: argparse.Namespace) -> None:
     raise SystemExit(redact_main(argv))
 
 
+def _locked_grant_since(root: Path, settings: Dict[str, Any]
+                        ) -> Optional[Tuple[int, str]]:
+    """(since, lock label) from the most recent filed-year lock — the
+    project's own or the one [settings] prior_year_record names — that
+    records grant timing with an option_grant_since; None otherwise."""
+    import json as _json
+    from taxjson.bin import taxjson_filed as _tfl
+    try:
+        locks = _tfl.project_locks(root, settings)
+    except _tfl.PriorRecordError:
+        return None
+    for _y, p, _w in sorted(locks, key=lambda t: t[0], reverse=True):
+        try:
+            ot = (_json.loads(p.read_text(encoding="utf-8")) or {}).get(
+                "option_timing")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if not isinstance(ot, dict) or str(
+                ot.get("option_premium_timing") or "").lower() != "grant":
+            continue
+        try:
+            return int(ot.get("option_grant_since")), \
+                _tfl.lock_label(root, p)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _grant_since_warning(settings: Dict[str, Any],
+                         root: Optional[Path] = None,
                          accounts: Optional[Dict[str, Any]] = None
                          ) -> Optional[str]:
     """The warning for a Canada project on grant timing with no explicit
@@ -10066,14 +10096,21 @@ def _grant_since_warning(settings: Dict[str, Any],
         # option-boundary say so); never suggest "since = None"
         # (S044-06).
         return None
+    # A filed-year lock that records an earlier `since` is the year to
+    # copy: "e.g. <project year>" put last year's year-straddling
+    # contracts back on close timing and taxed their premium twice
+    # (A2-1142).
+    locked = _locked_grant_since(root, settings) if root else None
+    example = (f"{locked[0]}, the year {locked[1]} records"
+               if locked else f"{yr}")
     return (f"[settings] option_grant_timing_since is not set, so grant "
             f"timing (ITA s.49(1)) starts at the project year ({yr}) — a "
             f"default that MOVES when you bump `year`: next year's project "
             f"would put this year's year-straddling written options back "
             f"on close timing and tax their premium a second time. Add "
             f"`option_grant_timing_since = <first year you file under "
-            f"grant timing>` (e.g. {yr}) to [settings] once and keep it "
-            f"unchanged in every later year's project.")
+            f"grant timing>` (e.g. {example}) to [settings] once and keep "
+            f"it unchanged in every later year's project.")
 
 
 def cmd_tax_logic(args: argparse.Namespace) -> None:
@@ -10235,32 +10272,54 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     kw = option_timing_from_settings(settings)
     timing = kw.get("option_premium_timing", "close") if kw else "close"
     since = kw.get("option_grant_since") if kw else None
-    _w = _grant_since_warning(settings, cfg.get("accounts") or {})
+    _w = _grant_since_warning(settings, root, cfg.get("accounts") or {})
     if _w:
         print(f"taxjson option-boundary: warning: {_w}", file=sys.stderr)
-    # Every lock the project can see — its own filed/<year>.json and the
-    # previous year's record named by prior_year_record (the per-year
-    # layout the owner uses was read as "no filed-year locks", A2-0360).
-    # An unreadable lock's timing is unknown: said, not read as "none
-    # recorded" (S044-08).
-    from taxjson.lib.option_boundary import filed_locks
-    filed_years, filed_timing = filed_locks(
-        root, settings,
-        warn=lambda t: print(f"taxjson option-boundary: warning: {t} The "
-                             f"advice below assumes no timing was "
-                             f"recorded.", file=sys.stderr))
+    filed_years = set()
+    filed_timing: Dict[int, Dict[str, Any]] = {}
+    filed_labels: Dict[int, str] = {}
+    from taxjson.bin import taxjson_filed as _tfl
+    # The project's own locks AND the one [settings] prior_year_record
+    # names: in the per-year layout last year's lock lives in the
+    # previous project, and "no filed-year locks ... No amended return
+    # is required" was printed for a premium that lock put in no return
+    # (A2-0036, A2-0335).
+    try:
+        _locks = _tfl.project_locks(root, settings)
+    except _tfl.PriorRecordError as e:
+        _die(str(e))
+    for fy, f, _where in _locks:
+        filed_years.add(fy)
+        _lbl = _tfl.lock_label(root, f)
+        filed_labels[fy] = _lbl
+        try:
+            _ot = (json.loads(f.read_text(encoding="utf-8")) or {}).get(
+                "option_timing")
+        except (OSError, ValueError, AttributeError) as e:
+            # The lock's recorded timing drives the advice below: an
+            # unreadable lock silently read as "no timing recorded" and
+            # the advice flipped to ATTENTION / since = <locked year>
+            # (S044-08).
+            print(f"taxjson option-boundary: warning: cannot read "
+                  f"{_lbl} ({e}) — its recorded option timing "
+                  f"is unknown, so the advice for {fy} below assumes "
+                  f"none was recorded; `taxjson check-filed` checks the "
+                  f"lock.", file=sys.stderr)
+            _ot = None
+        if isinstance(_ot, dict):
+            filed_timing[fy] = _ot
     # A lock taken before its year ended is a snapshot, not a filed
     # return (A2-1164): said beside the year.
     partial_locks: Dict[int, str] = {}
     from taxjson.bin.taxjson_filed import partial_year_note
-    for f in (root / "filed").glob("*.json"):
+    for fy, f, _where in _locks:
         try:
             _pn = partial_year_note(
-                json.loads(f.read_text(encoding="utf-8")), int(f.stem))
+                json.loads(f.read_text(encoding="utf-8")), fy)
         except (OSError, ValueError):
             continue
         if _pn:
-            partial_locks[int(f.stem)] = _pn
+            partial_locks[fy] = _pn
     rows = []
     books = 0
     missing = []
@@ -10299,7 +10358,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             txs, _log = synthesize_openings(txs, _phantoms)
         for r in straddling(txs, year, timing, since, filed_years,
                             filed_timing=filed_timing,
-                            tax_date=_tax_date_basis(settings)):
+                            tax_date=_tax_date_basis(settings),
+                            filed_labels=filed_labels):
             r["account"] = r["account"] or name
             rows.append(r)
     if not books:
@@ -11522,8 +11582,14 @@ def cmd_t1135(args: argparse.Namespace) -> None:
              # project's tax_date, like the gains files.
              "--tax-date", _tax_date_basis(settings)]
     t1135_map = root / "t1135.map"
-    if t1135_map.exists():
+    # A dangling link (or a directory) is not "no map": the domicile
+    # overrides it holds change the filing verdict (A2-0355).
+    if t1135_map.is_file():
         argv += ["--map", str(t1135_map)]
+    elif t1135_map.is_symlink() or t1135_map.exists():
+        sys.exit(f"taxjson t1135: cannot read {t1135_map.name} (a broken "
+                 f"link or not a file) — fix or remove it; its country "
+                 f"overrides change the verdict.")
     # The same phantom openings the gains stage applies (R1-321): without
     # them a phantom-backed position read as a short that later real
     # buys covered at zero cost.
@@ -11537,9 +11603,44 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     if sheltered_base.exists():
         argv += ["--sheltered", str(sheltered_base)]
     argv += option_timing_flags(settings)
+    # ...and its income dating: a listed corporation's ROC on its pay
+    # date in that pass (audit A2-0339).
+    argv += income_dating_flags(settings)
     if args.json:
         argv.append("--json")
     raise SystemExit(taxjson_t1135.main(argv))
+
+
+def _box18_by_year(root: Path, accounts) -> Dict[int, float]:
+    """{tax year: T5 box 18 capital-gains dividends} named in
+    capital_gains_dividends.map, in the base currency, dated as the
+    estimate dates them (_box18_into_estimate). {} without the map."""
+    fr = _box18_fractions(root)
+    if not fr:
+        return {}
+    from taxjson.lib.cg_dividends import row_amount
+    rules = _view_income_rules(root)
+    out: Dict[int, float] = {}
+    for acct in sorted(accounts):
+        p = root / "work" / f"{acct}_base.json"
+        if not p.exists():
+            continue
+        try:
+            data = _read_work_doc(p)
+        except (OSError, ValueError) as e:
+            _die(f"could not read {p.name} ({e}) for the capital-gains "
+                 f"dividends in capital_gains_dividends.map — re-run "
+                 f"`taxjson run`.")
+        for t in data.get("transactions", []):
+            f = fr.get((acct, str(t.get("id"))))
+            if not f or t.get("action") != "DIVIDEND":
+                continue
+            d = rules.income_date(t) if rules is not None \
+                else str(t.get("date") or "")
+            if len(str(d)) >= 4 and str(d)[:4].isdigit():
+                y = int(str(d)[:4])
+                out[y] = out.get(y, 0.0) + row_amount(t) * f
+    return out
 
 
 def cmd_carryover(args: argparse.Namespace) -> None:
@@ -11598,6 +11699,9 @@ def cmd_carryover(args: argparse.Namespace) -> None:
         # The same year attribution as run / close-year (R1-192).
         "--tax-date", _tax_date_basis(settings),
     ] + option_timing_flags(settings)       # same timing as the returns
+    # ...and the same income dating: a listed corporation's ROC on its
+    # pay date (audit A2-0123, A2-0339, A2-0341, A2-1141).
+    argv += income_dating_flags(settings)
     if settings.get("year") is not None:
         # Rows before the project year are flagged as possibly partial.
         argv += ["--project-year", str(int(settings["year"]))]
@@ -11608,24 +11712,32 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     if phantoms.exists():
         argv += ["--incomplete-history", str(phantoms)]
     claimed = Path(args.claimed) if args.claimed else root / "claimed_losses.txt"
-    if claimed.exists():
+    # A dangling symlink or a directory is not "no file": the ledger
+    # without the user's claims overstates the carryforward (A2-0355).
+    if claimed.is_file():
         argv += ["--claimed", str(claimed)]
-    elif args.claimed:
-        sys.exit(f"taxjson carryover: no such claimed file: {claimed}")
-    # Each locked year's filed realized total: the ledger recomputes
-    # every year with THIS project's option timing, and a locked year it
-    # disagrees with is flagged (S047-21, S048-20).
+    elif args.claimed or claimed.is_symlink() or claimed.exists():
+        sys.exit(f"taxjson carryover: cannot read the claimed file "
+                 f"{claimed} (missing, a broken link or not a file) — "
+                 f"fix or remove it; the carryforward depends on it.")
+    # Each filed-year lock — this project's filed/<year>.json and the
+    # prior_year_record lock of the per-year layout (A2-0338, A2-0121):
+    # a year before the project year takes what the lock says was
+    # filed; a later one is compared (S047-21, S048-20). An unreadable
+    # lock is named, never skipped (A2-0336).
     from taxjson.bin import taxjson_filed
-    import json as _json
-    for _yr, _lp in taxjson_filed.list_snapshots(root):
-        try:
-            _lock = _json.loads(_lp.read_text(encoding="utf-8"))
-            _real = float((_lock.get("totals") or {})["realized"])
-        except (OSError, ValueError, KeyError, TypeError,
-                AttributeError):
-            continue
-        argv += ["--filed", f"{_yr}={_real!r}"]
-    _w = _grant_since_warning(settings, cfg.get("accounts") or {})
+    try:
+        _locks = taxjson_filed.project_locks(root, settings)
+    except taxjson_filed.PriorRecordError as e:
+        _die(str(e))
+    for _yr, _lp, _where in _locks:
+        argv += ["--filed-lock", f"{_yr}={_lp}"]
+    # T5 box 18 capital-gains dividends named in
+    # capital_gains_dividends.map are capital gains of their year: the
+    # estimate nets them, so the ledger does too (A2-0678).
+    for _y, _amt in sorted(_box18_by_year(root, taxable).items()):
+        argv += ["--slip-gains", f"{_y}={_amt!r}"]
+    _w = _grant_since_warning(settings, root, cfg.get("accounts") or {})
     if _w:
         print(f"taxjson carryover: warning: {_w}", file=sys.stderr)
     # Deferred / failed / validation-ERROR books drive the carryforward
@@ -11955,7 +12067,10 @@ def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
     last full run (a failed run leaves them newer than the artifacts),
     an account with inputs but no report. [] when clean or when there
     is nothing to judge (no reports yet). The report commands used to
-    serve these books with rc 0 and no word (R1-252, S049-11)."""
+    serve these books with rc 0 and no word (R1-252, S049-11). A
+    "blocked" step with work/ books but no reports/ (a run that died
+    before writing them) is a problem too: close-year locked those with
+    rc 0 (A2-0035, A2-0658)."""
     try:
         from datetime import date as _d
         from taxjson.lib.checklist import Ctx, d_run_clean
@@ -12169,11 +12284,35 @@ def cmd_close_year(args: argparse.Namespace) -> None:
                  if getattr(args, "filed_dispositions", None) else None)
     if filed_csv is not None and not filed_csv.exists():
         sys.exit(f"taxjson close-year: {filed_csv} not found.")
+    if filed_csv is not None:
+        # Read it up front, through the broker decode funnel: a UTF-16
+        # save, a directory or a stray quote is one line naming the
+        # file, exit 2, before anything is computed (A2-1136, A2-1138).
+        try:
+            _handoff.load_filed_dispositions(filed_csv)
+        except ValueError as e:
+            print(f"taxjson close-year: {e} Nothing was written.",
+                  file=sys.stderr)
+            raise SystemExit(2)
     if taxjson_filed.snapshot_path(root, year).exists() and not args.force:
         sys.exit(f"taxjson close-year: {taxjson_filed.snapshot_path(root, year)}"
                  f" already exists — the lock protects a filed year. "
                  f"Re-run with --force to replace it (only if you "
                  f"re-filed/amended).")
+    _old_lock = None
+    if taxjson_filed.snapshot_path(root, year).exists():
+        try:
+            _old_lock = _json.loads(taxjson_filed.snapshot_path(
+                root, year).read_text(encoding="utf-8"))
+            if not isinstance(_old_lock, dict):
+                raise ValueError("not a close-year lock")
+        except (OSError, ValueError) as e:
+            print(f"taxjson close-year: WARNING: the lock being replaced "
+                  f"could not be read ({e}) — anything it recorded "
+                  f"(the filed totals, dispositions filed with another "
+                  f"tool) is not carried into the new lock.",
+                  file=sys.stderr)
+            _old_lock = None
     # The lock records a FILED return: a year that has not ended cannot
     # have been filed — the lock then drifted on every later run and
     # the checklist said "Return filed and the year locked" (S045-23).
@@ -12194,14 +12333,53 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         extra = _handoff.record_fields(
             root, cfg, int(year), files, _filed_run_gains,
             _handoff_gains_flags(settings), filed_csv)
+    except _handoff.BooksError as e:
+        sys.exit(f"taxjson close-year: {e}. Nothing was written.")
     except ValueError as e:
         sys.exit(f"taxjson close-year: {e}")
+    if (filed_csv is None and _old_lock is not None
+            and _old_lock.get("filed_dispositions") is not None):
+        # --force (what check-filed's DRIFTED advice says) used to drop
+        # the dispositions another tool actually filed, and handoff's
+        # double-reporting check silently fell back to taxjson's own
+        # (A2-0119). They describe the RETURN, not the books: keep them.
+        extra["filed_dispositions"] = _old_lock["filed_dispositions"]
+        if isinstance(_old_lock.get("filed_totals"), dict):
+            extra["filed_totals"] = _old_lock["filed_totals"]
+        print(f"  kept the {len(extra['filed_dispositions'])} filed "
+              f"disposition(s) the replaced lock recorded"
+              + (f" (from {_old_lock['filed_totals'].get('source')})"
+                 if isinstance(_old_lock.get("filed_totals"), dict)
+                 else "")
+              + " — pass --filed-dispositions to replace them.")
     path = taxjson_filed.write_snapshot(
         root, year, _normalize_country(settings["country"]), basis,
         accounts, force=args.force,
         option_timing=option_timing_from_settings(settings) or None,
         extra=extra, raw=raw_aggs)
     tot = _json.loads(path.read_text())["totals"]
+    _old_tot = (_old_lock or {}).get("totals")
+    if isinstance(_old_tot, dict):
+        # The replaced lock was the record of the filed return: say what
+        # moved, so a re-close made only to record positions (handoff's
+        # advice for a version-1 lock) does not overwrite the filed
+        # totals in silence (A2-0345).
+        _moved = []
+        for _k in ("realized", "disallowed", "income", "dispositions"):
+            try:
+                _a, _b = float(_old_tot.get(_k) or 0), float(tot.get(_k) or 0)
+            except (TypeError, ValueError):
+                continue
+            if abs(_a - _b) > 0.005:
+                _moved.append(f"{_k} {_a:,.2f} -> {_b:,.2f}")
+        if _moved:
+            print(f"taxjson close-year: WARNING: the replaced {year} lock "
+                  f"recorded other totals ({'; '.join(_moved)}). The lock "
+                  f"is the record of the FILED return: this is right only "
+                  f"if you amended {year} to these figures — otherwise "
+                  f"restore the old lock from your records (git) and "
+                  f"resolve the drift `taxjson check-filed` reports.",
+                  file=sys.stderr)
     print(f"closed {year} ({basis}): realized {tot['realized']:,.2f}, "
           f"disallowed {tot['disallowed']:,.2f}, income "
           f"{tot['income']:,.2f} across {len(accounts)} account(s)")
@@ -12235,10 +12413,16 @@ def _prior_record_path(root: Path, settings: Dict[str, Any],
                        override: Optional[str]) -> Path:
     if override:
         return Path(override).expanduser()
-    configured = settings.get("prior_year_record")
-    if configured:
-        p = Path(str(configured)).expanduser()
-        return p if p.is_absolute() else (root / p)
+    from taxjson.bin.taxjson_filed import (PriorRecordError,
+                                           prior_record_setting)
+    try:
+        p = prior_record_setting(root, settings)
+    except PriorRecordError as e:
+        # The same refusal `taxjson run` gives — not "no prior-year
+        # record at <root>/5" (A2-1135).
+        _die(str(e))
+    if p is not None:
+        return p
     year = settings.get("year")
     if not isinstance(year, int) or isinstance(year, bool):
         # It looked for filed/-1.json (A2-1162).
@@ -12275,7 +12459,11 @@ def cmd_handoff(args: argparse.Namespace) -> None:
             or "year_end" not in record:
         sys.exit(f"taxjson handoff: {rp} is a version-1 lock (totals "
                  f"only). Re-close that year with the current taxjson "
-                 f"(`taxjson close-year --force`) to record positions.")
+                 f"(`taxjson close-year --force` in its project) to record "
+                 f"positions — run `taxjson check-filed` there first: if "
+                 f"it reports DRIFTED, the re-close would replace the "
+                 f"filed totals, so resolve the drift (or amend) before "
+                 f"re-closing.")
     ry = int(record["year"])
     if int(settings.get("year") or 0) != ry + 1:
         print(f"taxjson handoff: note: the record is for {ry}; this "
@@ -12283,11 +12471,15 @@ def cmd_handoff(args: argparse.Namespace) -> None:
               file=sys.stderr)
     if not (root / "work").is_dir():
         sys.exit("taxjson handoff: no work/ — run `taxjson run` first.")
-    opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
-                                _filed_run_gains,
-                                _handoff_gains_flags(settings),
-                                root / "phantoms.json")
-    rep = _handoff.check(root, cfg, record, opening)
+    try:
+        opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
+                                    _filed_run_gains,
+                                    _handoff_gains_flags(settings),
+                                    root / "phantoms.json")
+        rep = _handoff.check(root, cfg, record, opening)
+    except _handoff.BooksError as e:
+        # Not a fabricated "a lot or a sale is missing" (A2-1137).
+        sys.exit(f"taxjson handoff: {e}")
     if getattr(args, "json", False):
         _json_out(dict(rep, record=str(rp)))
     else:
@@ -12297,14 +12489,43 @@ def cmd_handoff(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def _child_error_line(e: BaseException) -> str:
+    """One line for a failed sub-tool: the child's own last error line,
+    never the CalledProcessError repr with the full argv (A2-0676)."""
+    if isinstance(e, subprocess.CalledProcessError):
+        lines = [ln.strip() for ln in str(e.stderr or "").splitlines()
+                 if ln.strip()]
+        if lines:
+            return lines[-1]
+        return f"the gains engine exited {e.returncode}"
+    return f"{type(e).__name__}: {e}"
+
+
 def _check_filed_years(root: Path, cache: Path,
                        settings: Dict[str, Any], *,
-                       strict: bool) -> int:
+                       strict: bool,
+                       counts: Optional[Dict[str, int]] = None) -> int:
     """Drift check for every filed/<year>.json. Returns the number of
-    drifting years; prints per-year OK/DRIFT lines."""
+    years that drifted or could not be checked; prints per-year
+    OK/DRIFT lines. `counts` (when given) receives them split:
+    drifted, lock (unreadable, damaged or other-country locks) and
+    input (the recompute itself failed on the books or an input)."""
     from taxjson.bin import taxjson_filed
     import json as _json
     snaps = taxjson_filed.list_snapshots(root)
+    # A bad [settings] value is the CONFIG's problem: refuse it in the
+    # plain settings words before any lock is touched, not as "lock
+    # could not be checked — fix or restore the lock" (A2-1134).
+    if snaps:
+        try:
+            from taxjson.lib.pipeline import option_timing_from_settings
+            _income_rules(settings)
+            option_timing_from_settings(settings)
+            taxjson_filed._tax_date(
+                settings, taxjson_filed._canonical_country(settings))
+        except ValueError as e:
+            _die(f"{e} — fix taxjson.toml; the filed-year locks were not "
+                 f"checked.")
     drifting = 0
     # Which snapshot accounts are crypto (they blend only with each
     # other, and only in a Canadian project with two or more);
@@ -12324,8 +12545,10 @@ def _check_filed_years(root: Path, cache: Path,
     _taxable_cfg = {a for a, c in _acct_cfg.items()
                     if isinstance(c, dict) and c.get("type") == "taxable"}
     unreadable = 0
+    input_failed = 0
     mismatched = 0
     for year, path in snaps:
+        _stage = "lock"
         # One lock at a time: an unreadable or hand-edited lock is
         # reported BY NAME and counted as a failure, and the other
         # locks are still checked. A KeyError/JSONDecodeError here used
@@ -12367,16 +12590,28 @@ def _check_filed_years(root: Path, cache: Path,
                        if (_acct_cfg.get(a) or {}).get("crypto")]
             _equity = [a for a in _snap_accts if a not in _crypto]
             _lock_timing = snap.get("option_timing")
+            _stage = "recompute"
             recomputed = taxjson_filed.recompute_accounts(
                 cache, _equity, _crypto, year,
                 taxjson_filed.lock_settings(snap, settings),
                 snap.get("basis", ""), _filed_run_gains,
                 option_timing=_lock_timing)
+            _stage = "lock"
             lines = taxjson_filed.diff_snapshot(snap, recomputed,
                                                 unconfigured=_gone)
         except SystemExit:
             raise
         except Exception as e:          # this lock only
+            if _stage == "recompute":
+                # The books or an input failed, not the lock: say what
+                # failed in the child's words and do not send the user
+                # to edit the filed record (A2-0676).
+                input_failed += 1
+                print(f"  !! filed {year}: {path.name} could not be "
+                      f"checked: {_child_error_line(e)} — fix that input "
+                      f"and re-run `taxjson run` (the lock itself was "
+                      f"not judged)", file=sys.stderr)
+                continue
             unreadable += 1
             print(f"  !! filed {year}: {path.name} could not be checked: "
                   f"{type(e).__name__}: {e} — fix or restore the lock "
@@ -12401,6 +12636,31 @@ def _check_filed_years(root: Path, cache: Path,
                       f"option_grant_timing_since to match or contracts "
                       f"written around {year} are taxed in the wrong "
                       f"year or twice")
+            # The buy-back flag is recomputed from the lock too: an OK
+            # line said nothing while the project's own .sum for that
+            # year moved (A2-0348).
+            if _cur and "option_buyback_loss_superficial" in _lock_timing \
+                    and bool(_lock_timing.get(
+                        "option_buyback_loss_superficial")) \
+                    != bool(_cur.get("option_buyback_loss_superficial")):
+                print(f"  note: filed {year} recomputed with "
+                      f"option_buyback_loss_superficial = "
+                      f"{str(bool(_lock_timing['option_buyback_loss_superficial'])).lower()}"
+                      f" as its lock records; this project now says "
+                      f"{str(bool(_cur.get('option_buyback_loss_superficial'))).lower()}"
+                      f" — this project's reports for {year} no longer "
+                      f"match what was filed")
+        # Likewise the date basis (lock_settings): the lock is checked
+        # on the basis it was filed on, so OK says nothing about this
+        # project's own report for that year (A2-0672).
+        _rb = snap.get("date_basis")
+        _now_basis = _tax_date(settings)
+        if _rb in ("settle", "trade") and _rb != _now_basis:
+            print(f"  note: filed {year} recomputed on the {_rb} date "
+                  f"basis its lock records; this project uses "
+                  f"tax_date = \"{_now_basis}\" — sales near Dec 31 "
+                  f"fall in another year in this project's reports than "
+                  f"on the filed return")
         if lines:
             drifting += 1
             print(f"  !! filed {year} DRIFTED vs {path.name}:",
@@ -12417,6 +12677,10 @@ def _check_filed_years(root: Path, cache: Path,
         _partial = taxjson_filed.partial_year_note(snap, year)
         if _partial:
             print(f"  note: filed {year}: {_partial}")
+    if counts is not None:
+        counts.update(drifted=drifting, lock=unreadable + mismatched,
+                      input=input_failed)
+    unreadable += input_failed
     if (unreadable or mismatched) and strict:
         sys.exit(f"taxjson run --strict: {unreadable + mismatched} "
                  f"filed-year lock(s) could not be checked"
@@ -12456,7 +12720,9 @@ def _fx_cash_after_run(root: Path, cache: Path,
 
 def cmd_check_filed(args: argparse.Namespace) -> None:
     """`taxjson check-filed`: recompute every filed year from the
-    current books and diff against the locks. Exit 1 on drift."""
+    current books and diff against the locks. Exit 1 on drift or a
+    damaged lock, 2 when only the recompute failed on an input (nothing
+    was judged)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
     settings = load_config(root)["settings"]
@@ -12468,8 +12734,15 @@ def cmd_check_filed(args: argparse.Namespace) -> None:
     print("==> filed-year drift check")
     # "OK" is only as good as the books it recomputes (S048-23).
     _state = _warn_run_state(root, load_config(root))
-    if _check_filed_years(root, cache, settings, strict=False):
-        raise SystemExit(1)
+    _counts: Dict[str, int] = {}
+    if _check_filed_years(root, cache, settings, strict=False,
+                          counts=_counts):
+        # 1: a year drifted or a lock is damaged / of another country;
+        # 2: only the recompute failed on an input (A2-0676) — nothing
+        # was judged, so it is not reported as drift.
+        if _counts.get("drifted") or _counts.get("lock"):
+            raise SystemExit(1)
+        raise SystemExit(2)
     if _state:
         print("  (the books above are not clean — see the warning; an OK "
               "here is not conclusive until `taxjson run` is clean)")
@@ -12606,6 +12879,7 @@ def _explain_wash_sales(root: Path, cache: Path,
     for grp in groups:
         target, tmp = grp[0], None
         if len(grp) > 1:
+            _check_books_before_merge(grp)
             fd, name = _tf.mkstemp(prefix="taxjson_explain_",
                                    suffix=".json")
             _os.close(fd)
@@ -14543,6 +14817,24 @@ def _audit_source_files(cache: Path, name: str,
     return out
 
 
+def _check_books_before_merge(paths: List[Path]) -> None:
+    """Load each base book a command is about to merge into a temp file,
+    and die naming the damaged one. taxjson-merge passes a well-formed
+    JSON file with a bad row straight through, so the engine's error
+    named the deleted /tmp merge file instead of work/<acct>_base.json
+    (A2-1143)."""
+    from taxjson.lib.core import load_transactions
+    for b in paths:
+        try:
+            load_transactions(Path(b))
+        except Exception as e:                      # noqa: BLE001
+            msg = str(e).strip().splitlines()[0] if str(e).strip() \
+                else type(e).__name__
+            msg = msg.replace(f"load_transactions({b}): ", "")
+            _die(f"cannot read {b}: {msg} — re-run `taxjson run` to "
+                 f"rebuild it.")
+
+
 def cmd_audit(args: argparse.Namespace) -> None:
     """`taxjson audit`: the authoritative justification of every
     capital-gain figure. One block per taxable disposition: the parsed
@@ -14604,11 +14896,23 @@ def cmd_audit(args: argparse.Namespace) -> None:
     # recorded, as check-filed does: `audit --year 2025` from a 2026
     # project without since = 2025 printed -1,000 for a year filed at
     # -601, with no word (S048-18).
+    # The lock may live in the previous year's project (per-year
+    # layout, [settings] prior_year_record) — it counts the same as a
+    # local filed/<year>.json (A2-0335, A2-0664). Its recorded DATE
+    # BASIS applies too, as check-filed's lock_settings does: a year
+    # filed on settlement dates is audited on settlement dates
+    # (A2-0334, A2-1129).
     _timing_flags = option_timing_flags(settings)
     if year and str(year) != str(settings.get("year")):
         from taxjson.bin import taxjson_filed as _tf
-        _lp = _tf.snapshot_path(root, year)
-        if _lp.exists():
+        try:
+            _hit = _tf.lock_for_year(root, settings, int(year))
+        except _tf.PriorRecordError as e:
+            _die(str(e))
+        if _hit is not None:
+            _lp, _ = _hit
+            _lname = _tf.lock_label(root, _lp)
+            _lock = None
             try:
                 _lock = _json.loads(_lp.read_text(encoding="utf-8"))
                 _lot = (_lock.get("option_timing")
@@ -14616,15 +14920,23 @@ def cmd_audit(args: argparse.Namespace) -> None:
             except (OSError, ValueError) as e:
                 _lot = None
                 print(f"taxjson audit: warning: cannot read "
-                      f"filed/{_lp.name} ({e}) — {year} is recomputed "
-                      f"with this project's option timing, which may "
-                      f"not be the timing it was filed on.",
-                      file=sys.stderr)
+                      f"{_lname} ({e}) — {year} is recomputed "
+                      f"with this project's option timing and date "
+                      f"basis, which may not be the ones it was filed "
+                      f"on.", file=sys.stderr)
+            _lb = _tf.lock_settings(_lock, settings).get("tax_date") \
+                if isinstance(_lock, dict) else None
+            if _lb in ("settle", "trade") and _lb != tax_date:
+                print(f"taxjson audit: note: {year} is locked "
+                      f"({_lname}) — recomputed on the {_lb} date basis "
+                      f"its lock recorded, not this project's "
+                      f"{tax_date} basis.", file=sys.stderr)
+                tax_date = _lb
             if isinstance(_lot, dict):
                 _lf = _tf._lock_timing_flags(settings, int(year), _lot)
                 if _lf != _timing_flags:
                     print(f"taxjson audit: note: {year} is locked "
-                          f"(filed/{_lp.name}) — recomputed with the "
+                          f"({_lname}) — recomputed with the "
                           f"option timing its lock recorded "
                           f"({' '.join(_lf)}), not this project's "
                           f"({' '.join(_timing_flags) or 'none'}).",
@@ -14702,6 +15014,7 @@ def cmd_audit(args: argparse.Namespace) -> None:
             # inputs the pipeline's blended pass merged, rebuilt fresh
             # so a stale .blend artifact can't smuggle old numbers
             # past the tie-out.
+            _check_books_before_merge(bases)
             fd, tmp = tempfile.mkstemp(prefix="taxjson_audit_",
                                        suffix=".json")
             _os.close(fd)
@@ -16134,7 +16447,8 @@ def main() -> None:
     p_chk = sub.add_parser(
         "check-filed",
         help="Recompute every filed year from the current books and "
-             "report drift vs the locks (exit 1 on drift)")
+             "report drift vs the locks (exit 1 on drift or a damaged "
+             "lock, 2 when only an input failed)")
     p_chk.set_defaults(func=cmd_check_filed)
 
     p_fmh = sub.add_parser(
