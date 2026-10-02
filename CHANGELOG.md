@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **`taxjson fetch` (Questrade) keeps the API's order of one day's
+  rows.** The fetched file sorted each day's rows by symbol and action,
+  and every re-fetch merge sorted the whole file, so a same-day sale
+  listed before its rebuy was booked as rebuy-then-sale: the sale used
+  the averaged ACB and gain moved into a later year (CA-DATE-14 /
+  US-DATE-13). Rows now sort by trade date only, and the merge keeps
+  the download's order (audit A2-0084, A2-0598).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

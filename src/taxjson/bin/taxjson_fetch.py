@@ -259,14 +259,18 @@ def _money_cell(v: Any) -> Any:
 
 def qt_to_csv(activities: List[Dict[str, Any]], number: str) -> str:
     """Render API activities as a Questrade activity-export CSV — the
-    exact column set the existing parser reads. Rows sort by
-    transaction date so re-fetches are byte-stable."""
+    exact column set the existing parser reads. Rows sort by trade
+    date ONLY, a stable sort: rows of one day keep the API's order.
+    Questrade stamps every row at midnight, so that order is the only
+    record of a same-day sale before its rebuy (CA-DATE-14 /
+    US-DATE-13); sorting on (date, symbol, action) put every Buy ahead
+    of the Sell and moved gain into a later year (audit A2-0084). The
+    same download still renders the same bytes."""
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(_QT_COLUMNS)
     def _key(a):
-        return (str(a.get("tradeDate") or a.get("transactionDate") or ""),
-                str(a.get("symbol") or ""), str(a.get("action") or ""))
+        return str(a.get("tradeDate") or a.get("transactionDate") or "")[:10]
     for a in sorted(activities, key=_key):
         w.writerow([
             # tradeDate FIRST: the export's "Transaction Date" column

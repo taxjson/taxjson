@@ -12029,14 +12029,51 @@ def _merge_csv_text(existing: str, new: str) -> Tuple[str, int]:
         raise ValueError("header mismatch between the existing fetch "
                          "file and the new download")
     ex_c, new_c = Counter(ex_rows[1:]), Counter(new_rows[1:])
-    merged_c = ex_c | new_c                    # per-row max count
     added = sum((new_c - ex_c).values())
+    # ORDER (audit A2-0598): rows of one moment keep the export's order
+    # (CA-DATE-14 / US-DATE-13) and Questrade stamps every row at
+    # midnight, so the row sequence is data. The new download is the
+    # API's own order for what it covers; an existing-only row (outside
+    # the window, a restated copy, an extra split fill) is slotted in
+    # after the row it followed in the existing file. Then a STABLE
+    # sort on the trade date keeps the file chronological (the parser
+    # reads a newest-first file bottom-up). Sorting the row tuples put
+    # every same-day Buy ahead of its Sell.
+    merged = list(new_rows[1:])
+    matched = [False] * len(merged)
+    anchor = -1
+    for row in ex_rows[1:]:
+        hit = next((i for i in range(anchor + 1, len(merged))
+                    if not matched[i] and merged[i] == row), None)
+        if hit is not None:
+            matched[hit] = True
+            anchor = hit
+            continue
+        earlier = next((i for i in range(0, anchor + 1)
+                        if not matched[i] and merged[i] == row), None)
+        if earlier is not None:          # same row, other place: a dup
+            matched[earlier] = True
+            continue
+        anchor += 1                      # existing-only: keep it
+        merged.insert(anchor, row)
+        matched.insert(anchor, True)
+    col = _qt_date_col(list(ex_rows[0]))
+
+    def _day(r):
+        try:
+            return datetime.strptime(r[col][:10], "%Y-%m-%d").strftime(
+                "%Y-%m-%d")
+        except (ValueError, IndexError):
+            return None
+    days = [_day(r) for r in merged]
+    if all(days):
+        merged = [r for _d, r in sorted(zip(days, merged),
+                                        key=lambda p: p[0])]
     buf = _io.StringIO()
     w = _csv.writer(buf, lineterminator="\n")
     w.writerow(ex_rows[0])
-    for row in sorted(merged_c):
-        for _ in range(merged_c[row]):
-            w.writerow(row)
+    for row in merged:
+        w.writerow(row)
     return buf.getvalue(), added
 
 
