@@ -329,6 +329,39 @@ def _place_after(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _assign_underlying_resolver(transactions: List[Dict[str, Any]]):
+    """resolve(row dict) -> the stock symbol an option ASSIGN row's
+    premium folds into, by the engine's resolver (same account, class /
+    futures-month spelling, a stock trade near the assignment), or None.
+    The engine's notes are its own run's business; its ambiguity
+    warning is passed on."""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+    from taxjson.lib.core import _make_assign_underlying_resolver
+
+    def _ns(t: Dict[str, Any]) -> SimpleNamespace:
+        return SimpleNamespace(symbol=str(t.get("symbol") or ""),
+                               action=str(t.get("action") or "").upper(),
+                               account=t.get("account") or "",
+                               date=t.get("date") or "")
+
+    resolver = _make_assign_underlying_resolver(
+        [_ns(t) for t in transactions if t.get("symbol")],
+        lambda t: t.date)
+
+    def resolve(tx: Dict[str, Any]) -> Optional[str]:
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            out = resolver(_ns(tx))
+        for ln in buf.getvalue().splitlines():
+            if ln.startswith("warning:"):
+                print(f"taxjson-t1135: {ln}", file=sys.stderr)
+        return out
+
+    return resolve
+
+
 def walk_costs(transactions: List[Dict[str, Any]], year: int,
                overrides: Dict[str, Optional[str]],
                tax_date: str = "settle",
@@ -340,13 +373,17 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     t1135.map classification, S051-17)."""
     year_start = f"{year}-01-01"
     year_end = f"{year}-12-31"
-    from taxjson.lib.core import is_option_symbol, parse_option_underlying
+    from taxjson.lib.core import is_option_symbol
     # Underlyings that trade as stock here: only their assignments fold
     # the option premium into the shares (a cash-settled index option
     # has no stock leg — same test as the engine).
-    stock_symbols = {tx.get("symbol") for tx in transactions
-                     if tx.get("symbol")
-                     and not is_option_symbol(tx.get("symbol"))}
+    # The engine's own resolver (core._make_assign_underlying_resolver):
+    # a root that drops the share class (BRKB -> BRK.B.US, RCI ->
+    # RCI.B.TO) resolves to the one stock line the account trades at
+    # the assignment, so the premium folds into those shares as in the
+    # books (re-audit A2-0328, A2-1106). It is None for a cash-settled
+    # index option or a missing stock leg.
+    _resolve_underlying = _assign_underlying_resolver(transactions)
     # Splits applied so far per pool: a pre-split execution that
     # settles after the split is re-denominated like the engine does
     # (S008-06).
@@ -460,7 +497,24 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                                             pool.max_cost_in_year)
                 pools[symbol] = _Pool()
         elif action == "ADJUST":
-            pool.cost += Decimal(str(net))
+            # The engine's ADJUST rules (CA-ACB-06/07/14), so the cost
+            # amount is the engine's ACB (CA-RPT-12; re-audit A2-0034,
+            # A2-0115, A2-0321): a return of capital on an EMPTY pool is
+            # a s.40(3) gain of its year and never reaches the next
+            # position's cost; one beyond the ACB leaves it nil; on a
+            # short it is the short seller's payment (no cost amount —
+            # cost_amount() clamps shorts to 0). A basis increase on an
+            # empty pool still joins the next purchase (CA-ACB-13), and
+            # a superficial-loss addition (WASH_) is applied as booked.
+            _adj = Decimal(str(net))
+            _wash = str(tx.get("id") or "").startswith("WASH_")
+            if not _wash and abs(pool.qty) <= _QTY_EPS and net < -0.005:
+                _adj = Decimal(0)
+            elif not _wash and pool.qty < -_QTY_EPS:
+                _adj = -_adj
+            pool.cost += _adj
+            if not _wash and pool.qty > _QTY_EPS and pool.cost < 0:
+                pool.cost = Decimal(0)
         else:
             # BUYSELL / ASSIGN / EXERCISE-shaped rows: average-cost pool,
             # same conventions as the Canada engine (buy cost added =
@@ -483,12 +537,11 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
                         qty *= r
             fold = None
             if action == "ASSIGN" and is_option_symbol(symbol):
-                und = parse_option_underlying(symbol)
+                und = _resolve_underlying(tx)
                 _m = re.search(r"\d{6}([CP])\d{8}", symbol)
                 right = _m.group(1) if (und and _m) else ""
                 closing_units = min(abs(qty), abs(pool.qty))
-                if (und and und in stock_symbols
-                        and closing_units > _QTY_EPS
+                if (und and closing_units > _QTY_EPS
                         and ((pool.qty > 0 and right == "C")
                              or (pool.qty < 0 and right == "P"))):
                     # s.49(3) / 49(3.1): an exercised long call's cost
@@ -551,12 +604,18 @@ def walk_costs(transactions: List[Dict[str, Any]], year: int,
     # pools — counted (the conservative side) but named, since the
     # contract stopped being property at expiry.
     from taxjson.lib.core import parse_option_expiry
-    cutoff = min(year_end, today) if today else year_end
+    # Expired by the year end when it expires ON Dec 31 too (re-audit
+    # A2-1121, the R1-37 twin); in an unfinished year, only once its
+    # expiry day has passed (it still trades that day).
+
+    def _expired(sym: str) -> bool:
+        exp = parse_option_expiry(sym) or "9999"
+        return exp <= year_end and (not today or exp < today)
     expired_held = sorted(
         s for s, p in pools.items()
         if p.qty > _QTY_EPS and is_option_symbol(s)
         and classify_country(s, overrides) is not None
-        and (parse_option_expiry(s) or "9999") < cutoff)
+        and _expired(s))
 
     per_symbol = {}
     for s, p in pools.items():
@@ -630,7 +689,7 @@ def check_currency(paths: List[Path], base_currency: str) -> None:
                 f"{base} — the cost walk sums them as {base}. Pass the "
                 f"converted books (work/<account>_base.json and the "
                 f"<account>_gains*.json beside them; `taxjson t1135` "
-                f"does), or --base-currency matching them.")
+                f"does).")
 
 
 def join_income_gains(gains_paths: List[Path], year: int,
@@ -674,7 +733,12 @@ def join_income_gains(gains_paths: List[Path], year: int,
             if action == "DIVIDEND":
                 rec["income"] += float(e.get("dividend") or 0.0)
             elif action == "DIVIDEND_IN_LIEU":
-                rec["income"] += float(e.get("pil") or 0.0)
+                # A Canadian dealer's payment in lieu on a Canadian
+                # issuer is a s.260 deemed dividend: the run carries it
+                # as 'dividend' with pil 0 (re-audit A2-0661; as
+                # sum-gains and filed read it).
+                rec["income"] += (float(e.get("pil") or 0.0)
+                                  + float(e.get("dividend") or 0.0))
             elif "gain" in e:
                 # Tainted dispositions (phantom zero-cost basis) carry a
                 # fabricated gain — form-export and carryover exclude
@@ -901,6 +965,24 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         print(f"warning: t1135.map: {k!r} matches no symbol in the books "
               f"(renamed, consolidated by ticker.map, or a typo?) — the "
               f"override is not applied.", file=sys.stderr)
+    # A Canadian issuer on a foreign listing (its ISIN says CA — IB
+    # stamps issuer_country on the rows) is not specified foreign
+    # property, yet the listing suffix classifies it foreign. Named, not
+    # guessed: the user confirms with a `SYMBOL CA` line in t1135.map
+    # (re-audit A2-0332).
+    canadian_issuer = sorted({
+        str(t.get("symbol")) for t in txs
+        if str(t.get("issuer_country") or "").upper() == "CA"
+        and t.get("symbol") and t.get("symbol") not in user_keys
+        and classify_country(str(t.get("symbol")), overrides)
+        not in (None, CRYPTO)})
+    if canadian_issuer:
+        print(f"warning: {len(canadian_issuer)} symbol(s) on a foreign "
+              f"listing carry a Canadian ISIN ({', '.join(canadian_issuer[:6])}"
+              f"{' ...' if len(canadian_issuer) > 6 else ''}): shares of a "
+              f"Canadian corporation are not specified foreign property, "
+              f"but they are counted here by their listing — add "
+              f"`SYMBOL CA` to t1135.map once confirmed.", file=sys.stderr)
     deferred: Dict[str, float] = {}
     if not full_history:
         # Year-only mode: a loss denied in an earlier year whose
@@ -1011,6 +1093,7 @@ def build_report(base_paths: List[Path], gains_paths: List[Path], year: int,
         "year_complete": year_complete,
         "as_of": as_of,
         "expired_options_held": expired,
+        "canadian_issuer_symbols": canadian_issuer,
     }
 
 
@@ -1060,6 +1143,13 @@ def render_report(rep: Dict[str, Any]) -> str:
                      f"expiry date ({', '.join(_ex[:6])}"
                      f"{' ...' if len(_ex) > 6 else ''}) are counted at "
                      f"cost — the books lack their expiry/exercise row.")
+    if rep.get("canadian_issuer_symbols"):
+        _ci = rep["canadian_issuer_symbols"]
+        lines.append(f"  !! {len(_ci)} symbol(s) with a Canadian ISIN on a "
+                     f"foreign listing are counted as foreign property "
+                     f"({', '.join(_ci[:6])}{' ...' if len(_ci) > 6 else ''})"
+                     f" — a Canadian corporation's shares are not; map "
+                     f"them `SYMBOL CA` in t1135.map once confirmed.")
     _dw = sum((rep.get("deferred_wash_not_in_cost") or {}).values())
     if _dw:
         lines.append(f"  !! cost amounts EXCLUDE {_money(_dw)} {cur} of "
@@ -1261,12 +1351,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     overrides = load_overrides(args.map)
     if args.base_currency.upper() != "CAD":
-        # The wrapper says so for a non-CAD project; the stand-alone
-        # tool took the flag as a bare label (S052-17).
-        print(f"taxjson-t1135: warning: --base-currency "
-              f"{args.base_currency.upper()}: the T1135 thresholds are in "
-              f"CAD — the amounts are compared with them as if they were "
-              f"CAD.", file=sys.stderr)
+        # The thresholds are CAD amounts (ITA s.233.3): a USD book
+        # tested against "100,000 USD" read 80,000 USD (about 110,000
+        # CAD) as 'no T1135 required' at exit 0 (S052-17, re-audit
+        # A2-0660). Refused, never relabelled.
+        print(f"taxjson-t1135: --base-currency "
+              f"{args.base_currency.upper()}: the T1135 test is in CAD "
+              f"(ITA s.233.3) — pass books converted to CAD (a Canada "
+              f"project's work/<account>_base.json; `taxjson t1135` "
+              f"does).", file=sys.stderr)
+        return 2
     try:
         rep = build_report(args.files, args.gains, args.year, overrides,
                            args.base_currency.upper(),

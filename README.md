@@ -403,6 +403,9 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # paid = [{ date = "2026-03-16", amount = 15000 },
 #          { date = "2026-05-20", amount = 12000,
 #            note = "prior-year refund transferred to instalments" }]
+#                              # a December prepayment of THIS year's
+#                              # instalments needs tax_year = <year> on
+#                              # its row (credited from January 1)
 
 [accounts.margin]              # one section per folder under inputs/
 type = "taxable"               # REQUIRED: taxable | sheltered
@@ -705,7 +708,8 @@ its printed (cent-rounded) rows.
   "DIST ON ...", RBC activity "Distribution") on a Canadian issuer (a
   Canadian listing, or a CA ISIN) is dated by the record date it prints
   ("REC 12/30/24 PAY 01/06/25" is 2024 income) — in `divs-sum`, the .sum,
-  the estimate and instalments. Split-share corporations (BK, DF, DFN, DGS,
+  the estimate, instalments and the tax-year window of the `divs` / `roc` /
+  `events` views (the row still shows its pay date). Split-share corporations (BK, DF, DFN, DGS,
   ENS, FFN, FTN, GDV, LBS, LCS, LFE, PDV, PIC, PWI, SBC, SBN, WFS, XMF,
   XTD, YCM, and any row whose description says "SPLIT CORP") also say
   "Distribution" but are corporations: dated when paid, like any issuer
@@ -979,7 +983,8 @@ not listing exchange — is what T1135 cares about, interlisted names can need a
 case-insensitively; an override follows the symbol through a ticker change,
 and one that matches nothing in the books is warned about; a COUNTRY that is
 neither an ISO 3166 alpha-3 code nor CA/CAN/CANADA/EXCLUDE is ignored with a
-did-you-mean warning):
+did-you-mean warning). A foreign listing whose rows carry a Canadian ISIN
+(IB stamps the issuer's country) is named in a warning until you map it:
 
 ```
 # t1135.map — SYMBOL COUNTRY (ISO-3 code, or CA/EXCLUDE for "not foreign")
@@ -1008,7 +1013,12 @@ FILE` writes importable rows, `--json` the raw report.
   gain in (h) = (d) − (e) + (g) (each row foots on its rounded cents, so
   the part totals and the TXF agree) — split into Part I (short-term) / Part II
   (long-term) with the Schedule D totals per part. Pick the 8949 box (A–F)
-  yourself from whether the broker reported basis on your 1099-B.
+  yourself from whether the broker reported basis on your 1099-B. §1256
+  contracts — futures, options on futures and broad-based index options
+  (SPX, XSP, NDX, RUT, VIX and their weekly roots) — are **not** on Form
+  8949: they are kept out of the rows, the totals and the TXF, and listed
+  in a **FORM 6781 BY HAND** section with their P/L (the 60/40 split and
+  year-end marking are not modelled). Cells are rounded half-up to the cent.
 - **`--form schedule3`** (Canada): per-security rows — units, acquisition
   year, proceeds of disposition, ACB, outlays, gain(loss) — routed to the
   Part 3 line for the property type: **line 4** publicly traded shares and
@@ -1035,12 +1045,23 @@ FILE` writes importable rows, `--json` the raw report.
   proceeds and the cover as ACB (a close-timing write for a net debit: no
   proceeds, the debit as an outlay; under grant timing it shows its premium
   and its commission). Units are the contracts or shares disposed of, at
-  full precision: under grant timing a written option and its buy-back
-  count once.
+  full precision: under grant timing a written option and its buy-back in
+  the same year count once; a buy-back of an earlier year's write (grant or
+  close timing) is a disposition of its own. A net commission rebate (a
+  negative IB or Questrade commission) is not an outlay: it stays netted in
+  the proceeds, so the OUTLAYS column is never negative. Each cell is
+  rounded half-up to the cent and the ACB is the row's footing residual,
+  never below 0.00.
 
-Both refuse rows in another currency than the export's (the native
-`*_raw_gains.json` beside the converted file) and a file that is not a gains
-file (no `transactions` list, or a pre-gains stage file). `--csv` is written
+Both refuse rows in another currency than the return's (CAD for Schedule 3,
+USD for 8949/TXF — the native `*_raw_gains.json` beside the converted file),
+a `--base-currency` other than that currency, and a file that is not a gains
+file (no `transactions` list, or a pre-gains stage file); a disposition with
+no currency is warned about. A row whose date is not a string or whose money
+field is not a number is refused with the file and row named (every report
+reader checks work/ rows this way). Before the tax year has ended the report
+says the figures are year-to-date (as `sum`'s FOR THE RETURN block does), and
+both print the per-row rounding note `sum` prints. `--csv` is written
 through a temporary file, so a failed write leaves the previous CSV intact.
 
 Both read the wash-adjusted gains (the allowed numbers a return reports).
@@ -1062,15 +1083,22 @@ lot method vs FIFO). Slip headers are matched loosely (`Security`/`Box 16`/
 `Box 21`/`Box 20` T5008 spellings work as-is; so do `Symbol`/`Quantity`/
 `Proceeds`/`Cost or other basis`, the T5008 box headings and French
 headings too; an exact heading wins and two columns that both look like
-proceeds are refused as ambiguous). A slip symbol without a market suffix
+one amount — `Proceeds` and `Proceeds of disposition`, `Quantity` and
+`Qty` — are refused as ambiguous; a ticker column beside a security-name
+column is fine). A slip symbol without a market suffix
 matches the computed listing of that root (slip `AAPL` ↔ computed `AAPL.US`);
 when the books hold two listings of one root (a CDR `AMZN.TO` and `AMZN.US`)
 the row is `AMBIGUOUS_LISTING` until the slip CSV names the suffix. Broker
-option descriptions (`XYZ 21MAR25 50 C`, `CALL XYZ03/21/25 50`), share
+option descriptions (`XYZ 21MAR25 50 C`, `CALL XYZ03/21/25 50`, a strike
+with thousands separators `5,000.00`), share
 classes (`BRK B`) and the project's `ticker.map` renames (slip `KGC` ↔ books
 `K.TO`) are matched. A blank proceeds cell beside a cost is nil proceeds (an
 option that expired worthless); a worthless expiry with no slip row is
-`NO_SLIP_EXPECTED`, not a failure. A slip row with amounts but no symbol, or
+`NO_SLIP_EXPECTED`, not a failure. Under grant timing an option written this
+year and still open at the year end is `NO_SLIP_EXPECTED` too (the premium is
+reported in the write year, the broker's slip comes in the close year), and a
+close-year slip whose proceeds include an earlier year's write premium
+reconciles with a note. A slip row with amounts but no symbol, or
 an unreadable quantity, is counted as not reconciled. Net-of-commission slips
 are detected and noted. Slips aggregated per type code (IBKR's SHS/OPC/FUT
 rows, "Various") cannot be compared — transcribe a per-security CSV. Books

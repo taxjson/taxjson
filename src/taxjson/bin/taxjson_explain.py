@@ -40,7 +40,9 @@ from taxjson.lib.core import get_tax_rules
 from taxjson.lib.json_input import load_transactions_or_exit
 from taxjson.lib.country import (add_country_argument, default_tax_date,
                                  refuse_foreign_flags)
-from taxjson.lib.pipeline import load_stdin_transactions, prepare_books
+from taxjson.lib.pipeline import (GainsRequest, apply_roc_record_dates,
+                                  engine_options, load_stdin_transactions,
+                                  prepare_books)
 from taxjson.lib.trace_format import render_gain_block
 
 
@@ -125,6 +127,21 @@ def parse_args():
     parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR")
     parser.add_argument("--option-buyback-wash", action="store_true")
+    parser.add_argument(
+        "--corporate-distribution", action="append", default=None,
+        metavar="SYMBOL",
+        help="Canada: as in taxjson-gains ([settings] "
+             "corporate_distributions) — the same income dating the "
+             "books used.")
+    parser.add_argument(
+        "--ric-january-dividend", action="append", default=None,
+        metavar="\"SYMBOL [YYYY-01-DD]\"",
+        help="USA: as in taxjson-gains ([settings] "
+             "ric_january_dividends).")
+    parser.add_argument(
+        "--per-account-basis", action="store_true", default=None,
+        help="USA: FIFO basis pools per account on a merged book — the "
+             "default for a US book, as in taxjson-gains.")
     parser.add_argument(
         "--no-wash", action="store_true",
         help="Skip superficial-loss / wash-sale detection. Use it for a "
@@ -292,14 +309,29 @@ def main():
                             else None),
         phantom_hint=False)
 
+    # The income re-dating and engine options run_gains applies (one
+    # builder in lib/pipeline): the trust ROC record date
+    # (CA-INC-DATE-ROC-TRUST), the grant-timing since-year on the
+    # tax-date basis, US per-account FIFO — a trace on other inputs
+    # contradicted the books it explains (re-audit A2-0033, A2-0314,
+    # A2-0315).
+    try:
+        req = GainsRequest(
+            country=args.country, tax_date=args.tax_date,
+            per_account_basis=args.per_account_basis,
+            option_premium_timing=args.option_premium_timing,
+            option_grant_since=args.option_grant_since,
+            option_buyback_loss_superficial=args.option_buyback_wash,
+            corporate_distributions=tuple(
+                args.corporate_distribution or ()),
+            ric_january_dividends=tuple(args.ric_january_dividend or ()))
+    except ValueError as e:
+        sys.exit(f"taxjson-explain: error: {e}")
+    apply_roc_record_dates(transactions, req)
     rules = get_tax_rules(args.country)
     from taxjson.lib.core import AmbiguousTransferDateError
     try:
-        _kw = {}
-        if args.country == "canada":
-            _kw = {"option_premium_timing": args.option_premium_timing,
-                   "option_grant_since": args.option_grant_since,
-                   "option_buyback_loss_superficial": args.option_buyback_wash}
+        _kw = engine_options(req)
         results = rules.compute_gains(
             transactions,
             sheltered_transactions=sheltered,
