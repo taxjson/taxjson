@@ -464,5 +464,50 @@ class TestEstimateCanadianIssuer(unittest.TestCase):
                                to["grossed_eligible"], places=2)
 
 
+class TestUsEstimateSection1256(unittest.TestCase):
+    """A2-1124: the US estimate says when §1256 P/L (futures, index
+    options) is in its short-term figure — taxed as short-term, the
+    60/40 split not modelled — and its Assumes line says so."""
+
+    def _rows(self, sym, gain):
+        return {"date": "2025-03-03", "date_settle": "2025-03-04",
+                "symbol": sym, "qty": -1, "currency": "USD",
+                "proceeds": 1000.0 + gain, "cost": 1000.0, "gain": gain,
+                "days_held": 10, "term": "SHORT_TERM", "account": "margin",
+                "action": "BUYSELL"}
+
+    @rule("US-FUT-02")
+    def test_futures_pl_named_in_us_estimate(self):
+        rows = [self._rows("F:ESH5", 15000.0),
+                self._rows("AAA.US", 500.0)]
+        with tempfile.TemporaryDirectory() as td:
+            root = _estimate_project(td, rows, country="usa")
+            j = _taxjson(root, "estimate", "--other-income", "100000",
+                         "--json")
+            self.assertEqual(j.returncode, 0, j.stderr[-2000:])
+            est = json.loads(j.stdout)["estimate"]
+            self.assertAlmostEqual(est["section_1256_gain"], 15000.0,
+                                   places=2)
+            self.assertTrue(any("60/40" in n for n in est["notes"]),
+                            est["notes"])
+            t = _taxjson(root, "estimate", "--other-income", "100000")
+            self.assertEqual(t.returncode, 0, t.stderr[-2000:])
+            self.assertIn("§1256", t.stdout)
+            self.assertIn("60/40", t.stdout)
+
+    @rule("US-FUT-02")
+    def test_no_section_1256_no_note(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = _estimate_project(td, [self._rows("AAA.US", 500.0)],
+                                     country="usa")
+            j = _taxjson(root, "estimate", "--other-income", "100000",
+                         "--json")
+            self.assertEqual(j.returncode, 0, j.stderr[-2000:])
+            est = json.loads(j.stdout)["estimate"]
+            self.assertEqual(est.get("section_1256_gain", 0.0), 0.0)
+            self.assertFalse(any("60/40" in n
+                                 for n in est.get("notes") or []))
+
+
 if __name__ == "__main__":
     unittest.main()

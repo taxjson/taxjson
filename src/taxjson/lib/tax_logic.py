@@ -1345,7 +1345,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-RPT-07",
                  "It treats every dividend as qualified, payments in lieu "
                  "and staking as ordinary income, gains with no term as "
-                 "short-term, and a net capital loss as offsetting up to "
+                 "short-term, §1256 P/L as short-term (no 60/40 split; "
+                 "it names the amount), and a net capital loss as "
+                 "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
             Rule("US-EST-NIIT-LOSS",

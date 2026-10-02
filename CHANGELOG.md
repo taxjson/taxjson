@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `estimate` (USA): §1256 P/L (futures, futures options, broad-based
+  index options) is still taxed as short-term, but the estimate now
+  names the amount in a NOTE (`section_1256_gain` in --json) and its
+  Assumes line says the Form 6781 60/40 split is not modelled
+  (re-audit A2-1124).
 - `estimate` (Canada): a dividend or s.260 payment in lieu from a
   Canadian issuer on a US listing (CA ISIN in the books) is an eligible
   dividend, not a foreign one with an assumed 15% credit — the estimate

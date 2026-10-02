@@ -7986,6 +7986,39 @@ def _issuer_is_canadian_by_symbol(cache: Path, acct: str
     return out
 
 
+def _section_1256_gain(files: Dict[str, Path], accounts, year,
+                       settings: Dict[str, Any]) -> float:
+    """US only: the year's realized P/L of §1256 contracts (futures,
+    futures options, broad-based index options — lib/futures.
+    section_1256_kind) in the taxable accounts' gains files. The US
+    estimate taxes it with the short-term gains; this names how much of
+    that figure Form 6781 would split 60/40 (US-FUT-02, US-OPT-04:
+    not modelled; A2-1124)."""
+    from taxjson.lib.futures import section_1256_kind
+    key = ("date" if _tax_date_basis(settings) == "trade"
+           else "date_settle")
+    ystr = str(year or "")
+    total = 0.0
+    for acct in sorted(accounts):
+        p = files.get(acct)
+        if p is None:
+            continue
+        try:
+            data = _read_work_doc(p)
+        except (OSError, ValueError):
+            continue                # the account loop already refused it
+        for t in data.get("transactions", []) or []:
+            if not isinstance(t, dict) or t.get("action", "BUYSELL") in (
+                    "DIVIDEND", "DIVIDEND_IN_LIEU"):
+                continue
+            d = str(t.get(key) or t.get("date") or "")
+            if ystr and not d.startswith(ystr):
+                continue
+            if section_1256_kind(str(t.get("symbol") or "")):
+                total += float(t.get("gain") or 0.0)
+    return total
+
+
 def _box18_into_estimate(root: Path, est: Dict[str, float], accounts,
                          year, foreign_by_acct: Dict[str, float]) -> None:
     """Move the tax year's T5 box 18 capital-gains dividends named in
@@ -8246,6 +8279,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _box18_into_estimate(root, est, set(files) & taxable_accounts,
                              year or (cfg.get("settings") or {}).get("year"),
                              _foreign_by_acct)
+        if _country(cfg.get("settings") or {}) in ("us", "usa"):
+            est["s1256"] = _section_1256_gain(
+                files, set(files) & taxable_accounts,
+                year or (cfg.get("settings") or {}).get("year"),
+                cfg.get("settings") or {})
 
     def _sum_rows(rows: List[Dict[str, Any]]) -> Dict[str, float]:
         # Summed from the DISPLAYED (2dp-rounded) per-account figures,
@@ -9055,6 +9093,17 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                      other_income=other_income,
                      other_losses=other_losses)
     r["st_input"] = round(st_in, 2)
+    s1256 = float(est.get("s1256") or 0.0)
+    r["section_1256_gain"] = round(s1256, 2)
+    if abs(s1256) > 0.005:
+        r.setdefault("notes", []).append(
+            f"{fmt_money(s1256)} of the short-term figure is §1256 P/L "
+            f"(futures, futures options, broad-based index options such "
+            f"as SPX), taxed here as short-term at ordinary rates. Form "
+            f"6781 taxes it 60% long-term / 40% short-term and marks "
+            f"contracts open at year end to market — neither is "
+            f"modelled (the 60/40 split would lower this estimate on a "
+            f"gain).")
     return r
 
 
@@ -9346,7 +9395,9 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         for _n in r.get("notes") or []:
             print(_wrap_note("NOTE: " + _n, indent=""))
         print("Assumes: single filer, standard deduction, all dividends "
-              "QUALIFIED, no foreign tax credit, no state tax; interest "
+              "QUALIFIED, no foreign tax credit, no state tax; §1256 "
+              "contracts (futures, index options) taxed as short-term — "
+              "no 60/40 split or year-end marking (Form 6781); interest "
               "income and the §988 result on foreign currency (`taxjson "
               "fx-cash`) not included.")
 
