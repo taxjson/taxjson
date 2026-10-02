@@ -232,5 +232,84 @@ class TestCanadianVenues(unittest.TestCase):
         self.assertEqual(roots, {'ABC', 'FTN.PR.A'})
 
 
+class TestSchemaFutures(unittest.TestCase):
+    """A2-0302, A2-1082, A2-1087, A2-1089, A2-1088."""
+
+    def _v(self, **kw):
+        from taxjson.lib.brokerages.schema import validate_transactions
+        tx = dict(action='BUYSELL', date='2025-04-01', currency='USD',
+                  quantity=1, net_amount=10.0, price=10.0)
+        tx.update(kw)
+        return validate_transactions([tx])
+
+    def test_every_futures_prefix_may_have_a_negative_price(self):
+        for sym in ('F:CLK0.US', '/CLK0.US', '\\CLK0.US'):
+            with self.subTest(sym=sym):
+                errs, _ = self._v(symbol=sym, price=-5.0, net_amount=2.5,
+                                  multiplier=1000, quantity=-1)
+                self.assertFalse([e for e in errs if 'negative price' in e])
+        from taxjson.bin.taxjson_validate import validate_transactions as V
+        flat = str(V([{'action': 'BUYSELL', 'date': '2020-04-20',
+                       'symbol': '/CLK0.US', 'quantity': 1, 'price': -5.0,
+                       'net_amount': 2.5, 'currency': 'USD'}]))
+        self.assertNotIn('Price is negative', flat)
+
+    def test_negative_price_futures_buy_may_carry_signed_net(self):
+        errs, _ = self._v(symbol='F:CLK0.US', price=-5.0,
+                          net_amount=-4997.5, multiplier=1000)
+        self.assertEqual(errs, [])
+        # A share buy with a negative net is still wrong.
+        errs, _ = self._v(symbol='XYZ.US', net_amount=-10.0)
+        self.assertTrue([e for e in errs if '>= 0' in e])
+
+    def test_undeclared_futures_size_is_not_guessed(self):
+        for sym in ('F:CLK5.US', '/CLK5.US'):
+            errs, warns = self._v(symbol=sym, price=20.0,
+                                  net_amount=20002.37)
+            self.assertEqual((errs, warns), ([], []), sym)
+        # Declared, the check still runs (and is an error).
+        errs, _ = self._v(symbol='F:CLK5.US', price=20.0,
+                          net_amount=2000.0, multiplier=1000)
+        self.assertTrue(errs)
+
+    def test_option_settling_after_expiry_warns(self):
+        _, warns = self._v(symbol='XYZ251231C00050000.US', date='2025-12-31',
+                           date_settle='2026-01-02', price=0.0,
+                           net_amount=0.0)
+        self.assertTrue([w for w in warns if 'after the expiry day' in w])
+        # A trade on the expiry day settles T+1 (CA-DATE-04): not flagged.
+        _, warns = self._v(symbol='XYZ251231C00050000.US', date='2025-12-31',
+                           date_settle='2026-01-02', price=0.5,
+                           net_amount=49.0, quantity=-1)
+        self.assertFalse([w for w in warns if 'expiry' in w])
+        _, warns = self._v(symbol='XYZ251231C00050000.US', date='2025-12-30',
+                           date_settle='2025-12-31', price=0.0,
+                           net_amount=0.0)
+        self.assertFalse([w for w in warns if 'expiry' in w])
+
+    @rule("CA-FX-04")
+    @rule("US-FUT-01")
+    def test_negative_price_buy_books_a_gain_in_both_countries(self):
+        from taxjson.lib.core import TaxTransaction
+        from taxjson.lib.futures import method_for, settle_futures
+
+        def fill(date, qty, price, net):
+            return TaxTransaction(action='BUYSELL', date=date,
+                                  date_settle=date, symbol='F:CLK0.US',
+                                  quantity=qty, price=price,
+                                  net_amount=net, currency='USD',
+                                  fee=2.5, account='m')
+        for country in ('canada', 'usa'):
+            with self.subTest(country=country):
+                rows, _ = settle_futures(
+                    [fill('2020-04-20', 1, -5.0, -4997.5),
+                     fill('2020-04-22', -1, 1.0, 997.5)],
+                    method_for(country))
+                pl = sum(r.net_amount for r in rows if r.quantity < 0)
+                # Paid -4,997.50 (received cash) to open, received
+                # 997.50 to close: +5,995.00, not a 4,000 loss.
+                self.assertAlmostEqual(pl, 5995.0, places=2)
+
+
 if __name__ == '__main__':
     unittest.main()

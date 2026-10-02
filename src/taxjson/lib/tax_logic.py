@@ -414,7 +414,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "is paid to open one, so its notional is never converted. "
                  "Each close's P/L (commissions included, average cost of "
                  "the open contracts) is converted at that closing leg's "
-                 "rate;"),
+                 "rate. A fill at a negative price keeps its signed money "
+                 "(a buy then receives cash: a negative cost);"),
             Rule("CA-FX-05",
                  "Schedule 3 shows a gain as proceeds and a loss as ACB.",
                  cont=True),
@@ -1156,7 +1157,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "or reported. A close's P/L (commissions included) is "
                  "taken first in, first out from the open contracts, and "
                  "a non-USD contract's P/L is converted at the closing "
-                 "leg's rate."),
+                 "leg's rate. A fill at a negative price keeps its signed "
+                 "money (a buy then receives cash: a negative cost)."),
             Rule("US-FUT-02",
                  "Not modelled: §1256 year-end marking to market and the "
                  "60/40 split; report them on Form 6781 by hand.",

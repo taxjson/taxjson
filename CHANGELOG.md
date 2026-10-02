@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Futures at a negative price, and futures schema checks.** A
+  plain-futures buy at a negative price (WTI, April 2020) received cash;
+  its negative net is now accepted by the schema and booked as a
+  negative cost, where the magnitude the schema forced booked the loss
+  as a gain (tax-logic CA-FX-04 / US-FUT-01). The negative-price
+  exemption covers every futures prefix (`/` and `\` as well as `F:`)
+  in the schema and `taxjson-validate`; a futures row with no declared
+  contract size no longer gets a guessed-size ATTENTION (every
+  generic-importer futures row did); and an option expiry row dated
+  after its expiry day is a schema warning (audit A2-0302, A2-1082,
+  A2-1087, A2-1088, A2-1089).
 - **.tt lines spell Canadian listings like the broker parsers.** A .tt
   `ABC.V` (on a CAD line), `ABC.VN`, `ABC.CN`, `ABC.NE` or `FTN.PRA.TO`
   is now `ABC.TO` / `FTN.PR.A.TO`: it used to be its own ACB pool, so a
