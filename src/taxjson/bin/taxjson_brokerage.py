@@ -392,7 +392,8 @@ Examples:
         "--futures-settle", dest="futures_settle",
         choices=("trade", "next_day"), default="trade",
         help=(
-            "IB only: settle date of futures and futures options — "
+            "IB and the generic importer: settle date of futures and "
+            "futures options — "
             "'trade' (default; variation margin settles the P/L daily, so "
             "the disposition is the trade date) or 'next_day' (the "
             "clearing house's premium settlement day)."

@@ -606,3 +606,58 @@ class TestCutShortExport(unittest.TestCase):
         r, txs = _brokerage("coinbase", {"cb.csv": whole})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("line break", r.stderr)
+
+
+class TestWebullAndGenericAccountsThroughBrokerage(unittest.TestCase):
+    """A2-0286 / A2-1085: the parser-side broker accounts reach the
+    books through taxjson-brokerage (hashed) and keep two accounts'
+    identical rows."""
+
+    def _merge(self, brokerage, files):
+        r, txs = _brokerage(brokerage, files)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("unknown field 'broker_account'", r.stderr)
+        accts = {t.get("source_account") for t in txs}
+        self.assertEqual(len(accts), 2, txs)
+        for t in txs:
+            self.assertNotIn("broker_account", t)
+        plan = plan_dedup(txs)
+        return plan, txs
+
+    def test_two_webull_accounts(self):
+        from test_fix_a2_webull import _H25, _BUY
+        def pre(acct):
+            return (",,,,,,,,,\n"
+                    f"Account Number / Numéro de compte:,,,,,,,{acct},,\n"
+                    "Year / Année:,,,,,,,2024,,\n"
+                    "Report / Rapport:,,,,,,,TRADING SUMMARY / RÉSUMÉ DES "
+                    "TRANSACTIONS,,\n")
+        plan, txs = self._merge("webull", {
+            "wb_a.csv": pre("55500001") + _H25 + _BUY,  # pii-ok
+            "wb_b.csv": pre("55500002") + _H25 + _BUY})  # pii-ok
+        self.assertEqual(plan.drop, [])
+
+    def test_two_generic_accounts(self):
+        mapping = ('[columns]\ndate = "Date"\naction = "Type"\n'
+                   'symbol = "Ticker"\nquantity = "Qty"\nprice = "Price"\n'
+                   'amount = "Amount"\naccount = "Acct"\n'
+                   '[actions]\n"BUY" = "buy"\n[defaults]\ncurrency = "CAD"\n')
+        row = "2025-03-03,BUY,XYZ.TO,10,5,-50,{}\n"
+        hdr = "Date,Type,Ticker,Qty,Price,Amount,Acct\n"
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, td, True)
+        (td / "generic.toml").write_text(mapping)
+        files = {"gen_a.csv": hdr + row.format("55500001"),  # pii-ok
+                 "gen_b.csv": hdr + row.format("55500002")}  # pii-ok
+        paths = []
+        for n, b in files.items():
+            (td / n).write_text(b)
+            paths.append(str(td / n))
+        r = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+             "--brokerage", "generic"] + paths,
+            capture_output=True, text=True, env=_env(), cwd=str(td))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        txs = json.loads(r.stdout)["transactions"]
+        self.assertEqual(len({t["source_account"] for t in txs}), 2)
+        self.assertEqual(plan_dedup(txs).drop, [])
