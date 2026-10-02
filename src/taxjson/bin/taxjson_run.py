@@ -5765,6 +5765,20 @@ def _leaps_contracts(root: Path, account: Optional[str],
              + (f" for account {account!r}" if account else "")
              + " — run `taxjson run` first (LEAPS come from the built "
                "books).")
+    # An account with option gains but no native book: its LEAPS
+    # entries are unknowable, and the report silently left them out with rc 0
+    # (audit A2-0117; S040-00 covered an unreadable book only).
+    _no_native = sorted(
+        a for a, gf in resolve_gains_files(cache, account or None).items()
+        if _native_tx_file(cache, a) is None
+        and any(is_option_symbol(str(t.get("symbol") or ""))
+                for t in (_load_json_or_die(gf).get("transactions")
+                          or []) if isinstance(t, dict)))
+    if _no_native:
+        _die(f"no native transaction file (work/<account>_raw.json) for "
+             f"account(s) {', '.join(_no_native)}, which have gains in "
+             f"{cache} — rerun `taxjson run` (this report would "
+             f"otherwise leave their LEAPS out).")
     leaps: set = set()
     qty_by_symbol: Dict[str, float] = {}
     # The native books carry the broker's listing (pre-TOBASE: BCE...US)
@@ -5774,12 +5788,17 @@ def _leaps_contracts(root: Path, account: Optional[str],
     _renames: Dict[str, str] = {}
     _tm = root / "ticker.map"
     if _tm.exists():
+        # Read as `run` reads it: an unreadable map stops the report —
+        # treated as empty, a TOBASE-renamed LEAPS vanished with rc 0
+        # (audit A2-0329, A2-1126).
         try:
-            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+            from taxjson.bin.taxjson_ticker_map import (load_map_file,
                                                         merge_renames)
-            _renames = merge_renames(_parse_map_file(_tm)[0], True)
-        except Exception:                               # noqa: BLE001
-            _renames = {}
+            _renames = merge_renames(load_map_file(_tm), True)
+        except Exception as e:                          # noqa: BLE001
+            _die(f"could not read {_tm}: {e} — fix it (`taxjson run` "
+                 f"refuses it too); the LEAPS report would otherwise "
+                 f"miss the renamed contracts.")
     from taxjson.bin.taxjson_ticker_map import map_symbol as _map_sym
     for acct in accounts:
         native = _native_tx_file(cache, acct)
