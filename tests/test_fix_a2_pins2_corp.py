@@ -247,6 +247,190 @@ class TestIbSpinoffParsing(unittest.TestCase):
                          [(1000.0, 25840.67)], err)
 
 
+class TestCorpActionsCliDedup(unittest.TestCase):
+    """A2-0873: the same IB export given twice is one pending event and
+    one prompt (the dedup runs before the pending list)."""
+
+    def test_same_export_twice_is_one_pending_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = _ib_files(tmp, [_ca(_SPIN, 20, 400)],
+                             [_ca(_SPIN, 20, 400)])
+            pend = Path(tmp) / "pending.json"
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
+                 "--country", "canada", "--brokerage", "ib",
+                 "--manifest", str(Path(tmp) / "manifest.json"),
+                 "--no-input", "--pending-json", str(pend), str(a), str(b)],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL, timeout=120)
+            self.assertEqual(r.returncode, 3, r.stderr)
+            self.assertIn("1 corp-action event(s) need an election",
+                          r.stderr)
+            doc = json.loads(pend.read_text())
+        self.assertEqual(len(doc["pending"]), 1, doc)
+
+
+_QT_H = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
+         "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
+         "Account #,Activity Type,Account Type\n")
+_QT_BUY = ("2026-01-05 12:00:00 AM,2026-01-06 12:00:00 AM,Buy,PARX,"
+           "PARENTCO INC WE ACTED AS AGENT,{q},50,-5000,0,-5000,USD,"
+           "55500001,Trades,Individual margin\n")  # pii-ok
+_QT_DIS = ("2026-06-15 12:00:00 AM,2026-06-15 12:00:00 AM,DIS,SPNC,"
+           "SPINCO INC SPINOFF FROM SEC# X123456 PARENTCO INC REC 06/01/26 "
+           "PAY 06/15/26 ON 100 SHS,{q},0,0,0,0,USD,55500001,Dividends,"
+           "Individual margin\n")  # pii-ok
+
+
+class TestQuestradeCorpStrictNumbers(unittest.TestCase):
+    """A2-0871 (Questrade half), A2-0930, A2-1600: a DIS row's Quantity
+    and the parent-holding lookup's Quantity are parsed strictly — a
+    decimal comma or a garbled cell is refused, never read 10x/100x too
+    large or as 0."""
+
+    def _parse(self, tmp, buy_q='100', dis_q='20'):
+        from taxjson.lib.corp_actions import parse_questrade_corporate_actions
+        p = Path(tmp) / "qt.csv"
+        p.write_text(_QT_H + _QT_BUY.format(q=buy_q) + _QT_DIS.format(q=dis_q))
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            return parse_questrade_corporate_actions(p, 'margin')
+
+    def test_clean_rows_parse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            evs = self._parse(tmp)
+        self.assertEqual([(e.action_type, e.source_symbol, e.qty_received)
+                          for e in evs], [('spinoff', 'PARX.US', 20.0)])
+
+    def test_a2_0871_dis_decimal_comma_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(BrokerageParseError):
+                self._parse(tmp, dis_q='"10,5"')
+
+    def test_a2_1600_parent_lookup_decimal_comma_is_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(BrokerageParseError):
+                self._parse(tmp, buy_q='"100,5"')
+
+    def test_a2_0930_garbled_dis_quantity_is_one_line_rc_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "qt_dis.csv"
+            p.write_text(_QT_H + _QT_BUY.format(q='100')
+                         + _QT_DIS.format(q='5O'))
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_corp_actions",
+                 "--country", "canada", "--brokerage", "questrade",
+                 "--list", str(p)],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL, timeout=120)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("taxjson-corp-actions: error:", r.stderr)
+        self.assertIn("'5O'", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+
+class TestRbcLegOptionStrike(unittest.TestCase):
+    """A2-0542 (S063-15, corp_actions half): an RBC option-adjust leg's
+    thousands-separator strike is read whole, so legs pair in strike
+    order."""
+
+    def test_comma_strike_pairs_in_strike_order(self):
+        from test_fix_m_corp import _rbc_pairing, _rbc_row
+        d = "XCH - CALL .BKNG   06/20/25    {k} BKNG HLDGS ADJ: SPCL DIVD"
+        rows = [
+            _rbc_row("2025-05-15", "Reorganization", "8AAAAA1", "", "-1",
+                     "0", "USD", d.format(k="950")),
+            _rbc_row("2025-05-15", "Reorganization", "8AAAAA2", "", "-1",
+                     "0", "USD", d.format(k="1,000")),
+            _rbc_row("2025-05-15", "Reorganization", "8BBBBB1", "", "1",
+                     "0", "USD", d.format(k="940")),
+            _rbc_row("2025-05-15", "Reorganization", "8BBBBB2", "", "1",
+                     "0", "USD", d.format(k="990")),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            p = _rbc_pairing(tmp, *rows)
+        self.assertEqual(sorted((e.removal.symbol, e.receipt.symbol)
+                                for e in p.events
+                                if e.kind == 'option_adjust'),
+                         [('8AAAAA1', '8BBBBB1'), ('8AAAAA2', '8BBBBB2')])
+
+
+class TestCorpViewsPins(unittest.TestCase):
+    """A2-1534 (`taxjson splits` holdings across two splits) and A2-1538
+    (corp views and the elect re-extraction combine one event held in
+    two broker accounts)."""
+
+    def test_a2_1534_second_split_counts_the_first(self):
+        from taxjson.lib import corp_views
+        rows = [
+            {"action": "BUYSELL", "date": "2025-01-06", "time": "09:30:00",
+             "symbol": "XYZ.TO", "quantity": 100},
+            {"action": "SPLIT", "date": "2025-03-03", "time": "00:00:00",
+             "symbol": "XYZ.TO", "quantity": 2.0},
+            {"action": "SPLIT", "date": "2025-09-02", "time": "00:00:00",
+             "symbol": "XYZ.TO", "quantity": 1 / 3},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "work").mkdir()
+            (root / "work" / "margin_base.json").write_text(
+                json.dumps({"transactions": rows}))
+            out = corp_views.splits(
+                root, {"accounts": {"margin": {"type": "taxable"}}})
+        self.assertEqual([(s["date"], s["held_before"], s["held_after"])
+                          for s in out],
+                         [("2025-03-03", 100.0, 200.0),
+                          ("2025-09-02", 200.0, round(200 / 3, 6))])
+
+    def _rbc_two_accounts(self, root):
+        h = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
+             '"Price","Settlement Date","Account","Value","Currency",'
+             '"Description"\n')
+
+        def rows(acct, q):
+            return (f'"2025-06-11 00:00:00","Reorganization","A012345",'
+                    f'"ABC CORP","-{q}","","2025-06-11 00:00:00","{acct}",'
+                    f'"0","CAD","MGR - ABC CORP MERGER TO DEF CORP 0.5 NEW '
+                    f'= 1 OLD"\n'
+                    f'"2025-06-11 00:00:00","Reorganization","DEF",'
+                    f'"DEF CORP","{q // 2}","","2025-06-11 00:00:00",'
+                    f'"{acct}","0","CAD","MGR - DEF CORP SHRS RECEIVED THRU '
+                    f'MERGER"\n'
+                    f'"2025-03-03 00:00:00","Buy","ABC","ABC CORP","{q}",'
+                    f'"10","2025-03-04 00:00:00","{acct}","-{10 * q}","CAD",'
+                    f'"ABC CORP UNSOLICITED"\n')
+        (root / "work").mkdir()
+        (root / "inputs" / "margin").mkdir(parents=True)
+        (root / "inputs" / "margin" / "rbc_2025.csv").write_text(
+            h + rows("55500001", 100) + rows("55500002", 60))  # pii-ok
+        (root / "work" / "margin_sources.list").write_text(
+            "rbc/rbc_2025.csv\n")
+
+    def test_a2_1538_views_combine_two_broker_accounts(self):
+        from taxjson.lib import corp_views
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._rbc_two_accounts(root)
+            evs = corp_views._current_events(root, "margin")
+        self.assertEqual([(e.qty_disposed, e.qty_received)
+                          for e in evs.values()], [(160.0, 80.0)])
+
+    def test_a2_1538_elect_reextraction_combines_two_broker_accounts(self):
+        from taxjson.bin.taxjson_run import _reextract_pending_entry
+        from taxjson.lib import corp_views
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._rbc_two_accounts(root)
+            (eid,) = corp_views._current_events(root, "margin")
+            ent = _reextract_pending_entry(
+                root / "inputs" / "margin", "margin", "canada",
+                root / "inputs" / "margin" / "manifest.json", eid)
+        self.assertEqual((ent["qty_disposed"], ent["qty_received"]),
+                         (160.0, 80.0))
+
+
 # ============================================== close-year and handoff
 _QT_HEADER = ("Transaction Date,Settlement Date,Action,Symbol,Description,"
               "Quantity,Price,Gross Amount,Commission,Net Amount,Currency,"
