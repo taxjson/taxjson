@@ -2773,7 +2773,7 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
 
     # Broker groups REMOVED from inputs/: their parsed JSON, .diag and
     # corp files would otherwise persist forever — stale .diag lines in
-    # every .sum, dead fees counted by `taxjson-fees --cache`, dead
+    # every .sum, dead fees counted by `taxjson-fees-sum --cache`, dead
     # sources fed to the audit (2026-09 audit).
     _present = {f"{name}_{b}" for b in grouped} \
         | {f"{name}_{b}_corp" for b in grouped} \
@@ -3898,7 +3898,7 @@ def stage_fees(cache: Path, settings: Dict[str, Any], rates: Path,
     cross-broker comparison. Reads the parsed per-broker JSONs in the cache
     (the only place the brokerage tag survives), year-scoped to the tax year."""
     print("==> fees report")
-    # capture_diag=True: taxjson-fees emits FX default-rate fallback and
+    # capture_diag=True: taxjson-fees-sum emits FX default-rate fallback and
     # skipped-file warnings on stderr; persist them to the .diag so a silently
     # wrong rate can't slip through (the report body carries them too).
     _tm = cache.parent / "ticker.map"
@@ -6281,7 +6281,7 @@ def _cannot_write_decisions(path, e: OSError) -> str:
 
 def cmd_crypto_sends(args: argparse.Namespace) -> None:
     """`taxjson crypto-sends`: every outgoing crypto transfer that did
-    not arrive on another of your exchanges, with your decision (self /
+    not arrive in another of your crypto accounts, with your decision (self /
     gift / payment), its fair value and the ready .tt line; --set
     records a decision, --write regenerates inputs/<acct>/crypto_sends.tt."""
     from taxjson.lib import crypto_sends as CS
@@ -6454,15 +6454,15 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
     if _usa:
         # A US donor's gift is not a disposition (the recipient takes
         # over the basis); `gift` is refused (COMMAND_COUNTRY).
-        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
-              "another of your exchanges. A move to your own wallet is "
-              "not a sale (self); a payment is a sale at fair market "
+        print("CRYPTO SENDS — outgoing transfers that did not arrive in "
+              "another of your crypto accounts. A move to your own wallet "
+              "is not a sale (self); a payment is a sale at fair market "
               "value. A gift is not a sale for a US donor: record it as "
               "self.")
     else:
-        print("CRYPTO SENDS — outgoing transfers that did not arrive on "
-              "another of your exchanges. A move to your own wallet is not a "
-              "sale (self); a gift or a payment is a disposition at fair "
+        print("CRYPTO SENDS — outgoing transfers that did not arrive in "
+              "another of your crypto accounts. A move to your own wallet is "
+              "not a sale (self); a gift or a payment is a disposition at fair "
               "market value.")
     fx_by_year: Dict[str, float] = {}
     for acct, adoc in report["accounts"].items():
@@ -9526,6 +9526,19 @@ def cmd_summary(args: argparse.Namespace) -> None:
                              for e in _ents_8949), 2)
     _round_gap = (round(filing_total.get("gain", 0.0) - _engine_gain, 2)
                   if filing_line_rows else 0.0)
+    # The DENIED column (US: the code-W adjustment) has the same per-row
+    # rounding gap; R1-166's headline mismatch was a denied total, and
+    # form-export already names it (A2-0912).
+    _denied_key = "adjustment" if _is_us else "denied"
+    _engine_denied = round(sum(
+        float(e.get("disallowed_amount") or 0.0) for e in _ents_8949
+        # Form 8949 adds back only a positive disallowance (code W).
+        if not _is_us or float(e.get("disallowed_amount") or 0.0) > 1e-9),
+        2)
+    _denied_gap = (round(filing_total.get(_denied_key, 0.0)
+                         - _engine_denied, 2)
+                   if filing_line_rows else 0.0)
+    _denied_label = "adjustment (g)" if _is_us else "denied"
     # FX on foreign cash (s.39(1.1)) is reported on line 15300 too
     # (T4037) but lives outside the engine's dispositions; show the
     # estimate beside the block when the ledger builds, else a pointer.
@@ -9613,6 +9626,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
                            filing_line_rows,
                        "fx_cash": _fx_note,
                        "engine_gain_unrounded": _engine_gain,
+                       "engine_denied_unrounded": _engine_denied,
                        "date_basis": _date_key},
             "sheltered_included": sheltered_included,
             "run_state_problems": _run_state,
@@ -9712,6 +9726,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"files' unrounded total gain is "
                       f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
                       f"RETURN row).")
+            if abs(_denied_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total {_denied_label} is "
+                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
+                      f"the RETURN row).")
         else:
             print(f"FOR THE RETURN — taxable accounts ({_names}), {base} "
                   f"(Schedule 3, tax year {_fyear})")
@@ -9757,6 +9776,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                       f"files' unrounded total gain is "
                       f"{money(_engine_gain)} ({_round_gap:+,.2f} on the "
                       f"RETURN row).")
+            if abs(_denied_gap) >= 0.005:
+                print(f"Rows are rounded to the cent, as filed: the gains "
+                      f"files' unrounded total {_denied_label} is "
+                      f"{money(_engine_denied)} ({_denied_gap:+,.2f} on "
+                      f"the RETURN row).")
             if _fx_note is not None:
                 print(f"FX on foreign cash (s.39(1.1), ESTIMATE — not in "
                       f"the rows above): net {money(_fx_note['net_gain'])}, "
@@ -12429,7 +12453,7 @@ def cmd_t1135(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     gains_argv: List[str] = []
     missing: List[str] = []
-    for name in sorted(taxable):
+    for name in taxable:          # taxjson.toml order (CA-DATE-14)
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -12549,7 +12573,7 @@ def cmd_carryover(args: argparse.Namespace) -> None:
     base_argv: List[str] = []
     crypto_argv: List[str] = []
     missing: List[str] = []
-    for name in sorted(taxable):
+    for name in taxable:          # taxjson.toml order (CA-DATE-14)
         base = cache / f"{name}_base.json"
         if not base.exists():
             missing.append(name)
@@ -13514,6 +13538,15 @@ def _check_filed_years(root: Path, cache: Path,
                 a for a in _taxable_cfg
                 if a not in _snap_accts
                 and (cache / f"{a}_base.json").exists())
+            # Merge in taxjson.toml order, as the run's blended pass
+            # does (CA-DATE-14 / US-DATE-13: rows of different accounts
+            # at one moment follow the accounts' order). The lock's
+            # keys are alphabetical (sort_keys), so its order gave a
+            # false DRIFT right after close-year (A2-0512).
+            if _acct_cfg:
+                _toml_order = {a: i for i, a in enumerate(_acct_cfg)}
+                _snap_accts.sort(key=lambda a: _toml_order.get(
+                    a, len(_toml_order)))
             _crypto = [a for a in _snap_accts
                        if (_acct_cfg.get(a) or {}).get("crypto")]
             _equity = [a for a in _snap_accts if a not in _crypto]
@@ -13749,7 +13782,7 @@ def _explain_wash_sales(root: Path, cache: Path,
         if names is not None and not names:
             _no_wash_checkable("taxjson wash-sales")
         if names is not None:
-            bases = [cache / f"{n}_base.json" for n in sorted(names)
+            bases = [cache / f"{n}_base.json" for n in names
                      if (cache / f"{n}_base.json").exists()]
         else:
             bases = [p for p in sorted(cache.glob("*_base.json"))
@@ -13802,9 +13835,15 @@ def _explain_wash_sales(root: Path, cache: Path,
             if (n != account and bool((_acfg.get(n) or {}).get("crypto"))
                     == _is_c and (cache / f"{n}_base.json").exists()):
                 _by_name[n] = cache / f"{n}_base.json"
-    equity = [p for n, p in sorted(_by_name.items())
+    # Merged in taxjson.toml order, as the pipeline's blend: rows of
+    # different accounts at one moment follow that order (CA-DATE-14 /
+    # US-DATE-13); an alphabetical merge traced another book (A2-1592).
+    _toml_pos = {n: i for i, n in enumerate(_acfg)}
+    _ordered = sorted(_by_name.items(), key=lambda kv: (
+        _toml_pos.get(kv[0], len(_toml_pos)), kv[0]))
+    equity = [p for n, p in _ordered
               if not (_acfg.get(n) or {}).get("crypto")]
-    crypto = [p for n, p in sorted(_by_name.items())
+    crypto = [p for n, p in _ordered
               if (_acfg.get(n) or {}).get("crypto")]
     groups = ([equity] if equity else []) + (
         [crypto] if crypto and _crypto_blend
@@ -13993,7 +14032,7 @@ def _radar_taxable_bases(root: Path, cache: Path,
             return []
         _no_wash_checkable(prog)
     if names is not None:
-        bases = [cache / f"{n}_base.json" for n in sorted(names)
+        bases = [cache / f"{n}_base.json" for n in names
                  if (cache / f"{n}_base.json").exists()]
         # A configured taxable account without books used to vanish
         # from the checks in silence — a sibling's recent buy then read
@@ -14090,10 +14129,13 @@ def cmd_watch(args: argparse.Namespace) -> None:
     bases = _radar_taxable_bases(root, cache, "taxjson watch")
     cmd = _cmd("taxjson-wash-radar") + [
         "--taxable", *[str(b) for b in bases], "--all", "--json"]
-    cmd += _radar_engine_args(
-        bases, root / "phantoms.json",
-        _country(_radar_config(root, "taxjson watch").get(
-            "settings", {})))
+    _wcountry = _country(_radar_config(root, "taxjson watch").get(
+        "settings", {}))
+    cmd += _radar_engine_args(bases, root / "phantoms.json", _wcountry)
+    # A CLEAR is "safe as far as this project's accounts show"
+    # (CA-PLAN-04 / US-PLAN-04, re-audit A2-0909).
+    from taxjson.lib.wash_scope import scope_note as _scope_note
+    _scope = _scope_note(_wcountry)
     sheltered_base = cache / "sheltered_base.json"
     if sheltered_base.exists():
         cmd += ["--sheltered", str(sheltered_base)]
@@ -14168,7 +14210,8 @@ def cmd_watch(args: argparse.Namespace) -> None:
         if getattr(args, "json", False):
             _json_out({"baseline": True, "changes": [],
                        "tracked": len(cur_radar),
-                       "actionable": actionable, "as_of": as_of})
+                       "actionable": actionable, "as_of": as_of,
+                       "scope_note": _scope})
         else:
             print(f"watch: baseline recorded — {len(cur_radar)} "
                   f"ticker(s) tracked, {actionable} actionable "
@@ -14197,10 +14240,12 @@ def cmd_watch(args: argparse.Namespace) -> None:
         _json_out({"baseline": False, "changes": changes,
                    "tracked": len(cur_radar),
                    "actionable": actionable,
-                   "as_of": as_of, "since": state.get("as_of")})
+                   "as_of": as_of, "since": state.get("as_of"),
+                   "scope_note": _scope})
     elif changes:
         print(_watch.render_report(changes, as_of,
-                                   since=state.get("as_of")))
+                                   since=state.get("as_of"),
+                                   scope=_scope))
     if changes and getattr(args, "exit_code", False):
         raise SystemExit(1)
 
@@ -16169,8 +16214,11 @@ def cmd_audit(args: argparse.Namespace) -> None:
                if (c or {}).get("type") == "taxable"}
     if not taxable:
         _die("no taxable accounts in taxjson.toml — nothing to audit.")
-    equity = sorted(n for n, c in taxable.items() if not c.get("crypto"))
-    crypto = sorted(n for n, c in taxable.items() if c.get("crypto"))
+    # taxjson.toml order, as the pipeline's blended pass merges them
+    # (CA-DATE-14 / US-DATE-13); alphabetical failed the tie-out on a
+    # book with same-moment rows in two accounts (A2-1592 sibling).
+    equity = [n for n, c in taxable.items() if not c.get("crypto")]
+    crypto = [n for n, c in taxable.items() if c.get("crypto")]
     _acct = getattr(args, "account", None)
     if _acct:
         if _acct not in taxable:
@@ -16673,11 +16721,11 @@ def cmd_find_missing_history(args: argparse.Namespace) -> None:
 
 
 def cmd_fees_sum(args: argparse.Namespace) -> None:
-    """Convenience wrapper over `taxjson-fees`: trading-fee report by brokerage
+    """Convenience wrapper over `taxjson-fees-sum`: trading-fee report by brokerage
     (converted to the base currency), reading the parsed per-broker JSONs in
     work/. Resolves cache / base currency / rates from the project. Like the
     other roll-ups it takes an optional PERIOD window (30d/6w/…, wired to
-    `taxjson-fees --since`), defaulting to the tax year; a lone non-period
+    `taxjson-fees-sum --since`), defaulting to the tax year; a lone non-period
     positional is read as an account (its per-broker files only)."""
     root = Path(args.dir).resolve()
     cache = root / "work"
@@ -16696,7 +16744,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
     cmd = _cmd("taxjson-fees")
     if account:
         # Scope to one account by feeding only its parsed per-broker files;
-        # non-broker JSONs (…_base.json etc.) are skipped by taxjson-fees.
+        # non-broker JSONs (…_base.json etc.) are skipped by taxjson-fees-sum.
         # Exclude files that actually belong to a LONGER-named sibling
         # account sharing this prefix (accounts `margin` and `margin_us`:
         # the glob "margin_*.json" also matches margin_us_ib.json, leaking
@@ -16730,7 +16778,7 @@ def cmd_fees_sum(args: argparse.Namespace) -> None:
         if year:
             cmd += ["--year", str(year)]
 
-    # taxjson-fees needs --rates alongside --to; pass both only when the rate
+    # taxjson-fees-sum needs --rates alongside --to; pass both only when the rate
     # file exists, else report native per-brokerage amounts (no conversion).
     rates = cache / "to_base.csv"
     if rates.exists():
@@ -16917,9 +16965,15 @@ def _main() -> None:
     # shell umask — SECURITY.md promises it.
     from taxjson.bin._entry import private_umask
     private_umask()
-    p = argparse.ArgumentParser(prog="taxjson",
-                                description=__doc__.splitlines()[0],
-                                formatter_class=_CappedHelpFormatter)
+    p = argparse.ArgumentParser(
+        prog="taxjson", description=__doc__.splitlines()[0],
+        formatter_class=_CappedHelpFormatter,
+        epilog="Exit codes: 0 success; 1 failure, or a command's finding "
+               "(drift, a handoff problem, an unsafe trade, a lint hit); "
+               "2 usage, or a named input or output that cannot be read "
+               "or written; 3 elections required (run --no-input); 130 "
+               "interrupted; 141 stdout closed (| head). `taxjson help "
+               "COMMAND` or `taxjson COMMAND --help` for one command.")
     p.add_argument("-C", "--dir", default=".", help="Project root (default: cwd)")
     try:
         from importlib.metadata import version as _pkg_version
@@ -17037,12 +17091,22 @@ def _main() -> None:
 
     p_csend = sub.add_parser(
         "crypto-sends",
-        help="Crypto withdrawals/sends that did not arrive on another of "
-             "your exchanges: decide self (own wallet) / gift "
-             "(Canada only) / payment, "
-             "see the fair value and the .tt BUYSELL line; --write "
-             "generates inputs/<acct>/crypto_sends.tt. Stablecoins get "
-             "the currency-gain calculation instead of a sale line.")
+        help="Crypto withdrawals/sends that did not arrive in another of "
+             "your crypto accounts: decide self (own wallet) / gift "
+             "(Canada only) / payment, see the fair value and the .tt "
+             "BUYSELL line; --write generates inputs/<acct>/crypto_sends.tt. "
+             "Stablecoins get the currency-gain calculation instead of a "
+             "sale line.",
+        description="Crypto withdrawals/sends that did not arrive in "
+                    "another of your crypto accounts. A send is paired "
+                    "with an arrival of the same coin on another "
+                    "exchange, or on the same exchange in another "
+                    "account, from 10 minutes before to 3 days after the "
+                    "send, losing at most 10% to the network fee; a "
+                    "paired send is your own move. Decide each unpaired "
+                    "send: self (own wallet) / gift (Canada only) / "
+                    "payment; --write generates "
+                    "inputs/<acct>/crypto_sends.tt.")
     p_csend.add_argument("account", nargs="?",
                          help="Crypto account (default: all)")
     p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
