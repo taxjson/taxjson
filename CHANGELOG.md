@@ -19,6 +19,21 @@
   reaches a same-moment sale listed after the replacement purchase
   (A2-0555). tax-logic CA-SL-08/09/10 state it.
 
+- **An option assignment's premium goes to its own stock leg (both
+  countries).** The premium ledger used to pair an assignment with the
+  first marked stock leg within 7 days, or with whichever option was
+  staged first: a plain (IB/RBC) assignment next to a Webull marked leg
+  took the other assignment's premium and the other premium was lost;
+  a stock leg dated a day before its option row dropped the premium
+  from every year; same-moment assignments swapped premiums by row
+  order; and a x10 mini option was sized at 100 shares, so one of two
+  mini assignments was never folded. Each assignment is now paired by
+  identity (same account and underlying, the delivered quantity at the
+  declared contract size, the strike as the leg's price, a leg dated up
+  to 3 days before or 7 days after the option row), and the
+  "unconsumed" warning names that window instead of saying the leg
+  never arrived. tax-logic CA-OPT-08 / US-OPT-05 (audit A2-0050,
+  A2-0051, A2-0052, A2-0195, A2-0196, A2-0203).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

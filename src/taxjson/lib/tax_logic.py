@@ -606,6 +606,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Exercise or assignment: the premium folds into the "
                  "shares' cost or proceeds (s.49(3) for a call, s.49(3.1) "
                  "for a put; the grant year is amended under s.49(4))."),
+            Rule("CA-OPT-08",
+                 "Each assignment's premium goes to its own stock leg: the "
+                 "same account and underlying, the delivered quantity "
+                 "(contracts x the declared contract size, else 100; one "
+                 "per futures option), priced at the strike, dated up to 3 "
+                 "days before or 7 days after the option row. Several "
+                 "assignments at one moment are told apart by strike, "
+                 "never by row order.", cont=True),
             Rule("CA-OPT-07",
                  "If the premium's year was already filed, `taxjson "
                  "option-boundary` flags the T1-ADJ.", cont=True),
@@ -1145,6 +1153,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-OPT-02",
                  "Exercise or assignment folds the premium into the "
                  "stock's basis or proceeds.", cont=True),
+            Rule("US-OPT-05",
+                 "Each assignment's premium goes to its own stock leg: the "
+                 "same account and underlying, the delivered quantity "
+                 "(contracts x the declared contract size, else 100; one "
+                 "per futures option), priced at the strike, dated up to 3 "
+                 "days before or 7 days after the option row. Several "
+                 "assignments at one moment are told apart by strike, "
+                 "never by row order.", cont=True),
             Rule("US-OPT-03", "Cash-settled options realize on the option.",
                  cont=True),
             Rule("US-OPT-04",
