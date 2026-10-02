@@ -43,7 +43,10 @@ CACHE: ~/.currency_price_cache.json. The legacy Yahoo entries keep their
 `PAIR-YYYY-MM-DD` keys (forward-filled calendar dates); Bank of Canada
 observations live under `_boc`, and `_coverage` records the date range
 each source has been asked for (so a range with no data — Yahoo before
-its history starts — is not re-requested every run). Older taxjson
+its history starts — is not re-requested every run). Only a complete
+answer is recorded: an empty answer counts as "no data" only when the
+source answers for the dates after it, and an answer cut off before the
+range end records the dates it reached (the rest is asked again). Older taxjson
 versions read the file unchanged. A series the Valet API definitively
 reports as not found ({"message": "Series FX<CUR>CAD not found."}) is
 marked `not_published` with the date it was seen and asked again after
@@ -97,6 +100,11 @@ DEFAULT_START = "2000-01-01"
 MAX_FILL_DAYS = 7                   # longest weekend/holiday forward-fill
 TAIL_REFETCH_DAYS = 7               # re-ask BoC for the last week (late posts)
 SUSPECT_RECHECK_DAYS = 14           # re-ask an empty/truncated BoC answer
+# An empty Bank answer for a range is the truth ("the series stopped",
+# RUB since 2022) only when the series was already silent this long
+# before the range. A shorter silence may itself be the product of an
+# earlier degraded answer (re-audit A2-0393), so it is re-asked.
+STOPPED_SERIES_DAYS = 45
 VALET_URL = ("https://www.bankofcanada.ca/valet/observations/"
              "{series}/json?start_date={start}&end_date={end}")
 # Currencies with a Valet daily series FX<CUR>CAD (group FX_RATES_DAILY).
@@ -108,6 +116,11 @@ BOC_CURRENCIES = frozenset({
 
 _CCY_RE = re.compile(r"^[A-Z]{3}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class CacheProblem(str):
+    """An entry of build_rates' `errors` that is a damaged cache value,
+    not a failed download (printed with its own wording)."""
 
 
 class SeriesNotFound(Exception):
@@ -157,14 +170,11 @@ def load_cache():
 def save_cache(cache_data):
     # tmp + os.replace (repo standard): a kill mid-dump must not leave
     # a truncated cache that the next run silently discards.
-    tmp = CACHE_FILE + ".part"
-    try:
-        with open(tmp, 'w') as f:
-            json.dump(cache_data, f, indent=2)
-        os.replace(tmp, CACHE_FILE)
-    except OSError as exc:
-        print(f"{PROG}: warning: could not write {CACHE_FILE}: {exc}",
-              file=sys.stderr)
+    # A unique temp file renamed into place under a lock: two projects'
+    # runs no longer share one `.part` name (re-audit A2-0233). Not
+    # merged: this run may have dropped a damaged entry on purpose.
+    from taxjson.lib.json_cache import save_json_cache
+    save_json_cache(CACHE_FILE, cache_data, prog=PROG, indent=2)
 
 
 # ------------------------------------------------------------ date helpers
@@ -303,6 +313,22 @@ def _add_coverage(cache: dict, key: str, lo: str, hi: str) -> None:
     cache.setdefault("_coverage", {})[key] = _merge(cov)
 
 
+def _uncover(cache: dict, key: str, d: str) -> None:
+    """Remove date `d` from `key`'s coverage (asked again next fetch)."""
+    if key not in (cache.get("_coverage") or {}):
+        return
+    out: List[List[str]] = []
+    for lo, hi in _coverage(cache, key):
+        if lo <= d <= hi:
+            if lo < d:
+                out.append([lo, _shift(d, -1)])
+            if d < hi:
+                out.append([_shift(d, 1), hi])
+        else:
+            out.append([lo, hi])
+    cache["_coverage"][key] = out
+
+
 def _missing_ranges(cov: List[List[str]], start: str,
                     end: str) -> List[Tuple[str, str]]:
     """Sub-ranges of [start, end] outside every covered interval."""
@@ -437,7 +463,14 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
     ranges.sort()
     yesterday = _shift(today, -1)
     errors: List[str] = []
-    for a, b in ranges:
+    asked: set = set()
+    i = 0
+    while i < len(ranges):
+        a, b = ranges[i]
+        i += 1
+        if (a, b) in asked:
+            continue
+        asked.add((a, b))
         try:
             got = fetch(currency, a, b)
         except SeriesNotFound:
@@ -457,6 +490,19 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
             blk.pop("not_published_checked", None)
             had_marker = dated_marker = False
         known_last = max(blk["obs"]) if blk["obs"] else None
+        if got:
+            # The series answers again. A gap longer than a holiday
+            # between the cached observations and this answer, inside
+            # a range already recorded as covered, was left by an
+            # earlier empty or degraded answer (re-audit A2-0393): it is
+            # asked again now. An empty re-ask becomes a suspect below.
+            first = min(got)
+            prev = _prior(sorted(blk["obs"]), _shift(first, -1))
+            if prev and _days(prev, first) > MAX_FILL_DAYS + 1:
+                ha, hb = max(_shift(prev, 1), lo), _shift(first, -1)
+                if ha <= hb and not _missing_ranges(cov, ha, hb) \
+                        and (ha, hb) not in asked:
+                    ranges.append((ha, hb))
         blk["obs"].update(got)
         # Never mark today (or later) covered: today's rate is posted
         # late afternoon ET, so it is re-asked on the next run.
@@ -476,8 +522,14 @@ def refresh_boc(cache: dict, currency: str, start: str, end: str,
         # observation is more than a week before `a`) has stopped: an
         # empty answer there is expected, not suspect.
         last = max(got) if got else _shift(a, -1)
+        # Stopped: silent for weeks before this range and nothing cached
+        # after it. A silence of a few weeks may be an earlier degraded
+        # answer, and a series with observations after the range is
+        # alive (re-audit A2-0393: a second empty answer used to read as
+        # "stopped" and its dates stayed without a Bank rate for good).
         stopped = (known_last is not None and not got
-                   and _days(known_last, a) > MAX_FILL_DAYS)
+                   and _days(known_last, a) > STOPPED_SERIES_DAYS
+                   and not any(d > b for d in blk["obs"]))
         _drop_suspects(blk, a, hi)
         if _days(last, hi) > MAX_FILL_DAYS and not stopped:
             tail_a = max(a, _shift(last, 1))
@@ -521,6 +573,18 @@ def refresh_boc_noon(cache: dict, currency: str, start: str, end: str,
         if not got:
             continue                      # nothing to cache; asked again
         blk["obs"].update(got)
+        # The series is closed and every currency in NOON_SERIES runs to
+        # April 2017, so an answer that stops more than a holiday short
+        # of the range end was cut off: only the dates it reached are
+        # recorded, and the rest is asked again (re-audit A2-0393 — the
+        # whole range was recorded and never re-asked).
+        last = max(got)
+        if _days(last, b) > MAX_FILL_DAYS:
+            _add_coverage(cache, key, a, last)
+            errors.append(f"Bank of Canada noon {currency}CAD {a}..{b}: "
+                          f"the answer stops at {last} (cut off?) — "
+                          f"the rest is asked again on the next run")
+            continue
         _add_coverage(cache, key, a, b)
     return errors
 
@@ -545,13 +609,16 @@ def refresh_yahoo(cache: dict, pair: str, ranges: List[Tuple[str, str]],
             errors.append(f"Yahoo Finance {ticker} {a}..{b}: {exc}")
             continue
         existing = _yahoo_obs(cache, pair)
-        if not got and not any(d > b for d in existing):
+        if not got and not _yahoo_history_starts_later(
+                fetch, ticker, b, existing):
             # yfinance swallows a failed download (rate limit, network)
             # into an empty frame. Remember a range as "asked, no data"
-            # only when the source is known to have data AFTER it (its
-            # history simply starts later); otherwise it is a failure
-            # for this run, asked again next run (audit S055-02 — one
-            # hiccup used to leave the range unrated forever).
+            # only when the source, asked NOW, answers for the dates
+            # after it (its history simply starts later); otherwise it
+            # is a failure for this run, asked again next run (audit
+            # S055-02; re-audit A2-0136 — later dates already in the
+            # cache used to count as that proof, so a failed download
+            # was remembered as "no data" for good).
             errors.append(f"Yahoo Finance {ticker} {a}..{b}: no data "
                           f"returned (download failed?)")
             continue
@@ -574,8 +641,37 @@ def refresh_yahoo(cache: dict, pair: str, ranges: List[Tuple[str, str]],
             key = f"yahoo:{pair}"
             if key not in (cache.get("_coverage") or {}):
                 cache.setdefault("_coverage", {})[key] = cov
+            # An answer that stops more than a holiday short of the
+            # range end was cut off: record only the dates it reached
+            # and ask for the rest again (re-audit A2-0393). An answer
+            # that STARTS late is the source's history starting later.
+            if got and _days(max(got), hi) > MAX_FILL_DAYS:
+                last = max(got)
+                _add_coverage(cache, key, a, last)
+                errors.append(f"Yahoo Finance {ticker} {a}..{b}: the "
+                              f"answer stops at {last} (cut off?) — the "
+                              f"rest is asked again on the next run")
+                continue
             _add_coverage(cache, key, a, hi)
     return errors
+
+
+def _yahoo_history_starts_later(fetch, ticker: str, b: str,
+                                existing: Dict[str, float]) -> bool:
+    """After an empty answer for a range ending `b`: whether the source
+    has data after it RIGHT NOW (one probe up to the first cached
+    observation after `b`). A working source with nothing in the range
+    means its history starts later; a probe that also comes back empty
+    (or fails) means the download failed."""
+    later = sorted(d for d in existing if d > b)
+    if not later:
+        return False
+    try:
+        probe = fetch(ticker, _shift(b, 1),
+                      max(later[0], _shift(b, MAX_FILL_DAYS)))
+    except Exception:
+        return False
+    return bool(probe)
 
 
 # ------------------------------------------------------------ emission
@@ -721,6 +817,62 @@ def _not_published_note(cache: dict, from_curr: str,
             f"Bank's rate, the rest use Yahoo Finance {from_curr}CAD=X.")
 
 
+def _good_rate(v) -> bool:
+    """A cached rate is a positive finite number (a string or a float;
+    never a bool, list or text such as "1,3316")."""
+    if isinstance(v, bool) or not isinstance(v, (str, int, float)):
+        return False
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return f > 0 and f != float("inf")      # NaN fails `f > 0`
+
+
+def _drop_bad_obs(cache: dict, pair: str, offline: bool) -> List[str]:
+    """Remove cached observations for `pair` that are not a positive
+    finite number, and the coverage of their dates (an online run asks
+    the source again). One CacheProblem per bad value, naming the cache
+    file and the date (re-audit A2-1212 — a value such as "abc" was
+    copied verbatim into the rates file, and the run then blamed the
+    config: "no rates at all for USD")."""
+    out: List[str] = []
+    then = ("that date has no row this run (TAXJSON_OFFLINE) and is asked "
+            "for again online" if offline else "that date is asked for again")
+    blocks = (("_boc", f"boc:{pair}", "Bank of Canada"),
+              ("_boc_noon", f"boc_noon:{pair}", "Bank of Canada noon"))
+    for top, key, label in blocks:
+        blk = (cache.get(top) or {}).get(pair)
+        obs = blk.get("obs") if isinstance(blk, dict) else None
+        if not isinstance(obs, dict):
+            continue
+        for d in sorted(obs):
+            if _good_rate(obs[d]):
+                continue
+            out.append(CacheProblem(
+                f"{CACHE_FILE} holds a {label} {pair} rate for {d} that "
+                f"is not a positive number ({obs[d]!r}) — dropped; "
+                f"{then}."))
+            del obs[d]
+            if _DATE_RE.match(str(d)):
+                _uncover(cache, key, d)
+    pre = f"{pair}-"
+    for k in sorted(k for k in cache if isinstance(k, str)
+                    and k.startswith(pre) and _DATE_RE.match(k[len(pre):])):
+        if _good_rate(cache[k]):
+            continue
+        d = k[len(pre):]
+        out.append(CacheProblem(
+            f"{CACHE_FILE} holds a Yahoo {pair} rate for {d} that is not "
+            f"a positive number ({cache[k]!r}) — dropped; {then}."))
+        if f"yahoo:{pair}" not in (cache.get("_coverage") or {}):
+            cache.setdefault("_coverage", {})[f"yahoo:{pair}"] = \
+                _yahoo_coverage(cache, pair)
+        del cache[k]
+        _uncover(cache, f"yahoo:{pair}", d)
+    return out
+
+
 def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
                 today: Optional[str] = None, offline: bool = False,
                 fetch_boc_fn: Optional[Callable] = None,
@@ -735,6 +887,7 @@ def build_rates(from_curr: str, to_curr: str, start: str, end: str, *,
     errors: List[str] = []
     notes: List[str] = []
     pair = f"{from_curr}{to_curr}"
+    errors += _drop_bad_obs(cache, pair, offline)
     if offline:
         notes.append("TAXJSON_OFFLINE is set — using cached rates only "
                      "(no download); a transaction whose date has no "
@@ -851,6 +1004,9 @@ def main(argv=None):
     for n in notes:
         print(f"{PROG}: note: {n}", file=sys.stderr)
     for e in errors:
+        if isinstance(e, CacheProblem):
+            print(f"{PROG}: warning: {e}", file=sys.stderr)
+            continue
         print(f"{PROG}: warning: download failed — {e}; dates it would "
               f"have covered have no rate this run.", file=sys.stderr)
     print(f"{PROG}: note: FX {from_curr}→{to_curr}: {summarize(rows)}",

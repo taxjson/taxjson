@@ -41,15 +41,20 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### fx-cash: cash folded into a corporate-action sale leg is not ledgered
 - **Where:** `src/taxjson/bin/taxjson_fx_cash.py` — `_non_cash`.
-- **Current behavior:** rows emitted by the corp-actions stage (`corp_event_id` set: share-for-share mergers, taxable exchanges at FMV, spin-off ACB allocations) move no foreign cash and are left out of the s.39(1.1) ledger; so are crypto-for-crypto legs (Kraken swaps, Coinbase Convert) and staking rewards paid in a coin. A standalone cash-in-lieu leg is ledgered. Cash-in-lieu or §356 boot FOLDED into a taxable exchange's sale leg (`_emit_taxable_exchange`, `_emit_boot_exchange`) is not — the row does not say how much of its proceeds was cash. A cash takeover is a sale the broker parser books and is ledgered normally.
+- **Current behavior:** rows emitted by the corp-actions stage (`corp_event_id` set: share-for-share mergers, taxable exchanges at FMV, spin-off ACB allocations) move no foreign cash and are left out of the s.39(1.1) ledger; so are crypto-for-crypto legs (Kraken swaps, Coinbase Convert and Advanced Trade on a crypto-quoted pair), Kraken fees paid in a coin, and staking rewards paid in a coin (a reward in any USD stablecoin, PYUSD and GUSD included, is US-dollar cash in a Canada book). A standalone cash-in-lieu leg is ledgered. Cash-in-lieu or §356 boot FOLDED into a taxable exchange's sale leg (`_emit_taxable_exchange`, `_emit_boot_exchange`) is not — the row does not say how much of its proceeds was cash. A cash takeover is a sale the broker parser books and is ledgered normally.
 - **Evidence / work needed:** emit the cash part of a taxable exchange as its own leg (or a `cash_amount` field) so the ledger can count it; the amounts are fractional-share dust in practice.
 
 ### Kraken fiat conversions are not modeled
 - **Where:** `src/taxjson/lib/brokerages/kraken.py` — `_parse_trades` (a fill whose BASE is fiat after stablecoin folding: `USD/CAD`, `USDC/USD`, `USDT/CAD`) and `_build_instant_trade` (a `spend`/`receive` pair whose both legs are fiat: USDC dust swept to USD, USD → CAD).
 - **Current behavior:** counted as recognized non-events (`forex conversion … not modeled — KNOWN_ISSUES`). Previously each emitted a BUYSELL of a phantom `USD` / `CAD` asset (the fiat base treated as the traded security), which put a fake position in the crypto book and a nonsense trade in the gains report.
 - **Why deferred:** same reason as the IB item above — foreign-cash gains live in `taxjson fx-cash`, which does not read conversion rows yet. Stablecoin↔USD swaps are additionally a wash by construction (folded 1:1 for pricing) — in a Canada project; a fill more than 2% off 1.00 USD prints a de-peg warning.
-- **US projects differ:** stablecoins are property there (tax-logic US-CRYPTO-02): `taxjson run` parses with `--country usa`, so a `USDC/USD` fill, a `Buy`/`Sell USDC` row, a swap against a stablecoin, a stablecoin reward or fee are booked as purchases and sales of the coin (a swap, reward or fee at the 1.00 USD par; a sale for dollars at its price). Kraken ledger-only instant trades between a stablecoin and dollars follow the same rule.
+- **US projects differ:** all five USD stablecoins (USDC, USDT, DAI, PYUSD, GUSD) are property there, on Kraken and Coinbase alike (tax-logic US-CRYPTO-02): `taxjson run` parses with `--country usa`, so a `USDC/USD` fill, a `Buy`/`Sell USDC` row, a swap against a stablecoin, a stablecoin reward or fee are booked as purchases and sales of the coin (a swap, reward or fee at the 1.00 USD par; a sale for dollars at its price). Kraken ledger-only instant trades between a stablecoin and dollars follow the same rule.
 - **Coinbase follows the same model:** `Buy USDC` / `Sell USDC` rows are counted as stablecoin conversions (non-events) and the USDC leg of an Advanced Trade on a `*-USDC` pair is cash, not a position. An Advanced Trade on a crypto-quoted pair (`ETH-BTC`) is a swap: the quote coin's leg is booked too, at the fill's stated value (2026-09 audit R1-102). Strictly (CRA) a stablecoin is a crypto-asset, so the USD/CAD movement while USDC is held is an unbooked gain/loss — a few dollars a year on real data.
+
+### Stablecoin de-peg warning checks US-dollar-valued fills only
+- **Where:** `src/taxjson/lib/brokerages/_crypto_common.py` `warn_depeg`, called by the Coinbase and Kraken parsers.
+- **Current behavior:** a stablecoin fill valued in US dollars (Coinbase Buy/Sell, Convert and `*-USDC` Advanced Trade rows priced in USD; Kraken stablecoin/USD pairs) more than 2% off 1.00 USD prints the de-peg warning. A fill valued in CAD, EUR or another fiat (Coinbase rows priced in CAD, Kraken `USDC/CAD`, `USDT/EUR`, ledger stablecoin-to-fiat instant conversions) is not checked: the parser has no exchange rate to turn it into US dollars (re-audit A2-0590).
+- **Work needed:** check at the conversion stage, which has the day's rates: the parsers tag each stablecoin fill with its implied native price, and the stage converts it to USD and applies the 2% test.
 
 ### Canadian listings carry no venue (`ROOT.TO` for TSX, TSXV, CSE and NEO)
 - **Where:** `src/taxjson/lib/brokerages/base.py` — `canonical_ca_listing`, used by `apply_currency_suffix` (Questrade, RBC, Webull, generic) and `taxjson_fetch.qt_position_symbol`; IB stamps every CAD listing `.TO`.
@@ -464,7 +469,7 @@ each is a taxable disposition at fair market value"). Coinbase rows
 carry the spot price so the `.tt` FMV sell is copy-paste; Kraken
 ledgers carry no fiat value (price/net stay 0). Stablecoin evidence
 keeps its own name (a USDC gift is a disposition of USDC the
-property) even though trade books fold USDC/USDT/DAI to USD for
+property) even though trade books fold the USD stablecoins to USD for
 pricing. Kraken Earn allocation/deallocation shuffles (paired rows)
 remain ignored — internal moves; a `hybridearnwithdrawal` row has no
 counter-leg and is custody evidence like a withdrawal (a TRANSFER in the
@@ -480,9 +485,15 @@ rest (self / gift / payment, saved in `inputs/<acct>/sends.json`) and
 generates the FMV sells into `inputs/<acct>/crypto_sends.tt`
 (tests/test_fix_sends.py); a matched send that arrived short with no
 fee stated (a Coinbase Send) books the shortfall there as the network
-fee, a sale at fair value (2026-10, audit R1-26). Limits: pairing reads the crypto accounts'
+fee, a sale at fair value (2026-10, audit R1-26). The pairing is a
+minimum-loss assignment (also split deposits / merged sends), a Kraken
+Hybrid Earn move is never paired, a saved gift/payment the pairing
+overrides is warned about (`--unpair` keeps it), and a full `run` parses
+every crypto account before pairing (re-audit 2). Limits: pairing reads the crypto accounts'
 sidecars only (a send to an equity or `transfers = true` account looks
-unmatched); the stablecoin pool is rebuilt from Kraken ledgers and
+unmatched); a US move between two crypto accounts does not carry the
+basis (warned; `run --strict` stops — keep both exchanges in one
+account); the stablecoin pool is rebuilt from Kraken ledgers and
 Coinbase exports (a Kraken trades export without its ledger is not
 read for it) and does not add a superficial loss back into the pool's
 cost.
