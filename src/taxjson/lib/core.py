@@ -821,6 +821,19 @@ def coerce_transaction_row(t, i: int, ctx_prefix: str) -> TaxTransaction:
                 raise ValueError(
                     f"{_ctx}: impossible {_fld}={_d!r} (not a real "
                     f"calendar date) — fix the input data.")
+    # CA-DATE-03 / US-DATE-04: a settlement never precedes its trade;
+    # the parsers refuse one, and the JSON path (taxjson-gains on a
+    # hand-written file, taxjson-validate) now does too — the tax year
+    # follows the settle date, so the row moved into the prior year
+    # silently (audit A2-0959).
+    _td, _sd = clean_t.get('date'), clean_t.get('date_settle')
+    if (clean_t.get('action') in ('BUYSELL', 'ASSIGN') and _td and _sd
+            and str(_sd) < str(_td)):
+        raise ValueError(
+            f"{_ctx}: date_settle {_sd} is before the trade date {_td} — "
+            f"a settlement never precedes its trade, and the tax year "
+            f"follows the settle date; fix the row (or drop date_settle "
+            f"for the standard cycle).")
     if clean_t.get('action') == 'SPLIT' \
             and float(clean_t.get('quantity') or 0) <= 0:
         raise ValueError(
@@ -2774,6 +2787,8 @@ class CanadaTaxRules(TaxRules):
                                 if (pool['qty'] != 0 and pool['last_acq_date'] != SENTINEL
                                         and pool['last_acq_date'] < existing['last_acq_date']):
                                     existing['last_acq_date'] = pool['last_acq_date']
+                                    existing['last_acq_settle'] = pool.get(
+                                        'last_acq_settle')
                                 if not existing['currency']:
                                     existing['currency'] = pool['currency']
                                 # Preserve the EARLIEST position_start
@@ -2871,6 +2886,11 @@ class CanadaTaxRules(TaxRules):
                                 pool['position_start_date'] = tx.date
                             pool['qty'] += qty
                             pool['last_acq_date'] = tx.date
+                            # The s.54 window runs on settle dates
+                            # (CA-SL-01): the planning views measure
+                            # from this one (A2-0958). last_acq_date
+                            # stays the TRADE date (days held).
+                            pool['last_acq_settle'] = get_sort_date(tx)
 
                             if qty < 0 and _grant_mode and is_option_symbol(symbol):
                                 _open_short_option(pool, tx, abs(qty),
@@ -3084,6 +3104,7 @@ class CanadaTaxRules(TaxRules):
                                 pool['total_cost'] = D(eff_cost_leftover)
                                 pool['deferred_wash'] = 0.0
                                 pool['last_acq_date'] = tx.date
+                                pool['last_acq_settle'] = get_sort_date(tx)
                                 # Position flipped direction (long→short
                                 # or vice versa via a cross-zero SELL).
                                 # New position begins at this trade.
@@ -4403,6 +4424,15 @@ class CanadaTaxRules(TaxRules):
                                       if p.get('last_acq_date')
                                       in (None, '1970-01-01')
                                       else p.get('last_acq_date')),
+                    # Canada: the same acquisition on the s.54 window's
+                    # own basis (settle dates, CA-SL-01) — what the
+                    # harvest TX_ADD / SH_ADD columns measure from
+                    # (A2-0958). last_acq_date above is the trade date.
+                    'last_acq_settle': (None
+                                        if p.get('last_acq_date')
+                                        in (None, '1970-01-01')
+                                        else p.get('last_acq_settle')
+                                        or p.get('last_acq_date')),
                     # Denied superficial losses still parked in this
                     # pool's ACB (deferred; recovered on a clean sale).
                     'deferred_wash': round(

@@ -606,5 +606,78 @@ class TestStandaloneYearFlags(unittest.TestCase):
             self.assertIn('plausible tax year', r.stderr, mod)
 
 
+class TestJsonSettleBeforeTrade(unittest.TestCase):
+    """A2-0959: the JSON path refuses a settlement before its trade."""
+
+    def _rows(self, settle):
+        return [{'action': 'BUYSELL', 'date': '2025-01-06',
+                 'date_settle': '2025-01-07', 'time': '10:00:00',
+                 'symbol': 'XYZ.TO', 'quantity': 10, 'net_amount': 100.0,
+                 'currency': 'CAD', 'account': 'm'},
+                {'action': 'BUYSELL', 'date': '2025-12-15',
+                 'date_settle': settle, 'time': '10:00:00',
+                 'symbol': 'XYZ.TO', 'quantity': -10, 'net_amount': 90.0,
+                 'currency': 'CAD', 'account': 'm'}]
+
+    @rule("CA-DATE-03")
+    def test_loader_refuses(self):
+        from taxjson.lib.core import coerce_transaction_row
+        rows = self._rows('2025-12-12')
+        coerce_transaction_row(rows[0], 0, 'x')
+        with self.assertRaises(ValueError) as cm:
+            coerce_transaction_row(rows[1], 1, 'x')
+        self.assertIn('before the trade date', str(cm.exception))
+
+    @rule("US-DATE-04")
+    def test_loader_refuses_us(self):
+        from taxjson.lib.core import coerce_transaction_row
+        with self.assertRaises(ValueError):
+            coerce_transaction_row(self._rows('2025-12-12')[1], 1, 'x')
+
+    def test_validate_flags_early_and_late_settles(self):
+        import json
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        for settle, want, rc in (('2025-12-12', 'before the trade', 1),
+                                 ('2026-12-16', 'more than a month', None)):
+            with tempfile.TemporaryDirectory() as td:
+                f = Path(td) / 'm.json'
+                f.write_text(json.dumps({'transactions': self._rows(settle)}))
+                r = subprocess.run([sys.executable, '-m',
+                                    'taxjson.bin.taxjson_validate',
+                                    '--warnings', str(f)],
+                                   capture_output=True, text=True,
+                                   stdin=subprocess.DEVNULL)
+                self.assertIn(want, r.stdout + r.stderr, settle)
+                if rc is not None:
+                    self.assertNotEqual(r.returncode, 0)
+
+
+class TestLastAcquisitionSettleDate(unittest.TestCase):
+    """A2-0958: Canada's inventory names the latest acquisition's SETTLE
+    date, which harvest's TX_ADD measures the s.54 window from."""
+
+    @rule("CA-SL-01")
+    def test_canada_inventory_and_harvest(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from taxjson.bin.taxjson_harvest import load_inventory_agg
+        t = TaxTransaction(action='BUYSELL', date='2025-06-20',
+                           date_settle='2025-06-23', time='10:00:00',
+                           symbol='XYZ.US', quantity=10.0, price=10.0,
+                           net_amount=100.0, currency='CAD', account='m')
+        inv = _ca([t])['inventory'][0]
+        self.assertEqual((inv['last_acq_date'], inv['last_acq_settle']),
+                         ('2025-06-20', '2025-06-23'))
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / 'g.json'
+            f.write_text(json.dumps({'transactions': [], 'inventory': [inv]}))
+            agg = load_inventory_agg([f], 'TX_ADD')
+        self.assertEqual(agg['XYZ.US']['last_add'], '2025-06-23')
+
+
 if __name__ == '__main__':
     unittest.main()

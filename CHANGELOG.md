@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- The JSON input path (`taxjson-gains` on a hand-written file, the core
+  loader) refuses a trade whose settle date is before its trade date, as
+  the parsers do (CA-DATE-03 / US-DATE-04); `taxjson-validate` reports it
+  as an error and a settle more than a month late as a warning (A2-0959).
+- Canada: the gains inventory carries `last_acq_settle`, the latest
+  acquisition's settle date, and `taxjson harvest`'s TX_ADD / SH_ADD
+  columns measure the 30-day window from it (s.54 counts settle dates);
+  they showed the trade date, off by a weekend near day 30 (A2-0958).
+
 - The standalone year flags (`taxjson-gains/-explain/-audit/-carryover/
   -t1135 --option-grant-since`, `taxjson-brokerage --tax-year`,
   `taxjson-carryover --project-year`, `taxjson-audit --check-year`)
