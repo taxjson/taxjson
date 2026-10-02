@@ -74,6 +74,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from taxjson.lib.cli_diag import guard_main, tax_year
+from taxjson.bin.taxjson_convert_currency import norm_currency
 from taxjson.lib.core import is_option_symbol
 from taxjson.lib.futures import is_plain_future
 from typing import Any, Dict, List, Optional, Tuple
@@ -868,6 +869,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Defensive year filter (pipeline gains files "
                              "are already year-scoped)")
     parser.add_argument("--base-currency", default="",
+                        type=norm_currency,
                         help="Currency label for the header")
     parser.add_argument("--csv", type=Path, default=None,
                         help="Also write the rows as CSV to this path")
