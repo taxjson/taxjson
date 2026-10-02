@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Standalone `taxjson-brokerage` without `--country` books Kraken /
+  Coinbase USD stablecoins as property (the neutral answer, as a
+  foreign return of capital already defaults to a cost reduction) and
+  prints a note naming `--country`; it used to take Canada's US-dollar
+  cash model. Its help lists every choice `--country` makes (re-audit
+  A2-0742, A2-1238). `taxjson run` always passes the country.
 - RBC parse notes in a US project name Form 1099-DIV, basis and
   §305/§307 for rights, not the fund's T3 (box 21 / 42), the ACB or ITA
   s.15(1)(c); a Canada project's notes are unchanged and the booking is

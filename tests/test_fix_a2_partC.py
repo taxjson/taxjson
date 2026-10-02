@@ -324,5 +324,50 @@ class TestRbcNotesFollowTheCountry(unittest.TestCase):
                 self.assertNotIn("ACB", msgs)
 
 
+# ---------------------------------- taxjson-brokerage stablecoins (05)
+
+class TestBrokerageStablecoinDefault(unittest.TestCase):
+    """A2-0742, A2-1238: without --country a USD stablecoin is property
+    (the neutral answer, like --foreign-roc's cost reduction), with a
+    note naming --country; canada keeps the cash model, usa property."""
+
+    _CB = ("Transactions\n"
+           "ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
+           "Price Currency,Price at Transaction,Subtotal,"
+           "Total (inclusive of fees and/or spread),Fees and/or Spread,"
+           "Notes\n"
+           "a1,2025-06-01 12:00:00 UTC,Buy,USDC,1000,USD,$1.00,$1000.00,"
+           "$1000.00,$0.00,Bought 1000 USDC\n")
+
+    def _run(self, *flags):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "cb_2025.csv"
+            f.write_text(self._CB, encoding="utf-8")
+            r = _module("taxjson.bin.taxjson_brokerage", "--brokerage",
+                        "coinbase", *flags, str(f))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        txs = json.loads(r.stdout)["transactions"]
+        return [t for t in txs if t.get("symbol") == "USDC"
+                and t.get("action") == "BUYSELL"], r.stderr
+
+    @rule("CA-CRYPTO-02")
+    @rule_absent("CA-CRYPTO-02", country="usa")
+    def test_country_and_neutral_default(self):
+        ca, ca_err = self._run("--country", "canada")
+        us, _ = self._run("--country", "usa")
+        none, none_err = self._run()
+        self.assertEqual(ca, [])            # US-dollar cash
+        self.assertEqual(len(us), 1)        # property
+        self.assertEqual(none, us)          # neutral: property
+        self.assertIn("no --country given", none_err)
+        self.assertNotIn("no --country given", ca_err)
+
+    def test_help_names_both_choices(self):
+        r = _module("taxjson.bin.taxjson_brokerage", "--help")
+        flat = " ".join(r.stdout.split())
+        self.assertIn("stablecoins", flat)
+        self.assertIn("--foreign-roc", flat)
+
+
 if __name__ == "__main__":
     unittest.main()

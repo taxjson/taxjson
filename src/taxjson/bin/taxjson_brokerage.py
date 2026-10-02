@@ -370,12 +370,17 @@ Examples:
         "--country", type=country_arg, default=None,
         metavar="{canada,ca,usa,us}",
         help=(
-            "Whose rules the one country-specific parse choice follows "
-            "(IB --foreign-roc): canada -> 'dividend' (ITA s.90(1)), "
+            "Whose rules the country-specific parse choices follow: "
+            "(1) IB --foreign-roc: canada -> 'dividend' (ITA s.90(1)), "
             "usa -> 'acb' (a nondividend distribution lowers basis, "
-            "§301(c)(2)). Without it (and without --foreign-roc) a "
-            "foreign issuer's return of capital lowers the cost, and a "
-            "note says so. `taxjson run` passes the project's country."
+            "§301(c)(2)); (2) Kraken / Coinbase USD stablecoins: canada "
+            "-> US-dollar cash (CA-CRYPTO-02), usa -> property like any "
+            "coin (US-CRYPTO-02). It also picks the tax words of the "
+            "parse notes (RBC: T3 / ACB vs Form 1099-DIV / basis). "
+            "Without it both choices take the neutral answer — a "
+            "foreign issuer's return of capital lowers the cost and a "
+            "stablecoin is property — and a note says so. `taxjson run` "
+            "passes the project's country."
         ),
     )
     parser.add_argument(
@@ -531,10 +536,13 @@ Examples:
             extractor.country = args.country
         if hasattr(extractor, 'stablecoins_as_cash'):
             # USD stablecoins are US-dollar cash (Canada's stated
-            # approximation, and the default without a country) or
-            # property like any coin (a US project: tax-logic
-            # US-CRYPTO-02; partition COMMANDS-13).
-            extractor.stablecoins_as_cash = args.country != "usa"
+            # approximation, CA-CRYPTO-02) or property like any coin
+            # (a US project: US-CRYPTO-02; partition COMMANDS-13).
+            # Without a country: property, the neutral answer, as
+            # --foreign-roc defaults to the neutral cost reduction —
+            # it used to be Canada's cash model (re-audit A2-0742,
+            # A2-1238).
+            extractor.stablecoins_as_cash = args.country == "canada"
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
         try:
@@ -568,6 +576,19 @@ Examples:
                   file=sys.stderr)
             sys.exit(1)
         parsed_files.append((input_path, extractor, transactions))
+        if args.country is None and hasattr(extractor,
+                                            'stablecoins_as_cash'):
+            from taxjson.lib.brokerages._crypto_common import \
+                USD_STABLECOINS
+            _stab = sorted({str(t.get('symbol') or '').upper()
+                            for t in transactions}
+                           & set(USD_STABLECOINS))
+            if _stab:
+                print(f"taxjson-brokerage: note: {shown_name(input_path)}: "
+                      f"{', '.join(_stab)} booked as property like any "
+                      f"coin (no --country given); a Canadian filer "
+                      f"passes --country canada (USD stablecoins are "
+                      f"US-dollar cash).", file=sys.stderr)
         if args.country is None and args.foreign_roc is None:
             # The issuer's ISIN is in IB's description ("QZRX(US...)").
             _froc = [t for t in transactions
