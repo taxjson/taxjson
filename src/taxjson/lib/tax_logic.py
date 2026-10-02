@@ -563,18 +563,26 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-SL-08",
                  "Only units acquired in the window and still held count, "
                  "per holder, and each one backs a single denial (a sale "
-                 "split into fills, or two losses, share it). The denied "
+                 "split into fills, or two losses, share it; losses at "
+                 "the same moment claim in the export's row order). A "
+                 "held call contract backs one denial however often its "
+                 "series was bought and sold in the window. The denied "
                  "part is loss x (those units / units sold), capped at the "
                  "whole loss."),
             Rule("CA-SL-09",
-                 "The denied amount is added to the replacement's ACB and "
+                 "The denied amount is added to the replacement's ACB from "
+                 "its acquisition (a sale listed after it at the same "
+                 "moment uses the raised ACB) and "
                  "comes back when it is sold. If the replacement is in a "
                  "sheltered account, that part is lost for good."),
             Rule("CA-SL-10",
                  "Replacements are matched in acquisition order: purchases "
                  "after the sale first, then earlier ones, latest first. "
                  "Purchases at the same moment go to your taxable accounts "
-                 "first, then sheltered, then affiliated."),
+                 "first, then sheltered, then affiliated, then in the "
+                 "export's row order (accounts in taxjson.toml order); a "
+                 "purchase listed after a sale at the same moment is a "
+                 "purchase after it."),
             (Rule("CA-SL-12",
                   "A loss on buying back a written option (or, under "
                   "grant timing, on a write whose commission exceeds its "

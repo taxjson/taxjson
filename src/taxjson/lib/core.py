@@ -2963,6 +2963,19 @@ class CanadaTaxRules(TaxRules):
             # phantom GAIN with no warning.
             _bal_before: Dict[str, float] = {}
             _running: Dict[tuple, float] = {}
+            # The main pass's own processing order: its fixed rungs, then
+            # the export's row order at one moment (CA-DATE-14; accounts
+            # in taxjson.toml order). Every same-moment question below —
+            # which loss claims a shared replacement first, whether a rebuy
+            # listed after the loss sale is acquired after it, which of two
+            # same-moment triggers takes the bump — is answered by this
+            # order, never by the rows' content-hash id or account label
+            # (audit A2-0059/0551/0058/0193/0192/0961/0965: a one-cent
+            # price change used to move a denial).
+            _pos = {id(_t): _i for _i, _t in enumerate(current_tx_list)}
+
+            def _pkey(t):
+                return (_ev_key(t), _pos.get(id(t), -1))
             # Rename chain for ADJUST placement (FUZZ #F8): a wash
             # ADJUST keyed to the trigger's TRADE-TIME symbol landed on
             # a pool the rename had already deleted — the deferred loss
@@ -3063,8 +3076,7 @@ class CanadaTaxRules(TaxRules):
             # taken in a fixed order, so every pass agrees.
             _trg_used: Dict[str, float] = {}
             for loss in sorted(iteration_losses_to_check,
-                               key=lambda l: (_ev_key(l['tx']),
-                                              l['tx'].id or '')):
+                               key=lambda l: _pkey(l['tx'])):
                 tx = loss['tx']
                 # SETTLEMENT-date basis for the whole ±30-day window (CRA's
                 # disposition timing; matches get_sort_date and the config's
@@ -3297,6 +3309,21 @@ class CanadaTaxRules(TaxRules):
                         _h = _holder(t)
                         _bal_end_h[_h] = (_bal_end_h.get(_h, 0.0)
                                           + _row_loss_units(t, t.quantity))
+                def _claimed_out(t, h) -> bool:
+                    # Units an earlier loss claimed are still in the
+                    # day-30 balance but cannot back this loss too
+                    # (CA-SL-08), so they leave it. The one exception is
+                    # a TAXABLE purchase made before this sale: the sale
+                    # draws on the taxable pool, so those units are what
+                    # it disposes of — already out of the balance. A
+                    # registered/affiliated holder's units (A2-0012) and
+                    # a call (A2-0057/0198) are never disposed of by a
+                    # taxable share sale. "After" is the main pass's
+                    # processing order: a rebuy listed after a
+                    # same-moment sale is acquired after it (A2-0193).
+                    if not _trg_used.get(t.id):
+                        return False
+                    return h != ('taxable',) or _pkey(t) > _pkey(tx)
                 _acq_h: Dict[Any, float] = {}
                 for t in potential_triggers:
                     if t.id in _call_ids:
@@ -3304,12 +3331,7 @@ class CanadaTaxRules(TaxRules):
                     _h = _holder(t)
                     _acq_h[_h] = (_acq_h.get(_h, 0.0)
                                   + _row_loss_units(t, _avail_native(t)))
-                    # Units an earlier loss claimed that are bought AFTER this
-                    # sale are still in the day-30 balance but cannot back
-                    # this loss too. (A claimed purchase made before this
-                    # sale is what this sale disposes of: already out of
-                    # the balance.)
-                    if _trg_used.get(t.id) and _ev_key(t) > _ev_key(tx):
+                    if _claimed_out(t, _h):
                         _bal_end_h[_h] = _bal_end_h.get(_h, 0.0) - \
                             _row_loss_units(t, min(_trg_used[t.id],
                                                    _opening_qty(t, 'LONG')))
@@ -3340,6 +3362,16 @@ class CanadaTaxRules(TaxRules):
                             _k = ('call', _holder(t), t.symbol)
                             _call_end[_k] = (_call_end.get(_k, 0.0)
                                              + _call_units(t, t.quantity))
+                    # Contracts an earlier loss claimed leave the day-30
+                    # balance (CA-SL-08): one held contract backs one
+                    # denial, even when the claim was charged to a call
+                    # row sold since (A2-0057/0198).
+                    for t in call_triggers:
+                        if _claimed_out(t, ('call',)):
+                            _k = ('call', _holder(t), t.symbol)
+                            _call_end[_k] = _call_end.get(_k, 0.0) - \
+                                _call_units(t, min(_trg_used[t.id],
+                                                   _opening_qty(t, 'LONG')))
                     for _k, a in _call_acq.items():
                         _held_h[_k] = max(0.0, min(a, _call_end.get(_k, 0.0)))
                 held_substituted = sum(_held_h.values())
@@ -3374,29 +3406,40 @@ class CanadaTaxRules(TaxRules):
                     # feedback the solver amplified or never converged
                     # on (2026-09 engine audit, r08 / r08b).
                     _loss_key = _ev_key(tx)
+                    # Processing order, so a rebuy listed after a
+                    # same-moment loss sale is a purchase AFTER it
+                    # (CA-DATE-14 / CA-SL-10; A2-0058).
+                    _loss_pkey = _pkey(tx)
                     post_loss = [t for t in potential_triggers
-                                 if _ev_key(t) > _loss_key]
+                                 if _pkey(t) > _loss_pkey]
                     pre_loss = [t for t in potential_triggers
                                 if t not in post_loss]
-                    # Triggers at the SAME moment have no acquisition
-                    # order. The tie goes to the taxpayer's own (taxable)
-                    # acquisition first, then registered, then
-                    # affiliated accounts, then by account label — never
-                    # by the rows' content-hash id, which let a one-cent
-                    # change on a TFSA row flip a deferral into a
-                    # permanent denial (audit S018-06). Rationale: the
-                    # denial is permanent only for property an
-                    # affiliated person acquires (s.40(2)(g)(i)); with
-                    # no order between the two acquisitions the
-                    # taxpayer's own substituted property is the one
-                    # s.53(1)(f) reaches first.
-                    def _tie(x):
-                        return (_holder_rank(x), x.account or '',
-                                x.id or '')
-                    ordered = (sorted(sorted(post_loss, key=_tie),
-                                      key=_ev_key)
-                               + sorted(sorted(pre_loss, key=_tie),
-                                        key=_ev_key, reverse=True))
+                    # Triggers at the SAME moment: the taxpayer's own
+                    # (taxable) acquisition first, then registered, then
+                    # affiliated accounts; within one rank, the main
+                    # pass's processing order (export row order, accounts
+                    # in taxjson.toml order — CA-DATE-14) — never the
+                    # rows' content-hash id or the account label, which
+                    # let a one-cent change flip a deferral into a
+                    # permanent denial or move the bump between a call
+                    # and the shares (audits S018-06, A2-0192/0961/0965).
+                    # Rationale for the rank: the denial is permanent
+                    # only for property an affiliated person acquires
+                    # (s.40(2)(g)(i)); with no order between the two
+                    # acquisitions the taxpayer's own substituted
+                    # property is the one s.53(1)(f) reaches first.
+                    # Post-loss: earliest first; pre-loss: latest first
+                    # (the last-listed of a same-moment group is the
+                    # latest acquisition).
+                    ordered = (sorted(post_loss,
+                                      key=lambda x: (_ev_key(x),
+                                                     _holder_rank(x),
+                                                     _pos.get(id(x), -1)))
+                               + sorted(pre_loss,
+                                        key=lambda x: (_ev_key(x),
+                                                       -_holder_rank(x),
+                                                       _pos.get(id(x), -1)),
+                                        reverse=True))
                     per_share_loss = loss['loss_amount'] / loss['qty']
                     allocations = []      # (trigger, qty, amount)
                     perm_amt = 0.0
@@ -3486,7 +3529,7 @@ class CanadaTaxRules(TaxRules):
 
                     def _mk_adjust(trg, amt):
                         a_id = f"WASH_{tx.id}__{trg.id}"
-                        _pre_loss = _ev_key(trg) < _loss_key
+                        _pre_loss = _pkey(trg) < _loss_pkey
                         if _pre_loss:
                             # Pre-loss trigger: the bump lands just
                             # after the loss sale — same settle date and
@@ -3526,10 +3569,17 @@ class CanadaTaxRules(TaxRules):
                             _land.symbol,
                             _loss_key if _pre_loss else _ev_key(v),
                             _ev_key(_land))
-                        if _pre_loss:
-                            # Applied right after the loss row in the
-                            # main pass (see _place_wash_adjusts).
-                            v._wash_after = tx.id
+                        # Applied right after its row in the main pass
+                        # (see _place_wash_adjusts): a pre-loss bump
+                        # after the loss row; a post-loss bump after the
+                        # trigger purchase itself, so a same-moment sale
+                        # listed after that purchase sees the bumped ACB
+                        # (s.53(1)(f) — the bump is part of the
+                        # replacement's cost from its acquisition;
+                        # A2-0555). Sorted "cost adjustments last" it
+                        # landed after every trade at the trigger's
+                        # moment.
+                        v._wash_after = tx.id if _pre_loss else trg.id
                         if trg.id in sheltered_ids:
                             sheltered_ids.add(a_id)
                         if trg.id in affiliated_ids:
@@ -3637,7 +3687,12 @@ class CanadaTaxRules(TaxRules):
                             'role': role,
                             'running_bal': running_bal_by_tx.get(t.id),
                         })
-                    win_txs.sort(key=lambda r: (r['days_from_loss'], r['date'], r['account']))
+                    # Processing order, so the running balance reads in
+                    # the order the main pass applied the rows (A2-0965).
+                    _wpos = {t.id: _pos.get(id(t), -1) for t in all_txs}
+                    win_txs.sort(key=lambda r: (r['days_from_loss'],
+                                                r['date'],
+                                                _wpos.get(r['tx_id'], -1)))
                     wash_windows[tx.id] = {
                         'window_start': window_start_dt.strftime('%Y-%m-%d'),
                         'window_end': end_window_date,

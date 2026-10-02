@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Canada superficial loss: one held unit backs one denial, and
+  same-moment rows follow the export order.** A registered account's
+  units claimed by an earlier loss, or a call contract claimed through a
+  row sold since, could back a second denial (A2-0012/0057/0198). Same-
+  moment losses, rebuys and triggers were ordered by the rows' content
+  hash or account label, so a one-cent price change could move a denial
+  or turn a deferral permanent; they now follow the main pass's order
+  (export row order, accounts in taxjson.toml order — CA-DATE-14): a
+  rebuy listed after a same-moment loss sale is a purchase after it
+  (A2-0058/0193/0059/0551/0192/0961/0965). A deferred loss's bump now
+  reaches a same-moment sale listed after the replacement purchase
+  (A2-0555). tax-logic CA-SL-08/09/10 state it.
+
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
