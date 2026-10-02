@@ -819,8 +819,16 @@ def _root_aliases(occ_by_conid, underlying_by_conid):
         roots = {o[0] for o in occs}
         if len(roots) < 2:
             continue
-        und = (underlying_by_conid.get(conid) or '').strip()
-        canon = und if und in roots else _canonical_root(roots)
+        und = underlying_by_conid.get(conid) or ''
+        # Every Underlying any of the account's statements names for the
+        # conid: one statement said DFDV and a re-download DFDV1, and
+        # the file being parsed won — one put series split across two
+        # symbols (audit A2-0087). Among several, the prefix rule.
+        unds = ({u.strip() for u in und} if isinstance(und, (set, frozenset))
+                else {und.strip()}) & roots
+        canon = (next(iter(unds)) if len(unds) == 1
+                 else _canonical_root(unds) if unds
+                 else _canonical_root(roots))
         for r in roots:
             if r != canon:
                 root_alias[r] = canon
@@ -868,21 +876,58 @@ def _ib_stock_symbol(asset_cat: str, raw_symbol: str, currency: str,
     return f"{sym}.{_ib_listing_ext(asset_cat, raw_symbol, currency, fii)}"
 
 
-def _warn_stock_aliases(conid_syms: Dict[str, set], where: str) -> None:
+def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
+                        first_seen=None, listing=None,
+                        mapping=None) -> None:
     """One stock conid listed under several symbols (a ticker change
     with no corporate-action row): the parser books each symbol as its
     own security, so the position splits into two pools (audit S059-13 /
-    S060-17). Said on the console with the ticker.map fix."""
+    S060-17). Said on the console with the ticker.map fix: the OLD
+    symbol (first traded) first, each with the listing suffix it is
+    booked under (an alphabetical pair with a hard-coded .US joined
+    nothing, or renamed new to old — audit A2-0611); quiet once the
+    project's ticker.map (`mapping`) joins them."""
+    first_seen = first_seen or {}
+    listing = listing or {}
     for conid, syms in sorted(conid_syms.items()):
         if len(syms) < 2:
             continue
-        a, b = sorted(syms)[:2]
+        order = sorted(syms, key=lambda x: (first_seen.get(x) or '9999',
+                                            x))
+        full = [listing.get(x) or f"{x}.US" for x in order]
+        if mapping is not None:
+            from taxjson.bin.taxjson_ticker_map import map_symbol
+            if len({map_symbol(f, mapping) for f in full}) == 1:
+                continue
+        a, b = full[0], full[-1]
         print(f"{ATTENTION_PREFIX} {where}: IB lists one stock (contract "
-              f"id {conid}) under several symbols: {', '.join(sorted(syms))}"
+              f"id {conid}) under several symbols: {', '.join(order)}"
               f" — a ticker change. Each symbol is booked as its own "
               f"security until you join them in ticker.map, e.g. "
-              f"`GLOBAL {a}.US {b}.US` (old symbol first; use the listing's "
-              f"suffix).", file=sys.stderr)
+              f"`GLOBAL {a} {b}` (old symbol first, as first traded).",
+              file=sys.stderr)
+
+
+def _project_ticker_map(paths):
+    """The rename map of the project ticker.map next to inputs/<account>/
+    <statement>, or None (a statement outside a project, no map, or a
+    map that does not parse)."""
+    for path in paths:
+        try:
+            pp = Path(path).resolve().parents
+            root = pp[2] if pp[1].name == 'inputs' else None
+        except (IndexError, OSError):
+            root = None
+        if root is None or not (root / 'ticker.map').is_file():
+            continue
+        try:
+            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                        merge_renames)
+            return merge_renames(_parse_map_file(root / 'ticker.map')[0],
+                                 True)
+        except Exception:               # the run reports a bad map
+            return None
+    return None
 
 
 def _ib_prescan(rows, where: str) -> Dict[str, Any]:
@@ -899,6 +944,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'has_order_level': False, 'order_levels': {},
         'stock_isins': {}, 'stock_conid_syms': {}, 'opt_underlying': {},
         'held_rows': [], 'broker_name': '', 'cash_bad': {},
+        'first_seen': {}, 'stock_listing': {},
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -928,6 +974,12 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             # them (prepare_files).
             out['held_rows'].append((g('Symbol'), g('Asset Category'),
                                      g('Currency')))
+            _sroot = re.sub(r'\s+', '.', g('Symbol'))
+            _sday = (g('Date/Time') or g('Date')).replace(',', ' ').split()
+            if _sday and _IB_DATE_RE.match(_sday[0]):
+                _prev = out['first_seen'].get(_sroot)
+                if _prev is None or _sday[0] < _prev:
+                    out['first_seen'][_sroot] = _sday[0]
         if (sec == 'Trades'
                 and g('DataDiscriminator') in ('Order', 'Trade')):
             # Quantity per (category, symbol, trade day) and detail
@@ -991,7 +1043,8 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                         out['stock_conid_syms'].setdefault(
                             info['conid'], set()).add(_root)
             elif info['conid'] and info['underlying']:
-                out['opt_underlying'][info['conid']] = info['underlying']
+                out['opt_underlying'].setdefault(info['conid'], set()).add(
+                    info['underlying'])
             if g('Description'):
                 texts.append(g('Description'))
             for t in texts:
@@ -1027,6 +1080,10 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 continue
             out['cash'][(line, cur)] = out['cash'].get((line, cur),
                                                        0.0) + tot
+    for _sym, _cat, _cur in out['held_rows']:
+        out['stock_listing'].setdefault(
+            re.sub(r'\s+', '.', _sym), _ib_stock_symbol(_cat, _sym, _cur,
+                                                        out['fii']))
     out['occ_by_conid'] = occ_by_conid
     out['root_alias'], out['alias_conids'] = _root_aliases(
         occ_by_conid, out['opt_underlying'])
@@ -1147,7 +1204,7 @@ class IbBrokerage(BaseBrokerage):
             'opt_underlying': {}, 'stock_conid_syms': {},
             'stock_isins': {}, 'held': set(), 'posted_dividends': [],
             'tender_parked': {}, 'accrual_facts': [],
-            'file_accounts': {}}
+            'file_accounts': {}, 'first_seen': {}, 'stock_listing': {}}
         for path in paths:
             name = Path(path).name
             try:
@@ -1176,11 +1233,17 @@ class IbBrokerage(BaseBrokerage):
                 tgt = ctx['contract_conids'].setdefault(key, {})
                 for root, ids in by_root.items():
                     tgt.setdefault(root, set()).update(ids)
-            ctx['opt_underlying'].update(pre['opt_underlying'])
+            for conid, unds in pre['opt_underlying'].items():
+                ctx['opt_underlying'].setdefault(conid, set()).update(unds)
             for conid, syms in pre['stock_conid_syms'].items():
                 ctx['stock_conid_syms'].setdefault(conid, set()).update(syms)
             for root, ids in pre['stock_isins'].items():
                 ctx['stock_isins'].setdefault(root, set()).update(ids)
+            for root, d in pre['first_seen'].items():
+                if d < ctx['first_seen'].get(root, '9999'):
+                    ctx['first_seen'][root] = d
+            for root, full in pre['stock_listing'].items():
+                ctx['stock_listing'].setdefault(root, full)
             for sym, cat, cur in pre['held_rows']:
                 ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
             # Postings and accrual facts carry their statement's broker
@@ -1209,7 +1272,10 @@ class IbBrokerage(BaseBrokerage):
                   f"taxable margin accounts); give a registered account "
                   f"(TFSA/RRSP) its own folder.", file=sys.stderr)
         _warn_stock_aliases(ctx['stock_conid_syms'],
-                            'the account\'s IB statements')
+                            'the account\'s IB statements',
+                            first_seen=ctx['first_seen'],
+                            listing=ctx['stock_listing'],
+                            mapping=_project_ticker_map(paths))
         return ctx
 
     @classmethod
@@ -2104,15 +2170,19 @@ class IbBrokerage(BaseBrokerage):
             occ = {c: set(v) for c, v in pre['occ_by_conid'].items()}
             for c, v in ctx.get('occ_by_conid', {}).items():
                 occ.setdefault(c, set()).update(v)
-            und = dict(ctx.get('opt_underlying', {}))
-            und.update(pre['opt_underlying'])
+            und = {c: set(v) for c, v in
+                   ctx.get('opt_underlying', {}).items()}
+            for c, v in pre['opt_underlying'].items():
+                und.setdefault(c, set()).update(v)
             pre['root_alias'], pre['alias_conids'] = _root_aliases(occ, und)
             for key, by_root in ctx.get('contract_conids', {}).items():
                 tgt = pre['contract_conids'].setdefault(key, {})
                 for root, ids in by_root.items():
                     tgt.setdefault(root, set()).update(ids)
         else:
-            _warn_stock_aliases(pre['stock_conid_syms'], shown_name(path))
+            _warn_stock_aliases(pre['stock_conid_syms'], shown_name(path),
+                                first_seen=pre['first_seen'],
+                                listing=pre['stock_listing'])
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']
@@ -4264,10 +4334,28 @@ class IbBrokerage(BaseBrokerage):
         for _st in assign_stock_legs:
             _root, _ext = _split_known_ext(_st['symbol'])
             _stock_by_key.setdefault((_root, _ext, _st['date']), _st)
+        def _root_forms(r):
+            # The option root as the stock leg may spell it: itself, the
+            # adjusted contract's root without OCC's digit (QZX1 ->
+            # QZX), a class share without its dot (BRKB vs BRK.B) —
+            # the exact-root match left those legs on two settle dates
+            # (audit A2-1028).
+            base = re.sub(r'\d+$', '', r) or r
+            return [r, base]
+
+        _stock_flat = {}
+        for (_r, _e, _d), _st in _stock_by_key.items():
+            _stock_flat.setdefault((_r.replace('.', ''), _e, _d), _st)
         for _ol in assign_option_legs:
             _om = re.match(r'^(.+?)\d{6}[CP]\d{8}\.(\w+)$', _ol['symbol'])
-            _st = (_stock_by_key.get((_om.group(1), _om.group(2),
-                                      _ol['date'])) if _om else None)
+            _st = None
+            if _om:
+                for _r in _root_forms(_om.group(1)):
+                    _st = (_stock_by_key.get((_r, _om.group(2), _ol['date']))
+                           or _stock_flat.get((_r.replace('.', ''),
+                                               _om.group(2), _ol['date'])))
+                    if _st is not None:
+                        break
             if _st is not None:
                 _ol['date_settle'] = _st['date_settle']
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- IB: one option contract keeps one root across the account's
+  statements, whichever statement is parsed (a re-download naming the
+  adjusted root DFDV1 split one put series in two, audit A2-0087); the
+  ticker-change hint names the old symbol first with the listing
+  suffix it is booked under and goes quiet once ticker.map joins the
+  two (A2-0611); an assigned adjusted (QZX1) or class-share (BRKB)
+  option leg shares its stock leg's settle date (A2-1028).
 - IB statement coverage is checked per broker account and against the
   project year: another IB account's statement no longer hides this
   account's missing half-year, an account whose only statement is the

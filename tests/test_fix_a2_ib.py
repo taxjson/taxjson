@@ -18,7 +18,7 @@ from tax_rules.dual import gains_both
 from taxjson.lib import country as C
 
 from test_fix_l_ibparse import _book, _ACC_H, _DIV_H as _DIVA_H, _acc, _div
-from test_fix_ibparse import _parse_account
+from test_fix_ibparse import _parse_account, _fii_opt, _fii_stock
 
 from test_fix_ibparse import (HEAD, TRADES_H, XFER_H, CA_H, FII_H, DIV_H,
                               _trade, _xfer, _ca, _parse_ib, _brokerage_cli,
@@ -577,6 +577,82 @@ class TestChecklistIbStatementCoverage(unittest.TestCase):
             ib.write_text(_stmt('January 1, 2025', 'December 31, 2025'))
             r = cl.d_inputs_frozen(_ctx(root, {}, today=date(2026, 3, 1)))
             self.assertEqual(r.status, 'done', r.detail)
+
+
+class TestOptionRootAliasIsStableAcrossStatements(unittest.TestCase):
+    """A2-0087: one statement names the conid's Underlying QZD, a
+    re-download names QZD and QZD1; the file being parsed won, so one
+    put series was split across two symbols."""
+
+    def test_one_canonical_root_for_every_statement(self):
+        opt = _trade('QZD 19DEC25 60 P', '2025-10-10, 10:00:00', -1, 4, 400,
+                     0, cat='Equity and Index Options')
+        fii = _fii_opt('QZD   251219P00060000, QZD1  251219P00060000',
+                       'QZD 19DEC25 60 P', '990000021', 'QZD')
+        full = _stmt('January 1, 2025', 'December 31, 2025', TRADES_H, opt,
+                     FII_H, fii)
+        nov = _stmt('January 1, 2025', 'November 14, 2025', TRADES_H, opt,
+                    FII_H, fii,
+                    _fii_opt('QZD   251219P00060000, QZD1  251219P00060000',
+                             'QZD1 19DEC25 60 P', '990000021', 'QZD1'))
+        for files in ({'full.csv': full, 'nov.csv': nov},
+                      {'nov.csv': nov, 'full.csv': full}):
+            with self.subTest(order=list(files)):
+                txs, err = _parse_account(files)
+                self.assertEqual({t['symbol'] for t in txs},
+                                 {'QZD251219P00060000.US'}, err)
+
+
+class TestTickerChangeHint(unittest.TestCase):
+    """A2-0611: the hint named the pair alphabetically with a hard-coded
+    .US and kept firing after ticker.map joined the symbols."""
+
+    BODY = (HEAD + TRADES_H
+            + _trade('QZMR', '2025-02-05, 10:00:00', 900, 10, -9000,
+                     cur='CAD')
+            + _trade('QZKB', '2025-09-10, 10:00:00', -900, 12, 10800,
+                     cur='CAD', code='C')
+            + FII_H + _fii_stock('QZMR, QZKB', 'CA9990001501',
+                                 conid='990001501', exch='TSE'))
+
+    def _run(self, tmap=None):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as td:
+            acct = Path(td) / 'inputs' / 'margin'
+            acct.mkdir(parents=True)
+            p = acct / 'ib.csv'
+            p.write_text(self.BODY)
+            if tmap:
+                (Path(td) / 'ticker.map').write_text(tmap)
+            with contextlib.redirect_stderr(err):
+                IbBrokerage.prepare_files([p])
+        return err.getvalue()
+
+    def test_hint_is_old_first_with_the_listing_suffix(self):
+        self.assertIn('`GLOBAL QZMR.TO QZKB.TO`', self._run())
+
+    def test_quiet_once_ticker_map_joins_them(self):
+        self.assertNotIn('several symbols',
+                         self._run('GLOBAL QZMR.TO QZKB.TO\n'))
+
+
+class TestAssignmentSettleRootAware(unittest.TestCase):
+    """A2-1028: an adjusted (QZX1) or class-share option leg kept T+1
+    while its stock leg settled T+2."""
+
+    def test_adjusted_and_class_share_legs_share_the_settle_date(self):
+        for opt, stock in (('QZX1 16JUN23 50 P', 'QZX'),
+                           ('QZBB 16JUN23 50 P', 'QZB B')):
+            with self.subTest(opt=opt):
+                body = (HEAD + TRADES_H
+                        + _trade(opt, '2023-06-16, 16:20:00', 1, 0, 0, 0,
+                                 code='A;C', cat='Equity and Index Options')
+                        + _trade(stock, '2023-06-16, 16:20:00', 100, 50,
+                                 -5000, 0, code='A;O'))
+                _, txs, _ = _parse_ib(body)
+                leg = next(t for t in txs if t['action'] == 'ASSIGN')
+                st = next(t for t in txs if t['action'] == 'BUYSELL')
+                self.assertEqual(leg['date_settle'], st['date_settle'])
 
 
 if __name__ == '__main__':
