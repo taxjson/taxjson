@@ -804,7 +804,7 @@ def parse_args(argv=None):
                    help=argparse.SUPPRESS)    # retired, ignored
     p.add_argument("--option-premium-timing", choices=["grant", "close"],
                    default=None, help="Canada only (default: close)")
-    p.add_argument("--option-grant-since", type=int, default=None)
+    p.add_argument("--option-grant-since", type=tax_year, default=None)
     p.add_argument("--option-buyback-wash", action="store_true")
     p.add_argument("--no-wash", action="store_true",
                    help="Disable wash detection (US crypto: digital "
@@ -824,7 +824,7 @@ def parse_args(argv=None):
     p.add_argument("--check", action="append", default=[],
                    help="Pipeline gains JSON (repeatable) to tie out "
                         "against.")
-    p.add_argument("--check-year", type=int, default=None,
+    p.add_argument("--check-year", type=tax_year, default=None,
                    help="The tax year the --check files hold (pipeline "
                         "gains files are year-scoped): dispositions of "
                         "other years are reported as not tied out "

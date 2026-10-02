@@ -87,7 +87,7 @@ def _parse_args():
              "defaults a Canada project to grant. Ignored for the US "
              "engine.")
     parser.add_argument(
-        "--option-grant-since", type=int, default=None, metavar="YEAR",
+        "--option-grant-since", type=tax_year, default=None, metavar="YEAR",
         help="With grant timing: contracts written before YEAR keep close "
              "timing (transition from books filed under close timing).")
     parser.add_argument(

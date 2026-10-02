@@ -122,7 +122,7 @@ def parse_args():
                         "or close timing for written options (match the "
                         "run). Default: close, with a note — `taxjson run` "
                         "defaults a Canada project to grant.")
-    parser.add_argument("--option-grant-since", type=int, default=None,
+    parser.add_argument("--option-grant-since", type=tax_year, default=None,
                         metavar="YEAR")
     parser.add_argument("--option-buyback-wash", action="store_true")
     parser.add_argument(

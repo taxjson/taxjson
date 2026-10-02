@@ -583,5 +583,28 @@ class TestShelteredFlagRepeatable(unittest.TestCase):
             self.assertIn('3,000.00', line)
 
 
+class TestStandaloneYearFlags(unittest.TestCase):
+    """A2-0955: the standalone year flags refuse an implausible year
+    (a typo such as 226 for 2026), like --year does."""
+
+    def test_flags_use_the_tax_year_type(self):
+        import subprocess
+        import sys
+        cases = [
+            ('taxjson.bin.taxjson_gains', ['--country', 'canada',
+                                           '--option-grant-since', '226']),
+            ('taxjson.bin.taxjson_brokerage', ['--tax-year', '225']),
+            ('taxjson.bin.taxjson_carryover', ['--project-year', '0']),
+            ('taxjson.bin.taxjson_audit', ['--check-year', '99999']),
+            ('taxjson.bin.taxjson_explain', ['--option-grant-since', '226']),
+        ]
+        for mod, argv in cases:
+            r = subprocess.run([sys.executable, '-m', mod, *argv, 'x.json'],
+                               capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL)
+            self.assertEqual(r.returncode, 2, (mod, r.stderr[-300:]))
+            self.assertIn('plausible tax year', r.stderr, mod)
+
+
 if __name__ == '__main__':
     unittest.main()

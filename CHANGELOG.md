@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The standalone year flags (`taxjson-gains/-explain/-audit/-carryover/
+  -t1135 --option-grant-since`, `taxjson-brokerage --tax-year`,
+  `taxjson-carryover --project-year`, `taxjson-audit --check-year`)
+  refuse an implausible year such as 226 for 2026, like `--year`
+  (A2-0955).
+
 - `taxjson-explain` and `taxjson-audit` take `--sheltered` more than
   once, as `taxjson-gains` does; a second file used to replace the first
   silently, and the superficial-loss denial it backed disappeared
