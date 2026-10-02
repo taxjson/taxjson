@@ -647,8 +647,11 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
             state["cache"] = F.load_cache()
         cache = state["cache"]
         key = f"{ysym}-{day}"
-        if key in cache and float(cache[key]) > 0:
-            return float(cache[key]), ysym
+        # A damaged entry (null, "abc", true, Infinity) is a miss, as in
+        # fill-crypto (re-audit A2-0464 / A2-1403).
+        hit = F.cached_price(cache, key)
+        if hit is not None:
+            return hit, ysym
         if offline_enabled():
             return None, ysym
         saved = dict(F.SYMBOL_OVERRIDES)
