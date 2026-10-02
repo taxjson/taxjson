@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- option-boundary: an assignment whose option root drops the share
+  class (RCI for RCI.B.TO, BRKB for BRK.B.US) is paired with its share
+  leg by the engine's own resolver; it was called cash-settled with
+  "no amendment" while the engine folds the premium (re-audit A2-0114,
+  a regression of S075-09, and A2-0328). A buy-back carried with a
+  negative net (a .tt book) is a cost of its magnitude ('net 500.00' and
+  '--101.00' before, A2-1111), and a contract on its own expiry day is
+  open, not 'expired, missing its expiry row' (A2-1112).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

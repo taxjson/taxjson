@@ -1322,7 +1322,7 @@ def option_contract_size(opt_tx) -> float:
     return m if m > 0 else float(OPTION_CONTRACT_SHARES)
 
 
-def _make_assign_underlying_resolver(transactions, date_of):
+def _make_assign_underlying_resolver(transactions, date_of, quiet=False):
     """Return resolve(option_tx) -> underlying stock symbol for an option
     ASSIGN, or None when no stock line in the option's own account
     matches (a cash-settled index option, or a missing stock leg).
@@ -1335,7 +1335,9 @@ def _make_assign_underlying_resolver(transactions, date_of):
     S019-01, S070-17, R1-176: RCI for RCI.B.TO, BRKB for BRK.B.US,
     F:CL for F:CLG6.US used to be treated as cash-settled, realizing the
     premium in the wrong year). An ambiguous match is left unresolved
-    with a warning naming the candidates."""
+    with a warning naming the candidates. `quiet` drops the per-match
+    "resolved" note (a report that re-derives the engine's pairing,
+    e.g. option-boundary, A2-0114; the engine run already printed it)."""
     dates: Dict[Any, list] = {}
     for t in transactions:
         if is_option_symbol(t.symbol) or t.action not in ('BUYSELL', 'ASSIGN'):
@@ -1368,10 +1370,11 @@ def _make_assign_underlying_resolver(transactions, date_of):
         out = None
         if len(near) == 1:
             out = near[0]
-            print(f"note: {tx.symbol}: option root {und} resolved to "
-                  f"{out}, the stock line this account trades at the "
-                  f"assignment — the premium rolls into its cost/proceeds.",
-                  file=sys.stderr)
+            if not quiet:
+                print(f"note: {tx.symbol}: option root {und} resolved to "
+                      f"{out}, the stock line this account trades at the "
+                      f"assignment — the premium rolls into its "
+                      f"cost/proceeds.", file=sys.stderr)
         elif len(near) > 1:
             print(f"warning: {tx.symbol}: option root {und} matches "
                   f"several stock lines traded at the assignment "
