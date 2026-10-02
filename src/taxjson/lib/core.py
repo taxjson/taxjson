@@ -4841,9 +4841,13 @@ class USATaxRules(TaxRules):
                     print(
                         f"warning: {symbol} ADJUST of {tx.net_amount:.2f} "
                         f"on {tx.date} found no open long lots (position "
-                        f"closed or short) — a return of capital with no "
-                        f"basis to reduce is a taxable event needing "
-                        f"manual review; the row was NOT applied.",
+                        f"closed or short) — "
+                        + ("a return of capital with no basis to reduce "
+                           "is a taxable event needing manual review"
+                           if tx.net_amount < 0 else
+                           "a basis increase with no shares to carry it "
+                           "needs manual review")
+                        + "; the row was NOT applied.",
                         file=sys.stderr,
                     )
                     continue
@@ -4950,11 +4954,27 @@ class USATaxRules(TaxRules):
                             f"sh | spread over {len(_lots)} lot(s), "
                             f"{_held:.4f} sh held")
                     continue
+                # Held before and sold out by the pay date (sold between
+                # the record and pay dates): the history is complete, the
+                # §307 share belongs to the sold lots (audit A2-0562).
+                _sold_out = any(
+                    _p is not tx and _p.symbol == tx.symbol
+                    and _p.account == tx.account
+                    and _p.action in ('BUYSELL', 'ASSIGN')
+                    and _p.quantity < 0
+                    and (_p.date, _p.time or '') <= (tx.date,
+                                                     tx.time or '')
+                    for _p in taxable_sorted)
                 print(f"warning: {symbol}: stock dividend of "
                       f"{tx.quantity:g} share(s) on {tx.date} with no "
-                      f"shares held — booked as a $0 purchase; add the "
-                      f"missing purchase history so it can share their "
-                      f"basis (§307).", file=sys.stderr)
+                      f"shares held — booked as a $0 purchase; "
+                      + ("the shares were disposed of before the pay "
+                         "date, so the §307 basis allocation reaches the "
+                         "SOLD lots: adjust their basis and this lot's by "
+                         "hand (.tt ADJUST rows)."
+                         if _sold_out else
+                         "add the missing purchase history so it can "
+                         "share their basis (§307)."), file=sys.stderr)
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);

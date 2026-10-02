@@ -35,6 +35,15 @@ Corporate Actions,Data,Stocks,USD,2025-10-29,"2025-10-28, 20:25:00","RGLD.CAD(10
 Corporate Actions,Data,Total,,,,,,0,18550.0,0,
 '''
 
+# IB's rebook of the cancelled 10-28 journal (the real statement shape).
+_RGLD_REBOOK = (
+    'Corporate Actions,Data,Stocks,CAD,2025-10-30,"2025-10-29, 20:25:00",'
+    '"RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 '
+    '(RGLD.CAD, ROYAL GOLD INC, US0000000002)",-100,0,-25840.0,0,\n'
+    'Corporate Actions,Data,Stocks,USD,2025-10-30,"2025-10-29, 20:25:00",'
+    '"RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 '
+    '(RGLD, ROYAL GOLD INC, US0000000002)",100,0,18550.0,0,\n')
+
 
 def _write_csv(content: str) -> Path:
     f = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
@@ -167,8 +176,10 @@ class TestIBExtractor(unittest.TestCase):
 
     def test_cross_listing_journal_collapses_into_main_event(self):
         """IB's RGLD.CAD → RGLD.US 1-for-1 journal is noise from the
-        user's perspective — collapse it so the result is SSL.TO→RGLD.US."""
-        path = _write_csv(_SSL_RGLD_CSV)
+        user's perspective — collapse it so the result is SSL.TO→RGLD.US.
+        The fixture's 10-28 journal is cancelled (Ca) and rebooked on
+        10-29, the real statement's shape (A2-0069)."""
+        path = _write_csv(_SSL_RGLD_CSV + _RGLD_REBOOK)
         events = parse_ib_corporate_actions(path)
         primary = next(e for e in events if e.source_symbol == 'SSL.TO')
         # Target ISIN should be RGLD's US ISIN (chain-collapsed).
@@ -300,25 +311,23 @@ class TestIBExtractor(unittest.TestCase):
         # + 2 from hop 2 = 6).
         self.assertEqual(len(ev.raw_descriptions), 6)
 
-    def test_duplicate_cross_listing_journal_surfaces_for_user_ignore(self):
-        """IB sometimes replays the cross-listing journal on a second
-        date. Rather than silently dropping it via a brittle source-level
-        heuristic, we surface it so the user can mark it `ignore` through
-        the interactive prompt — that decision then persists in the
-        manifest and re-runs are deterministic."""
-        dup_csv = _SSL_RGLD_CSV + (
-            'Corporate Actions,Data,Stocks,CAD,2025-10-30,"2025-10-29, 20:25:00",'
-            '"RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 '
-            '(RGLD.CAD, ROYAL GOLD INC, US0000000002)",-100,0,-25840.0,0,\n'
-            'Corporate Actions,Data,Stocks,USD,2025-10-30,"2025-10-29, 20:25:00",'
-            '"RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 '
-            '(RGLD, ROYAL GOLD INC, US0000000002)",100,0,18550.0,0,\n'
-        )
-        path = _write_csv(dup_csv)
-        events = parse_ib_corporate_actions(path)
-        # Both events surface: the real merger AND the duplicate journal.
-        # The user chooses which (if any) to ignore via the prompt.
-        self.assertEqual(len(events), 2)
+    def test_cancelled_journal_and_its_rebook_are_one_event(self):
+        """IB cancels the 10-28 cross-listing journal (Ca) and rebooks it
+        on 10-29. The cancelled journal used to surface as a second
+        event the user had to mark `ignore` by hand; each Ca row now
+        removes its original, so only the merger (collapsed through the
+        rebooked journal) is offered (A2-0069)."""
+        events = parse_ib_corporate_actions(
+            _write_csv(_SSL_RGLD_CSV + _RGLD_REBOOK))
+        self.assertEqual([(e.source_symbol, e.target_symbol)
+                          for e in events], [('SSL.TO', 'RGLD.US')])
+
+    def test_cancelled_journal_without_rebook_is_undone(self):
+        """With no rebook, the cancelled journal moved nothing: the
+        merger lands on the CAD-side line."""
+        events = parse_ib_corporate_actions(_write_csv(_SSL_RGLD_CSV))
+        self.assertEqual([(e.source_symbol, e.target_symbol)
+                          for e in events], [('SSL.TO', 'RGLD.CAD.TO')])
 
 
 class TestCanadaMergerRules(unittest.TestCase):

@@ -18,10 +18,17 @@ only (lib/country PROJECT_FILE_COUNTRY): a US project refuses the file.
     FFN.TO     2024         1711.05  margin  # box 18 total for the year
 
 - SYMBOL: the dividend row's symbol as the books spell it (after
-  ticker.map); a bare root without a suffix (LFE) matches LFE.TO.
-- WHEN: a year (every dividend whose tax date is in it) or one date.
+  ticker.map); a bare root without a suffix (LFE) matches that root's
+  Canadian listings only (LFE.TO, LFE.V ...) — never another class or
+  preferred series (LFE.PR.B.TO) nor a foreign listing (LFE.US): name
+  those in full.
+- WHEN: a year (every dividend whose tax date is in it) or one date
+  (the payment's pay date, or its record date when the books date it
+  by the record date).
 - AMOUNT: `all`, or the box-18 amount in the row's currency — the
-  TOTAL over the matching rows, shared among them pro rata.
+  TOTAL over the matching rows, shared among them pro rata. A plain
+  decimal with a decimal point (thousands commas in groups of three):
+  a decimal comma is refused.
 - ACCOUNT: optional. Without it the entry covers the taxable accounts
   (only they get a T5); name an account to restrict it.
 
@@ -35,6 +42,7 @@ or matching rows in more than one currency is an error naming the line.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +52,9 @@ MAP_NAME = "capital_gains_dividends.map"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _YEAR_RE = re.compile(r"^\d{4}$")
+# Digits with an optional decimal point; thousands commas only in
+# groups of three before the point.
+_AMOUNT_RE = re.compile(r"(?:[1-9]\d{0,2}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+")
 
 
 class CgDividendMapError(ValueError):
@@ -62,13 +73,28 @@ class Entry:
         return f"{MAP_NAME} line {self.line}"
 
     def matches_symbol(self, symbol: str) -> bool:
+        """Exact, or a bare root against ROOT.<Canadian listing suffix>:
+        a preferred series or another class (FTN.PR.A.TO) and a foreign
+        listing of a same-root issuer (T.US for T) are other securities
+        and never carry a T5 box-18 dividend of this one (audit A2-0075,
+        A2-0228)."""
+        from taxjson.lib.income_dating import CA_LISTING_SUFFIXES
         s = (symbol or "").upper()
-        return s == self.symbol or (
-            "." not in self.symbol and s.startswith(self.symbol + "."))
+        if s == self.symbol:
+            return True
+        if "." in self.symbol:
+            return False
+        root, _dot, suffix = s.partition(".")
+        return root == self.symbol and suffix in CA_LISTING_SUFFIXES
 
-    def matches_date(self, iso: str) -> bool:
-        return iso == self.when if len(self.when) == 10 \
-            else iso[:4] == self.when
+    def matches_date(self, iso: str, pay: str = "") -> bool:
+        """A year matches the income (tax) date's year; a date matches
+        the pay date or the income date (the record date of a
+        trust-dated row) — the documented pay date used to be refused
+        for a record-dated row (audit A2-0560)."""
+        if len(self.when) == 10:
+            return self.when in (iso, pay)
+        return iso[:4] == self.when
 
 
 def parse_map(text: str) -> List[Entry]:
@@ -92,12 +118,16 @@ def parse_map(text: str) -> List[Entry]:
         if amt.lower() == "all":
             amount = None
         else:
-            try:
-                amount = float(amt.replace(",", ""))
-            except ValueError:
+            # A plain decimal: float(amt.replace(',', '')) read the
+            # decimal comma '17,11' as 1711 and '1_0' as 10 (audit
+            # A2-0227, A2-0987, A2-0990).
+            if not _AMOUNT_RE.fullmatch(amt):
                 raise CgDividendMapError(
                     f"{where}: AMOUNT must be `all` or a positive amount "
-                    f"in the dividend's currency, got {amt!r}") from None
+                    f"in the dividend's currency with a decimal POINT "
+                    f"(e.g. 17.11 or 1,711.05; a decimal comma is "
+                    f"refused), got {amt!r}")
+            amount = float(amt.replace(",", ""))
             if not amount > 0 or amount != amount or amount == float("inf"):
                 raise CgDividendMapError(
                     f"{where}: AMOUNT must be positive, got {amt!r}")
@@ -109,8 +139,15 @@ def parse_map(text: str) -> List[Entry]:
 def load_map(root: Path) -> Optional[List[Entry]]:
     """The project's entries, or None when there is no map file."""
     p = Path(root) / MAP_NAME
-    if not p.is_file():
+    if not os.path.lexists(p):
         return None
+    if not p.is_file():
+        # A directory or a dangling symlink is not "no map": the box-18
+        # dividends would silently show as ordinary dividends (audit
+        # A2-0994).
+        raise CgDividendMapError(
+            f"{MAP_NAME}: cannot read it (not a regular file"
+            + (" — a dangling symlink" if p.is_symlink() else "") + ")")
     try:
         text = p.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
@@ -142,14 +179,18 @@ def allocate(entries: Iterable[Entry],
                 if (a == e.account if e.account
                     else (dflt is None or a in dflt))
                 and e.matches_symbol(str(t.get("symbol") or ""))
-                and e.matches_date(str(date_of(t) or ""))]
+                and e.matches_date(str(date_of(t) or ""),
+                                   str(t.get("date") or ""))]
         if not hits:
             scope = (f"account {e.account!r}" if e.account
                      else "the taxable accounts")
             raise CgDividendMapError(
                 f"{e.where()}: {e.symbol} {e.when} matches no dividend in "
                 f"{scope} — check the symbol (as the books spell it, after "
-                f"ticker.map) and the date (the dividend's pay date)")
+                f"ticker.map) and the date (a year is the income year — "
+                f"for a distribution dated by its record date, the "
+                f"record date's year; a date is the pay date or that "
+                f"record date)")
         if e.amount is None:
             frac = {(a, str(t.get("id"))): 1.0 for a, t in hits}
         else:

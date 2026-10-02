@@ -169,6 +169,16 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `core.py` `detect_option_replacement_matches` (warn-only in the US engine; the Canada engine enforces the call rule).
 - **Current behavior:** §1091(a) covers "a contract or option so to acquire"; a deep-ITM call bought inside the window leaves the stock loss allowed, with a warning. A user policy choice, not a bug — the statute itself is mandatory, so treat the warning as an instruction (2026-09 audit).
 
+### US: §355 spin-off basis is spread by quantity, with no per-block tacking (A2-0065)
+- **Where:** `lib/corp_actions.py` `_us_spinoff_tax_free_355` (one BUYSELL of the spin-off on the spin date plus one parent ADJUST) and the US engine's ADJUST branch in `core.py` (spread per share across the open lots).
+- **Current behavior:** the allocated basis is taken from each parent lot in proportion to its SHARES, not its basis (Reg. §1.358-2: each share gives up the same fraction of its own basis), so a low-basis lot can go below zero and book a §301(c)(3) "deemed gain" on a tax-free spin-off; and the spun-off shares are one new lot dated on the spin date instead of one block per parent lot with the parent's holding period (§1223(1)).
+- **Why deferred:** needs the engine to apply a basis-allocation event per parent lot (a fraction of each lot's basis, and a spin-off lot per parent lot carrying its acquisition date); the corp-actions stage does not see lots. Workaround: book the spin-off in a `.tt` file as one BUYSELL per parent block with the block's date, and a per-lot ADJUST.
+
+### US: `reorg_368_boot` is computed on the whole pool, not per block (A2-0066)
+- **Where:** `lib/corp_actions.py` `_emit_boot_exchange` (one engineered SELL at proceeds = total basis + recognized gain, split by the engine across lots by quantity).
+- **Current behavior:** with lots of different basis, one lot books a gain and another a LOSS, though §356(c) recognizes no loss; Reg. §1.356-1(b) / Rev. Rul. 68-23 compute the recognized gain block by block (each block: min(its realized gain, its share of the boot), never below zero). Totals are right only when every lot is in a gain.
+- **Why deferred:** needs per-lot data the corp-actions stage does not have; the fix is an engine-applied boot exchange (per lot: realized = its share of new-share FMV + boot − basis, recognized = max(0, min(realized, boot share)), new basis = basis − boot share + recognized, holding period tacked). Workaround: book it by hand in a `.tt` file, one SELL/BUY pair per block.
+
 ### US: specific-lot identification is not supported (FIFO only)
 - **Where:** the US engine consumes lots FIFO (Reg. 1.1012-1(c)(1) default). Reg. 1.1012-1(c)(2)–(3) specific identification, and a broker's non-FIFO default (e.g. highest-cost), are not modeled.
 - **Consequence:** a broker 1099-B computed under specific ID will not reconcile per-lot; year totals agree only when every lot is eventually sold. Set the broker's lot method to FIFO or reconcile by hand.
