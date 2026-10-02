@@ -929,19 +929,33 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
          "watch, web)", [
             Rule("CA-PLAN-01",
                  "They apply the superficial-loss rule above on settle "
-                 "dates: a loss whose replacement is still held can be "
-                 "rescued by selling the replacement so that it is no "
-                 "longer held when day 30 settles (VIOLATION prints the "
-                 "last trade date that does it)."),
+                 "dates, each replacement unit backing one denial (an "
+                 "earlier loss's claim, even one whose window has closed, "
+                 "is spent; quantities across a split are compared in "
+                 "today's units): a loss whose replacement is still held "
+                 "can be rescued by selling the replacement so that it is "
+                 "no longer held when day 30 settles (VIOLATION prints the "
+                 "last trade date that does it, on the listing's "
+                 "calendar; once that date has passed it says the loss is "
+                 "denied)."),
             Rule("CA-PLAN-02",
                  "A long call on the shares bought in the window counts "
-                 "as a replacement.", cont=True),
+                 "as a replacement at its contract size; a warrant, an "
+                 "adjusted-series call or a futures option is a note to "
+                 "check by hand.", cont=True),
             Rule("CA-PLAN-03",
                  "The web what-if runs a taxable sale on the blended s.47 "
                  "pool of the taxable accounts of its kind, with the "
                  "registered accounts as context, so a sibling account's "
                  "purchase in the window denies the loss as the filing "
-                 "would."),
+                 "would. It prices an option at the contract size the "
+                 "book's rows declare (100 for an equity option with "
+                 "none), settles the sale on the listing's market "
+                 "calendar whatever currency the price is typed in, "
+                 "books a trust's return of capital on its record date "
+                 "first, refuses a plain futures contract (its gain is "
+                 "the settled P/L), and lists the engine's warn-only "
+                 "replacement flags for the sale."),
             Rule("CA-PLAN-04",
                  "Their verdicts cover the project's own accounts only and "
                  "say so: a purchase by your spouse or common-law partner, "
@@ -1486,17 +1500,33 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "undoes it (the disallowed loss is in the replacement's "
                  "basis)."),
             Rule("US-PLAN-02",
-                 "A long call bought in the window is a note only.",
+                 "A long call bought in the window is a note only, for an "
+                 "existing loss and for a loss sale today, as are a "
+                 "warrant, an adjusted-series call and a futures option; "
+                 "an IRA purchase the engine already matched to an "
+                 "earlier loss is not counted again (share for share), "
+                 "and a short position's trigger is a new short sale.",
                  cont=True),
             Rule("US-PLAN-03",
                  "The web what-if runs a sale with every taxable "
                  "account's purchases and the IRAs as wash-sale context, "
-                 "on the account's own FIFO basis."),
+                 "on the account's own FIFO basis. It prices an option "
+                 "at the contract size the book's rows declare (100 for "
+                 "an equity option with none), settles the sale on the "
+                 "listing's market calendar whatever currency the price "
+                 "is typed in, refuses a plain futures contract (its "
+                 "gain is the settled P/L), and lists the engine's "
+                 "warn-only replacement flags for the sale (a long call "
+                 "bought in the window, US-WASH-12)."),
             Rule("US-PLAN-04",
                  "Their verdicts cover the project's own accounts only and "
                  "say so: a purchase by your spouse or by a corporation "
                  "you control also makes a loss a wash sale (IRS Pub. "
                  "550), and those accounts are not in the project."),
+            Rule("US-PLAN-05",
+                 "harvest counts a loss in an account marked crypto as "
+                 "claimable now, with no wash-sale advice: those "
+                 "accounts are outside the wash-sale rule (US-WASH-13)."),
         ]),
         ("Project country", _ownership(c)),
     ]

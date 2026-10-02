@@ -105,6 +105,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             if cat == "LOCKED" and r.get("at_risk_qty") is not None \
                     and float(r["at_risk_qty"]) < abs(q) - 1e-6:
                 status = "PARTIAL"
+            if cat == "VIOLATION" and r.get("deadline_passed"):
+                # No rescue sale settles in time any more: the loss is
+                # denied — never 'Sell ... by <yesterday>' (A2-0368).
+                status = "DENIED"
             adv = r.get("advisory") or ""
             reason = adv.split(":", 1)[1].strip() if ":" in adv else adv
             output_rows.append([r.get("ticker"), f"{q:.4f}", status, reason])

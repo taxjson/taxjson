@@ -52,6 +52,43 @@ _PAIR_CURRENCIES = frozenset({"USD", "CAD", "EUR", "GBP", "AUD", "JPY",
                               "ZAR", "ILS"})
 from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_SUFFIXES
 
+# Listings whose quote may come in MINOR units (LSE pence, JSE cents,
+# TASE agorot): a quote that does not state its unit cannot be valued —
+# 70 could be 70 pence or 70 pounds (audit A2-0379 / A2-0692).
+_MINOR_UNIT_SUFFIXES = frozenset({"L", "IL", "JO", "TA"})
+
+
+def minor_unit_listing(quote_symbol: str) -> bool:
+    """True for a listing quoted in pence/cents on its own market (an
+    LSE '.L' line): only a source that names the unit can price it."""
+    sym = (quote_symbol or "").strip()
+    if "." not in sym:
+        return False
+    return sym.rsplit(".", 1)[1].upper() in _MINOR_UNIT_SUFFIXES
+
+
+def clean_quote_currency(price: float, currency
+                         ) -> Tuple[float, Optional[str], Optional[str]]:
+    """(price, currency, problem) for a currency a tier or the cache
+    reported: stripped, minor units ('GBp') converted to the major
+    currency, upper-cased. A non-string or non-ISO value is dropped
+    (currency None) and `problem` says why — validated like the price
+    beside it (audit A2-1170: a list crashed harvest, 'usd' dropped the
+    holding)."""
+    if currency is None:
+        return price, None, None
+    if not isinstance(currency, str):
+        return price, None, f"currency {currency!r} is not a code"
+    cur = currency.strip()
+    if not cur:
+        return price, None, None
+    if cur in _MINOR_UNITS:
+        return price / 100.0, _MINOR_UNITS[cur], None
+    cur = cur.upper()
+    if len(cur) != 3 or not cur.isalpha():
+        return price, None, f"currency {currency!r} is not a code"
+    return price, cur, None
+
 
 @dataclass
 class PriceQuote:
@@ -71,19 +108,29 @@ def is_crypto_symbol(symbol: str) -> bool:
     return bool(symbol) and bool(re.fullmatch(r"[A-Z0-9]{1,15}", symbol))
 
 
-def yf_symbol_for(symbol: str) -> Optional[str]:
+def yf_symbol_for(symbol: str,
+                  crypto_overrides: Optional[Dict[str, str]] = None
+                  ) -> Optional[str]:
     """Best-effort Yahoo spelling for a taxjson symbol, used when
     yf_ticker.map carries no override. THE single home for this
     translation (harvest consumes it — the
     audit found three drifting copies). Returns None for symbols Yahoo
-    can't serve (exchange-prefixed 'X:SYM' forms)."""
+    can't serve (exchange-prefixed 'X:SYM' forms).
+
+    `crypto_overrides`: the coin spellings the books were priced with
+    (fill-crypto's built-ins merged with the project's
+    crypto_ticker.map — `load_crypto_overrides`); the built-ins alone
+    when not given (audit A2-0364: FOO mapped to FOO123 in the books
+    was quoted as FOO-USD, another asset)."""
     import re
     if is_crypto_symbol(symbol):
         # A coin, not a stock: Yahoo's crypto pair, with the same
         # collision table the crypto price filler uses (audit R1-228 —
         # ETH/LINK/SOL went out as equity tickers).
-        from taxjson.bin.fill_crypto_prices import SYMBOL_OVERRIDES
-        return f"{SYMBOL_OVERRIDES.get(symbol, symbol)}-USD"
+        if crypto_overrides is None:
+            from taxjson.bin.fill_crypto_prices import SYMBOL_OVERRIDES
+            crypto_overrides = SYMBOL_OVERRIDES
+        return f"{crypto_overrides.get(symbol, symbol)}-USD"
     yf_ticker = symbol
     if symbol.endswith('.US'):
         yf_ticker = symbol[:-3]
@@ -111,6 +158,19 @@ def yf_symbol_for(symbol: str) -> Optional[str]:
     if ':' in yf_ticker:
         return None
     return yf_ticker
+
+
+def load_crypto_overrides(search_dirs) -> Dict[str, str]:
+    """fill-crypto's coin spellings: its built-in collision table merged
+    with the first crypto_ticker.map found in `search_dirs` (the
+    project root's map is the one `taxjson run` priced the books
+    with)."""
+    from taxjson.bin.fill_crypto_prices import (SYMBOL_OVERRIDES,
+                                                load_symbol_overrides)
+    for d in search_dirs:
+        if (Path(d) / "crypto_ticker.map").is_file():
+            return load_symbol_overrides([str(d)])
+    return dict(SYMBOL_OVERRIDES)
 
 
 def load_yf_map(search_dirs) -> Dict[str, Tuple[str, float]]:
@@ -635,6 +695,7 @@ def fetch_prices(pairs: Dict[str, str], *,
             s: (p, "yfinance", cur) for s, (p, cur) in _yfinance_fetcher(
                 rem, verbose=verbose).items()})
 
+    unit_less: List[str] = []
     for fetcher in fetchers:
         if not remaining:
             break
@@ -645,8 +706,21 @@ def fetch_prices(pairs: Dict[str, str], *,
                 print(f"price-chain: tier failed ({exc})", file=sys.stderr)
             continue
         for sym, hit in got.items():
+            if sym not in remaining:
+                continue
             price, source = hit[0], hit[1]
-            cur = hit[2] if len(hit) > 2 else None
+            price, cur, problem = clean_quote_currency(
+                price, hit[2] if len(hit) > 2 else None)
+            if problem:
+                print(f"warning: price-chain: {source} quote for {sym}: "
+                      f"{problem} — ignored", file=sys.stderr)
+            if cur is None and minor_unit_listing(pairs.get(sym) or sym):
+                # Pence or pounds? A unit-less quote for an LSE line is
+                # left for the next tier (Yahoo names the unit) and
+                # never cached (audit A2-0692).
+                if sym not in unit_less:
+                    unit_less.append(sym)
+                continue
             quotes[sym] = PriceQuote(price=price, source=source, asof=today,
                                      currency=cur)
             remaining.pop(sym, None)
@@ -670,9 +744,14 @@ def fetch_prices(pairs: Dict[str, str], *,
                        - datetime.strptime(asof, "%Y-%m-%d").date()).days
             except ValueError:
                 continue
+            price, cur, problem = clean_quote_currency(
+                price, rec.get("currency"))
+            if problem:
+                print(f"warning: price cache entry for {sym}: {problem} "
+                      f"— its currency is ignored", file=sys.stderr)
             quotes[sym] = PriceQuote(price=price,
                                      source=f"cache:{age}d", asof=asof,
-                                     currency=rec.get("currency"))
+                                     currency=cur)
             remaining.pop(sym)
             if age > max_cache_age_days:
                 stale.append(f"{sym} ({age}d)")
@@ -680,6 +759,13 @@ def fetch_prices(pairs: Dict[str, str], *,
             print(f"warning: price cache older than {max_cache_age_days}d "
                   f"for: {', '.join(stale)} — connect IBKR or the network "
                   f"to refresh.", file=sys.stderr)
+
+    for sym in unit_less:
+        if sym not in quotes:
+            print(f"warning: price-chain: the quote for {sym} did not say "
+                  f"its unit — that market quotes in pence/cents as well "
+                  f"as pounds, so it was not used (a source that names "
+                  f"the unit, e.g. Yahoo, prices it).", file=sys.stderr)
 
     # Write back every fresh (non-cache) quote.
     dirty = False

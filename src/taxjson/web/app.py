@@ -9,7 +9,6 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import data
 from .data import ReportArtifactError, UnknownAccountError
@@ -24,6 +23,28 @@ _HERE = Path(__file__).parent
 # that single-label name let a rebinding page read the books (S078-10);
 # tests use base_url="http://127.0.0.1".
 _DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _host_of(header: str) -> str:
+    """The host part of a Host header, lower-cased, without the port and
+    without an IPv6 address's brackets ("[::1]:8765" -> "::1"). Starlette's
+    TrustedHostMiddleware split at the first ':', so an IPv6 Host became
+    "[" and no IPv6 bind could ever be reached (A2-0695, A2-1186)."""
+    h = (header or "").strip().lower()
+    if h.startswith("["):
+        end = h.find("]")
+        return h[1:end] if end > 0 else ""
+    if h.count(":") > 1:
+        return h                      # a bare IPv6 address, no port
+    return h.split(":", 1)[0]
+
+
+def _host_allowed(header: str, allowed) -> bool:
+    if "*" in allowed:
+        return True
+    host = _host_of(header)
+    return bool(host) and host in {str(a).strip().strip("[]").lower()
+                                   for a in allowed}
 
 
 AUTH_COOKIE = "taxjson_token"
@@ -58,10 +79,18 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
                 response.set_cookie(AUTH_COOKIE, auth_token, httponly=True,
                                     samesite="strict")
             return response
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=list(dict.fromkeys(
-            (*_DEFAULT_ALLOWED_HOSTS, *(allowed_hosts or ())))))
+    _allowed = list(dict.fromkeys(
+        (*_DEFAULT_ALLOWED_HOSTS, *(allowed_hosts or ()))))
+
+    @app.middleware("http")
+    async def _trusted_host(request: Request, call_next):
+        # Registered last, so it runs first (before the token check),
+        # as TrustedHostMiddleware did.
+        if not _host_allowed(request.headers.get("host", ""), _allowed):
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("Invalid host header",
+                                     status_code=400)
+        return await call_next(request)
     templates = Jinja2Templates(directory=str(_HERE / "templates"))
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")),
               name="static")
@@ -228,6 +257,7 @@ def create_app(ctx: ProjectContext, allowed_hosts=None,
         return page("wash_radar.html", request, status_code=status,
                     errors=[stale] if stale else [],
                     account=acct, scope_note=scope_note,
+                    law_scope_note=data.wash_radar_scope_note(cur(), acct),
                     radar_accounts=(with_reports or candidates),
                     sections=sections, error=error)
 

@@ -75,6 +75,117 @@
   claimed amount '0,125' is refused; standalone carryover and audit
   note the close-timing default (A2-0351, A2-0355, A2-0665, A2-0667,
   A2-0677, A2-0678).
+- Wash radar, sell-check, buy-check, harvest's ADVISORY: each replacement
+  unit backs one denial, as in the engine (CA-SL-08) — a rebuy an earlier
+  loss used up no longer makes a second, false VIOLATION or a false
+  LOCKED for a sale today, and a sale split into fills no longer counts
+  its shared rebuy twice (re-audit A2-0009, A2-0038, A2-0377, A2-0689,
+  A2-0691; US: an IRA buy the engine already matched is not 'at risk'
+  again). Quantities across a split are compared in today's units
+  (A2-0382); a long call counts at its declared contract size (A2-0373);
+  a class-share option root (RCI for RCI.B.TO) names its class line; a
+  futures option on the loss's own contract is a note to check by hand,
+  never a VIOLATION (A2-0378, A2-0690, also in edge-cases).
+- Wash radar: once the last rescue trade date has passed, a VIOLATION
+  says the loss is denied (JSON `deadline_passed`) instead of 'Sell ...
+  by <yesterday>'; sell-check no longer answers ACTION/UNSAFE for it and
+  safe-to-sell shows DENIED (A2-0688, A2-0368). The sell-by date walks
+  back on the listing's calendar (A2-1183) and a futures rescue settles
+  on its trade date (A2-1181).
+- Wash radar: warrants, adjusted-series calls and futures options bought
+  in a loss's window (and, US, a long call bought in the last 30 days for
+  a sale today) are noted for a manual check, carried to sell-check;
+  buy-check flags buying one after a share loss instead of 'no wash
+  exposure', and a US long call after a share loss is a note, not UNSAFE
+  (A2-0129, A2-0687).
+- Wash radar: a short position is described as a short (cover, re-short;
+  a US short's trigger is a new short sale, not an IRA purchase)
+  (A2-0371, A2-0686, A2-1184).
+- Wash radar's own pool: a Canadian trust's return of capital moves to
+  its record date and a return of capital above the ACB floors it at nil
+  (A2-1174, A2-1178, A2-0372); a coin rebuy under 1e-6 units is a holding
+  (A2-1168); a `.tt` row dated tomorrow in a settle-date project is a
+  trade made today (A2-0130).
+- buy-check: buying back a written call you are short is SAFE (it
+  acquires nothing) (A2-0370). buy-check / sell-check: the 'last loss
+  sale' line shows only losses the queried trade can affect (A2-1172);
+  a bare-array book no longer crashes them (A2-1180); an unreadable
+  ticker.map stops them, as it stops `run` (A2-0683).
+- `run --account <sheltered>` refuses (and keeps `sheltered_base.json`)
+  when another sheltered account with inputs has no book in work/; it
+  rebuilt the combined book without that account's buys, so the radar
+  said "safe to sell at a loss" (re-audit A2-0128).
+- The same export file under two accounts' `inputs/` folders is an
+  ATTENTION line naming both files, for every broker and `.tt`; `run
+  --strict` stops on it and on one broker account feeding two taxjson
+  accounts (re-audit A2-0366).
+- Every view and planning command that reads the work/ books (gains,
+  divs-sum, roc-sum, wash-sales, fx-cash, list, shares, winners, the
+  radar, buy-check, sell-check, harvest and others) prints the
+  stale-books banner after a failed run or changed inputs, on stderr
+  (re-audit A2-0380, A2-0381).
+- edge-cases, spinoffs, splits, check-dates, winners, leaps and
+  leaps-sum refuse an account that is not in `[accounts]`; harvest names
+  a bare symbol filter that matches no position (re-audit A2-0684,
+  A2-1167).
+- trades, divs, events, roc, gains, shares, fees-sum and check-dates name
+  a configured account that has inputs but no books (re-audit A2-1182).
+- Grant timing: an expired written option counts as a close in ccd-sum,
+  winners and the .sum TRADES line, as under close timing (re-audit
+  A2-0693).
+- buy-check, sell-check, watch, instalments, wash-sales and `list --date`
+  relay a failed child's error line instead of the first 200-400
+  characters of its traceback (re-audit A2-1190).
+
+- harvest --options values an option at the contract size its rows
+  declare (a x10 mini contract is no longer valued at x100), as `list`
+  and the holdings export do (re-audit A2-0367, A2-1177).
+- harvest: a VIOLATION whose rescue deadline has passed is no longer
+  counted as harvestable now; it waits for the registered buy to age
+  out (re-audit A2-0365).
+- harvest quotes a coin under the project's crypto_ticker.map spelling,
+  the one the books were priced with (re-audit A2-0364).
+- harvest / price chain: an LSE (.L) quote that does not state its unit
+  (pence or pounds) is left out with a warning instead of valued as
+  pounds; a live tier's unit-less quote falls through to the next tier
+  and is never cached (re-audit A2-0379, A2-0692).
+- price cache: a cached quote's currency is checked like its price —
+  'usd' is read as USD, a non-text value is ignored with a warning
+  instead of a traceback (re-audit A2-1170).
+- harvest, t1135, form-export and carryover strip and upper-case
+  --base-currency (' CAD' no longer drops every row or refuses the
+  books; re-audit A2-1169).
+- harvest --json carries the planning-tool scope note (re-audit
+  A2-1171).
+- US harvest: a crypto account's losses are claimable now with no
+  wash-sale advice (US-WASH-13, new US-PLAN-05); an open short shows ST,
+  never LT (US-HOLD-03) (re-audit A2-1173, A2-1176).
+- `taxjson serve` on an IPv6 address (`--host ::1`, `[::1]`, or a LAN
+  IPv6 address) answers requests instead of refusing every one with 400
+  "Invalid host header", and prints the URL with the address in brackets
+  (re-audit A2-0695, A2-1186).
+
+- Web: the wash-radar page shows the scope note (verdicts cover the
+  project's own accounts only, CA-PLAN-04 / US-PLAN-04); a radar sidecar
+  without "sections" or with a row field of the wrong type, and a
+  holdings row whose `trades` is not a list, are an error banner instead
+  of "no report yet", the stale .rpt, or an HTTP 500; the stale-rate
+  label uses harvest's threshold (7 days, not 4); and the freshness
+  fallback counts the same input files as the checklist (a Finder
+  .DS_Store no longer marks the dashboard stale) (re-audit A2-0374,
+  A2-0696, A2-1187, A2-1188, A2-1179, A2-1185).
+
+- Web what-if: an option is priced at the contract size the book's rows
+  declare (a x10 mini option was priced at x100, a 10 loss shown as a
+  350 gain), and a plain futures contract is refused instead of priced
+  at x1 and dated as an equity T+1 sale; the simulated sale settles on
+  the listing's market calendar, not the calendar of the currency the
+  price was typed in; a Canadian trust's return of capital is booked on
+  its record date first, as the run does; a registered account with
+  inputs but no built book is named in the warnings; and the engine's
+  warn-only option-replacement flag (a call bought in the window) is
+  listed in the result (re-audit A2-0131, A2-0384, A2-0132, A2-0375,
+  A2-0437, A2-1189, A2-1175, A2-0383, A2-0687).
 - US form-export (8949, TXF) and `sum` FOR THE RETURN keep §1256
   contracts — futures, options on futures, broad-based index options
   such as SPX — off Form 8949 and list them for Form 6781 by hand; a
