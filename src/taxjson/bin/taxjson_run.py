@@ -2452,6 +2452,11 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    # Income a record date moves across a year end, or an implausible
+    # record date (lib/income_dating): on the console every run, cached
+    # or not — one project year leaves that income out (audit A2-0073,
+    # A2-0229).
+    echo_attention_lines(gains_json, prefix="income year: ")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 

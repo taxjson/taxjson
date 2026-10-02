@@ -341,5 +341,136 @@ class TestCgDividendsMap(unittest.TestCase):
             self.assertAlmostEqual(f[("m", "XTD.TO-2025-09-10")], 0.055)
 
 
+def _dist(sym, pay, rec, amt=100.0, desc="", action="DIVIDEND", **kw):
+    r = {"action": action, "symbol": sym, "date": pay, "record_date": rec,
+         "gross_amount": amt, "net_amount": amt, "currency": "CAD",
+         "description": desc, "account": ACCT}
+    if action == "DIVIDEND":
+        r["income_label"] = "distribution"
+    else:
+        r.update(type="roc", net_amount=-amt, gross_amount=0.0)
+    r.update(kw)
+    return r
+
+
+class TestIncomeDating(unittest.TestCase):
+    """A2-0076, A2-0231, A2-0991, A2-0229, A2-0073, A2-0561/A2-0993."""
+
+    def _ca(self, **settings):
+        from taxjson.lib.income_dating import rules_for
+        return rules_for("canada", settings)
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_a2_0076_split_share_corps_keep_pay_date(self):
+        r = self._ca()
+        for sym in ("XTD.TO", "GDV.TO", "LCS.TO", "PWI.TO", "SBN.TO",
+                    "WFS.TO", "PIC.A.TO"):
+            self.assertEqual(
+                r.income_date(_dist(sym, "2026-01-12", "2025-12-31")),
+                "2026-01-12", sym)
+        # Off the list, but the description names a split corporation.
+        row = _dist("ZZQ.TO", "2026-01-12", "2025-12-31",
+                    desc="ZZQ SPLIT CORP CL A DIST ON 1000 SHS REC "
+                         "12/31/25 PAY 01/12/26")
+        self.assertEqual(r.income_date(row), "2026-01-12")
+        # A trust keeps its record date.
+        self.assertEqual(r.income_date(_dist("XIC.TO", "2026-01-12",
+                                             "2025-12-31")), "2025-12-31")
+
+    @rule("CA-INC-DATE-ROC")
+    def test_a2_0231_split_corp_roc_on_pay_date(self):
+        r = self._ca()
+        row = _dist("XTD.TO", "2026-01-12", "2025-12-31", amt=100.0,
+                    action="ADJUST", desc="TDB SPLIT CORP RETURN OF CAPITAL")
+        self.assertEqual(r.roc_date(row), "2026-01-12")
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_a2_0991_corporate_entry_covers_issuer_classes(self):
+        r = self._ca(corporate_distributions=["GHI.TO", "ABC.PR.A",
+                                              "DEF.UN"])
+        for sym in ("GHI.PR.B.TO", "GHI.TO", "ABC.PR.A.TO", "DEF.UN.TO"):
+            self.assertEqual(
+                r.income_date(_dist(sym, "2026-01-06", "2025-12-30")),
+                "2026-01-06", sym)
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_a2_0229_implausible_record_date_uses_pay_date(self):
+        r = self._ca()
+        row = _dist("XYZ.UN.TO", "2025-01-03", "2023-12-30")
+        roc = _dist("XYZ.UN.TO", "2025-01-03", "2023-12-30",
+                    action="ADJUST")
+        self.assertEqual(r.income_date(row), "2025-01-03")
+        self.assertEqual(r.roc_date(roc), "2025-01-03")
+        w = r.warnings([row, roc], 2025)
+        self.assertEqual(sum("not a plausible declaration" in x
+                             for x in w), 2)
+        self.assertTrue(all(x.startswith("ATTENTION: income year: ")
+                            for x in w))
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_a2_0073_cross_year_trust_income_is_flagged(self):
+        r = self._ca()
+        jan = _dist("XIC.TO", "2025-01-03", "2024-12-30", amt=576.91)
+        dec = _dist("XIC.TO", "2026-01-05", "2025-12-30", amt=10.0)
+        w = r.warnings([jan, dec], 2025)
+        self.assertEqual(len(w), 2)
+        self.assertIn("is income of 2024", w[0])
+        self.assertIn("NOT in 2025's numbers", w[0])
+        self.assertIn("576.91", w[0])
+        self.assertIn("counted in 2025 here", w[1])
+        # Out of the project's two years: quiet.
+        self.assertEqual(r.warnings([jan], 2027), [])
+        # A corporation named in the description gets the remedy.
+        corp = _dist("ZZC.TO", "2025-01-03", "2024-12-30",
+                     desc="ZZC INCOME CORP DIST ON 100 SHS")
+        self.assertIn("corporate_distributions", r.warnings([corp], 2025)[0])
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_a2_0073_gains_stage_prints_attention(self):
+        from taxjson.lib.core import coerce_transaction_row
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        row = coerce_transaction_row(
+            _dist("XIC.TO", "2025-01-03", "2024-12-30"), 0, "t")
+        _r, err = _quiet(run_gains, [row], [], [],
+                         req=GainsRequest(country="canada", taxable=True,
+                                          year=2025))
+        self.assertIn("warning: ATTENTION: income year: XIC.TO", err)
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_a2_0561_ib_roc_warning_quiet_once_pair_entered(self):
+        r = self._ca()
+        roc = {"action": "ADJUST", "type": "roc", "symbol": "XYZ.UN.TO",
+               "date": "2025-01-15", "net_amount": -20.0,
+               "currency": "CAD", "account": ACCT}
+        self.assertEqual(len(r.warnings([roc], 2025)), 1)
+        pair = [{"action": "ADJUST", "symbol": "XYZ.UN.TO",
+                 "date": "2024-12-31", "net_amount": -20.0,
+                 "currency": "CAD"},
+                {"action": "ADJUST", "symbol": "XYZ.UN.TO",
+                 "date": "2025-01-15", "net_amount": 20.0,
+                 "currency": "CAD"}]
+        self.assertEqual(r.warnings([roc] + pair, 2025), [])
+        self.assertEqual(len(r.warnings([roc, pair[0]], 2025)), 1)
+
+
+class TestRicBareRoot(unittest.TestCase):
+    """A2-0230, A2-0992: a bare ric_january_dividends entry is that
+    fund's US listing only."""
+
+    @rule("US-INC-DATE-RIC")
+    def test_bare_root_is_us_listing_only(self):
+        from taxjson.lib.income_dating import rules_for
+        r = rules_for("usa", {"ric_january_dividends": ["T", "PSA"]})
+
+        def moved(sym):
+            return r.ric_prior_year({"action": "DIVIDEND", "symbol": sym,
+                                     "date": "2025-01-15"})
+        self.assertTrue(moved("T.US"))
+        self.assertTrue(moved("PSA.US"))
+        self.assertFalse(moved("T.TO"))
+        self.assertFalse(moved("T.PR.A.US"))
+        self.assertFalse(moved("PSA.PR.H.US"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **Canada income dating: more split-share corporations, a loud
+  year-end flag.** XTD, GDV, LCS, PWI, SBN, WFS and PIC.A (and any row
+  whose description says "SPLIT CORP") are corporations: their
+  December-record, January-paid dividends and returns of capital now
+  stay in the pay year instead of moving to the record year as a
+  trust's. A `corporate_distributions` entry covers its issuer's
+  classes and series (`GHI.TO` covers GHI.PR.B.TO; `DEF.UN` now
+  matches DEF.UN.TO). A record date 92+ days before the pay date is no
+  longer used. Every trust distribution or ROC whose record date puts
+  it in another year than its payment is now printed on the console
+  (`ATTENTION: income year:`) in both project years — one of them
+  leaves it out (owner books: four January 2025 trust distributions
+  dated to 2024). The IB January trust-ROC warning stops once the two
+  `.tt` lines it prescribes are in the books. US: a bare
+  `ric_january_dividends` entry (`T`, `PSA`) is that fund's US listing
+  only — TELUS (T.TO) and PSA.PR.H.US are no longer moved (A2-0073,
+  A2-0076, A2-0229, A2-0230, A2-0231, A2-0561, A2-0991, A2-0992,
+  A2-0993).
+
 - **capital_gains_dividends.map reads what it documents.** A bare root
   (`FTN`, `T`) also claimed the issuer's preferred series (FTN.PR.A.TO)
   and a same-root foreign listing (AT&T's T.US), turning their

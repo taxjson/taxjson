@@ -65,13 +65,35 @@ SPLIT_SHARE_ROOTS: FrozenSet[str] = frozenset({
     "ENS",   # E Split Corp
     "FFN",   # North American Financial 15 Split Corp
     "FTN",   # Financial 15 Split Corp
+    "GDV",   # Global Dividend Growth Split Corp
     "LBS",   # Life & Banc Split Corp
+    "LCS",   # Brompton Lifeco Split Corp
     "LFE",   # Canadian Life Companies Split Corp
     "PDV",   # Prime Dividend Corp
+    "PIC",   # Premium Income Corp (PIC.A)
+    "PWI",   # Sustainable Power & Infrastructure Split Corp
     "SBC",   # Brompton Split Banc Corp
+    "SBN",   # S Split Corp
+    "WFS",   # World Financial Split Corp
     "XMF",   # M Split Corp
+    "XTD",   # TDb Split Corp
     "YCM",   # Commerce Split Corp
 })
+
+# A description that names a split-share corporation ("TDB SPLIT CORP
+# ... DIST ON"): a corporation's payout whatever the list says (audit
+# A2-0076, A2-0231).
+_SPLIT_CORP_RE = re.compile(r"\bSPLIT\s+CORP", re.IGNORECASE)
+# Another corporation named in a "distribution" description: not moved
+# (a trust can be named "... Corp" too), but warned about.
+_CORP_RE = re.compile(r"\b(?:CORP|CORPORATION|INC|LTD)\b", re.IGNORECASE)
+# A record date this many days or more before the pay date is not a
+# plausible declaration (a typo or a stale field): the pay date is kept
+# and the row is warned about (audit A2-0229).
+MAX_RECORD_LEAD_DAYS = 92
+# Prefix of the warnings `taxjson run` echoes to the console (printed by
+# the gains stage as "warning: ATTENTION: income year: ...").
+ATTENTION_INCOME_YEAR = "ATTENTION: income year: "
 
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SETTING_CORPORATE = "corporate_distributions"
@@ -174,8 +196,13 @@ class IncomeRules:
         if c == _C.CANADA and self.ric_january_dividends:
             raise IncomeRulesError(
                 f"{SETTING_RIC} is US-only (§852(b)(7) / §857(b)(9))")
+        # An entry names an ISSUER: 'GHI.TO', 'ABC.PR.A' and 'DEF.UN'
+        # cover every class and series of their root, as the built-in
+        # split-share roots do (audit A2-0991: dotted entries without a
+        # listing suffix matched nothing, and 'GHI.TO' missed
+        # GHI.PR.B.TO).
         object.__setattr__(self, "_corp", frozenset(
-            s.upper() for s in self.corporate_distributions))
+            listing_root(s) for s in self.corporate_distributions))
 
     # ------------------------------------------------------------ build
     @classmethod
@@ -201,17 +228,34 @@ class IncomeRules:
     # ------------------------------------------------------------ Canada
     def is_corporate(self, symbol: str) -> bool:
         """A Canadian issuer whose "distribution" is a corporation's
-        payout (split-share list or the project's own list)."""
-        s = str(symbol or "").upper()
-        root = listing_root(s)
-        return (root in SPLIT_SHARE_ROOTS or s in self._corp
-                or root in self._corp)
+        payout (split-share list or the project's own list, by issuer
+        root)."""
+        root = listing_root(symbol)
+        return root in SPLIT_SHARE_ROOTS or root in self._corp
+
+    def is_corporate_row(self, row: Any) -> bool:
+        """is_corporate, or a description naming a split-share
+        corporation ("... SPLIT CORP ...")."""
+        return (self.is_corporate(_get(row, "symbol"))
+                or bool(_SPLIT_CORP_RE.search(
+                    str(_get(row, "description") or ""))))
 
     def is_canadian_trust(self, row: Any) -> bool:
         """Canada: a Canadian issuer that is not on the corporate list.
         (The caller adds the label test for income rows.)"""
         return (self.country == _C.CANADA and is_canadian_issuer(row)
-                and not self.is_corporate(_get(row, "symbol")))
+                and not self.is_corporate_row(row))
+
+    @staticmethod
+    def _plausible_record(rec: str, pay: str) -> bool:
+        """A record date on or before the pay date and less than
+        MAX_RECORD_LEAD_DAYS before it."""
+        try:
+            lead = (_date.fromisoformat(pay)
+                    - _date.fromisoformat(rec)).days
+        except ValueError:
+            return False
+        return 0 <= lead < MAX_RECORD_LEAD_DAYS
 
     def trust_record_date(self, row: Any) -> str:
         """Canada: the record date that dates a Canadian trust's
@@ -223,7 +267,7 @@ class IncomeRules:
         if str(_get(row, "income_label")).lower() != "distribution":
             return ""
         rec, pay = _iso(_get(row, "record_date")), _iso(_get(row, "date"))
-        if not rec or not pay or rec > pay:
+        if not rec or not pay or not self._plausible_record(rec, pay):
             return ""
         return rec if self.is_canadian_trust(row) else ""
 
@@ -236,7 +280,8 @@ class IncomeRules:
                 or str(_get(row, "type")).lower() != "roc"):
             return ""
         rec, pay = _iso(_get(row, "record_date")), _iso(_get(row, "date"))
-        if not rec or not pay or rec >= pay:
+        if not rec or not pay or rec >= pay \
+                or not self._plausible_record(rec, pay):
             return ""
         return rec if self.is_canadian_trust(row) else ""
 
@@ -263,8 +308,7 @@ class IncomeRules:
             return False
         sym = str(_get(row, "symbol")).upper()
         for s, d in self.ric_january_dividends:
-            if (s == sym or ("." not in s and listing_root(sym) == s)) \
-                    and (not d or d == pay):
+            if _ric_symbol_match(s, sym) and (not d or d == pay):
                 return True
         return False
 
@@ -295,17 +339,35 @@ class IncomeRules:
                  ) -> List[str]:
         """What the export cannot decide (one line each): Canada — a
         January-paid return of capital on a Canadian trust with no
-        record date (IB); USA — a January dividend with an Oct-Dec
-        ex/record date that is not listed in ric_january_dividends."""
+        record date (IB), unless the two .tt lines it asks for are in
+        the books; a trust-dated distribution whose record-date year is
+        not its pay year (ATTENTION: one project year leaves it out); a
+        record date implausibly far from the pay date (ATTENTION). USA
+        — a January dividend with an Oct-Dec ex/record date that is not
+        listed in ric_january_dividends."""
+        rows = list(rows)
         out: List[str] = []
+        adj_keys = set()
+        if self.country == _C.CANADA:
+            for r in rows:
+                if (str(_get(r, "action")).upper() == "ADJUST"
+                        and str(_get(r, "type")).lower() != "roc"):
+                    adj_keys.add((str(_get(r, "symbol")),
+                                  _iso(_get(r, "date")),
+                                  round(float(_get(r, "net_amount", 0.0)
+                                              or 0.0), 2)))
         for r in rows:
             pay = _iso(_get(r, "date"))
-            if not pay or pay[5:7] != "01":
-                continue
-            if year is not None and int(pay[:4]) not in (year, year + 1):
+            if not pay:
                 continue
             sym = _get(r, "symbol")
             action = str(_get(r, "action")).upper()
+            if self.country == _C.CANADA:
+                out += self._ca_year_warnings(r, pay, sym, action, year)
+            if pay[5:7] != "01":
+                continue
+            if year is not None and int(pay[:4]) not in (year, year + 1):
+                continue
             if self.country == _C.CANADA:
                 if (action == "ADJUST"
                         and str(_get(r, "type")).lower() == "roc"
@@ -313,6 +375,13 @@ class IncomeRules:
                         and self.is_canadian_trust(r)):
                     amt = -float(_get(r, "net_amount", 0.0) or 0.0)
                     prev = int(pay[:4]) - 1
+                    # The pair this warning prescribes is in the books:
+                    # handled (audit A2-0561, A2-0993).
+                    if ((str(sym), f"{prev}-12-31", round(-amt, 2))
+                            in adj_keys
+                            and (str(sym), pay, round(amt, 2))
+                            in adj_keys):
+                        continue
                     out.append(
                         f"{sym}: return of capital {amt:,.2f} "
                         f"{_get(r, 'currency')} paid {pay} with no record "
@@ -348,6 +417,74 @@ class IncomeRules:
                 f"1099-DIV. Check the slip; to move it, add \"{sym} "
                 f"{pay}\" to [settings] {SETTING_RIC}.")
         return out
+
+    def _ca_year_warnings(self, r: Any, pay: str, sym: Any, action: str,
+                          year: Optional[int]) -> List[str]:
+        """Canada ATTENTION lines (prefix ATTENTION_INCOME_YEAR, echoed
+        by `taxjson run`): income a record date moves across a year end,
+        and a record date too far from the pay date to be used."""
+        out: List[str] = []
+        rec = _iso(_get(r, "record_date"))
+        cur = _get(r, "currency")
+        amt = (float(_get(r, "gross_amount", 0.0) or 0.0)
+               or float(_get(r, "net_amount", 0.0) or 0.0))
+        if action == "ADJUST":
+            amt = -float(_get(r, "net_amount", 0.0) or 0.0)
+        is_dist = (action == "DIVIDEND" and str(
+            _get(r, "income_label")).lower() == "distribution")
+        is_roc = (action == "ADJUST"
+                  and str(_get(r, "type")).lower() == "roc")
+        if (rec and (is_dist or is_roc) and self.is_canadian_trust(r)
+                and not self._plausible_record(rec, pay)
+                and (year is None or year in (int(rec[:4]),
+                                              int(pay[:4])))):
+            out.append(
+                f"{ATTENTION_INCOME_YEAR}{sym}: record date {rec} is not "
+                f"within {MAX_RECORD_LEAD_DAYS} days before the pay date "
+                f"{pay} — not a plausible declaration, so the PAY date is "
+                f"used for this {amt:,.2f} {cur} "
+                f"{'return of capital' if is_roc else 'distribution'}. "
+                f"Check the export row (and the T3).")
+            return out
+        inc = self.trust_record_date(r) if is_dist else (
+            self.roc_record_date(r) if is_roc else "")
+        if not inc or inc[:4] == pay[:4]:
+            return out
+        iy, py = int(inc[:4]), int(pay[:4])
+        if year is not None and year not in (iy, py):
+            return out
+        what = "return of capital" if is_roc else "distribution"
+        where = ("lowers the ACB in" if is_roc else "is income of")
+        if year == py or year is None:
+            tail = (f"it is NOT in {py}'s numbers: make sure the {iy} "
+                    f"return carries it (the {iy} books end before the "
+                    f"pay date)")
+        else:
+            tail = (f"it is counted in {iy} here; the {py} project leaves "
+                    f"it out")
+        corp = ""
+        if _CORP_RE.search(str(_get(r, "description") or "")):
+            corp = (f" Its description names a corporation: if {sym} is "
+                    f"one, its payout is income when PAID (s.82(1)) — add "
+                    f"it to [settings] {SETTING_CORPORATE}.")
+        out.append(
+            f"{ATTENTION_INCOME_YEAR}{sym}: {what} {amt:,.2f} {cur} paid "
+            f"{pay} with record date {inc} {where} {iy} (a Canadian "
+            f"trust's, {'s.53(2)(h)' if is_roc else 's.104(13)'}; the {iy} "
+            f"T3) — {tail}.{corp}")
+        return out
+
+
+def _ric_symbol_match(entry: str, symbol: str) -> bool:
+    """ric_january_dividends: exact, or a bare root against that one
+    fund's US listing (SPY -> SPY.US). A bare root used to match every
+    listing and class sharing it — TELUS's T.TO for AT&T's T, and the
+    preferred series PSA.PR.H.US for PSA (audit A2-0230, A2-0992)."""
+    if entry == symbol:
+        return True
+    if "." in entry:
+        return False
+    return symbol in (entry, f"{entry}.US")
 
 
 def rules_for(country: Any, settings: Optional[Dict[str, Any]] = None

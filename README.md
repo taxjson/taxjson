@@ -682,10 +682,18 @@ its printed (cent-rounded) rows.
   Canadian listing, or a CA ISIN) is dated by the record date it prints
   ("REC 12/30/24 PAY 01/06/25" is 2024 income) — in `divs-sum`, the .sum,
   the estimate and instalments. Split-share corporations (BK, DF, DFN, DGS,
-  ENS, FFN, FTN, LBS, LFE, PDV, SBC, XMF, YCM) also say "Distribution" but
-  are corporations: dated when paid, like any symbol you list in
-  `[settings] corporate_distributions`. A foreign fund, and a row with no
-  record date, keeps its pay date. That includes every IB row: IB prints
+  ENS, FFN, FTN, GDV, LBS, LCS, LFE, PDV, PIC, PWI, SBC, SBN, WFS, XMF,
+  XTD, YCM, and any row whose description says "SPLIT CORP") also say
+  "Distribution" but are corporations: dated when paid, like any issuer
+  you list in `[settings] corporate_distributions` (an entry covers every
+  class and series of its root: `GHI.TO` also covers GHI.PR.B.TO). A
+  foreign fund, and a row with no record date, keeps its pay date. A
+  record date 92 days or more before the pay date is taken as an export
+  error: the pay date is used and the console says so. A distribution its
+  record date moves into another year than the payment (a December record
+  date paid in January) is listed on the console as `ATTENTION: income
+  year:` on every run of either project year — one of the two leaves it
+  out, so make sure the return of the record year carries it. That includes every IB row: IB prints
   only the pay date and calls a trust's distribution a dividend, so a
   trust cannot be told from a corporation (the ex date of IB's accruals is
   not used); a December-record trust distribution IB pays in January
@@ -697,7 +705,8 @@ its printed (cent-rounded) rows.
   (s.53(2)(a)) or a foreign issuer's return of capital lowers it when paid.
   IB prints no record date: a January-paid ROC on a Canadian trust is
   warned about — check the prior year's T3 box 42 and move it to Dec 31
-  with the two `.tt` ADJUST lines the warning prints.
+  with the two `.tt` ADJUST lines the warning prints (the warning stops
+  once both lines are in the books).
 - Canada: a **payment in lieu** on a Canadian issuer's share paid by a
   Canadian dealer (IB's statement names Interactive Brokers Canada Inc.) is
   a taxable dividend (s.260(5)/(5.1)), as the dealer's T5 box 24 reports
@@ -708,7 +717,8 @@ its printed (cent-rounded) rows.
   exports cannot tell a fund from a company, so taxjson keeps the pay date,
   warns when a January dividend has an October–December ex or record date,
   and moves the payments you list in `[settings] ric_january_dividends` to
-  Dec 31 of the prior year.
+  Dec 31 of the prior year (a bare `SPY` is the fund's US listing SPY.US
+  only — not a .TO listing or a preferred class of the same root).
 - The slips (T5/T3, 1099-DIV) are authoritative; these rules make the
   planning numbers and the slip tie-outs agree with them.
 
