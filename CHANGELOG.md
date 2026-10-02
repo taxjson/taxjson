@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A `.tt` SPLIT or rename of a USD stock no longer stops `taxjson run`
+  (exit 1, "Currency mismatch") in the native-holdings pass, in either
+  country: a SPLIT carries no money, so its currency stamp is no longer
+  checked against the pool's (re-audit A2-0010, regression of R1-126).
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

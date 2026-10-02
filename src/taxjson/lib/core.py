@@ -2454,7 +2454,13 @@ class CanadaTaxRules(TaxRules):
                 # gate, an opening sheltered trade in USD would set
                 # the pool's currency, then a later taxable CAD trade
                 # on the same symbol would hard-error on the mismatch.
-                if not is_other_scope:
+                # A SPLIT carries no money, so its currency stamp says
+                # nothing about the pool: a .tt SPLIT is stamped CAD
+                # whatever the listing (kept so row ids stay stable),
+                # and a USD stock's split or rename stopped the native
+                # gains pass (A2-0010, regression of R1-126). A rename's
+                # real currency mix still shows on the trades either side.
+                if not is_other_scope and tx.action != 'SPLIT':
                     if tx.currency and pool['currency'] and tx.currency != pool['currency']:
                         raise ValueError(
                             f"Currency mismatch for {symbol}: pool is in {pool['currency']!r} "
@@ -4886,7 +4892,9 @@ class USATaxRules(TaxRules):
         symbol_currency: Dict[str, str] = {}
         _main_ids = {id(t) for t in transactions}
         for _tx in (transactions + (sheltered_transactions or []) + (affiliated_transactions or [])):
-            if not _tx.currency or _tx.action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE', 'TRANSFER'):
+            # SPLIT carries no money (a .tt SPLIT is stamped CAD whatever
+            # the listing — A2-0010); its currency says nothing.
+            if not _tx.currency or _tx.action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE', 'TRANSFER', 'SPLIT'):
                 continue
             existing = symbol_currency.get(_tx.symbol)
             if existing and existing != _tx.currency:
