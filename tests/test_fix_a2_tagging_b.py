@@ -97,5 +97,142 @@ class TestCanadaEstimatePaymentInLieu(unittest.TestCase):
         self.assertNotEqual(got, wrong["estimated_tax"])
 
 
+
+def _etx(acct, date, settle, sym, qty):
+    return {"account": acct, "action": "BUYSELL", "date": date,
+            "date_settle": settle, "time": "10:00:00", "symbol": sym,
+            "quantity": qty, "net_amount": 0.0, "currency": "CAD",
+            "id": f"{acct}-{sym}-{date}-{qty}"}
+
+
+def _egain(date, settle, sym, qty, raw, denied=0.0, perm=0.0):
+    return {"account": "margin", "date": date, "date_settle": settle,
+            "symbol": sym, "qty": qty, "gain": raw + denied,
+            "raw_gain": raw, "disallowed_amount": denied,
+            "permanently_disallowed": perm, "proceeds": 1000.0,
+            "cost": 1000.0 - raw, "id": f"g-{sym}-{date}"}
+
+
+class TestEdgeCasesCountryGates(unittest.TestCase):
+    """A2-0855, A2-1495: every country gate in edge-cases, on one book
+    read as a Canadian and as a US project (CA-RPT-07 / US-RPT-05)."""
+
+    CALL = "ABC260116C00010000.US"
+
+    @classmethod
+    def setUpClass(cls):
+        cls._td = tempfile.TemporaryDirectory()
+        root = cls.root = Path(cls._td.name)
+        work = root / "work"
+        work.mkdir()
+        margin = [
+            # Straddles: a closing sale and an option write.
+            _etx("margin", "2025-01-02", "2025-01-03", "XYZ.US", 100),
+            _etx("margin", "2025-12-31", "2026-01-02", "XYZ.US", -100),
+            _etx("margin", "2025-12-31", "2026-01-02",
+                 "ZZW260320C00050000.US", -1),
+            # A written option left to expire in the year.
+            _etx("margin", "2025-06-02", "2025-06-03",
+                 "ZZE251231C00050000.US", -1),
+            # ABC: loss settling 03-04; a rebuy sold on day 30 and a long
+            # call bought on day 30.
+            _etx("margin", "2025-01-10", "2025-01-13", "ABC.US", 100),
+            _etx("margin", "2025-03-03", "2025-03-04", "ABC.US", -100),
+            _etx("margin", "2025-03-10", "2025-03-11", "ABC.US", 50),
+            _etx("margin", "2025-04-02", "2025-04-03", "ABC.US", -50),
+            _etx("margin", "2025-04-02", "2025-04-03", cls.CALL, 1),
+            # DEF / GHI: losses whose window crosses the year end.
+            _etx("margin", "2025-06-02", "2025-06-03", "DEF.US", 10),
+            _etx("margin", "2025-12-19", "2025-12-22", "DEF.US", -10),
+            _etx("margin", "2025-06-02", "2025-06-03", "GHI.US", 10),
+            _etx("margin", "2025-12-19", "2025-12-22", "GHI.US", -10),
+            _etx("margin", "2026-01-06", "2026-01-07", "GHI.US", 10),
+            _etx("margin", "2026-01-08", "2026-01-09", "GHI.US", -10),
+        ]
+        plan = [
+            _etx("plan", "2025-04-01", "2025-04-02", "ABC.US", 5),
+            _etx("plan", "2026-01-05", "2026-01-06", "DEF.US", 10),
+            _etx("plan", "2025-12-31", "2026-01-02", "QQQ.US", 5),
+        ]
+        (work / "margin_base.json").write_text(json.dumps(margin))
+        (work / "plan_base.json").write_text(json.dumps(plan))
+        (work / "margin_gains_wash.json").write_text(json.dumps({
+            "transactions": [
+                _egain("2025-12-31", "2026-01-02", "XYZ.US", 100, 500.0),
+                _egain("2025-03-03", "2025-03-04", "ABC.US", 100, -300.0,
+                       denied=15.0, perm=15.0),
+                _egain("2025-12-19", "2025-12-22", "DEF.US", 10, -100.0,
+                       denied=100.0, perm=100.0),
+                _egain("2025-12-19", "2025-12-22", "GHI.US", 10, -100.0)]}))
+        cls.out = {}
+        from taxjson.lib.edge_cases import analyze, render_text
+        for c, tax_date in (("canada", "settle"), ("usa", "settle")):
+            cfg = {"settings": {"year": 2025, "country": c,
+                                "tax_date": tax_date,
+                                "option_premium_timing": "grant",
+                                "option_grant_timing_since": 2025}
+                   if c == "canada" else
+                   {"year": 2025, "country": c, "tax_date": tax_date},
+                   "accounts": {"margin": {"type": "taxable"},
+                                "plan": {"type": "sheltered"}}}
+            with contextlib.redirect_stderr(io.StringIO()):
+                doc = analyze(root, cfg)
+            cls.out[c] = "\n".join(render_text(doc, verbose=True))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._td.cleanup()
+
+    @rule("CA-RPT-07")
+    @rule("US-RPT-05")
+    def test_registered_account_words(self):
+        ca, us = self.out["canada"], self.out["usa"]
+        self.assertIn("registered account: no tax effect", ca)
+        self.assertIn("IRA: no tax effect", us)
+        self.assertNotIn("IRA", ca)
+        self.assertNotIn("registered", us)
+        self.assertIn("(registered)", ca)
+        self.assertIn("(IRA)", us)
+        self.assertIn("registered replacement", ca)
+        self.assertIn("IRA replacement", us)
+
+    @rule("CA-RPT-07")
+    @rule("US-RPT-05")
+    def test_option_premium_words(self):
+        ca, us = self.out["canada"], self.out["usa"]
+        self.assertIn("§1234", us)
+        self.assertNotIn("§1234", ca)
+        self.assertIn("under grant timing the premium is a gain", ca)
+        self.assertIn("under grant timing the premium was already a gain",
+                      ca)
+        self.assertNotIn("grant timing", us)
+
+    @rule("CA-RPT-07")
+    @rule("US-RPT-05")
+    def test_allowed_verdict_and_header(self):
+        ca, us = self.out["canada"], self.out["usa"]
+        self.assertIn("not still held on day 30", ca)
+        self.assertIn("matched none of those purchases", us)
+        self.assertNotIn("matched none of those purchases", ca)
+        self.assertIn("(settlement date, CRA)", ca)
+        self.assertIn("(settlement date)", us)
+        self.assertNotIn("CRA", us)
+
+    @rule("CA-RPT-07", "CA-SL-05")
+    @rule("US-RPT-05")
+    def test_window_items_near_day_30(self):
+        # Canada lists the day-30 sale and the long call as window items;
+        # the US has no still-held test and lists a call as a warning
+        # only (A2-0855).
+        ca, us = self.out["canada"], self.out["usa"]
+        self.assertIn("sale of 50 in margin", ca)
+        self.assertNotIn("sale of 50 in margin", us)
+        # The call: a window item AND a calls-section line in Canada; in
+        # the US the calls section's warning only.
+        self.assertEqual(ca.count("long call of 1 in margin"), 2)
+        self.assertEqual(us.count("long call of 1 in margin"), 1)
+        self.assertIn("a warning only", us)
+
+
 if __name__ == "__main__":
     unittest.main()
