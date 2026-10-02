@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Unreadable is never absent: a statement CSV or .tt that is a dangling
+  symlink stops `run` naming the file, every command (not only `run`)
+  refuses a dangling or directory ticker.map / phantoms.json /
+  distributions.map / overrides file, and a dangling taxjson.toml is
+  refused instead of read as "no config" (re-audit A2-0143, A2-0403,
+  A2-0401, A2-0144).
+- An account named inside another account's work-file namespace
+  (`<other>_tt_<x>`, `<other>_<broker>`) is refused — the two overwrote
+  each other's books or deleted each other's corp files — and two .tt
+  files of one account that convert to the same work file (`start.tt`,
+  `start.TT`) stop the run (re-audit A2-0140, A2-0402, A2-0399, A2-1222).
 - A position that goes short where no short can exist — a registered
   account (TFSA/RRSP/IRA), a crypto account's spot coins, or a sale the
   broker codes CLOSING with nothing held — is now an `ATTENTION: short:`

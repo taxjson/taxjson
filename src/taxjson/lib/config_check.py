@@ -61,6 +61,42 @@ def account_name_problem(name: str) -> str:
     return ""
 
 
+# The per-account artifact namespaces an account `a` owns besides its
+# fixed suffixes: work/a_tt_<stem>.json (a converted .tt), work/a_<broker>
+# [_corp|_transfers].json (a broker parse). An account named
+# `a_tt_x` or `a_questrade` lives inside `a`'s namespace: the two
+# overwrote each other's books, and one run's stale-file cleanup deleted
+# the other's corp and transfer files (re-audit A2-0140, A2-0402).
+ARTIFACT_NAMESPACES = ("tt", "questrade", "ib", "webull", "rbc_direct",
+                       "coinbase", "kraken", "generic")
+
+
+def account_pair_problems(names) -> List[str]:
+    """One message per account whose name sits in another account's
+    artifact namespace (`<other>_<namespace>...`)."""
+    out: List[str] = []
+    names = [str(n) for n in names]
+    for long in names:
+        for short in names:
+            if long == short or not long.lower().startswith(
+                    short.lower() + "_"):
+                continue
+            rest = long[len(short) + 1:].lower()
+            ns = next((x for x in ARTIFACT_NAMESPACES
+                       if re.match(rf"{re.escape(x)}(?:$|[_-])", rest)),
+                      None)
+            if ns:
+                out.append(
+                    f"[accounts.{long}]: the name is inside account "
+                    f"{short!r}'s work files (work/{short}_{ns}...json, "
+                    f"its {'.tt' if ns == 'tt' else ns} books) — the two "
+                    f"accounts would overwrite or delete each other's "
+                    f"books. Rename it (and its inputs/{long}/ folder), "
+                    f"e.g. {short + '-' + long[len(short) + 1:]!r}.")
+                break
+    return out
+
+
 def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
     """One message per [accounts.*] entry that is not a table or whose
     `type` is missing or not exactly "taxable"/"sheltered". Empty on a
@@ -103,7 +139,8 @@ def account_type_problems(cfg: Dict[str, Any]) -> List[str]:
             out.append(
                 f"[accounts.{name}] crypto must be true or false (no "
                 f"quotes), got {acfg['crypto']!r}")
-    return out + bool_setting_problems(cfg)
+    return (out + account_pair_problems(accounts.keys())
+            + bool_setting_problems(cfg))
 
 
 def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:

@@ -519,6 +519,7 @@ def load_config(root: Path) -> Dict[str, Any]:
     path = root / "taxjson.toml"
     if not path.exists():
         _die(f"no taxjson.toml in {root}. Run `taxjson init` first.")
+    _refuse_unreadable_project_inputs(root)
     text = _read_config_text(path)
     try:
         cfg = tomllib.loads(text)
@@ -1292,8 +1293,24 @@ def input_files(dirpath: Path, suffix: str) -> List[Path]:
     exits 0 with those trades missing (REVIEW-2026-07-ui #1)."""
     if not dirpath.is_dir():
         return []
-    return sorted(p for p in dirpath.iterdir()
-                  if p.is_file() and p.suffix.lower() == suffix)
+    out = []
+    for p in sorted(dirpath.iterdir()):
+        if p.suffix.lower() != suffix:
+            continue
+        if p.is_file():
+            out.append(p)
+        elif p.is_symlink():
+            # A statement that is a dangling (or looping) symlink was
+            # left out of the books at exit 0 (re-audit A2-0143/A2-0403).
+            import os as _os
+            try:
+                tgt = _os.readlink(p)
+            except OSError:
+                tgt = "?"
+            _die(f"{p} is a symlink to {tgt}, which does not exist (or "
+                 f"loops) — its rows would be missing from the books. "
+                 f"Fix the link or remove it.")
+    return out
 
 
 # Spreadsheet suffixes a broker export may arrive in. None is read by
@@ -1961,6 +1978,18 @@ def _unreadable_project_inputs(root: Path) -> List[str]:
     return out
 
 
+def _refuse_unreadable_project_inputs(root: Path) -> None:
+    """Die when a project-root input exists as a name but cannot be read.
+    Every config reader calls it, so no command (scan, sanity, harvest,
+    fees, ...) builds as if ticker.map or phantoms.json were absent
+    (re-audit A2-0401 / A2-0144; `run` since A2-0313)."""
+    _unreadable = _unreadable_project_inputs(root)
+    if _unreadable:
+        _die("project file(s) that exist but cannot be read — fix or "
+             "remove each; nothing was run:\n    "
+             + "\n    ".join(_unreadable))
+
+
 def _inputs_fingerprint(paths: List[Path]) -> str:
     """One line per existing file: name, size and SHA-256 of the
     content (mtimes deliberately left out — see R1-253)."""
@@ -2335,6 +2364,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # intermediates like <acct>_base.json (R1-116).
     tt_jsons: List[Path] = []
     from taxjson.lib.config_check import RESERVED_NAME_SUFFIXES
+    # Two .tt files whose names differ only in the suffix's case
+    # (start.tt / start.TT) convert to ONE work file: the second
+    # overwrote the first and its trades vanished (re-audit A2-0399).
+    _tt_by_out: Dict[str, str] = {}
+    for tt in input_files(acct_dir, ".tt"):
+        _o = tt_json_path(cache, name, tt.name).name
+        if _o in _tt_by_out:
+            _die(f"inputs/{name}/{_tt_by_out[_o]} and inputs/{name}/"
+                 f"{tt.name} convert to the same work file ({_o}) — one "
+                 f"would overwrite the other's rows. Rename one (or "
+                 f"merge the two).")
+        _tt_by_out[_o] = tt.name
     for tt in input_files(acct_dir, ".tt"):
         _stem = tt.stem.lower()
         _clash = next((x for x in RESERVED_NAME_SUFFIXES
@@ -3590,11 +3631,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     # A project map that exists as a NAME but cannot be opened (a
     # dangling or looping symlink) read as "absent": the run exited 0
     # with other gains (audit A2-0313). Absent and unreadable differ.
-    _unreadable = _unreadable_project_inputs(root)
-    if _unreadable:
-        _die("project file(s) that exist but cannot be read — fix or "
-             "remove each; nothing was run:\n    "
-             + "\n    ".join(_unreadable))
+    _refuse_unreadable_project_inputs(root)
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -10685,7 +10722,15 @@ def _soft_config(root: Path) -> Dict[str, Any]:
     single home for the query wrappers' config reads — they must work
     from work/ files without a hard config dependency."""
     cfg_path = root / "taxjson.toml"
+    if cfg_path.is_symlink() and not cfg_path.exists():
+        # Unreadable is not absent: a dangling taxjson.toml switched
+        # fees / dil-sum / roc-sum from the tax year to all history at
+        # exit 0 (re-audit A2-0144). (A directory reads as an error
+        # below.)
+        _die(f"cannot read {cfg_path}: it is a symlink whose target "
+             f"does not exist (or loops) — fix or remove it.")
     if cfg_path.exists() and tomllib is not None:
+        _refuse_unreadable_project_inputs(root)
         try:
             cfg = tomllib.loads(_read_config_text(cfg_path)) or {}
         except Exception as e:

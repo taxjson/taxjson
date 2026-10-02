@@ -384,5 +384,97 @@ class TestImpossibleShortsAreLoud(unittest.TestCase):
             self.assertNotIn("ATTENTION: short:", r.stdout + r.stderr)
 
 
+# --------------------------------------- A2-0140 / A2-0402 / A2-0399 / A2-1222
+class TestArtifactNamespacesNeverCollide(unittest.TestCase):
+    """One account's work files must never be another's: an account named
+    <other>_tt_<x> or <other>_<broker> is refused, and two .tt files
+    of one account that convert to the same work file are refused."""
+
+    def test_pair_names_refused(self):
+        from taxjson.lib.config_check import account_type_problems
+        for a, b in (("m", "m_tt_x"), ("a", "a_questrade"),
+                     ("a", "a_ib_corp"), ("a", "a_generic-ws"),
+                     ("a", "a_rbc_direct")):
+            with self.subTest(b=b):
+                cfg = {"accounts": {a: {"type": "taxable"},
+                                    b: {"type": "taxable"}}}
+                probs = account_type_problems(cfg)
+                self.assertTrue(any(f"[accounts.{b}]" in p for p in probs),
+                                probs)
+        ok = {"accounts": {"rrsp": {"type": "sheltered"},
+                           "rrsp2": {"type": "sheltered"},
+                           "rrsp_spousal": {"type": "sheltered"},
+                           "margin": {"type": "taxable"}}}
+        self.assertEqual(account_type_problems(ok), [])
+
+    def test_run_refuses_pair(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [], accounts={
+                "m": ("taxable", ["BUYSELL 2026-01-05 10:00:00 XYZ.TO 1 "
+                                  "CAD 10 -10 0"]),
+                "m_tt_x": ("taxable", ["BUYSELL 2026-01-05 10:00:00 "
+                                       "ABC.TO 1 CAD 10 -10 0"])})
+            r = _cli(root, home, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("[accounts.m_tt_x]", r.stderr)
+
+    def test_tt_suffix_case_twins_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [
+                "BUYSELL 2026-01-05 10:00:00 AAA.TO 10 CAD 10 -100 0"])
+            twin = root / "inputs" / "m" / "a.TT"
+            twin.write_text("BUYSELL 2026-01-05 10:00:00 BBB.TO 10 CAD 10 "
+                            "-100 0\n")
+            if len(list((root / "inputs" / "m").iterdir())) < 2:
+                self.skipTest("case-insensitive file system")
+            r = _cli(root, home, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0, r.stdout[-1500:])
+            self.assertIn("a.TT", r.stderr)
+            self.assertIn("a.tt", r.stderr)
+
+
+# ------------------------------------- A2-0143 / A2-0403 / A2-0144 / A2-0401
+class TestUnreadableInputsAreRefused(unittest.TestCase):
+    """A file that exists as a name but cannot be read (a dangling or
+    looping symlink, a directory) is never taken as absent."""
+
+    def _proj(self, td):
+        return _tt_project(td, [
+            "BUYSELL 2026-01-05 10:00:00 XYZ.TO 10 CAD 10 -100 0"])
+
+    def test_dangling_statement_csv(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            (root / "inputs" / "m" / "questrade_h2.csv").symlink_to(
+                root / "nowhere.csv")
+            r = _cli(root, home, "run", "--no-input")
+            self.assertNotEqual(r.returncode, 0, r.stdout[-1500:])
+            self.assertIn("questrade_h2.csv", r.stderr)
+
+    def test_dangling_ticker_map_in_read_commands(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            (root / "ticker.map").symlink_to(root / "gone.map")
+            for cmd in (["sanity"], ["scan"], ["harvest"], ["fees"]):
+                with self.subTest(cmd=cmd):
+                    r = _cli(root, home, *cmd)
+                    self.assertNotEqual(r.returncode, 0, r.stdout[-800:])
+                    self.assertIn("ticker.map", r.stderr)
+
+    def test_dangling_config_is_not_absent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = self._proj(td)
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            cfg = root / "taxjson.toml"
+            cfg.rename(root / "moved.toml")
+            cfg.symlink_to(root / "gone.toml")
+            r = _cli(root, home, "fees")
+            self.assertNotEqual(r.returncode, 0, r.stdout[-800:])
+            self.assertIn("taxjson.toml", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
