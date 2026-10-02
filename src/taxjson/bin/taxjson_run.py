@@ -3230,7 +3230,32 @@ def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
     print(f"  → {exports_dir}/")
 
 
-def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
+def _duplicate_input_files(inputs_dir: Path,
+                           accounts: Dict[str, Any]) -> List[List[str]]:
+    """Groups of input files (inputs/<account>/*.csv|.tt) with identical
+    content that sit under two or more DIFFERENT configured accounts —
+    a copied export books every row twice, and parsers whose rows carry
+    no broker account (Kraken, a .tt, an IB dividend) had no check at all
+    (audit A2-0366). Whitespace-only files are ignored. Each group lists
+    `account/file` names."""
+    import hashlib
+    by_hash: Dict[str, List[Tuple[str, str]]] = {}
+    for name in sorted(accounts or {}):
+        d = inputs_dir / name
+        for p in input_files(d, ".csv") + input_files(d, ".tt"):
+            try:
+                data = p.read_bytes()
+            except OSError:
+                continue
+            if not data.strip():
+                continue
+            by_hash.setdefault(hashlib.sha256(data).hexdigest(), []).append(
+                (name, f"{name}/{p.name}"))
+    return [[f for _a, f in grp] for grp in by_hash.values()
+            if len({a for a, _f in grp}) > 1]
+
+
+def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> int:
     """One broker account's export in TWO taxjson accounts books every
     row twice (audit A2-0293, A2-0630). The rows carry their broker
     account (hashed, `source_account`); name each pair of taxjson
@@ -3252,15 +3277,18 @@ def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
                      t.get("quantity"), t.get("net_amount")))
         seen[name] = per
     names = sorted(seen)
+    shared = 0
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             for h in sorted(set(seen[a]) & set(seen[b])):
+                shared += 1
                 same = len(seen[a][h] & seen[b][h])
                 print(f"  {ATTENTION_PREFIX} the same broker account "
                       f"(#{h[:6]}) feeds two taxjson accounts, {a} and "
                       f"{b} ({same} identical row(s)) — every row of it "
                       f"is booked in BOTH. Put each broker account's "
                       f"exports under ONE inputs/<account>/ folder.")
+    return shared
 
 
 def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
@@ -3696,6 +3724,17 @@ def cmd_run(args: argparse.Namespace) -> None:
     elif _maps_marker.exists():
         _maps_marker.unlink()
 
+    _dup_inputs = _duplicate_input_files(inputs_dir, accounts)
+    for _paths in _dup_inputs:
+        print(f"  {ATTENTION_PREFIX} the same export file sits in two "
+              f"accounts: {', '.join(_paths)} (identical content) — every "
+              f"row of it is booked in BOTH accounts. Keep each broker "
+              f"export under ONE inputs/<account>/ folder.",
+              file=sys.stderr)
+    if _dup_inputs and getattr(args, "strict", False):
+        _die("--strict: the same export file is in two accounts "
+             "(ATTENTION above) — nothing was built.")
+
     print("==> currency rates")
     rates = stage_currency_rates(settings, cache)
 
@@ -3744,9 +3783,28 @@ def cmd_run(args: argparse.Namespace) -> None:
         # meant a later `wash-radar --account margin` (and the web/GUI
         # what-if) read a sheltered book that predated this run's buys,
         # exactly the rows a 30-day radar exists to see (2026-09 audit).
-        _others = [cache / f"{n}_base.json" for n, c in accounts.items()
-                   if c.get("type", "sheltered") == "sheltered"
-                   and n != args.account]
+        _other_names = [n for n, c in accounts.items()
+                        if c.get("type", "sheltered") == "sheltered"
+                        and n != args.account]
+        _others = [cache / f"{n}_base.json" for n in _other_names]
+        # A sibling WITH inputs but no book (deleted, or its last stage
+        # failed) would silently drop its registered buys from the
+        # combined book — the radar and the what-if then said "safe to
+        # sell at a loss" (audit A2-0128). Refuse and keep the old
+        # combined book; an account with no inputs never has a book.
+        _lost = [f"{n}_base.json" for n in _other_names
+                 if not (cache / f"{n}_base.json").exists()
+                 and not (cache / f"{n}_pending_elections.json").exists()
+                 and (input_files(inputs_dir / n, ".csv")
+                      or input_files(inputs_dir / n, ".tt"))]
+        if _lost:
+            _die(f"run --account {args.account}: the sheltered book(s) "
+                 f"{', '.join(_lost)} are missing from work/ although "
+                 f"their accounts have inputs — sheltered_base.json was "
+                 f"left unchanged (rebuilding it without them would hide "
+                 f"their purchases from the superficial-loss checks). "
+                 f"Run `taxjson run` without --account to rebuild every "
+                 f"book.")
         _missing = [p.name for p in _others if not p.exists()]
         _sheltered_merge_inputs = (
             [o["base"] for _, o in sheltered_outputs]
@@ -3754,8 +3812,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         print(f"==> rebuilding sheltered_base.json from this run's "
               f"{args.account} book plus the other sheltered accounts' "
               f"last-built books"
-              + (f" (missing: {', '.join(_missing)} — never built; "
-                 f"run without --account)" if _missing else ""))
+              + (f" (no book for {', '.join(_missing)}: no inputs, "
+                 f"or deferred on elections)" if _missing else ""))
     _pending_sheltered = {pe.account for pe in pending_accounts}
     if (not _sheltered_merge_inputs and not args.account
             and not _pending_sheltered):
@@ -4008,9 +4066,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         _warn_cross_taxable_overlap(
             [(n, o["base"]) for n, o, c in taxable_outputs if not c],
             settings)
-        _warn_shared_broker_accounts(
+        _shared_brokers = _warn_shared_broker_accounts(
             [(n, o["base"]) for n, o in sheltered_outputs]
             + [(n, o["base"]) for n, o, _c in taxable_outputs])
+        if _shared_brokers and getattr(args, "strict", False):
+            # Every row of that broker account is booked twice (A2-0366).
+            _die("--strict: one broker account feeds two taxjson "
+                 "accounts (ATTENTION above) — aborting.")
         if _crypto_blend:
             _warn_cross_taxable_overlap(
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],
