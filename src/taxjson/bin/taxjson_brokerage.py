@@ -497,7 +497,8 @@ Examples:
         # timestamps, audit S063-22).
         _cov = getattr(extractor_class, 'coverage_messages', None)
         if _cov is not None and args.tax_year and shared_context is not None:
-            for _m in _cov(shared_context, args.tax_year):
+            for _m in _cov(shared_context, args.tax_year,
+                           country=args.country):
                 print(_m, file=sys.stderr)
 
     # s.90(1) is Canadian law: never the default without a country
@@ -524,6 +525,10 @@ Examples:
             extractor.foreign_return_of_capital = foreign_roc
         if hasattr(extractor, 'futures_settle'):
             extractor.futures_settle = args.futures_settle
+        if hasattr(extractor, 'country'):
+            # The notes' tax words (RBC: T3 / ACB vs Form 1099-DIV /
+            # basis); None = neutral words. Booking is unchanged.
+            extractor.country = args.country
         if hasattr(extractor, 'stablecoins_as_cash'):
             # USD stablecoins are US-dollar cash (Canada's stated
             # approximation, and the default without a country) or

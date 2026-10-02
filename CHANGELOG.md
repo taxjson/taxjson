@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- RBC parse notes in a US project name Form 1099-DIV, basis and
+  §305/§307 for rights, not the fund's T3 (box 21 / 42), the ACB or ITA
+  s.15(1)(c); a Canada project's notes are unchanged and the booking is
+  the same in both (taxjson-brokerage --country picks the words; none
+  given: neutral words) (re-audit A2-0729, A2-0731, A2-0733, A2-0736,
+  A2-1254, A2-1309, A2-1313, A2-1314, A2-1315, A2-1321, A2-1344,
+  A2-1345, A2-1346, A2-1347).
 - Standalone `taxjson-reconcile-slips` requires `--country` (a missing
   one silently meant Canada: CAD amounts and settlement-date year
   scope), and `--date-basis` defaults to the country's (trade date for

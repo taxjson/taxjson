@@ -249,5 +249,80 @@ class TestReconcileSlipsCountry(unittest.TestCase):
         self.assertNotIn("MISSING_FROM_COMPUTED", out)
 
 
+# ------------------------------------------------ RBC parser notes (05)
+
+def _rbc_rows():
+    from test_rbc_parse_audit_2026_09 import HDR, row, RTS_EXP
+    return HDR + "".join([
+        row("December 31, 2025", "Distribution", "VDX", "VANGUARD X", "",
+            "", "0", "CAD", "VANGUARD X 2025 NOTIONAL DISTRIBUTION "
+            "ADJUSTMENT TO BOOK COST $2000.00"),
+        row("December 31, 2025", "Distribution", "XYZ.UN", "XYZ TRUST", "",
+            "", "0", "CAD", "RTC - XYZ TRUST RETURN OF CAPITAL ADJUSTMENT "
+            "TO BOOK COST $30.00"),
+        row("September 8, 2025", "Reorganization", "CSX.RT", "", "1", "",
+            "0", "CAD", f"DIS - RTS CONSTELLO SOFTWARE INC {RTS_EXP} "
+            f"{RTS_EXP} RTS DIST  ON       1 SHS REC 09/01/25 PAY "
+            "09/08/25"),
+        row("April 7, 2025", "Dividends", "RBF8411", "RBC INTL EQUITY O",
+            "5", "", "", "USD", "DIV - Rbc International Equity Series O "
+            "U$ (8411) As Of 04/07/25 Reinvest @ $20.00"),
+        row("March 3, 2025", "Return of Capital", "ZZR", "ZZR TRUST", "",
+            "", "0", "CAD", "ZZR TRUST RETURN OF CAPITAL ON 10 SHS"),
+    ])
+
+
+class TestRbcNotesFollowTheCountry(unittest.TestCase):
+    """A2-0729, A2-0731, A2-0733, A2-0736, A2-1254, A2-1309, A2-1313,
+    A2-1314, A2-1315, A2-1321, A2-1344, A2-1345, A2-1346, A2-1347: the
+    same rows, the same booking; the notes' tax words are the project's
+    country's (taxjson-brokerage --country, which `taxjson run` passes)."""
+
+    _CA = ("ITA s.", "s.15(1)(c)", "T3", "T5", "ACB", "box 21", "box 42")
+
+    def _brokerage(self, country):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "rbc.csv"
+            f.write_text(_rbc_rows(), encoding="utf-8")
+            argv = ["--brokerage", "rbc_direct", str(f)]
+            if country:
+                argv += ["--country", country]
+            r = _module("taxjson.bin.taxjson_brokerage", *argv)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["transactions"], r.stderr
+
+    @rule("CA-DIST-02")
+    @rule("US-DIST-02")
+    def test_dual_country_wording(self):
+        ca_doc, ca = self._brokerage("canada")
+        us_doc, us = self._brokerage("usa")
+        neutral_doc, neutral = self._brokerage(None)
+        # Booking is country-blind (parsers emit neutral facts).
+        self.assertEqual(ca_doc, us_doc)
+        self.assertEqual(ca_doc, neutral_doc)
+        for w in ("s.15(1)(c)", "usually box 21", "raises its ACB",
+                  "fund's T3", "T3/T5 slip"):
+            self.assertIn(w, ca, w)
+        for w in self._CA:
+            self.assertNotIn(w, us, w)
+            self.assertNotIn(w, neutral, w)
+        for w in ("Form 1099-DIV", "raises its basis", "§305"):
+            self.assertIn(w, us, w)
+
+    def test_coverage_note_wording(self):
+        from taxjson.lib.brokerages.rbc_direct import rbc_coverage_messages
+        exports = [("rbc.csv", "2026-01-15", ["2025-03-03", "2025-12-30"],
+                    set())]
+        for country, has, lacks in (("canada", "2025 T3", None),
+                                    ("usa", "Forms 1099-DIV", "T3"),
+                                    (None, "tax slips", "T3")):
+            msgs = " ".join(rbc_coverage_messages(
+                exports, 2025, None, country=country))
+            self.assertIn(has, msgs, country)
+            if lacks:
+                self.assertNotIn(lacks, msgs)
+                self.assertNotIn("ACB", msgs)
+
+
 if __name__ == "__main__":
     unittest.main()
