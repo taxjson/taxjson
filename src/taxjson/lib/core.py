@@ -899,7 +899,9 @@ def load_transactions(path: Path) -> List[TaxTransaction]:
     with open(path, 'rb') as f:
         raw = f.read()
     try:
-        text = raw.decode('utf-8')
+        # A BOM (a hand-written book saved by a Windows editor) is
+        # dropped, as json_input and the .tt reader do (A2-1412).
+        text = raw.decode('utf-8-sig')
     except UnicodeDecodeError as e:
         # An OSError-class error, not the ValueError the data guards
         # raise: an unreadable file is an environment error (exit 2),

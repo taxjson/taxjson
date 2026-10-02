@@ -29,7 +29,6 @@ standard one, an income date on a weekend).
 """
 from __future__ import annotations
 
-import json
 import re
 from datetime import date, datetime, time as dtime
 from pathlib import Path
@@ -81,18 +80,18 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
     """The rows of one parsed file ([] when it does not exist). A file
     that exists but cannot be read raises ValueError naming it: dropping
     it silently turned an ERROR into a clean exit 0 (audit A2-0385)."""
-    try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    from taxjson.lib.json_input import InputFileError, read_work_doc
+    path = Path(path)
+    if not path.exists() and not path.is_symlink():
         return []
-    except (OSError, ValueError) as e:
-        raise ValueError(f"work/{path.name} cannot be read "
-                         f"({str(e)[:120]}) — re-run `taxjson run`") from None
-    rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
-    if not isinstance(rows, list):
-        raise ValueError(f"work/{path.name} has no transactions list — "
-                         f"re-run `taxjson run`")
-    return [r for r in rows if isinstance(r, dict)]
+    # The shared work/ reader: a wrong-shape document, a row that is not
+    # an object or a text price is one line naming the file, not a
+    # traceback (re-audit A2-0794).
+    try:
+        doc = read_work_doc(path)
+    except InputFileError as e:
+        raise ValueError(f"{e} — re-run `taxjson run`") from None
+    return list(doc.get("transactions") or [])
 
 
 def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:

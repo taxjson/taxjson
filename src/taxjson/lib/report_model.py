@@ -147,7 +147,8 @@ def load_report_json(path: Optional[Path] = None) -> Any:
     exactly like the inline copies it replaces — callers keep their own
     error policy."""
     if path is not None:
-        with open(path, 'r', encoding='utf-8') as f:
+        # utf-8-sig: a BOM is dropped (re-audit A2-1412).
+        with open(path, 'r', encoding='utf-8-sig') as f:
             return json.loads(strip_report_comments(f))
     # UTF-8 whatever the locale, as files are read (A2-1219).
     import io
