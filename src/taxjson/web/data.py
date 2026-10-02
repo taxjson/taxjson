@@ -636,7 +636,6 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # priced a sale between the record and pay dates on the unreduced
     # ACB (A2-1175). IncomeRules answers '' outside Canada.
     from taxjson.lib.income_dating import IncomeRules
-    from taxjson.lib.pipeline import apply_roc_record_dates
     try:
         _income = IncomeRules.from_settings(ctx.settings)
     except Exception as exc:
@@ -652,7 +651,13 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
 
     def _simulate(main_rows, context_rows, **extra_kw):
         if _income is not None:
-            apply_roc_record_dates(main_rows, _income)
+            # The same move run_gains makes (pipeline.
+            # apply_roc_record_dates, which takes the run's request).
+            for _t in main_rows:
+                _rec = _income.roc_record_date(_t)
+                if _rec:
+                    _t.date = _rec
+                    _t.date_settle = _rec
         try:
             after = rules.compute_gains(
                 main_rows + [synth], sheltered_transactions=context_rows,

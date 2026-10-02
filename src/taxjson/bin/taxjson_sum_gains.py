@@ -39,14 +39,12 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
     # (RCI...TO with RCI.B.TO shares) groups under that share (S040-11).
     from taxjson.lib.ticker_map import class_share_aliases
     _aliases = class_share_aliases(t.get('symbol') for t in transactions)
+    # Grant-timing writes not yet paired with a buy-back:
+    # (symbol, currency) -> [[bucket, dollars index, open units,
+    # tick_stats, hold_days index], ...] (A2-1114).
+    open_writes: Dict[Any, list] = {}
 
-    # An expired grant-timing WRITE has no closing record; it stands for
-    # its own close (A2-0693).
-    from taxjson.lib.report_model import grant_write_closes
-    _gclose = grant_write_closes(transactions, data.get('inventory') or [],
-                                 (data.get('summary') or {}).get('year'))
-
-    for _ti, tx in enumerate(transactions):
+    for tx in transactions:
         symbol = tx.get('symbol')
         if not symbol: continue
         
@@ -98,23 +96,63 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 tick_stats['cap'] += gain
 
-            # A grant-timing WRITE record (s.49(1)) is the premium's
-            # recognition, not a closed trade: counting it doubled the
-            # TRADES of every written-and-closed contract and skewed the
-            # win rate / average hold (S040-12). Its gain stays in the
-            # totals above.
-            if not tx.get('grant') or _ti in _gclose:
-                tick_stats['hold_days'].append(days)
+            # Aggregate for statistics
+            asset_type = 'Options' if is_opt else 'Stocks'
+            if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
+            if currency not in returns_by_asset[asset_type]:
+                returns_by_asset[asset_type][currency] = {'dollars': [], 'days': [], 'fees': [], 'fee_shares': []}
+            bucket = returns_by_asset[asset_type][currency]
+            qty = abs(float(tx.get('qty', 0) or 0))
+
+            def _trade(dollars, held):
+                bucket['dollars'].append(dollars)
+                bucket['days'].append(held)
+                tick_stats['hold_days'].append(held)
                 tick_stats['trade_count'] += 1
+                return (len(bucket['dollars']) - 1,
+                        len(tick_stats['hold_days']) - 1)
 
-                # Aggregate for statistics
-                asset_type = 'Options' if is_opt else 'Stocks'
-                if asset_type not in returns_by_asset: returns_by_asset[asset_type] = {}
-                if currency not in returns_by_asset[asset_type]:
-                    returns_by_asset[asset_type][currency] = {'dollars': [], 'days': [], 'fees': [], 'fee_shares': []}
-
-                returns_by_asset[asset_type][currency]['dollars'].append(gain)
-                returns_by_asset[asset_type][currency]['days'].append(days)
+            if tx.get('grant'):
+                # A grant-timing WRITE record (s.49(1)) and its buy-back
+                # are ONE trade (S040-12: counting both doubled TRADES):
+                # the write is the trade, its premium the result until a
+                # same-year buy-back folds its cost in below. Leaving the
+                # write out (as S040-12 did) dropped every premium from
+                # the per-asset block — an expired write vanished and a
+                # bought-back one showed only its loss (A2-1114).
+                _bi, _hi = _trade(gain, 0)
+                open_writes.setdefault((symbol, currency), []).append(
+                    [bucket, _bi, qty, tick_stats, _hi])
+            else:
+                # Units of this close that buy back a grant write of the
+                # SAME year (the engine's grant_closed; a file written
+                # before it: any open write of the series) fold into
+                # that write's trade, FIFO. A buy-back of an earlier
+                # year's write is a trade of its own.
+                fold = 0.0
+                if is_opt and tx.get('direction') == 'SHORT':
+                    gc = tx.get('grant_closed')
+                    if isinstance(gc, dict):
+                        _y = str(tx.get('date_settle') or tx.get('date') or '')[:4]
+                        fold = sum(float((v or {}).get('units') or 0.0)
+                                   for y, v in gc.items() if str(y) == _y)
+                    else:
+                        fold = qty
+                folded = 0.0
+                for w in open_writes.get((symbol, currency), []):
+                    if fold - folded <= 1e-9:
+                        break
+                    take = min(w[2], fold - folded)
+                    if take <= 1e-9:
+                        continue
+                    w[0]['dollars'][w[1]] += gain * take / qty if qty else gain
+                    w[0]['days'][w[1]] = days
+                    w[3]['hold_days'][w[4]] = days
+                    w[2] -= take
+                    folded += take
+                rest = qty - folded
+                if rest > 1e-9 or qty <= 1e-9:
+                    _trade(gain * rest / qty if qty > 1e-9 else gain, days)
 
             term = tx.get('term')
             if term == 'SHORT_TERM':

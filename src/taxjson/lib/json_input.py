@@ -77,6 +77,42 @@ def read_json_doc(path, *, list_key: Optional[str] = "transactions",
     return doc
 
 
+# The row funnel for report readers (A2-0330): a work/ row whose date is
+# not a string, or whose money / quantity field is not a number, died
+# later as a TypeError/ValueError traceback in whichever view read it
+# first (events, trades-sum, form-export's _acquired_date, ...). Checked
+# once, here, where every reader loads the file. None is allowed (an
+# absent value); bool is not a number.
+_STR_FIELDS = ("date", "date_settle")
+_NUM_FIELDS = ("qty", "quantity", "proceeds", "cost", "gain", "net_amount",
+               "price", "commission", "fee", "total_cost",
+               "disallowed_amount")
+
+
+def check_row_types(rows, path, key: str = "transactions") -> None:
+    """InputFileError naming the file, list, row and field when a row's
+    date is not a string or a numeric field is not a number."""
+    for i, r in enumerate(rows or []):
+        if not isinstance(r, dict):
+            continue
+        for f in _STR_FIELDS:
+            v = r.get(f)
+            if v is not None and not isinstance(v, str):
+                raise InputFileError(
+                    f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
+                    f"{f} is {v!r}, not a YYYY-MM-DD string — the file "
+                    f"is damaged or hand-edited: fix it or re-run "
+                    f"`taxjson run`")
+        for f in _NUM_FIELDS:
+            v = r.get(f)
+            if v is not None and (isinstance(v, bool)
+                                  or not isinstance(v, (int, float))):
+                raise InputFileError(
+                    f'{path}: "{key}" row {i} ({r.get("symbol") or "?"}): '
+                    f"{f} is {v!r}, not a number — the file is damaged "
+                    f"or hand-edited: fix it or re-run `taxjson run`")
+
+
 def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:
     """``doc`` when it is a gains-stage document: a ``transactions``
     list whose rows carry ``gain`` (any income-only or empty list is
@@ -101,6 +137,9 @@ def require_gains_doc(doc: Dict[str, Any], path) -> Dict[str, Any]:
             f"{path}: a pipeline stage file (its rows have no 'gain') — "
             f"pass the <account>_gains.json (or _gains_wash.json) the "
             f"gains stage writes")
+    for key in _WORK_ROW_LISTS:
+        check_row_types(doc.get(key) if isinstance(doc.get(key), list)
+                        else [], path, key)
     return doc
 
 
@@ -170,4 +209,6 @@ def read_work_doc(path) -> Dict[str, Any]:
     if doc.get("summary") is not None and not isinstance(doc["summary"],
                                                          dict):
         raise InputFileError(f'{p}: "summary" must be a JSON object')
+    for key in _WORK_ROW_LISTS:
+        check_row_types(doc.get(key), p, key)
     return doc

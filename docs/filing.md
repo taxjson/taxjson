@@ -107,9 +107,11 @@ the open steps one at a time; `--quick` skips the slow detectors.
       de minimis (ITA s.39(1.1)).
 - [ ] Carrying charges for line 22100 — the margin interest you paid,
       from the broker statements (`taxjson events` lists the INTEREST
-      rows; no taxjson command totals them). Trade commissions are not
-      carrying charges: they are already in the ACB and proceeds, so do
-      not take the `taxjson fees` total to line 22100 (CRA, line 22100).
+      rows; the CASH INTEREST line of reports/<account>.sum nets credit
+      against debit interest, so it is not the amount paid). Trade
+      commissions are not carrying charges: they are already in the ACB
+      and proceeds, so do not take the `taxjson fees` total to line
+      22100 (CRA, line 22100).
 - [ ] `taxjson estimate` with other income, then `taxjson instalments` —
       a sanity check on the tax and on what is still owed against what
       was paid.
