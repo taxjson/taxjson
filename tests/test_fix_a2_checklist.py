@@ -486,20 +486,23 @@ class TestCryptoSendsCommand(unittest.TestCase):
         """A2-0359: with kr not parsed, a send to it is not offered as a
         gift; A2-1163: a saved decision can be removed."""
         sol = "cb-20250713T071327-SOL-50.0001"
-        r = self.cli("run", "--no-input", "--account", "cb")
+        r = self.cli("run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        # kr's evidence gone (never parsed): the guard the command
+        # applies (main's stale_evidence) holds the checklist too.
+        (self.root / "work" / "kr_kraken_transfers.json").unlink()
         r = self.cli("crypto-sends", "cb", "--set", f"{sol}=gift")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("kr have not been parsed", r.stderr)
+        self.assertIn("kr (kraken: not parsed yet)", r.stderr)
         r = self.cli("crypto-sends", "cb")
-        self.assertIn("kr have not", r.stderr)
+        self.assertIn("kr (kraken: not parsed yet)", r.stderr)
         from taxjson.lib.tomlcompat import tomllib
         cfg = tomllib.loads((self.root / "taxjson.toml").read_text())
         c = cl.Ctx(root=self.root, cfg=cfg, year=2026, today=date(2026, 9, 1),
                    run_sub=lambda argv, timeout=900: (0, "", ""))
         res = cl.d_crypto_sends(c)
         self.assertEqual(res.status, "blocked", res.detail)
-        self.assertIn("kr not parsed", res.detail)
+        self.assertIn("kr (kraken: not parsed yet)", res.detail)
         # Full run: SOL matched; decide the BTC send, then take it back.
         self.assertEqual(self.cli("run", "--no-input").returncode, 0)
         btc = "cb-20250801T080000-BTC-0.001"

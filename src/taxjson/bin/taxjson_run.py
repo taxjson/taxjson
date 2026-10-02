@@ -44,6 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from taxjson.lib.cli_diag import note
 from taxjson.lib.cli_diag import tax_year as _tax_year_arg
 from taxjson.lib.numeric import nonneg_float_arg as _nonneg_float_arg
+from taxjson.lib.numeric import positive_float_arg
 from taxjson.lib.pipeline import (income_dating_flags,
                                   option_timing_flags, tt_json_path)
 from taxjson.lib.report_model import (align_columns, fmt_money,
@@ -1730,18 +1731,6 @@ def _crypto_broker_files(root: Path, cfg: Dict[str, Any]
     return out
 
 
-def _unparsed_crypto_accounts(root: Path, cfg: Dict[str, Any],
-                              exclude: Optional[str] = None) -> List[str]:
-    """Crypto accounts with an exchange export whose transfer sidecar
-    (work/<acct>_<exchange>_transfers.json) does not exist yet: their
-    arrivals are unknown, so a send to them looks unmatched."""
-    files = _crypto_broker_files(root, cfg)
-    cache = root / "work"
-    return sorted(a for a, fs in files.items() if a != exclude and any(
-        not (cache / f"{a}_{b}_transfers.json").exists()
-        for b, _p in fs if b in ("kraken", "coinbase")))
-
-
 def _is_us(cfg: Dict[str, Any]) -> bool:
     return _country((cfg.get("settings") or {})) in ("us",
                                                                  "usa")
@@ -1750,30 +1739,20 @@ def _is_us(cfg: Dict[str, Any]) -> bool:
 def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
                      ) -> Tuple[str, List[Dict[str, Any]]]:
     """(Re)write inputs/<acct>/crypto_sends.tt from the report. Returns
-    (write status, duplicate hand-written lines). Raises ValueError when
-    a gift/payment cannot be priced (nothing is written then), and
+    (write status, duplicate hand-written lines). Raises
     crypto_sends.RefusedDecision AFTER writing the file without them
     when a saved decision is one the country refuses (a US gift:
-    partition SPEC-01/INPUTS-04)."""
+    partition SPEC-01/INPUTS-04), and crypto_sends.UnpricedSends AFTER
+    writing the priced lines when a gift/payment or network fee cannot
+    be priced (its ``dups`` carries the duplicate lines)."""
     from taxjson.lib import crypto_sends as CS
     adoc = report["accounts"][acct]
     entries, unpriced = CS.tt_entries(adoc)
     refused = CS.refused_entries(adoc)
-    if unpriced:
-        _fee_only = all(e.get("network_fee") for e in unpriced)
-        raise ValueError(
-            "no fair value for " + ", ".join(e["id"] for e in unpriced)
-            + " (the price lookup failed or TAXJSON_OFFLINE is set and "
-              "the price is not cached) — re-run online"
-            + ("" if _fee_only else
-               f", or give the value per coin in "
-               f"{report['base_currency']}: `taxjson crypto-sends {acct} "
-               f"--set ID=gift|payment --price P`")
-            + (" (a `-fee` id is the network fee hidden in a send that "
-               "arrived short: priced from the send row or the Yahoo "
-               "close)" if any(e.get("network_fee") for e in unpriced)
-               else "")
-            + ". crypto_sends.tt was not changed.")
+    # Every priced entry is written on its own; one that cannot be
+    # priced is reported AFTER the write (re-audit A2-0240: a single
+    # unpriceable network fee used to hold back the owner's fully
+    # priced gifts and payments, and left an old crypto_sends.tt).
     status = CS.write_tt(Path(adoc["tt_file"]),
                          CS.render_tt(acct, entries, report["country"]))
     if refused:
@@ -1781,6 +1760,25 @@ def _crypto_sends_tt(root: Path, acct: str, report: Dict[str, Any]
             f"inputs/{acct}/{CS.MANIFEST_NAME}: "
             + "; ".join(e["refused"] for e in refused)
             + f" (inputs/{acct}/{CS.TT_NAME} {status} without it)")
+    if unpriced:
+        _fee = [e["id"] for e in unpriced if e.get("network_fee")]
+        _dec = [e["id"] for e in unpriced if not e.get("network_fee")]
+        _exc = CS.UnpricedSends(
+            "no fair value for " + ", ".join(e["id"] for e in unpriced)
+            + " (the price lookup failed or TAXJSON_OFFLINE is set and "
+              "the price is not cached) — NOT booked. Re-run online, or "
+              f"give the value per coin in {report['base_currency']}: "
+            + "; ".join(
+                ([f"`taxjson crypto-sends {acct} --set {i}=gift|payment "
+                  f"--price P`" for i in _dec[:1]] if _dec else [])
+                + ([f"`taxjson crypto-sends {acct} --set {i}=fee "
+                    f"--price P` (the network fee hidden in a send that "
+                    f"arrived short)" for i in _fee[:1]] if _fee else []))
+            + f". inputs/{acct}/{CS.TT_NAME} {status} with the "
+              f"{len(entries)} priced line(s).")
+        _exc.dups = CS.duplicate_lines(root / "inputs" / acct, entries)
+        _exc.status = status
+        raise _exc
     return status, CS.duplicate_lines(root / "inputs" / acct, entries)
 
 
@@ -1793,7 +1791,7 @@ def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
     for d in dups:
         when = (d["timestamp"] if d["same_time"]
                 else f"{d['timestamp'][:10]} (the hand-written line has "
-                     f"another time)")
+                     f"another date or time, or a near quantity)")
         if d["id"].endswith("-fee"):
             out.append(
                 f"{d['file']} line {d['line']} and inputs/{acct}/"
@@ -1814,6 +1812,41 @@ def _dup_warning(acct: str, dups: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
+def _transfers_accounts(cfg: Dict[str, Any]) -> List[str]:
+    """Accounts with `transfers = true`: their TRANSFER rows are in the
+    books, so they keep no transfer sidecar."""
+    return [n for n, a in (cfg.get("accounts") or {}).items()
+            if (a or {}).get("transfers")]
+
+
+def _crypto_sends_problems(name: str, adoc: Dict[str, Any]) -> List[str]:
+    """What the run must not book silently for crypto account `name`
+    (each a WARNING; `run --strict` stops on any): a saved gift/payment
+    the automatic pairing overrode (re-audit A2-0004) and, in a US
+    project, a paired move between two crypto accounts whose basis
+    nothing carries (A2-0003)."""
+    out = []
+    for o in adoc.get("overridden") or []:
+        out.append(
+            f"inputs/{name}/sends.json saves {o['id']} ({o['summary']}) as "
+            f"`{o['decision']}`, but that send now pairs with an arrival "
+            f"— {o['arrival']} — so it is booked as your own move and the "
+            f"{o['decision']} is NOT booked. If that arrival is unrelated: "
+            f"`taxjson crypto-sends {name} --set {o['id']}={o['decision']} "
+            f"--unpair`; if the pairing is right: `taxjson crypto-sends "
+            f"{name} --set {o['id']}=self`.")
+    for c in adoc.get("cross_account_moves") or []:
+        out.append(
+            f"{c['id']} ({c['summary']}) moved coins from crypto account "
+            f"{name} to {', '.join(c['to'])}. A US project keeps basis per "
+            f"account (US-BASIS-01) and taxjson cannot carry the moved "
+            f"coins' basis and holding period across accounts: {name} "
+            f"keeps a phantom long and the receiving account sells short "
+            f"(a 0 gain). Keep both exchanges' exports in ONE crypto "
+            f"account, or report the sale of the moved coins by hand.")
+    return out
+
+
 def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                         strict: bool = False) -> None:
     """`taxjson run` hook for a crypto account, right after the parse:
@@ -1830,29 +1863,22 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
     cfg = _soft_config(root)
     cache = root / "work"
     _diag = cache / f"{name}_crypto_sends.diag"
-    _diag_lines: List[Tuple[str, str]] = []      # (prefix, message)
-
-    def _finish() -> None:
-        if _diag_lines:
-            _diag.write_text("".join(f"{p} {name}: crypto sends: {m}\n"
-                                     for p, m in _diag_lines),
-                             encoding="utf-8")
-        else:
-            _diag.unlink(missing_ok=True)
-        if strict and _diag_lines:
-            sys.exit(f"taxjson run --strict: {name}: crypto sends: "
-                     f"{_diag_lines[0][1]}"
-                     + (f" (and {len(_diag_lines) - 1} more in "
-                        f"work/{_diag.name})" if len(_diag_lines) > 1
-                        else "") + " — aborting.")
-    # Another crypto account not parsed yet (first run of a
-    # multi-account project): its arrivals are unknown, so a send to it
-    # would look like a gift. Don't ask until its sidecar exists.
+    # Another crypto account not parsed yet, or parsed before its
+    # export changed (a `run --account` subset): its arrivals are
+    # unknown or stale, so a send to it would look like a gift. Don't
+    # ask, and say so (re-audit A2-0077). A full run parses every
+    # crypto account before this stage (cmd_run), so this is rare.
     files = _crypto_broker_files(root, cfg)
-    unparsed = _unparsed_crypto_accounts(root, cfg, exclude=name)
+    unparsed = CS.stale_evidence(cache, files,
+                                 skip=[name] + _transfers_accounts(cfg))
+    # (prefix, message): UNBOOKED for a declared disposition the run
+    # could not book, ATTENTION for the rest — written to
+    # work/<acct>_crypto_sends.diag for the .sum and run-clean.
+    _problems: List[Tuple[str, str]] = []
+    _dups: List[str] = []
     try:
         report = CS.build_report(root, cfg, files, CS.yahoo_usd_price(root),
-                                 want=name)
+                                 want=name, exports_only=True)
         adoc = report["accounts"].get(name)
         if adoc is None:
             _diag.unlink(missing_ok=True)
@@ -1865,12 +1891,13 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                                        "gift") is None):
                 report = CS.build_report(root, cfg, files,
                                          CS.yahoo_usd_price(root),
-                                         want=name)
+                                         want=name, exports_only=True)
                 adoc = report["accounts"][name]
-        if adoc["undecided"] and interactive and unparsed:
-            print(f"  note: not asking about crypto sends yet — account(s) "
-                  f"{', '.join(unparsed)} have not been parsed, so a send "
-                  f"to them would look unmatched.", file=sys.stderr)
+        if unparsed:
+            _problems.append((ATTENTION_PREFIX,
+                f"the transfer evidence of {'; '.join(unparsed)} is not "
+                f"current, so a send to it may look unmatched (or a "
+                f"network fee be missed) — run without --account."))
         if adoc["undecided"]:
             print(f"  note: {adoc['undecided']} crypto send(s) not yet "
                   f"classified as self / gift / payment — `taxjson "
@@ -1878,29 +1905,55 @@ def _stage_crypto_sends(root: Path, name: str, interactive: bool,
                   f"a disposition at fair value).", file=sys.stderr)
             if strict and not unparsed:
                 # A pending decision, like a pending election: a send
-                # that may be a disposition is not in the books.
+                # that may be a disposition is not in the books (A2-0362).
+                _diag.unlink(missing_ok=True)
                 sys.exit(f"taxjson run --strict: {name}: "
                          f"{adoc['undecided']} crypto send(s) not yet "
                          f"classified as self / gift / payment — decide "
                          f"each with `taxjson crypto-sends {name} --set "
                          f"ID=...` — aborting.")
-        status, dups = _crypto_sends_tt(root, name, report)
+        if adoc.get("orphans"):
+            print(f"  note: inputs/{name}/{CS.MANIFEST_NAME} has "
+                  f"{len(adoc['orphans'])} decision(s) for send ids that "
+                  f"no longer exist ({', '.join(adoc['orphans'][:3])}"
+                  f"{' ...' if len(adoc['orphans']) > 3 else ''}) — the "
+                  f"inputs or local_timezone changed? They are ignored; "
+                  f"`taxjson crypto-sends {name}` lists the current ids.",
+                  file=sys.stderr)
+        _problems += [(ATTENTION_PREFIX, w)
+                      for w in _crypto_sends_problems(name, adoc)]
+        try:
+            status, dups = _crypto_sends_tt(root, name, report)
+        except CS.UnpricedSends as e:
+            status, dups = getattr(e, "status", ""), getattr(e, "dups", [])
+            # A declared disposition the run could not book (R1-104).
+            _problems.append((UNBOOKED_PREFIX, str(e)))
         if status in ("written", "removed"):
             print(f"  crypto-sends: inputs/{name}/{CS.TT_NAME} {status}")
-        for w in _dup_warning(name, dups):
-            print(f"taxjson: WARNING: {w}", file=sys.stderr)
-            _diag_lines.append((ATTENTION_PREFIX, w))
+        # Booked twice (A2-0127): --strict stops, the .sum says so.
+        _dups = _dup_warning(name, dups)
     except CS.RefusedDecision as e:
         # A saved decision the country refuses (a US gift): not booked,
         # and the run stops until sends.json says what it was.
         _diag.unlink(missing_ok=True)
         sys.exit(f"taxjson run: {name}: crypto sends: {e}")
     except ValueError as e:
-        print(f"taxjson: WARNING: {name}: crypto sends: {e}",
+        _problems.append((ATTENTION_PREFIX, str(e)))
+    for _p, w in _problems:
+        print(f"taxjson: WARNING: {name}: crypto sends: {w}",
               file=sys.stderr)
-        # A declared disposition the run could not book (R1-104 class).
-        _diag_lines.append((UNBOOKED_PREFIX, str(e)))
-    _finish()
+    for w in _dups:
+        print(f"taxjson: WARNING: {w}", file=sys.stderr)
+    _problems += [(ATTENTION_PREFIX, w) for w in _dups]
+    if _problems:
+        _diag.write_text("".join(f"{p} {name}: crypto sends: {m}\n"
+                                 for p, m in _problems), encoding="utf-8")
+    else:
+        _diag.unlink(missing_ok=True)
+    if strict and _problems:
+        sys.exit(f"taxjson run --strict: {name}: crypto sends: "
+                 f"{len(_problems)} problem(s) above would leave the books "
+                 f"wrong — aborting.")
 
 
 def ib_foreign_roc_mode(settings: Dict[str, Any]) -> str:
@@ -2022,11 +2075,14 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   incomplete_history: Optional[Path] = None,
                   no_input: bool = False,
                   strict: bool = False,
+                  parse_only: bool = False,
                   ) -> Optional[Dict[str, Path]]:
     """Full per-account pipeline. Returns {base, gains, sum} paths, or None
     when the account has no inputs yet (a configured-but-unpopulated account,
     e.g. straight after `taxjson init`) — that's a warn-and-skip, not a fatal
-    error, so the other accounts still run."""
+    error, so the other accounts still run. `parse_only`: stop after the
+    broker parse (returns None) — cmd_run parses every crypto account
+    first so each one's sends pair against current arrivals."""
     acct_dir = inputs_dir / name
     if not acct_dir.exists():
         print(f"taxjson: warning: no inputs dir for account '{name}' "
@@ -2088,8 +2144,12 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # silently vanished from every report at exit 0 (REVIEW #20).
 
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
-    print(f"==> {name}  ({'taxable' if is_taxable else 'sheltered'}"
-          f"{', crypto' if is_crypto else ''})")
+    if parse_only:
+        print(f"==> {name}  (crypto exports first: sends pair across "
+              f"accounts)")
+    else:
+        print(f"==> {name}  ({'taxable' if is_taxable else 'sheltered'}"
+              f"{', crypto' if is_crypto else ''})")
 
     # Deletion-blindness guard (FUZZ #J): mtime deps only cover files
     # that EXIST — deleting an input CSV left its trades in the cached
@@ -2271,6 +2331,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                   f"Check the file's header/format (or its name: cb_/kr_/"
                   f"coinbase/kraken route it to a crypto parser); "
                   f"`run --strict` refuses this.", file=sys.stderr)
+
+    if parse_only:
+        # The transfer evidence of an export REMOVED from inputs/ must
+        # not pair or book anything in this run (re-audit A2-1026; the
+        # sweep below removes the rest of its artifacts).
+        for _b in ("kraken", "coinbase"):
+            _side = cache / f"{name}_{_b}_transfers.json"
+            if _b not in grouped and _side.exists():
+                _side.unlink()
+                print(f"  removed stale {_side.name} (its input files are "
+                      f"gone)")
+        return None
 
     # 1b. crypto sends: an outgoing transfer that never arrived on
     # another exchange is a gift, a payment, or a move to your own
@@ -2483,13 +2555,20 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         # Its state (content, or absence) is a rebuild dep through a
         # stamp that changes only when the map does, so `run --fast`
         # re-prices after the map is added, edited, or deleted.
-        _cmap = inputs_dir.parent / "crypto_ticker.map"
-        try:
-            _cstate = ("sha256:" + hashlib.sha256(
-                _cmap.read_bytes()).hexdigest()) if _cmap.is_file() \
-                else "absent"
-        except OSError:
-            _cstate = "unreadable"
+        # fill-crypto also reads the map in its input file's folder
+        # (work/), later wins: that one is part of the stamp too
+        # (re-audit A2-0585).
+        _cparts = []
+        for _cmap in (inputs_dir.parent / "crypto_ticker.map",
+                      mapped.parent / "crypto_ticker.map"):
+            try:
+                _cparts.append(("sha256:" + hashlib.sha256(
+                    _cmap.read_bytes()).hexdigest()) if _cmap.is_file()
+                    else "absent")
+            except OSError:
+                _cparts.append("unreadable")
+        _cstate = (_cparts[0] if _cparts[1] == "absent"
+                   else " ".join(_cparts))
         _cstamp = cache / f"{name}_crypto_ticker_map.state"
         if (not _cstamp.exists()
                 or _cstamp.read_text(encoding="utf-8").strip() != _cstate):
@@ -3256,6 +3335,39 @@ def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
     print(f"  → {exports_dir}/")
 
 
+def _duplicate_crypto_exports(cache: Path, names: List[str]) -> List[str]:
+    """One line per pair of crypto accounts whose parsed exchange rows
+    share transaction ids: the same export filed under two accounts is
+    booked twice (re-audit A2-0569; the per-account dedup only sees one
+    account). Exchange ids are unique per row (Coinbase IDs, Kraken
+    txids; a content hash when the export has none)."""
+    import json as _json
+    ids: Dict[str, Dict[str, str]] = {}
+    for n in names:
+        mine: Dict[str, str] = {}
+        for b in ("coinbase", "kraken"):
+            p = cache / f"{n}_{b}.json"
+            try:
+                doc = _json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            for t in doc.get("transactions") or []:
+                if t.get("id"):
+                    mine[str(t["id"])] = b
+        ids[n] = mine
+    out = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            both = set(ids.get(a, {})) & set(ids.get(b, {}))
+            if both:
+                ex = sorted({ids[a][k] for k in both})
+                out.append(
+                    f"crypto accounts {a} and {b} hold {len(both)} "
+                    f"identical {'/'.join(ex)} row(s) (the same "
+                    f"transaction ids): the same export is in both "
+                    f"inputs/{a}/ and inputs/{b}/, so its trades are "
+                    f"booked twice. Keep it in one account.")
+    return out
 def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
     """One broker account's export in TWO taxjson accounts books every
     row twice (audit A2-0293, A2-0630). The rows carry their broker
@@ -3722,6 +3834,33 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     no_input = getattr(args, "no_input", False)
     pending_accounts: List[PendingElectionsError] = []
+
+    # Crypto sends pair a send in one crypto account with its arrival
+    # in another: parse EVERY crypto account's exports before any
+    # account's sends stage reads the transfer evidence, so the first
+    # run after a new export pairs against it (re-audit A2-0077) and a
+    # removed export's evidence is gone (A2-1026). The parse is cached,
+    # so the account's own stage below does not parse again.
+    _crypto_first = [(n, c) for n, c in accounts.items()
+                     if (c or {}).get("crypto") and not (c or {}).get(
+                         "transfers")]
+    if len(_crypto_first) >= 2:
+        for name, acfg in _crypto_first:
+            stage_account(name, acfg, settings, inputs_dir, cache,
+                          reports_dir, rates, ticker_map_arg,
+                          sec_overrides_arg, args.force,
+                          incomplete_history=phantoms_arg,
+                          no_input=no_input,
+                          strict=getattr(args, "strict", False),
+                          parse_only=True)
+        _dups = _duplicate_crypto_exports(
+            cache, [n for n, _c in _crypto_first])
+        for _d in _dups:
+            print(f"taxjson: WARNING: {_d}", file=sys.stderr)
+        if _dups and getattr(args, "strict", False):
+            sys.exit("taxjson run --strict: the same exchange rows are in "
+                     "two crypto accounts (above) — every one would be "
+                     "booked twice. Remove the copy.")
 
     sheltered_outputs: List[Tuple[str, Dict[str, Path]]] = []
     _skipped_no_input: List[str] = []       # no CSV/.tt — see B7 helper
@@ -4594,6 +4733,17 @@ def cmd_elect(args: argparse.Namespace) -> None:
         return
 
     # --set: non-interactive election writing (headless/CI bootstrap).
+    if isinstance(getattr(args, "set", None), list):
+        # A second --set used to replace the first silently (argparse
+        # keeps the last) and the run still asked for the dropped event
+        # (re-audit A2-0563 / A2-0568). --hint belongs to ONE election,
+        # so one --set per command.
+        if len(args.set) > 1:
+            sys.exit(f"taxjson elect: {len(args.set)} --set flags — give "
+                     f"ONE --set per command (its --hint flags belong to "
+                     f"it): run `taxjson elect {name} --set ...` once per "
+                     f"event. Nothing was saved.")
+        args.set = args.set[0]
     if getattr(args, "set", None):
         from taxjson.lib.corp_actions import (ElectionRecord,
                                               RULES_BY_COUNTRY)
@@ -5492,8 +5642,9 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
             _die(f"--set/--unset/--write need an account: `taxjson "
                  f"crypto-sends <{'|'.join(accts)}> --set ID=gift`.")
         acct = accts[0]
-    if (args.note is not None or args.price is not None) and not sets:
-        _die("--note/--price only apply with --set ID=DECISION.")
+    if (args.note is not None or args.price is not None
+            or getattr(args, "unpair", False)) and not sets:
+        _die("--note/--price/--unpair only apply with --set ID=DECISION.")
     if args.json and (sets or unsets or args.write):
         _die("--json applies to the listing only.")
     if sets and unsets:
@@ -5504,15 +5655,8 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         _die("no crypto transfer evidence in work/ — run `taxjson run` "
              "first (the parse keeps withdrawals/sends in "
              "work/<acct>_<exchange>_transfers.json).")
-    # Another crypto account not parsed yet: its arrivals are unknown,
-    # so a send to it reads as unmatched — the guard `run` applies
-    # before it asks (A2-0359).
-    unparsed = _unparsed_crypto_accounts(root, cfg)
-    if unparsed and (sets or args.write):
-        _die(f"crypto account(s) {', '.join(unparsed)} have not been "
-             f"parsed yet — a send to them would look unmatched. Run "
-             f"`taxjson run` first, then decide.")
     if unsets:
+        # Removing a saved decision needs no current evidence (A2-1163).
         from taxjson.lib.crypto_sends import MANIFEST_NAME as _MN
         _man = root / "inputs" / acct / _MN
         try:
@@ -5528,20 +5672,49 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
         print(f"Regenerate the .tt lines: `taxjson crypto-sends {acct} "
               f"--write` (or just `taxjson run`).")
         return
-    if unparsed:
-        print(f"note: crypto account(s) {', '.join(unparsed)} have not "
-              f"been parsed yet — a send to them is listed as unmatched "
-              f"until `taxjson run` reads them.", file=sys.stderr)
+    files = _crypto_broker_files(root, cfg)
+    # Evidence parsed before an export changed: a send that has since
+    # arrived would still be listed as unmatched, and a decision saved
+    # for it is then dropped by the next run (re-audit A2-1010).
+    stale = CS.stale_evidence(cache, files, skip=_transfers_accounts(cfg))
+    if stale and (sets or args.write):
+        _die(f"the transfer evidence is not current for "
+             f"{'; '.join(stale)} — run `taxjson run` first, then decide "
+             f"(a send may have arrived since).")
+    if stale:
+        print(f"taxjson crypto-sends: WARNING: the transfer evidence is "
+              f"not current for {'; '.join(stale)} — run `taxjson run` "
+              f"before deciding (a send may have arrived since).",
+              file=sys.stderr)
     try:
         if sets:
-            light = CS.build_report(root, cfg, None, None, want=acct,
-                                    with_pool=False)
-            by_id = {s["id"]: s for s in light["accounts"][acct]["sends"]}
+            light = CS.build_report(root, cfg, files, None, want=acct,
+                                    with_pool=False, exports_only=True)
+            adoc = light["accounts"][acct]
+            by_id = {s["id"]: s for s in adoc["sends"]}
+            fee_ids = {f["id"]: f for f in adoc["network_fees"]}
             for item in sets:
                 if "=" not in item:
                     _die(f"--set expects ID=DECISION, got {item!r}.")
                 sid, dec = (x.strip() for x in item.rsplit("=", 1))
                 dec = dec.lower()
+                if sid in fee_ids:
+                    # The network fee hidden in a send that arrived
+                    # short: a sale at fair value; the owner can only
+                    # price it (re-audit A2-0240).
+                    if dec != CS.FEE_DECISION or args.price is None:
+                        _die(f"{sid} is the network fee hidden in a send "
+                             f"that arrived short — a sale at fair value; "
+                             f"give its price: `--set {sid}="
+                             f"{CS.FEE_DECISION} --price P`.")
+                    CS.record_decision(Path(adoc["manifest"]), sid, dec,
+                                       note=args.note, price=args.price,
+                                       summary=fee_ids[sid]["summary"])
+                    print(f"saved: {sid} priced at {args.price:g} "
+                          f"{light['base_currency']} per "
+                          f"{fee_ids[sid]['symbol']}  "
+                          f"(inputs/{acct}/{CS.MANIFEST_NAME})")
+                    continue
                 if dec not in CS.DECISIONS:
                     _die(f"decision {dec!r} for {sid} — expected one of "
                          f"{', '.join(CS.DECISIONS)}.")
@@ -5553,23 +5726,43 @@ def cmd_crypto_sends(args: argparse.Namespace) -> None:
                          f"recipient takes over your basis) — record it "
                          f"as `self` (no tax event) or, if you were paid, "
                          f"`payment`.")
+                summary = by_id[sid]["summary"] if sid in by_id else ""
+                unpair = None
                 if sid not in by_id:
-                    _die(f"no unmatched send {sid!r} in account {acct!r} — "
-                         f"`taxjson crypto-sends {acct}` lists the ids.")
-                if args.price is not None and not (args.price > 0):
-                    _die("--price must be a positive value per coin.")
-                CS.record_decision(Path(light["accounts"][acct]["manifest"]),
-                                   sid, dec, note=args.note,
-                                   price=args.price,
-                                   summary=by_id[sid]["summary"])
-                print(f"saved: {sid} = {dec}  "
+                    paired = CS.matched_send(root, cfg, acct, sid, files)
+                    if paired is None:
+                        _die(f"no send {sid!r} in account {acct!r} — "
+                             f"`taxjson crypto-sends {acct}` lists the "
+                             f"ids.")
+                    if dec in CS.DISPOSING and not args.unpair:
+                        # The pairing calls it your own move: a gift or
+                        # payment needs the owner to say the arrival is
+                        # unrelated (re-audit A2-0004).
+                        _die(f"{sid} is paired with an arrival: {paired} "
+                             f"— booked as your own move. If that arrival "
+                             f"is unrelated and the coins left your "
+                             f"ownership: `--set {sid}={dec} --unpair`.")
+                    summary = paired.split(" arrived as ")[0]
+                if args.unpair:
+                    if dec not in CS.DISPOSING:
+                        _die("--unpair applies to a gift or payment.")
+                    unpair = True
+                try:
+                    CS.record_decision(Path(adoc["manifest"]), sid, dec,
+                                       note=args.note, price=args.price,
+                                       summary=summary, unpair=unpair)
+                except ValueError as e:
+                    _die(str(e))
+                print(f"saved: {sid} = {dec}"
+                      f"{' (unpaired)' if unpair else ''}  "
                       f"(inputs/{acct}/{CS.MANIFEST_NAME})")
             if not args.write:
                 print(f"Regenerate the .tt lines: `taxjson crypto-sends "
                       f"{acct} --write` (or just `taxjson run`).")
                 return
-        report = CS.build_report(root, cfg, _crypto_broker_files(root, cfg),
-                                 CS.yahoo_usd_price(root), want=acct)
+        report = CS.build_report(root, cfg, files,
+                                 CS.yahoo_usd_price(root), want=acct,
+                                 exports_only=True)
         if args.write:
             status, dups = _crypto_sends_tt(root, acct, report)
             n = len(CS.tt_entries(report["accounts"][acct])[0])
@@ -5626,7 +5819,8 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         for e in sends:
             dec = (e["decision"] or "PENDING").upper()
             ref = f"   ref {e['ref']}" if e["ref"] else ""
-            print(f"\n{e['id']}   {dec}{ref}")
+            unp = "   (unpaired by you)" if e.get("unpaired") else ""
+            print(f"\n{e['id']}   {dec}{ref}{unp}")
             fee = ("" if not e["fee_booked"] else
                    f"  (plus a {CS.fmt_qty(e['fee_booked'])} {e['symbol']} "
                    f"withdrawal fee — cash, not a sale)" if e["stable"] else
@@ -5679,14 +5873,15 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
                 print(f"  REFUSED: {e['refused']}")
         entries, unpriced = CS.tt_entries(adoc)
         tt = Path(adoc["tt_file"])
-        want = (CS.render_tt(acct, entries, report["country"])
-                if not unpriced else None)
+        want = CS.render_tt(acct, entries, report["country"])
         have = tt.read_text(encoding="utf-8") if tt.is_file() else None
         print()
         if unpriced:
-            print(f"crypto_sends.tt: cannot be written — no fair value for "
-                  f"{', '.join(e['id'] for e in unpriced)}.")
-        elif want == have:
+            print(f"NOT BOOKED — no fair value for "
+                  f"{', '.join(e['id'] for e in unpriced)}: give it with "
+                  f"`--set ID=gift|payment --price P` (a `-fee` id: "
+                  f"`--set ID=fee --price P`).")
+        if want == have:
             print(f"inputs/{acct}/{CS.TT_NAME}: up to date "
                   f"({len(entries)} line(s))." if have else
                   "No gift/payment or network fee needs a sale line.")
@@ -5697,10 +5892,12 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
         for w in _dup_warning(acct, CS.duplicate_lines(
                 root / "inputs" / acct, entries)):
             print(f"WARNING: {w}")
+        for w in _crypto_sends_problems(acct, adoc):
+            print(f"WARNING: {w}")
         for sid in adoc["orphans"]:
             print(f"note: sends.json has a decision for {sid}, which is "
-                  f"no longer an unmatched send (inputs changed?) — it is "
-                  f"ignored.")
+                  f"no longer a send in the exports (inputs or "
+                  f"local_timezone changed?) — it is ignored.")
         if adoc["undecided"]:
             print(f"Decide: taxjson crypto-sends {acct} --set "
                   f"ID={'self|payment' if _usa else 'self|gift|payment'}"
@@ -5710,10 +5907,15 @@ def _print_crypto_sends(root: Path, report: Dict[str, Any]) -> None:
               "losses excluded): " + "; ".join(
                   f"{y} {g:+,.2f} {base}" for y, g in sorted(
                       fx_by_year.items())))
+        # fx-cash has no input for it (re-audit A2-0591): the amount is
+        # added by hand to the year's s.39(1.1) currency total.
         print("  Stablecoins are US-dollar cash in these books, so this is "
               "a foreign-currency gain: ITA s.39(1.1) taxes only the "
-              "year's NET currency gain beyond $200 — add it to "
-              "`taxjson fx-cash` for the year.")
+              "year's NET currency gain beyond $200. It is NOT in any "
+              "taxjson figure (`taxjson fx-cash` does not read it): add "
+              "it by hand to the year's net foreign-exchange gain or loss "
+              "(the fx-cash net before the $200) and apply the $200 to "
+              "the total.")
     pool = report.get("pool")
     if pool and pool.get("overdrafts"):
         print(f"\nnote: the USD/stablecoin pool went short "
@@ -14779,6 +14981,7 @@ def main() -> None:
                          help="Scope --redo/--reset to one event id "
                               "(from the list); default is all")
     p_elect.add_argument("--set", metavar="EVENT_ID=ELECTION",
+                         action="append",
                          help="Write one election non-interactively "
                               "(headless/CI bootstrap), e.g. --set "
                               "20251022-ssl-rgld-51d7=rollover_s_85_1_5")
@@ -14856,7 +15059,13 @@ def main() -> None:
     p_csend.add_argument("--set", action="append", metavar="ID=DECISION",
                          help="Record a decision (self | gift | payment) "
                               "for a send id from the listing; "
-                              "repeatable")
+                              "repeatable. A `-fee` id (a network fee "
+                              "hidden in a send that arrived short) takes "
+                              "`ID-fee=fee --price P`")
+    p_csend.add_argument("--unpair", action="store_true",
+                         help="With --set ID=gift|payment on a send the "
+                              "tool paired with an arrival: keep it "
+                              "unpaired (that arrival was unrelated)")
     p_csend.add_argument("--unset", action="append", metavar="ID",
                          help="Remove the saved decision for a send id "
                               "(it is undecided again: `taxjson run` "
@@ -14864,9 +15073,11 @@ def main() -> None:
     p_csend.add_argument("--note", metavar="TEXT",
                          help="With --set: a note kept with the decision "
                               "and written into crypto_sends.tt")
-    p_csend.add_argument("--price", type=float, metavar="P",
+    p_csend.add_argument("--price", type=positive_float_arg, metavar="P",
                          help="With --set: fair value per coin in the base "
-                              "currency, when the price lookup fails")
+                              "currency, when the price lookup fails "
+                              "(finite, at least 0.00000001; re-deciding a "
+                              "send to another decision drops it)")
     p_csend.add_argument("--write", action="store_true",
                          help="(Re)generate inputs/<acct>/crypto_sends.tt "
                               "from the decisions (idempotent)")

@@ -135,6 +135,159 @@
   year, and one after Dec 31 but within the books' data, are flagged
   (re-audit A2-1210).
 
+- The shared price and rate caches in $HOME (crypto prices, currency
+  rates, the price chain) are saved through a unique temp file under a
+  lock, so two projects' runs at once no longer fail to save or make a
+  reader see an empty cache; the crypto price cache keeps both runs'
+  prices (re-audit A2-0233).
+
+- The same exchange export filed under two crypto accounts (rows with
+  the same transaction ids) is warned about, and `run --strict` stops,
+  instead of booking every trade twice at exit 0 (re-audit A2-0569).
+
+- `taxjson elect ACCOUNT --set A=x --set B=y` is refused (nothing saved)
+  instead of saving only the last --set at exit 0; give one --set per
+  command (re-audit A2-0563, A2-0568).
+
+- The stablecoin de-peg warning ("not in the gains; report it by hand")
+  is an ATTENTION line, so `taxjson run` shows it on the console, not
+  only in the .sum (re-audit A2-1001).
+
+- fill-crypto values PYUSD and GUSD at their 1.00 USD par like USDC
+  (a US Coinbase or Kraken PYUSD reward went to Yahoo, and an offline
+  run stopped); `run --fast` re-prices after a `work/crypto_ticker.map`
+  change, which fill-crypto reads (re-audit A2-1000, A2-0593, A2-0585).
+
+- **Crypto sends: pairing, decisions and prices (re-audit 2).** The
+  send/arrival pairing is a minimum-loss assignment, not first come
+  first served: a send no longer takes another send's arrival and books
+  a phantom network-fee sale; a send that landed as two deposits (or two
+  sends as one) pairs; a Kraken Hybrid Earn move is never paired. A
+  saved gift/payment that a later arrival pairs with is no longer
+  dropped silently: `run` warns, `--strict` stops, the checklist flags
+  it, and `crypto-sends --set ID=gift --unpair` keeps it. A full `run`
+  parses every crypto account before pairing (a new export pairs on the
+  first run; a removed export's sends no longer book); `crypto-sends
+  --set` refuses stale evidence. US: a move paired between two crypto
+  accounts (basis not carried) is warned about and stops `--strict`.
+  `--price` and a hand-edited sends.json price must be finite and at
+  least 0.00000001; re-deciding a send drops its old hand price; a
+  network fee takes `--set ID-fee=fee --price P`; an unpriceable entry no
+  longer holds back the priced ones (it is warned about; `--strict`
+  stops). Same-second sends get distinct ids. The stablecoin pool reads
+  a Coinbase Convert whichever leg the Asset column names, parses Notes
+  numbers strictly and takes deposit fees out. A bad rate in to_base.csv
+  is refused; today's open price is not cached; work/crypto_ticker.map
+  applies as in fill-crypto; the duplicate-line check catches the UTC
+  date, a fee-inclusive or rounded quantity, a thousands comma and a
+  split sale.
+
+- FX rates: a transient failure is no longer cached as a permanent
+  answer (re-audit A2-0136, A2-0393). A failed Yahoo download counts as
+  "no data" only when Yahoo, asked again right then, answers for the
+  dates after the range (later dates already in the cache are no proof);
+  a second empty Bank of Canada answer is no longer read as a stopped
+  series (a series counts as stopped only after 45 silent days with
+  nothing cached after the range), and when the Bank answers again the
+  hole an earlier empty answer left is asked for again; a noon or Yahoo
+  answer cut off before the range end records only the dates it reached
+  and says so.
+- FX rates: a cached Bank of Canada (or Yahoo) rate that is not a
+  positive number (`"abc"`, `"1,3316"`, a list) is no longer copied into
+  the rates file, where the run then blamed the config ("no rates at
+  all for USD"): it is dropped, named with `~/.currency_price_cache.json`
+  and its date, and asked for again online (re-audit A2-1212).
+- tax-logic CA-FX-02 / US-FX-02 now state the rate gap the converter
+  really accepts: the rates file carries a rate over weekends and
+  holidays for up to 7 days and a day with no row looks back 5 more, so
+  a rate up to 12 days old is used; no number changes (re-audit A2-0706).
+- **fx-cash: stablecoins, coin legs and holiday settles.** A PYUSD or
+  GUSD reward in a Canada book now enters the US-dollar pool, as a USDC
+  reward does. fx-cash and the parsers share one stablecoin list. A
+  Coinbase Advanced Trade on a crypto-quoted pair (ETH-BTC) and a Kraken
+  fee paid in a coin no longer count as US dollars acquired and
+  disposed. Rows that settle on the same day are walked in trade-date
+  order, so a holiday no longer puts a later buy before an earlier sale.
+  tax-logic CA-FX-07 now states the loss side of the $200 exemption and
+  the pooled-average-cost method. Re-audit A2-0079, A2-0234, A2-0235,
+  A2-0244, A2-0576, A2-0589, A2-1012, A2-1013, A2-1015 and A2-1016.
+- **Coinbase rows must add up.** A Buy/Sell whose Total is not
+  Subtotal ± fee, a Buy/Sell, Convert or staking reward whose value does
+  not fit Quantity × Price (5% for spread), and a Convert whose Quantity
+  Transacted disagrees with its Notes are refused, naming the file and
+  line. A 10x Subtotal on a Convert used to add about 26.8k to the gain
+  under `run --strict`. A sale whose fee exceeds its Subtotal now books
+  negative proceeds whatever sign the Total cell carries, and an
+  explicit $0.00 Buy is refused like a blank one. Before, fill-crypto
+  re-priced it at market. Re-audit A2-0022, A2-0080 (the Coinbase half),
+  A2-0250, A2-0565, A2-0997 and A2-1023.
+- **Coinbase classification.** A fiat `Withdrawal` is a recognized
+  non-event like a fiat `Deposit`. Before, it raised a false UNBOOKED
+  "moves coins" warning and `run --strict` failed. A `Deposit` or
+  `Subscription` in a coin is now UNBOOKED; it used to be dropped as a
+  non-event. A row cut inside Fees or Notes is refused as truncated. The
+  unterminated-quote error names the line the quote opened on. The two
+  legs of a Convert in an export without an ID column share one id stem,
+  so fill-crypto values the swap once. Advanced Trade legs on a
+  crypto-quoted pair say "crypto-to-crypto". A USD-valued Convert or
+  `*-USDC` Advanced Trade more than 2% off the peg prints the de-peg
+  warning. Re-audit A2-0237, A2-0564, A2-0566, A2-0567, A2-1024,
+  A2-0249, A2-0584, A2-0998 and A2-1003.
+- **Kraken: a stablecoin swap far off the peg is warned about.** A
+  ledger instant swap or an ETH/USDC fill whose ledger `amountusd`
+  implies a stablecoin price more than 2% from 1.00 USD now prints the
+  de-peg warning a USDC/USD fill does (tax-logic CA-CRYPTO-02; re-audit
+  A2-1003, Kraken half).
+- **tax-logic states the Kraken staked-code fold.** CA-CRYPTO-01 and
+  US-CRYPTO-01 now say that Kraken's staked and bonded wallet codes
+  (DOT.S, DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) are the
+  same coin as the bare code, so a 1:1 swap between them is not a sale,
+  which is what the parser already did (re-audit A2-0236).
+- **Kraken trades: the cost must fit vol x price.** A fill whose cost
+  contradicts |vol| x price by more than rounding, or whose fee is more
+  than 5% of the cost, is refused, naming the txid: a shifted, swapped
+  or 10x column used to book with at most a schema warning (re-audit
+  A2-0080).
+- **Kraken: three smaller ledger fixes.** An instant-trade spend with a
+  positive amount or a receive with a negative one is refused (the
+  amount was taken as abs(), booking an inverted trade as an ordinary
+  buy); a fill whose fee was paid with KFEE fee credits books with no
+  fee instead of being refused; and a multi-coin dust sweep into one
+  coin keeps ids fill-crypto pairs, so each split swap is valued once
+  instead of each leg at its own coin's close (re-audit A2-1019,
+  A2-0577, A2-0581).
+- **Kraken: rows that are not your own cash moving are no longer
+  ignored.** A trades row whose type is blank or not buy/sell, a fiat
+  `credit` or `adjustment`, and a coin row that moves nothing but a fee
+  are UNBOOKED warnings (shown by `taxjson run`, refused by `--strict`);
+  they were a quiet note saying moving your own cash is not a tax event.
+  A fee taken in a coin on a fiat withdrawal or on a staking reward is a
+  sale of those coins at fair value, as on a coin withdrawal (tax-logic
+  CA-CRYPTO-03 / US-CRYPTO-03). `earn/migration` rows are a wallet move,
+  and a ledger whose rows are all recognized non-events (an ETH->ETH2
+  relabel, a fiat deposit) no longer prints the "parsed to 0
+  transactions" warning that `run --strict` refused (re-audit A2-0245,
+  A2-0578, A2-1002, A2-0582, A2-1018, A2-1017, A2-0583).
+- **Kraken: a broken quote or a duplicated column is refused.** A stray
+  quote that closed in a later row swallowed the rows between into one
+  cell, silently dropping those fills or rewards; an unterminated quote
+  was reported at the end of the span as a truncated row; a header with
+  two `fee` columns used the last one. Each is now refused, naming the
+  line the quote opened on or the duplicated column (re-audit A2-0246,
+  A2-0247, A2-0248, A2-1022).
+- **US: all five USD stablecoins at par on Kraken.** In a US project
+  PYUSD and GUSD are valued at their 1.00 USD par like USDC, USDT and
+  DAI (a swap, a reward or a fee in one); an EUR/PYUSD fill is refused
+  like EUR/USDC instead of being dropped as a forex conversion; and a
+  Kraken ledger instant swap against a stablecoin takes the par ahead
+  of the export's amountusd, as the trades export does. tax-logic
+  US-CRYPTO-02 says so (re-audit A2-1004, A2-1020).
+- **Kraken: every fiat currency is cash.** Only USD, CAD, EUR and GBP
+  were: an AUD, JPY or CHF bank deposit or withdrawal became a crypto
+  send to classify, an XBT/AUD fill a coin-for-coin swap with a phantom
+  `AUD` coin, and an AUD.HOLD reward an unpriced coin. Kraken now uses
+  the Coinbase parser's fiat list (re-audit A2-0238, A2-0251, A2-0579,
+  A2-0580).
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of
