@@ -1167,7 +1167,11 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
     from datetime import date as _date
     from taxjson.lib.core import is_option_symbol, parse_option_expiry
     diag = cache / f"{name}_expired_options.diag"
-    cutoff = min(f"{year}-12-31", _date.today().isoformat())
+    # An expiry ON Dec 31 is that year's (re-audit A2-0716): the year
+    # end is inclusive, today exclusive (a contract expiring today may
+    # still trade).
+    year_end = f"{year}-12-31"
+    today = _date.today().isoformat()
     lines: List[str] = []
     try:
         inv = _json.loads(gains_json.read_text(encoding="utf-8")).get(
@@ -1210,7 +1214,7 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
         if abs(qty) < 1e-9 or not is_option_symbol(sym):
             continue
         exp = parse_option_expiry(sym)
-        if not exp or exp >= cutoff:
+        if not exp or exp > year_end or exp >= today:
             continue
         side = "long" if qty > 0 else "written"
         if sym in _redescribed:
@@ -5412,6 +5416,13 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     cache = root / "work"
     want = (args.account or "").strip() or None
     cfg = _soft_config(root)
+    if not cfg:
+        # With no config the sheltered accounts' in-book rows were left
+        # out and the view said "the broker reported none" at rc 0
+        # (re-audit A2-0717); the other views refuse.
+        _die(f"no taxjson.toml in {root} — the accounts (and their "
+             f"in-book TRANSFER rows) are unknown; run from the project "
+             f"root.")
     if want and cfg and want not in (cfg.get("accounts") or {}):
         # A typo read "no transfer rows ... the broker reported none"
         # with rc 0, as if the account existed (S039-20).
@@ -5448,9 +5459,15 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "fee": _fee(t),
                          "currency": t.get("currency") or "",
                          "where": "sidecar"})
+    _no_inputs = _accounts_skipped_for_no_inputs(root)
     for name in (cfg.get("accounts") or {}):
         p = cache / f"{name}_base.json"
         if not p.exists():
+            # Missing says so like unreadable does (re-audit A2-1232).
+            if name not in _no_inputs and _has_inputs(root, name):
+                print(f"taxjson: warning: no {p.name} (run `taxjson "
+                      f"run`) — {name}'s in-book TRANSFER rows are not "
+                      f"shown.", file=sys.stderr)
             continue
         try:
             doc = _read_work_doc(p)
@@ -6210,9 +6227,12 @@ def cmd_ccd_sum(args: argparse.Namespace) -> None:
     tainted_skipped = 0
     from taxjson.lib.ticker_map import class_share_aliases, underlying_of
     _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
+    # Held shares (inventory) too: a covered call's class share is
+    # often only held (re-audit A2-0715).
     _aliases = class_share_aliases(
         t.get("symbol") for _a, _d in _docs
-        for t in _d.get("transactions", []) or [])
+        for t in (_d.get("transactions", []) or [])
+        + (_d.get("inventory", []) or []) if isinstance(t, dict))
     for acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Routed phantom-basis rows (manual_reporting_required) are
@@ -6362,9 +6382,12 @@ def cmd_winners(args: argparse.Namespace) -> None:
     shel_accts = set()
     from taxjson.lib.ticker_map import class_share_aliases, underlying_of
     _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
+    # Held shares (inventory) too: a covered call's class share is
+    # often only held (re-audit A2-0715).
     _aliases = class_share_aliases(
         t.get("symbol") for _a, _d in _docs
-        for t in _d.get("transactions", []) or [])
+        for t in (_d.get("transactions", []) or [])
+        + (_d.get("inventory", []) or []) if isinstance(t, dict))
     for _acct, data in _docs:
         _settle = _settle_basis(root, data)
         # Pipeline files ROUTE phantom-basis rows out of transactions[]

@@ -604,6 +604,15 @@ class TestExpiredOpenOptionWarns(unittest.TestCase):
             self.assertIn("ZZQ251219C00015000.TO expired 2025-12-19", txt)
             self.assertIn("201.00 paid is a loss of 2025", txt)
 
+    @rule("CA-OPT-04")
+    def test_dec_31_expiry_is_the_years(self):
+        # re-audit A2-0716: an expiry ON the year end was skipped.
+        err, summ = self._run(
+            "BUYSELL 2025-02-03 10:00:00 ZZQ251231C00015000.TO 1.00000000 "
+            "CAD 2.01000000 201.00000 0.00000\n")
+        self.assertIn("ZZQ251231C00015000.TO expired 2025-12-31", err)
+        self.assertIn("201.00 paid is a loss of 2025", err)
+
     def test_expiry_row_present_is_quiet(self):
         err, summ = self._run(self.BUY + (
             "BUYSELL 2025-12-19 16:00:00 ZZQ251219C00015000.TO -1.00000000 CAD "

@@ -38,7 +38,10 @@ def summarize_gains(data: Dict[str, Any]) -> Dict[str, Any]:
     # An option whose root names no share listing but one class share
     # (RCI...TO with RCI.B.TO shares) groups under that share (S040-11).
     from taxjson.lib.ticker_map import class_share_aliases
-    _aliases = class_share_aliases(t.get('symbol') for t in transactions)
+    # Held shares (inventory) too (re-audit A2-0715).
+    _aliases = class_share_aliases(
+        t.get('symbol') for t in list(transactions)
+        + list(data.get('inventory') or []) if isinstance(t, dict))
 
     for tx in transactions:
         symbol = tx.get('symbol')

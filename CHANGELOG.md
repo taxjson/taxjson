@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A long option expiring ON Dec 31 with no expiry row is warned about in
+  that year's project; ccd.rpt / leaps / ccd-sum / the .sum name a
+  covered call's held class share (RCI.B.TO) even when the shares were
+  not sold; `taxjson transfers` refuses to run without taxjson.toml and
+  says when an account's base book is missing (re-audit A2-0716,
+  A2-0715, A2-0717, A2-1232).
 - `taxjson run` reads an unset `base_currency` as the country's currency,
   like every other command (it refused it); an empty or unreadable
   statement CSV is named as such instead of "rename it to cb_/kr_/

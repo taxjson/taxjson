@@ -52,8 +52,11 @@ def process_data(data, groups, *, direction: str, calls_only: bool):
     # An RCI...TO call on RCI.B.TO shares groups under the class share,
     # not a phantom RCI.TO (S040-11).
     from taxjson.lib.ticker_map import class_share_aliases
+    # The held shares count too: a covered call's RCI.B.TO is usually
+    # only in the inventory (re-audit A2-0715).
     aliases = class_share_aliases(
-        t.get('symbol') for t in data.get('transactions', []) or []
+        t.get('symbol') for t in (data.get('transactions', []) or [])
+        + (data.get('inventory', []) or [])
         if isinstance(t, dict))
     for tx in data.get('transactions', []) or []:
         if not isinstance(tx, dict):
