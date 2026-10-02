@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `taxjson checklist`: a checklist.json that is a directory or a looping
+  symlink, a wrong-shape mark entry, or a file that cannot be written or
+  removed (read-only project, full disk) is now one `taxjson checklist:`
+  line; a failed write keeps the old file and leaves no .part; a BOM'd
+  hand-edited file loads (A2-0768, A2-0789, A2-1393, A2-1414, A2-0776).
+- `taxjson watch`: a .watch_state.json whose inner radar entries or
+  harvest_now are the wrong shape records a new baseline with a warning
+  instead of crashing with exit 1 (A2-1430).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

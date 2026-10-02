@@ -10775,9 +10775,10 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                       + (f" (recorded in {cl.STATE_FILE})." if changed
                          else "."))
     if args.reset:
-        _state = root / cl.STATE_FILE
-        existed = _state.exists()
-        _state.unlink(missing_ok=True)
+        try:
+            existed = cl.reset_state(root)
+        except cl.StateFileError as e:
+            sys.exit(f"taxjson checklist: {e}")
         recorded.append({"step": None, "mark": "reset", "changed": existed})
         if not args.json:
             print(f"taxjson checklist: {cl.STATE_FILE} removed." if existed
