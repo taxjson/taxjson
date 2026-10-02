@@ -44,13 +44,51 @@ ACB_REL_TOL = 1e-4
 RunGains = Callable[[List[str], Path], None]
 
 
+class BooksError(ValueError):
+    """A work/ book the hand-off reads exists but cannot be read."""
+
+
+def _label(path: Path) -> str:
+    p = Path(path)
+    return f"{p.parent.name}/{p.name}"
+
+
 def _rows(path: Path) -> List[Dict[str, Any]]:
-    try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    """The rows of a work/<acct>_base.json; [] when the file does not
+    exist (an account with no inputs). An unreadable or damaged file is
+    a BooksError naming it: close-year wrote a lock with no year-end
+    positions, and handoff reported every lot as missing from the
+    opening file, at rc 0 and with nothing on stderr (A2-0346,
+    A2-1137)."""
+    p = Path(path)
+    if not p.exists():
         return []
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
+                         f"`taxjson run` to rebuild it")
     rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        raise BooksError(f"could not read {_label(p)} (no transaction "
+                         f"list) — re-run `taxjson run` to rebuild it")
     return [r for r in rows if isinstance(r, dict)]
+
+
+def _check_books(path: Path) -> None:
+    """Validate one source book with the engine's own loader BEFORE it is
+    merged into a temporary file: a damaged row was reported against
+    /tmp/taxjson-handoff-*/equity_full.json, a file the user never saw
+    and that is gone when the message is read (A2-1143)."""
+    p = Path(path)
+    if not p.exists():
+        return
+    from taxjson.lib.core import load_transactions
+    try:
+        load_transactions(p)
+    except Exception as e:                          # noqa: BLE001
+        raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
+                         f"`taxjson run` to rebuild it")
 
 
 def _d(s: Any) -> Optional[date]:
@@ -120,6 +158,7 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
         for g, names in groups(cfg).items():
             rows = []
             for n in names:
+                _check_books(cache / f"{n}_base.json")
                 rows += _rows(cache / f"{n}_base.json")
             if not rows:
                 continue
@@ -358,6 +397,97 @@ def _filed_by_symbol(rec: Dict[str, Any]) -> Tuple[Dict[str, float],
     return book, filed
 
 
+def _grant_in(timing: Dict[str, Any], wy: int) -> bool:
+    """Whether a contract written in `wy` is on grant timing (premium
+    taxed in the write year, ITA s.49(1)) under `timing`."""
+    if str(timing.get("option_premium_timing") or "close").lower() \
+            != "grant":
+        return False
+    since = timing.get("option_grant_since")
+    try:
+        return since is None or wy >= int(since)
+    except (TypeError, ValueError):
+        return True
+
+
+def _timing_issues(cache: Path, cfg: Dict[str, Any],
+                   record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Written options carried out of the closed year that the record
+    and this project put on DIFFERENT premium timing (Canada): the
+    closed return taxed the premium at the write (grant) and this
+    project taxes it again at the close, or the closed return left it to
+    the close (close timing) and this project puts it back in the closed
+    year, where no return reports it. handoff said "Everything ... is
+    here, once" over a premium taxed twice (A2-0037)."""
+    rec_t = record.get("option_timing")
+    if not isinstance(rec_t, dict) or "option_premium_timing" not in rec_t:
+        return []
+    settings = cfg.get("settings", {}) or {}
+    from taxjson.lib.pipeline import option_timing_from_settings
+    try:
+        here_t = option_timing_from_settings(settings) or {}
+    except ValueError:
+        return []
+    if not here_t:
+        return []                       # no written-option timing (US)
+    ry = int(record["year"])
+    from taxjson.lib.core import load_transactions
+    from taxjson.lib.option_boundary import write_lots
+    out: List[Dict[str, Any]] = []
+    for g, names in groups(cfg).items():
+        if g != "equity":
+            continue
+        txs = []
+        for n in names:
+            p = cache / f"{n}_base.json"
+            if p.exists():
+                txs += load_transactions(p)
+        for lot in write_lots(txs, tax_date=_basis(settings)):
+            wy = lot.write_year
+            if lot.broker_closing or wy > ry:
+                continue
+            carried = (lot.open_units > 1e-9
+                       or any(int(c.date[:4]) > ry for c in lot.closes))
+            if not carried:
+                continue
+            was, now = _grant_in(rec_t, wy), _grant_in(here_t, wy)
+            if was == now:
+                continue
+            _since = rec_t.get("option_grant_since")
+            if was:
+                why = (f"written {lot.write_date} for {lot.premium:,.2f}: "
+                       f"the {ry} record is on grant timing since "
+                       f"{_since}, so the {wy} return taxed this premium; "
+                       f"this project keeps the contract on close timing "
+                       f"(option_grant_timing_since = "
+                       f"{here_t.get('option_grant_since')}) and taxes it "
+                       f"again when it closes. Set "
+                       f"option_grant_timing_since = {_since} in this "
+                       f"project, as the {ry} record has it.")
+            else:
+                why = (f"written {lot.write_date} for {lot.premium:,.2f}: "
+                       f"the {ry} record is on "
+                       + (f"grant timing since {_since}"
+                          if str(rec_t.get("option_premium_timing"))
+                          == "grant" else "close timing")
+                       + f", so the {wy} return left this premium to the "
+                       f"close; this project puts it back in {wy} "
+                       f"(grant timing since "
+                       f"{here_t.get('option_grant_since')}), where no "
+                       f"return reports it. Set option_grant_timing_since "
+                       f"= {ry + 1} (keep the closed year's contracts on "
+                       f"close timing, as filed) or T1-ADJ {wy} to add the "
+                       f"premium.")
+            out.append({"group": g, "symbol": lot.symbol,
+                        "account": lot.account, "written": lot.write_date,
+                        "write_year": wy,
+                        "premium": round(lot.premium, 2),
+                        "closed_year_timing": "grant" if was else "close",
+                        "timing_here": "grant" if now else "close",
+                        "why": why})
+    return out
+
+
 def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
           opening: Dict[str, Any]) -> Dict[str, Any]:
     """Compare a closed year's record with this project's books.
@@ -368,7 +498,9 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     basis = _basis(settings)
     rbasis = record.get("date_basis") or basis
     issues: Dict[str, List[Dict[str, Any]]] = {
-        "positions": [], "missed": [], "double": [], "notes": []}
+        "positions": [], "missed": [], "double": [], "timing": [],
+        "notes": []}
+    issues["timing"] = _timing_issues(cache, cfg, record)
 
     # 1. Opening positions and cost.
     book_by, filed_by = _filed_by_symbol(record)
@@ -518,8 +650,10 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
             continue
         try:
             doc = json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as e:
+            # A skipped gains file hid every double in it (A2-1137).
+            raise BooksError(f"could not read {_label(Path(p))} ({e}) — "
+                             f"re-run `taxjson run` to rebuild it")
         for t in doc.get("transactions", []):
             if t.get("gain") is None or t.get("action"):
                 continue
@@ -558,7 +692,7 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     return {"year": ry, "record_basis": rbasis, "basis": basis,
             **issues,
             "problems": sum(len(issues[k]) for k in
-                            ("positions", "missed", "double"))}
+                            ("positions", "missed", "double", "timing"))}
 
 
 def render(rep: Dict[str, Any], record_path: str) -> List[str]:
@@ -586,6 +720,11 @@ def render(rep: Dict[str, Any], record_path: str) -> List[str]:
                    f"{i['date']}  settles {i['date_settle']}"))
     sec("Sales reported in both years", rep["double"],
         lambda i: f"{i['symbol']:<26} {i.get('qty', 0):>12g}  {i['date']}")
+    sec(f"Written options on another premium timing than the {y} record",
+        rep.get("timing") or [],
+        lambda i: (f"{i['symbol']:<26} written {i['written']}  "
+                   f"{y}: {i['closed_year_timing']}  here: "
+                   f"{i['timing_here']}"))
     for n in rep["notes"]:
         L.append("note: " + n)
     L.append("")

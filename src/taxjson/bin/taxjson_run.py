@@ -3474,7 +3474,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     accounts = cfg.get("accounts", {})
     if _country(settings) == "usa":
         print(_US_EXPERIMENTAL_NOTE, file=sys.stderr)
-    _since_warn = _grant_since_warning(settings)
+    _since_warn = _grant_since_warning(settings, root)
     if _since_warn and any(_c.get("type") == "taxable" and not _c.get("crypto")
                            for _c in accounts.values()):
         # (a crypto-only project writes no options — nothing to warn about)
@@ -9465,7 +9465,36 @@ def cmd_redact(args: argparse.Namespace) -> None:
     raise SystemExit(redact_main(argv))
 
 
-def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
+def _locked_grant_since(root: Path, settings: Dict[str, Any]
+                        ) -> Optional[Tuple[int, str]]:
+    """(since, lock label) from the most recent filed-year lock — the
+    project's own or the one [settings] prior_year_record names — that
+    records grant timing with an option_grant_since; None otherwise."""
+    import json as _json
+    from taxjson.bin import taxjson_filed as _tfl
+    try:
+        locks = _tfl.project_locks(root, settings)
+    except _tfl.PriorRecordError:
+        return None
+    for _y, p, _w in sorted(locks, key=lambda t: t[0], reverse=True):
+        try:
+            ot = (_json.loads(p.read_text(encoding="utf-8")) or {}).get(
+                "option_timing")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if not isinstance(ot, dict) or str(
+                ot.get("option_premium_timing") or "").lower() != "grant":
+            continue
+        try:
+            return int(ot.get("option_grant_since")), \
+                _tfl.lock_label(root, p)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _grant_since_warning(settings: Dict[str, Any],
+                         root: Optional[Path] = None) -> Optional[str]:
     """The warning for a Canada project on grant timing with no explicit
     `option_grant_timing_since`: the default is the PROJECT year, which
     moves every year — consecutive default projects tax a year-straddling
@@ -9485,14 +9514,21 @@ def _grant_since_warning(settings: Dict[str, Any]) -> Optional[str]:
         # option-boundary say so); never suggest "since = None"
         # (S044-06).
         return None
+    # A filed-year lock that records an earlier `since` is the year to
+    # copy: "e.g. <project year>" put last year's year-straddling
+    # contracts back on close timing and taxed their premium twice
+    # (A2-1142).
+    locked = _locked_grant_since(root, settings) if root else None
+    example = (f"{locked[0]}, the year {locked[1]} records"
+               if locked else f"{yr}")
     return (f"[settings] option_grant_timing_since is not set, so grant "
             f"timing (ITA s.49(1)) starts at the project year ({yr}) — a "
             f"default that MOVES when you bump `year`: next year's project "
             f"would put this year's year-straddling written options back "
             f"on close timing and tax their premium a second time. Add "
             f"`option_grant_timing_since = <first year you file under "
-            f"grant timing>` (e.g. {yr}) to [settings] once and keep it "
-            f"unchanged in every later year's project.")
+            f"grant timing>` (e.g. {example}) to [settings] once and keep "
+            f"it unchanged in every later year's project.")
 
 
 def cmd_tax_logic(args: argparse.Namespace) -> None:
@@ -9639,17 +9675,26 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     kw = option_timing_from_settings(settings)
     timing = kw.get("option_premium_timing", "close") if kw else "close"
     since = kw.get("option_grant_since") if kw else None
-    _w = _grant_since_warning(settings)
+    _w = _grant_since_warning(settings, root)
     if _w:
         print(f"taxjson option-boundary: warning: {_w}", file=sys.stderr)
     filed_years = set()
     filed_timing: Dict[int, Dict[str, Any]] = {}
-    for f in (root / "filed").glob("*.json"):
-        try:
-            fy = int(f.stem)
-        except ValueError:
-            continue
+    filed_labels: Dict[int, str] = {}
+    from taxjson.bin import taxjson_filed as _tfl
+    # The project's own locks AND the one [settings] prior_year_record
+    # names: in the per-year layout last year's lock lives in the
+    # previous project, and "no filed-year locks ... No amended return
+    # is required" was printed for a premium that lock put in no return
+    # (A2-0036, A2-0335).
+    try:
+        _locks = _tfl.project_locks(root, settings)
+    except _tfl.PriorRecordError as e:
+        _die(str(e))
+    for fy, f, _where in _locks:
         filed_years.add(fy)
+        _lbl = _tfl.lock_label(root, f)
+        filed_labels[fy] = _lbl
         try:
             _ot = (json.loads(f.read_text(encoding="utf-8")) or {}).get(
                 "option_timing")
@@ -9659,7 +9704,7 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             # the advice flipped to ATTENTION / since = <locked year>
             # (S044-08).
             print(f"taxjson option-boundary: warning: cannot read "
-                  f"filed/{f.name} ({e}) — its recorded option timing "
+                  f"{_lbl} ({e}) — its recorded option timing "
                   f"is unknown, so the advice for {fy} below assumes "
                   f"none was recorded; `taxjson check-filed` checks the "
                   f"lock.", file=sys.stderr)
@@ -9704,7 +9749,8 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
             txs, _log = synthesize_openings(txs, _phantoms)
         for r in straddling(txs, year, timing, since, filed_years,
                             filed_timing=filed_timing,
-                            tax_date=_tax_date_basis(settings)):
+                            tax_date=_tax_date_basis(settings),
+                            filed_labels=filed_labels):
             r["account"] = r["account"] or name
             rows.append(r)
     if not books:
@@ -11310,14 +11356,19 @@ def _has_inputs(root: Path, name: str) -> bool:
     return bool(input_files(d, ".csv") or input_files(d, ".tt"))
 
 
-def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
+def _run_state_problems(root: Path, cfg: Dict[str, Any], *,
+                        blocked: bool = False) -> List[str]:
     """What `taxjson checklist`'s run-clean step finds wrong with the
     books the filing commands read: validation ERRORs in the last run,
     an account deferred on pending elections, inputs changed since the
     last full run (a failed run leaves them newer than the artifacts),
     an account with inputs but no report. [] when clean or when there
     is nothing to judge (no reports yet). The report commands used to
-    serve these books with rc 0 and no word (R1-252, S049-11)."""
+    serve these books with rc 0 and no word (R1-252, S049-11).
+    `blocked=True` (close-year: the lock certifies the filing numbers)
+    also reports a "blocked" step — work/ books with no reports/, a run
+    that died before writing them — which close-year locked with rc 0
+    (A2-0035)."""
     try:
         from datetime import date as _d
         from taxjson.lib.checklist import Ctx, d_run_clean
@@ -11326,6 +11377,8 @@ def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
                               lambda *a, **k: (0, "", "")))
     except Exception:                                   # noqa: BLE001
         return []
+    if res.status == "blocked" and blocked:
+        return [res.detail]
     if res.status != "attention":
         return []
     return [x.strip() for x in res.detail.split("; ") if x.strip()]
@@ -11405,7 +11458,7 @@ def cmd_close_year(args: argparse.Namespace) -> None:
     # validation ERRORs, a pending-election deferral or inputs changed
     # since (a failed run) are not locked without --force (S048-23,
     # S049-11).
-    _state = _run_state_problems(root, cfg)
+    _state = _run_state_problems(root, cfg, blocked=True)
     if _state and not args.force:
         sys.exit("taxjson close-year: the books are not the clean result "
                  "of the current inputs — " + "; ".join(_state)
@@ -11539,6 +11592,8 @@ def cmd_close_year(args: argparse.Namespace) -> None:
         extra = _handoff.record_fields(
             root, cfg, int(year), files, _filed_run_gains,
             _handoff_gains_flags(settings), filed_csv)
+    except _handoff.BooksError as e:
+        sys.exit(f"taxjson close-year: {e}. Nothing was written.")
     except ValueError as e:
         sys.exit(f"taxjson close-year: {e}")
     path = taxjson_filed.write_snapshot(
@@ -11629,11 +11684,15 @@ def cmd_handoff(args: argparse.Namespace) -> None:
               file=sys.stderr)
     if not (root / "work").is_dir():
         sys.exit("taxjson handoff: no work/ — run `taxjson run` first.")
-    opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
-                                _filed_run_gains,
-                                _handoff_gains_flags(settings),
-                                root / "phantoms.json")
-    rep = _handoff.check(root, cfg, record, opening)
+    try:
+        opening = _handoff.snapshot(root / "work", cfg, f"{ry}-12-31",
+                                    _filed_run_gains,
+                                    _handoff_gains_flags(settings),
+                                    root / "phantoms.json")
+        rep = _handoff.check(root, cfg, record, opening)
+    except _handoff.BooksError as e:
+        # Not a fabricated "a lot or a sale is missing" (A2-1137).
+        sys.exit(f"taxjson handoff: {e}")
     if getattr(args, "json", False):
         _json_out(dict(rep, record=str(rp)))
     else:

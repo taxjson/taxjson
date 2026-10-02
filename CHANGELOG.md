@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- close-year / handoff / option-boundary (re-audit filing locks):
+  close-year refuses books with no reports/ (a run that died before
+  writing them) and an unreadable work/<acct>_base.json instead of
+  locking empty year-end positions; handoff names an unreadable or
+  damaged base file instead of reporting every lot as missing or
+  naming a deleted /tmp merge file (A2-0035, A2-0346, A2-1137,
+  A2-1143). option-boundary reads last year's lock through
+  [settings] prior_year_record, as handoff does (A2-0036, A2-0335);
+  handoff flags a written option the closed year's record taxed on
+  another premium timing than this project (A2-0037); the
+  option_grant_timing_since hint quotes the since a lock records
+  (A2-1142); handoff refuses a non-string prior_year_record like run
+  (A2-1135).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

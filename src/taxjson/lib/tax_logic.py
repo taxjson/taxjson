@@ -855,7 +855,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "year-end positions and cost, and trades settling in "
                  "January; `taxjson handoff` checks the next year starts "
                  "from exactly that, so no sale is reported twice or "
-                 "never."),
+                 "never. It also flags a written option carried out of "
+                 "the closed year that this project puts on another "
+                 "premium timing than the record (taxed twice, or in no "
+                 "return); `option-boundary` and `handoff` read last "
+                 "year's record through prior_year_record."),
             Rule("CA-RPT-09",
                  "The record states its country: `check-filed` and "
                  "`handoff` refuse one closed under US rules instead of "

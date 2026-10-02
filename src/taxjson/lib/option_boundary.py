@@ -220,7 +220,8 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                since: Optional[int], filed_years: Optional[set] = None,
                filed_timing: Optional[Dict[int, Dict[str, Any]]] = None,
                today: Optional[date] = None,
-               tax_date: Optional[str] = None
+               tax_date: Optional[str] = None,
+               filed_labels: Optional[Dict[int, str]] = None
                ) -> List[Dict[str, Any]]:
     """Rows for `taxjson option-boundary`: every write lot with a close in a
     later year than the write, or still open at the end of `year`.
@@ -228,8 +229,14 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
     recorded (`option_premium_timing`, `option_grant_since`). `today`
     (default: the run date) bounds the missing-expiry check: during the
     year a contract expiring after today is open, not missing a row.
-    `tax_date` is the project's date basis (settle|trade)."""
+    `tax_date` is the project's date basis (settle|trade).
+    `filed_labels` names each locked year's lock in the advice (default
+    filed/<year>.json; a lock reached through [settings]
+    prior_year_record is named by its path, A2-0036)."""
     filed_years = set(filed_years or set()) | set((filed_timing or {}).keys())
+
+    def _lk(y: int) -> str:
+        return (filed_labels or {}).get(y) or f"filed/{y}.json"
     grant_mode = (timing or "close").lower() == "grant"
     # The missing-expiry cutoff is the EARLIER of the year end and today
     # (R1-36/R1-174/R1-190: comparing with Dec 31 alone flagged every
@@ -293,7 +300,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         missed = grant and filed_close is True
 
         def _missed_text(prem_text: str) -> str:
-            return (f"ATTENTION: filed/{wy}.json records CLOSE timing, so "
+            return (f"ATTENTION: {_lk(wy)} records CLOSE timing, so "
                     f"the {wy} return did not report the {prem_text} "
                     f"premium, and this project (grant timing from "
                     f"{since}) puts it in {wy} too — it is in no return. "
@@ -305,7 +312,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
         def _double_text(prem_text: str, cy: Optional[int]) -> str:
             known = filed_close is False
             where_now = f"again in {cy}" if cy else "again when it closes"
-            return (f"ATTENTION: {wy} is locked (filed/{wy}.json) and "
+            return (f"ATTENTION: {wy} is locked ({_lk(wy)}) and "
                     + (f"its lock records grant timing, so the {wy} return "
                        f"reported the {prem_text} premium; " if known else
                        f"a {wy} project on grant timing (the default, "
@@ -332,7 +339,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
             if c.kind == "assignment":
                 if grant and missed:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
-                    action = (f"no amendment — filed/{wy}.json records close timing, so the {wy} "
+                    action = (f"no amendment — {_lk(wy)} records close timing, so the {wy} "
                               f"return never reported the {prem:,.2f} premium; the fold in {cy} is right")
                 elif grant:
                     where = f"folded into the share leg in {cy} ({_assignment_cite(lot.symbol)}); the books show no {wy} gain"
@@ -343,7 +350,7 @@ def straddling(transactions: List[TaxTransaction], year: int, timing: str,
                     where = f"folded into the share leg in {cy}; nothing in {wy} (close timing)"
                     action = f"same as the Act's post-amendment state; if {wy} was filed with the premium as a gain, amend {wy} (s.49(4))"
                     if double:
-                        action = (f"ATTENTION: {wy} is locked (filed/{wy}.json); if it was filed under grant timing "
+                        action = (f"ATTENTION: {wy} is locked ({_lk(wy)}); if it was filed under grant timing "
                                   f"with the {prem:,.2f} premium as a gain, T1-ADJ {wy} to remove it (s.49(4))")
             elif c.kind == "expiry":
                 if grant:
