@@ -4315,6 +4315,17 @@ def cmd_elect(args: argparse.Namespace) -> None:
         return
 
     # --set: non-interactive election writing (headless/CI bootstrap).
+    if isinstance(getattr(args, "set", None), list):
+        # A second --set used to replace the first silently (argparse
+        # keeps the last) and the run still asked for the dropped event
+        # (re-audit A2-0563 / A2-0568). --hint belongs to ONE election,
+        # so one --set per command.
+        if len(args.set) > 1:
+            sys.exit(f"taxjson elect: {len(args.set)} --set flags — give "
+                     f"ONE --set per command (its --hint flags belong to "
+                     f"it): run `taxjson elect {name} --set ...` once per "
+                     f"event. Nothing was saved.")
+        args.set = args.set[0]
     if getattr(args, "set", None):
         from taxjson.lib.corp_actions import (ElectionRecord,
                                               RULES_BY_COUNTRY)
@@ -14190,6 +14201,7 @@ def main() -> None:
                          help="Scope --redo/--reset to one event id "
                               "(from the list); default is all")
     p_elect.add_argument("--set", metavar="EVENT_ID=ELECTION",
+                         action="append",
                          help="Write one election non-interactively "
                               "(headless/CI bootstrap), e.g. --set "
                               "20251022-ssl-rgld-51d7=rollover_s_85_1_5")

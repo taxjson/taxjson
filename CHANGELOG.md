@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `taxjson elect ACCOUNT --set A=x --set B=y` is refused (nothing saved)
+  instead of saving only the last --set at exit 0; give one --set per
+  command (re-audit A2-0563, A2-0568).
+
 - The stablecoin de-peg warning ("not in the gains; report it by hand")
   is an ATTENTION line, so `taxjson run` shows it on the console, not
   only in the .sum (re-audit A2-1001).
