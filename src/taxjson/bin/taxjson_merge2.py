@@ -347,17 +347,17 @@ def _load_json_files(paths, require_inputs=False):
         print("error: --require-inputs is set and one or more inputs were "
               "missing or unreadable; refusing to emit a partial merge.",
               file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)                 # an unreadable input (A2-0164)
     if fatal:
         print("error: one or more inputs exist but could not be read; "
               "refusing to emit a partial merge.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     if paths and not sources:
         # Every input was missing: an empty merge at exit 0 is the
         # silent-empty-merge hazard in another costume.
         print("error: none of the input files could be read; refusing "
               "to emit an empty merge.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
     return merged, sources
 
 

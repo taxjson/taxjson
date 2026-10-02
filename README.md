@@ -300,7 +300,14 @@ option, description, and required hint) are written to
 `taxjson elect --pending` (ready-to-copy `--set` lines; `--json` for
 machines), resolve each with `taxjson elect <account> --set
 <event_id>=<election> [--hint KEY=VALUE]`, and re-run. Exit codes:
-0 = success, 1 = failure, 2 = usage, **3 = elections required**.
+0 = success, 1 = failure (or a command's finding: drift, a handoff
+problem, a lint hit), 2 = usage, or a named input or output that cannot
+be read or written (missing, a directory, not UTF-8, not valid JSON),
+**3 = elections required**, 130 = interrupted (Ctrl-C), 141 = the
+reader of stdout went away (`taxjson trades | head`). Every `taxjson`
+command and `taxjson-*` tool reports an unreadable input in one line,
+never a Python traceback. Only one `taxjson run` runs in a project at a
+time (`work/.run.lock`); a second one refuses.
 
 - `<account>.sum`, `<account>_wash.sum` — realized gains and wash-sale detail
 - `wash_radar_<account>.rpt` / `.json` — superficial-loss "safe to sell at a loss?" advisor (the JSON sidecar carries absolute clear dates; the web UI computes countdowns from it at view time)

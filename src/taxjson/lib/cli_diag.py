@@ -112,6 +112,75 @@ def read_stdin_utf8() -> str:
         raise not_utf8("<stdin>", e) from None
 
 
+def tolerant_stdout() -> None:
+    """Report text that the terminal's encoding cannot show degrades to
+    '?' instead of a UnicodeEncodeError traceback: with
+    PYTHONIOENCODING=ascii (or latin-1) every report that printed an em
+    dash died mid-table (re-audit A2-0786). Top level only — a tool run
+    in-process prints into its caller's buffer."""
+    for stream, errors in ((sys.stdout, "replace"),
+                           (sys.stderr, "backslashreplace")):
+        try:
+            stream.reconfigure(errors=errors)
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _stdout_closed_exit() -> "NoReturn":
+    """The reader of our stdout went away (`taxjson trades | head -1`):
+    stop quietly with the shell's SIGPIPE status, 141, and no traceback
+    (re-audit A2-0785). stdout is pointed at /dev/null first so the
+    interpreter's own flush at exit cannot fail again (exit 120)."""
+    import os
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass
+    raise SystemExit(141)
+
+
+def _flush_stdout() -> None:
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        _stdout_closed_exit()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def run_top_level(prog, fn, *a, interrupt_note="", **kw):
+    """Run a command's main at the top of the process (the `taxjson`
+    entry point and every `taxjson-*` console script): Ctrl-C is one
+    `<prog>: interrupted` line with exit 130 (re-audit A2-0782 /
+    A2-1425: a 25-50 line KeyboardInterrupt traceback), and a closed
+    stdout pipe exits 141 quietly (A2-0785). Never used around a tool
+    run in-process by another: its Ctrl-C must stop the whole run."""
+    tolerant_stdout()
+    try:
+        r = fn(*a, **kw)
+        _flush_stdout()
+        return r
+    except SystemExit:
+        _flush_stdout()
+        raise
+    except BrokenPipeError:
+        _stdout_closed_exit()
+    except KeyboardInterrupt:
+        try:
+            sys.stdout.flush()
+        except Exception:                                # noqa: BLE001
+            pass
+        print("", file=sys.stderr)          # end the ^C line
+        # (both may be callables: `taxjson` knows its command only once
+        # argv is parsed)
+        prog = prog() if callable(prog) else prog
+        note_ = interrupt_note() if callable(interrupt_note) \
+            else interrupt_note
+        error(prog, "interrupted" + (f" — {note_}" if note_ else ""))
+        raise SystemExit(130)
+
+
 def describe_input_error(exc: BaseException) -> str:
     """The one-line text for an input a tool could not read."""
     import json

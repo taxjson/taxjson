@@ -195,7 +195,9 @@ def main(argv=None):
     txs, failed = _load_all(args.files)
     if not txs:
         print("No transactions loaded.", file=sys.stderr)
-        return 1
+        # An input that could not be read is exit 2, not the 'finding'
+        # code (A2-0164).
+        return 2 if failed else 1
     if args.account:
         # An --account no row carries (a typo, the wrong case) filtered
         # every finding away and printed the all-clear (audit S035-07).
@@ -300,7 +302,7 @@ def main(argv=None):
     if args.phantoms:
         try:
             for e in json.loads(Path(args.phantoms).read_text(
-                    encoding="utf-8")) or []:
+                    encoding="utf-8-sig")) or []:
                 if isinstance(e, dict) and e.get("symbol") \
                         and e.get("account"):
                     ph_pairs.add((str(e["symbol"]).strip().upper(),
@@ -392,7 +394,7 @@ def main(argv=None):
     if args.phantoms:
         try:
             for e in json.loads(Path(args.phantoms).read_text(
-                    encoding="utf-8")) or []:
+                    encoding="utf-8-sig")) or []:
                 if isinstance(e, dict):
                     _ph.add((str(e.get("symbol") or "").upper(),
                              str(e.get("account") or "").lower()))

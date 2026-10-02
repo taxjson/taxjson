@@ -140,12 +140,12 @@ def load_inputs(prog: str, files: List[str]):
             doc = {'transactions': doc}
         if not isinstance(doc, dict):
             cli_diag.error(prog, "<stdin>: expected a JSON object")
-            sys.exit(1)
+            sys.exit(2)
         try:
             require_gains_doc(doc, "<stdin>")
         except InputFileError as e:
             cli_diag.error(prog, str(e))
-            sys.exit(1)
+            sys.exit(2)
         return [doc]
     docs = []
     for path in files:
@@ -157,7 +157,7 @@ def load_inputs(prog: str, files: List[str]):
             # A report missing an input is not a report: the old code
             # printed TOTAL 0.00 and exited 0 (audit R1-173).
             cli_diag.error(prog, f"cannot load {e}")
-            sys.exit(1)
+            sys.exit(2)             # an unreadable input (A2-0164)
     return docs
 
 

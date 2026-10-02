@@ -1002,8 +1002,11 @@ def main():
                     _die(f"{input_path}: reading TOML holdings needs "
                          f"Python 3.11+ or the `tomli` package")
                 try:
+                    # (a leading BOM dropped: re-audit A2-1409)
                     with open(input_path, 'rb') as f:
-                        doc = tomllib.load(f)
+                        _raw = f.read()
+                    doc = tomllib.loads(
+                        _raw.removeprefix(b"\xef\xbb\xbf").decode("utf-8"))
                 except (tomllib.TOMLDecodeError, OSError,
                         UnicodeDecodeError) as e:
                     _die(f"{input_path}: not a readable TOML file ({e})")

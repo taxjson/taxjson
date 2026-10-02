@@ -235,6 +235,7 @@ def main():
     
     global_total_issues = 0
     global_total_warnings = 0
+    unreadable = 0
     
     for filename in args.files:
         try:
@@ -242,6 +243,7 @@ def main():
         except Exception as e:
             cli_diag.error(PROG, f"failed to load JSON {filename}: {e}")
             global_total_issues += 1
+            unreadable += 1
             continue
             
         fx_fallback = []
@@ -309,7 +311,9 @@ def main():
             sys.exit(0)
     else:
         cli_diag.error(PROG, f"validation failed with {global_total_issues} total errors")
-        sys.exit(1)
+        # An input that could not be read at all is exit 2, not the
+        # validation finding 1 (re-audit A2-0164).
+        sys.exit(2 if unreadable else 1)
 
 if __name__ == "__main__":
     main()
