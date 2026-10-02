@@ -1280,13 +1280,19 @@ def input_files(dirpath: Path, suffix: str) -> List[Path]:
     exits 0 with those trades missing (REVIEW-2026-07-ui #1)."""
     if not dirpath.is_dir():
         return []
+    # Hidden files (macOS '._x.csv' AppleDouble) and Office lock files
+    # ('~$x.csv') are never inputs; the checklist's input fingerprint
+    # skips them too, so the two agree on the input set (A2-1145,
+    # A2-1166).
     return sorted(p for p in dirpath.iterdir()
-                  if p.is_file() and p.suffix.lower() == suffix)
+                  if p.is_file() and p.suffix.lower() == suffix
+                  and not p.name.startswith((".", "~$")))
 
 
 # Spreadsheet suffixes a broker export may arrive in. None is read by
-# the run; validate_config refuses them unless converted (R1-64).
-SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods")
+# the run; validate_config refuses them unless converted (R1-64; Apple
+# Numbers too, A2-1156 — lib/checklist.SPREADSHEET_SUFFIXES is the same).
+SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods", ".numbers")
 
 
 def spreadsheet_inputs(dirpath: Path) -> List[Path]:

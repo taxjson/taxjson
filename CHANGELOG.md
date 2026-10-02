@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Checklist run-clean / filing banners / web freshness: the record of
+  what the last full run read now covers every run input — an account's
+  elections `manifest.json` and crypto `sends.json`, and the root
+  `crypto_ticker.map` — so a changed election no longer reads as current.
+  Only the settings `run` reads count in taxjson.toml: a comment,
+  `[instalments]`, `[estimate]`, `province`, `prior_year_record`,
+  `holdings` and the fetch keys no longer mark the books stale (close-year
+  refused after an instalment was recorded). A damaged record is
+  "attention", not "no record"; a dangling reports/*.sum symlink is named
+  instead of crashing the step. Hidden files and Excel `~$` lock files in
+  inputs/ are no longer read by `run` (nor fingerprinted, nor taken as
+  slips), and an Apple Numbers export is refused like .xlsx (re-audit
+  A2-0124, A2-0126, A2-0358, A2-0363, A2-0681, A2-1145, A2-1148, A2-1155,
+  A2-1156, A2-1157, A2-1158, A2-1166).
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

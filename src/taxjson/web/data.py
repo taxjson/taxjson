@@ -265,22 +265,32 @@ def freshness(ctx: ProjectContext) -> Optional[Dict[str, Any]]:
     report. The newest report used to decide, so a `run --account tfsa`
     after a margin edit cleared the banner over stale margin numbers."""
     from datetime import datetime as _dt
-    from taxjson.lib.checklist import (_fingerprint_diff, _input_paths,
-                                       _load_fingerprint, input_fingerprint)
+    from taxjson.lib.checklist import _input_paths, inputs_changed
     sums = sorted(ctx.reports.glob("*.sum")) if ctx.reports.is_dir() else []
     report_files = sums or ([p for p in ctx.reports.glob("*") if p.is_file()]
                             if ctx.reports.is_dir() else [])
     if not report_files:
         return None
-    oldest = min(p.stat().st_mtime for p in report_files)
+    _mt = []
+    for p in report_files:
+        try:
+            _mt.append(p.stat().st_mtime)
+        except OSError:        # a dangling reports/*.sum symlink (A2-1148)
+            continue
+    if not _mt:
+        return None
+    oldest = min(_mt)
     cfg = {"accounts": {a.name: {} for a in ctx.accounts}}
     why = ""
-    recorded = _load_fingerprint(ctx.root)
+    # One rule with the checklist (inputs_changed): the same input set
+    # and an unreadable record is stale, never "no record" (A2-0126,
+    # A2-1155, A2-1158).
+    recorded = inputs_changed(ctx.root, cfg)
     if recorded is not None:
-        why = _fingerprint_diff(recorded, input_fingerprint(ctx.root, cfg))
-        extra = [ctx.root / "crypto_ticker.map"]
+        why = recorded
+        extra = []
     else:
-        extra = _input_paths(ctx.root, cfg) + [ctx.root / "crypto_ticker.map"]
+        extra = _input_paths(ctx.root, cfg)
         inputs_dir = ctx.root / "inputs"
         if inputs_dir.is_dir():
             extra += [p for p in inputs_dir.rglob("*") if p.is_file()]

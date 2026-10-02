@@ -308,8 +308,13 @@ def _data_files(folder: Path) -> List[Path]:
     if not folder.is_dir():
         return []
     return sorted(p for p in folder.iterdir()
-                  if p.is_file() and not p.name.startswith(".")
+                  if p.is_file() and not _skipped_input_name(p.name)
                   and p.suffix.lower() in (".csv", ".tt"))
+
+
+# Spreadsheet suffixes a broker export may arrive in; none is read by
+# `run` (taxjson_run.SPREADSHEET_SUFFIXES is the same list, A2-1156).
+SPREADSHEET_SUFFIXES = (".xlsx", ".xls", ".xlsm", ".ods", ".numbers")
 
 
 def _base_docs_checked(ctx: Ctx, names: List[str]
@@ -549,7 +554,16 @@ def d_run_clean(ctx: Ctx) -> Result:
     errors = sum(per_account.values())
     pend = [p for p in ctx.cache.glob("*pending_elections.json")
             if p.is_file() and p.stat().st_size > 2]
-    oldest_report = min(s.stat().st_mtime for s in sums)
+    # A dangling reports/*.sum symlink is already in `unreadable`; its
+    # stat must not take the step down (A2-1148).
+    _mtimes = []
+    for s in sums:
+        try:
+            _mtimes.append(s.stat().st_mtime)
+        except OSError:
+            if f"reports/{s.name}" not in unreadable:
+                unreadable.append(f"reports/{s.name}")
+    oldest_report = min(_mtimes) if _mtimes else 0.0
     problems = []
     if unreadable:
         problems.append(f"cannot read {', '.join(unreadable)} — its "
@@ -563,17 +577,17 @@ def d_run_clean(ctx: Ctx) -> Result:
     # (cp -p, rsync -a, unzip) left this step done over stale reports
     # (S067-07). Older projects without the record fall back to mtimes,
     # now including the project-root inputs `run` reads (R1-249).
-    recorded = _load_fingerprint(ctx.root)
-    if recorded is not None:
-        diff = _fingerprint_diff(recorded,
-                                 input_fingerprint(ctx.root, ctx.cfg))
-        if diff:
-            problems.append("inputs changed since the last full run ("
-                            + diff + ")")
-    else:
+    diff = inputs_changed(ctx.root, ctx.cfg)
+    if diff:
+        problems.append("inputs changed since the last full run ("
+                        + diff + ")")
+    elif diff is None:
         newest_input = 0.0
         for p in _input_paths(ctx.root, ctx.cfg):
-            newest_input = max(newest_input, p.stat().st_mtime)
+            try:
+                newest_input = max(newest_input, p.stat().st_mtime)
+            except OSError:
+                continue
         if newest_input > oldest_report + 1:
             problems.append("inputs changed since the last run")
     # Every configured account with inputs must have its report: a run
@@ -615,8 +629,8 @@ def d_run_clean(ctx: Ctx) -> Result:
             continue
         stems = {p.stem.lower() for p in _data_files(folder)}
         sheets += [f"inputs/{n}/{p.name}" for p in sorted(folder.iterdir())
-                   if p.is_file() and not p.name.startswith((".", "~$"))
-                   and p.suffix.lower() in (".xlsx", ".xls", ".xlsm", ".ods")
+                   if p.is_file() and not _skipped_input_name(p.name)
+                   and p.suffix.lower() in SPREADSHEET_SUFFIXES
                    and p.stem.lower() not in stems]
     if sheets:
         problems.append("unread spreadsheet(s) " + ", ".join(sheets)
@@ -628,23 +642,89 @@ def d_run_clean(ctx: Ctx) -> Result:
 
 
 FINGERPRINT_FILE = ".inputs_fingerprint.json"     # in work/
-_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
-                "phantoms.json", "ticker_extraction_overrides.txt")
+# The record's format: 2 = taxjson.toml by the settings `run` reads, the
+# root maps of PROJECT_ROOT_MAPS, manifest.json / sends.json. A record
+# without it (1) was written by an older taxjson and is compared the
+# old way until the next full run rewrites it.
+FINGERPRINT_VERSION = 2
+# Project-root maps `taxjson run` reads (taxjson_run._PROJECT_ROOT_INPUTS
+# is the same list; a test keeps the two equal — A2-0363, A2-1158).
+PROJECT_ROOT_MAPS = ("ticker.map", "ticker_extraction_overrides.txt",
+                     "distributions.map", "phantoms.json",
+                     "crypto_ticker.map")
+_ROOT_INPUTS = ("taxjson.toml",) + PROJECT_ROOT_MAPS
+_LEGACY_ROOT_INPUTS = ("taxjson.toml", "ticker.map", "distributions.map",
+                       "phantoms.json", "ticker_extraction_overrides.txt")
+# Per-account files `run` reads besides the activity files: the
+# corp-action elections (A2-0124, A2-0126) and a crypto account's send
+# decisions, which regenerate crypto_sends.tt (A2-0358).
+_ACCOUNT_SIDECARS = ("manifest.json", "sends.json")
+# taxjson.toml content no `taxjson run` stage reads — planning tables,
+# the estimate's province, handoff's prior-year path, `sanity`'s
+# holdings files and `fetch`'s broker keys. An edit to them (or to a
+# comment) does not make the books stale (A2-0681, A2-1157).
+_PLANNING_TABLES = ("instalments", "estimate")
+_PLANNING_SETTINGS = ("province", "prior_year_record")
+_PLANNING_ACCOUNT_KEYS = ("holdings", "brokerage", "account", "query_id")
+
+
+def _skipped_input_name(name: str) -> bool:
+    """Hidden files and Office lock files ('~$x.csv', written while a
+    file is open in Excel) are never inputs — `run` skips them too
+    (A2-1145, A2-1166)."""
+    return name.startswith((".", "~$"))
 
 
 def _input_paths(root: Path, cfg: Dict[str, Any]) -> List[Path]:
     """Every file `taxjson run` reads to build the books: the project-
-    root config and maps, and each configured account's activity files
-    plus generic-mapping sidecars (inputs/<acct>/*.toml)."""
+    root config and maps, and each configured account's activity files,
+    generic-mapping sidecars (inputs/<acct>/*.toml), its elections
+    manifest and its crypto send decisions."""
     out = [root / n for n in _ROOT_INPUTS if (root / n).is_file()]
     for n in sorted((cfg.get("accounts") or {})):
         folder = root / "inputs" / n
         if not folder.is_dir():
             continue
         out += sorted(p for p in folder.iterdir()
-                      if p.is_file() and not p.name.startswith(".")
-                      and p.suffix.lower() in (".csv", ".tt", ".toml"))
+                      if p.is_file() and not _skipped_input_name(p.name)
+                      and (p.suffix.lower() in (".csv", ".tt", ".toml")
+                           or p.name in _ACCOUNT_SIDECARS))
     return out
+
+
+def _run_config_digest(path: Path) -> str:
+    """sha256 of the part of taxjson.toml a run reads: the parsed
+    document without the planning-only tables and keys, canonically
+    serialised (comments and layout do not count). A file that does
+    not parse is hashed as bytes — it changed, whatever it says."""
+    import hashlib
+    raw = path.read_bytes()
+    try:
+        from taxjson.lib.tomlcompat import tomllib
+        doc = tomllib.loads(raw.decode("utf-8-sig"))
+    except Exception:                                   # noqa: BLE001
+        return hashlib.sha256(raw).hexdigest()
+    doc = {k: v for k, v in doc.items() if k not in _PLANNING_TABLES}
+    if isinstance(doc.get("settings"), dict):
+        doc["settings"] = {k: v for k, v in doc["settings"].items()
+                           if k not in _PLANNING_SETTINGS}
+    if isinstance(doc.get("accounts"), dict):
+        doc["accounts"] = {
+            n: ({k: v for k, v in a.items()
+                 if k not in _PLANNING_ACCOUNT_KEYS}
+                if isinstance(a, dict) else a)
+            for n, a in doc["accounts"].items()}
+    blob = json.dumps(doc, sort_keys=True, default=str).encode("utf-8")
+    return "run-settings:" + hashlib.sha256(blob).hexdigest()
+
+
+def _empty_manifest(p: Path) -> bool:
+    """The elections manifest the corp stage creates on an account's
+    first run ({"elections": {}}) is the same as none."""
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) == {"elections": {}}
+    except (OSError, ValueError):
+        return False
 
 
 def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
@@ -652,6 +732,33 @@ def input_fingerprint(root: Path, cfg: Dict[str, Any]) -> Dict[str, str]:
     import hashlib
     out: Dict[str, str] = {}
     for p in _input_paths(root, cfg):
+        if p.name == "manifest.json" and _empty_manifest(p):
+            continue
+        try:
+            out[p.relative_to(root).as_posix()] = (
+                _run_config_digest(p) if p.parent == root
+                and p.name == "taxjson.toml"
+                else hashlib.sha256(p.read_bytes()).hexdigest())
+        except OSError:
+            continue
+    return out
+
+
+def _legacy_input_fingerprint(root: Path, cfg: Dict[str, Any]
+                              ) -> Dict[str, str]:
+    """The format-1 fingerprint (raw taxjson.toml bytes, the old root
+    maps, .csv/.tt/.toml only) — to judge a record an older taxjson
+    wrote, without calling every project stale after an upgrade."""
+    import hashlib
+    paths = [root / n for n in _LEGACY_ROOT_INPUTS if (root / n).is_file()]
+    for n in sorted((cfg.get("accounts") or {})):
+        folder = root / "inputs" / n
+        if folder.is_dir():
+            paths += sorted(p for p in folder.iterdir()
+                            if p.is_file() and not p.name.startswith(".")
+                            and p.suffix.lower() in (".csv", ".tt", ".toml"))
+    out: Dict[str, str] = {}
+    for p in paths:
         try:
             out[p.relative_to(root).as_posix()] = hashlib.sha256(
                 p.read_bytes()).hexdigest()
@@ -666,20 +773,79 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any]) -> None:
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / (FINGERPRINT_FILE + ".part")
-    tmp.write_text(json.dumps({"files": input_fingerprint(root, cfg)},
+    tmp.write_text(json.dumps({"version": FINGERPRINT_VERSION,
+                               "files": input_fingerprint(root, cfg)},
                               indent=1, sort_keys=True) + "\n",
                    encoding="utf-8")
     tmp.replace(work / FINGERPRINT_FILE)
 
 
-def _load_fingerprint(root: Path) -> Optional[Dict[str, str]]:
+class FingerprintUnreadable(ValueError):
+    """work/.inputs_fingerprint.json exists but is not a fingerprint."""
+
+
+def _load_fingerprint_doc(root: Path) -> Optional[Dict[str, Any]]:
+    """The recorded fingerprint document, None when there is none.
+    Raises FingerprintUnreadable for a file that exists but cannot be
+    read (truncated, files not a table): never "no record", which fell
+    back to mtimes and called stale books clean (A2-1155)."""
     p = root / "work" / FINGERPRINT_FILE
+    if not p.exists() and not p.is_symlink():
+        return None
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as e:
+        raise FingerprintUnreadable(str(e)) from e
     files = doc.get("files") if isinstance(doc, dict) else None
-    return files if isinstance(files, dict) else None
+    if not isinstance(files, dict) or not all(
+            isinstance(k, str) and isinstance(v, str)
+            for k, v in files.items()):
+        raise FingerprintUnreadable("no files table")
+    return doc
+
+
+def _load_fingerprint(root: Path) -> Optional[Dict[str, str]]:
+    try:
+        doc = _load_fingerprint_doc(root)
+    except FingerprintUnreadable:
+        return None
+    return doc["files"] if doc else None
+
+
+def inputs_changed(root: Path, cfg: Dict[str, Any]) -> Optional[str]:
+    """Why the books are not the result of the current inputs according
+    to the last full run's record: a diff text, "" when they are, None
+    when no record exists (the caller falls back to mtimes). The one
+    rule for run-clean, the filing banners and the web freshness flag."""
+    try:
+        doc = _load_fingerprint_doc(root)
+    except FingerprintUnreadable as e:
+        return (f"work/{FINGERPRINT_FILE} cannot be read ({e}) — what the "
+                f"last full run was built from is unknown")
+    if doc is None:
+        return None
+    if doc.get("version") == FINGERPRINT_VERSION:
+        return _fingerprint_diff(doc["files"], input_fingerprint(root, cfg))
+    # An older record: the old comparison, plus the inputs it did not
+    # cover, by mtime against the record itself.
+    why = _fingerprint_diff(doc["files"], _legacy_input_fingerprint(root, cfg))
+    if why:
+        return why
+    try:
+        since = (root / "work" / FINGERPRINT_FILE).stat().st_mtime
+    except OSError:
+        return why
+    legacy = set(doc["files"])
+    newer = sorted(p.relative_to(root).as_posix()
+                   for p in _input_paths(root, cfg)
+                   if p.relative_to(root).as_posix() not in legacy
+                   and p.name != "taxjson.toml"
+                   and not (p.name == "manifest.json" and _empty_manifest(p))
+                   and p.stat().st_mtime > since + 1)
+    if newer:
+        return "changed: " + ", ".join(newer[:3]) + (
+            " ..." if len(newer) > 3 else "")
+    return ""
 
 
 def _fingerprint_diff(before: Dict[str, str], now: Dict[str, str]) -> str:
@@ -1148,7 +1314,7 @@ def slip_files(root: Path) -> List[Path]:
     if not slips.is_dir():
         return []
     return sorted((p for p in slips.iterdir()
-                   if p.is_file() and not p.name.startswith(".")
+                   if p.is_file() and not _skipped_input_name(p.name)
                    and p.suffix.lower() == ".csv"),
                   key=lambda p: p.name.lower())
 
@@ -1158,7 +1324,7 @@ def _unread_slip_files(root: Path) -> List[Path]:
     if not slips.is_dir():
         return []
     return sorted(p for p in slips.iterdir()
-                  if p.is_file() and not p.name.startswith(".")
+                  if p.is_file() and not _skipped_input_name(p.name)
                   and p.suffix.lower() != ".csv")
 
 
