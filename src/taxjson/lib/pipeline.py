@@ -55,7 +55,11 @@ def load_stdin_transactions(stream=None) -> List[TaxTransaction]:
     through core.strip_json_comments (which is string-aware and could
     accept inputs the old path rejected)."""
     from taxjson.lib.core import coerce_transaction_row
-    stream = stream if stream is not None else sys.stdin
+    if stream is None:
+        # UTF-8 whatever the locale, as files are read (A2-1219).
+        import io
+        from taxjson.lib.cli_diag import read_stdin_utf8
+        stream = io.StringIO(read_stdin_utf8())
     content = "".join(line for line in stream
                       if not line.strip().startswith('#'))
     if not content.strip():
@@ -805,10 +809,17 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
                 if len(sample) >= 5:
                     break
         more = "" if n_main <= 5 else f"\n  (+{n_main - 5} more)"
+        _accts = sorted({t.account for t in transactions
+                         if t.action == 'TRANSFER' and t.account})
+        # Worded for both callers: `taxjson run` never passes a flag the
+        # user typed (re-audit A2-1221, the S076-19 twin).
         raise TransferValidationError(
-            f"--taxable was set but the input contains {n_main} TRANSFER row(s). "
+            f"taxable account {', '.join(_accts) or '?'}: its input holds "
+            f"{n_main} TRANSFER row(s). "
             f"TRANSFER is not allowed in taxable accounts — replace each with "
-            f"the actual buy/sell history that established the position.\n"
+            f"the actual buy/sell history that established the position "
+            f"(standalone `taxjson-gains`: drop --taxable for a sheltered "
+            f"book).\n"
             + "\n".join(sample) + more
         )
 
@@ -834,11 +845,18 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     return rewritten, sheltered_transactions
 
 
+# A position short where none can exist (a registered account, spot
+# crypto, a sale the broker codes CLOSING): `taxjson run` echoes these
+# and `run --strict` refuses them.
+ATTENTION_SHORT = "warning: ATTENTION: short: "
+
+
 def prepare_books(transactions, sheltered_transactions=(),
                   affiliated_transactions=(), *, taxable: bool,
                   incomplete_history: Optional[Path] = None,
                   phantom_hint: bool = True,
-                  base_currency: Optional[str] = None):
+                  base_currency: Optional[str] = None,
+                  spot_crypto: bool = False):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then phantom opening
     synthesis. Returns (transactions, sheltered, affiliated, phantom_log).
@@ -846,6 +864,12 @@ def prepare_books(transactions, sheltered_transactions=(),
     `phantom_hint` controls the advisory stderr NOTE emitted when NO
     phantom file is supplied but positions go short (the gains CLI wants
     it; explain and the web keep their stderr quiet).
+
+    With the hint on, a position that goes short where no short can
+    exist — a registered account (TFSA/RRSP/IRA), or a spot-crypto book
+    (`spot_crypto`) — is said as an ATTENTION `short:` line (`taxjson
+    run` echoes it and `run --strict` refuses), as is a sale the broker
+    codes CLOSING with no position (re-audit A2-0395, A2-0137, A2-1223).
     """
     transactions = list(transactions)
     sheltered_transactions = list(sheltered_transactions)
@@ -922,7 +946,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                 # sold was bought before the data — not a short, not a
                 # written option, whatever the books do with it until
                 # the history is supplied (audit S013-00).
-                print(f"warning: ATTENTION: {c.symbol} ({c.account}): the "
+                print(f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
                       f"broker codes the sale on {c.first_negative_date} "
                       f"CLOSING (IB code C"
                       + (f", IB Basis {c.broker_basis}" if c.broker_basis
@@ -932,6 +956,35 @@ def prepare_books(transactions, sheltered_transactions=(),
                         f"purchase is supplied (`taxjson "
                         f"find-missing-history --gen-phantoms "
                         f"phantoms.json`).", file=sys.stderr)
+        # A short where none can exist (A2-0395 / A2-0137): the main
+        # book's own accounts only — a context book's account says it in
+        # its own stage.
+        _main_accts = {t.account for t in transactions}
+        for c in candidates:
+            if (c.account not in _main_accts or _is_opt(c.symbol)
+                    or c.broker_says_closing):
+                continue
+            if c.registered:
+                why = ("a registered account (TFSA/RRSP/IRA) cannot be "
+                       "short")
+                tail = ("its later purchases are read as covering the "
+                        "short, so a superficial-loss / wash-sale denial "
+                        "they cause for a taxable account's loss is "
+                        "missed")
+            elif spot_crypto:
+                why = "spot crypto cannot be short"
+                tail = ("no gain is booked for the sale until the coins' "
+                        "cost is supplied")
+            else:
+                continue
+            print(f"{ATTENTION_SHORT}{c.symbol} ({c.account}): {why} — "
+                  f"it sells {abs(c.peak_short):g} more than the data "
+                  f"holds from {c.first_negative_date}: history is missing "
+                  f"(a transfer-in, a deposit, or a purchase before the "
+                  f"data). Until it is supplied, {tail}. Supply it (the "
+                  f"transfer or purchase rows, or `taxjson "
+                  f"find-missing-history --gen-phantoms phantoms.json`).",
+                  file=sys.stderr)
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
@@ -967,6 +1020,9 @@ class GainsRequest:
     detect_wash: Optional[bool] = None        # None → taxable and not no_wash
     cross_asset: bool = False
     phantom_hint: bool = True
+    # The book is a crypto account (spot coins): a short is missing
+    # history, said as ATTENTION (prepare_books).
+    spot_crypto: bool = False
     # ITA s.49(1) premium timing for written options (Canada only):
     # 'grant' recognises the premium on the write date, 'close' at the
     # closing transaction (the US §1234 convention). Contracts written
@@ -1054,7 +1110,78 @@ def annotate_inventory_multipliers(results: dict, transactions) -> None:
             item['multiplier'] = m
 
 
-def apply_roc_record_dates(transactions, req: GainsRequest) -> None:
+def apply_trust_roc_record_dates(transactions, income_rules) -> list:
+    """Canada: a Canadian trust's return of capital lowers the ACB when it
+    becomes payable (s.53(2)(h)): an ADJUST with a printed record date is
+    booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row keeps its id;
+    only its dates move. Every engine caller applies it (run_gains,
+    taxjson-audit, taxjson-explain, the web what-if): applied only in
+    run_gains, the others booked the ROC on its pay date and contradicted
+    the .sum (re-audit A2-0139 / A2-0201 / A2-0397). A no-op for the US
+    (IncomeRules.roc_record_date is Canada-only). Returns [(row, pay
+    date)] for each row moved."""
+    moved = []
+    for _t in transactions:
+        _rec = income_rules.roc_record_date(_t)
+        if _rec:
+            moved.append((_t, _t.date))
+            _t.date = _rec
+            _t.date_settle = _rec
+    return moved
+
+
+def add_income_dating_args(parser) -> None:
+    """--corporate-distribution / --ric-january-dividend ([settings]
+    corporate_distributions / ric_january_dividends): the engine CLIs
+    that date income share one spelling (taxjson-gains, -audit,
+    -explain)."""
+    parser.add_argument(
+        "--corporate-distribution", action="append", default=None,
+        metavar="SYMBOL",
+        help="Canada: a Canadian issuer whose \"distribution\" rows are "
+             "a corporation's payout (dated when paid), beyond the "
+             "built-in split-share list; repeatable ([settings] "
+             "corporate_distributions).")
+    parser.add_argument(
+        "--ric-january-dividend", action="append", default=None,
+        metavar="\"SYMBOL [YYYY-01-DD]\"",
+        help="USA: a January fund/REIT dividend received on Dec 31 of "
+             "the prior year (§852(b)(7), §857(b)(9)); repeatable "
+             "([settings] ric_january_dividends).")
+
+
+def _warn_roc_moved_into_prior_year(results, moved, tax_date, year):
+    """A trust ROC paid in one year with a record date in the year before
+    lowers the ACB of a sale made between the two dates in that earlier
+    year — a year that may already be filed without it (re-audit
+    A2-0039). Name each such sale on the ATTENTION channel (`taxjson
+    run` echoes it) when this run's year is the pay year (or no year)."""
+    from taxjson.lib.income_dating import ATTENTION_INCOME_YEAR
+    key = 'date_settle' if tax_date == 'settle' else 'date'
+    for t, pay in moved:
+        rec = t.date or ''
+        if not rec or not pay or rec[:4] == pay[:4]:
+            continue
+        if year is not None and str(year) != pay[:4]:
+            continue
+        sales = [e for e in results.get('transactions') or []
+                 if e.get('gain') is not None
+                 and e.get('symbol') == t.symbol
+                 and rec <= (e.get('date') or '') < pay
+                 and (e.get(key) or e.get('date') or '')[:4] == rec[:4]]
+        if not sales:
+            continue
+        what = ", ".join(
+            f"{(e.get(key) or e.get('date'))} (gain now "
+            f"{float(e.get('gain') or 0.0):,.2f})" for e in sales)
+        amt = -float(t.net_amount or 0.0)
+        print(f"warning: {ATTENTION_INCOME_YEAR}{t.symbol}: the return of "
+              f"capital {amt:,.2f} {t.currency} paid {pay} (record date "
+              f"{rec}) lowers the ACB of the {rec[:4]} sale on {what}. If "
+              f"{rec[:4]} was filed without this ROC, that return needs an "
+              f"adjustment (T1-ADJ) for the gain.", file=sys.stderr)
+
+def apply_roc_record_dates(transactions, req: GainsRequest) -> list:
     """Canada: a Canadian trust's return of capital lowers the ACB when
     it becomes payable (s.53(2)(h)): an ADJUST with a printed record
     date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The row
@@ -1062,15 +1189,11 @@ def apply_roc_record_dates(transactions, req: GainsRequest) -> None:
 
     Every engine entry point calls this — run_gains, taxjson-audit and
     taxjson-explain — so an audit or a trace cannot re-run the engine
-    on the pay date the books did not use (re-audit A2-0033)."""
+    on the pay date the books did not use (re-audit A2-0033). Returns
+    the rows moved, as apply_trust_roc_record_dates does."""
     if req.country != 'canada':
-        return
-    income_rules = req.income_rules()
-    for _t in transactions:
-        _rec = income_rules.roc_record_date(_t)
-        if _rec:
-            _t.date = _rec
-            _t.date_settle = _rec
+        return []
+    return apply_trust_roc_record_dates(transactions, req.income_rules())
 
 
 def engine_options(req: GainsRequest) -> Dict[str, Any]:
@@ -1121,15 +1244,18 @@ def run_gains(transactions, sheltered_transactions=(),
          phantom_application_log) = prepare_books(
             transactions, sheltered_transactions, affiliated_transactions,
             taxable=req.taxable, incomplete_history=req.incomplete_history,
-            phantom_hint=req.phantom_hint,
+            phantom_hint=req.phantom_hint, spot_crypto=req.spot_crypto,
             base_currency=HOME_CURRENCY.get(req.country))
 
     rules = get_tax_rules(req.country)
     income_rules = req.income_rules()
     _warn_year = int(req.year) if req.year else None
-    for _w in income_rules.warnings(transactions, _warn_year):
+    # Income-dating advice is about a return's income and ACB: none of
+    # it applies to a sheltered (registered) book (re-audit A2-1218).
+    for _w in (income_rules.warnings(transactions, _warn_year)
+               if req.taxable else ()):
         print(f"warning: {_w}", file=sys.stderr)
-    apply_roc_record_dates(transactions, req)
+    _roc_moved = apply_roc_record_dates(transactions, req)
     if req.country == 'canada':
         # The parsers book a stock dividend as a neutral $0 event; the
         # Canadian cost is its declared amount, which the export does
@@ -1137,15 +1263,41 @@ def run_gains(transactions, sheltered_transactions=(),
         # own rule (§305(a)/§307) when it spreads the basis.
         # An ATTENTION line, on the run console (re-audit A2-0265: the
         # NOTE sat in the .sum while the income and ACB were short).
-        for _t in transactions:
-            if is_stock_dividend(_t) and float(_t.quantity or 0) > 0:
-                print(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
-                      f"{float(_t.quantity):g} share(s) on {_t.date} "
-                      f"entered at $0 cost — in Canada it is a dividend "
-                      f"at its declared amount, which is also the new "
-                      f"shares' cost: add it (distributions.map or a .tt "
-                      f"ADJUST) for the correct ACB and income.",
-                      file=sys.stderr)
+        # Only for the run's own year and a taxable book, and quiet once
+        # the cost is in the books (an ADJUST on the symbol from 31 days
+        # before to 7 days after: a .tt line or distributions.map's
+        # record-date row). Adding it books the ACB only — the dividend
+        # is reported from the slip (re-audit A2-0709, A2-0711, A2-1220,
+        # A2-1224; CA-DIST-01).
+        from datetime import date as _d, timedelta as _td
+
+        def _cost_added(sd):
+            try:
+                d0 = _d.fromisoformat(str(sd.date)[:10])
+            except ValueError:
+                return False
+            lo, hi = (d0 - _td(days=31)).isoformat(), \
+                (d0 + _td(days=7)).isoformat()
+            return any(a.action == 'ADJUST' and a.symbol == sd.symbol
+                       and float(a.net_amount or 0) > 0
+                       and lo <= str(a.date)[:10] <= hi
+                       for a in transactions)
+        for _t in (transactions if req.taxable else ()):
+            if not (is_stock_dividend(_t) and float(_t.quantity or 0) > 0):
+                continue
+            if _warn_year is not None and not str(_t.date).startswith(
+                    str(_warn_year)):
+                continue
+            if _cost_added(_t):
+                continue
+            print(f"warning: ATTENTION: {_t.symbol}: stock dividend of "
+                  f"{float(_t.quantity):g} share(s) on {_t.date} "
+                  f"entered at $0 cost — in Canada it is a dividend at its "
+                  f"declared amount, which is also the new shares' cost: "
+                  f"add that cost (distributions.map or a .tt ADJUST) for "
+                  f"the correct ACB. That books the ACB only: report the "
+                  f"dividend itself from the T5/T3 slip (taxjson does not "
+                  f"count it as income).", file=sys.stderr)
     _extra = engine_options(req)
     # The engine's option/right-replacement warnings are printed below,
     # after the year filter: printed by the engine they put a prior
@@ -1162,6 +1314,8 @@ def run_gains(transactions, sheltered_transactions=(),
     )
 
     annotate_inventory_multipliers(results, transactions)
+    _warn_roc_moved_into_prior_year(results, _roc_moved, tax_date,
+                                    _warn_year)
 
     # Capture tainted dispositions across ALL years before the year filter
     # strips them. The superficial-loss warning below pairs in-year clean
@@ -1250,51 +1404,53 @@ def run_gains(transactions, sheltered_transactions=(),
             ]
             results['summary']['total_disallowed'] = sum(w['disallowed_amount'] for w in results['wash_sales'])
 
-        # Rebuild by_ticker from year-filtered transactions. Without this,
-        # consumers reading by_ticker['AAPL.US']['total_gain'] get all-year
-        # totals on what looks like a single-year report.
-        #
-        # Skip `tainted` rows — they carry fabricated gain numbers (cost
-        # basis = 0 against a synthetic/phantom opening) which are about
-        # to be routed to `manual_reporting_required` below. Letting them
-        # into by_ticker totals would silently inflate any downstream
-        # consumer that reads by_ticker instead of `transactions`.
-        if 'by_ticker' in results:
-            rebuilt: Dict[str, Dict] = {}
-            for t in results['transactions']:
-                if t.get('tainted'):
-                    continue
-                sym = t.get('symbol')
-                if not sym:
-                    continue
-                stats = rebuilt.setdefault(sym, {
-                    'total_cost': 0.0, 'total_proceeds': 0.0,
-                    'total_gain': 0.0, 'total_div': 0.0,
-                    'total_pil': 0.0,
-                    'trade_count': 0, 'hold_days': [],
-                })
-                action = t.get('action')
-                if action == 'DIVIDEND':
-                    stats['total_div'] += float(t.get('dividend', 0.0) or 0.0)
-                elif action == 'DIVIDEND_IN_LIEU':
-                    # A Canadian s.260 payment in lieu carries its
-                    # amount as 'dividend' (see the income pass above).
-                    stats['total_div'] += float(t.get('dividend', 0.0)
-                                                or 0.0)
-                    # PIL is its own bucket — same per-ticker association
-                    # as a dividend but bucketed separately so downstream
-                    # T5 totals stay clean. Before this branch, PIL rows
-                    # fell into the trade accumulator below: trade_count
-                    # got incremented and the PIL amount was invisible.
-                    stats['total_pil'] += float(t.get('pil', 0.0) or 0.0)
-                else:
-                    stats['total_cost'] += float(t.get('cost', 0.0) or 0.0)
-                    stats['total_proceeds'] += float(t.get('proceeds', 0.0) or 0.0)
-                    stats['total_gain'] += float(t.get('gain', 0.0) or 0.0)
-                    stats['trade_count'] += 1
-                    if t.get('days_held') is not None:
-                        stats['hold_days'].append(t['days_held'])
-            results['by_ticker'] = rebuilt
+    # Rebuild by_ticker from the (year-filtered) rows, with or without
+    # --year (re-audit A2-0710: without it an s.260 deemed dividend
+    # stayed in total_pil). Under --year, consumers reading
+    # by_ticker['AAPL.US']['total_gain'] otherwise got all-year totals
+    # on what looks like a single-year report.
+    #
+    # Skip `tainted` rows — they carry fabricated gain numbers (cost
+    # basis = 0 against a synthetic/phantom opening) which are about
+    # to be routed to `manual_reporting_required` below. Letting them
+    # into by_ticker totals would silently inflate any downstream
+    # consumer that reads by_ticker instead of `transactions`.
+    if 'by_ticker' in results:
+        rebuilt: Dict[str, Dict] = {}
+        for t in results['transactions']:
+            if t.get('tainted'):
+                continue
+            sym = t.get('symbol')
+            if not sym:
+                continue
+            stats = rebuilt.setdefault(sym, {
+                'total_cost': 0.0, 'total_proceeds': 0.0,
+                'total_gain': 0.0, 'total_div': 0.0,
+                'total_pil': 0.0,
+                'trade_count': 0, 'hold_days': [],
+            })
+            action = t.get('action')
+            if action == 'DIVIDEND':
+                stats['total_div'] += float(t.get('dividend', 0.0) or 0.0)
+            elif action == 'DIVIDEND_IN_LIEU':
+                # A Canadian s.260 payment in lieu carries its
+                # amount as 'dividend' (see the income pass above).
+                stats['total_div'] += float(t.get('dividend', 0.0)
+                                            or 0.0)
+                # PIL is its own bucket — same per-ticker association
+                # as a dividend but bucketed separately so downstream
+                # T5 totals stay clean. Before this branch, PIL rows
+                # fell into the trade accumulator below: trade_count
+                # got incremented and the PIL amount was invisible.
+                stats['total_pil'] += float(t.get('pil', 0.0) or 0.0)
+            else:
+                stats['total_cost'] += float(t.get('cost', 0.0) or 0.0)
+                stats['total_proceeds'] += float(t.get('proceeds', 0.0) or 0.0)
+                stats['total_gain'] += float(t.get('gain', 0.0) or 0.0)
+                stats['trade_count'] += 1
+                if t.get('days_held') is not None:
+                    stats['hold_days'].append(t['days_held'])
+        results['by_ticker'] = rebuilt
 
     # Aggregate trading fees across the raw transaction list (both buys AND
     # sells, both taxable and sheltered) for informational reporting. Gain

@@ -169,10 +169,13 @@ class TestStockDividend(unittest.TestCase):
         self.assertIn("§307",
                       gains_both(book, year=2024)["usa"]["_stderr"])
         # Canada: the 5 shares joined the pool at $0 (same total here),
-        # and the declared amount is left to the user, with a note.
+        # and the declared amount is left to the user, with a note in
+        # the dividend's year only, like the US note (re-audit A2-0711).
         self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 1300.0,
                                places=6)
-        self.assertIn("declared amount", r["canada"]["_stderr"])
+        self.assertNotIn("declared amount", r["canada"]["_stderr"])
+        self.assertIn("declared amount",
+                      gains_both(book, year=2024)["canada"]["_stderr"])
         self.assertNotIn("§307", r["canada"]["_stderr"])
 
     @rule("CA-STKDIV-01")

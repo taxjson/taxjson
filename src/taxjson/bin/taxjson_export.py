@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from taxjson.lib.cli_diag import guard_main
+from taxjson.lib.numeric import nonneg_float_arg
 from taxjson.lib.report_model import load_report_json
 from taxjson.lib import cli_diag
 from taxjson.lib.json_input import InputFileError, read_json_doc
@@ -566,7 +567,11 @@ def _load_trade_events(paths, mapping=None, drops=None,
                 continue
             act = tx.get("action")
             sym = tx.get("symbol")
-            if act not in ("BUYSELL", "ASSIGN", "SPLIT") or not sym:
+            # TRANSFER / OPENING_BALANCE rows move units in or out too:
+            # left out, a transferred-in position's later round looked
+            # flat and its events were trimmed away (re-audit A2-1215).
+            if act not in ("BUYSELL", "ASSIGN", "SPLIT", "TRANSFER",
+                           "OPENING_BALANCE") or not sym:
                 continue
             rows.append(((tx.get("date_settle") or tx.get("date") or "",
                           tx.get("time") or "",
@@ -608,6 +613,13 @@ def _load_trade_events(paths, mapping=None, drops=None,
         except (TypeError, ValueError):
             continue
         if qty == 0 or sym in drops:
+            continue
+        if tx.get("action") in ("TRANSFER", "OPENING_BALANCE"):
+            # Units moved in or out (no trade to chart): the running
+            # balance only.
+            balance[sym] = balance.get(sym, 0.0) + qty
+            if current_position_only and abs(balance[sym]) < 1e-6:
+                events[sym] = []
             continue
         events.setdefault(sym, []).append({
             "date": tx.get("date"),
@@ -879,7 +891,10 @@ def main():
     parser.add_argument("--short", action="store_true", help="Only short positions")
     parser.add_argument("--long", action="store_true", help="Only long positions")
     parser.add_argument(
-        "--dust-threshold", type=float, default=1e-3, metavar="QTY",
+        # nonneg_float_arg: nan / inf hid every zero-cost holding and
+        # a negative value was accepted (re-audit A2-1214/1216/1217).
+        "--dust-threshold", type=nonneg_float_arg, default=1e-3,
+        metavar="QTY",
         help="Drop --report / --holdings-toml positions whose absolute "
              "quantity is below this (default: 0.001) AND whose absolute "
              "total cost is below 1.00 — sub-fractional residue left by "

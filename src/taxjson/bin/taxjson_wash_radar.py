@@ -1926,9 +1926,11 @@ def main():
         if args.json_out:
             out_path = Path(args.json_out)
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(payload, indent=2,
-                                           sort_keys=True)
-                                + "\n", encoding="utf-8")
+            # 'cannot write <path>: ...', not the input wording
+            # (re-audit A2-0707).
+            from taxjson.lib.cli_diag import write_text_atomic
+            write_text_atomic(out_path, json.dumps(payload, indent=2,
+                                                   sort_keys=True) + "\n")
 
     print("-" * head_w)
     print("Definitions:")

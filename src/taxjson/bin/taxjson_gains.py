@@ -28,6 +28,7 @@ from taxjson.lib.phantom_holdings import detect_phantoms, format_suggestions
 # Back-compat re-exports: tests and older callers import these from here.
 from taxjson.lib.pipeline import (            # noqa: F401
     GainsRequest,
+    add_income_dating_args,
     TransferValidationError,
     _handle_transfers,
     load_stdin_transactions,
@@ -96,19 +97,13 @@ def _parse_args():
              "option as a superficial loss when identical options are acquired "
              "within 30 days and held (strict reading; default off — a "
              "closing purchase is not a disposition s.54 reaches).")
+    add_income_dating_args(parser)
     parser.add_argument(
-        "--corporate-distribution", action="append", default=None,
-        metavar="SYMBOL",
-        help="Canada: a Canadian issuer whose \"distribution\" rows are "
-             "a corporation's payout (dated when paid), beyond the "
-             "built-in split-share list; repeatable ([settings] "
-             "corporate_distributions).")
-    parser.add_argument(
-        "--ric-january-dividend", action="append", default=None,
-        metavar="\"SYMBOL [YYYY-01-DD]\"",
-        help="USA: a January fund/REIT dividend received on Dec 31 of "
-             "the prior year (§852(b)(7), §857(b)(9)); repeatable "
-             "([settings] ric_january_dividends).")
+        "--spot-crypto", action="store_true",
+        help="The book is a crypto account's spot coins: a position going "
+             "short is missing history (a deposit or transfer-in), said "
+             "as an ATTENTION line (`taxjson run` passes it for crypto "
+             "accounts).")
     # Retired (2026-09-29): long calls vs share losses are enforced by
     # the Canada engine and always warned by the US engine; nothing is
     # opt-in any more. Accepted so old scripts keep working.
@@ -316,6 +311,7 @@ def _request(args) -> GainsRequest:
         option_buyback_loss_superficial=args.option_buyback_wash,
         corporate_distributions=tuple(args.corporate_distribution or ()),
         ric_january_dividends=tuple(args.ric_january_dividend or ()),
+        spot_crypto=args.spot_crypto,
     )
 
 

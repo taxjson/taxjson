@@ -280,6 +280,18 @@ def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
             print(f"  {line}")
 
 
+def _attention_short_lines(out_path: Path) -> List[str]:
+    """The `ATTENTION: short:` lines of a gains stage's persisted .diag
+    (lib/pipeline.ATTENTION_SHORT)."""
+    from taxjson.lib.pipeline import ATTENTION_SHORT
+    diag_path = out_path.with_name(out_path.name + ".diag")
+    try:
+        lines = diag_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    return [ln for ln in lines if ln.startswith(ATTENTION_SHORT)]
+
+
 def unbooked_lines(out_path: Path) -> List[str]:
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
@@ -519,6 +531,7 @@ def load_config(root: Path) -> Dict[str, Any]:
     path = root / "taxjson.toml"
     if not path.exists():
         _die(f"no taxjson.toml in {root}. Run `taxjson init` first.")
+    _refuse_unreadable_project_inputs(root)
     text = _read_config_text(path)
     try:
         cfg = tomllib.loads(text)
@@ -952,7 +965,8 @@ def validate_config(cfg: Dict[str, Any],
             if not adir.is_dir():
                 continue
             for sub in sorted(adir.iterdir()):
-                if not sub.is_dir() or sub.name.startswith("."):
+                if (not sub.is_dir() or sub.name.startswith(".")
+                        or sub.suffix.lower() == ".numbers"):
                     continue
                 # Spreadsheets too: an .xlsx here got no word at all
                 # (S043-13).
@@ -1179,6 +1193,9 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
     from datetime import date as _date
     from taxjson.lib.core import is_option_symbol, parse_option_expiry
     diag = cache / f"{name}_expired_options.diag"
+    # An expiry ON Dec 31 is that year's (re-audit A2-0716): the year
+    # end is inclusive, today exclusive (a contract expiring today may
+    # still trade).
     _today = _date.today().isoformat()
 
     def _expired(exp: str) -> bool:
@@ -1322,9 +1339,24 @@ def input_files(dirpath: Path, suffix: str) -> List[Path]:
     # ('~$x.csv') are never inputs; the checklist's input fingerprint
     # skips them too, so the two agree on the input set (A2-1145,
     # A2-1166).
-    return sorted(p for p in dirpath.iterdir()
-                  if p.is_file() and p.suffix.lower() == suffix
-                  and not p.name.startswith((".", "~$")))
+    out = []
+    for p in sorted(dirpath.iterdir()):
+        if p.suffix.lower() != suffix or p.name.startswith((".", "~$")):
+            continue
+        if p.is_file():
+            out.append(p)
+        elif p.is_symlink():
+            # A statement that is a dangling (or looping) symlink was
+            # left out of the books at exit 0 (re-audit A2-0143/A2-0403).
+            import os as _os
+            try:
+                tgt = _os.readlink(p)
+            except OSError:
+                tgt = "?"
+            _die(f"{p} is a symlink to {tgt}, which does not exist (or "
+                 f"loops) — its rows would be missing from the books. "
+                 f"Fix the link or remove it.")
+    return out
 
 
 # Spreadsheet suffixes a broker export may arrive in. None is read by
@@ -1337,14 +1369,31 @@ def spreadsheet_inputs(dirpath: Path) -> List[Path]:
     """Spreadsheet files directly in an inputs folder (never read)."""
     if not dirpath.is_dir():
         return []
+    # A Numbers document can be a package DIRECTORY (macOS bundle copied
+    # as-is): it is a spreadsheet all the same (re-audit A2-0714).
     return sorted(p for p in dirpath.iterdir()
-                  if p.is_file() and not p.name.startswith((".", "~$"))
+                  if (p.is_file() or (p.is_dir()
+                                      and p.suffix.lower() == ".numbers"))
+                  and not p.name.startswith((".", "~$"))
                   and p.suffix.lower() in SPREADSHEET_SUFFIXES)
 
 
 def group_inputs(account_dir: Path) -> Dict[str, List[Path]]:
     out: Dict[str, List[Path]] = {}
     for csv in input_files(account_dir, ".csv"):
+        # An unreadable or empty file got the "rename it to cb_/kr_/
+        # generic_" advice; renaming never helps (re-audit A2-0713,
+        # A2-1228).
+        try:
+            with open(csv, "rb") as _fh:
+                _head = _fh.read(4096)
+        except OSError as e:
+            from taxjson.lib.cli_diag import describe_input_error
+            _die(f"{describe_input_error(e)} — taxjson cannot read this "
+                 f"input; fix its permissions (or remove it).")
+        if not _head.strip(b" \t\r\n\xef\xbb\xbf\x00"):
+            _die(f"{csv} is empty — a failed or interrupted download? "
+                 f"Download the export again (or remove the file).")
         broker = detect_broker(csv)
         if not broker:
             # Content detection cannot read a cp1252 re-save: the
@@ -2102,6 +2151,18 @@ def _unreadable_project_inputs(root: Path) -> List[str]:
     return out
 
 
+def _refuse_unreadable_project_inputs(root: Path) -> None:
+    """Die when a project-root input exists as a name but cannot be read.
+    Every config reader calls it, so no command (scan, sanity, harvest,
+    fees, ...) builds as if ticker.map or phantoms.json were absent
+    (re-audit A2-0401 / A2-0144; `run` since A2-0313)."""
+    _unreadable = _unreadable_project_inputs(root)
+    if _unreadable:
+        _die("project file(s) that exist but cannot be read — fix or "
+             "remove each; nothing was run:\n    "
+             + "\n    ".join(_unreadable))
+
+
 def _inputs_fingerprint(paths: List[Path]) -> str:
     """One line per existing file: name, size and SHA-256 of the
     content (mtimes deliberately left out — see R1-253)."""
@@ -2496,6 +2557,18 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # intermediates like <acct>_base.json (R1-116).
     tt_jsons: List[Path] = []
     from taxjson.lib.config_check import RESERVED_NAME_SUFFIXES
+    # Two .tt files whose names differ only in the suffix's case
+    # (start.tt / start.TT) convert to ONE work file: the second
+    # overwrote the first and its trades vanished (re-audit A2-0399).
+    _tt_by_out: Dict[str, str] = {}
+    for tt in input_files(acct_dir, ".tt"):
+        _o = tt_json_path(cache, name, tt.name).name
+        if _o in _tt_by_out:
+            _die(f"inputs/{name}/{_tt_by_out[_o]} and inputs/{name}/"
+                 f"{tt.name} convert to the same work file ({_o}) — one "
+                 f"would overwrite the other's rows. Rename one (or "
+                 f"merge the two).")
+        _tt_by_out[_o] = tt.name
     for tt in input_files(acct_dir, ".tt"):
         _stem = tt.stem.lower()
         _clash = next((x for x in RESERVED_NAME_SUFFIXES
@@ -2803,6 +2876,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
               "losses are allowed in full.")
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
+    if is_crypto:
+        # Spot coins cannot be short: a sale with nothing held is
+        # missing history, said as ATTENTION (re-audit A2-0137).
+        cmd.append("--spot-crypto")
     # Project-wide phantom opening-balances (from `find-missing-history
     # --gen-phantoms`). load_phantoms filters by (symbol, account), so passing
     # the whole file to every account's gains run is safe — non-matching pairs
@@ -2822,6 +2899,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # A2-0229), a phantoms.json entry on a real short or a written
     # option (A2-0637 / A2-0639). One call covers all.
     echo_attention_lines(gains_json)
+    # A short where none can exist (a registered account, spot crypto,
+    # a sale the broker codes CLOSING): missing history the numbers
+    # depend on — --strict refuses (re-audit A2-0395 / A2-0137 / A2-1223).
+    _shorts = _attention_short_lines(gains_json)
+    if _shorts and strict:
+        sys.exit(f"taxjson run --strict: {name}: {len(_shorts)} position(s) "
+                 f"go short where none can exist (registered account, "
+                 f"spot crypto, or a sale the broker codes closing) — "
+                 f"history is missing; see the ATTENTION short: lines "
+                 f"above. Spot crypto and registered accounts cannot be "
+                 f"short.")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year,
                                    tax_date=_tax_date_basis(settings))
@@ -3504,7 +3592,10 @@ def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
         except (OSError, ValueError):
             continue
         for t in doc.get("transactions", []):
-            if t.get("action") in ("BUYSELL", "ASSIGN", "OPENING_BALANCE"):
+            # A position moved in kind into the account (a declared
+            # TRANSFER) is held there too (re-audit A2-1231).
+            if t.get("action") in ("BUYSELL", "ASSIGN", "OPENING_BALANCE",
+                                   "TRANSFER"):
                 sym = (t.get("symbol") or "").strip()
                 if sym:
                     by_symbol.setdefault(sym, set()).add(name)
@@ -3753,9 +3844,13 @@ def cmd_run(args: argparse.Namespace) -> None:
     # before the "missing year" death it causes.
     for msg in validate_config(cfg, root / "inputs"):
         print(f"taxjson: warning: taxjson.toml: {msg}", file=sys.stderr)
-    for required in ("year", "country", "base_currency"):
+    for required in ("year", "country"):
         if required not in settings:
             _die(f"missing [settings] {required} in taxjson.toml")
+    if not settings.get("base_currency"):
+        # Unset means the country's currency, as every other command
+        # reads it (INPUTS-07; re-audit A2-0712: only `run` refused it).
+        settings["base_currency"] = _base(settings)
 
     inputs_dir = root / "inputs"
     cache = root / "work"
@@ -3795,11 +3890,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     # A project map that exists as a NAME but cannot be opened (a
     # dangling or looping symlink) read as "absent": the run exited 0
     # with other gains (audit A2-0313). Absent and unreadable differ.
-    _unreadable = _unreadable_project_inputs(root)
-    if _unreadable:
-        _die("project file(s) that exist but cannot be read — fix or "
-             "remove each; nothing was run:\n    "
-             + "\n    ".join(_unreadable))
+    _refuse_unreadable_project_inputs(root)
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
@@ -5499,6 +5590,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
                   f"skipping.", file=sys.stderr)
             continue
         data = _load_json_or_die(native)
+        # The tax withheld on a payment is dated with it (A2-0396).
+        _wh = (_rules.withholding_dates(data.get("transactions", []))
+               if _rules is not None else {})
         for tx in data.get("transactions", []):
             if actions is not None and tx.get("action") not in actions:
                 continue
@@ -5513,6 +5607,8 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             elif (_rules is not None and tx.get("action") in
                   ("DIVIDEND", "DIVIDEND_IN_LIEU", "ADJUST")):
                 _wd = _rules.row_date(tx) or d
+            elif id(tx) in _wh:
+                _wd = _wh[id(tx)]
             else:
                 _wd = d
             if keep(_wd):
@@ -5670,6 +5766,13 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
     cache = root / "work"
     want = (args.account or "").strip() or None
     cfg = _soft_config(root)
+    if not cfg:
+        # With no config the sheltered accounts' in-book rows were left
+        # out and the view said "the broker reported none" at rc 0
+        # (re-audit A2-0717); the other views refuse.
+        _die(f"no taxjson.toml in {root} — the accounts (and their "
+             f"in-book TRANSFER rows) are unknown; run from the project "
+             f"root.")
     if want and cfg and want not in (cfg.get("accounts") or {}):
         # A typo read "no transfer rows ... the broker reported none"
         # with rc 0, as if the account existed (S039-20).
@@ -5729,9 +5832,15 @@ def cmd_transfers_view(args: argparse.Namespace) -> None:
                          "fee_currency": _coin_fee(t)[1],
                          "currency": t.get("currency") or "",
                          "where": "sidecar"})
+    _no_inputs = _accounts_skipped_for_no_inputs(root)
     for name in (cfg.get("accounts") or {}):
         p = cache / f"{name}_base.json"
         if not p.exists():
+            # Missing says so like unreadable does (re-audit A2-1232).
+            if name not in _no_inputs and _has_inputs(root, name):
+                print(f"taxjson: warning: no {p.name} (run `taxjson "
+                      f"run`) — {name}'s in-book TRANSFER rows are not "
+                      f"shown.", file=sys.stderr)
             continue
         try:
             doc = _read_work_doc(p)
@@ -6766,9 +6875,12 @@ def cmd_winners(args: argparse.Namespace) -> None:
     shel_accts = set()
     from taxjson.lib.ticker_map import class_share_aliases, underlying_of
     _docs = [(_a, _load_json_or_die(_f)) for _a, _f in resolved.items()]
+    # Held shares (inventory) too: a covered call's class share is
+    # often only held (re-audit A2-0715).
     _aliases = class_share_aliases(
         t.get("symbol") for _a, _d in _docs
-        for t in _d.get("transactions", []) or [])
+        for t in (_d.get("transactions", []) or [])
+        + (_d.get("inventory", []) or []) if isinstance(t, dict))
     from taxjson.lib.report_model import grant_write_closes
     for _acct, data in _docs:
         _gclose = grant_write_closes(
@@ -8059,9 +8171,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
     # US/TO line actually held is visible — the gains inventory is
     # already consolidated and would hide it).
     holdings: Dict[str, list] = {}
+    # Accounts the scan cannot read (no holdings report / raw book): a
+    # 'clean scan' over them was a false all-clear (re-audit A2-0404).
+    _skipped_no_inputs = _accounts_skipped_for_no_inputs(root)
+    unscanned: Dict[str, str] = {}
     for name in accounts:
         f = reports / f"{name}_holdings.toml"
         if not f.exists() or tomllib is None:
+            if (tomllib is not None and name not in _skipped_no_inputs
+                    and not (accounts.get(name) or {}).get("crypto")
+                    and _has_inputs(root, name)):
+                unscanned[name] = f"reports/{f.name}"
             continue
         try:
             holdings[name] = (tomllib.loads(f.read_text(encoding="utf-8"))
@@ -8090,6 +8210,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
     for name in accounts:
         f = cache / f"{name}_raw.json"
         if not f.exists():
+            if (name not in _skipped_no_inputs
+                    and not (accounts.get(name) or {}).get("crypto")
+                    and _has_inputs(root, name)):
+                unscanned.setdefault(name, f"work/{f.name}")
             continue
         # A truncated raw book turned a real finding into 'No findings —
         # clean scan.' with exit 0 (audit S042-05).
@@ -8455,9 +8579,11 @@ def cmd_scan(args: argparse.Namespace) -> None:
             {"check": c, "account": a, "symbol": sy, "message": m}
             for c, a, sy, m in findings],
             "notes": [{"check": "MAP-UNUSED", "rule": r}
-                      for r in map_unused]},
+                      for r in map_unused],
+            "unscanned": [{"account": n, "missing": w}
+                          for n, w in sorted(unscanned.items())]},
             indent=2, sort_keys=True))
-        raise SystemExit(1 if findings else 0)
+        raise SystemExit(1 if findings or unscanned else 0)
 
     print(f"SCAN — common tax-efficiency mistakes, {country}"
           f"{', online map probe' if getattr(args, 'online', False) else ''}")
@@ -8472,7 +8598,17 @@ def cmd_scan(args: argparse.Namespace) -> None:
               f"{'; '.join(map_unused)}. Unused rules are harmless; "
               f"prune only if you know the symbol will not return.")
         print()
+    if unscanned:
+        print("taxjson scan: WARNING: not scanned (no "
+              + "; ".join(f"{n}: {w}" for n, w in sorted(unscanned.items()))
+              + ") — re-run `taxjson run` to rebuild them.",
+              file=sys.stderr)
     if not findings:
+        if unscanned:
+            print(f"No findings in the accounts scanned — NOT a clean "
+                  f"scan: {', '.join(sorted(unscanned))} could not be "
+                  f"read (see above).")
+            raise SystemExit(1)
         print("No findings — clean scan.")
         raise SystemExit(0)
     out_lines = ["CHECK ACCOUNT SYMBOL"]
@@ -11046,6 +11182,10 @@ def cmd_sanity(args: argparse.Namespace) -> None:
                              f"quantity — fix the file (an unreadable "
                              f"row is never skipped).")
                 try:
+                    # A TOML boolean is not a quantity (`true` read as 1,
+                    # re-audit A2-1230).
+                    if isinstance(_qraw, bool):
+                        raise TypeError("bool")
                     q = float(_qraw)
                 except (TypeError, ValueError):
                     sys.exit(f"taxjson sanity: {path.name}: {sym or '?'}: "
@@ -11533,7 +11673,15 @@ def _soft_config(root: Path) -> Dict[str, Any]:
     single home for the query wrappers' config reads — they must work
     from work/ files without a hard config dependency."""
     cfg_path = root / "taxjson.toml"
+    if cfg_path.is_symlink() and not cfg_path.exists():
+        # Unreadable is not absent: a dangling taxjson.toml switched
+        # fees / dil-sum / roc-sum from the tax year to all history at
+        # exit 0 (re-audit A2-0144). (A directory reads as an error
+        # below.)
+        _die(f"cannot read {cfg_path}: it is a symlink whose target "
+             f"does not exist (or loops) — fix or remove it.")
     if cfg_path.exists() and tomllib is not None:
+        _refuse_unreadable_project_inputs(root)
         try:
             cfg = tomllib.loads(_read_config_text(cfg_path)) or {}
         except Exception as e:
@@ -11601,6 +11749,14 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     if not args.account:
         _warn_accounts_without_books(root, resolved, "wash-sales",
                                      "gains file")
+    # The filing views' banners: per-account books after `run --account`
+    # (no blended pass) and books built for another tax year printed
+    # 'No wash sales' at rc 0 (re-audit A2-0400, A2-0405).
+    # (The run-state banner: the dispatch loop, _RUN_STATE_BANNER_CMDS.)
+    _cfg_ws = _soft_config(root)
+    if _cfg_ws:
+        _warn_artifact_year(resolved,
+                            (_cfg_ws.get("settings") or {}).get("year"))
     files = list(resolved.items())
 
     money = fmt_money               # shared report-layer formatter
@@ -11680,10 +11836,14 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         print(f"Currently embedded in OPEN positions: {money(embedded)} "
               f"{base} of deferred losses (see `taxjson list` DEFERRED).")
     print("DENIED is added to the cost basis of the repurchased shares (you "
-          "recover it on a later sale) — except any permanently-denied amount "
-          "from a repurchase in "
-          + ("an IRA" if _usa else "a registered account")
-          + ", which is lost for good.")
+          "recover it on a later sale) — except any permanently-denied amount"
+          + (" from a repurchase in an IRA, which is lost for good."
+             if _usa else
+             # An affiliated person's purchase: their own ACB, not
+             # "lost for good" (S033-03 wording; re-audit A2-1233).
+             ": a repurchase in a registered account loses it for good; "
+             "one bought by an affiliated person is added to that "
+             "person's own ACB (s.53(1)(f)), not yours."))
 
 
 def cmd_t1135(args: argparse.Namespace) -> None:
@@ -16981,6 +17141,7 @@ def main() -> None:
             _die(f"no such directory: {args.dir} (-C/--dir names the "
                  f"project root — the folder holding taxjson.toml)")
         _enforce_command_country(args)
+        _refuse_artifact_account(args)
         _refuse_unknown_account(args)
         if args.cmd in _RUN_STATE_BANNER_CMDS:
             _banner_run_state(args)
@@ -17005,6 +17166,33 @@ def main() -> None:
                      f"{' '.join(str(c) for c in (e.cmd or [])[-3:])} "
                      f"(exit {e.returncode}) — see the error above.")
     return
+
+
+def _refuse_artifact_account(args: argparse.Namespace) -> None:
+    """An ACCOUNT argument that is a pipeline artifact's name (`margin_raw`,
+    `margin_raw_base`, `x_gains` ...) is never an account — the config
+    refuses those names — yet sum, list, winners, wash-sales and their
+    twins read work/<name>_gains.json and printed the native-currency
+    books under a base-currency header (re-audit A2-0394). Refused once,
+    for every command."""
+    from taxjson.lib.config_check import RESERVED_NAME_SUFFIXES
+    # `period` too: `winners [PERIOD] [ACCOUNT]` takes a lone name in
+    # the first slot as the account.
+    vals = []
+    for attr in ("account", "period"):
+        v = getattr(args, attr, None)
+        vals += v if isinstance(v, list) else [v]
+    for v in vals:
+        if not isinstance(v, str):
+            continue
+        low = v.lower()
+        suf = next((x for x in RESERVED_NAME_SUFFIXES if low.endswith(x)),
+                   None)
+        if suf:
+            _die(f"{v!r} is not an account: names ending in {suf!r} are "
+                 f"pipeline work files (an account's native or "
+                 f"intermediate books), never accounts — use an account "
+                 f"name from [accounts] in taxjson.toml.")
 
 
 # Commands that read the work/ books and print figures or verdicts from

@@ -52,8 +52,11 @@ def process_data(data, groups, *, direction: str, calls_only: bool):
     # An RCI...TO call on RCI.B.TO shares groups under the class share,
     # not a phantom RCI.TO (S040-11).
     from taxjson.lib.ticker_map import class_share_aliases
+    # The held shares count too: a covered call's RCI.B.TO is usually
+    # only in the inventory (re-audit A2-0715).
     aliases = class_share_aliases(
-        t.get('symbol') for t in data.get('transactions', []) or []
+        t.get('symbol') for t in (data.get('transactions', []) or [])
+        + (data.get('inventory', []) or [])
         if isinstance(t, dict))
     for tx in data.get('transactions', []) or []:
         if not isinstance(tx, dict):
@@ -117,10 +120,13 @@ def load_inputs(prog: str, files: List[str]):
     or a one-line refusal and exit."""
     if not files:
         from taxjson.lib.report_model import strip_report_comments
+        import io
         try:
-            content = strip_report_comments(sys.stdin)
-        except UnicodeDecodeError as e:
-            cli_diag.error(prog, f"<stdin>: not UTF-8 text ({e.reason})")
+            content = strip_report_comments(
+                io.StringIO(cli_diag.read_stdin_utf8()))
+        except (UnicodeDecodeError, cli_diag.InputReadError) as e:
+            cli_diag.error(prog, f"<stdin>: not UTF-8 text "
+                                 f"({getattr(e, 'reason', e)})")
             sys.exit(1)
         if not content.strip():
             cli_diag.error(prog, "no input provided")

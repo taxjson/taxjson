@@ -750,7 +750,11 @@ its printed (cent-rounded) rows.
   warns when a January dividend has an October–December ex or record date,
   and moves the payments you list in `[settings] ric_january_dividends` to
   Dec 31 of the prior year (a bare `SPY` is the fund's US listing SPY.US
-  only — not a .TO listing or a preferred class of the same root).
+  only — not a .TO listing or a preferred class of the same root). Each
+  moved payment is listed on the console as `ATTENTION: income year:` in
+  both project years, since one of them leaves it out.
+- The tax withheld on a payment is dated with it: when a rule above moves
+  a dividend or distribution to another year, its withholding moves too.
 - The slips (T5/T3, 1099-DIV) are authoritative; these rules make the
   planning numbers and the slip tie-outs agree with them.
 

@@ -393,7 +393,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "record date: the pay date is used, and a January-paid "
                  "one is warned about (check the prior year's T3 box 42 "
                  "and move it to Dec 31 with a .tt ADJUST pair; the "
-                 "warning stops once that pair is in the books).",
+                 "warning stops once that pair is in the books). Every "
+                 "engine pass dates it the same way (run, audit, explain, "
+                 "the web what-if). When the record date falls in the "
+                 "year before the pay date, the pay-year run names, as "
+                 "ATTENTION, each sale of that earlier year whose ACB it "
+                 "lowers (that year may be filed without it).",
                  keys=("corporate_distributions",)),
             Rule("CA-INC-DATE-TRUST",
                  "A Canadian trust's distribution belongs to the year it "
@@ -416,7 +421,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "ATTENTION line. A distribution its record date moves "
                  "into another year than its pay date is listed on the "
                  "console (ATTENTION): one of the two project years "
-                 "leaves it out. A foreign fund keeps the pay date, and so does an IB "
+                 "leaves it out. The tax withheld on a payment is dated "
+                 "with it. A foreign fund keeps the pay date, and so does an IB "
                  "row: IB prints no record date and calls a trust's "
                  "distribution a dividend, so a trust cannot be told from "
                  "a corporation (the ex date IB's accruals give is not "
@@ -528,7 +534,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A stock dividend's new shares enter the pool at $0 cost. "
                  "Its declared amount (a dividend, and by law also the new "
                  "shares' cost) is not in the broker's export: add it "
-                 "(distributions.map or a .tt ADJUST). The new shares are "
+                 "(distributions.map or a .tt ADJUST) — that books the ACB "
+                 "only; the dividend itself is reported from the T5/T3 "
+                 "slip (taxjson does not count it as income). A taxable "
+                 "run of the dividend's year says so until the cost is in "
+                 "the books. The new shares are "
                  "an acquisition for the superficial-loss rule. Shares of "
                  "ANOTHER security (another class) paid as a stock "
                  "dividend are not booked: the parse says UNBOOKED; enter "
@@ -678,7 +688,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "its acquisition (a sale listed after it at the same "
                  "moment uses the raised ACB) and "
                  "comes back when it is sold. If the replacement is in a "
-                 "sheltered account, that part is lost for good."),
+                 "sheltered account, that part is lost for good; one "
+                 "bought by an affiliated person (--affiliated) is denied "
+                 "on your return too, and that person adds it to their "
+                 "own ACB (s.53(1)(f))."),
             Rule("CA-SL-10",
                  "Replacements are matched in acquisition order: purchases "
                  "after the sale first, then earlier ones, latest first. "
@@ -1115,7 +1128,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "\"SYMBOL YYYY-01-DD\"; a bare root is that fund's US "
                  "listing only, never another class or a .TO listing"
                  + (f"; now: {', '.join(_ric_list(s))}" if _ric_list(s)
-                    else "") + ") on Dec 31 of the prior year. Form "
+                    else "") + ") on Dec 31 of the prior year; a moved "
+                 "payment is listed on the console (ATTENTION) in both "
+                 "project years, since one of them leaves it out, and the "
+                 "tax withheld on it moves with it. Form "
                  "1099-DIV is authoritative.",
                  keys=("ric_january_dividends",)),
         ]),

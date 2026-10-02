@@ -167,6 +167,85 @@
   option-boundary and the checklist: an expiry on Dec 31 of a closed
   year, and one after Dec 31 but within the books' data, are flagged
   (re-audit A2-1210).
+- taxjson-export `--dust-threshold` refuses nan, inf and negatives (nan or
+  inf hid every zero-cost holding); a position transferred in keeps its
+  later trade events in the holdings TOML; JSON piped on stdin is read
+  as UTF-8 whatever the locale, as files are (re-audit A2-1214, A2-1216,
+  A2-1217, A2-1215, A2-1219).
+- Canada stock-dividend ATTENTION: printed only by a taxable run of the
+  dividend's own year, quiet once an ADJUST adds the cost, and worded
+  right — adding the cost books the ACB only; the dividend is reported
+  from the slip. Income-dating advice is no longer printed for sheltered
+  books, and a TRANSFER in a taxable account names the account instead
+  of a `--taxable` flag the user never passed (re-audit A2-0709,
+  A2-0711, A2-1220, A2-1224, A2-1218, A2-1221).
+- An output path that is a directory (or cannot be written) says
+  "cannot write <path>" and leaves no `.part` file (taxjson-convert-tt,
+  taxjson-brokerage sidecars, wash-radar --json-out); the --explain trace
+  rounds a denial to the same cent as the wash-sales table (re-audit
+  A2-0707, A2-0708).
+- `taxjson sanity` refuses a holdings `quantity = true` (read as 1), and
+  the cross-account overlap note counts a position moved in kind into a
+  second taxable account (re-audit A2-1230, A2-1231).
+- A long option expiring ON Dec 31 with no expiry row is warned about in
+  that year's project; ccd.rpt / leaps / ccd-sum / the .sum name a
+  covered call's held class share (RCI.B.TO) even when the shares were
+  not sold; `taxjson transfers` refuses to run without taxjson.toml and
+  says when an account's base book is missing (re-audit A2-0716,
+  A2-0715, A2-0717, A2-1232).
+- `taxjson run` reads an unset `base_currency` as the country's currency,
+  like every other command (it refused it); an empty or unreadable
+  statement CSV is named as such instead of "rename it to cb_/kr_/
+  generic_"; an Apple Numbers export in an account folder is refused like
+  .xlsx (re-audit A2-0712, A2-0713, A2-1228, A2-0714).
+- `taxjson scan` no longer prints "No findings — clean scan." (exit 0)
+  when an account's holdings report or raw book is missing: it names
+  each account it could not scan and exits 1 (re-audit A2-0404).
+- `sum`, `list`, `winners` and `wash-sales` refuse a pipeline work-file
+  name as an account (`margin_raw` printed native USD under a CAD
+  header); `wash-sales`, `list` and `winners` carry the run-state banner
+  after per-account runs, and `wash-sales` the other-year banner
+  (re-audit A2-0394, A2-0400, A2-0694, A2-0405).
+- The superficial-loss trace, the `wash-sales` footer and the `sum`
+  filing note no longer call an affiliated person's denial "lost for
+  good": that person adds it to their own ACB (re-audit A2-1225,
+  A2-1233).
+- Unreadable is never absent: a statement CSV or .tt that is a dangling
+  symlink stops `run` naming the file, every command (not only `run`)
+  refuses a dangling or directory ticker.map / phantoms.json /
+  distributions.map / overrides file, and a dangling taxjson.toml is
+  refused instead of read as "no config" (re-audit A2-0143, A2-0403,
+  A2-0401, A2-0144).
+- An account named inside another account's work-file namespace
+  (`<other>_tt_<x>`, `<other>_<broker>`) is refused — the two overwrote
+  each other's books or deleted each other's corp files — and two .tt
+  files of one account that convert to the same work file (`start.tt`,
+  `start.TT`) stop the run (re-audit A2-0140, A2-0402, A2-0399, A2-1222).
+- A position that goes short where no short can exist — a registered
+  account (TFSA/RRSP/IRA), a crypto account's spot coins, or a sale the
+  broker codes CLOSING with nothing held — is now an `ATTENTION: short:`
+  line on the console, and `run --strict` refuses it (missing history; a
+  registered short hid a superficial-loss denial). taxjson-gains takes
+  `--spot-crypto`, which `taxjson run` passes for crypto accounts
+  (re-audit A2-0395, A2-0137, A2-1223).
+- The tax withheld on a dividend now moves with it when income dating
+  re-dates the payment (a US January RIC dividend, a Canadian trust's
+  record-date distribution), so one payment's income and withholding are
+  in the same year; a listed US January RIC dividend is named on the
+  console as `ATTENTION: income year:` in both project years (re-audit
+  A2-0396, A2-0398).
+- A pay-year run names, as ATTENTION, each prior-year sale whose ACB a
+  December-record trust return of capital lowers (that year may be
+  filed without it) (re-audit A2-0039; the audit / explain / what-if
+  record-date dating of A2-0139, A2-0201, A2-0397 is A2-0033 /
+  A2-1175).
+- Two SPLIT rows for one event with different ratios (both applied) are
+  now a validation ERROR named on the console: `run --strict` stops and
+  checklist run-clean is not done (re-audit A2-0040).
+- A `.tt` SPLIT or rename of a USD stock no longer stops `taxjson run`
+  (exit 1, "Currency mismatch") in the native-holdings pass, in either
+  country: a SPLIT carries no money, so its currency stamp is no longer
+  checked against the pool's (re-audit A2-0010, regression of R1-126).
 - close-year / handoff / option-boundary (re-audit filing locks):
   close-year refuses books with no reports/ (a run that died before
   writing them) and an unreadable work/<acct>_base.json instead of

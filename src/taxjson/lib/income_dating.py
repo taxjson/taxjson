@@ -323,6 +323,37 @@ class IncomeRules:
             return f"{int(pay[:4]) - 1}-12-31"
         return pay
 
+    def withholding_dates(self, rows: Iterable[Any]) -> Dict[int, str]:
+        """{id(row): income date} for each withholding TAX row whose
+        payment's dividend (same account, symbol and pay date) the rules
+        date in another year: the tax withheld on a payment is reported
+        with it (1099-DIV box 7; the T3/T5 foreign-tax box). A TAX row
+        keeps its pay date when that day's dividends of the symbol are
+        dated differently from each other (re-audit A2-0396)."""
+        rows = list(rows)
+        dated: Dict[tuple, set] = {}
+        for r in rows:
+            if str(_get(r, "action")).upper() not in ("DIVIDEND",
+                                                       "DIVIDEND_IN_LIEU"):
+                continue
+            pay = _iso(_get(r, "date"))
+            if not pay:
+                continue
+            key = (_get(r, "account"), _get(r, "symbol"), pay)
+            dated.setdefault(key, set()).add(self.income_date(r) or pay)
+        out: Dict[int, str] = {}
+        for r in rows:
+            if (str(_get(r, "action")).upper() != "TAX"
+                    and str(_get(r, "type")).lower() != "tax"):
+                continue
+            pay = _iso(_get(r, "date"))
+            ds = dated.get((_get(r, "account"), _get(r, "symbol"), pay))
+            if ds and len(ds) == 1:
+                d = next(iter(ds))
+                if d != pay:
+                    out[id(r)] = d
+        return out
+
     def roc_date(self, row: Any) -> str:
         """The date a return-of-capital ADJUST lowers the cost on."""
         return self.roc_record_date(row) or str(_get(row, "date") or "")
@@ -396,7 +427,13 @@ class IncomeRules:
                         f"{pay} 12:00:00 {sym} {_get(r, 'currency')} "
                         f"{amt:.2f}.")
                 continue
-            if action != "DIVIDEND" or self.ric_prior_year(r):
+            if action == "DIVIDEND" and self.ric_prior_year(r):
+                # A listed January RIC dividend leaves the pay year: say
+                # so in either project year, as Canada does for a trust's
+                # record-date year (re-audit A2-0398).
+                out.append(self._ric_moved_note(r, pay, sym, year))
+                continue
+            if action != "DIVIDEND":
                 continue
             if is_canadian_issuer(r):
                 continue
@@ -418,6 +455,23 @@ class IncomeRules:
                 f"1099-DIV. Check the slip; to move it, add \"{sym} "
                 f"{pay}\" to [settings] {SETTING_RIC}.")
         return out
+
+    def _ric_moved_note(self, r: Any, pay: str, sym: Any,
+                        year: Optional[int]) -> str:
+        iy, py = int(pay[:4]) - 1, int(pay[:4])
+        amt = (float(_get(r, "gross_amount", 0.0) or 0.0)
+               or float(_get(r, "net_amount", 0.0) or 0.0))
+        if year == py or year is None:
+            tail = (f"it is NOT in {py}'s numbers: make sure the {iy} "
+                    f"return carries it (the {iy} project counts it only "
+                    f"if its exports reach the pay date)")
+        else:
+            tail = (f"it is counted in {iy} here; the {py} project leaves "
+                    f"it out")
+        return (f"{ATTENTION_INCOME_YEAR}{sym}: dividend {amt:,.2f} "
+                f"{_get(r, 'currency')} paid {pay} is received on "
+                f"{iy}-12-31 ({SETTING_RIC}, §852(b)(7)/§857(b)(9); the "
+                f"{iy} Form 1099-DIV) — {tail}.")
 
     def _ca_year_warnings(self, r: Any, pay: str, sym: Any, action: str,
                           year: Optional[int]) -> List[str]:

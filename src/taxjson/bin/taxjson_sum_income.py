@@ -81,14 +81,18 @@ def summarize_income(transactions: List[Dict[str, Any]], target_year: int = None
     # CLI refuses them; library callers see the count.
     missing_amount: List[Dict[str, Any]] = []
 
+    # The tax withheld on a payment follows its dividend's date (A2-0396).
+    wh_dates = (rules.withholding_dates(transactions)
+                if rules is not None else {})
     for tx in transactions:
         # `tx['date']` is sometimes explicitly None (came in as JSON
         # null) — `tx.get('date', '')` returns None in that case and
         # the [:4] slice would have crashed. Use `or ''` to fold both
         # missing-and-None into the empty-string path which the year
         # filter below already tolerates.
-        date = str(((rules.income_date(tx) if rules is not None
-                     else tx.get('date')) or '')[:4])
+        date = str((wh_dates.get(id(tx))
+                    or (rules.income_date(tx) if rules is not None
+                        else tx.get('date')) or '')[:4])
         
         # Filter by year if specified
         if target_year and not date.startswith(str(target_year)):

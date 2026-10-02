@@ -894,22 +894,20 @@ Examples:
                 for _t in _rows:
                     _t['account'] = args.account_name
         kept_aside = _dedup_evidence(kept_aside_per_file)
-        _tmp = _sp.with_suffix(_sp.suffix + ".part")
-        _tmp.write_text(json.dumps(
+        from taxjson.lib.cli_diag import write_text_atomic
+        write_text_atomic(_sp, json.dumps(
             {"transactions": kept_aside,
              "metadata": {"kind": "transfer_sidecar",
                           "account": args.account_name,
                           "brokerage": brokerage_id}},
-            indent=2, sort_keys=True), encoding="utf-8")
-        _tmp.replace(_sp)
+            indent=2, sort_keys=True))
     if args.override_log:
         _lp = Path(args.override_log)
-        _lt = _lp.with_suffix(_lp.suffix + ".part")
-        _lt.write_text(json.dumps(
+        from taxjson.lib.cli_diag import write_text_atomic
+        write_text_atomic(_lp, json.dumps(
             {"renamed": {k: sorted(v)
                          for k, v in sorted(override_renamed.items())},
-             "kept": sorted(override_kept)}, indent=2), encoding="utf-8")
-        _lt.replace(_lp)
+             "kept": sorted(override_kept)}, indent=2))
     json.dump(output_data, sys.stdout, indent=2, sort_keys=True)
     print()
 
