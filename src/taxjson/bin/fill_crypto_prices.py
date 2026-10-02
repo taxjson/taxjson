@@ -30,18 +30,11 @@ def load_cache():
     return {}
 
 def save_cache(cache_data):
-    # tmp + os.replace (repo standard — price_chain._save_cache,
-    # corp_actions manifest): a Ctrl-C mid-dump left a truncated file
-    # that load_cache silently discarded, refetching every historical
-    # price on the next run.
-    tmp = CACHE_FILE + ".part"
-    try:
-        with open(tmp, 'w') as f:
-            json.dump(cache_data, f, indent=2)
-        os.replace(tmp, CACHE_FILE)
-    except OSError as exc:
-        print(f"{PROG}: warning: could not write {CACHE_FILE}: {exc}",
-              file=sys.stderr)
+    # A unique temp file renamed into place under a lock, merged with
+    # what another project's concurrent run saved meanwhile (re-audit
+    # A2-0233; a Ctrl-C mid-dump still never truncates the cache).
+    from taxjson.lib.json_cache import save_json_cache
+    save_json_cache(CACHE_FILE, cache_data, merge=True, prog=PROG, indent=2)
 
 # Built-in Yahoo ticker-collision disambiguations. Extended (or
 # overridden) per project by a `crypto_ticker.map` file — same idea as

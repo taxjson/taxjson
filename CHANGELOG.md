@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The shared price and rate caches in $HOME (crypto prices, currency
+  rates, the price chain) are saved through a unique temp file under a
+  lock, so two projects' runs at once no longer fail to save or make a
+  reader see an empty cache; the crypto price cache keeps both runs'
+  prices (re-audit A2-0233).
+
 - The same exchange export filed under two crypto accounts (rows with
   the same transaction ids) is warned about, and `run --strict` stops,
   instead of booking every trade twice at exit 0 (re-audit A2-0569).

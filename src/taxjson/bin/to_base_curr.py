@@ -157,14 +157,11 @@ def load_cache():
 def save_cache(cache_data):
     # tmp + os.replace (repo standard): a kill mid-dump must not leave
     # a truncated cache that the next run silently discards.
-    tmp = CACHE_FILE + ".part"
-    try:
-        with open(tmp, 'w') as f:
-            json.dump(cache_data, f, indent=2)
-        os.replace(tmp, CACHE_FILE)
-    except OSError as exc:
-        print(f"{PROG}: warning: could not write {CACHE_FILE}: {exc}",
-              file=sys.stderr)
+    # A unique temp file renamed into place under a lock: two projects'
+    # runs no longer share one `.part` name (re-audit A2-0233). Not
+    # merged: this run may have dropped a damaged entry on purpose.
+    from taxjson.lib.json_cache import save_json_cache
+    save_json_cache(CACHE_FILE, cache_data, prog=PROG, indent=2)
 
 
 # ------------------------------------------------------------ date helpers

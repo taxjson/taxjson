@@ -139,5 +139,66 @@ class TestSameExportInTwoAccounts(unittest.TestCase):
             self.assertIn("identical coinbase row(s)", r.stderr)
 
 
+_RACER = """
+import json, sys
+from taxjson.lib.json_cache import save_json_cache
+path, tag = sys.argv[1], sys.argv[2]
+for i in range(40):
+    save_json_cache(path, {f"{tag}-{i}": i}, merge=True, indent=2)
+"""
+_READER = """
+import json, sys, time
+bad = 0
+t0 = time.time()
+while time.time() - t0 < 1.5:
+    try:
+        d = json.loads(open(sys.argv[1]).read())
+        if not isinstance(d, dict):
+            bad += 1
+    except FileNotFoundError:
+        pass
+    except ValueError:
+        bad += 1
+print(bad)
+"""
+
+
+class TestSharedCacheSaves(unittest.TestCase):
+    def test_concurrent_saves_keep_every_entry_and_readers_see_json(self):
+        # A2-0233: one fixed `.part` name: lost saves, an empty-looking
+        # cache for a concurrent reader.
+        import os
+        import subprocess
+        env = dict(os.environ, PYTHONPATH=str(
+            Path(__file__).resolve().parent.parent / "src"))
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = str(Path(tmp) / ".crypto_price_cache.json")
+            reader = subprocess.Popen([sys.executable, "-c", _READER, cache],
+                                      stdout=subprocess.PIPE, text=True,
+                                      env=env)
+            procs = [subprocess.Popen([sys.executable, "-c", _RACER, cache,
+                                       tag], env=env,
+                                      stderr=subprocess.PIPE, text=True)
+                     for tag in ("a", "b")]
+            errs = [p.communicate()[1] for p in procs]
+            out, _ = reader.communicate()
+            self.assertEqual(errs, ["", ""])
+            self.assertEqual(out.strip(), "0")
+            got = json.loads(Path(cache).read_text())
+            self.assertEqual(len(got), 80)
+            self.assertEqual([p.name for p in Path(tmp).iterdir()
+                              if p.name.endswith(".part")], [])
+
+    def test_the_three_caches_use_it(self):
+        from taxjson.bin import fill_crypto_prices, to_base_curr
+        from taxjson.lib import price_chain
+        import inspect
+        for mod, fn in ((fill_crypto_prices, "save_cache"),
+                        (to_base_curr, "save_cache"),
+                        (price_chain, "_save_cache")):
+            self.assertIn("save_json_cache",
+                          inspect.getsource(getattr(mod, fn)), mod.__name__)
+
+
 if __name__ == "__main__":
     unittest.main()
