@@ -507,6 +507,32 @@ class KrakenBrokerage(BaseBrokerage):
                 f"the ledger charged {q_fee:.10g} {quote} and 0 {base}.")
         return abs(b_amt), 0.0, trade_fee
 
+    @staticmethod
+    def _check_fill_money(ctx, pair, price, cost, fee, vol,
+                          fiat_quote) -> None:
+        """Fail-closed money identity for one trades fill (the S023-19
+        check the equity parsers make; re-audit A2-0080): `cost` must be
+        |vol| x price (Kraken states it to the quote's precision; half a
+        percent plus a cent of slack), and the fee must be fee-sized
+        (Kraken's highest, the instant-buy fee, is about 1.5%; 5% is
+        allowed). A shifted, swapped or 10x column used to book with at
+        most a schema warning."""
+        gross = abs(vol) * abs(price)
+        slack = 0.01 if fiat_quote else 1e-8
+        if abs(abs(cost) - gross) > slack + 0.005 * max(gross, abs(cost)):
+            raise ValueError(
+                f"Kraken {ctx} ({pair}): cost {abs(cost):.10g} does not "
+                f"fit vol {abs(vol):.10g} x price {abs(price):.10g} = "
+                f"{gross:.10g} — a wrong or shifted column; refusing to "
+                f"book it. Re-export the trades or fix the row.")
+        if abs(fee) > slack * 5 + 0.05 * abs(cost):
+            raise ValueError(
+                f"Kraken {ctx} ({pair}): fee {abs(fee):.10g} is "
+                f"{abs(fee) / abs(cost) * 100 if cost else float('inf'):.1f}"
+                f"% of the cost {abs(cost):.10g} — not a trading fee (a "
+                f"wrong or shifted column); refusing to book it. "
+                f"Re-export the trades or fix the row.")
+
     def _same_property_swap(self, qty_out: float, qty_in: float,
                             asset: str, where: str) -> None:
         """A swap whose two sides fold to the same asset (ETH <-> ETH2 /
@@ -575,6 +601,8 @@ class KrakenBrokerage(BaseBrokerage):
                                f"Kraken trades {path.name}")
                 base = self._norm(base)
                 quote = self._norm(quote)
+                self._check_fill_money(ctx, pair, price, cost, fee, vol,
+                                       quote in _FIAT_ASSETS)
                 if (not self.stablecoins_as_cash
                         and base in _FIAT_CURRENCIES
                         and quote in _STABLECOINS):

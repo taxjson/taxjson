@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Kraken trades: the cost must fit vol x price.** A fill whose cost
+  contradicts |vol| x price by more than rounding, or whose fee is more
+  than 5% of the cost, is refused, naming the txid: a shifted, swapped
+  or 10x column used to book with at most a schema warning (re-audit
+  A2-0080).
 - **Kraken: three smaller ledger fixes.** An instant-trade spend with a
   positive amount or a receive with a negative one is refused (the
   amount was taken as abs(), booking an inverted trade as an ordinary

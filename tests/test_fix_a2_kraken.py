@@ -432,5 +432,32 @@ class TestMultiCoinSweepValuedOnce(unittest.TestCase):
                          ["RS1-ADA", "RS1-DOT"])
 
 
+class TestTradeMoneyIdentity(unittest.TestCase):
+    """A2-0080: cost must fit |vol| x price, the fee must be fee-sized."""
+
+    def _t(self, price, cost, fee, vol, pair="XBT/USD"):
+        return _KT_H + (f"T1,O1,{pair},2025-06-02 16:00:00,buy,limit,"
+                        f"{price},{cost},{fee},{vol},,,\n")
+
+    def test_control(self):
+        txs, _ = _parse({"kr_trades.csv": self._t(60000, 6000, 10, 0.1)},
+                        "kr_trades.csv")
+        self.assertAlmostEqual(txs[0]["net_amount"], 6010.0)
+        txs, _ = _parse({"kr_trades.csv": self._t(0.05, 0.005, 0.00001, 0.1,
+                                                  "ETH/XBT")},
+                        "kr_trades.csv")
+        self.assertEqual(len(txs), 2)
+
+    def test_contradictions_are_refused(self):
+        for case in ((60000, 600, 1, 0.1), (60000, 0.1, 0.1, 6000),
+                     (60000, 6000, 6000, 0.1), (0.05, 0.05, 0, 0.1)):
+            with self.subTest(case=case):
+                pair = "ETH/XBT" if case[0] == 0.05 else "XBT/USD"
+                with self.assertRaises(ValueError) as cm:
+                    _parse({"kr_trades.csv": self._t(*case, pair=pair)},
+                           "kr_trades.csv")
+                self.assertIn("refusing", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
