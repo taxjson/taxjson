@@ -162,7 +162,11 @@ def validate_transactions(txs: List[Dict[str, Any]],
             # engine books those negative proceeds (core._trade_money).
             # Refusing them failed every `taxjson run` on a routine
             # penny close (audit S017-00). A negative BUY is still wrong.
-            if net < -_MONEY_EPS and not qty < -_QTY_EPS:
+            # ... except a plain futures fill at a negative price (it
+            # receives money: a negative cost, audit A2-0092).
+            if (net < -_MONEY_EPS and not qty < -_QTY_EPS
+                    and not (str(tx.get('symbol') or '').startswith('F:')
+                             and price < -_MONEY_EPS)):
                 errors.append(f"{_who(tx, i)}: trade net_amount must be "
                               f">= 0 (got {net}); direction belongs in "
                               f"the quantity sign")

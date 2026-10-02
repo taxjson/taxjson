@@ -1320,6 +1320,13 @@ def run_gains(transactions, sheltered_transactions=(),
         bucket['total'] += fee
     results['summary']['total_fees_by_currency'] = fees_by_currency
 
+    # The engine's dated notes (US stock dividends, an unapplied basis
+    # adjustment), printed for the tax year only (audit A2-0956).
+    _notes = results.pop('dated_notes', None) or []
+    for _d, _text in _notes:
+        if not req.year or str(_d or '').startswith(str(req.year)):
+            print(_text, file=sys.stderr)
+
     # The engine's option/right-replacement warnings, printed here after
     # the year filter above (audit S070-04).
     if results.get('option_replacement_warnings'):

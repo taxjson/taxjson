@@ -133,6 +133,272 @@
   root (same expiry, strike, quantity and cost) while failing a `.tt`
   whose root this year's export closes under another spelling
   (re-audit A2-0006, A2-0095, A2-0266, A2-0267).
+- **IB: a futures fill at a negative price keeps its money sign.** A
+  sale at -37.63 (WTI, April 2020) was booked as receiving 37,630, a
+  loss of 57,630 became a gain; the parser now keeps the notional's
+  sign, the futures settlement books a buy's cost signed and the schema
+  accepts the negative buy (tax-logic CA-FX-04 / US-FUT-01; audit
+  A2-0092). The generic importer and `.tt` lines still read the
+  magnitude (KNOWN_ISSUES).
+- IB: a warrant exercise leg (booked as a disposal at 0 — the warrant's
+  cost becomes a loss instead of part of the shares' cost) is an
+  ATTENTION line; the fix is deferred (KNOWN_ISSUES, audit A2-0090).
+- IB: a stock buy at zero cost is an ATTENTION line (it books a $0
+  cost; almost always a transfer or journal row — audit A2-0263); an
+  option description no form reads (a decimal-comma strike
+  `6,85`) is refused instead of becoming a raw symbol or a truncated
+  strike (A2-1041); a money row shorter than its section header (a
+  truncated export) is refused instead of reading the missing cells as
+  blank (A2-1042).
+- IB: a dividend or return of capital is re-bound to the listing held
+  on its payment date: a TSX buy months after an NYSE-line ROC moved
+  the ROC onto the TSX line (an EMPTY-pool s.40(3) gain and a currency
+  clash that stopped `taxjson run`), and two overlapping downloads
+  booked the same dividend twice (audit A2-0089). A row left on its
+  ISIN listing because two listings were held that day gets a note.
+- IB: one option contract keeps one root across the account's
+  statements, whichever statement is parsed (a re-download naming the
+  adjusted root DFDV1 split one put series in two, audit A2-0087); the
+  ticker-change hint names the old symbol first with the listing
+  suffix it is booked under and goes quiet once ticker.map joins the
+  two (A2-0611); an assigned adjusted (QZX1) or class-share (BRKB)
+  option leg shares its stock leg's settle date (A2-1028).
+- IB statement coverage is checked per broker account and against the
+  project year: another IB account's statement no longer hides this
+  account's missing half-year, an account whose only statement is the
+  prior year is reported (and `checklist` inputs-frozen says so), and
+  the owner's 2024 download pattern (Jan 1 - Fri Dec 27, Mon Dec 30 -
+  Jan 1) no longer reports the weekend as a gap or 2025 as missing. A
+  label holding the separate statements of several IB accounts is an
+  ATTENTION line (audit A2-0091, A2-0261, A2-0262, A2-0609).
+- IB: an open dividend accrual and a statement spanning several IB
+  accounts are ATTENTION lines on the run's console (they were only in
+  the .sum/.diag; audit A2-0264, A2-0610). Another IB account's posted
+  dividend no longer pays this account's accrual (A2-1035, A2-1039). A
+  dividend's ex date and share count come from its accrual in the
+  previous statement too, and a posting a day after the accrued pay
+  date keeps its ex date, so the US §852(b)(7) January-dividend
+  warning fires (A2-0601, A2-0602).
+- IB: a corporate action follows the security it names. A split whose
+  new leg names another ticker (`OLDT ... Split 1 for 10 (NEWT, ...)`)
+  moves the pool to it, a cash in lieu naming a delivered security
+  sells that security's fraction, and a stock dividend paid in ANOTHER
+  security is an `UNBOOKED` line instead of new shares in the parent's
+  pool (audit A2-0085, A2-0093, A2-0257, A2-1033). A TSX USD unit's
+  split, cash takeover, tender or commission refund stays on X.U.TO with
+  its trades (audit A2-0086).
+- IB: a Corporate Actions row IB cancelled (`Ca`) leaves no trace in
+  the parse output: a merger, spin-off or tender journal row leaves the
+  non-event tally and the tender note's row count and dates, a
+  cancelled cash takeover no longer prints its `NOTE: cash takeover
+  booked as a sale`, and a cancelled zero-proceeds cash in lieu no
+  longer warns (audit A2-0600, A2-1030, A2-0606, A2-1029, A2-1031,
+  A2-1034).
+- **IB: overlapping statements of one account no longer resurrect a
+  cancelled or refunded row.** A statement pairs a `Ca` cancellation
+  with its original (Trades, Transfers, Corporate Actions), folds a
+  commission refund into its trade and joins a cash in lieu to its
+  split on its own; an older overlapping download that still held the
+  unadjusted original kept it through dedup (a cancelled split applied
+  twice, a cancelled sale booked, a refunded buy booked twice). The
+  same adjustment is now applied to every overlapping statement of the
+  same IB account, and a `Ca` whose original is in two other
+  statements undoes both (audit A2-0023, A2-0024, A2-0088, A2-0258,
+  A2-0259, A2-1038).
+- **IB: a commission refund folds into its trade in another statement**
+  (a December trade refunded in January), and a refund naming one
+  execution of an Order row (`Refund (KWEB, -400, ...)` for a -440
+  order) or an option trade folds too (tax-logic CA-ACB-COMMREFUND /
+  US-BASIS-COMMREFUND; audit A2-0604, A2-0605, A2-1032, A2-1036). A
+  cash in lieu paid in the statement after its split joins that split
+  (A2-1037). A Corporate Actions `Ca` matches its original's currency
+  and asset category too (a CAD leg undid a USD split, A2-0603).
+
+- **`taxjson fetch` (Questrade) keeps the API's order of one day's
+  rows.** The fetched file sorted each day's rows by symbol and action,
+  and every re-fetch merge sorted the whole file, so a same-day sale
+  listed before its rebuy was booked as rebuy-then-sale: the sale used
+  the averaged ACB and gain moved into a later year (CA-DATE-14 /
+  US-DATE-13). Rows now sort by trade date only, and the merge keeps
+  the download's order (audit A2-0084, A2-0598).
+- `taxjson fetch`: the overlap check and `--trim-overlap` read a UTF-16
+  or UTF-8-BOM Questrade export the way the parser does. A UTF-16
+  manual export showed no overlap, so it double-counted next to the
+  fetched file with no warning (audit A2-0256, A2-1040).
+- `taxjson fetch` (IBKR Flex): the guard that refuses a download which
+  would drop the tax year's activity takes the download's span from its
+  Statement Period (else its activity dates), not from any digits on any
+  row. An 8-decimal P/L such as -26.20190219 read as 2019-02-19 and
+  silenced the refusal (audit A2-0083).
+- `taxjson fetch` (Questrade): activity windows ask from local
+  (America/Toronto) midnight, -04:00 in summer, not a fixed -05:00 that
+  could miss the first day of a summer `--from` window (audit A2-0599).
+- IB: a Trades clock time with an unpadded hour (`9:45:00`) is zero-padded
+  before the session rules compare it — it was read as an overnight fill
+  and a Dec 31 morning sale moved into January; an impossible time
+  (hour 24+, minute or second 60+) is refused naming the row (audit
+  A2-0082, A2-0260, A2-0607).
+- IB: fills outside the US regular session take their exchange's trade
+  date (tax-logic CA-/US-DATE-SESSION): US-dollar futures and
+  futures-option fills in the CME evening session (18:00 ET onward,
+  Sunday to Thursday, or on an exchange holiday) and SPX/SPXW/XSP/VIX
+  options in Cboe Global Trading Hours (20:15 ET onward) trade on the
+  next trading day; ASX options and warrants (not only stocks) and
+  HKEX, Tokyo, Singapore and NZX fills are dated in local time; the
+  after-midnight part of a US overnight session on an NYSE holiday
+  moves to the next trading day. A Sunday-evening futures fill is no
+  longer dated Sunday, and a Dec 30 evening futures close settles in
+  January under `futures_settle = "next_day"` (audit A2-0252, A2-0253,
+  A2-0254, A2-0255, A2-0595, A2-0596, A2-0597, A2-0608, A2-1027).
+- IB: a stock or warrant settles in its listing's market, not its quote
+  currency: a USD unit listed on the TSX (ZSP.U) on the Canadian
+  calendar, and a USD line listed on the LSE (a UCITS ETF) is booked as
+  `.L` on the UK T+2 cycle instead of a fictional `.US` security on
+  US T+1 (audit A2-0595, A2-0081). `check-dates` notes a Sunday-evening
+  GTH index-option fill instead of calling it an ERROR.
+- A ticker that trades again after a rename moved it to a new symbol is
+  flagged (`warning: ATTENTION: ... after its rename ...`) in both
+  countries: the superficial-loss / wash-sale rule treats it as the
+  renamed security, which is wrong if another company now uses the
+  ticker. The class is unchanged — the export cannot tell the two cases
+  apart (A2-0197; CA-ACB-04 / US-BASIS-06).
+
+- The JSON input path (`taxjson-gains` on a hand-written file, the core
+  loader) refuses a trade whose settle date is before its trade date, as
+  the parsers do (CA-DATE-03 / US-DATE-04); `taxjson-validate` reports it
+  as an error and a settle more than a month late as a warning (A2-0959).
+- Canada: the gains inventory carries `last_acq_settle`, the latest
+  acquisition's settle date, and `taxjson harvest`'s TX_ADD / SH_ADD
+  columns measure the 30-day window from it (s.54 counts settle dates);
+  they showed the trade date, off by a weekend near day 30 (A2-0958).
+
+- The standalone year flags (`taxjson-gains/-explain/-audit/-carryover/
+  -t1135 --option-grant-since`, `taxjson-brokerage --tax-year`,
+  `taxjson-carryover --project-year`, `taxjson-audit --check-year`)
+  refuse an implausible year such as 226 for 2026, like `--year`
+  (A2-0955).
+
+- `taxjson-explain` and `taxjson-audit` take `--sheltered` more than
+  once, as `taxjson-gains` does; a second file used to replace the first
+  silently, and the superficial-loss denial it backed disappeared
+  (A2-0194).
+
+- Canada blended books: a split and a trade at the same stamp are walked
+  split first in the per-account split of the blended pass (and in the
+  distribution balance walk), as the engine does (CA-DATE-14): a buy
+  listed before a same-stamp 2:1 split showed 300 shares in `list` /
+  `shares` where the books held 250, with a false "likely phantom"
+  warning (A2-0013).
+
+- Canada: `taxjson list --date` and the close-year `year_end` snapshot
+  judge a trust's return of capital by its record date, as the books do
+  (CA-INC-DATE-ROC-TRUST): a January-paid ROC with a December record
+  date used to be cut off, so the as-of ACB differed from the engine's
+  (A2-0554/0960/0202).
+
+- **A cost adjustment in another currency no longer stops `taxjson run`.**
+  A USD return of capital or notional distribution on a TSX listing
+  (RBC, Questrade, IB, in either country), or a CAD `.tt` ADJUST /
+  DISALLOW on a USD unit, made the native-currency raw pass exit 1 at
+  "raw gains" with advice to run an underscore tool. The raw merge now
+  restates such a row in the listing's currency at its date (a note per
+  row); with no rate on file the native holdings view is skipped with a
+  note. The filing books were never affected. The engine's own
+  currency-mismatch error names the row and the installed command
+  (A2-0055/0191/0204).
+
+- **Long calls as replacements: class-share roots, mini contracts and
+  futures options.** A call booked under the root that drops the share
+  class (RCI for RCI.B.TO, BRKB for BRK.B) is now a call on that class
+  line: Canada denies the loss and the US warns (A2-0015/0016/0207). A
+  call's replacement units are its declared contract size (a `x10` mini
+  replaces 10 shares, not 100) in both engines (A2-0049/0957). A futures
+  option on the loss's own futures contract is flagged for a manual
+  check in both countries instead of being enforced as a 100-unit call
+  in Canada (A2-0014/0056). tax-logic CA-SL-05/15, US-WASH-12/15.
+
+- Canada: a coin rebuy under a millionth of a unit now backs its share
+  of a superficial loss; the solver's zero is the pool's own (relative
+  for a coin) instead of a fixed 1e-6 (A2-0552; cents at most).
+
+- **Canada superficial loss: one held unit backs one denial, and
+  same-moment rows follow the export order.** A registered account's
+  units claimed by an earlier loss, or a call contract claimed through a
+  row sold since, could back a second denial (A2-0012/0057/0198). Same-
+  moment losses, rebuys and triggers were ordered by the rows' content
+  hash or account label, so a one-cent price change could move a denial
+  or turn a deferral permanent; they now follow the main pass's order
+  (export row order, accounts in taxjson.toml order — CA-DATE-14): a
+  rebuy listed after a same-moment loss sale is a purchase after it
+  (A2-0058/0193/0059/0551/0192/0961/0965). A deferred loss's bump now
+  reaches a same-moment sale listed after the replacement purchase
+  (A2-0555). tax-logic CA-SL-08/09/10 state it.
+
+- **An option assignment's premium goes to its own stock leg (both
+  countries).** The premium ledger used to pair an assignment with the
+  first marked stock leg within 7 days, or with whichever option was
+  staged first: a plain (IB/RBC) assignment next to a Webull marked leg
+  took the other assignment's premium and the other premium was lost;
+  a stock leg dated a day before its option row dropped the premium
+  from every year; same-moment assignments swapped premiums by row
+  order; and a x10 mini option was sized at 100 shares, so one of two
+  mini assignments was never folded. Each assignment is now paired by
+  identity (same account and underlying, the delivered quantity at the
+  declared contract size, the strike as the leg's price, a leg dated up
+  to 3 days before or 7 days after the option row), and the
+  "unconsumed" warning names that window instead of saying the leg
+  never arrived. tax-logic CA-OPT-08 / US-OPT-05 (audit A2-0050,
+  A2-0051, A2-0052, A2-0195, A2-0196, A2-0203).
+- **US: an unapplied return of capital or notional distribution is on
+  the console.** A basis adjustment the US engine cannot apply (no
+  shares held after a full sale, or the position short) printed only to
+  the .sum; `taxjson run` now echoes it as `warning: ATTENTION:
+  unapplied basis adjustment: ...`, and a basis increase is no longer
+  called a return of capital (A2-0199, A2-0964). The US stock-dividend
+  notes print only for the tax year's dividends (A2-0956).
+- tax-logic states engine behaviour that only KNOWN_ISSUES described:
+  Canada's basis increase on an emptied pool goes to the next purchase
+  and an ADJUST on a short is the short seller's compensation payment
+  (CA-ACB-13/14); the US leaves both unapplied (US-ROC-04); §1091(e)(1)
+  is not modelled (US-WASH-19); an IRA buy sold before the loss still
+  makes it permanent (US-WASH-11); Schedule 3's acquisition year comes
+  from trade-date days held (CA-DISP-07) (A2-0062, A2-0962, A2-0963,
+  A2-0964).
+- **US: a loss on a futures contract (or an option on one) is no longer
+  disallowed as a wash sale.** A §1256 contract is not stock or
+  securities; a re-bought F:CLG7 had its whole loss disallowed with no
+  flag. The re-purchase is now flagged for a manual check
+  (`futures_vs_loss`); Canada keeps denying (s.54 covers any property)
+  (tax-logic US-WASH-18; A2-0053).
+- **US: same-moment replacement lots of two accounts follow the
+  taxjson.toml order**, as US-DATE-13 states, not the account label:
+  renaming an account moved a wash-sale deferral to the other account's
+  lot (A2-0200, A2-0208).
+- **US: a stock dividend posted after the shares were sold is not a
+  wash-sale purchase** (US-STKDIV-01); it washed part of the loss. The
+  warning now names the sold-before-paid case (A2-0205).
+- **US: wash-sale replacement lots keep the right shares, units and
+  holding periods.** A replacement bought before a split got the
+  disallowed loss on the pre-split share count (half the matched
+  shares), creating a fake loss and an inflated gain at its sale
+  (A2-0054); a later purchase matched by two losses became one merged
+  block with an averaged bump and the earliest tacked date, so a
+  short-term block was reported long-term (A2-0060: now one block per
+  matched loss); a short-side replacement bigger than the loss spread
+  the proceeds reduction over every share of the new short, moving loss
+  into a later year (A2-0206: now share for share, as on the long side).
+- **US: shares closed by one sale never wash each other.** A sale that
+  closed an old lot together with shares bought in the last 30 days
+  washed the old lot's loss into the very shares it was selling, split
+  them, and cascaded one chunk at a time: a 1-share old lot sold with
+  100 recent shares gave 101 Form 8949 rows (100 code W, 55,500 of
+  adjustments on a 1,060 loss, the short-term loss reported long-term),
+  and a 0.001-share lot 100,001 rows. Shares (or shorts) closed by the
+  same sale or cover — one row, or the same-second fills of one order —
+  are no longer replacements for each other; shares kept after the sale
+  still are (tax-logic US-WASH-17; audit A2-0001, A2-0017, A2-0553).
+  The wash radar's US EXITABLE advice now says the full exit must be
+  one order.
 - US `reorg_368_boot`: the cash boot and the new shares' value (in the
   new listing's currency) and the old basis (in US dollars) are combined
   in USD, and each leg is booked in its own listing's currency at the

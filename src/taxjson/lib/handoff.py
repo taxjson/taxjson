@@ -106,6 +106,11 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
     settings = cfg.get("settings", {}) or {}
     basis = _basis(settings)
     cut = _d(as_of)
+    from taxjson.lib.income_dating import IncomeRules
+    try:
+        _ir = IncomeRules.from_settings(settings)
+    except ValueError:          # no country: no record-date rule to apply
+        _ir = IncomeRules(country="")
     sheltered = cache / "sheltered_base.json"
     sheltered_ids = {r.get("id") for r in _rows(sheltered)} \
         if sheltered.exists() else set()
@@ -144,8 +149,12 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                     "symbol": a["symbol"], "currency": a["currency"],
                     "net_amount": a["amount"], "quantity": 0.0,
                     "account": names[0], "id": f"HANDOFF_WASH_{i}"})
+            # A trust ROC counts on its record date, as the engine books
+            # it (CA-INC-DATE-ROC-TRUST; A2-0202).
             kept = [r for r in rows
-                    if (d := _bdate(r, basis)) is not None and d <= cut]
+                    if (d := (_d(_ir.roc_record_date(r))
+                              or _bdate(r, basis))) is not None
+                    and d <= cut]
             trunc = tdp / f"{g}_asof.json"
             trunc.write_text(json.dumps({"transactions": kept + adjust_rows}))
             tail = ["--taxable", "--no-wash"] + common_flags

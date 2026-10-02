@@ -23,7 +23,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
 - **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — the module-level `_ISIN_EXT` map (`'IE': 'L'`), read through `_isin_ext()` by the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead).
-- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
+- **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`; when the ticker is held under two listings during the statement, the one held on the payment date), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
 - **Why deferred:** the user holds no IE-domiciled ETFs, so the bug doesn't fire on their data. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
 - **Workaround:** users who hold IE-domiciled ETFs should add a `ticker.map` GLOBAL rule rewriting the parsed `.L` symbol to the correct market suffix.
 
@@ -59,9 +59,20 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### Trade reversals across export files
 - **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI / stock dividend).
-- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. A Questrade CIL/REI/stock-dividend reversal must find its original in the SAME export file, else the parse is refused.
+- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. An OVERLAPPING statement of the same IB account (a download taken before IB posted the cancellation) that still holds the original drops it too, for Trades, Transfers and Corporate Actions rows, so dedup keeps one book (`IbBrokerage.reconcile_files`); statements of different IB accounts (Account Information) never touch each other. A Questrade CIL/REI/stock-dividend reversal must find its original in the SAME export file, else the parse is refused.
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
 - **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
+
+### A negative futures price in a generic or `.tt` file
+- **Where:** `src/taxjson/lib/brokerages/generic.py` (`_trade_net` takes the magnitude), `src/taxjson/bin/taxjson_convert_tt.py` (a `.tt` total is a magnitude).
+- **Current behavior:** IB futures rows keep the sign of a negative price (audit A2-0092); a generic-import or `.tt` futures row at a negative price is still read as its magnitude, so its P/L sign is wrong.
+- **Workaround:** book such a fill from the IB statement, or enter the realized P/L of the close by hand.
+
+### A warrant exercise is booked as a disposal at 0
+- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` (a `Warrants` leg coded `Ex`/`A` at price 0), `src/taxjson/lib/brokerages/rbc_direct.py` (an `Exercise` of a non-option symbol); the premium roll in `lib/core.py` handles OPTION symbols only.
+- **Current behavior:** the warrant leg is a disposal at 0, so the warrant's cost is a capital loss on the exercise date and the shares carry only the cash paid; the correct treatment is no disposition and the warrant's cost added to the shares (ITA s.49(3); US basis carryover with a holding period from the exercise). IB prints an `ATTENTION` line for the leg (audit A2-0090 / A2-0274).
+- **Why deferred:** the engines' premium roll keys on OCC option symbols; a warrant needs its own pairing with the exercised shares (parser marks the pair, both engines roll the cost, dual-country tests). No warrant exercise is in the owner's books.
+- **Workaround:** book the exercise by hand: drop the warrant leg and add the warrant's cost to the shares' purchase in a `.tt` file.
 
 ### Identical rows in two exports with little overlap are booked once
 - **Where:** `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, used by `taxjson-merge2 --dedup`, `taxjson-sort --dedup` and `fees-sum`.
@@ -140,13 +151,13 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Stock dividends: $0 in Canada until the declared amount is added
 - **Where:** the parsers emit a neutral stock-dividend event — a $0 BUYSELL of the new shares typed `stock_dividend` — from `questrade.py` (the `DIS` + stock-dividend branch), `ib_extractor.py` (a Corporate Actions `Stock Dividend` row; IB's exact wording is modelled, not seen in a real statement; its `ATTENTION` line shows the row's Value) and `rbc_direct.py:_build_stock_dividend`. Each gains engine applies its country's rule (`lib/core.STOCK_DIVIDEND`).
-- **Current behavior:** Canada: the shares enter the pool at $0 cost and count as an acquisition for the superficial-loss rule (tax-logic CA-STKDIV-01); the taxable amount is the fund's *declared* amount, which the CSV does not carry, and the gains run prints a `NOTE:` naming the symbol, date and share count. US: a pro-rata stock dividend is not income (§305(a)) — the new shares join the lots held, the basis is spread over old and new (§307), the purchase dates carry over (§1223(5)), and they are not a §1091 purchase (US-STKDIV-01). A taxable US stock dividend (§305(b)) is not detected.
+- **Current behavior:** Canada: the shares enter the pool at $0 cost and count as an acquisition for the superficial-loss rule (tax-logic CA-STKDIV-01); the taxable amount is the fund's *declared* amount, which the CSV does not carry, and the gains run prints a `NOTE:` naming the symbol, date and share count. US: a pro-rata stock dividend is not income (§305(a)) — the new shares join the lots held, the basis is spread over old and new (§307), the purchase dates carry over (§1223(5)), and they are not a §1091 purchase (US-STKDIV-01). A taxable US stock dividend (§305(b)) is not detected. An IB stock dividend whose trailing `(TICKER, NAME, ISIN)` names ANOTHER security (another class) is not booked: an `UNBOOKED` line asks for a hand entry (a split whose new leg names another ticker renames the pool; a cash in lieu naming another security sells that security's fraction).
 - **Impact:** registered accounts — none. Canadian taxable accounts — ACB is understated (gain overstated at sale) until the declared amount is supplied; the zero-basis walk also surfaces the position via `taxjson find-missing-history`.
 - **Workaround (the intended flow, Canada):** add the fund's declared per-share amount for the record date to `distributions.map`; `taxjson run` converts it into the ACB-raising ADJUST. That books the cost side only: the declared amount is also a dividend of the year, reported from the T5/T3 slip — taxjson's income totals, `divs-sum` and `estimate` do not include it (the run's NOTE says so).
 
-### Settlement cycles outside North America are keyed on currency, with weekends-only calendars
-- **Where:** `src/taxjson/lib/dates.py` (`_T1_CUTOVER`), `src/taxjson/lib/market_calendar.py`.
-- **Current behavior:** the settlement lag follows the trade currency: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other currency (the ASX's AUD, HKD, JPY, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. IB stamps ASX fills in US Eastern time; the parser dates them in Sydney time (tax-logic CA-DATE-SESSION), but only the ASX has a venue time zone — another non-North-American market is dated as IB stamps it.
+### Settlement calendars outside North America skip weekends only; the generic importer keys the market on currency
+- **Where:** `src/taxjson/lib/dates.py` (`_T1_CUTOVER`), `src/taxjson/lib/market_calendar.py`, `src/taxjson/lib/brokerages/generic.py`.
+- **Current behavior:** the settlement lag follows the market: USD/CAD/MXN T+1 since May 2024; GBP/EUR/CHF T+2 until the 2027-10-11 move to T+1; every other market (the ASX, HKEX, Tokyo, ...) T+2. Outside the US and Canada only weekends are skipped — a local bank holiday inside the lag (Jan 1, Boxing Day) is not, so such a settle date can be a day early. The IB parser takes the market from the listing (a USD unit on the TSX settles on the Canadian calendar, a USD line listed on the LSE is `.L` on the UK cycle) and dates ASX, HKEX, Tokyo, Singapore and NZX fills in the exchange's local time (tax-logic CA-DATE-SESSION). The generic importer still keys the market on the row currency for a suffix other than the Canadian ones and `.US`, so a USD-quoted `.L` row settles on the US T+1 cycle; other non-North-American venues (Eurex, the LSE in the evening) keep IB's Eastern clock date.
 - **Why deferred:** per-market holiday calendars and venue time zones for markets the books rarely touch.
 
 ---
@@ -157,12 +168,12 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 ### US: §1091(e)(1) — a long SALE within the window of a short-cover loss is not a wash trigger
 - **Where:** `src/taxjson/lib/core.py` US short-side replacement matching (`short_replacements`): only the short-OPEN portion of a SELL (§1091(e)(2), "another short sale") registers as a replacement for a loss on closing a short.
 - **Current behavior:** short 100 @100; cover 200 @110 (loss −1,000, opens 100 long); sell 100 @105 two weeks later → the −1,000 cover loss is allowed. §1091(e)(1) ("substantially identical stock ... were **sold**" within the window) would wash it. Same-year totals coincide; cross-year attribution and 8949 code-W reporting can differ.
-- **Why deferred:** rare shape (a cover that flips long, then a sale inside the window); documenting the gap is the honest state until a fixture demands it (2026-09 US-engine audit).
+- **Why deferred:** rare shape (a cover that flips long, then a sale inside the window); documenting the gap is the honest state until a fixture demands it (2026-09 US-engine audit). `taxjson tax-logic` states it (US-WASH-19, audit A2-0062).
 
 ### US: sheltered (IRA) replacements already sold before the loss still deny it; taxable ones don't
 - **Where:** `core.py` US pass — sheltered BUYs register their full quantity with no lot reference and are never decremented by later sheltered SELLs; taxable replacement lots are zeroed on consumption.
 - **Current behavior:** IRA buys 100 on 05-20 and sells 100 on 05-25; taxable loss 06-15 → `permanently_disallowed`. The identical pattern in a second taxable account (`per_account_basis`) → loss allowed. §1091(a) keys on ACQUISITION within the window (no still-held test), so the IRA reading is the literal statute and the taxable reading follows Reg. 1.1091-1's lot consumption — the two books apply different theories.
-- **Why deferred:** which reading is right for shares acquired AND disposed inside the window before the loss is not settled authority; flagged so the asymmetry is known (2026-09 audit).
+- **Why deferred:** which reading is right for shares acquired AND disposed inside the window before the loss is not settled authority; flagged so the asymmetry is known (2026-09 audit). `taxjson tax-logic` states the IRA reading (US-WASH-11, audit A2-0962).
 
 ### US: options as replacement property are advisory-only
 - **Where:** `core.py` `detect_option_replacement_matches` (warn-only in the US engine; the Canada engine enforces the call rule).
@@ -270,7 +281,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### `days_held` uses trade dates
 - **Where:** `lib/core.py` closing branch.
-- **Current behavior:** the days-held figure counts from trade dates while every other Canadian date is settlement-basis. Canada has no holding-period rule, but the figure also gives the year of acquisition `form-export` prints on Schedule 3 (disposition date minus days held), so a lot bought on a late-December trade date that settled in January shows the earlier year.
+- **Current behavior:** the days-held figure counts from trade dates while every other Canadian date is settlement-basis. Canada has no holding-period rule, but the figure also gives the year of acquisition `form-export` prints on Schedule 3 (disposition date minus days held), so a lot bought on a late-December trade date that settled in January shows the earlier year. `taxjson tax-logic` states it (CA-DISP-07, audit A2-0962).
 
 ### Non-eligible dividends are estimated as eligible
 - **Where:** `src/taxjson/lib/tax_estimate.py` `estimate_canada`.
@@ -380,7 +391,7 @@ reported manually" instead of counting them as missing.
 
 ### US January fund and REIT dividends need a list
 - **Where:** `lib/income_dating.py`; tax-logic US-INC-DATE-RIC.
-- **Current behaviour:** §852(b)(7) / §857(b)(9) put a fund or REIT dividend declared in October–December and paid in January on Dec 31, but no export says which payer is a fund. A US project keeps the pay date, warns when a January dividend has an October–December ex date (IB accruals) or record date (Questrade/RBC), and moves the payments in `[settings] ric_january_dividends` to Dec 31.
+- **Current behaviour:** §852(b)(7) / §857(b)(9) put a fund or REIT dividend declared in October–December and paid in January on Dec 31, but no export says which payer is a fund. A US project keeps the pay date, warns when a January dividend has an October–December ex date (IB accruals, from any statement of the same IB account and matched to a posting within a week of the accrued pay date) or record date (Questrade/RBC), and moves the payments in `[settings] ric_january_dividends` to Dec 31.
 
 ### `wash-sales --explain` traces each account on its own
 - The explain trace predates the blended passes; the numbers in the table are the blended ones.
@@ -416,8 +427,11 @@ Commissions + Transaction Fees = the Comm/Fee sum) — the fold this
 item first shipped charged them twice and was removed in the 2026-09
 parse hardening; `Commission Adjustments` refunds
 are folded into the trade they name (a lower cost for a purchase,
-higher proceeds for a sale; tax-logic CA-ACB-COMMREFUND), or kept as a
-negative FEE row when that trade is not in the same statement; tender / voluntary-offer journals are netted
+higher proceeds for a sale; tax-logic CA-ACB-COMMREFUND) — in the
+same statement or in another statement of the account (a December trade
+refunded in January), and a refund naming one execution of an Order row
+folds into that order; a refund that matches no trade, or several, is
+kept as a negative FEE row, with a note; tender / voluntary-offer journals are netted
 (zero-proceeds round trip = recognized no-op, cash settlement = a
 booked sale with a NOTE; an allocation that delivers ANOTHER security
 is an UNBOOKED warning — book the exchange by hand). Kraken `transfer/transferpeertopeer` is

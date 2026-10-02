@@ -24,8 +24,8 @@ _IB_WITH_MERGER = '''\
 Statement,Header,Field Name,Field Value
 Statement,Data,BrokerName,Interactive Brokers
 Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
-Corporate Actions,Data,Stocks,CAD,2025-10-29,"2025-10-28, 20:25:00","RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 (RGLD.CAD, ROYAL GOLD INC, US0000000002)",-100,0,-25840.0,0
-Corporate Actions,Data,Stocks,USD,2025-10-30,"2025-10-29, 20:25:00","RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 (RGLD, ROYAL GOLD INC, US0000000002)",100,0,18550.0,0
+Corporate Actions,Data,Stocks,CAD,2025-10-29,"2025-10-28, 20:25:00","RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 (RGLD.CAD, ROYAL GOLD INC, US0000000002)",-100,0,-25840.0,0,
+Corporate Actions,Data,Stocks,USD,2025-10-30,"2025-10-29, 20:25:00","RGLD.CAD(10000001) Merged(Acquisition) WITH RGLD 1 for 1 (RGLD, ROYAL GOLD INC, US0000000002)",100,0,18550.0,0,
 '''
 
 # IB statement with a SPLIT — known-handled, should NOT trigger warning.
@@ -33,7 +33,7 @@ _IB_WITH_SPLIT_ONLY = '''\
 Statement,Header,Field Name,Field Value
 Statement,Data,BrokerName,Interactive Brokers
 Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
-Corporate Actions,Data,Stocks,USD,2025-06-15,"2025-06-15, 09:30:00","NVDA (US67066G1040) Split 10 for 1 (NVDA, NVIDIA CORP, US67066G1040)",900,0,0,0
+Corporate Actions,Data,Stocks,USD,2025-06-15,"2025-06-15, 09:30:00","NVDA (US67066G1040) Split 10 for 1 (NVDA, NVIDIA CORP, US67066G1040)",900,0,0,0,
 '''
 
 
@@ -56,8 +56,8 @@ _IB_WITH_UNKNOWN = '''\
 Statement,Header,Field Name,Field Value
 Statement,Data,BrokerName,Interactive Brokers
 Corporate Actions,Header,Asset Category,Currency,Report Date,Date/Time,Description,Quantity,Proceeds,Value,Realized P/L,Code
-Corporate Actions,Data,Stocks,CAD,2025-10-29,"2025-10-28, 20:25:00","QZX(CA9990000001) Delisted (QZX, QZX CORP, CA9990000001)",-100,0,0,0
-Corporate Actions,Data,Stocks,USD,2025-10-30,"2025-10-29, 20:25:00","QZY(US9990000002) Delisted (QZY, QZY CORP, US9990000002)",-50,0,0,0
+Corporate Actions,Data,Stocks,CAD,2025-10-29,"2025-10-28, 20:25:00","QZX(CA9990000001) Delisted (QZX, QZX CORP, CA9990000001)",-100,0,0,0,
+Corporate Actions,Data,Stocks,USD,2025-10-30,"2025-10-29, 20:25:00","QZY(US9990000002) Delisted (QZY, QZY CORP, US9990000002)",-50,0,0,0,
 '''
 
 

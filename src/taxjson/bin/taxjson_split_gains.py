@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib import cli_diag
-from taxjson.bin.taxjson_apply_distributions import balance_on
+from taxjson.bin.taxjson_apply_distributions import balance_on, moment_rank
 
 PROG = "taxjson-split-gains"
 
@@ -63,6 +63,7 @@ def _position_starts(rows: List[dict], basis: str) -> Dict[str, str]:
     order = sorted(rows, key=lambda t: (str(t.get(date_key)
                                             or t.get("date") or ""),
                                         str(t.get("date") or ""),
+                                        moment_rank(t),
                                         str(t.get("time") or "")))
     bal: Dict[str, float] = {}
     start: Dict[str, str] = {}

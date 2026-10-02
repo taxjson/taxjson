@@ -793,8 +793,10 @@ def parse_args(argv=None):
     p.add_argument("--base", required=True,
                    help="Engine input books (mapped + converted) — the "
                         "same file the pipeline's gains stage consumed.")
-    p.add_argument("--sheltered", help="sheltered_base.json for the "
-                                       "wash/superficial-loss context.")
+    p.add_argument("--sheltered", action="append", default=[],
+                   metavar="FILE",
+                   help="sheltered_base.json for the wash/superficial-loss "
+                        "context; repeatable, as in taxjson-gains.")
     p.add_argument("--affiliated")
     p.add_argument("--incomplete-history", metavar="FILE")
     p.add_argument("--per-account-basis", action="store_true")
@@ -802,7 +804,7 @@ def parse_args(argv=None):
                    help=argparse.SUPPRESS)    # retired, ignored
     p.add_argument("--option-premium-timing", choices=["grant", "close"],
                    default=None, help="Canada only (default: close)")
-    p.add_argument("--option-grant-since", type=int, default=None)
+    p.add_argument("--option-grant-since", type=tax_year, default=None)
     p.add_argument("--option-buyback-wash", action="store_true")
     p.add_argument("--no-wash", action="store_true",
                    help="Disable wash detection (US crypto: digital "
@@ -822,7 +824,7 @@ def parse_args(argv=None):
     p.add_argument("--check", action="append", default=[],
                    help="Pipeline gains JSON (repeatable) to tie out "
                         "against.")
-    p.add_argument("--check-year", type=int, default=None,
+    p.add_argument("--check-year", type=tax_year, default=None,
                    help="The tax year the --check files hold (pipeline "
                         "gains files are year-scoped): dispositions of "
                         "other years are reported as not tied out "
@@ -881,8 +883,10 @@ def main(argv=None) -> int:
 
     base_path = Path(args.base)
     transactions = load_transactions(base_path)
-    sheltered = (load_transactions(Path(args.sheltered))
-                 if args.sheltered else [])
+    # Repeatable (A2-0194): a second --sheltered used to replace the
+    # first silently.
+    sheltered = [t for f in args.sheltered
+                 for t in load_transactions(Path(f))]
     affiliated = (load_transactions(Path(args.affiliated))
                   if args.affiliated else [])
 
@@ -895,8 +899,8 @@ def main(argv=None) -> int:
         if rid and rid not in base_index:
             base_index[rid] = row
     replacement_lookup = dict(base_index)
-    if args.sheltered:
-        for row in (_load_doc(Path(args.sheltered))
+    for _sf in args.sheltered:
+        for row in (_load_doc(Path(_sf))
                     .get("transactions") or []):
             rid = row.get("id")
             if rid and rid not in replacement_lookup:
