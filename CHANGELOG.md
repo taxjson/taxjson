@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A position that goes short where no short can exist — a registered
+  account (TFSA/RRSP/IRA), a crypto account's spot coins, or a sale the
+  broker codes CLOSING with nothing held — is now an `ATTENTION: short:`
+  line on the console, and `run --strict` refuses it (missing history; a
+  registered short hid a superficial-loss denial). taxjson-gains takes
+  `--spot-crypto`, which `taxjson run` passes for crypto accounts
+  (re-audit A2-0395, A2-0137, A2-1223).
 - The tax withheld on a dividend now moves with it when income dating
   re-dates the payment (a US January RIC dividend, a Canadian trust's
   record-date distribution), so one payment's income and withholding are

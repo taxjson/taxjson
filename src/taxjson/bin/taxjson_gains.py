@@ -98,6 +98,12 @@ def _parse_args():
              "within 30 days and held (strict reading; default off — a "
              "closing purchase is not a disposition s.54 reaches).")
     add_income_dating_args(parser)
+    parser.add_argument(
+        "--spot-crypto", action="store_true",
+        help="The book is a crypto account's spot coins: a position going "
+             "short is missing history (a deposit or transfer-in), said "
+             "as an ATTENTION line (`taxjson run` passes it for crypto "
+             "accounts).")
     # Retired (2026-09-29): long calls vs share losses are enforced by
     # the Canada engine and always warned by the US engine; nothing is
     # opt-in any more. Accepted so old scripts keep working.
@@ -305,6 +311,7 @@ def _request(args) -> GainsRequest:
         option_buyback_loss_superficial=args.option_buyback_wash,
         corporate_distributions=tuple(args.corporate_distribution or ()),
         ric_january_dividends=tuple(args.ric_january_dividend or ()),
+        spot_crypto=args.spot_crypto,
     )
 
 

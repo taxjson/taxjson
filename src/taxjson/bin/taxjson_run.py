@@ -278,6 +278,18 @@ def echo_attention_lines(out_path: Path, prefix: str = "") -> None:
             print(f"  {line}")
 
 
+def _attention_short_lines(out_path: Path) -> List[str]:
+    """The `ATTENTION: short:` lines of a gains stage's persisted .diag
+    (lib/pipeline.ATTENTION_SHORT)."""
+    from taxjson.lib.pipeline import ATTENTION_SHORT
+    diag_path = out_path.with_name(out_path.name + ".diag")
+    try:
+        lines = diag_path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    return [ln for ln in lines if ln.startswith(ATTENTION_SHORT)]
+
+
 def unbooked_lines(out_path: Path) -> List[str]:
     diag_path = out_path.with_name(out_path.name + ".diag")
     if not diag_path.exists():
@@ -2623,6 +2635,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
               "losses are allowed in full.")
     cmd += option_timing_flags(settings)
     cmd += income_dating_flags(settings)
+    if is_crypto:
+        # Spot coins cannot be short: a sale with nothing held is
+        # missing history, said as ATTENTION (re-audit A2-0137).
+        cmd.append("--spot-crypto")
     # Project-wide phantom opening-balances (from `find-missing-history
     # --gen-phantoms`). load_phantoms filters by (symbol, account), so passing
     # the whole file to every account's gains run is safe — non-matching pairs
@@ -2642,6 +2658,17 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # A2-0229), a phantoms.json entry on a real short or a written
     # option (A2-0637 / A2-0639). One call covers all.
     echo_attention_lines(gains_json)
+    # A short where none can exist (a registered account, spot crypto,
+    # a sale the broker codes CLOSING): missing history the numbers
+    # depend on — --strict refuses (re-audit A2-0395 / A2-0137 / A2-1223).
+    _shorts = _attention_short_lines(gains_json)
+    if _shorts and strict:
+        sys.exit(f"taxjson run --strict: {name}: {len(_shorts)} position(s) "
+                 f"go short where none can exist (registered account, "
+                 f"spot crypto, or a sale the broker codes closing) — "
+                 f"history is missing; see the ATTENTION short: lines "
+                 f"above. Spot crypto and registered accounts cannot be "
+                 f"short.")
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 

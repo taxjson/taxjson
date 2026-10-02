@@ -334,5 +334,55 @@ class TestListedRicDividendIsNamed(unittest.TestCase):
         self.assertNotIn("VTI.US", e24)
 
 
+# ------------------------------------------------------ A2-0395 / A2-0137
+class TestImpossibleShortsAreLoud(unittest.TestCase):
+    """A registered account or a spot-crypto book cannot be short: a sale
+    with nothing held is missing history. The run says so on the console
+    (ATTENTION) and `run --strict` refuses."""
+
+    def _run_both(self, root, home, needle):
+        r = _cli(root, home, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        out = r.stdout + r.stderr
+        self.assertIn("ATTENTION: short:", out)
+        self.assertIn(needle, out)
+        r = _cli(root, home, "run", "--no-input", "--strict")
+        self.assertNotEqual(r.returncode, 0, r.stdout[-2000:])
+        self.assertIn("cannot be short", r.stderr)
+
+    def test_registered_account_short(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [], accounts={
+                "margin": ("taxable", [
+                    "BUYSELL 2026-01-05 10:00:00 XYZ.TO 100 CAD 50 -5000 0",
+                    "BUYSELL 2026-06-10 10:00:00 XYZ.TO -100 CAD 40 4000 0"]),
+                "tfsa": ("sheltered", [
+                    "BUYSELL 2026-03-02 10:00:00 XYZ.TO -100 CAD 45 4500 0",
+                    "BUYSELL 2026-06-12 10:00:00 XYZ.TO 100 CAD 41 -4100 0"]),
+            })
+            self._run_both(root, home, "XYZ.TO (tfsa)")
+
+    def test_spot_crypto_short(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [], accounts={
+                "kr": ("taxable", [
+                    "BUYSELL 2026-03-02 10:00:00 BTC -1 CAD 100000 100000 0"]),
+            }, extra_settings="")
+            cfg = (root / "taxjson.toml").read_text().replace(
+                '[accounts.kr]\ntype = "taxable"\n',
+                '[accounts.kr]\ntype = "taxable"\ncrypto = true\n')
+            (root / "taxjson.toml").write_text(cfg)
+            self._run_both(root, home, "BTC (kr)")
+
+    def test_taxable_short_stays_quiet(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [
+                "BUYSELL 2026-03-02 10:00:00 XYZ.TO -100 CAD 45 4500 0",
+                "BUYSELL 2026-06-12 10:00:00 XYZ.TO 100 CAD 41 -4100 0"])
+            r = _cli(root, home, "run", "--no-input", "--strict")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            self.assertNotIn("ATTENTION: short:", r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

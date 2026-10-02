@@ -834,11 +834,18 @@ def _handle_transfers(transactions, sheltered_transactions, *, taxable,
     return rewritten, sheltered_transactions
 
 
+# A position short where none can exist (a registered account, spot
+# crypto, a sale the broker codes CLOSING): `taxjson run` echoes these
+# and `run --strict` refuses them.
+ATTENTION_SHORT = "warning: ATTENTION: short: "
+
+
 def prepare_books(transactions, sheltered_transactions=(),
                   affiliated_transactions=(), *, taxable: bool,
                   incomplete_history: Optional[Path] = None,
                   phantom_hint: bool = True,
-                  base_currency: Optional[str] = None):
+                  base_currency: Optional[str] = None,
+                  spot_crypto: bool = False):
     """The load-side preprocessing every gains consumer must share:
     TRANSFER handling (strip/drop/rewrite/reject) then phantom opening
     synthesis. Returns (transactions, sheltered, affiliated, phantom_log).
@@ -846,6 +853,12 @@ def prepare_books(transactions, sheltered_transactions=(),
     `phantom_hint` controls the advisory stderr NOTE emitted when NO
     phantom file is supplied but positions go short (the gains CLI wants
     it; explain and the web keep their stderr quiet).
+
+    With the hint on, a position that goes short where no short can
+    exist — a registered account (TFSA/RRSP/IRA), or a spot-crypto book
+    (`spot_crypto`) — is said as an ATTENTION `short:` line (`taxjson
+    run` echoes it and `run --strict` refuses), as is a sale the broker
+    codes CLOSING with no position (re-audit A2-0395, A2-0137, A2-1223).
     """
     transactions = list(transactions)
     sheltered_transactions = list(sheltered_transactions)
@@ -922,7 +935,7 @@ def prepare_books(transactions, sheltered_transactions=(),
                 # sold was bought before the data — not a short, not a
                 # written option, whatever the books do with it until
                 # the history is supplied (audit S013-00).
-                print(f"warning: ATTENTION: {c.symbol} ({c.account}): the "
+                print(f"{ATTENTION_SHORT}{c.symbol} ({c.account}): the "
                       f"broker codes the sale on {c.first_negative_date} "
                       f"CLOSING (IB code C"
                       + (f", IB Basis {c.broker_basis}" if c.broker_basis
@@ -932,6 +945,35 @@ def prepare_books(transactions, sheltered_transactions=(),
                         f"purchase is supplied (`taxjson "
                         f"find-missing-history --gen-phantoms "
                         f"phantoms.json`).", file=sys.stderr)
+        # A short where none can exist (A2-0395 / A2-0137): the main
+        # book's own accounts only — a context book's account says it in
+        # its own stage.
+        _main_accts = {t.account for t in transactions}
+        for c in candidates:
+            if (c.account not in _main_accts or _is_opt(c.symbol)
+                    or c.broker_says_closing):
+                continue
+            if c.registered:
+                why = ("a registered account (TFSA/RRSP/IRA) cannot be "
+                       "short")
+                tail = ("its later purchases are read as covering the "
+                        "short, so a superficial-loss / wash-sale denial "
+                        "they cause for a taxable account's loss is "
+                        "missed")
+            elif spot_crypto:
+                why = "spot crypto cannot be short"
+                tail = ("no gain is booked for the sale until the coins' "
+                        "cost is supplied")
+            else:
+                continue
+            print(f"{ATTENTION_SHORT}{c.symbol} ({c.account}): {why} — "
+                  f"it sells {abs(c.peak_short):g} more than the data "
+                  f"holds from {c.first_negative_date}: history is missing "
+                  f"(a transfer-in, a deposit, or a purchase before the "
+                  f"data). Until it is supplied, {tail}. Supply it (the "
+                  f"transfer or purchase rows, or `taxjson "
+                  f"find-missing-history --gen-phantoms phantoms.json`).",
+                  file=sys.stderr)
         if candidates:
             n_reg = sum(1 for c in candidates if c.registered)
             preview = ', '.join(f"{c.symbol}/{c.account}" for c in candidates[:3])
@@ -967,6 +1009,9 @@ class GainsRequest:
     detect_wash: Optional[bool] = None        # None → taxable and not no_wash
     cross_asset: bool = False
     phantom_hint: bool = True
+    # The book is a crypto account (spot coins): a short is missing
+    # history, said as ATTENTION (prepare_books).
+    spot_crypto: bool = False
     # ITA s.49(1) premium timing for written options (Canada only):
     # 'grant' recognises the premium on the write date, 'close' at the
     # closing transaction (the US §1234 convention). Contracts written
@@ -1166,7 +1211,7 @@ def run_gains(transactions, sheltered_transactions=(),
          phantom_application_log) = prepare_books(
             transactions, sheltered_transactions, affiliated_transactions,
             taxable=req.taxable, incomplete_history=req.incomplete_history,
-            phantom_hint=req.phantom_hint,
+            phantom_hint=req.phantom_hint, spot_crypto=req.spot_crypto,
             base_currency=HOME_CURRENCY.get(req.country))
 
     rules = get_tax_rules(req.country)
