@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Dedup per broker account (audit A2-0008, A2-0625, A2-0296, A2-1085,
+  A2-0286): every parser that reads the broker account (IB, Questrade
+  `Account #`, RBC `Account`) stamps each row with it, hashed
+  (`source_account`); cross-file dedup in the books, `taxjson-sort
+  --dedup` (which now also reads the parse's per-file accounts, A2-0297)
+  and the fee report never collapses rows of two different accounts —
+  two accounts holding the same ETF no longer lose half the
+  distributions.
+- Dedup no longer depends on file order (A2-0105, A2-0624): a `.tt` line
+  equal to an exported row stands for one exported row, so two accounts'
+  identical fill plus a matching `.tt` line book two rows in any order,
+  and two `.tt` files plus one export book two.
+- A `.tt` line that repeats an exported row by hand (a different id, so
+  both are booked) now prints an ATTENTION line (A2-0295); two exports
+  that disagree on the dates both cover name the rows only one holds — a
+  restated IB statement next to its older vintage (A2-0108).
+- One broker account's export placed in two taxjson accounts prints an
+  ATTENTION line naming both (A2-0293, A2-0630).
+- An IB Corporate Actions `Ca` is offered only to statements of its own
+  broker account (A2-1090), merge2's trade-`Ca` pairing compares the
+  broker account (A2-1095), and the TRANSFER-evidence sidecar keeps
+  identical custody moves of two accounts (A2-1093, A2-1094).
+
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

@@ -1400,19 +1400,38 @@ transfers are combined, not de-duplicated away).
 re-download, a 2025 export that runs into January next to the 2026 one) hold
 the same rows twice, and the books keep each row once. The rule, which the
 fees report uses too:
+- every parser that sees the broker account (the IB statement's account,
+  the Questrade `Account #` and RBC `Account` columns, the Webull preamble,
+  a generic mapping's account column or `[broker].account`) stamps each row
+  with it, hashed; rows of two DIFFERENT broker accounts are never one row,
+  whatever the files look like (two accounts with the same holdings get the
+  same distributions);
 - two identical rows in ONE file are one row, unless the parser marked them
   as separate fills (`[fill #2]`);
 - the same row in two exports is one row when the files overlap as copies:
   on the dates both files cover, one file's rows are a subset of the
   other's, and they share at least two rows;
 - identical lines in two `.tt` files are separate records, so both are
-  booked; identical rows in IB statements of two different broker accounts
-  are both booked as well;
+  booked; a `.tt` line equal to an exported row stands for that row (each
+  exported row absorbs at most one `.tt` line), and the result does not
+  depend on the order the files are listed in;
 - anything else (the files share only that one row, the files disagree on
   the dates they both cover, or a `.tt` line equals an exported row) is booked
   once, and `taxjson run` prints `warning: ATTENTION: dedup: ...` with both
-  file names. If they really are two trades, enter the second one as a `.tt`
-  line. If a `.tt` line was typed into two files, delete one copy.
+  file names. When the files disagree, the line also names the rows only one
+  of them holds: a newer statement that restated a row (a commission refund
+  folded into the trade, a cancelled trade) leaves the older version booked
+  too, so keep only the newer file. If they really are two trades, enter the
+  second one as a `.tt` line. If a `.tt` line was typed into two files,
+  delete one copy;
+- a `.tt` line that repeats an exported row by hand never has the row's id
+  (the export's description and settle date differ), so both are booked:
+  `taxjson run` prints `warning: ATTENTION: dedup: <file>.tt line ...
+  repeats the exported row ...` when the symbol, quantity, money and trade
+  or settle date match. Delete the `.tt` line if it is that trade;
+- one broker account's export placed under two `inputs/<account>/` folders
+  is booked in both: `taxjson run` prints an ATTENTION line naming the two
+  taxjson accounts.
 
 ### When you can't get the real cost basis
 

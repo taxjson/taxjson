@@ -2895,6 +2895,39 @@ def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
     print(f"  → {exports_dir}/")
 
 
+def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
+    """One broker account's export in TWO taxjson accounts books every
+    row twice (audit A2-0293, A2-0630). The rows carry their broker
+    account (hashed, `source_account`); name each pair of taxjson
+    accounts that share one, with the count of identical rows."""
+    import json
+    seen: Dict[str, Dict[str, set]] = {}
+    for name, base in bases:
+        try:
+            rows = json.loads(Path(base).read_text()).get("transactions")
+        except (OSError, ValueError, AttributeError):
+            continue
+        per: Dict[str, set] = {}
+        for t in rows or ():
+            if isinstance(t, dict) and t.get("source_account"):
+                # The id hashes the taxjson account label: compare the
+                # row's content instead.
+                per.setdefault(t["source_account"], set()).add(
+                    (t.get("date"), t.get("action"), t.get("symbol"),
+                     t.get("quantity"), t.get("net_amount")))
+        seen[name] = per
+    names = sorted(seen)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            for h in sorted(set(seen[a]) & set(seen[b])):
+                same = len(seen[a][h] & seen[b][h])
+                print(f"  {ATTENTION_PREFIX} the same broker account "
+                      f"(#{h[:6]}) feeds two taxjson accounts, {a} and "
+                      f"{b} ({same} identical row(s)) — every row of it "
+                      f"is booked in BOTH. Put each broker account's "
+                      f"exports under ONE inputs/<account>/ folder.")
+
+
 def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
                                 settings: Dict[str, Any]) -> None:
     """Loud caveat for the KNOWN_ISSUES multi-account gap: when the SAME
@@ -3628,6 +3661,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         _warn_cross_taxable_overlap(
             [(n, o["base"]) for n, o, c in taxable_outputs if not c],
             settings)
+        _warn_shared_broker_accounts(
+            [(n, o["base"]) for n, o in sheltered_outputs]
+            + [(n, o["base"]) for n, o, _c in taxable_outputs])
         if _crypto_blend:
             _warn_cross_taxable_overlap(
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],

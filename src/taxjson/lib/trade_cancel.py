@@ -45,6 +45,13 @@ def cancels(orig: Any, ca: Any) -> bool:
             or _g(orig, 'date') != _g(ca, 'date')
             or (_g(orig, 'account') or '') != (_g(ca, 'account') or '')):
         return False
+    # `account` is the taxjson label for every statement; the broker
+    # account (hashed, stamped by taxjson-brokerage) tells two IB
+    # accounts' identical fills apart (audit A2-1095).
+    sa_o = _g(orig, 'source_account') or ''
+    sa_c = _g(ca, 'source_account') or ''
+    if sa_o and sa_c and sa_o != sa_c:
+        return False
     q_o = float(_g(orig, 'quantity') or 0.0)
     q_c = float(_g(ca, 'quantity') or 0.0)
     if abs(q_c) < 1e-12 or abs(q_o + q_c) > 1e-9 * max(1.0, abs(q_c)):

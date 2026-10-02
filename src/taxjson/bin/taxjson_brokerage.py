@@ -72,7 +72,31 @@ _CANONICAL_ID = {'interactive_brokers': 'ib', 'rbc': 'rbc_direct',
 # Parser fields that are evidence only (not TaxTransaction fields): kept
 # on the raw rows (the --transfers-out sidecar carries them) and dropped
 # quietly from the book rows. 'qty' is the legacy alias of 'quantity'.
-_EVIDENCE_KEYS = frozenset({'qty', 'book_value'})
+_EVIDENCE_KEYS = frozenset({'qty', 'book_value', 'broker_account'})
+
+
+def hash_broker_account(acct) -> str:
+    """The form a broker account id takes in work/ files: sha256 of the
+    id the export prints, first 10 hex (the id itself never leaves the
+    parse). Dedup compares these per row and per file (R1-296, A2-0008)."""
+    return hashlib.sha256(str(acct).strip().encode()).hexdigest()[:10]
+
+
+def stamp_source_accounts(rows, file_accounts) -> None:
+    """Replace each parser row's raw `broker_account` (when the parser
+    read one) with its hash in `source_account`; a row without one gets
+    the statement's account when the file names exactly one. Rows of a
+    file naming several accounts and none per row stay unstamped (the
+    per-file set in metadata.source_accounts still applies)."""
+    single = (hash_broker_account(next(iter(file_accounts)))
+              if len(file_accounts) == 1 else '')
+    for t in rows:
+        raw = t.pop('broker_account', None)
+        t.pop('source_account', None)
+        if raw is not None and str(raw).strip():
+            t['source_account'] = hash_broker_account(raw)
+        elif single:
+            t['source_account'] = single
 
 
 class SecurityOverrideError(ValueError):
@@ -190,6 +214,10 @@ def _dedup_evidence(per_file) -> list:
                                         if k in valid}).id
             except (TypeError, ValueError):
                 key = json.dumps(t, sort_keys=True, default=str)
+            # Identical custody moves of two DIFFERENT broker accounts
+            # are two moves (audit A2-1093 / A2-1094): the account
+            # (hashed, stamped before this) is part of the key.
+            key = (key, t.get('source_account') or '')
             mine.setdefault(key, []).append(t)
         for key, ts in mine.items():
             if key not in best:
@@ -482,11 +510,25 @@ Examples:
     # ANOTHER of the account's statements (IB: booked in the 2025
     # statement, cancelled and rebooked in the 2026 one) undoes it there
     # (audit S059-04); the rest are warned about once.
+    def _stmt_accts(ex) -> set:
+        try:
+            return set(ex.statement_accounts()) \
+                if hasattr(ex, 'statement_accounts') else set()
+        except Exception:       # noqa: BLE001 — a parser without state
+            return set()
+
     for _i, (_p, _ex, _txs) in enumerate(parsed_files):
+        _mine = _stmt_accts(_ex)
         for _ca in getattr(_ex, 'unmatched_ca', None) or ():
             _done = False
             for _j in range(len(parsed_files) - 1, -1, -1):
                 _other = parsed_files[_j][1]
+                # Only a statement of the SAME broker account holds the
+                # original (audit A2-1090): another account's identical
+                # row is a different event.
+                _theirs = _stmt_accts(_other)
+                if _mine and _theirs and not _mine & _theirs:
+                    continue
                 if _j != _i and getattr(_other, 'ca_undo', None) \
                         and _other.ca_undo(_ca):
                     print(f"note: {shown_name(_p)}: IB cancelled (Ca) "
@@ -546,10 +588,16 @@ Examples:
         _source_names[id(extractor)] = _nm
         _accts = extractor.statement_accounts() \
             if hasattr(extractor, 'statement_accounts') else set()
+        # The accounts the parser read per row count too (a Questrade
+        # export of two accounts, an RBC Account column) — every parser
+        # that sees the broker account reports it (audit A2-0008).
+        _accts = {str(a).strip() for a in _accts if str(a).strip()} | {
+            str(t['broker_account']).strip() for t in _txs
+            if str(t.get('broker_account') or '').strip()}
         if _accts:
             source_accounts[_nm] = sorted(
-                hashlib.sha256(str(a).encode()).hexdigest()[:10]
-                for a in _accts)
+                hash_broker_account(a) for a in _accts)
+        stamp_source_accounts(_txs, _accts)
 
     for input_path, extractor, transactions in parsed_files:
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
