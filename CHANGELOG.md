@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **RBC / Questrade / Webull / Coinbase: a Buy row signed as a sale is
+  refused.** An RBC Buy with a negative Quantity was booked as a sale
+  with negative proceeds (a 4,880 swing under `--strict`); Questrade
+  flipped it to a buy silently; a Webull BUY whose quantity and cash
+  both said sale, and a Coinbase Buy carrying Coinbase's own sale
+  signature (negative quantity and total), were booked as purchases.
+  Each is now refused with the row named, as the generic importer does
+  (re-audit A2-0097, A2-0287, A2-1025, A2-1057).
 - **RBC / Questrade: book-cost adjustment rows.** An RBC 'Return of
   Capital' row lowers the ACB whatever its description words (a
   'ROC ADJUSTMENT TO BOOK COST' raised it); a Return of Capital row

@@ -1771,6 +1771,16 @@ class RbcBrokerage(BaseBrokerage):
 
         qty = r.qty
         is_retraction = r.cls == 'retraction'
+        if activity.strip().lower() == 'buy' and qty < 0:
+            # A Buy whose quantity says SALE (re-audit A2-0097): it was
+            # booked as a sale with negative proceeds, a 4,880 swing,
+            # under --strict. RBC signs a buy positive; refuse, as the
+            # generic importer does.
+            raise _err(Path(self._fname), r.line,
+                       f"a Buy row with a NEGATIVE Quantity {qty:g} "
+                       f"({r.label()}) — the activity says purchase, the "
+                       f"quantity says sale; refusing to guess. Fix the "
+                       f"row (or book it in a .tt file).")
         if activity.strip().lower() == 'sell' or is_retraction:
             qty = -abs(qty)
         price = r.price

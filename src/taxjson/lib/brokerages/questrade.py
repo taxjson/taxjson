@@ -1115,6 +1115,16 @@ class QuestradeBrokerage(BaseBrokerage):
                         f"(zero-cash, not an option leg)")
                     continue
             if is_trade:
+                if action_raw == 'Buy' and qty < 0:
+                    # Questrade signs a buy positive and a sale negative;
+                    # a Buy with a negative Quantity was flipped to a buy
+                    # silently (re-audit A2-1057). Refused, as the
+                    # generic importer does.
+                    raise BrokerageParseError(
+                        f"{self._where(lineno)}: a Buy row with a NEGATIVE "
+                        f"Quantity {qty:g} ({desc[:50]!r}) — the action "
+                        f"says purchase, the quantity says sale; refusing "
+                        f"to guess.")
                 qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'Sell'))
             # EXP / ASN / EX option legs: the CSV quantity is already
             # signed to close the open position — a long option expires

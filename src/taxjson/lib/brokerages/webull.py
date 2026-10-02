@@ -252,6 +252,14 @@ class WebullBrokerage(BaseBrokerage):
             _signed = parse_strict_number(
                 proceeds_raw, field='Proceeds', where=where,
                 allow_blank=True, blank=0.0)
+            if action_raw == 'BUY' and qty < 0 and _signed > 0:
+                # The quantity AND the cash say SALE under a BUY label
+                # (re-audit A2-0287): it was booked as a purchase, also
+                # under --strict. Refused, as the generic importer does.
+                raise BrokerageParseError(
+                    f"{where}: a BUY row with a NEGATIVE Quantity "
+                    f"{qty_raw} and cash IN (Proceeds {proceeds_raw}) — "
+                    f"both say sale; refusing to guess.")
             net_amount = abs(_signed) if action_raw == 'BUY' else _signed
             qty = self.signed_quantity(qty, action_is_sell=(action_raw == 'SELL'))
 

@@ -544,5 +544,62 @@ class TestRbcBookCostAdjustments(unittest.TestCase):
         self.assertIn("warning: UNBOOKED:", err)
 
 
+
+def _parse_with(cls, text, name="x.csv"):
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / name
+        p.write_text(text)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            return cls().parse_file(p), err.getvalue()
+
+
+class TestBuyRowsWithASaleSign(unittest.TestCase):
+    """A2-0097, A2-0287, A2-1025, A2-1057: a Buy row whose quantity (and
+    cash) say SALE is refused, as the generic importer refuses it."""
+
+    def test_rbc(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        body = (row("January 12, 2024", "Buy", "XEI", "XEI ETF", "200", "24",
+                    "-4809.95", "CAD", "XEI ETF UNSOLICITED")
+                + row("February 12, 2024", "Buy", "XEI", "XEI ETF", "-100",
+                      "25", "-2509.95", "CAD", "XEI ETF UNSOLICITED"))
+        with self.assertRaises(RbcFormatError) as cm:
+            parse_one(body)
+        self.assertIn("NEGATIVE Quantity", str(cm.exception))
+
+    def test_questrade(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaises(BrokerageParseError):
+            qt_parse(q(qty="-40", price="170", gross="-6800", comm="-9.95",
+                       net="-6809.95"))
+
+    def test_webull(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        from taxjson.lib.brokerages.webull import WebullBrokerage
+        wh = ('"Currency","Date","Action Code","Symbol","Security '
+              'Description","Type Code","Quantity","Price","Proceeds"\n')
+        wb = 'USD,15-01-2025,BUY,NVDA,NVIDIA CORP,STK,10,120.00,"(1201.00)"\n'
+        bad = 'USD,20-03-2025,BUY,NVDA,NVIDIA CORP,STK,-4,150.00,"599.20"\n'
+        with self.assertRaises(BrokerageParseError):
+            _parse_with(WebullBrokerage, wh + wb + bad)
+        txs, _err = _parse_with(WebullBrokerage, wh + wb)
+        self.assertEqual([t["quantity"] for t in txs], [10.0])
+
+    def test_coinbase(self):
+        from taxjson.lib.brokerages.coinbase import CoinbaseBrokerage
+        h = ("Timestamp,Transaction Type,Asset,Quantity Transacted,Price "
+             "Currency,Price at Transaction,Fees and/or Spread,Total "
+             "(inclusive of fees and/or spread)\n")
+        b = "2025-01-15 10:00:00 UTC,Buy,ETH,1.5,USD,3000,10,4510\n"
+        bad = "2025-04-10 09:00:00 UTC,Buy,ETH,-0.5,USD,3400,5,-1695\n"
+        with self.assertRaises(Exception) as cm:
+            _parse_with(CoinbaseBrokerage, h + b + bad)
+        self.assertIn("sale signature", str(cm.exception))
+        sell = "2025-04-10 09:00:00 UTC,Sell,ETH,-0.5,USD,3400,5,-1695\n"
+        txs, _err = _parse_with(CoinbaseBrokerage, h + b + sell)
+        self.assertIn(-0.5, [t["quantity"] for t in txs])
+
+
 if __name__ == "__main__":
     unittest.main()
