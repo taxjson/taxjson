@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- IB: a stock buy at zero cost is an ATTENTION line (it books a $0
+  cost; almost always a transfer or journal row — audit A2-0263); an
+  option description no form reads (a decimal-comma strike
+  `6,85`) is refused instead of becoming a raw symbol or a truncated
+  strike (A2-1041); a money row shorter than its section header (a
+  truncated export) is refused instead of reading the missing cells as
+  blank (A2-1042).
 - IB: a dividend or return of capital is re-bound to the listing held
   on its payment date: a TSX buy months after an NYSE-line ROC moved
   the ROC onto the TSX line (an EMPTY-pool s.40(3) gain and a currency

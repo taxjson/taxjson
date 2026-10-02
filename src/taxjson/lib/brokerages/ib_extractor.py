@@ -277,7 +277,7 @@ def get_ib_settlement(date_str: str, asset_cat: str,
     days = settlement_lag_days(date_str, currency, is_option=not is_equity)
     return add_settlement_days(date_str, days, currency).isoformat()
 
-from taxjson.lib.core import STOCK_DIVIDEND
+from taxjson.lib.core import STOCK_DIVIDEND, is_option_symbol
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
@@ -312,6 +312,12 @@ _IB_METADATA_SECTIONS = frozenset({
     # Comm/Fee column (see the Transaction Fees note in parse_file).
     'Transaction Fees',
 })
+# Money / position sections whose Data rows IB writes at the header's
+# full width (a shorter row is a truncated export).
+_IB_FULL_WIDTH_SECTIONS = frozenset({
+    'Trades', 'Dividends', 'Withholding Tax', 'Interest', 'Fees',
+    'Commission Adjustments', 'Corporate Actions', 'Transfers',
+    'Options Expirations'})
 # Header columns that mark a section as carrying money.
 _IB_MONEY_COLUMNS = frozenset({
     'Amount', 'Proceeds', 'Comm/Fee', 'Net Amount', 'Gross Amount',
@@ -1200,7 +1206,7 @@ def _ib_option_ref(ex, raw: str, fii, root_alias, aliased_roots,
     if not re.search(r'\s', raw or ''):
         return None
     occ = ex._option_symbol(raw, 'Equity and Index Options', fii,
-                            root_alias, aliased_roots, where)
+                            root_alias, aliased_roots, where, strict=False)
     return occ if is_option_symbol(occ) else None
 
 
@@ -1738,7 +1744,8 @@ class IbBrokerage(BaseBrokerage):
 
     def _option_symbol(self, raw: str, asset_cat: str, fii: Dict[tuple, Any],
                        root_alias: Dict[str, str],
-                       aliased_roots: Dict[str, str], where: str) -> str:
+                       aliased_roots: Dict[str, str], where: str,
+                       strict: bool = True) -> str:
         """OCC symbol for an IB option row ("XSP 16JAN26 68.5 P",
         futures-option monthly "CL JAN26 52 P", legacy "SPX 20241220 P
         4000"). The root is canonicalized through the statement's
@@ -1751,7 +1758,9 @@ class IbBrokerage(BaseBrokerage):
         opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
         opt_match_monthly = (re.search(r'^(.+?)\s+([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
                              if not opt_match else None)
-        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+' + OPTION_STRIKE_RE, raw)
+        # Anchored at the end: a decimal-comma strike ('4,00') was read
+        # as its integer part (audit A2-1041).
+        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+' + OPTION_STRIKE_RE + r'\s*$', raw)
                             if not (opt_match or opt_match_monthly) else None)
         if opt_match:
             base, day, mon, yr, strike, right = opt_match.groups()
@@ -1798,8 +1807,20 @@ class IbBrokerage(BaseBrokerage):
             strike = option_strike_text(strike)
             base = base.replace(' ', '.')
             symbol = f"{base}{exp[2:]}{right}{encode_occ_strike(strike)}"
-        # Strip all spaces as a fallback / cleanup
-        return symbol.replace(' ', '')
+        # Strip all spaces as a fallback / cleanup (an OCC-padded
+        # symbol 'QZY   250321C00050000' is already the contract).
+        symbol = symbol.replace(' ', '')
+        if strict and not is_option_symbol(symbol):
+            # An option description no form reads ('XSP 16JAN26 6,85 P',
+            # a decimal-comma strike) became a raw non-option symbol —
+            # a phantom security, silently (audit A2-1041).
+            raise BrokerageParseError(
+                f"{where}: {asset_cat} symbol {raw!r} is not an option "
+                f"description this parser reads (UNDERLYING DDMMMYY "
+                f"STRIKE P|C, a decimal point in the strike) — refusing "
+                f"to guess the contract. Re-export the statement in "
+                f"English.")
+        return symbol
 
     def _alias_root(self, base: str, yymmdd: str, right: str, strike: str,
                     root_alias: Dict[str, str],
@@ -2248,6 +2269,7 @@ class IbBrokerage(BaseBrokerage):
                   f"taxable margin accounts); export a registered "
                   f"account (TFSA/RRSP) separately.", file=sys.stderr)
         header_maps = {} # section -> header_map
+        header_lens: Dict[str, int] = {}
         unknown_row_types: Dict[str, int] = {}
 
         for lineno, row in enumerate(rows, 1):
@@ -2259,6 +2281,7 @@ class IbBrokerage(BaseBrokerage):
 
             if type_ == 'Header':
                 header_maps[section] = {col: i for i, col in enumerate(row)}
+                header_lens[section] = len(row)
                 continue
 
             if type_ != 'Data':
@@ -2279,6 +2302,19 @@ class IbBrokerage(BaseBrokerage):
                 self.count_skip(f"section {section}: Data row with "
                                 f"no Header row")
                 continue
+            if (section in _IB_FULL_WIDTH_SECTIONS
+                    and len(row) < header_lens.get(section, 0)):
+                # A row cut short (a truncated or hand-edited export)
+                # read its missing cells as blank: a Trades row without
+                # its Code booked an assignment leg as a plain trade,
+                # silently (audit A2-1042 — the Webull/RBC/Kraken
+                # refusal). IB writes every money row at full width.
+                raise BrokerageParseError(
+                    f"{shown_name(path)} line {lineno}: {section} row has "
+                    f"{len(row)} cells but its header has "
+                    f"{header_lens[section]} — the row is cut short; "
+                    f"refusing to read its missing cells as blank. "
+                    f"Re-download the statement.")
 
             if section == 'Trades' or section == 'Options Expirations':
                 where = f"{shown_name(path)} line {lineno} ({section})"
@@ -2614,6 +2650,21 @@ class IbBrokerage(BaseBrokerage):
                 # in an earlier statement is paired by taxjson-merge2.
                 # The Cash Report booking below keeps both rows (IB's
                 # own totals include both).
+                if (asset_cat in ('Stocks', 'Warrants') and qty > 0
+                        and section == 'Trades'
+                        and abs(price) < 1e-9 and gross_proceeds < 0.005
+                        and 'Ca' not in code_tokens
+                        and not ('A' in code_tokens or 'Ex' in code_tokens)):
+                    # A stock BUY at ZERO cost books a $0 ACB, and the
+                    # whole sale later becomes gain: almost always a
+                    # transfer or journal row (the generic importer
+                    # refuses it, R1-120; audit A2-0263).
+                    print(f"{ATTENTION_PREFIX} {where}: {full_symbol}: a "
+                          f"buy of {qty:g} at ZERO cost (T. Price and "
+                          f"Proceeds 0) — booked at $0 cost. A zero-cost "
+                          f"buy is almost always a transfer or journal "
+                          f"row: give the real cost in a .tt file and "
+                          f"remove the row, if so.", file=sys.stderr)
                 if 'Ca' in code_tokens:
                     # (description stays the raw symbol: the security
                     # overrides key on it, and the original must get the

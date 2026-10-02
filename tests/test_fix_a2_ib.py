@@ -684,5 +684,60 @@ class TestIncomeRebindOnThePaymentDate(unittest.TestCase):
                           if t['action'] == 'ADJUST'], ['QZORX.US'], err)
 
 
+class TestZeroCostStockBuy(unittest.TestCase):
+    """A2-0263: the IB parser booked a $0 stock buy silently (the
+    generic importer refuses it)."""
+
+    def test_zero_cost_buy_is_an_attention_line(self):
+        _, txs, err = _parse_ib(HEAD + TRADES_H + _trade(
+            'QZZ', '2025-03-03, 10:00:00', 100, 0, 0))
+        self.assertEqual(len(txs), 1)
+        self.assertRegex(err, r'warning: ATTENTION: .*QZZ\.US: a buy of 100 '
+                              r'at ZERO cost')
+
+    def test_assignment_leg_and_paid_buy_are_quiet(self):
+        _, _, err = _parse_ib(HEAD + TRADES_H + _trade(
+            'QZZ', '2025-03-03, 10:00:00', 100, 10, -1000))
+        self.assertNotIn('ZERO cost', err)
+
+
+class TestDecimalCommaStrike(unittest.TestCase):
+    """A2-1041: a decimal-comma strike became a raw non-option symbol
+    (daily form) or was truncated (legacy form), silently."""
+
+    def test_decimal_comma_strike_is_refused(self):
+        for desc in ('QZX 16JAN26 6,85 P', 'QZSPX 20241220 P 4,00'):
+            with self.subTest(desc=desc):
+                with self.assertRaises(BrokerageParseError) as cm:
+                    _parse_ib(HEAD + TRADES_H + _trade(
+                        f'"{desc}"', '2025-03-03, 10:00:00', 1, 1, -100,
+                        cat='Equity and Index Options'))
+                self.assertIn(desc, str(cm.exception))
+
+    def test_grouped_and_occ_padded_strikes_still_read(self):
+        for desc, occ in (('QZSPX 20241220 P 4,000',
+                           'QZSPX241220P04000000.US'),
+                          ('QZY   250321C00050000',
+                           'QZY250321C00050000.US')):
+            with self.subTest(desc=desc):
+                _, txs, _ = _parse_ib(HEAD + TRADES_H + _trade(
+                    f'"{desc}"', '2025-03-03, 10:00:00', 1, 1, -100,
+                    cat='Equity and Index Options'))
+                self.assertEqual(txs[0]['symbol'], occ)
+
+
+class TestShortTradesRowIsRefused(unittest.TestCase):
+    """A2-1042: a Trades row cut short was booked (an assignment leg
+    without its Code became a plain trade)."""
+
+    def test_row_shorter_than_its_header_is_refused(self):
+        row = _trade('QZ 16JAN26 50 P', '2025-03-03, 16:20:00', 1, 0, 0,
+                     code='A;C', cat='Equity and Index Options')
+        cut = row.rstrip('\n').rsplit(',', 1)[0] + '\n'
+        with self.assertRaises(BrokerageParseError) as cm:
+            _parse_ib(HEAD + TRADES_H + cut)
+        self.assertIn('cut short', str(cm.exception))
+
+
 if __name__ == '__main__':
     unittest.main()
