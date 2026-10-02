@@ -13258,7 +13258,10 @@ def _radar_config(root: Path, prog: str = "taxjson") -> Dict[str, Any]:
     cfg_path = root / "taxjson.toml"
     if cfg_path.exists() and tomllib is not None:
         try:
-            tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+            # A UTF-8 BOM is dropped, as load_config drops it (S038-04;
+            # re-audit A2-0429 sibling: the radar family refused a BOM
+            # project that `taxjson run` accepts).
+            tomllib.loads(cfg_path.read_text(encoding="utf-8-sig"))
         except Exception as e:
             sys.exit(f"{prog}: taxjson.toml cannot be read ({e}) — fix "
                      f"it first; the radar will not guess which "

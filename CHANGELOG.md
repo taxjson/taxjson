@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A `taxjson.toml` saved with a UTF-8 byte-order mark (Notepad) is read
+  by `find-missing-history`, `gains --suggest-phantoms`, `convert-tt`
+  and the wash radar the way `taxjson run` reads it; one that does not
+  parse stops those commands instead of being treated as "no project"
+  (which fell back to settle dates and guessed account types in a US
+  project) (re-audit A2-0419, A2-0424, A2-0429, A2-0430, A2-0438).
 - `taxjson crypto-sends` prices a send, and values the stablecoin pool,
   with a rate from the send's day or the 5 days before it, as the
   conversion stage does; an older rate (a January rate for a June send)
