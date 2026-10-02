@@ -64,6 +64,81 @@
   US-RPT-11, US-RPT-03; re-audit A2-0482, A2-0829). The checklist's
   1099-DA statement is tax-logic US-RPT-10 (US-RPT-09 had two meanings).
 
+- After `country` changes in taxjson.toml, every report command
+  (`list`, `wash-sales`, `sum`, `divs-sum`, `check-dates` ...) refuses
+  the books the last full run built under the other country, instead of
+  printing them under this country's labels at exit 0; the run records
+  the country in work/.inputs_fingerprint.json, and `check-dates` now
+  shows the run-state banner too (CA-CTRY-01 / US-CTRY-01; audit
+  A2-0147).
+- `scripts/check_tax_rules.py` check 8 also fails on a source message
+  that refuses an option for one country ("--x ... is Canada-only")
+  when lib/country does not own it, and checks PLAN_COUNTRY's owners;
+  tax-logic's CTRY-02 lists `--foreign-roc dividend` (audit A2-0719,
+  merged with partD's table).
+- `taxjson run`'s native-currency (raw) pass checks the same actions as
+  the engines' currency guard: an OPENING_BALANCE in another currency
+  than its listing skips the raw view with a warning instead of stopping
+  the run, and a TRANSFER in another currency no longer skips it
+  needlessly (audit A2-0440).
+- The built-in FX placeholder rate follows the direction: a row older
+  than the rates file in a US (USD) project converts CAD at the inverse
+  of 1.35, not at 1.35 (which booked 1,000 CAD of cost as 1,350 USD);
+  the row is still a validation error. `taxjson-fees-sum` and
+  `taxjson-audit` use the same per-direction fallback (audit A2-0148).
+- One-country wording: `taxjson elect --set` names a US election key in
+  a US project (not the Canadian s.85.1 one), the retired `cross_asset`
+  warning states the US rule (a long call is only flagged) in a US
+  project, and `taxjson-gains --help` says `--option-premium-timing` /
+  `--per-account-basis` are refused in the other country, as they are
+  (audit A2-0718, A2-0724, A2-1241, A2-1273).
+- `[accounts.X] plan` kinds belong to one country (lib/country
+  PLAN_COUNTRY): the other country's plan is refused (CA-CTRY-02 /
+  US-CTRY-02), US `hsa`, `403b`, `457b`, `sep`, `529` and Canadian `lif`,
+  `lrif`, `rdsp`, `prpp` are known, the "did you mean" hint names only
+  the project country's plans, and a registered plan on a taxable account
+  is warned about (the scan treats it as taxable) (audit A2-0739,
+  A2-1272, A2-1332).
+- US projects' `roc-sum` (and the roc/roc-sum help), `divs-sum`,
+  `trades-sum`, `leaps` / `leaps-sum` / `ccd-sum`, `audit` and
+  `missing-history` name basis, Form 1099-DIV (box 3 for nondividend
+  distributions), Form 8949 and IRA / tax-advantaged accounts instead of
+  ACB, T3 box 42, T5/T3 slips, Schedule 3 and "registered" (audit
+  A2-0439, A2-0741, A2-1265, A2-1269, A2-1271, A2-1324, A2-1354,
+  A2-1358, A2-1359).
+- A Canadian project's `wash-sales` report is titled SUPERFICIAL LOSSES,
+  counts "superficial loss(es)", says the denial goes onto the ACB of the
+  substituted property (s.53(1)(f)), and its `--explain` trace and the
+  single-account run note name the superficial-loss rule; the US keeps
+  the wash-sale wording (audit A2-0748, A2-1249, A2-1326, A2-1352,
+  A2-1360, A2-1371, A2-1372).
+- `buy-check` / `sell-check`: in a US project a bare coin held in a
+  crypto account (`buy-check ETH`) is answered as outside the wash-sale
+  rule instead of taking ETH.US's verdict or saying "no tracked taxable
+  position"; a LOCKED row (a registered / IRA buy in the window) no
+  longer says a full exit escapes the rule; a Canadian call bought
+  after a share loss states the denial per share and per 100-share
+  contract (US-PLAN-05, CA-PLAN-02; audit A2-0408, A2-0749, A2-0750,
+  A2-0752, A2-1340).
+- Crypto sends in a US project: `taxjson run`'s note, the parse NOTE in
+  the crypto .sum, and `crypto-sends`' hints, listing and decision error
+  no longer say a gift is a disposition or offer `gift` (refused there):
+  a payment is a sale, a gift is not a sale for a US donor (US-SEND-02;
+  audit A2-0721, A2-0740, A2-1283, A2-1285, A2-1286, A2-1329).
+- `taxjson run` stops when sends.json cannot be read while a
+  crypto_sends.tt generated from earlier decisions exists: it used to
+  book the old file with a warning (a gift since changed to self, or a
+  gift a US project refuses), even under `--strict` (audit A2-0415).
+- `taxjson list --date` in a US project calls its cost the per-account
+  FIFO basis (the return's own basis) and no longer claims a symbol held
+  in two accounts has one blended s.47 ACB on the return; the note and
+  the "ACB" wording stay in Canada (CA-ACB-01 / US-BASIS-01; audit
+  A2-0154, A2-0410, A2-0720, A2-0734, A2-1244, A2-1266, A2-1318,
+  A2-1330).
+- `taxjson carryover` in a US project whose only taxable accounts are
+  crypto accounts no longer applies the wash-sale rule to the coins: the
+  books go to the ledger's no-wash crypto pass, as in a mixed project
+  (US-WASH-13; audit A2-0146, A2-0411, A2-0412).
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard

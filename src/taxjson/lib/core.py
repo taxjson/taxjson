@@ -293,6 +293,15 @@ def parse_option_expiry(symbol: str) -> Optional[str]:
 
 OPTION_CONTRACT_SHARES = 100.0      # shares per standard equity option
 
+# Actions that never touch a symbol's ACB / basis pool, so their currency
+# is never checked against it (both engines' currency guards skip them:
+# income rows, a TRANSFER kept as evidence, a SPLIT that carries no
+# money). Every other action with a currency must match the pool's — the
+# raw (native-currency) pass in `taxjson run` tests the same set (audit
+# A2-0440).
+POOL_FREE_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST',
+                     'FEE', 'TRANSFER', 'SPLIT')
+
 
 def parse_option_right(symbol: str) -> Optional[str]:
     """'C' or 'P' for an OCC option symbol, else None."""
@@ -5017,7 +5026,7 @@ class USATaxRules(TaxRules):
         for _tx in (transactions + (sheltered_transactions or []) + (affiliated_transactions or [])):
             # SPLIT carries no money (a .tt SPLIT is stamped CAD whatever
             # the listing — A2-0010); its currency says nothing.
-            if not _tx.currency or _tx.action in ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE', 'TRANSFER', 'SPLIT'):
+            if not _tx.currency or _tx.action in POOL_FREE_ACTIONS:
                 continue
             existing = symbol_currency.get(_tx.symbol)
             if existing and existing != _tx.currency:

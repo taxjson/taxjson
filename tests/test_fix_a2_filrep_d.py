@@ -62,6 +62,10 @@ class TestCryptoSendsStageFailure(unittest.TestCase):
     @rule("CA-CRYPTO-07")
     def test_malformed_decision_reaches_sum_and_strict_stops(self):
         self._set_manifest("Gift")
+        # With no generated crypto_sends.tt the run goes on and reports;
+        # an existing one stops the run instead (A2-0415, test_fix_a2_partB).
+        (self.root / "inputs" / "crypto" / "crypto_sends.tt").unlink(
+            missing_ok=True)
         r = self._cli(self.root, self.home, "run", "--no-input")
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertIn("crypto sends", self._sum_text())

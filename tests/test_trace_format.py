@@ -181,7 +181,7 @@ class TestRenderGainBlock(unittest.TestCase):
         )
         out = render_gain_block(g)
         joined = "\n".join(out)
-        self.assertIn('WASH SALE (CRA superficial loss)', joined)
+        self.assertIn('SUPERFICIAL LOSS (ITA s.54)', joined)
         self.assertIn('triggered by 2025-07-20', joined)
         self.assertIn('+$201.50', joined)
         # Deferred (taxable trigger): the explain says where the denied
