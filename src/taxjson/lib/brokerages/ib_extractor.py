@@ -109,7 +109,8 @@ def _split_known_ext(symbol: str):
 def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
                                     extra_held=None, fallback_held=None,
                                     isins_by_root=None,
-                                    mismatches=None) -> None:
+                                    mismatches=None, open_qty=None,
+                                    ambiguous=None) -> None:
     """Rewrite each DIVIDEND/TAX suffix to match the position held for the same
     ticker in this file, correcting ISIN-vs-listing mismatches. Leaves the
     ISIN-derived suffix untouched when the account holds no position for that
@@ -135,7 +136,18 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     vs Telus's T.TO, Equifax vs Enerflex EFX.TO) keeps its ISIN-derived
     suffix (audit S059-24 / S060-19); the (symbol, ISIN) pairs skipped
     are added to `mismatches`. A row whose ISIN, or whose root's listing
-    ISIN, is unknown is rebound as before."""
+    ISIN, is unknown is rebound as before.
+
+    A root held under several listings is narrowed to the listings held
+    ON THE PAYMENT DATE: a TSX buy months after an NYSE-line ROC moved
+    the ROC onto the TSX line (an EMPTY pool, a false s.40(3) gain, a
+    currency clash) and made the row differ between overlapping
+    downloads (audit A2-0089). The position on a date is this
+    statement's trades and transfers up to it on top of the opening
+    position — `open_qty` (the Open Positions quantities, when the
+    section is present) less the statement's net, else the least
+    opening the trades need. Rows still ambiguous are added to
+    `ambiguous` as (symbol, date)."""
     held: Dict[str, set] = {}
     for full in (extra_held or ()):
         root, ext = _split_known_ext(full)
@@ -154,6 +166,29 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     held.update(fb)
     if not held:
         return
+    pos: Dict[tuple, list] = {}
+    for t in transactions:
+        if t.get('action') in _POSITION_ACTIONS:
+            root, ext = _split_known_ext(t.get('symbol'))
+            if ext:
+                pos.setdefault((root, ext), []).append(
+                    (t.get('date') or '', float(t.get('quantity') or 0.0)))
+
+    def _held_on(root, ext, day) -> bool:
+        rows = sorted(pos.get((root, ext)) or ())
+        if not rows:
+            return True              # no dated evidence: cannot exclude
+        net = sum(q for _d, q in rows)
+        if open_qty is not None:
+            opening = float(open_qty.get(f"{root}.{ext}", 0.0)) - net
+        else:
+            run_q, low = 0.0, 0.0
+            for _d, q in rows:
+                run_q += q
+                low = min(low, run_q)
+            opening = -low
+        q_on = opening + sum(q for d, q in rows if d <= day)
+        return abs(q_on) > 1e-9
     for t in transactions:
         # ROC ADJUSTs come out of the same ISIN-suffixed Dividends section
         # as income rows, so they need the same held-listing rebind — an
@@ -166,6 +201,13 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
         if ext is None:
             continue
         suffixes = held.get(root)
+        if suffixes and len(suffixes) > 1:
+            on_day = {e for e in suffixes
+                      if _held_on(root, e, t.get('date') or '')}
+            if len(on_day) == 1:
+                suffixes = on_day
+            elif ambiguous is not None:
+                ambiguous.add((t.get('symbol'), t.get('date')))
         if suffixes and len(suffixes) == 1:
             want = next(iter(suffixes))
             if want != ext:
@@ -1911,6 +1953,7 @@ class IbBrokerage(BaseBrokerage):
         # income-reattribution holdings map (covers buy-and-hold years with
         # no trade rows, and disambiguates interlisted same-ticker names).
         open_position_syms: set = set()
+        open_position_qty: Dict[str, float] = {}
 
         # Year-end dividend accruals. IB accrues a declared dividend
         # ('Po' code) and reverses the accrual ('Re') once the cash
@@ -2761,8 +2804,15 @@ class IbBrokerage(BaseBrokerage):
                 self._check_symbol_tag(re.sub(
                     r'\.(TO|US|AX|L)$', '', symbol.strip(),
                     flags=re.IGNORECASE), shown_name(path))
-                open_position_syms.add(_ib_stock_symbol(
-                    asset_cat, symbol, currency, fii))
+                _op_full = _ib_stock_symbol(asset_cat, symbol, currency,
+                                            fii)
+                open_position_syms.add(_op_full)
+                try:
+                    open_position_qty[_op_full] = (
+                        open_position_qty.get(_op_full, 0.0)
+                        + parse_strict_number(qty_raw, field='Quantity'))
+                except ValueError:
+                    pass
                 self.note_row_consumed()      # read into parser state
 
             elif section == 'Statement':
@@ -4292,12 +4342,21 @@ class IbBrokerage(BaseBrokerage):
         # dual-listed names). Runs after the full file is parsed so it sees
         # every position regardless of section order.
         _isin_mismatch: set = set()
+        _ambiguous: set = set()
         _reattribute_income_to_holdings(
             transactions, extra_held=open_position_syms,
             fallback_held=(ctx or {}).get('held'),
             isins_by_root={**(ctx or {}).get('stock_isins', {}),
                            **pre['stock_isins']},
-            mismatches=_isin_mismatch)
+            mismatches=_isin_mismatch,
+            open_qty=(open_position_qty if 'Open Positions' in header_maps
+                      else None),
+            ambiguous=_ambiguous)
+        for _sym, _day in sorted(_ambiguous):
+            print(f"note: {shown_name(path)}: income on {_sym} of {_day} "
+                  f"kept its ISIN listing: the account held more than one "
+                  f"listing of the ticker that day (add a ticker.map rule "
+                  f"if it belongs to the other).", file=sys.stderr)
         for t in transactions:
             t.pop('_isin', None)
         for _sym, _isin, _held in sorted(_isin_mismatch):

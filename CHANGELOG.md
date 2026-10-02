@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- IB: a dividend or return of capital is re-bound to the listing held
+  on its payment date: a TSX buy months after an NYSE-line ROC moved
+  the ROC onto the TSX line (an EMPTY-pool s.40(3) gain and a currency
+  clash that stopped `taxjson run`), and two overlapping downloads
+  booked the same dividend twice (audit A2-0089). A row left on its
+  ISIN listing because two listings were held that day gets a note.
 - IB: one option contract keeps one root across the account's
   statements, whichever statement is parsed (a re-download naming the
   adjusted root DFDV1 split one put series in two, audit A2-0087); the

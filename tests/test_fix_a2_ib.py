@@ -655,5 +655,34 @@ class TestAssignmentSettleRootAware(unittest.TestCase):
                 self.assertEqual(leg['date_settle'], st['date_settle'])
 
 
+class TestIncomeRebindOnThePaymentDate(unittest.TestCase):
+    """A2-0089: a TSX buy months after an NYSE-line ROC moved the ROC
+    onto the TSX line (EMPTY pool, false s.40(3) gain, run exit 1)."""
+
+    ROC = ('Dividends,Data,USD,2025-04-15,"QZORX(CA9990001601) Cash '
+           'Dividend USD 1.50 per Share (Return of Capital)",150\n')
+    TRADES = (TRADES_H
+              + _trade('QZORX', '2025-03-03, 10:00:00', 100, 20, -2000)
+              + _trade('QZORX', '2025-06-02, 10:00:00', -100, 28, 2800,
+                       code='C'))
+    TSX = _trade('QZORX', '2025-08-11, 10:00:00', 100, 30, -3000, cur='CAD')
+
+    def test_roc_stays_on_the_listing_held_that_day(self):
+        _, txs, err = _parse_ib(HEAD + self.TRADES + self.TSX + DIV_H
+                                + self.ROC)
+        roc = [t for t in txs if t['action'] == 'ADJUST']
+        self.assertEqual([t['symbol'] for t in roc], ['QZORX.US'], err)
+
+    def test_overlapping_vintages_book_the_same_row(self):
+        may = _stmt('January 1, 2025', 'May 31, 2025', self.TRADES.split(
+            _trade('QZORX', '2025-06-02, 10:00:00', -100, 28, 2800,
+                   code='C'))[0], DIV_H, self.ROC)
+        aug = _stmt('January 1, 2025', 'August 31, 2025', self.TRADES,
+                    self.TSX, DIV_H, self.ROC)
+        rows, err = _booked({'may.csv': may, 'aug.csv': aug})
+        self.assertEqual([t['symbol'] for t in rows
+                          if t['action'] == 'ADJUST'], ['QZORX.US'], err)
+
+
 if __name__ == '__main__':
     unittest.main()
