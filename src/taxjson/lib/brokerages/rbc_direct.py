@@ -836,25 +836,18 @@ def classify_rbc_row(r) -> str:
 
 
 def strict_option_from_description(parser, desc: str):
-    """BaseBrokerage.parse_option_from_description, refusing a strike the
-    pattern only partly read (re-audit A2-1041, the Questrade / RBC half):
-    '2,50' was read as 2 and '1,0000' as 1000 — the strike ends where a
-    comma or another digit still follows."""
-    if not desc:
-        return None
-    for pat in parser._option_description_patterns():
-        m = pat.search(desc)
-        if not m:
-            continue
-        rest = desc[m.end(4):]
-        if re.match(r'[,\d]', rest):
-            raise BrokerageParseError(
-                f"{getattr(parser, '_fname', '') or getattr(parser, '_qt_name', '')}"
-                f": option description {desc[:70]!r} has a strike that is "
-                f"not a plain number ({desc[m.start(4):m.end(4)]}{rest[:5]}"
-                f"...: a decimal comma?) — refusing to guess the strike.")
+    """BaseBrokerage.parse_option_from_description, whose shared strike
+    reader refuses a strike it can only partly read ('2,50', '1,0000';
+    audit A2-0632 / re-audit A2-1041) — re-raised naming the file and
+    the description, for the Questrade and RBC consumers."""
+    try:
         return BaseBrokerage.parse_option_from_description(parser, desc)
-    return None
+    except BrokerageParseError as e:
+        where = (getattr(parser, '_fname', '')
+                 or getattr(parser, '_qt_name', ''))
+        raise BrokerageParseError(
+            f"{where}: option description {(desc or '')[:70]!r}: {e}"
+        ) from None
 
 
 def _names_underlying(root: str, symbol: str) -> bool:
