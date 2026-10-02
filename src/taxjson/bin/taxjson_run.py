@@ -1793,6 +1793,25 @@ _PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
                         "crypto_ticker.map")
 
 
+def _unreadable_project_inputs(root: Path) -> List[str]:
+    """Project-root input names that exist as a symlink whose target is
+    missing (or loops), or as a directory — never "absent" (A2-0313)."""
+    import os
+    out = []
+    for name in _PROJECT_ROOT_INPUTS + ("claimed_losses.txt",):
+        p = root / name
+        if p.is_symlink() and not p.exists():
+            try:
+                tgt = os.readlink(p)
+            except OSError:
+                tgt = "?"
+            out.append(f"{name} is a symlink to {tgt}, which does not "
+                       f"exist (or loops)")
+        elif p.is_dir():
+            out.append(f"{name} is a directory, not a file")
+    return out
+
+
 def _inputs_fingerprint(paths: List[Path]) -> str:
     """One line per existing file: name, size and SHA-256 of the
     content (mtimes deliberately left out — see R1-253)."""
@@ -3219,6 +3238,14 @@ def cmd_run(args: argparse.Namespace) -> None:
                   "everything; --fast applies from the next run")
             args.force = True
     _code_stamp.unlink(missing_ok=True)
+    # A project map that exists as a NAME but cannot be opened (a
+    # dangling or looping symlink) read as "absent": the run exited 0
+    # with other gains (audit A2-0313). Absent and unreadable differ.
+    _unreadable = _unreadable_project_inputs(root)
+    if _unreadable:
+        _die("project file(s) that exist but cannot be read — fix or "
+             "remove each; nothing was run:\n    "
+             + "\n    ".join(_unreadable))
     # ticker.map — one keyword-prefixed symbol-rule file. GLOBAL renames
     # apply everywhere; TOBASE consolidations apply only in the main
     # (to-base) merge; JOURNAL pairs also net in the holdings export;
