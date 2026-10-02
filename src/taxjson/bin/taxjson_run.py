@@ -2756,6 +2756,93 @@ def _render_wash_outputs(name: str, settings: Dict[str, Any], cache: Path,
     print(f"  → {wash_sum}")
 
 
+# A custody move's two legs (out of one account, into another) post a
+# few days apart at most.
+_OWN_MOVE_DAYS = 10
+
+
+def own_account_custody_moves(names: List[str], cache: Path
+                              ) -> List[Dict[str, Any]]:
+    """Moves of a security between two of these accounts, read from the
+    transfer sidecars (transfers = false keeps TRANSFER rows out of the
+    books): an outbound leg in one account paired with an inbound leg
+    of the same symbol and quantity in another, within _OWN_MOVE_DAYS."""
+    import json as _json
+    from datetime import date as _date
+    rows = []
+    for n in names:
+        for sc in sorted(cache.glob(f"{n}_*_transfers.json")):
+            try:
+                doc = _json.loads(sc.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            md = ((doc.get("metadata") or {}) if isinstance(doc, dict)
+                  else {})
+            if (md.get("kind") != "transfer_sidecar"
+                    or md.get("account") != n):
+                continue        # another account's (or a .tt) file
+            for t in doc.get("transactions") or []:
+                if (t.get("action") == "TRANSFER" and t.get("symbol")
+                        and abs(float(t.get("quantity") or 0)) > 1e-9):
+                    rows.append((n, t))
+
+    def _d(t):
+        try:
+            return _date.fromisoformat(str(t.get("date"))[:10])
+        except ValueError:
+            return None
+    ins = [(n, t) for n, t in rows if float(t["quantity"]) > 0]
+    used = set()
+    out = []
+    for a, t in sorted(((n, t) for n, t in rows
+                        if float(t["quantity"]) < 0),
+                       key=lambda e: (str(e[1].get("date")), e[0])):
+        q = -float(t["quantity"])
+        da = _d(t)
+        for i, (b, u) in enumerate(ins):
+            db = _d(u)
+            if (i in used or b == a or u.get("symbol") != t.get("symbol")
+                    or abs(float(u["quantity"]) - q) > 1e-6
+                    or da is None or db is None
+                    or abs((db - da).days) > _OWN_MOVE_DAYS):
+                continue
+            used.add(i)
+            out.append({"symbol": t["symbol"], "qty": q, "from": a,
+                        "to": b, "date_out": str(t.get("date")),
+                        "date_in": str(u.get("date"))})
+            break
+    return out
+
+
+def _check_own_account_moves(names: List[str], settings: Dict[str, Any],
+                             cache: Path, *, strict: bool) -> None:
+    """US projects: a custody move between two of your own taxable
+    accounts carries the lot's basis and purchase date, but the US
+    engine keeps lots per account (US-BASIS-01) and the move's rows sit
+    in the transfer sidecar — the receiver's sale read as a short with
+    no basis, the sender kept the shares, and the run exited 0 (audit
+    A2-0032). Said loudly (ATTENTION), and --strict stops. Canada pools
+    the ACB across the accounts (s.47): nothing to say there."""
+    from taxjson.lib.country import basis_pooled_across_accounts
+    if basis_pooled_across_accounts(_country(settings)):
+        return
+    moves = own_account_custody_moves(names, cache)
+    for m in moves:
+        print(f"  warning: ATTENTION: {m['symbol']}: {m['qty']:g} moved "
+              f"from {m['from']} ({m['date_out']}) to {m['to']} "
+              f"({m['date_in']}) — a move between your own accounts is "
+              f"not a sale and the lot keeps its basis and purchase "
+              f"date, but taxjson keeps US lots per account and does not "
+              f"carry them: {m['to']}'s sales of these shares read as a "
+              f"short with no basis and {m['from']} still holds them. "
+              f"Report those sales by hand (US-BASIS-05).",
+              file=sys.stderr)
+    if moves and strict:
+        sys.exit(f"taxjson run --strict: {len(moves)} move(s) between "
+                 f"your own taxable accounts that the US books cannot "
+                 f"carry (ATTENTION above) — aborting.")
+
+
 def stage_blended_wash_pass(names: List[str],
                             settings: Dict[str, Any], cache: Path,
                             reports_dir: Path,
@@ -3535,6 +3622,8 @@ def cmd_run(args: argparse.Namespace) -> None:
             raise SystemExit(1)
         return
     if _blend_names and not args.account and not pending_accounts:
+        _check_own_account_moves(_blend_names, settings, cache,
+                                 strict=getattr(args, "strict", False))
         stage_blended_wash_pass(_blend_names, settings, cache,
                                 reports_dir, sheltered_base,
                                 incomplete_history=phantoms_arg)
