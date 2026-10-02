@@ -626,6 +626,11 @@ def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
                        f"right to acquire them (its deliverable is not in "
                        f"the books), so {_LOSS_TERM[country]} — review "
                        f"it by hand")
+        elif w['rule'] == 'futures_vs_loss':
+            verdict = ("a futures contract (or an option on one) is a "
+                       "§1256 contract, not stock or securities, and "
+                       "usually outside §1091: the loss is NOT denied — "
+                       "review it by hand")
         elif w['rule'] == 'futures_option_vs_loss':
             verdict = (f"a call on the same futures contract is a right "
                        f"to acquire it, so {_LOSS_TERM[country]}"
@@ -4624,6 +4629,38 @@ class USATaxRules(TaxRules):
             # other lot, audit S070-12.)
             return out
 
+        # §1091 covers "stock or securities": a commodity or broad-index
+        # futures contract (or an option on one) is a §1256 contract,
+        # marked to market, usually outside it. Its loss is never denied;
+        # a re-purchase in the window is flagged for a manual check
+        # (tax-logic US-WASH-18; audit A2-0053 — a re-bought F:CLG7 had
+        # its whole 10,000 loss disallowed with no flag). Canada's s.54
+        # covers any property and keeps denying.
+        _fut_flags: Dict[str, Dict[str, Any]] = {}
+
+        def _outside_1091(sym: str) -> bool:
+            if is_option_symbol(sym):
+                return bool(_FUTURES_PREFIX_RE.match(
+                    parse_option_underlying(sym) or ''))
+            return bool(_FUTURES_PREFIX_RE.match(sym or ''))
+
+        def _flag_futures_loss(loss_tx, loss_amt, cands):
+            rec = _fut_flags.get(loss_tx.id)
+            if rec is None:
+                rec = _fut_flags[loss_tx.id] = {
+                    'rule': 'futures_vs_loss',
+                    'loss_symbol': loss_tx.symbol,
+                    'loss_date': loss_tx.date,
+                    'loss_amount': 0.0,
+                    'loss_id': loss_tx.id,
+                    'option_symbol': cands[0]['tx'].symbol,
+                    'option_acquired': min(c['date'] for c in cands),
+                    'option_qty': sum(c['remaining_qty'] for c in cands),
+                    'held_at_window_end': None,
+                    'statute': "IRS §1091 ('stock or securities')",
+                }
+            rec['loss_amount'] = round(rec['loss_amount'] + loss_amt, 2)
+
         # === MAIN PASS ===
         # Underlyings whose assignment STOCK leg is explicitly marked
         # (action='ASSIGN' on a non-option symbol). When one exists,
@@ -5273,6 +5310,10 @@ class USATaxRules(TaxRules):
                             short_replacements.get(_rep_key(symbol), []),
                             tx.date,
                         )
+                        if _outside_1091(symbol):
+                            if candidates:
+                                _flag_futures_loss(tx, raw_gain, candidates)
+                            candidates = []
                         for rep in candidates:
                             if remaining_loss_qty <= epsilon:
                                 break
@@ -5630,6 +5671,10 @@ class USATaxRules(TaxRules):
                         long_replacements.get(_rep_key(symbol), []),
                         tx.date,
                     )
+                    if _outside_1091(symbol):
+                        if candidates:
+                            _flag_futures_loss(tx, raw_gain, candidates)
+                        candidates = []
                     for rep in candidates:
                         if remaining_loss_qty <= epsilon:
                             break
@@ -5986,6 +6031,7 @@ class USATaxRules(TaxRules):
                 date_of=lambda t: t.date,
                 canonical=split_timeline.canonical,
                 statute_label="IRS §1091 ('option to acquire')")
+        option_replacement_warnings += list(_fut_flags.values())
         if getattr(self, 'emit_replacement_stderr', True):
             # run_gains turns this off and prints the warnings after its
             # year filter (audit S070-04).

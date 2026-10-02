@@ -8,7 +8,8 @@ import time
 import unittest
 
 from taxjson.lib.core import TaxTransaction, USATaxRules
-from tax_rules import rule
+from tax_rules import rule, rule_absent
+from tax_rules.dual import gains_both, tx
 
 
 def _t(d, q, p, *, sym='XYZ.US', acct='T1', tm='10:00:00', action='BUYSELL',
@@ -254,6 +255,40 @@ class TestStockDividendAfterSale(unittest.TestCase):
         self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
         self.assertAlmostEqual(r['summary']['total_gain'], -2000.0)
         self.assertIn("sold before it was paid", err.getvalue())
+
+
+class TestFuturesOutside1091(unittest.TestCase):
+    """A2-0053: the US engine never disallows a loss on a futures
+    contract or an option on one (flag only); Canada's s.54 covers any
+    property and keeps denying."""
+
+    @rule("US-WASH-18")
+    @rule_absent("US-WASH-18", country="canada")
+    def test_rebought_future_flagged_not_denied(self):
+        for sym, loss in (("F:CLG7.US", 10000.0), ("F:ESZ6.US", 5000.0),
+                          ("F:CL261216C00070000.US", 1000.0)):
+            book = [tx("BUYSELL", "2025-03-03", sym, 1, 20000),
+                    tx("BUYSELL", "2025-03-10", sym, -1, 20000 - loss),
+                    tx("BUYSELL", "2025-03-18", sym, 1, 20000 - loss)]
+            r = gains_both(book, year=2025)
+            self.assertAlmostEqual(
+                r["usa"]["summary"]["total_disallowed"], 0.0, msg=sym)
+            self.assertAlmostEqual(
+                r["canada"]["summary"]["total_disallowed"], loss, msg=sym)
+            rules = [w["rule"] for w in
+                     r["usa"].get("option_replacement_warnings") or []]
+            self.assertIn("futures_vs_loss", rules, sym)
+
+    @rule("US-WASH-18")
+    def test_flag_printed(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            USATaxRules().compute_gains(
+                [_t("2025-03-03", 1, 200, sym="F:CLG7.US"),
+                 _t("2025-03-10", -1, 100, sym="F:CLG7.US"),
+                 _t("2025-03-18", 1, 100, sym="F:CLG7.US")])
+        self.assertIn("[futures_vs_loss]", err.getvalue())
+        self.assertIn("NOT denied", err.getvalue())
 
 
 if __name__ == '__main__':

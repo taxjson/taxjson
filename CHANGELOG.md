@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **US: a loss on a futures contract (or an option on one) is no longer
+  disallowed as a wash sale.** A §1256 contract is not stock or
+  securities; a re-bought F:CLG7 had its whole loss disallowed with no
+  flag. The re-purchase is now flagged for a manual check
+  (`futures_vs_loss`); Canada keeps denying (s.54 covers any property)
+  (tax-logic US-WASH-18; A2-0053).
 - **US: same-moment replacement lots of two accounts follow the
   taxjson.toml order**, as US-DATE-13 states, not the account label:
   renaming an account moved a wash-sale deferral to the other account's

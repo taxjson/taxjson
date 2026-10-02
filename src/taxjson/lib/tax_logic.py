@@ -1043,6 +1043,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "e.g. XYZ1) or a futures option on the loss's futures "
                  "contract (a commodity future is usually outside §1091).",
                  cont=True),
+            Rule("US-WASH-18",
+                 "A loss on a futures contract, or on an option on one, is "
+                 "never disallowed: a §1256 contract is not stock or "
+                 "securities. A re-purchase in the window is flagged for "
+                 "a manual check."),
             Rule("US-WASH-13",
                  "Accounts marked crypto are not subject to the wash-sale "
                  "rule."),
