@@ -1391,6 +1391,21 @@ def pool_qty_eps(symbol: str, *scales: float) -> float:
     return max(_COIN_QTY_ABS_EPS, _COIN_QTY_REL_EPS * scale)
 
 
+def _currency_mismatch_advice(tx, pool_cur: str) -> str:
+    """The fix a currency-mismatch error names (audit A2-0055/0191/0204:
+    it named an underscore tool a project user never runs)."""
+    if tx.action in ('ADJUST', 'DISALLOW'):
+        return (f"Enter the amount in the pool's currency ({pool_cur}) — a "
+                f"slip's CAD figure on a {pool_cur} listing is converted at "
+                f"the row's date — or convert the whole book first "
+                f"(taxjson-convert-currency --to <base>). `taxjson run` "
+                f"does this itself.")
+    return ("One pool holds one currency: convert the book first "
+            "(taxjson-convert-currency --to <base>), or keep the listings "
+            "apart (.TO vs .US). `taxjson run` converts before the "
+            "filing books.")
+
+
 def _place_wash_adjusts(stream):
     """Move each pre-loss superficial-loss ADJUST (marked `_wash_after`
     = the loss row's id) to immediately after its loss row. s.53(1)(f)
@@ -2382,9 +2397,8 @@ class CanadaTaxRules(TaxRules):
                     if tx.currency and pool['currency'] and tx.currency != pool['currency']:
                         raise ValueError(
                             f"Currency mismatch for {symbol}: pool is in {pool['currency']!r} "
-                            f"but transaction {tx.id} on {tx.date} is in {tx.currency!r}. "
-                            f"Run taxjson_convert_currency first to unify currencies."
-                        )
+                            f"but {tx.action} {tx.id} on {tx.date} is in {tx.currency!r}. "
+                            + _currency_mismatch_advice(tx, pool['currency']))
                     if tx.currency and not pool['currency']:
                         pool['currency'] = tx.currency
 
@@ -2686,7 +2700,7 @@ class CanadaTaxRules(TaxRules):
                                         f"currency mismatch "
                                         f"{pool['currency']!r} vs "
                                         f"{existing['currency']!r}. Run "
-                                        f"taxjson_convert_currency first."
+                                        f"taxjson-convert-currency first."
                                     )
                                 if (existing['qty'] * pool['qty']
                                         < -1e-9):
@@ -4810,9 +4824,8 @@ class USATaxRules(TaxRules):
                     continue
                 raise ValueError(
                     f"Currency mismatch for {_tx.symbol}: previously seen as {existing!r} "
-                    f"but transaction {_tx.id} on {_tx.date} is in {_tx.currency!r}. "
-                    f"Run taxjson_convert_currency first to unify currencies."
-                )
+                    f"but {_tx.action} {_tx.id} on {_tx.date} is in {_tx.currency!r}. "
+                    + _currency_mismatch_advice(_tx, existing))
             if not existing:
                 symbol_currency[_tx.symbol] = _tx.currency
         # When an option closes via ASSIGN/exercise, the premium is rolled

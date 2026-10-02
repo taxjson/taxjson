@@ -1362,12 +1362,93 @@ def _raw_mixed_currency_symbols(raw_json: Path) -> List[str]:
         # refresh was skipped with a misleading "rollover rename"
         # message (R1-126). A rename's currency mix still shows through
         # the trades on either side of it (followed via `renames`).
-        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER"):
+        # ADJUST / DISALLOW rows move the pool too: one left in another
+        # currency (a USD return of capital on a CAD listing that
+        # _raw_align_adjust_currency could not price) would stop the
+        # native gains pass (A2-0055/0191/0204).
+        if t.get("action") not in ("BUYSELL", "ASSIGN", "TRANSFER",
+                                   "ADJUST", "DISALLOW"):
             continue
         c, sym = t.get("currency"), t.get("symbol")
         if c and sym:
             curs.setdefault(_final(sym), set()).add(c)
     return sorted(sym for sym, cs in curs.items() if len(cs) > 1)
+
+
+def _raw_align_adjust_currency(raw_json: Path, rates_path: Path,
+                               base_currency: str) -> List[str]:
+    """Restate, in the pool's own currency, every ADJUST / DISALLOW row of
+    the NATIVE-currency raw merge that is in another currency: a USD
+    return of capital on a TSX listing (RBC, Questrade, IB), a CAD T3
+    box-42 ADJUST on a USD unit (README recipe). The native gains pass
+    pools one currency per symbol and used to stop the whole run at
+    "raw gains" with advice a project user cannot act on (audit
+    A2-0055/0191/0204). The amount is converted through the base
+    currency at the row's date (the same Bank of Canada / base rates the
+    filing books use); the converted, tax-authoritative books are
+    untouched — they convert every row anyway. A row with no rate is
+    left as is (the raw view is then skipped with a note). Returns one
+    line per restated row for the console."""
+    import json as _json
+    from datetime import timedelta
+    from decimal import Decimal as _D
+    try:
+        doc = _json.loads(raw_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    txs = doc.get("transactions", []) if isinstance(doc, dict) else []
+    pool_cur: Dict[str, set] = {}
+    for t in txs:
+        if t.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER",
+                               "OPENING_BALANCE") and t.get("currency"):
+            pool_cur.setdefault(t.get("symbol"), set()).add(t["currency"])
+    todo = [t for t in txs
+            if t.get("action") in ("ADJUST", "DISALLOW")
+            and t.get("currency")
+            and len(pool_cur.get(t.get("symbol"), ())) == 1
+            and t["currency"] not in pool_cur[t.get("symbol")]]
+    if not todo:
+        return []
+    from taxjson.bin.taxjson_convert_currency import load_exchange_rates
+    base = (base_currency or "").upper()
+    try:
+        hist = load_exchange_rates(rates_path, target_curr=base)
+    except (OSError, ValueError):
+        return []
+
+    def _rate(cur: str, day: str):
+        if cur == base:
+            return _D(1)
+        h = hist.get(cur) or {}
+        try:
+            d0 = datetime.strptime(day, "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return None
+        for i in range(6):           # prior business day, as convert does
+            k = (d0 - timedelta(days=i)).strftime("%Y-%m-%d")
+            if k in h:
+                return h[k]
+        return None
+    notes = []
+    for t in todo:
+        src, dst = t["currency"], next(iter(pool_cur[t["symbol"]]))
+        day = t.get("date") or ""
+        r_src, r_dst = _rate(src, day), _rate(dst, day)
+        if not r_src or not r_dst:
+            continue
+        f = r_src / r_dst
+        for k in ("net_amount", "gross_amount"):
+            if t.get(k) not in (None, ""):
+                t[k] = float(_D(str(t[k])) * f)
+        t["currency"] = dst
+        notes.append(f"{t['symbol']} {t['action']} {day}: {src} amount "
+                     f"restated as {t['net_amount']:,.2f} {dst} for the "
+                     f"native-currency holdings view")
+    if notes:
+        tmp = raw_json.with_name(raw_json.name + ".part")
+        tmp.write_text(_json.dumps(doc, indent=2), encoding="utf-8")
+        tmp.replace(raw_json)
+    return notes
 
 
 # ---------------------------------------------------------------- stages
@@ -2484,15 +2565,23 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
                 raw_cmd += ["--map", str(ticker_map)]
             raw_cmd += [str(p) for p in sources]
             run_to_file(raw_cmd, raw_json, capture_diag=False)
+        # Idempotent: rewrites only rows still in another currency (also
+        # a raw merge an earlier version left behind).
+        for _ln in _raw_align_adjust_currency(raw_json, rates,
+                                              base_currency):
+            print(f"  note: {_ln}", file=sys.stderr)
         mixed = _raw_mixed_currency_symbols(raw_json)
         if mixed:
             # Unrepresentable in a native-currency book (cross-currency
-            # rollover rename): skip the raw view rather than kill the
+            # rollover rename, or a foreign-currency cost adjustment with
+            # no rate on file): skip the raw view rather than kill the
             # run. The converted books, gains, wash and .sum reports
             # above are complete and authoritative.
             print(f"  !! raw holdings skipped for '{name}': "
                   f"{', '.join(mixed)} would pool mixed currencies "
-                  f"after a cross-currency rollover rename. "
+                  f"(a cross-currency rollover rename, or a cost "
+                  f"adjustment in another currency with no exchange "
+                  f"rate on file). "
                   f"{name}_holdings.toml was NOT refreshed this run.",
                   file=sys.stderr)
             # The native books of an EARLIER run (before the rollover

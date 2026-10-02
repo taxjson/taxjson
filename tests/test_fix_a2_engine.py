@@ -344,5 +344,79 @@ class TestDeclaredContractSize(unittest.TestCase):
                           w['at_risk_amount']), (10.0, 1.0, -100.0))
 
 
+class TestRawPassForeignCurrencyAdjust(unittest.TestCase):
+    """A2-0055 / A2-0191 / A2-0204: a cost adjustment in another currency
+    than its pool no longer stops `taxjson run` at the native raw pass."""
+
+    def _write(self, td, txs, rates):
+        import json
+        from pathlib import Path
+        raw = Path(td) / 'm_raw.json'
+        raw.write_text(json.dumps({'transactions': txs}))
+        rp = Path(td) / 'to_base.csv'
+        rp.write_text(''.join(f'{d} 12:00:00 {c} CAD {r}\n'
+                              for d, c, r in rates))
+        return raw, rp
+
+    def _tx(self, action, sym, cur, net, d='2025-07-15'):
+        return {'action': action, 'date': d, 'time': '09:30:00',
+                'symbol': sym, 'currency': cur, 'quantity': 0,
+                'net_amount': net, 'account': 'margin'}
+
+    def test_usd_roc_on_a_cad_listing_is_restated(self):
+        import json
+        import tempfile
+        from taxjson.bin.taxjson_run import (_raw_align_adjust_currency,
+                                             _raw_mixed_currency_symbols)
+        with tempfile.TemporaryDirectory() as td:
+            buy = dict(self._tx('BUYSELL', 'GLDX.TO', 'CAD', 10000.0,
+                                '2024-03-04'), quantity=1000)
+            ubuy = dict(self._tx('BUYSELL', 'QZU.U.TO', 'USD', 1000.0,
+                                 '2024-03-04'), quantity=100)
+            raw, rp = self._write(td, [
+                buy, self._tx('ADJUST', 'GLDX.TO', 'USD', -2000.0),
+                ubuy, self._tx('ADJUST', 'QZU.U.TO', 'CAD', -50.0,
+                               '2025-12-31')],
+                [('2025-07-15', 'USD', '1.371'),
+                 ('2025-12-31', 'USD', '1.25')])
+            notes = _raw_align_adjust_currency(raw, rp, 'CAD')
+            self.assertEqual(len(notes), 2)
+            rows = json.loads(raw.read_text())['transactions']
+            self.assertEqual((rows[1]['currency'], rows[1]['net_amount']),
+                             ('CAD', -2742.0))
+            self.assertEqual(rows[3]['currency'], 'USD')
+            self.assertAlmostEqual(rows[3]['net_amount'], -40.0)
+            self.assertEqual(_raw_mixed_currency_symbols(raw), [])
+            # Idempotent.
+            self.assertEqual(_raw_align_adjust_currency(raw, rp, 'CAD'), [])
+
+    def test_no_rate_leaves_it_for_the_detector(self):
+        import tempfile
+        from taxjson.bin.taxjson_run import (_raw_align_adjust_currency,
+                                             _raw_mixed_currency_symbols)
+        with tempfile.TemporaryDirectory() as td:
+            buy = dict(self._tx('BUYSELL', 'GLDX.TO', 'CAD', 10000.0,
+                                '2024-03-04'), quantity=1000)
+            raw, rp = self._write(td, [
+                buy, self._tx('ADJUST', 'GLDX.TO', 'USD', -2000.0)], [])
+            self.assertEqual(_raw_align_adjust_currency(raw, rp, 'CAD'), [])
+            # The raw view is skipped with a note, never a dead run.
+            self.assertEqual(_raw_mixed_currency_symbols(raw), ['GLDX.TO'])
+
+    def test_engine_error_names_the_row_and_the_fix(self):
+        rows = [_row('2024-03-04', 1000, 10),
+                TaxTransaction(action='ADJUST', date='2025-07-15',
+                               date_settle='2025-07-15', time='09:30:00',
+                               symbol='XYZ.TO', quantity=0, price=0,
+                               net_amount=-2000.0, currency='USD',
+                               account='margin')]
+        with self.assertRaises(ValueError) as cm:
+            _ca(rows)
+        msg = str(cm.exception)
+        self.assertIn('ADJUST', msg)
+        self.assertIn("pool's currency", msg)
+        self.assertNotIn('taxjson_convert_currency', msg)
+
+
 if __name__ == '__main__':
     unittest.main()

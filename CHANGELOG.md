@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A cost adjustment in another currency no longer stops `taxjson run`.**
+  A USD return of capital or notional distribution on a TSX listing
+  (RBC, Questrade, IB, in either country), or a CAD `.tt` ADJUST /
+  DISALLOW on a USD unit, made the native-currency raw pass exit 1 at
+  "raw gains" with advice to run an underscore tool. The raw merge now
+  restates such a row in the listing's currency at its date (a note per
+  row); with no rate on file the native holdings view is skipped with a
+  note. The filing books were never affected. The engine's own
+  currency-mismatch error names the row and the installed command
+  (A2-0055/0191/0204).
+
 - **Long calls as replacements: class-share roots, mini contracts and
   futures options.** A call booked under the root that drops the share
   class (RCI for RCI.B.TO, BRKB for BRK.B) is now a call on that class
