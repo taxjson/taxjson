@@ -484,8 +484,10 @@ def apply_distributions(doc: dict, map_rows, account: str,
         if per_share < 0:
             _warn_roc_overlaps(txs, sym, key, date, account, amount,
                                country)
+        ccy = doc.get("metadata", {}).get("target_currency", "")
+        unit = f" {ccy}" if ccy else ""
         print(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
-              f"{per_share:g} = {amount:+.2f} "
+              f"{per_share:g}{unit} = {amount:+.2f} "
               f"{_cost} adjustment.{income}", file=sys.stderr)
         applied += 1
     doc["transactions"] = txs
@@ -494,9 +496,16 @@ def apply_distributions(doc: dict, map_rows, account: str,
 
 @guard_main("taxjson-apply-distributions")
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        epilog="Map lines are SYMBOL RECORD_DATE PER_SHARE. The per-share "
+               "amount is in the project BASE currency (the books this "
+               "tool reads are already converted): convert a US-listed "
+               "fund's published USD factor to the base currency first.")
     ap.add_argument("base_json", type=Path)
-    ap.add_argument("--map", type=Path, required=True)
+    ap.add_argument("--map", type=Path, required=True,
+                    help="distributions.map (per-share amounts in the "
+                         "project base currency)")
     ap.add_argument("--account", default="")
     ap.add_argument("--date-basis", choices=DATE_BASES, default="settle",
                     help="Which date a trade moves the record-date "

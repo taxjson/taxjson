@@ -47,10 +47,14 @@ the open steps one at a time; `--quick` skips the slow detectors.
 - [ ] `taxjson find-missing-history` — nothing marked **AFFECTS <year>**.
       Import real confirmations first (`.tt` lines); phantoms only for
       what is unrecoverable.
+- [ ] `taxjson renames` — every ticker change is a dated event, and no
+      trade in an old ticker after its rename date is left undeclared
+      (a dated `RENAME OLD NEW YYYY-MM-DD late=fold|late=separate` line
+      in `ticker.map` says which; `run --strict` stops until then).
 - [ ] `taxjson elect --pending` — no unresolved merger or spin-off
       election.
-- [ ] `taxjson crypto-sends` — every crypto send that did not arrive on
-      another of your exchanges is decided: `self` (your own wallet),
+- [ ] `taxjson crypto-sends` — every crypto send that did not arrive in
+      another of your crypto accounts is decided: `self` (your own wallet),
       `gift` or `payment` (a disposition at fair value). `taxjson run`
       asks at a terminal; headless, `--set ID=...`. The gifts and
       payments are written to `inputs/<account>/crypto_sends.tt` (`--write`,

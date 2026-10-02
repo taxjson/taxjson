@@ -543,7 +543,8 @@ class GenericBrokerage(BaseBrokerage):
 
     def _listing_symbol(self, symbol_raw: str, currency: str) -> str:
         """The row's symbol with its exchange suffix. An explicit known
-        suffix (.TO/.V/.CN/.NE/.US/.AX/.L) is the LISTING and is kept:
+        suffix (.TO/.US/.AX/.L) is the LISTING and is kept (a Canadian
+        venue .V/.VN/.CN/.NE is spelled .TO, below):
         the row currency is only what the trade settled in, and deriving
         the suffix from it turned DLR.U.TO bought in USD into DLR.U.US —
         a different identity, so a superficial loss across accounts was

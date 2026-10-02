@@ -82,7 +82,9 @@ def _render_wash_window(g: Dict[str, Any]) -> List[str]:
         return []
 
     out: List[str] = []
-    out.append("# --- WASH SALE WINDOW (±30 days, all accounts) ---")
+    # Canada only (wash_window comes from the s.54 engine): its own
+    # name, never "wash sale" (audit A2-1352).
+    out.append("# --- SUPERFICIAL-LOSS WINDOW (±30 days, all accounts) ---")
     out.append(f"#   T-30  = {ww['window_start']}")
     out.append(f"#   LOSS  = {ww['loss_date']}")
     out.append(f"#   T+30  = {ww['window_end']}")
@@ -227,7 +229,7 @@ def _render_wash_explanation(g: Dict[str, Any]) -> List[str]:
     wt = g.get('wash_trigger')
     if wt:
         # Canada (CRA superficial-loss rule, ITA 54).
-        out.append("# --- WASH SALE (CRA superficial loss) ---")
+        out.append("# --- SUPERFICIAL LOSS (ITA s.54) ---")
         if wt.get('is_full_disallowance'):
             out.append(f"#   raw loss {_fmt_signed_money(raw)} -> fully disallowed (+{_fmt_money(dis)})")
         else:
