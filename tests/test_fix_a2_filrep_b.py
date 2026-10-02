@@ -365,3 +365,106 @@ class TestSumGainsGrantWrites(unittest.TestCase):
                        gc={"2024": {"units": 1.0, "premium": 300.0}}),
                self._e(B, "2025-03-04", 1, 250.0, grant=True)]
         self.assertEqual(self._dollars(txs), [-100.0, 250.0])
+
+
+# ---------------------------------------------------------------------
+# fees report
+# ---------------------------------------------------------------------
+
+def _fees_run(*args):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    src = Path(__file__).resolve().parent.parent / "src"
+    env = dict(os.environ, PYTHONPATH=str(src), TAXJSON_OFFLINE="1")
+    return subprocess.run([sys.executable, "-m", "taxjson.bin.taxjson_fees",
+                           *args], capture_output=True, text=True, env=env,
+                          stdin=subprocess.DEVNULL)
+
+
+def _fee_trade(i, date, fee, currency="CAD", symbol="XYZ.TO"):
+    return {"id": f"t{i}", "action": "BUYSELL", "date": date,
+            "date_settle": date, "symbol": symbol, "quantity": 10,
+            "price": 10.0, "gross_amount": 100.0, "net_amount": 100.0 + fee,
+            "fee": fee, "currency": currency, "account": "margin"}
+
+
+def _write(path, doc):
+    import json
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+class TestFeesReport(unittest.TestCase):
+
+    def test_a2_0645_to_currency_spelling_normalised(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "margin_questrade.json"
+            _write(f, {"metadata": {"source_brokerage": "questrade"},
+                       "transactions": [_fee_trade(1, "2025-03-03", 9.99),
+                                        _fee_trade(2, "2025-03-04", 9.99)]})
+            rates = Path(d) / "to_base.csv"
+            rates.write_text("2025-03-03 00:00:00 USD CAD 1.40\n")
+            outs = []
+            for to in ("CAD", "cad", " CAD"):
+                r = _fees_run(str(f), "--year", "2025", "--to", to,
+                              "--rates", str(rates))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn("default-rate", r.stderr + r.stdout)
+                outs.append([ln for ln in r.stdout.splitlines()
+                             if ln.startswith("TOTAL")])
+            self.assertEqual(outs[0], outs[1])
+            self.assertEqual(outs[0], outs[2])
+            self.assertIn("19.98", outs[0][0])
+
+    def test_a2_0646_unnamed_generic_bucket_caveats_zero_fee_claim(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            q = Path(d) / "margin_questrade.json"
+            _write(q, {"metadata": {"source_brokerage": "questrade"},
+                       "transactions": [_fee_trade(1, "2024-03-03", 0.0)]})
+            g = Path(d) / "margin_generic_x.json"
+            _write(g, {"metadata": {"source_brokerage": "generic"},
+                       "transactions": [_fee_trade(2, "2025-03-03", 10.0)]})
+            r = _fees_run(str(q), str(g), "--year", "2025")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("Brokers with NO fees", r.stdout)
+            self.assertIn("questrade", r.stdout)
+            self.assertIn("not attributed to a broker", r.stdout)
+            self.assertIn("[broker] name", r.stdout)
+
+    def test_a2_1102_title_names_the_trade_date_window(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "margin_questrade.json"
+            _write(f, {"metadata": {"source_brokerage": "questrade"},
+                       "transactions": [_fee_trade(1, "2025-03-03", 9.99)]})
+            r = _fees_run(str(f), "--year", "2025")
+            self.assertIn("tax year 2025, by TRADE date", r.stdout)
+            j = _fees_run(str(f), "--year", "2025", "--json")
+            self.assertEqual(json.loads(j.stdout)["meta"]["date_basis"],
+                             "trade")
+
+
+class TestDedupOrderIndependent(unittest.TestCase):
+    """A2-1100: the books (.tt files first) and the fees report (sorted
+    glob) feed plan_dedup the same rows in different orders; the plan
+    keeps the same rows either way."""
+
+    def test_a2_1100_same_verdict_in_both_orders(self):
+        from taxjson.bin.taxjson_sort import plan_dedup
+
+        def row(src):
+            return {"id": "same", "action": "BUYSELL", "date": "2025-03-03",
+                    "symbol": "XYZ.US", "quantity": 100, "source": src}
+        acc = {"ib.csv": ["aaaaaaaaaa"], "ib.csv#2": ["bbbbbbbbbb"]}
+        books = [row("m.tt"), row("ib.csv"), row("ib.csv#2")]
+        fees = [row("ib.csv"), row("ib.csv#2"), row("m.tt")]
+        kb = sorted(books[i]["source"] for i in plan_dedup(books, acc).keep)
+        kf = sorted(fees[i]["source"] for i in plan_dedup(fees, acc).keep)
+        self.assertEqual(kb, kf)

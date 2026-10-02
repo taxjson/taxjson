@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- fees report: `--to cad` / `--to " CAD"` no longer converts CAD fees at
+  the 1.35 fallback (re-audit A2-0645); fees in a generic import with no
+  `[broker] name` no longer leave a broker listed as fee-free (A2-0646);
+  the title says the year is windowed by TRADE date, unlike the .sum and
+  trades-sum (A2-1102; JSON `meta.date_basis`).
+
 - `.sum` per-asset block: under grant timing each written option is one
   trade whose result is its premium plus a same-year buy-back; the block
   dropped every premium (an expired write vanished, a bought-back one
