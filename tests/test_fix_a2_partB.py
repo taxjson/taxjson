@@ -535,5 +535,42 @@ class TestOneCountryHelpAndWarnings(unittest.TestCase):
         self.assertIn("Refused with --country canada", flat)
 
 
+
+class TestFxFallbackDirection(unittest.TestCase):
+    """A2-0148: the implicit 1.35 fallback (a USD->CAD rate) multiplied a
+    pre-coverage CAD row in a USD book by 1.35 (real ~0.74)."""
+
+    @rule("CA-FX-02")
+    @rule("US-FX-02")
+    def test_placeholder_rate_follows_the_direction(self):
+        from taxjson.bin import taxjson_convert_currency as CC
+        from taxjson.lib.core import TaxTransaction
+        CC.reset_fallback_tally()
+
+        def conv(cur, tgt):
+            t = TaxTransaction(action="BUYSELL", date="1995-06-01",
+                               time="09:30:00", date_settle="1995-06-01",
+                               symbol="XYZ.TO", quantity=100, price=10.0,
+                               net_amount=-1000.0, currency=cur)
+            return CC.convert_transaction(t, tgt, {}, None).net_amount
+
+        self.assertAlmostEqual(conv("USD", "CAD"), -1350.0, places=2)
+        self.assertAlmostEqual(conv("CAD", "USD"), -740.74, places=2)
+        # An explicit --default-rate is the user's own, applied as given.
+        t = TaxTransaction(action="BUYSELL", date="1995-06-01",
+                           time="09:30:00", date_settle="1995-06-01",
+                           symbol="XYZ.TO", quantity=100, price=10.0,
+                           net_amount=-1000.0, currency="CAD")
+        self.assertAlmostEqual(CC.convert_transaction(
+            t, "USD", {}, CC.resolve_default_rate(0.8)).net_amount,
+            -800.0, places=2)
+        rows = CC.fallback_rows()
+        self.assertTrue(rows)
+        msg = "\n".join(m for v in CC.fallback_validation_issues(
+            "USD", None).values() for m in v)
+        self.assertIn("0.740741", msg)
+        CC.reset_fallback_tally()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,32 @@ from taxjson.lib.core import (
 )
 
 DEFAULT_RATE = 1.35
+# The built-in fallback is a USD->CAD rate: applied to a CAD row in a
+# USD book it multiplied CAD by 1.35 instead of ~0.74 (audit A2-0148).
+# The implicit fallback is per direction; an explicit --default-rate is
+# the user's own rate and is applied as given.
+IMPLICIT_PAIR_RATES = {("USD", "CAD"): Decimal("1.35"),
+                       ("CAD", "USD"): (Decimal(1) / Decimal("1.35")
+                                        ).quantize(Decimal("0.000001"))}
+
+
+def default_rate_for(src: str, tgt: str, explicit=None) -> Decimal:
+    """The fallback rate for one src->tgt conversion: `explicit` (a
+    --default-rate) when given, else the built-in rate of that
+    direction (USD->CAD 1.35, CAD->USD its inverse), else DEFAULT_RATE."""
+    if explicit is not None:
+        return Decimal(str(explicit))
+    return IMPLICIT_PAIR_RATES.get((norm_currency(src), norm_currency(tgt)),
+                                   Decimal(str(DEFAULT_RATE)))
+
+
+def describe_default_rate(default_rate) -> str:
+    """How a fallback rate is named in messages (None: the built-in
+    per-direction rates)."""
+    if default_rate is not None:
+        return str(default_rate)
+    return (f"1.35 for USD->CAD, {IMPLICIT_PAIR_RATES[('CAD', 'USD')]} "
+            f"for CAD->USD")
 
 _RATE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -62,10 +88,12 @@ def positive_rate(value: str) -> float:
     return rate
 
 
-def resolve_default_rate(value) -> float:
+def resolve_default_rate(value):
     """--default-rate is parsed with default=None so callers can tell
-    an explicit `--default-rate 1.35` from the implicit fallback."""
-    return DEFAULT_RATE if value is None else float(value)
+    an explicit `--default-rate 1.35` from the implicit fallback: the
+    explicit rate as a Decimal, or None — the built-in rate of each
+    row's direction (default_rate_for)."""
+    return None if value is None else Decimal(str(value))
 
 
 def load_exchange_rates(rates_file: Path, target_curr: str = None) -> Dict[str, Dict[str, Decimal]]:
@@ -273,14 +301,15 @@ def convert_transaction(
         # Resolve rate for this transaction's date
         tx_date = tx.date_settle if tx.date_settle else tx.date
         before = dict(_DEFAULT_RATE_FALLBACKS)
-        rate = get_rate_for_date(src_curr, tx_date, history, default_rate)
+        _fallback = default_rate_for(src_curr, target_curr, default_rate)
+        rate = get_rate_for_date(src_curr, tx_date, history, _fallback)
         if _DEFAULT_RATE_FALLBACKS != before:
             reason = next(r for (c, r), n in _DEFAULT_RATE_FALLBACKS.items()
                           if n != before.get((c, r), 0))
             _FALLBACK_ROWS.append({
                 "id": tx.id, "date": tx_date, "currency": src_curr,
                 "symbol": tx.symbol, "action": tx.action,
-                "reason": reason})
+                "reason": reason, "rate": str(_fallback)})
         rates_map = {(src_curr, target_curr): rate}
 
         # Stage all converted values before mutating `converted`. The
@@ -298,7 +327,7 @@ def convert_transaction(
                 continue
             try:
                 staged[field] = convert_currency(
-                    value, src_curr, target_curr, rates_map, float(default_rate)
+                    value, src_curr, target_curr, rates_map, float(rate)
                 )
             except Exception as exc:
                 # Stay loud — a silent skip here was the original bug.
@@ -424,7 +453,7 @@ def fallback_validation_issues(target_curr: str,
         out.setdefault(ctx, []).append(
             f"FX: no {r['currency']}->{tgt} rate "
             f"for {r['date']} ({r['reason']}); converted at the default "
-            f"rate {default_rate}. {fix}")
+            f"rate {r.get('rate') or default_rate_for(r['currency'], tgt, default_rate)}. {fix}")
     return out
 
 
@@ -486,8 +515,8 @@ def emit_fallback_summary(default_rate, *, stream=None) -> None:
         for (currency, reason), count in sorted(_DEFAULT_RATE_FALLBACKS.items())
     )
     print(
-        f"warning: applied --default-rate ({default_rate}) to {total} "
-        f"row(s) that had no rate match: {breakdown}",
+        f"warning: applied --default-rate ({describe_default_rate(default_rate)}) "
+        f"to {total} row(s) that had no rate match: {breakdown}",
         file=(stream or sys.stderr),
     )
 
@@ -506,7 +535,9 @@ def main():
     parser.add_argument(
         "--default-rate", type=positive_rate, default=None,
         help="Fallback rate when the rates file is missing a date "
-             "(default: 1.35). Passing it explicitly also allows a "
+             "(default: 1.35 for USD->CAD, its inverse for CAD->USD — "
+             "every such row is a validation error). Passing it "
+             "explicitly also allows a "
              "currency that is entirely absent from --rates to convert "
              "at this rate; without it that is a fatal error.")
     args = parser.parse_args()
@@ -534,7 +565,7 @@ def main():
         print(
             f"warning: no --rates file given; every cross-currency row will "
             f"be converted with the hardcoded --default-rate "
-            f"({resolve_default_rate(args.default_rate)}). Pass --rates "
+            f"({describe_default_rate(resolve_default_rate(args.default_rate))}). Pass --rates "
             f"rates.csv to use real historical rates.",
             file=sys.stderr,
         )
@@ -549,7 +580,7 @@ def main():
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
-    default_rate = Decimal(str(resolve_default_rate(args.default_rate)))
+    default_rate = resolve_default_rate(args.default_rate)
 
     try:
         converted_transactions = process_transactions(
@@ -568,7 +599,8 @@ def main():
         Path(args.rates) if args.rates else None, target_curr))
     metadata = {
         "converted_to": target_curr,
-        "default_rate": str(default_rate),
+        "default_rate": (str(default_rate) if default_rate is not None
+                         else "implicit"),
     }
     if args.default_rate is None and fallback_rows():
         # Default-rate rows are validation ERRORS unless the fallback

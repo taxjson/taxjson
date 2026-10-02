@@ -50,6 +50,7 @@ from taxjson.bin.taxjson_convert_currency import (
     emit_source_summary, fallback_validation_issues, load_rate_sources,
     load_exchange_rates, process_transactions as convert_transactions,
     positive_rate, reset_fallback_tally, resolve_default_rate,
+    describe_default_rate,
 )
 from taxjson.bin.taxjson_validate import validate_transactions as _validate_dict_list
 from taxjson.lib.corporate_timeline import normalize_symbol_new
@@ -546,7 +547,7 @@ def main():
             print(
                 f"warning: --to {target_currency} given without --rates; "
                 f"every cross-currency row will be converted with the "
-                f"hardcoded --default-rate ({resolve_default_rate(args.default_rate)}). Pass "
+                f"hardcoded --default-rate ({describe_default_rate(resolve_default_rate(args.default_rate))}). Pass "
                 f"--rates rates.csv to use real historical rates.",
                 file=sys.stderr,
             )
@@ -562,7 +563,7 @@ def main():
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        default_rate = Decimal(str(resolve_default_rate(args.default_rate)))
+        default_rate = resolve_default_rate(args.default_rate)
         try:
             txs = convert_transactions(txs, target_currency, history,
                                        default_rate, country=args.country)

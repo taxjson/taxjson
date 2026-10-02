@@ -48,7 +48,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from taxjson.lib.cli_diag import guard_main, tax_year
-from taxjson.bin.taxjson_convert_currency import positive_rate
+from taxjson.bin.taxjson_convert_currency import (default_rate_for,
+                                                  positive_rate)
 from taxjson.lib.core import (get_tax_rules, is_option_symbol,
                               load_transactions)
 from taxjson.lib.country import (add_country_argument, canonical_country,
@@ -347,7 +348,7 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
                 source_index: Dict[str, List[Dict[str, Any]]],
                 check_index: Dict[str, List[Dict[str, Any]]],
                 fx_history: Dict[str, Dict[str, Decimal]],
-                default_rate: Decimal, base_currency: str,
+                default_rate: Optional[Decimal], base_currency: str,
                 tmap, replacement_lookup: Dict[str, Dict[str, Any]],
                 checks_supplied: bool,
                 futures_native: Optional[Dict[str, float]] = None,
@@ -425,7 +426,11 @@ def build_event(g: Dict[str, Any], base_index: Dict[str, Dict[str, Any]],
             # one — mirror it exactly.
             rate_date = str(raw.get("date_settle") or raw.get("date") or "")
             rate, kind, src_date = rate_with_provenance(
-                cur, rate_date, fx_history, default_rate)
+                cur, rate_date, fx_history,
+                # The converter's own fallback of this direction (a
+                # USD->CAD 1.35 never prices a CAD row in a USD book,
+                # audit A2-0148).
+                default_rate_for(cur, base_currency, default_rate))
             nominal = float(raw.get("net_amount") or 0.0)
             priced_by_fill = False
             _filled = (filled_index or {}).get(gid)
@@ -895,7 +900,9 @@ def parse_args(argv=None):
     p.add_argument("--base-currency",
                    help="Report currency (inferred from the base books "
                         "when omitted).")
-    p.add_argument("--default-rate", type=positive_rate, default=1.35)
+    p.add_argument("--default-rate", type=positive_rate, default=None,
+                   help="The converter's FX fallback (default: 1.35 for "
+                        "USD->CAD, its inverse for CAD->USD)")
     p.add_argument("--map", dest="ticker_map", help="ticker.map for "
                                                     "naming rename rules.")
     p.add_argument("--source", action="append", default=[],
@@ -1107,7 +1114,8 @@ def main(argv=None) -> int:
             if row.get("id"):
                 filled_index[row["id"]] = row
     events = [build_event(g, base_index, source_index, check_index,
-                          fx_history, Decimal(str(args.default_rate)),
+                          fx_history, (None if args.default_rate is None
+                                       else Decimal(str(args.default_rate))),
                           base_currency, tmap, replacement_lookup,
                           checks_supplied=bool(args.check),
                           futures_native=futures_native,

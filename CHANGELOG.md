@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The built-in FX placeholder rate follows the direction: a row older
+  than the rates file in a US (USD) project converts CAD at the inverse
+  of 1.35, not at 1.35 (which booked 1,000 CAD of cost as 1,350 USD);
+  the row is still a validation error. `taxjson-fees-sum` and
+  `taxjson-audit` use the same per-direction fallback (audit A2-0148).
 - One-country wording: `taxjson elect --set` names a US election key in
   a US project (not the Canadian s.85.1 one), the retired `cross_asset`
   warning states the US rule (a long call is only flagged) in a US

@@ -119,7 +119,8 @@ class TestMerge2DefaultRateWarning(unittest.TestCase):
             _write_json(p, {"transactions": [_trade(1, "2025-03-03", 1.0)]})
             r = _run("taxjson.bin.taxjson_merge2", str(p), "--to", "CAD")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("--default-rate (1.35)", r.stderr)
+            # The built-in fallback is per direction (A2-0148).
+            self.assertIn("--default-rate (1.35 for USD->CAD", r.stderr)
             self.assertNotIn("(None)", r.stderr)
 
 
