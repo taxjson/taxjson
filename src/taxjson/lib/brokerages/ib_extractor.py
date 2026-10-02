@@ -400,45 +400,69 @@ def _ib_split_datetime(raw: str, where: str):
         raise BrokerageParseError(
             f"{where}: Date/Time {raw!r} is not IB's 'YYYY-MM-DD, "
             f"HH:MM:SS' — refusing to guess the date")
-    if len(time.split(':')) == 2:
-        time += ':00'
-    return date, time
+    hms = [int(x) for x in time.split(':')] + [0]
+    h, m, s = hms[0], hms[1], hms[2]
+    if h > 23 or m > 59 or s > 59:
+        raise BrokerageParseError(
+            f"{where}: Date/Time {raw!r} holds an impossible clock time "
+            f"(hour 00-23, minute and second 00-59) — refusing to guess "
+            f"the date")
+    # Zero-padded: the session rules and every (date, time) sort compare
+    # the time as TEXT, and '9:45:00' sorts after '20:00:00' (audit
+    # A2-0082 / A2-0607).
+    return date, f"{h:02d}:{m:02d}:{s:02d}"
 
 
-# IB stamps Trades rows with the US Eastern CLOCK time. Two kinds of fill
-# have an official trade date other than that clock date (tax-logic
+# IB stamps Trades rows with the US Eastern CLOCK time. These fills have
+# an official trade date other than that clock date (tax-logic
 # CA-DATE-SESSION / US-DATE-SESSION):
 #   * a US-listed stock or ETF filled in the overnight session (20:00 ET
-#     onward, Sunday to Thursday nights) trades on the NEXT trading day;
-#   * an ASX fill is stamped in the ET evening, which is already the next
-#     day in Sydney: its trade date is the Sydney date.
+#     onward, Sunday to Thursday nights — and its after-midnight half on
+#     a day the NYSE is closed) trades on the NEXT trading day;
+#   * a US-dollar futures or futures-option fill in the CME Globex
+#     evening session (18:00 ET onward, Sunday to Thursday) or on a
+#     weekday the exchange is closed trades on the next trading day;
+#   * an SPX/SPXW/XSP/VIX option filled in Cboe Global Trading Hours
+#     (20:15 ET onward) trades on the next trading day;
+#   * a fill on the ASX, HKEX, Tokyo, Singapore or NZX exchanges (every
+#     asset class) is dated in the exchange's local time.
 _IB_OVERNIGHT_OPEN = '20:00:00'
+_IB_OVERNIGHT_CLOSE = '04:00:00'        # the session ends 03:50 ET
+_IB_CME_EVENING_OPEN = '18:00:00'
+_IB_GTH_OPEN = '20:15:00'
+_IB_GTH_ROOTS = frozenset({'SPX', 'SPXW', 'XSP', 'VIX', 'VIXW'})
 _IB_CLOCK_TZ = 'America/New_York'
-_IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney'}
+_IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney',
+                            'HKD': 'Asia/Hong_Kong', 'JPY': 'Asia/Tokyo',
+                            'SGD': 'Asia/Singapore',
+                            'NZD': 'Pacific/Auckland'}
+# The settlement market (calendar and cycle) of a stock/warrant listing
+# whose suffix names a venue in another currency: a USD unit listed on
+# the TSX settles through CDS, a USD line listed on the LSE on the UK
+# cycle (audit A2-0595 / A2-0081).
+_IB_EXT_SETTLE_MARKET = {'TO': 'CAD', 'L': 'GBP', 'AX': 'AUD', 'US': 'USD'}
+
+
+def _ib_next_trading_day(d, include_today: bool = False):
+    from taxjson.lib.market_calendar import is_trading_day
+    nxt = d if include_today else d + timedelta(days=1)
+    while not is_trading_day(nxt, 'USD'):
+        nxt += timedelta(days=1)
+    return nxt
 
 
 def _ib_market_trade_date(date: str, time: str, asset_cat: str,
-                          currency: str, ext: str):
+                          currency: str, ext: str, symbol: str = ''):
     """(trade date, time, broker stamp) of a Trades row whose exchange
     trade date is not the clock date IB printed; the broker stamp is ''
-    when nothing changes. An overnight fill is placed at 00:00:00 of
-    its trade date — before that day's regular session, the fills of
+    when nothing changes. A fill moved to the next trading day is placed
+    at 00:00:00 of that day — before its regular session, the fills of
     one night keeping their export (clock) order. A Friday- or
     Saturday-night US fill is left as stamped: there is no session
     then, and `taxjson check-dates` flags it."""
-    if asset_cat != 'Stocks':
-        return date, time, ''
     stamp = f"{date} {time} ET"
-    if ext == 'US' and time >= _IB_OVERNIGHT_OPEN:
-        from taxjson.lib.market_calendar import is_trading_day
-        d = datetime.strptime(date, "%Y-%m-%d").date()
-        if d.weekday() in (6, 0, 1, 2, 3):          # Sunday .. Thursday
-            nxt = d + timedelta(days=1)
-            while not is_trading_day(nxt, 'USD'):
-                nxt += timedelta(days=1)
-            return nxt.isoformat(), '00:00:00', stamp
-        return date, time, ''
-    zone = _IB_LOCAL_TZ_BY_CURRENCY.get((currency or '').upper())
+    cur = (currency or '').upper()
+    zone = _IB_LOCAL_TZ_BY_CURRENCY.get(cur)
     if zone:
         from zoneinfo import ZoneInfo
         clock = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
@@ -447,6 +471,39 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
         ld, lt = local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S")
         if ld != date:
             return ld, lt, stamp
+        return date, time, ''
+    d = datetime.strptime(date, "%Y-%m-%d").date()
+    sun_thu = d.weekday() in (6, 0, 1, 2, 3)
+    from taxjson.lib.market_calendar import is_trading_day
+    if asset_cat in FUTURES_CATEGORIES:
+        if cur != 'USD':
+            return date, time, ''
+        if time >= _IB_CME_EVENING_OPEN and sun_thu:
+            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
+        if d.weekday() < 5 and not is_trading_day(d, 'USD'):
+            # A holiday session (MLK day): its trade date is the next
+            # trading day.
+            return (_ib_next_trading_day(d).isoformat(), '00:00:00',
+                    stamp)
+        return date, time, ''
+    if asset_cat == 'Equity and Index Options':
+        root = (symbol or '').strip().split(' ')[0].upper()
+        if (cur == 'USD' and root in _IB_GTH_ROOTS
+                and time >= _IB_GTH_OPEN and sun_thu):
+            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
+        return date, time, ''
+    if asset_cat != 'Stocks' or ext != 'US':
+        return date, time, ''
+    if time >= _IB_OVERNIGHT_OPEN:
+        if sun_thu:
+            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
+        return date, time, ''
+    if (time < _IB_OVERNIGHT_CLOSE and d.weekday() < 5
+            and not is_trading_day(d, 'USD')):
+        # The after-midnight half of an overnight session on an NYSE
+        # holiday (audit A2-0597): the same trade date as its
+        # pre-midnight half.
+        return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
     return date, time, ''
 
 
@@ -602,6 +659,7 @@ def _root_aliases(occ_by_conid, underlying_by_conid):
 
 # Canadian listing venues as IB's Financial Instrument Information names
 # them (Listing Exch).
+_IB_LSE_VENUES = frozenset({'LSE', 'LSEETF', 'LSEIOB1'})
 _IB_CA_VENUES = frozenset({'TSE', 'VENTURE', 'TSXV', 'CSE', 'NEO', 'AEQLIT',
                            'PURE', 'OMEGA', 'CHIXCA', 'ALPHA', 'LYNX'})
 
@@ -617,12 +675,18 @@ def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
     interlisted ordinary share (MDA on the NYSE) must keep `.US`."""
     ext = _ib_currency_ext(currency)
     s = (raw_symbol or '').strip()
-    if (ext != 'TO' and asset_cat in ('Stocks', 'Warrants')
-            and re.search(r'[.\s]U$', s)):
-        info = (fii.get((asset_cat, s))
-                or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
-        if (info.get('exch') or '').upper() in _IB_CA_VENUES:
-            return 'TO'
+    if asset_cat not in ('Stocks', 'Warrants') or ext in ('TO', 'L'):
+        return ext
+    info = (fii.get((asset_cat, s))
+            or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
+    exch = (info.get('exch') or '').upper()
+    if re.search(r'[.\s]U$', s) and exch in _IB_CA_VENUES:
+        return 'TO'
+    if exch in _IB_LSE_VENUES:
+        # A USD line of an LSE-listed fund or GDR (CSPX-style UCITS
+        # ETF): an LSE security on the UK cycle, not a fictional `.US`
+        # one on the US T+1 calendar (audit A2-0081).
+        return 'L'
     return ext
 
 
@@ -2054,12 +2118,18 @@ class IbBrokerage(BaseBrokerage):
                 # The exchange's trade date when it is not the ET clock
                 # date (an overnight-session US fill, an ASX fill):
                 # tax-logic CA-DATE-SESSION / US-DATE-SESSION.
+                _listing = (_ib_listing_ext(asset_cat, symbol, currency,
+                                            fii)
+                            if asset_cat in ('Stocks', 'Warrants') else '')
                 date, time, broker_time = _ib_market_trade_date(
-                    date, time, asset_cat, currency,
-                    _ib_listing_ext(asset_cat, symbol, currency, fii)
-                    if asset_cat in ('Stocks', 'Warrants') else '')
-                date_settle = get_ib_settlement(date, asset_cat, currency,
-                                                futures_settle=self.futures_settle)
+                    date, time, asset_cat, currency, _listing,
+                    symbol=symbol)
+                # Settled in the listing's market: a USD unit on the TSX
+                # through CDS, a USD line on the LSE on the UK cycle.
+                date_settle = get_ib_settlement(
+                    date, asset_cat,
+                    _IB_EXT_SETTLE_MARKET.get(_listing, currency),
+                    futures_settle=self.futures_settle)
                 qty = _num('Quantity')
                 opt_exp = section == 'Options Expirations'
                 price = _num('T. Price', optional=opt_exp)
