@@ -546,5 +546,31 @@ class TestHarvestShelteredAdd(unittest.TestCase):
         self.assertNotIn("registered", got["usa"])
 
 
+# ------------------------------------------- income-rule refusal (06)
+
+class TestIncomeRuleRefusalWording(unittest.TestCase):
+    """A2-1306: the example follows the setting's country, and a CLI
+    flag is not called a [settings] key."""
+
+    def test_examples_and_sources(self):
+        from taxjson.lib.income_dating import (
+            IncomeRules, IncomeRulesError, parse_ric_entries)
+        with self.assertRaises(IncomeRulesError) as cm:
+            IncomeRules.from_settings({"country": "usa",
+                                       "ric_january_dividends": "XYZ"})
+        self.assertIn('["XYZ.US"]', str(cm.exception))
+        self.assertNotIn(".TO", str(cm.exception))
+        with self.assertRaises(IncomeRulesError) as cm:
+            IncomeRules.from_settings({"country": "canada",
+                                       "corporate_distributions": "XYZ"})
+        self.assertIn('["XYZ.TO"]', str(cm.exception))
+        with self.assertRaises(IncomeRulesError) as cm:
+            parse_ric_entries(["XYZ 2024-02-01"],
+                              key="--ric-january-dividend")
+        self.assertTrue(str(cm.exception).startswith(
+            "--ric-january-dividend:"), str(cm.exception))
+        self.assertNotIn("[settings]", str(cm.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

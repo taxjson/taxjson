@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- An invalid `ric_january_dividends` / `corporate_distributions` entry
+  is refused with an example listing of the setting's own country
+  (XYZ.US for the US-only RIC list), and a bad `--ric-january-dividend`
+  flag is named as the flag, not as a `[settings]` key (re-audit
+  A2-1306).
 - `taxjson harvest` in a US project shows an IRA purchase made within
   the window in SH_ADD even after the IRA sold it (an IRA buy washes a
   loss for good whether or not it is still held), and the SH_ADD legend

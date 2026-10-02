@@ -141,14 +141,27 @@ class IncomeRulesError(ValueError):
     pass
 
 
+def _where(key: str) -> str:
+    """How a refusal names its source: a CLI flag as itself, a setting
+    as `[settings] key` (re-audit A2-1306)."""
+    return key if key.startswith("--") else f"[settings] {key}"
+
+
+def _example(key: str) -> str:
+    """A listing of the setting's own country: the RIC list is US-only,
+    the corporate-distribution list Canada-only (re-audit A2-1306)."""
+    us = key in (SETTING_RIC, "--ric-january-dividend")
+    return '["XYZ.US"]' if us else '["XYZ.TO"]'
+
+
 def _symbols(value: Any, key: str) -> Tuple[str, ...]:
     if value in (None, ""):
         return ()
     if not isinstance(value, (list, tuple)) or not all(
             isinstance(v, str) and v.strip() for v in value):
         raise IncomeRulesError(
-            f"[settings] {key} must be a list of symbols, e.g. "
-            f"[\"XYZ.TO\"] (got {value!r})")
+            f"{_where(key)} must be a list of symbols, e.g. "
+            f"{_example(key)} (got {value!r})")
     return tuple(v.strip().upper() for v in value)
 
 
@@ -173,7 +186,7 @@ def parse_ric_entries(value: Any, key: str = SETTING_RIC
                 out.append((parts[0], parts[1]))
                 continue
         raise IncomeRulesError(
-            f"[settings] {key}: {v!r} is not \"SYMBOL\" or \"SYMBOL "
+            f"{_where(key)}: {v!r} is not \"SYMBOL\" or \"SYMBOL "
             f"YYYY-01-DD\" (a January pay date)")
     return tuple(out)
 
