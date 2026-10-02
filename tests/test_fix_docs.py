@@ -118,6 +118,20 @@ class TestKnownIssuesCurrent(unittest.TestCase):
                       "symbol's rows", ki)
 
 
+class TestFilingChecklistDoc(unittest.TestCase):
+    def test_every_checklist_command_is_in_filing_md(self):
+        # docs/filing.md is the checklist's own text: a step proved by a
+        # `taxjson X` command names it there (the renames step was missing).
+        from taxjson.lib.checklist import STEPS
+        doc = _read("docs/filing.md")
+        missing = []
+        for sid, _stage, _title, cmd, _why in STEPS:
+            for c in re.findall(r"taxjson ([a-z][a-z0-9-]+)", cmd):
+                if f"`taxjson {c}" not in doc:
+                    missing.append((sid, c))
+        self.assertEqual(missing, [])
+
+
 class TestDeckAndSecurity(unittest.TestCase):
     def test_webull_input_named_trading_summary(self):
         # A2-0949/0950/1623

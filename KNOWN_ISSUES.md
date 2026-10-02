@@ -2,7 +2,7 @@
 
 Known bugs, limitations, and deferred-fix items in taxjson. Each entry describes the current behavior, why it isn't fixed yet, and what evidence would be needed (or what work is required) to address it. Open a PR or attach a sample CSV to graduate any of these.
 
-The codebase has been through seven audit cycles; everything listed here was triaged and deliberately left in place rather than overlooked.
+The codebase has been through eight audit rounds and the re-audits that followed; everything listed here was triaged and deliberately left in place rather than overlooked.
 
 ---
 
@@ -22,7 +22,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 - **When the lookup fails (2026-09 audit R1-105):** a Yahoo error, outage or rate limit, or an HTTP 200 with a null/empty close, leaves the row at price 0. That is never silent any more: fill-crypto warns (per lookup, plus an `UNPRICED` summary), and the crypto path runs `taxjson-validate --require-prices`, so each unpriced row is a validation ERROR on the console and fatal under `taxjson run --strict`. Re-run online (a failed price is never cached).
 
 ### IB ISIN→market map `IE → L` is wrong for non-LSE IE-domiciled ETFs
-- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — the module-level `_ISIN_EXT` map (`'IE': 'L'`), read through `_isin_ext()` by the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_currency_ext(currency)` instead).
+- **Where:** `src/taxjson/lib/brokerages/ib_extractor.py` — the module-level `_ISIN_EXT` map (`'IE': 'L'`), read through `_isin_ext()` by the Dividends and Withholding Tax branches (the Corporate Actions and Transfers branches derive suffixes via `_ib_listing_ext` instead: the currency's suffix, with a TSX `.U` unit kept on `.TO` and an LSE-venue USD line on `.L`).
 - **Current behavior:** every Irish-domiciled (ISIN prefix `IE`) security is mapped to a `.L` (LSE) market suffix. Partially mitigated since the income-reattribution pass: DIVIDEND / DIVIDEND_IN_LIEU / TAX rows are re-bound to the suffix of the position actually held for that ticker in the statement (`_reattribute_income_to_holdings`; when the ticker is held under two listings during the statement, the one held on the payment date), so income no longer lands on a phantom `.L` symbol when the shares are held under another suffix. Since 2026-09 the holding may come from any of the account's IB statements (a statement with only a dividend row), and the rebind requires the held listing's ISIN (Financial Instrument Information) to match the income row's — a different issuer sharing the ticker keeps its own listing.
 - **Why deferred:** the user holds no IE-domiciled ETFs, so the bug doesn't fire on their data. Most IE-domiciled ETFs trade in EUR / multiple currencies, not all on LSE; a real fix needs an ISIN → exchange lookup or a per-ticker override.
 - **Workaround:** users who hold IE-domiciled ETFs should add a `ticker.map` GLOBAL rule rewriting the parsed `.L` symbol to the correct market suffix.
@@ -53,7 +53,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### Stablecoin de-peg warning checks US-dollar-valued fills only
 - **Where:** `src/taxjson/lib/brokerages/_crypto_common.py` `warn_depeg`, called by the Coinbase and Kraken parsers.
-- **Current behavior:** a stablecoin fill valued in US dollars (Coinbase Buy/Sell, Convert and `*-USDC` Advanced Trade rows priced in USD; Kraken stablecoin/USD pairs) more than 2% off 1.00 USD prints the de-peg warning. A fill valued in CAD, EUR or another fiat (Coinbase rows priced in CAD, Kraken `USDC/CAD`, `USDT/EUR`, ledger stablecoin-to-fiat instant conversions) is not checked: the parser has no exchange rate to turn it into US dollars (re-audit A2-0590).
+- **Current behavior:** a stablecoin fill valued in US dollars (Coinbase Buy/Sell, Convert and `*-USDC` Advanced Trade rows priced in USD; Kraken stablecoin/USD pairs and instant conversions, crypto/stablecoin fills such as ETH/USDC through the joined ledger's `amountusd`, and any Kraken ledger stablecoin leg that carries `amountusd` — exports since 2026) more than 2% off 1.00 USD prints the de-peg warning. A fill valued only in CAD, EUR or another fiat (Coinbase rows priced in CAD, Kraken trades-file `USDC/CAD`, `USDT/EUR`, pre-2026 ledger stablecoin-to-fiat conversions without `amountusd`) is not checked: the parser has no exchange rate to turn it into US dollars (re-audit A2-0590).
 - **Work needed:** check at the conversion stage, which has the day's rates: the parsers tag each stablecoin fill with its implied native price, and the stage converts it to USD and applies the 2% test.
 
 ### Canadian listings carry no venue (`ROOT.TO` for TSX, TSXV, CSE and NEO)
@@ -64,14 +64,14 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### Trade reversals across export files
 - **Where:** `src/taxjson/lib/trade_cancel.py` (IB `Ca`), `src/taxjson/lib/brokerages/questrade.py:_pair_reversals` (CIL / REI / stock dividend).
-- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. An OVERLAPPING statement of the same IB account (a download taken before IB posted the cancellation) that still holds the original drops it too, for Trades, Transfers and Corporate Actions rows, so dedup keeps one book (`IbBrokerage.reconcile_files`); statements of different IB accounts (Account Information) never touch each other. A Questrade CIL/REI/stock-dividend reversal must find its original in the SAME export file, else the parse is refused.
+- **Current behavior:** an IB cancellation pairs with its original in the same statement or, through `taxjson-merge2`, in another statement of the same account; with no original anywhere it stays booked as a reversing trade and merge2 warns. An OVERLAPPING statement of the same IB account (a download taken before IB posted the cancellation) that still holds the original drops it too, for Trades, Transfers and Corporate Actions rows, so dedup keeps one book (`IbBrokerage.reconcile_files`); statements of different IB accounts (Account Information) never touch each other. A Questrade CIL/REI/stock-dividend reversal (and an RBC REI CANCEL) pairs with its original in any export of the same account, overlapping copies included; with the original in no export of the account the parse is refused.
 - **Why deferred:** no real Questrade reversal row has been seen, so its cross-file shape (same code, negated signs, later date) is inferred from how Questrade reverses dividends.
-- **Workaround:** delete both rows of a reversal pair that straddles two exports, or book the correction in a `.tt` file.
+- **Workaround:** when the original is in no export (an export window that starts after it), book the correction in a `.tt` file.
 
 ### A negative futures price in a generic or `.tt` file
-- **Where:** `src/taxjson/lib/brokerages/generic.py` (`_trade_net` takes the magnitude), `src/taxjson/bin/taxjson_convert_tt.py` (a `.tt` total is a magnitude).
-- **Current behavior:** IB futures rows keep the sign of a negative price (audit A2-0092); a generic-import or `.tt` futures row at a negative price is still read as its magnitude, so its P/L sign is wrong.
-- **Workaround:** book such a fill from the IB statement, or enter the realized P/L of the close by hand.
+- **Where:** `src/taxjson/lib/brokerages/generic.py` (`_trade_net` takes the magnitude); `src/taxjson/bin/taxjson_convert_tt.py`.
+- **Current behavior:** IB futures rows keep the sign of a negative price (audit A2-0092). A generic-import futures row at a negative price is still read as its magnitude, so its P/L sign is wrong. A `.tt` line keeps a negative price and total as written, so it is right when the total carries the sign; a `.tt` line that writes a negative price with a positive total is not caught (the qty x price check runs only for a positive price).
+- **Workaround:** book such a fill from the IB statement or as a `.tt` line with the signed total, or enter the realized P/L of the close by hand.
 
 ### Identical rows in two exports with little overlap are booked once
 - **Where:** `src/taxjson/bin/taxjson_sort.py` — `plan_dedup`, used by `taxjson-merge2 --dedup`, `taxjson-sort --dedup` and `fees-sum`.
@@ -87,7 +87,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 ### Questrade `commission` vs everyone else `fee`
 - **Where:** `src/taxjson/lib/brokerages/questrade.py`.
 - **Current behavior:** Questrade transactions emit a `commission` key; IB / RBC / Webull / Kraken / Coinbase all emit `fee`.
-- **Why this isn't a bug:** cost-basis math is correct because downstream sums both fields (`core.py`'s `_effective_fee_for_trace` uses `tx.commission + tx.fee`). The inconsistency is cosmetic — per-row reports that itemize one column show the values under different headers across brokerages.
+- **Why this isn't a bug:** cost-basis math is correct because the engine works from `net_amount`, which already includes the charge; the fee reports sum both fields (`taxjson_fees.py`), and `core.py`'s display-only `_effective_fee_for_trace` uses `tx.commission + tx.fee`. The inconsistency is cosmetic — per-row reports that itemize one column show the values under different headers across brokerages.
 - **Why deferred:** pure refactor with no behavioral change. Touching every test and downstream consumer for a cosmetic split isn't worth the churn.
 
 ---
@@ -106,10 +106,11 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** Webull interest and dividends (T5 slips) are not in any Webull input, so the account's income summary leaves them out. A row with another action code (DIV, a transfer) that does appear in a Trading Summary is reported as `warning: UNBOOKED:` (echoed by `taxjson run`, refused by `--strict`). Enter them by hand in a `.tt` file in the account's folder: `INTEREST 2025-12-31 16:00:00 USD 1149.27` (T5 box 13; a slip with a blank box 27 is CAD), `DIVIDEND ...` for dividends.
 - **Why:** Webull exports no income file the parser could read.
 
-### Questrade emits no standalone INTEREST or withholding-TAX rows
-- **Where:** `src/taxjson/lib/brokerages/questrade.py` — strips `TAX WITHHELD`/`NON-RES` only as description-key noise; no TAX/INTEREST emission.
-- **Current behavior:** IB and RBC emit dedicated TAX (foreign withholding) and INTEREST records; Questrade does not, so a Questrade account's non-resident-tax-withheld dividend or interest credit is not recorded as such (foreign-tax-credit / interest income under-reported).
-- **Why deferred:** needs a Questrade CSV showing the interest and withholding row formats to parse them correctly.
+### Questrade dividends with tax withheld are booked at the net amount
+- **Where:** `src/taxjson/lib/brokerages/questrade.py` — strips `TAX WITHHELD`/`NON-RES` only as description-key noise; no TAX emission. (Interest rows, `INT`, are booked as INTEREST, sign kept.)
+- **Current behavior:** IB and RBC emit dedicated TAX (foreign withholding) records; Questrade's export gives neither the gross nor the tax of a dividend marked NON-RES TAX WITHHELD, so it is booked at the net amount (foreign-tax credit missing, income understated). In a taxable account the parse prints an ATTENTION line listing those dividends.
+- **Why deferred:** needs a Questrade CSV that carries the withholding as its own row (or the gross) to parse it correctly.
+- **Workaround:** take the gross and the withholding from the T5/NR4 slip.
 
 ### RBC identity across projects (one year's export per project)
 - **Where:** `src/taxjson/lib/brokerages/rbc_direct.py` (`build_rbc_account_context`).
@@ -299,13 +300,6 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Current behavior:** a US row under 1e-8 units is left out and named in a warning. (The Canada pool walk keeps a coin residue of any size with its cost — only float noise, under 1e-11 of the position, drains; share pools keep the 1e-6 tolerance: tax-logic CA-CRYPTO-09.)
 - **Why deferred:** the US lot epsilon also absorbs float noise in every FIFO lot split; a per-asset tolerance there needs its own fuzz audit. Effect: cents.
 
-## Test coverage gaps (tracked; lower priority)
-
-Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, and the country-alias helpers. Still uncovered:
-- `bin/to_base_curr.py` — `main()` and the FX fetch+cache paths (network-bound; cache read/write is testable). (`fill_crypto_prices.py` cache paths graduated: covered by `test_silent_corruption_fixes` and `test_audit_2026_08_fixes` — 2026-09 round-five audit.)
-
----
-
 ## Report semantics (by design — not a bug)
 
 ### `<account>.sum` vs `<account>_wash.sum` — pre-wash and post-wash reports
@@ -343,7 +337,7 @@ Added 2026-06: CLI tests for `taxjson-corp-actions`, `taxjson-missing-history`, 
 ## CLI silent-fail conditions
 
 ### `to_base_curr.py` real-time intra-day fetch
-- **Where:** `src/taxjson/bin/to_base_curr.py` (the intraday real-time block at the end of main).
+- **Where:** `src/taxjson/bin/to_base_curr.py` (`_spot_row`, the intra-day spot row; non-CAD base currencies only — a CAD base takes Bank of Canada daily rates and no spot row).
 - **Current behavior:** if the intra-day spot fetch from yfinance fails, the failure is swallowed without a stderr message. The historical rates already emitted are unaffected.
 - **Why deferred:** the most common failure mode is "market closed" (weekends, holidays, evenings). Logging on every off-market run would be steady noise drowning out real warnings.
 - **Workaround:** the historical-rates path emits its own loud `WARNING:` line on a fetch failure, so a real outage is still visible — only the optional intra-day stamp is silent.
@@ -390,6 +384,8 @@ These are real bugs in code paths the standard `taxjson run` flow never exercise
 
 ## Graduated (fixed)
 
+- **FX converter test coverage** — 2026-10: `to_base_curr.main()` and the Bank of Canada / noon-rate / Yahoo fetch-and-cache paths are covered with the fetchers mocked (`tests/test_fx_boc.py`, `tests/test_fix_a2_fx.py`).
+- **Questrade interest** — Questrade `INT` rows are booked as INTEREST (sign kept); only the dividend withholding is still missing (entry above).
 - **Option premium timing across a year end (ITA s.49(1); IT-479R paras 23–32)** — 2026-09: a written option's premium is now a gain in the year written under `option_premium_timing = "grant"` (Canada default), a buy-back a loss in its own year, an assignment folded with no grant record; `taxjson option-boundary` names any filed year to amend. Previously the premium was recognised at the close (the US §1234 convention).
 - **Income dating and payments in lieu (partition Phase C, 2026-09-30)** — a Canadian trust's distribution is now income of its record-date year and its return of capital lowers the ACB on the record date (Questrade/RBC); a Canadian dealer's payment in lieu on a Canadian issuer's share is a dividend (s.260); US January fund/REIT dividends are warned about and can be listed. Previously every row was dated by its pay date and every payment in lieu was ordinary income.
 - **Negative ACB after a return of capital (s.40(3))** — 2026-09: booked as a deemed gain in the distribution year with the ACB reset to nil; previously only a warning, with the whole amount landing in the sale year.

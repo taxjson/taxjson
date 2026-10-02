@@ -1681,7 +1681,7 @@ defended in layers rather than by tests alone:
 - **Property fuzzers.** Three seeded generators assert conservation,
   determinism and ordering laws over thousands of random books per
   run (engine, custody transfers, settle-lag/split interactions);
-  they are what still finds engine bugs after seven audit rounds.
+  they are what still finds engine bugs after eight audit rounds.
 - **Mutation testing** of the wash-sale regions, so a boundary that
   no test pins gets noticed.
 - **Independent audits.** Eight rounds plus a pre-release security and
@@ -1708,7 +1708,7 @@ defended in layers rather than by tests alone:
 
 ## Status
 
-Pre-1.0. The core pipeline (parse → merge → gains → summarize) is stable and covered by 2,100+ tests and three property fuzzers, but expect occasional breaking changes to CLI flags and JSON field names until 1.0.
+Pre-1.0. The core pipeline (parse → merge → gains → summarize) is stable and covered by 5,000+ tests and three property fuzzers, but expect occasional breaking changes to CLI flags and JSON field names until 1.0.
 
 The tests run against synthetic fixtures and check that the code implements the rules as written here — they are not an assurance that the rules themselves are correctly interpreted for your situation, and no output has been reviewed by a tax professional. The planning commands (`estimate`, `instalments`, the AMT check, `fx-cash`) are explicitly estimates: they say so in their own output, and they should be checked against your assessment or your accountant before you rely on them. Report anything that looks wrong.
 
