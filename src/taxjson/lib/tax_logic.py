@@ -1134,8 +1134,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "sale (a de-peg is a gain or loss), and a payment in one "
                  "is written as a sale. A swap against a stablecoin, a "
                  "reward or a fee in one is valued at its 1.00 USD par "
-                 "(ahead of any USD value the exchange states); a sale "
-                 "for dollars at the fill's price."),
+                 "(on Kraken ahead of any USD value the export states; a "
+                 "Coinbase row keeps the value Coinbase states for it, "
+                 "par when it states none); a sale for dollars at the "
+                 "fill's price."),
             Rule("US-CRYPTO-03",
                  "A Kraken fee paid in a coin is a sale of that coin: on a "
                  "move of coins (a withdrawal, a deposit, a transfer to "
