@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- tax-logic states the crypto rules the parsers and the US engine apply:
+  Coinbase's ETH2 is ETH (a Convert between them is not a sale), a
+  Kraken dust sweep splits its receipt over the coins by amountusd or
+  equally, and the US engine counts under 1e-08 units as zero — a lot
+  residue that small is folded into the sale that closes the lot and a
+  sale's excess that small opens no position, each now named in a
+  warning (CA-CRYPTO-10/11, US-CRYPTO-06/07/08; re-audit A2-0479,
+  A2-0815, A2-1469, A2-0808, A2-0818, A2-1471, A2-1484, A2-1485).
 - tax-logic states the date rules the parsers already apply: an expiry
   posted at most 7 days late is moved back to the contract's expiry
   date, a same-contract trade on the expiry day settles no later than

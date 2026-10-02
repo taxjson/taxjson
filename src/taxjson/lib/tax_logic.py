@@ -135,6 +135,7 @@ PARTITION_RULES = frozenset({
     "US-CTRY-03",      # base currency USD
     "US-FUT-01",       # futures P/L FIFO
     "US-CRYPTO-02",    # stablecoins are property (CA: US-dollar cash)
+    "US-CRYPTO-08",    # under 1e-08 units is zero (CA keeps any amount)
     "US-STKDIV-01",    # stock dividend: §307 basis spread, no §1091
     "US-BASIS-04",     # manual phantom-loss check on trade dates
     "US-ROC-03",       # ROC with no shares held: not booked (CA books it)
@@ -841,6 +842,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
                  "name the same coin as the bare code, so a 1:1 swap "
                  "between them is not a sale."),
+            Rule("CA-CRYPTO-10",
+                 "So is Coinbase's ETH2 (its staked ETH): it is booked as "
+                 "ETH, and a \"Converted ETH to ETH2\" row is not a sale "
+                 "(unequal quantities stop the parse).", cont=True),
+            Rule("CA-CRYPTO-11",
+                 "A Kraken dust sweep (several coins converted at once "
+                 "into one receipt) is a sale of each coin: the receipt "
+                 "is split over them by the export's amountusd, or "
+                 "equally when the export has none (the parse says "
+                 "which).", cont=True),
             Rule("CA-CRYPTO-09",
                  "Any amount of a coin is property: a residue left after a "
                  "sale, however small, stays in the holdings with its "
@@ -1458,6 +1469,26 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "DOT28.S, ETH2, ETH2.S, the .M/.F/.B/.P/.HOLD suffixes) "
                  "name the same coin as the bare code, so a 1:1 swap "
                  "between them is not a sale."),
+            Rule("US-CRYPTO-06",
+                 "So is Coinbase's ETH2 (its staked ETH): it is booked as "
+                 "ETH, and a \"Converted ETH to ETH2\" row is not a sale "
+                 "(unequal quantities stop the parse).", cont=True),
+            Rule("US-CRYPTO-07",
+                 "A Kraken dust sweep (several coins converted at once "
+                 "into one receipt) is a sale of each coin: the receipt "
+                 "is split over them by the export's amountusd, or "
+                 "equally when the export has none (the parse says "
+                 "which).", cont=True),
+            Rule("US-CRYPTO-08",
+                 "The US engine counts less than 1e-08 units as zero: a "
+                 "purchase or sale row under 1e-08 units is not booked "
+                 "(its units and money are left out of the lots and Form "
+                 "8949), a lot residue of at most 1e-08 units is folded "
+                 "into the sale that closes the lot (its cost goes with "
+                 "that sale), and a sale's excess of at most 1e-08 units "
+                 "over the units held opens no position (the whole "
+                 "proceeds are on the units held). Each case is named in "
+                 "a warning."),
             Rule("US-CRYPTO-02",
                  "USD stablecoins (USDC, USDT, DAI, PYUSD and GUSD, on "
                  "Kraken and Coinbase alike) are property like any coin: "

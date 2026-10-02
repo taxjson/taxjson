@@ -301,7 +301,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ### Sub-micro quantity tolerance in the US engine (crypto dust)
 - **Where:** `lib/core.py` (US engine) — no row or lot below 1e-8 units is booked.
-- **Current behavior:** a US row under 1e-8 units is left out and named in a warning. (The Canada pool walk keeps a coin residue of any size with its cost — only float noise, under 1e-11 of the position, drains; share pools keep the 1e-6 tolerance: tax-logic CA-CRYPTO-09.)
+- **Current behavior:** a US row under 1e-8 units is left out (its money too), a lot residue of at most 1e-8 units is folded into the sale that closes the lot, and a sale's excess of at most 1e-8 units opens no position; each case is named in a warning (tax-logic US-CRYPTO-08). (The Canada pool walk keeps a coin residue of any size with its cost — only float noise, under 1e-11 of the position, drains; share pools keep the 1e-6 tolerance: tax-logic CA-CRYPTO-09.)
 - **Why deferred:** the US lot epsilon also absorbs float noise in every FIFO lot split; a per-asset tolerance there needs its own fuzz audit. Effect: cents.
 
 ## Test coverage gaps (tracked; lower priority)

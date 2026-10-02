@@ -4737,6 +4737,16 @@ class USATaxRules(TaxRules):
         # Rows below the lot epsilon (1e-8 units) are not booked; they
         # are named once instead of vanishing silently (audit S070-09).
         _us_dust: List[TaxTransaction] = []
+        # A lot residue of at most epsilon units folded into the sale
+        # that closes the lot, and a sale's excess of at most epsilon
+        # over the lots (no position opened): named too (US-CRYPTO-08,
+        # re-audit A2-0808 / A2-1485). (symbol, units) per case; float
+        # noise (under 1e-11 of the quantities) is not named.
+        _us_dust_absorbed: List[Tuple[str, float]] = []
+        _us_dust_dropped: List[Tuple[str, float]] = []
+
+        def _dust_noise(*q: float) -> float:
+            return 1e-11 * max([1.0] + [abs(x) for x in q])
         # Notes tied to one dated row (stock dividends, an unapplied
         # basis adjustment): printed now by a direct caller, or by
         # run_gains after its year filter (audit A2-0956: a 2023 stock
@@ -5728,6 +5738,10 @@ class USATaxRules(TaxRules):
                 while qty_remaining > epsilon and inventory_short[ikey]:
                     short_lot = inventory_short[ikey][0]
                     if short_lot['qty'] <= qty_remaining + epsilon:
+                        if (short_lot['qty'] - qty_remaining
+                                > _dust_noise(short_lot['qty'])):
+                            _us_dust_absorbed.append(
+                                (symbol, short_lot['qty'] - qty_remaining))
                         chunk_qty = short_lot['qty']
                         chunk_open_proceeds_d = short_lot['proceeds']
                         inventory_short[ikey].pop(0)
@@ -6008,6 +6022,9 @@ class USATaxRules(TaxRules):
                     qty_remaining -= chunk_qty
 
                 # --- buy-to-open: any leftover quantity opens a new long lot ---
+                if (_dust_noise(tx_qty_abs) < qty_remaining <= epsilon
+                        and not inventory_short[ikey]):
+                    _us_dust_dropped.append((symbol, qty_remaining))
                 if qty_remaining > epsilon:
                     rep_record = next(
                         (r for r in long_replacements.get(_rep_key(symbol, tx.date), [])
@@ -6113,6 +6130,9 @@ class USATaxRules(TaxRules):
             while qty_remaining > epsilon and inventory_long[ikey]:
                 lot = inventory_long[ikey][0]
                 if lot['qty'] <= qty_remaining + epsilon:
+                    if lot['qty'] - qty_remaining > _dust_noise(lot['qty']):
+                        _us_dust_absorbed.append(
+                            (symbol, lot['qty'] - qty_remaining))
                     chunk_qty = lot['qty']
                     chunk_cost_d = lot['cost_basis']
                     inventory_long[ikey].pop(0)
@@ -6388,6 +6408,9 @@ class USATaxRules(TaxRules):
                 qty_remaining -= chunk_qty
 
             # --- sell-to-open: any leftover quantity opens a new short lot ---
+            if (_dust_noise(tx_qty_abs) < qty_remaining <= epsilon
+                    and not inventory_long[ikey]):
+                _us_dust_dropped.append((symbol, -qty_remaining))
             if qty_remaining > epsilon:
                 rep_record = next(
                     (r for r in short_replacements.get(_rep_key(symbol, tx.date), [])
@@ -6516,6 +6539,21 @@ class USATaxRules(TaxRules):
                       for s_, q in sorted(_by.items()))
                   + " — their units and money are left out of the lots "
                   "and Form 8949.", file=sys.stderr)
+        for _what, _rows in (
+                ("a lot residue of at most 1e-08 units was folded into "
+                 "the sale that closed the lot (its cost is in that "
+                 "sale's basis)", _us_dust_absorbed),
+                ("a sale exceeded the units held by at most 1e-08 (no "
+                 "position was opened for the excess; the whole proceeds "
+                 "are on the units held)", _us_dust_dropped)):
+            if _rows:
+                _agg: Dict[str, List[float]] = {}
+                for _s, _q in _rows:
+                    _agg.setdefault(_s, []).append(_q)
+                print(f"warning: {_what}: " + ", ".join(
+                    f"{s_} ({len(q)} time(s), {sum(q):+.3g} units)"
+                    for s_, q in sorted(_agg.items()))
+                    + " (US-CRYPTO-08).", file=sys.stderr)
 
         # Warn-only call-as-replacement scan (the experimental US engine
         # does not enforce it; always on — cross_asset is retired).

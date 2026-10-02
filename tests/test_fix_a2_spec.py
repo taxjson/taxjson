@@ -48,6 +48,18 @@ def _project(td, country, files, *, accounts=("margin",), year=2025,
     return root
 
 
+def _gains_one(country, book, **req):
+    """One country's pipeline.run_gains on `book` (stderr captured)."""
+    from taxjson.lib.pipeline import GainsRequest, run_gains
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        res = run_gains(list(book), [], [],
+                        req=GainsRequest(country=country, taxable=True,
+                                         **dict(dict(year=2025), **req)))
+    res["_stderr"] = err.getvalue()
+    return res
+
+
 def _gains(root, account="margin"):
     p = root / "work" / f"{account}_gains.json"
     return json.loads(p.read_text())
@@ -196,6 +208,116 @@ class TestCrossFileTies(unittest.TestCase):
         g2 = self._run("canada", buy, sell)
         rg2 = g2["transactions"][0]
         self.assertGreater(rg2["cost"], rg["cost"] * 1.5)
+
+
+# ------------------------------------------------------------ crypto
+class TestCoinbaseEth2IsEth(unittest.TestCase):
+    """A2-0479 / A2-0815: Coinbase's ETH -> ETH2 convert is a relabel;
+    tax-logic says so for each country."""
+
+    def _check(self, country, rid):
+        from test_fix_m_parsers2_crypto import _bs, _cb_row, _parse_cb
+        self.assertIn("Coinbase's ETH2", _text(country, rid))
+        txs, err = _parse_cb(
+            _cb_row("b1", "2025-01-02 10:00:00 UTC", "Buy", "ETH", "1",
+                    "CAD", "2000", "2000", "2000", "0")
+            + _cb_row("c1", "2025-06-02 10:00:00 UTC", "Convert", "ETH",
+                      "-1", "CAD", "4000", "4000", "4000", "0",
+                      "Converted 1 ETH to 1 ETH2"))
+        self.assertEqual([(t["symbol"], t["quantity"]) for t in _bs(txs)],
+                         [("ETH", 1.0)])
+        self.assertIn("same property ETH", err)
+
+    @rule("CA-CRYPTO-10")
+    def test_canada(self):
+        self._check("canada", "CA-CRYPTO-10")
+
+    @rule("US-CRYPTO-06")
+    def test_usa(self):
+        self._check("usa", "US-CRYPTO-06")
+
+
+class TestKrakenDustSweepSplit(unittest.TestCase):
+    """A2-1469: a multi-coin dust sweep's receipt is split by amountusd,
+    equally without it."""
+
+    def _sales(self, rows, header, cash):
+        from test_fix_a2_kraken import _ledger, _parse
+        txs, err = _parse({"kr_ledgers.csv": _ledger(rows, header)},
+                          "kr_ledgers.csv", cash=cash)
+        return ({t["symbol"]: round(t["net_amount"], 6) for t in txs
+                 if t["action"] == "BUYSELL"}, err)
+
+    def _check(self, cash):
+        from test_fix_a2_kraken import _KL_H, _KL_H2
+        legs = ["L1,RS1,2025-03-01 12:00:00,spend,,currency,ADA,spot,-1,0,0",
+                "L2,RS1,2025-03-01 12:00:00,spend,,currency,AVAX,spot,-0.01,"
+                "0,0",
+                "L3,RS1,2025-03-01 12:00:00,spend,,currency,BNB,spot,-0.001,"
+                "0,0",
+                "L4,RS1,2025-03-01 12:00:00,receive,,currency,ZUSD,spot,1.80,"
+                "0,1.80"]
+        eq, err = self._sales(legs, _KL_H, cash)
+        self.assertEqual(eq, {"ADA": 0.6, "AVAX": 0.6, "BNB": 0.6})
+        self.assertIn("equal shares", err)
+        usd = [legs[0] + ",0.90,,", legs[1] + ",0.60,,", legs[2] + ",0.30,,",
+               legs[3] + ",1.80,,"]
+        by, err = self._sales(usd, _KL_H2, cash)
+        self.assertEqual(by, {"ADA": 0.9, "AVAX": 0.6, "BNB": 0.3})
+        self.assertIn("amountusd", err)
+
+    @rule("CA-CRYPTO-11")
+    def test_canada(self):
+        self._check(cash=True)
+
+    @rule("US-CRYPTO-07")
+    def test_usa(self):
+        self._check(cash=False)
+
+
+class TestUsDust(unittest.TestCase):
+    """A2-0808 / A2-0818 / A2-0820 / A2-1471 / A2-1484 / A2-1485: the
+    US engine's 1e-08 zero is stated and every case is named; Canada
+    keeps any amount of a coin (CA-CRYPTO-09)."""
+
+    def _book(self, *rows):
+        return [tx("BUYSELL", d, s, q, n, currency="CAD", account="crypto")
+                for d, s, q, n in rows]
+
+    @rule("US-CRYPTO-08")
+    @rule_absent("US-CRYPTO-08", country="canada")
+    def test_dust_row_residue_and_excess(self):
+        r = gains_both(self._book(("2025-01-02", "ETH", 5e-9, 2),
+                                  ("2025-03-03", "ETH", -5e-9, 3)),
+                       year=2025)
+        self.assertEqual(r["usa"]["transactions"], [])
+        self.assertIn("smaller than 1e-08", r["usa"]["_stderr"])
+        self.assertAlmostEqual(r["canada"]["transactions"][0]["gain"], 1.0)
+
+        r = gains_both(self._book(("2025-01-02", "ETH", 1.000000005, 2000),
+                                  ("2025-03-03", "ETH", -1, 3000)),
+                       year=2025)
+        self.assertEqual(r["usa"]["inventory"], [])
+        self.assertIn("lot residue of at most 1e-08",
+                      r["usa"]["_stderr"])
+        self.assertEqual(len(r["canada"]["inventory"]), 1)
+        self.assertNotIn("1e-08", r["canada"]["_stderr"])
+
+        r = gains_both(self._book(("2025-01-02", "BTC", 1, 2000),
+                                  ("2025-03-03", "BTC", -1.000000009, 3000)),
+                       year=2025)
+        self.assertEqual(r["usa"]["inventory"], [])
+        self.assertIn("exceeded the units held", r["usa"]["_stderr"])
+        self.assertLess(r["canada"]["inventory"][0]["qty"], 0)
+        self.assertIn("1e-08", _text("usa", "US-CRYPTO-08"))
+
+    @rule("US-CRYPTO-08")
+    def test_float_noise_is_not_named(self):
+        r = _gains_one("usa", self._book(("2025-01-02", "ETH", 0.1, 200),
+                                         ("2025-01-03", "ETH", 0.2, 400),
+                                         ("2025-03-03", "ETH", -0.3, 900)))
+        self.assertEqual(r["inventory"], [])
+        self.assertNotIn("1e-08", r["_stderr"])
 
 
 if __name__ == "__main__":
