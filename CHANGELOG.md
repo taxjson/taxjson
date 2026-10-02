@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- IB: a corporate action follows the security it names. A split whose
+  new leg names another ticker (`OLDT ... Split 1 for 10 (NEWT, ...)`)
+  moves the pool to it, a cash in lieu naming a delivered security
+  sells that security's fraction, and a stock dividend paid in ANOTHER
+  security is an `UNBOOKED` line instead of new shares in the parent's
+  pool (audit A2-0085, A2-0093, A2-0257, A2-1033). A TSX USD unit's
+  split, cash takeover, tender or commission refund stays on X.U.TO with
+  its trades (audit A2-0086).
 - IB: a Corporate Actions row IB cancelled (`Ca`) leaves no trace in
   the parse output: a merger, spin-off or tender journal row leaves the
   non-event tally and the tender note's row count and dates, a

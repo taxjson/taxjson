@@ -14,6 +14,10 @@ from taxjson.bin.taxjson_sort import plan_dedup
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.ib_extractor import IbBrokerage
 from tax_rules import rule
+from tax_rules.dual import gains_both
+from taxjson.lib import country as C
+
+from test_fix_l_ibparse import _book
 
 from test_fix_ibparse import (HEAD, TRADES_H, XFER_H, CA_H, FII_H, DIV_H,
                               _trade, _xfer, _ca, _parse_ib, _brokerage_cli,
@@ -335,6 +339,111 @@ class TestCancelledCorporateActionLeavesNoTrace(unittest.TestCase):
                                 + _ca(d, 0.5, code='Ca'))
         self.assertEqual(txs, [])
         self.assertNotIn('Proceeds 0', err)
+
+
+# ----------------------------------- the security a corporate action delivers
+def _fii(sym, isin, conid, exch):
+    return (f'Financial Instrument Information,Data,Stocks,"{sym}",{sym} '
+            f'FUND,{conid},{isin},,{exch},1,,,COMMON,,\n')
+
+
+class TestCorporateActionListingAndDeliveredLine(unittest.TestCase):
+
+    def test_tsx_usd_unit_split_takeover_and_refund_stay_on_the_tsx(self):
+        # A2-0086: the S010-06 listing rule (ZSP.U.TO) for every
+        # corporate action and the refund FEE row.
+        body = (HEAD + TRADES_H
+                + _trade('ZSP.U', '2025-02-03, 10:00:00', 100, 30, -3000)
+                + _trade('HXU.U', '2025-02-03, 10:00:00', 100, 20, -2000)
+                + CA_H
+                + _ca('ZSP.U(CA9990001001) Split 2 for 1 (ZSP.U, ZSP FUND, '
+                      'CA9990001001)', 100)
+                + _ca('HXU.U(CA9990001002) Merged(Acquisition) FOR USD '
+                      '25.00 PER SHARE', -100, proceeds=2500)
+                + ADJ_H + _adj('USD', '2025-03-10',
+                               'Refund (ZSP.U, 50, 2025-01-02)', 0.5)
+                + FII_H + _fii('ZSP.U', 'CA9990001001', '990001001', 'TSE')
+                + _fii('HXU.U', 'CA9990001002', '990001002', 'TSE'))
+        _, txs, err = _parse_ib(body)
+        syms = {(t['action'], t['symbol']) for t in txs}
+        self.assertIn(('SPLIT', 'ZSP.U.TO'), syms, err)
+        self.assertIn(('FEE', 'ZSP.U.TO'), syms)
+        self.assertEqual([t['symbol'] for t in txs
+                          if t['action'] == 'BUYSELL'
+                          and t['quantity'] < 0], ['HXU.U.TO'])
+        self.assertFalse([s_ for _a, s_ in syms if s_.endswith('.U.US')])
+
+    @rule("CA-CORP-02")
+    @rule("US-CORP-02")
+    def test_split_that_renames_moves_the_pool(self):
+        # A2-0085 / A2-0257: 'OLDT ... Split 1 for 10 (NEWT, ...)'.
+        new = ('QZOLD(US9990001101) Split 1 for 10 (QZNEW, QZNEW INC, '
+               'US9990001102)')
+        old = ('QZOLD(US9990001101) Split 1 for 10 (QZOLD.OLD, QZOLD INC, '
+               'US9990001101)')
+        body = (HEAD + TRADES_H
+                + _trade('QZOLD', '2025-02-03, 10:00:00', 100, 10, -1000)
+                + _trade('QZNEW', '2025-06-02, 10:00:00', -10, 120, 1200,
+                         code='C')
+                + CA_H + _ca(old, -100, when='2025-03-03, 20:25:00')
+                + _ca(new, 10, when='2025-03-03, 20:25:00'))
+        _, txs, err = _parse_ib(body)
+        sp = [t for t in txs if t['action'] == 'SPLIT']
+        self.assertEqual([(t['symbol'], t['symbol_new'], t['quantity'])
+                          for t in sp], [('QZOLD.US', 'QZNEW.US', 0.1)])
+        r = gains_both(_book(txs), year=2025)
+        for c in C.COUNTRIES:
+            with self.subTest(country=c):
+                self.assertAlmostEqual(r[c]['summary']['total_gain'], 200.0)
+
+    def test_cancelled_renaming_leg_restores_the_symbol(self):
+        new = ('QZOLD(US9990001101) Split 1 for 10 (QZNEW, QZNEW INC, '
+               'US9990001102)')
+        old = ('QZOLD(US9990001101) Split 1 for 10 (QZOLD.OLD, QZOLD INC, '
+               'US9990001101)')
+        _, txs, _ = _parse_ib(HEAD + CA_H + _ca(old, -100) + _ca(new, 10)
+                              + _ca(new, -10, code='Ca'))
+        self.assertEqual([(t['symbol'], t['symbol_new']) for t in txs
+                          if t['action'] == 'SPLIT'],
+                         [('QZOLD.US', 'QZOLD.US')])
+
+    @rule("CA-STKDIV-01")
+    def test_stock_dividend_in_another_security_is_unbooked(self):
+        # A2-0093: GOOGL-style row paying GOOG-style shares.
+        body = (HEAD + TRADES_H
+                + _trade('QZPAR', '2025-02-03, 10:00:00', 100, 10, -1000)
+                + CA_H + _ca('QZPAR(US9990001201) Stock Dividend '
+                             'US9990001202 1 for 10 (QZNEWC, QZNEWC INC, '
+                             'US9990001202)', 10, value=500))
+        _, txs, err = _parse_ib(body)
+        self.assertEqual([(t['symbol'], t['quantity']) for t in txs],
+                         [('QZPAR.US', 100.0)])
+        self.assertIn('warning: UNBOOKED:', err)
+        self.assertIn('QZNEWC', err)
+
+    @rule("US-STKDIV-02")
+    def test_stock_dividend_in_another_security_is_unbooked_us(self):
+        _, txs, err = _parse_ib(HEAD + CA_H + _ca(
+            'QZPAR(US9990001201) Stock Dividend US9990001202 1 for 10 '
+            '(QZNEWC, QZNEWC INC, US9990001202)', 10, value=500))
+        self.assertEqual(txs, [])
+        self.assertIn('warning: UNBOOKED:', err)
+
+    @rule("CA-STKDIV-01")
+    def test_same_security_stock_dividend_is_still_booked(self):
+        _, txs, err = _parse_ib(HEAD + CA_H + _ca(
+            'QZPAR(US9990001201) Stock Dividend US9990001201 1 for 10 '
+            '(QZPAR, QZPAR INC, US9990001201)', 10, value=500))
+        self.assertEqual([(t['symbol'], t['type']) for t in txs],
+                         [('QZPAR.US', 'stock_dividend')])
+        self.assertNotIn('UNBOOKED', err)
+
+    def test_cash_in_lieu_of_the_delivered_security(self):
+        # A2-1033: the fraction is of NEWC, not the parent.
+        _, txs, _ = _parse_ib(HEAD + CA_H + _ca(
+            'QZPAR(US9990001201) Cash in Lieu of Fractional Shares '
+            '(QZNEWC, QZNEWC INC, US9990001202)', -0.5, proceeds=15))
+        self.assertEqual([t['symbol'] for t in txs], ['QZNEWC.US'])
 
 
 if __name__ == '__main__':

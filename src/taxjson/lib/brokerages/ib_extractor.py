@@ -568,7 +568,7 @@ def _ib_tender_is_placeholder(description: str, qty: float) -> bool:
     return (tender_in and qty > 0) or (not tender_in and qty < 0)
 
 
-def _ib_tender_parked(rows) -> Dict[str, float]:
+def _ib_tender_parked(rows, fii=None) -> Dict[str, float]:
     """Shares a statement leaves on the tender placeholder line, per
     suffixed root symbol — the parse's own tally, for the account-wide
     check (a tender in one statement resolved in the next, audit
@@ -601,7 +601,14 @@ def _ib_tender_parked(rows) -> Dict[str, float]:
                                            allow_blank=True, blank=0.0)
         except BrokerageParseError:
             continue
-        sym = f"{root}.{_IB_CURRENCY_EXT.get(cur, cur)}"
+        _base = _IB_CURRENCY_EXT.get(cur, cur)
+        _e = _base
+        if fii:
+            for _raw in (root, root.replace('.', ' ')):
+                _e = _ib_listing_ext(cat or 'Stocks', _raw, cur, fii)
+                if _e != _base:
+                    break
+        sym = f"{root}.{_e}"
         if 'Ca' in re.split(r'[;,\s]+', g('Code')):
             if _ib_tender_is_placeholder(desc, -qty):
                 out[sym] = out.get(sym, 0.0) + qty
@@ -1009,7 +1016,7 @@ class IbBrokerage(BaseBrokerage):
                 ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
             ctx['posted_dividends'].extend(
                 (name, t, d) for t, d in _ib_posted_dividends(rows))
-            for sym, n in _ib_tender_parked(rows).items():
+            for sym, n in _ib_tender_parked(rows, pre['fii']).items():
                 ctx['tender_parked'][sym] = (
                     ctx['tender_parked'].get(sym, 0.0) + n)
         _warn_coverage_gaps(ctx['periods'])
@@ -1755,6 +1762,8 @@ class IbBrokerage(BaseBrokerage):
             kind = eff['kind']
             if kind == 'split':
                 info = eff['split']
+                if eff.get('renames'):
+                    info['tx']['symbol_new'] = info['tx']['symbol']
                 if eff['qty'] > 0:
                     info['new'] -= eff['qty']
                 elif eff['qty'] < 0:
@@ -2921,6 +2930,29 @@ class IbBrokerage(BaseBrokerage):
 
                 ext = _ib_currency_ext(currency)
 
+                def _cx(ticker, _cat=_ca_cat or 'Stocks', _cur=currency,
+                        _base=ext):
+                    """The listing suffix of a corporate action's
+                    stock: the S010-06 / A2-0081 listing rule of the
+                    trades (a TSX USD unit stays X.U.TO, an LSE USD line
+                    .L) — the currency suffix alone put a split or cash
+                    takeover of ZSP.U on ZSP.U.US while its trades sat
+                    on ZSP.U.TO (audit A2-0086)."""
+                    for _raw in (ticker, ticker.replace('.', ' ')):
+                        _e = _ib_listing_ext(_cat, _raw, _cur, fii)
+                        if _e != _base:
+                            return _e
+                    return _base
+
+                # The security the row DELIVERS: the first token of its
+                # trailing `(TICKER, NAME, ISIN)` parenthetical (the
+                # tender branch's S013-06 reading, now shared by the
+                # split, stock-dividend and cash-in-lieu branches —
+                # audit A2-0085 / A2-0093 / A2-0257 / A2-1033).
+                _dm_all = _IB_DELIVERED_RE.search(description)
+                _deliv = (_dm_all.group(1).strip().replace(' ', '.')
+                          if _dm_all else '')
+
                 # Cancel/rebook restatements: IB re-lists a corrected
                 # corporate action as original + `Ca` cancellation
                 # (same description, negated quantity) + rebooked
@@ -3001,7 +3033,7 @@ class IbBrokerage(BaseBrokerage):
 
                 _troot = ib_tender_root(description)
                 if _troot is not None:
-                    _tsym = f"{_troot}.{ext}"
+                    _tsym = f"{_troot}.{_cx(_troot)}"
                     _tl = tender_legs.setdefault(_tsym, {
                         'rows': 0, 'parked': 0.0, 'cash_qty': 0.0,
                         'cash': 0.0, 'dates': [], 'currency': currency})
@@ -3101,7 +3133,13 @@ class IbBrokerage(BaseBrokerage):
                 cil_match = _IB_CIL_RE.search(description)
                 if cil_match and qty < 0:
                     ticker = cil_match.group(1).strip().replace(' ', '.')
-                    symbol = f"{ticker}.{ext}"
+                    if (_deliv and _deliv.upper() != ticker.upper()
+                            and not _deliv.upper().endswith('.OLD')):
+                        # The fraction is of the DELIVERED security (a
+                        # merger's or a renaming split's new line): the
+                        # parent may no longer exist (audit A2-1033).
+                        ticker = _deliv
+                    symbol = f"{ticker}.{_cx(ticker)}"
                     self._check_symbol_tag(ticker, where)
                     # Proceeds is the cash paid (a required column; a
                     # blank one is refused). Value is IB's MARKET value
@@ -3145,7 +3183,7 @@ class IbBrokerage(BaseBrokerage):
                     # S058-18 / S060-14).
                     _near = [(abs(_days_between(d, date)), d, i)
                              for (s_, d, _r), i in emitted_splits.items()
-                             if s_ == symbol
+                             if symbol in (s_, i['tx'].get('symbol_new'))
                              and abs(_days_between(d, date)) <= _IB_CIL_WINDOW]
                     if _near:
                         _info = min(_near, key=lambda x: (x[0], x[1]))[2]
@@ -3171,7 +3209,7 @@ class IbBrokerage(BaseBrokerage):
                                                  field='split ratio',
                                                  where=where)
                     ratio = new_sh / old_sh if old_sh != 0 else 1.0
-                    symbol = f"{ticker}.{ext}"
+                    symbol = f"{ticker}.{_cx(ticker)}"
                     split_key = (symbol, date, round(ratio, 9))
                     info = emitted_splits.get(split_key)
                     if info is None:
@@ -3205,6 +3243,23 @@ class IbBrokerage(BaseBrokerage):
                         info['old'] += -qty
                     _ib_refine_split_ratio(info)
                     _eff.update(kind='split', split=info)
+                    if (qty > 0 and _deliv
+                            and _deliv.upper() != ticker.upper()):
+                        # The new leg names ANOTHER line: a split that
+                        # also renames the security (OLDT 1-for-10 into
+                        # NEWT). The pool moves to it — it stayed on the
+                        # old ticker and the NEWT sale went short (audit
+                        # A2-0085 / A2-0257). Tax-logic CA-ACB-04.
+                        info['tx']['symbol_new'] = f"{_deliv}.{_cx(_deliv)}"
+                        _eff['renames'] = True
+                        for _c in [c for c in pending_cil
+                                   if c['symbol'] == info['tx']['symbol_new']
+                                   and abs(_days_between(c['date'], date))
+                                   <= _IB_CIL_WINDOW]:
+                            info['cil'] += _c['frac']
+                            _c['eff']['split'] = info
+                            pending_cil.remove(_c)
+                        _ib_refine_split_ratio(info)
                     handled = True
 
                 # Spinoff 1 for 10. Gated on `not handled` so a
@@ -3254,7 +3309,7 @@ class IbBrokerage(BaseBrokerage):
                             'date': date,
                             'time': time,
                             'date_settle': date,
-                            'symbol': f"{_ticker}.{ext}",
+                            'symbol': f"{_ticker}.{_cx(_ticker)}",
                             'quantity': qty,
                             'currency': currency,
                             'price': round(_cash / -qty, 8),
@@ -3266,7 +3321,7 @@ class IbBrokerage(BaseBrokerage):
                             'description': description,
                         }
                         transactions.append(_ttx)
-                        _ct_msg = (f"{_ticker}.{ext} {-qty:g} sh for "
+                        _ct_msg = (f"{_ticker}.{_cx(_ticker)} {-qty:g} sh for "
                                    f"{_cash:.2f} {currency} on {date}")
                         cash_takeovers.append(_ct_msg)
                         _eff.update(kind='cash_takeover', txs=[_ttx],
@@ -3288,8 +3343,27 @@ class IbBrokerage(BaseBrokerage):
                 # country's rule (partition INPUTS-01).
                 _sd = _IB_STOCK_DIV_RE.match(description)
                 if _sd and not handled:
+                    _sd_tk = _sd.group(1).strip().replace(' ', '.')
+                    if (qty > 0 and _deliv
+                            and _deliv.upper() != _sd_tk.upper()):
+                        # Shares of ANOTHER security (another class:
+                        # GOOGL paying GOOG) are not new shares of the
+                        # parent: booked into its pool they inflated it
+                        # and the delivered line's sale went short. The
+                        # cost split between two securities is each
+                        # country's rule (CA-STKDIV-01, US-STKDIV-02):
+                        # not guessed here (audit A2-0093).
+                        _unbooked(
+                            f"{shown_name(path)} {date}: stock dividend "
+                            f"on {_sd_tk} paid {qty:g} share(s) of "
+                            f"ANOTHER security, {_deliv} "
+                            f"({description[:90]!r}) — not booked: enter "
+                            f"the new shares and their cost by hand in a "
+                            f".tt file (BUYSELL; a US filer also moves "
+                            f"part of {_sd_tk}'s basis, §307).")
+                        continue
                     if qty > 0:
-                        _sym = f"{_sd.group(1).strip().replace(' ', '.')}.{ext}"
+                        _sym = f"{_sd_tk}.{_cx(_sd_tk)}"
                         _stx = {
                             'action': 'BUYSELL', 'date': date, 'time': time,
                             'date_settle': date, 'symbol': _sym,

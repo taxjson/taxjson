@@ -476,7 +476,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Its declared amount (a dividend, and by law also the new "
                  "shares' cost) is not in the broker's export: add it "
                  "(distributions.map or a .tt ADJUST). The new shares are "
-                 "an acquisition for the superficial-loss rule."),
+                 "an acquisition for the superficial-loss rule. Shares of "
+                 "ANOTHER security (another class) paid as a stock "
+                 "dividend are not booked: the parse says UNBOOKED; enter "
+                 "them by hand."),
             Rule("CA-DIST-01",
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gains distribution, a late return-of-capital "
@@ -1027,7 +1030,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "wash-sale rule."),
             Rule("US-STKDIV-02",
                  "A taxable stock dividend (§305(b), e.g. one with a cash "
-                 "option) is not detected: enter it by hand.", cont=True),
+                 "option) is not detected: enter it by hand. Shares of "
+                 "ANOTHER security (another class) paid as a stock "
+                 "dividend are not booked: the parse says UNBOOKED; enter "
+                 "them and the §307 basis split by hand.", cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",
