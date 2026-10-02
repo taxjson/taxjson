@@ -23,6 +23,13 @@ from typing import Optional
 
 DEFAULT_LOCAL_TZ = 'America/Toronto'
 
+# The USD-pegged stablecoins, ONE list for every crypto consumer (the
+# Coinbase and Kraken parsers, crypto-sends, fx-cash, fill-crypto). In a
+# Canada project they are US-dollar cash (tax-logic CA-CRYPTO-02); a US
+# project books them as property. Copies of this list drifted apart
+# (PYUSD/GUSD missing in some, audit S060-24 / re-audit A2-0589).
+USD_STABLECOINS = frozenset({'USDC', 'USDT', 'DAI', 'PYUSD', 'GUSD'})
+
 # Currency markers an exchange may glue to an amount. Longest first so
 # `CA$` is not half-eaten by `A$`/`$`.
 _MONEY_PREFIXES = ('CA$', 'US$', 'C$', 'A$', '$', '€', '£')
