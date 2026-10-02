@@ -1,13 +1,13 @@
 """Re-audit-2 conformance gaps: a mutant of each rule below survived the
-whole suite (~/taxjson-audit-2/conformance.md). Each test here fails on
+whole suite in the re-audit's conformance pass. Each test here fails on
 that mutant and passes on the real code. Synthetic data only.
 """
 import contextlib
 import io
 import unittest
 
-from tax_rules import rule, rule_absent
-from tax_rules.dual import gains_both, tx
+from tax_rules import rule
+from tax_rules.dual import tx
 
 
 def _gains_one(country, book, sheltered=(), **req):
