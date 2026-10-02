@@ -917,7 +917,8 @@ class QuestradeBrokerage(BaseBrokerage):
                     self.note_row_consumed()
                     transactions.append(tx)
                     if (_NONRES_NET_RE.search(desc)
-                            and tx['action'] == 'DIVIDEND'
+                            and tx['action'] in ('DIVIDEND',
+                                                 'DIVIDEND_IN_LIEU')
                             and float(tx['net_amount']) > 0):
                         net_of_tax.append(
                             f"{tx['symbol']} {tx['date']} "
@@ -1746,8 +1747,13 @@ class QuestradeBrokerage(BaseBrokerage):
             return self.tx_roc_adjust(symbol=symbol, currency=currency,
                                       date=date, desc=desc, amount=net)
         qty, price = _parse_div_qty_rate(desc, net)
+        # A substitute payment ("SUBST PAY ... IN LIEU OF DIVIDEND") is
+        # its own income kind, paid by a Canadian dealer (re-audit
+        # A2-0098; lib/income_dating applies CA-INC-03 / US-INC-01).
+        from taxjson.lib.brokerages.rbc_direct import PIL_DESC_RE
+        pil = bool(PIL_DESC_RE.search(desc))
         tx = {
-            'action': 'DIVIDEND',
+            'action': 'DIVIDEND_IN_LIEU' if pil else 'DIVIDEND',
             'date': date,
             'time': time,
             'date_settle': date,
@@ -1757,10 +1763,12 @@ class QuestradeBrokerage(BaseBrokerage):
             'price': price,
             'net_amount': net,
             'gross_amount': net,
-            'type': 'dividend',
+            'type': 'dividend_in_lieu' if pil else 'dividend',
             'description': desc,
             'account': self.DEFAULT_ACCOUNT,
         }
+        if pil:
+            tx['dealer_country'] = 'CA'
         # "DIST ON ... REC mm/dd/yy": the record date and the
         # distribution label, as neutral facts (lib/income_dating).
         tx.update(income_facts_from_description(desc))

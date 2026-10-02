@@ -19,6 +19,8 @@ from taxjson.lib.option_close_check import (unbacked_option_closes,
 from test_fix_rbc import (ABC_REC, ABC_REM, ABC_SELL, HDR, ORCX_ROWS, OWL,
                           parse_files, parse_one, row)
 from test_fix_rbcqt import q, qdiv, qt_parse
+from tax_rules import rule, rule_absent
+from tax_rules.dual import gains_both
 
 REPO = Path(__file__).resolve().parent.parent
 ACCT = "55500001"  # pii-ok (synthetic)
@@ -846,6 +848,51 @@ class TestQuestradeDescriptionNumbers(unittest.TestCase):
         for comm, net, gross in got.values():
             self.assertAlmostEqual(abs(gross) + comm if net > abs(gross)
                                    else abs(gross) - comm, net, places=2)
+
+
+
+class TestPaymentsInLieuFromCanadianDealers(unittest.TestCase):
+    """A2-0098: Questrade 'SUBST PAY ... IN LIEU OF DIVIDEND' and RBC
+    'CASH / PAYMENT IN LIEU OF DIVIDEND' rows are payments in lieu paid
+    by a Canadian dealer, not dividends."""
+
+    def _books(self):
+        from taxjson.lib.core import TaxTransaction
+        qt_txs, _e, _ = qt_parse(
+            qdiv("XLV", "HEALTH CARE SELECT SUBST PAY ON 100 SHS IN LIEU OF "
+                 "DIVIDEND", "26.33")
+            + qdiv("RY.TO", "ROYAL BANK SUBST PAY ON 100 SHS IN LIEU OF "
+                   "DIVIDEND", "50.00", cur="CAD"))
+        rbc_txs, _e, _ = parse_one(row(
+            "June 2, 2025", "Dividends", "MSFT", "MICROSOFT CORP", "", "",
+            "83.00", "USD", "MICROSOFT CORP CASH IN LIEU OF DIVIDEND"))
+        return qt_txs, rbc_txs
+
+    def test_parsers_emit_a_payment_in_lieu(self):
+        qt_txs, rbc_txs = self._books()
+        for t in qt_txs + rbc_txs:
+            self.assertEqual((t["action"], t["type"], t["dealer_country"]),
+                             ("DIVIDEND_IN_LIEU", "dividend_in_lieu", "CA"))
+
+    @rule("CA-INC-03")
+    @rule_absent("CA-INC-03", country="usa")
+    @rule("US-INC-01")
+    def test_canada_deems_only_the_canadian_issuer_a_dividend(self):
+        from taxjson.lib.core import TaxTransaction
+        qt_txs, rbc_txs = self._books()
+        book = [TaxTransaction(**{k: v for k, v in t.items()
+                                  if k in TaxTransaction.__dataclass_fields__})
+                for t in qt_txs + rbc_txs]
+        r = gains_both(book, year=2025)
+        inc = {c: {t["symbol"]: t for t in r[c]["transactions"]
+                   if t.get("action") == "DIVIDEND_IN_LIEU"}
+               for c in ("canada", "usa")}
+        self.assertEqual(inc["canada"]["RY.TO"].get("deemed_dividend"),
+                         "ITA s.260")
+        self.assertNotIn("deemed_dividend", inc["canada"]["XLV.US"])
+        self.assertNotIn("deemed_dividend", inc["canada"]["MSFT.US"])
+        for sym in ("RY.TO", "XLV.US", "MSFT.US"):
+            self.assertNotIn("deemed_dividend", inc["usa"][sym])
 
 
 if __name__ == "__main__":

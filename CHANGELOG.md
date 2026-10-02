@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Questrade / RBC: payments in lieu of a dividend.** A Questrade
+  'SUBST PAY ... IN LIEU OF DIVIDEND' row and an RBC 'CASH / PAYMENT IN
+  LIEU OF DIVIDEND' row were booked as dividends: in Canada a PIL on a
+  US issuer got a foreign tax credit nobody withheld, and in a US
+  project it was a qualified dividend. They are payments in lieu paid
+  by a Canadian dealer now: Canada deems one on a Canadian issuer a
+  dividend (s.260) and keeps the rest ordinary income; the US keeps all
+  of them ordinary (tax-logic CA-INC-03 names the dealers; US-INC-01)
+  (re-audit A2-0098).
 - Questrade: a CAD-settled US trade (EXCHANGE RATE) carries its
   commission in CAD like its price and net; it stayed USD-sized, so the
   fees report and the Schedule 3 proceeds/outlays split were short by

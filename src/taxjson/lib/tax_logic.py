@@ -638,8 +638,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "A payment in lieu of a dividend is ordinary income (no "
                  "gross-up or credit), EXCEPT one on a Canadian issuer's "
                  "share (a Canadian listing or a CA ISIN) paid by a "
-                 "Canadian dealer (the export names it: IB's statement "
-                 "says Interactive Brokers Canada Inc.): ITA "
+                 "Canadian dealer (IB's statement names Interactive "
+                 "Brokers Canada Inc.; Questrade and RBC Direct are "
+                 "Canadian dealers, and their 'IN LIEU OF DIVIDEND' rows "
+                 "are payments in lieu): ITA "
                  "s.260(5)/(5.1) deems that a taxable dividend — "
                  "eligible in the estimate, counted in divs-sum, and on "
                  "the dealer's T5 box 24. The slip is authoritative."),

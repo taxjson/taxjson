@@ -148,6 +148,10 @@ _RBC_TRANSFER_OUT_RE = re.compile(
 # RBC's open/close marker at the end of an option trade's description:
 # "CALL .RCI.B 01/15/27 46 ROGERS COMMUNICATIONS INC CA CLOSE CONTRACT".
 _RBC_OPEN_CLOSE_RE = re.compile(r'\b(OPEN|CLOSE)\s+CONTRACT\b', re.I)
+# A payment in lieu of a dividend ("CASH IN LIEU OF DIVIDEND", "PAYMENT
+# IN LIEU OF DIVIDEND", Questrade's "SUBST PAY ... IN LIEU OF DIVIDEND"),
+# the same phrase IB's parser reads (re-audit A2-0098).
+PIL_DESC_RE = re.compile(r'\bIN\s+LIEU\s+OF\s+(?:A\s+)?DIV', re.I)
 _RBC_CIL_FRACTION_RE = re.compile(
     r'CASH\s+IN\s+LIEU\s+(?:OF\s+)?(?:A\s+)?FRAC', re.I)
 
@@ -2226,15 +2230,25 @@ class RbcBrokerage(BaseBrokerage):
                 'account': self.DEFAULT_ACCOUNT,
                 'description': f"{desc} (Implied Tax)",
             })
+        # A payment in lieu of a dividend is its own income kind (re-
+        # audit A2-0098: booked as a dividend, a PIL on a US issuer got a
+        # foreign tax credit and the US engine called it qualified). RBC
+        # Direct is a Canadian dealer: lib/income_dating deems a PIL on
+        # a Canadian issuer a dividend (CA-INC-03); the rest is
+        # ordinary income (US-INC-01).
+        pil = bool(PIL_DESC_RE.search(desc))
         div = {
-            'action': 'DIVIDEND',
+            'action': 'DIVIDEND_IN_LIEU' if pil else 'DIVIDEND',
             'date': date, 'time': '09:30:00', 'date_settle': date,
             'symbol': symbol, 'quantity': qty, 'currency': currency,
             'price': rate,
             'net_amount': net, 'gross_amount': gross_amount,
-            'type': 'dividend', 'account': self.DEFAULT_ACCOUNT,
+            'type': 'dividend_in_lieu' if pil else 'dividend',
+            'account': self.DEFAULT_ACCOUNT,
             'description': desc,
         }
+        if pil:
+            div['dealer_country'] = 'CA'
         # "REC mm/dd/yy" and the "Distribution" activity / "DIST ON"
         # label, as neutral facts (lib/income_dating dates the row).
         div.update(income_facts_from_description(desc, r.activity or ''))
