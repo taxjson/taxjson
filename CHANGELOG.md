@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- **Canada: rows that settle on the same day go in trade order.** Over a
+  settlement holiday a Friday trade and the next trading day's trade
+  settle together; the engine took them by clock time, so a Monday
+  09:45 buy was applied before the previous Friday's 15:00 sale (wrong
+  ACB, a false superficial loss). They now go in trade-date order
+  (tax-logic CA-DATE-14) (A2-0067).
+- **A split repeated with a rounded ratio is applied once.** A manual
+  `.tt` SPLIT line (2.333333, or convert-tt's 8 decimals) next to the
+  broker's own row (2.333333333) scaled the pool twice at exit 0. Copies
+  whose ratios agree to 1e-6 within the 7-day split window are one
+  event, take the most precise ratio, and `run` prints an ATTENTION
+  line naming them (A2-0070). A same-day rename chain (A→B, B→C) gives
+  the same superficial-loss unit conversion in either row order
+  (A2-0983).
+- **`taxjson spinoffs` in a US project** flags a $0 §301 distribution
+  (ZERO-VALUE) and a §355 spin-off with no allocated basis
+  (NO-ALLOCATION) and exits 1, with US wording (an IRA is not called a
+  "registered account") (A2-0063, A2-0221). `spinoffs` and `splits`
+  refuse an unreadable or malformed manifest or base file instead of
+  crashing or reporting an empty view (A2-0968, A2-0969); a corrupt
+  manifest's error no longer suggests deleting it (A2-0979).
+- **`run --fast` sees election, sends and config edits by content.** The
+  elections manifest, sends.json and taxjson.toml are now in the
+  per-account content fingerprint, so a copy restored with an older
+  mtime no longer keeps the previous books (A2-0224, A2-0985,
+  A2-1229). `taxjson elect --redo` passes the same rates, base currency
+  and ticker.map as `run` (A2-0981, A2-0982), and the legacy manifest
+  migration is atomic (A2-0218).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
