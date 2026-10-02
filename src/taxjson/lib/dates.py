@@ -45,27 +45,51 @@ def noon_utc(dt: datetime) -> datetime:
 
 
 # ---------------------------------------------------------- settlement
-# One home for the settlement-lag convention. Equities settled T+3 until
-# 2017-09-05 (US and Canada moved together), T+2 until the 2024 cutover
-# (US 2024-05-28; Canada 2024-05-27, a TSX trading day the US spent
-# closed for Memorial Day) and T+1 since; other markets per _T1_CUTOVER;
-# options are T+1 in every era.
+# One home for the settlement-lag convention, per market (keyed on the
+# trade currency, which stands in for the market):
+#   T+3 -> T+2: North America 2017-09-05 (US and Canada together; Mexico
+#     kept with them); the UK, the EU markets and Switzerland 2014-10-06;
+#     Australia and New Zealand 2016-03-07; Singapore 2018-12-10; Japan
+#     2019-07-16; Hong Kong has been T+2 throughout. Any other market
+#     follows the North-American dates (not researched market by market).
+#     (Audit A2-0704: every non-North-American market inherited the US
+#     T+3 era before 2017, so a late-December 2016 LSE/ASX sale landed in
+#     2017; A2-1195: Tokyo got T+2 two years early.)
+#   T+2 -> T+1: per _T1_CUTOVER — US 2024-05-28; Canada and Mexico
+#     2024-05-27 (a TSX trading day the US spent closed for Memorial
+#     Day); the UK, the EU markets and Switzerland 2027-10-11 (A2-0705:
+#     every EU currency, not only the euro); every other market stays
+#     T+2.
+# Options are T+1 in every era.
 # The lag is counted in SETTLEMENT days of the trade's market
 # (lib/market_calendar: US = NYSE + Federal Reserve holidays, Canada =
-# TSX + Remembrance Day + Truth and Reconciliation), so a holiday inside
-# the lag moves the settle date later, as the clearing houses do.
+# TSX + Remembrance Day + Truth and Reconciliation; elsewhere weekends
+# only), so a holiday inside the lag moves the settle date later, as the
+# clearing houses do.
 
 T3_TO_T2 = '2017-09-05'
 
-# The T+1 cutovers, by trade currency (standing in for the market: the
-# callers key the calendar on currency). North America moved in May
+# Currencies of the EU markets outside the euro area (they move with the
+# euro markets: one EU regulation, CSDR).
+_EU_NON_EURO = ('SEK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'BGN')
+
+# The T+3 -> T+2 move, by trade currency ('' = T+2 throughout).
+_T2_CUTOVER = {'USD': T3_TO_T2, 'CAD': T3_TO_T2, 'MXN': T3_TO_T2,
+               'GBP': '2014-10-06', 'EUR': '2014-10-06',
+               'CHF': '2014-10-06', 'NOK': '2014-10-06',
+               **{c: '2014-10-06' for c in _EU_NON_EURO},
+               'AUD': '2016-03-07', 'NZD': '2016-03-07',
+               'SGD': '2018-12-10', 'JPY': '2019-07-16', 'HKD': ''}
+
+# The T+1 cutovers, by trade currency. North America moved in May
 # 2024 (Mexico with Canada); the UK, the EU and Switzerland move on
 # 2027-10-11. Every other market (the ASX, Hong Kong, Japan, ...) is
 # T+2 (audit G5-0: LSE and ASX fills settled on the US T+1 cycle, so a
 # sale on the second-to-last trading day landed in the wrong year).
 _T1_CUTOVER = {'USD': '2024-05-28', 'CAD': '2024-05-27',
                'MXN': '2024-05-27', 'GBP': '2027-10-11',
-               'EUR': '2027-10-11', 'CHF': '2027-10-11'}
+               'EUR': '2027-10-11', 'CHF': '2027-10-11',
+               **{c: '2027-10-11' for c in _EU_NON_EURO}}
 
 
 def settlement_lag_days(trade_iso: str, currency: str = 'USD',
@@ -74,9 +98,9 @@ def settlement_lag_days(trade_iso: str, currency: str = 'USD',
     `trade_iso` (YYYY-MM-DD) in the given market."""
     if is_option:
         return 1
-    if trade_iso < T3_TO_T2:
-        return 3
     cur = (currency or '').upper() or 'USD'
+    if trade_iso < _T2_CUTOVER.get(cur, T3_TO_T2):
+        return 3
     cutover = _T1_CUTOVER.get(cur)
     if cutover is None:
         return 2

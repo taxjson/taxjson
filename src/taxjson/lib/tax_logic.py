@@ -293,11 +293,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "earlier than the trade date is refused; one more than 7 "
                  "days after it is booked as printed and flagged)."),
             Rule("CA-DATE-04",
-                 "Otherwise: T+1 (from 2024-05-27 in CAD, 2024-05-28 in "
-                 "USD), T+2 from 2017-09-05, T+3 before; other markets "
-                 "T+2 (UK, EU and Swiss T+1 from 2027-10-11); options T+1, "
-                 "but an exercise or assignment takes its stock leg's "
-                 "date.", cont=True),
+                 "Otherwise: T+1 (from 2024-05-27 in CAD and MXN, "
+                 "2024-05-28 in USD), T+2 from 2017-09-05, T+3 before; "
+                 "other markets T+2 — from 2014-10-06 in the UK, the EU "
+                 "and Switzerland (T+1 from 2027-10-11 in every EU "
+                 "currency, sterling and the Swiss franc), 2016-03-07 in "
+                 "Australia and New Zealand, 2018-12-10 in Singapore and "
+                 "2019-07-16 in Japan (T+3 before each), always in Hong "
+                 "Kong, and on the North-American dates elsewhere; "
+                 "options T+1, but an exercise or assignment takes its "
+                 "stock leg's date.", cont=True),
             Rule("CA-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
@@ -913,9 +918,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "earlier than the trade date is refused; one more than 7 "
                  "days after it is booked as printed and flagged). "
                  "Otherwise: T+1 (from 2024-05-28 in USD, 2024-05-27 in "
-                 "CAD), T+2 from 2017-09-05, T+3 before; other markets T+2 "
-                 "(UK, EU and Swiss T+1 from 2027-10-11); options T+1, but "
-                 "an exercise or assignment takes its stock leg's date."),
+                 "CAD and MXN), T+2 from 2017-09-05, T+3 before; other "
+                 "markets T+2 — from 2014-10-06 in the UK, the EU and "
+                 "Switzerland (T+1 from 2027-10-11 in every EU currency, "
+                 "sterling and the Swiss franc), 2016-03-07 in Australia "
+                 "and New Zealand, 2018-12-10 in Singapore and 2019-07-16 "
+                 "in Japan (T+3 before each), always in Hong Kong, and on "
+                 "the North-American dates elsewhere; options T+1, but an "
+                 "exercise or assignment takes its stock leg's date."),
             Rule("US-DATE-05",
                  "Days skip weekends and settlement holidays (US: NYSE and "
                  "Federal Reserve holidays; Canada: TSX holidays, "
