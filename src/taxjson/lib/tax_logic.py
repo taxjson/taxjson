@@ -321,8 +321,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "below.", cont=True),
             Rule("CA-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
-            Rule("CA-DATE-08", "an option expiry is dated its expiry day.",
-                 cont=True),
+            Rule("CA-DATE-08",
+                 "an option expiry is dated its expiry day, and so is a "
+                 "right or warrant expiry (the date in the row's "
+                 "description, \"AS OF\" or \"EXP\", when it is at most "
+                 "7 days before the posting date; else the posting "
+                 "date), settled the same day.", cont=True),
             (Rule("CA-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "
@@ -1063,8 +1067,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "below.", cont=True),
             Rule("US-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
-            Rule("US-DATE-08", "an option expiry is dated its expiry day.",
-                 cont=True),
+            Rule("US-DATE-08",
+                 "an option expiry is dated its expiry day, and so is a "
+                 "right or warrant expiry (the date in the row's "
+                 "description, \"AS OF\" or \"EXP\", when it is at most "
+                 "7 days before the posting date; else the posting "
+                 "date), settled the same day.", cont=True),
             (Rule("US-DATE-09",
                   "Futures and futures options settle on the TRADE date "
                   "(futures_settle = \"trade\": variation margin settles "

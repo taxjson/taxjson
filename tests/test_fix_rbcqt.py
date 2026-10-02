@@ -315,6 +315,7 @@ class TestQtRowShapes(unittest.TestCase):
         self.assertEqual(txs[0]['date_settle'], '2023-12-29')
 
     @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_warrant_expiry_books_on_its_expiry_date(self):
         """S065-04."""
         txs, _, _ = qt_parse(q(td='2028-01-03', action='EXP', sym='QZWW',
@@ -594,6 +595,8 @@ class TestRbcTradeRows(unittest.TestCase):
                    "06/16/23", settle=""))
         self.assertEqual({t['date_settle'] for t in txs}, {'2023-06-20'})
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_warrant_expiry_settles_on_its_date(self):
         """S065-04."""
         txs, _, _ = rbc_parse(rrow("December 31, 2027", "Reorganization",
@@ -601,6 +604,13 @@ class TestRbcTradeRows(unittest.TestCase):
                                    "CAD", "EXP - WTS QZW CORP AS OF 12/31/27 "
                                    "EXPIRED", settle="January 3, 2028"))
         self.assertEqual(txs[0]['date_settle'], '2027-12-31')
+        # Posted the next business day: booked on the description's date.
+        txs, _, _ = rbc_parse(rrow("January 3, 2028", "Reorganization",
+                                   "QZW.WT", "QZW CORP WTS", "-100", "", "0",
+                                   "CAD", "EXP - WTS QZW CORP AS OF 12/31/27 "
+                                   "EXPIRED", settle="January 4, 2028"))
+        self.assertEqual((txs[0]['date'], txs[0]['date_settle']),
+                         ('2027-12-31', '2027-12-31'))
 
 
 class TestRbcIncomeAndCorporateRows(unittest.TestCase):

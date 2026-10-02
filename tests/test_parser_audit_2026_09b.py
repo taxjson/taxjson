@@ -98,6 +98,8 @@ class TestIbExpirySettlement(unittest.TestCase):
         self.assertEqual(gains[0]['date_settle'], '2026-12-31')
         self.assertAlmostEqual(gains[0]['gain'], -501.0)
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_zero_price_close_without_ep_code_is_an_expiry(self):
         body = (IB_TRADES_HDR
                 + _ib_trade(self.OPT, 'QZX 18DEC26 70 P',
@@ -105,6 +107,8 @@ class TestIbExpirySettlement(unittest.TestCase):
         txs, _ = _parse(IbBrokerage(), body)
         self.assertEqual(txs[0]['date_settle'], '2026-12-18')
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_options_expirations_section_row(self):
         body = ('Options Expirations,Header,Currency,Symbol,Date/Time,'
                 'Quantity,T. Price,Proceeds,Comm/Fee,Code\n'
@@ -114,6 +118,9 @@ class TestIbExpirySettlement(unittest.TestCase):
         self.assertEqual(len(txs), 1)
         self.assertEqual(txs[0]['date_settle'], '2026-12-31')
 
+    @rule("CA-OPT-04")
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_0dte_long_clamps_to_expiry_and_closes_long(self):
         # Bought and expired on Dec 31: the buy's T+1 settle (next year)
         # would sort AFTER the expiry on the settle basis.
@@ -129,6 +136,8 @@ class TestIbExpirySettlement(unittest.TestCase):
         self.assertEqual(gains[0]['direction'], 'LONG')
         self.assertAlmostEqual(gains[0]['gain'], -251.3)
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_0dte_short_expiry_closes_short(self):
         body = (IB_TRADES_HDR
                 + _ib_trade(self.OPT, 'QZX 31DEC26 70 P',
@@ -191,6 +200,8 @@ class TestWebullExpiry(unittest.TestCase):
         'USD,28-02-2025,BUY,,CALL QZQ02/27/25 511,,4,2.35,,(943.96)\n'
         'USD,04-03-2025,BUY,@QZW,QZW CORP,,10,20.00,,(200.00)\n')
 
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_expiry_row_not_shifted(self):
         txs, _ = _parse(WebullBrokerage(), self.CSV)
         exp = next(t for t in txs if t['quantity'] == -4)
@@ -220,6 +231,9 @@ QT_HEAD = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
 
 
 class TestQuestradeExpiry(unittest.TestCase):
+    @rule("CA-OPT-04")
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_exp_posted_next_business_day_books_on_expiry(self):
         # Friday 2027-12-31 expiry posted Monday 2028-01-03, settle blank.
         csv = QT_HEAD + (
@@ -255,6 +269,8 @@ RBC_HEAD = ('"Date","Activity","Symbol","Symbol Description","Quantity",'
 
 
 class TestRbcExpiry(unittest.TestCase):
+    @rule("CA-DATE-08")
+    @rule("US-DATE-08")
     def test_exp_posted_monday_books_friday_expiry(self):
         csv = RBC_HEAD + (
             '"January 3, 2028","Reorganization","8QZQZQ1","","-5","",'
