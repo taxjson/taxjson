@@ -78,7 +78,7 @@ the cell as is. A mapping that references columns the CSV doesn't have
 refuses loudly.
 
 Mis-mapped columns are the importer's worst failure mode — amounts in
-the fee column once inflated a filed return by ~$41k without a word.
+the fee column can inflate a return by thousands without a word.
 So every BUY/SELL row is cross-checked and the import REFUSES when:
 
 * two logical fields name the same CSV header (e.g. fee = amount);
@@ -146,7 +146,8 @@ from taxjson.lib.tomlcompat import tomllib
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          canonical_ca_listing,
                                          decode_broker_text,
-                                         parse_strict_number)
+                                         parse_strict_number,
+                                         shown_name)
 from taxjson.lib.core import is_option_symbol, parse_option_expiry
 from taxjson.lib.dates import settlement_date
 
@@ -240,7 +241,7 @@ def mapping_path(csv_path: Path) -> Path:
     if sidecar.is_symlink() and not sidecar.exists():
         raise ValueError(
             f"generic importer: the mapping {sidecar.name} for "
-            f"{csv_path.name} is a link to a file that does not exist — "
+            f"{shown_name(csv_path)} is a link to a file that does not exist — "
             f"fix or remove it. (The shared generic.toml is NOT used in "
             f"its place: it describes other files' columns.)")
     return sidecar if sidecar.exists() else csv_path.parent / "generic.toml"
@@ -251,7 +252,7 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     path = mapping_path(csv_path)
     if not path.exists():
         raise ValueError(
-            f"generic importer: no mapping for {csv_path.name} — write "
+            f"generic importer: no mapping for {shown_name(csv_path)} — write "
             f"{sidecar.name} (or a shared generic.toml in the same "
             f"folder). See examples/generic_wealthsimple.toml for a "
             f"template.")
@@ -265,18 +266,18 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         mapping = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except OSError as e:
         raise ValueError(f"generic importer: cannot read the mapping "
-                         f"{path.name}: {e.strerror or e}")
+                         f"{shown_name(path)}: {e.strerror or e}")
     except tomllib.TOMLDecodeError as e:
-        raise ValueError(f"generic importer: {path.name}: bad TOML: {e}")
+        raise ValueError(f"generic importer: {shown_name(path)}: bad TOML: {e}")
     for sec, val in mapping.items():
         if sec not in _SECTIONS:
             raise ValueError(
-                f"generic importer: {path.name}: unknown section "
+                f"generic importer: {shown_name(path)}: unknown section "
                 f"[{sec}].{_did_you_mean(sec, _SECTIONS)} Valid sections: "
                 f"{', '.join('[' + x + ']' for x in _SECTIONS)}.")
         if not isinstance(val, dict):
             raise ValueError(
-                f"generic importer: {path.name}: {sec} must be a "
+                f"generic importer: {shown_name(path)}: {sec} must be a "
                 f"[{sec}] table, got {val!r}")
     cols = mapping.get("columns") or {}
     _check_keys(path.name, "columns", cols, _COLUMN_KEYS)
@@ -291,7 +292,7 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         bname = raw_name.strip().lower() if isinstance(raw_name, str) else ""
         if not _BROKER_NAME_RE.match(bname):
             raise ValueError(
-                f"generic importer: {path.name}: [broker].name must be a "
+                f"generic importer: {shown_name(path)}: [broker].name must be a "
                 f"short name of letters, digits, '-' or '_' (e.g. "
                 f"\"wealthsimple\"), got {raw_name!r}")
         mapping["broker"]["name"] = bname
@@ -299,7 +300,7 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         acct = mapping["broker"]["account"]
         if not isinstance(acct, str) or not acct.strip():
             raise ValueError(
-                f"generic importer: {path.name}: [broker].account must be "
+                f"generic importer: {shown_name(path)}: [broker].account must be "
                 f"the broker account id as a quoted string, got a "
                 f"{type(acct).__name__}")
         mapping["broker"]["account"] = acct.strip()
@@ -310,12 +311,12 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         for k, v in (mapping.get(sec) or {}).items():
             if not isinstance(v, str):
                 raise ValueError(
-                    f"generic importer: {path.name}: [{sec}].{k} must be "
+                    f"generic importer: {shown_name(path)}: [{sec}].{k} must be "
                     f"a quoted string, got {v!r}")
     for k, v in cols.items():
         if not isinstance(v, str):
             raise ValueError(
-                f"generic importer: {path.name}: [columns].{k} must be "
+                f"generic importer: {shown_name(path)}: [columns].{k} must be "
                 f"a quoted header NAME, got {v!r}")
     defaults = mapping.get("defaults") or {}
     # Two logical fields on ONE header: fee = "Net" next to amount =
@@ -328,14 +329,14 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         detail = "; ".join(f"{', '.join(ks)} -> {h!r}"
                            for h, ks in sorted(shared.items()))
         raise ValueError(
-            f"generic importer: {path.name}: several [columns] fields "
+            f"generic importer: {shown_name(path)}: several [columns] fields "
             f"map to the SAME CSV header ({detail}) — each logical field "
             f"needs its own column. A fee/amount mix-up books wrong "
             f"money silently; fix the mapping.")
     if "currency" not in cols and not str(
             defaults.get("currency", "")).strip():
         raise ValueError(
-            f"generic importer: {path.name}: no currency — map "
+            f"generic importer: {shown_name(path)}: no currency — map "
             f"[columns].currency or set [defaults].currency (e.g. "
             f"\"CAD\"). There is no implicit USD default: a CAD account "
             f"read as USD is converted at the wrong rate.")
@@ -343,26 +344,26 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     for k, v in options.items():
         if k not in _OPTIONS:
             raise ValueError(
-                f"generic importer: {path.name}: unknown [options].{k}."
+                f"generic importer: {shown_name(path)}: unknown [options].{k}."
                 f"{_did_you_mean(k, _OPTIONS)} (valid: "
                 f"{', '.join(_OPTIONS)})")
         if not isinstance(v, bool):
             raise ValueError(
-                f"generic importer: {path.name}: [options].{k} must be "
+                f"generic importer: {shown_name(path)}: [options].{k} must be "
                 f"true or false, got {v!r}")
     if "date" not in cols:
-        raise ValueError(f"generic importer: {path.name}: "
+        raise ValueError(f"generic importer: {shown_name(path)}: "
                          f"[columns].date is required")
     if "action" not in cols and "action" not in defaults:
-        raise ValueError(f"generic importer: {path.name}: map "
+        raise ValueError(f"generic importer: {shown_name(path)}: map "
                          f"[columns].action or set [defaults].action")
     if "symbol" not in cols and "symbol" not in defaults:
-        raise ValueError(f"generic importer: {path.name}: map "
+        raise ValueError(f"generic importer: {shown_name(path)}: map "
                          f"[columns].symbol or set [defaults].symbol")
     for raw, target in (mapping.get("actions") or {}).items():
         if target not in _VALID_TARGETS:
             raise ValueError(
-                f"generic importer: {path.name}: [actions] {raw!r} maps "
+                f"generic importer: {shown_name(path)}: [actions] {raw!r} maps "
                 f"to unknown target {target!r} (valid: "
                 f"{', '.join(_VALID_TARGETS)})")
     # Required fields per target actually used.
@@ -370,18 +371,18 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     income = sorted(targets & set(_INCOME_TARGETS))
     if income and "amount" not in cols:
         raise ValueError(
-            f"generic importer: {path.name}: [actions] map to "
+            f"generic importer: {shown_name(path)}: [actions] map to "
             f"{', '.join(income)} but [columns].amount is not mapped — "
             f"income/tax/fee rows book the amount cell, and without it "
             f"every such row would be booked as 0.")
     if targets & {"buy", "sell"}:
         if "quantity" not in cols:
             raise ValueError(
-                f"generic importer: {path.name}: [actions] map to buy/"
+                f"generic importer: {shown_name(path)}: [actions] map to buy/"
                 f"sell but [columns].quantity is not mapped.")
         if "price" not in cols and "amount" not in cols:
             raise ValueError(
-                f"generic importer: {path.name}: [actions] map to buy/"
+                f"generic importer: {shown_name(path)}: [actions] map to buy/"
                 f"sell but neither [columns].price nor [columns].amount "
                 f"is mapped — the cost/proceeds would be the fee alone.")
     mapping["_path"] = path.name
@@ -688,7 +689,7 @@ class GenericBrokerage(BaseBrokerage):
                       if v.strip().lower() in _dupes]
             if _ambig:
                 raise ValueError(
-                    f"generic importer: {path.name}: mapped column(s) "
+                    f"generic importer: {shown_name(path)}: mapped column(s) "
                     f"appear MORE THAN ONCE in the header — rename the "
                     f"duplicates or map the exact one you mean: "
                     f"{', '.join(_ambig)}. Header: {fieldnames}.")
@@ -696,7 +697,7 @@ class GenericBrokerage(BaseBrokerage):
                        if v.strip().lower() not in header]
             if missing:
                 raise ValueError(
-                    f"generic importer: {path.name}: mapped column(s) "
+                    f"generic importer: {shown_name(path)}: mapped column(s) "
                     f"not in the CSV header: {', '.join(missing)}. "
                     f"Header: {fieldnames}. Fix "
                     f"{mapping['_path']}.")
@@ -764,7 +765,7 @@ class GenericBrokerage(BaseBrokerage):
                           if k is not None and v is None]
                 if _short:
                     raise ValueError(
-                        f"generic importer: {path.name} record ending on "
+                        f"generic importer: {shown_name(path)} record ending on "
                         f"line {reader.line_num}: "
                         f"{len(fieldnames) - len(_short)} cell(s), "
                         f"fewer cells than the header's {len(fieldnames)} "
@@ -775,14 +776,14 @@ class GenericBrokerage(BaseBrokerage):
                         and fieldnames
                         and not (row.get(fieldnames[-1]) or "").strip()):
                     raise ValueError(
-                        f"generic importer: {path.name} line "
+                        f"generic importer: {shown_name(path)} line "
                         f"{reader.line_num}: the file ends on a separator "
                         f"with no line break — its last record looks cut "
                         f"off (the {fieldnames[-1]!r} cell is missing). "
                         f"Re-export the file.")
                 if _extra or _nl:
                     raise ValueError(
-                        f"generic importer: {path.name} record ending on "
+                        f"generic importer: {shown_name(path)} record ending on "
                         f"line {reader.line_num}: "
                         + (f"{len(_extra)} cell(s) more than the header"
                            if _extra else
@@ -809,7 +810,7 @@ class GenericBrokerage(BaseBrokerage):
                         if _v:
                             _moves = True
                     if _moves:
-                        _w = (f"{path.name} line {reader.line_num}: "
+                        _w = (f"{shown_name(path)} line {reader.line_num}: "
                               f"action {raw_action or '?'!r} (not in "
                               f"[actions]) carries a quantity/amount")
                         unbooked.append(_w)
@@ -828,12 +829,12 @@ class GenericBrokerage(BaseBrokerage):
                     # stamped or dropped date distorts years/holding
                     # periods invisibly.
                     raise ValueError(
-                        f"generic importer: {path.name}: unparseable "
+                        f"generic importer: {shown_name(path)}: unparseable "
                         f"date {date_raw!r} with [formats].date="
                         f"{date_fmt!r}")
                 date = dt.strftime("%Y-%m-%d")
                 row_dates.append(date)
-                where = f"{path.name} line {reader.line_num}"
+                where = f"{shown_name(path)} line {reader.line_num}"
                 currency = (str(cell(row, "currency")).strip()
                             or str(defaults.get("currency", ""))
                             ).strip().upper()
@@ -1026,13 +1027,13 @@ class GenericBrokerage(BaseBrokerage):
                     f"and sells to separate action values ({len(bad)} "
                     f"such row(s)).")
         if expiry_clamped:
-            print(f"note: generic importer: {path.name}: "
+            print(f"note: generic importer: {shown_name(path)}: "
                   f"{len(expiry_clamped)} option close(s) at $0 posted "
                   f"after the contract's expiry are dated the expiry day "
                   f"(CA-DATE-08 / US-DATE-08): "
                   f"{'; '.join(expiry_clamped[:5])}", file=sys.stderr)
         if late_settles:
-            print(f"warning: ATTENTION: generic importer: {path.name}: "
+            print(f"warning: ATTENTION: generic importer: {shown_name(path)}: "
                   f"{len(late_settles)} trade(s) settle more than "
                   f"{_SETTLE_LATE_DAYS} days after the trade date: "
                   f"{'; '.join(late_settles[:5])}. The tax year follows "

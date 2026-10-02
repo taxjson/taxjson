@@ -1022,8 +1022,8 @@ def prepare_books(transactions, sheltered_transactions=(),
                 f"If any of these are from truncated history rather than real short trades, "
                 f"list them in phantoms.json: `taxjson find-missing-history "
                 f"--gen-phantoms phantoms.json` in a project (`taxjson run` "
-                f"picks the file up), or `taxjson-gains --suggest-phantoms "
-                f"FILE` standalone.",
+                f"picks the file up), or `taxjson-gains --country "
+                f"canada|usa --suggest-phantoms FILE` standalone.",
                 file=sys.stderr,
             )
     return (transactions, sheltered_transactions, affiliated_transactions,

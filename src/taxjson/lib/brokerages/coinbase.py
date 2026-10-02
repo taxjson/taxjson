@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
-from taxjson.lib.brokerages.base import BaseBrokerage, read_broker_text
+from taxjson.lib.brokerages.base import (BaseBrokerage, read_broker_text,
+                                         shown_name)
 from taxjson.lib.brokerages._crypto_common import (USD_STABLECOINS,
                                                    strict_money, utc_to_local,
                                                    warn_depeg)
@@ -215,7 +216,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                                    if f not in header_map]
                         if missing:
                             raise ValueError(
-                                f"Coinbase CSV {path.name}: unrecognized "
+                                f"Coinbase CSV {shown_name(path)}: unrecognized "
                                 f"export layout — no column found for "
                                 f"{', '.join(repr(m) for m in missing)}. "
                                 f"Header: {header}. If this is a new "
@@ -235,7 +236,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # one booked a qty-0 or symbol-less row) — audit
                     # R1-115.
                     raise ValueError(
-                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"Coinbase CSV {shown_name(path)} line {reader.line_num}: "
                         f"the row has {len(row)} cells but the header has "
                         f"{len(header)} — a truncated row (a cut-off "
                         f"export?); refusing to read the missing cells "
@@ -247,7 +248,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                 # never write more cells than the header.
                 if any('\n' in c or '\r' in c for c in row):
                     raise ValueError(
-                        f"Coinbase CSV {path.name} line {row_start}: "
+                        f"Coinbase CSV {shown_name(path)} line {row_start}: "
                         f"a cell spans several lines — an unterminated "
                         f"quote (e.g. in Notes) opened on this line has "
                         f"swallowed lines {row_start + 1}-"
@@ -256,7 +257,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                 if len(row) > len(header) and any(
                         c.strip() for c in row[len(header):]):
                     raise ValueError(
-                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"Coinbase CSV {shown_name(path)} line {reader.line_num}: "
                         f"the row has {len(row)} cells but the header has "
                         f"{len(header)} — misaligned columns (an unquoted "
                         f"comma?); refusing to read it.")
@@ -464,7 +465,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # both negative) under a Buy label was booked as an
                     # acquisition, also under --strict (re-audit A2-1025).
                     raise ValueError(
-                        f"Coinbase CSV {path.name} line {reader.line_num}: "
+                        f"Coinbase CSV {shown_name(path)} line {reader.line_num}: "
                         f"a {type_raw.strip()} row with a NEGATIVE "
                         f"quantity and total — the sale signature; "
                         f"refusing to book it as a purchase.")
@@ -481,7 +482,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     # Both legs need one id stem for fill-crypto to value
                     # the swap once (re-audit A2-0998's twin).
                     cb_id = self._content_stem(row)
-                where = (f"Coinbase {path.name} line {row_start} "
+                where = (f"Coinbase {shown_name(path)} line {row_start} "
                          f"({type_raw.strip()} {asset} "
                          f"{self._col(row, header_map, 'timestamp')})")
 
@@ -613,7 +614,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                     continue
                 transactions.append(tx)
         if self._blank_totals:
-            print(f"note: Coinbase {path.name}: {self._blank_totals} "
+            print(f"note: Coinbase {shown_name(path)}: {self._blank_totals} "
                   f"Buy/Sell row(s) had a blank Total — derived from "
                   f"Subtotal ± fee (or quantity × price ± fee when "
                   f"Subtotal is blank too). Check them against the "
@@ -631,7 +632,7 @@ class CoinbaseBrokerage(BaseBrokerage):
                 kinds[k] = kinds.get(k, 0) + 1
             dates = sorted(d for _k, d, _a, _q in unbooked)
             assets = sorted({a for _k, _d, a, _q in unbooked})
-            msg = (f"Coinbase {path.name}: {len(unbooked)} row(s) of "
+            msg = (f"Coinbase {shown_name(path)}: {len(unbooked)} row(s) of "
                    f"type(s) the parser does not book "
                    f"({', '.join(f'{k} x{n}' for k, n in sorted(kinds.items()))}"
                    f"; {dates[0]}..{dates[-1]}; assets "

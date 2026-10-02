@@ -8,7 +8,8 @@ from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE, parse_strict_number,
-                                         read_broker_text)
+                                         read_broker_text,
+                                         shown_name)
 from taxjson.lib.core import is_option_symbol, parse_option_expiry
 
 
@@ -177,7 +178,7 @@ class WebullBrokerage(BaseBrokerage):
             # File line of this record (the header record is the first
             # one the reader returns; line_num counts physical lines
             # read so far, so a record's LAST physical line).
-            where = f"{path.name} line {header_index + reader.line_num}"
+            where = f"{shown_name(path)} line {header_index + reader.line_num}"
             if (row and len(row) < width and any(c.strip() for c in row)
                     and row[0].strip().upper() in _CURRENCY_PREFIXES):
                 # A data row cut short — the last line of a download

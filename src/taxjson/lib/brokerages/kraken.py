@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
-                                         read_broker_text)
+                                         read_broker_text,
+                                         shown_name)
 from taxjson.lib.brokerages._crypto_common import (FIAT_CURRENCIES,
                                                    USD_STABLECOINS,
                                                    strict_money, utc_to_local,
@@ -193,6 +194,14 @@ def _classify_header(header_line: str) -> str:
     return ''
 
 
+def _mask(ref: Any) -> str:
+    """A Kraken txid/refid as shown in a message: first 2 characters +
+    *** (the privacy rule for ids, A2-0756/A2-1381). The raw id stays
+    the work-JSON transaction id, which is data, not a message."""
+    s = str(ref or '').strip()
+    return f"{s[:2]}***" if s else "''"
+
+
 def _lower_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {(k or '').strip().lower(): v for k, v in row.items()}
 
@@ -202,7 +211,7 @@ def _require_columns(fieldnames, required, path: Path, kind: str) -> None:
     missing = [c for c in required if c not in have]
     if missing:
         raise ValueError(
-            f"Kraken {kind} CSV {path.name}: required column(s) missing: "
+            f"Kraken {kind} CSV {shown_name(path)}: required column(s) missing: "
             f"{', '.join(missing)}. Header: {list(fieldnames or [])}. "
             f"A missing fee/vol/amount column would read as 0 on every "
             f"row — re-export the full {kind} CSV from Kraken.")
@@ -221,7 +230,7 @@ def _check_row_width(raw: Dict[Any, Any], path: Path, line: int,
         n_header = len([k for k in raw if k is not None])
         n_row = n_header - len(missing) + len(extra or [])
         raise ValueError(
-            f"Kraken {kind} CSV {path.name} line {line}: the row has "
+            f"Kraken {kind} CSV {shown_name(path)} line {line}: the row has "
             f"{n_row} cells but the header has {n_header} — a truncated "
             f"or misaligned row (a missing fee would read as 0). "
             f"Re-export the file or fix the row.")
@@ -240,7 +249,7 @@ def _refuse_duplicate_columns(fieldnames, path: Path, kind: str) -> None:
     dup = sorted(k for k, n in seen.items() if n > 1)
     if dup:
         raise ValueError(
-            f"Kraken {kind} CSV {path.name}: column(s) {', '.join(dup)} "
+            f"Kraken {kind} CSV {shown_name(path)}: column(s) {', '.join(dup)} "
             f"appear twice in the header — refusing to guess which one "
             f"holds the values. Remove the extra column or re-export the "
             f"file.")
@@ -278,7 +287,7 @@ def _dict_rows(f, path: Path, kind: str, required=()):
         prev_end = end
         if breaks or any('\r' in c for c in cells):
             raise ValueError(
-                f"Kraken {kind} CSV {path.name} line {start}: a cell holds "
+                f"Kraken {kind} CSV {shown_name(path)} line {start}: a cell holds "
                 f"a line break — an unterminated or stray quote on that "
                 f"line swallowed the row(s) after it (through line {end}), "
                 f"so they would silently be missing from the books. Fix "
@@ -413,14 +422,14 @@ class KrakenBrokerage(BaseBrokerage):
                                 if prev[0] != _ledger_identity(row):
                                     raise ValueError(
                                         f"Kraken ledger exports "
-                                        f"{prev[1]} and {p.name} both "
+                                        f"{prev[1]} and {shown_name(p)} both "
                                         f"carry ledger txid "
                                         f"{tx_id[:2]}*** with DIFFERENT "
                                         f"content — they cannot both be "
                                         f"this account's ledger; remove "
                                         f"the wrong one.")
                                 continue
-                            seen[tx_id] = (_ledger_identity(row), p.name)
+                            seen[tx_id] = (_ledger_identity(row), shown_name(p))
                         idx.setdefault(ref, []).append(row)
             except UnicodeDecodeError:
                 continue
@@ -441,7 +450,7 @@ class KrakenBrokerage(BaseBrokerage):
         Any disagreement between the two exports (legs missing, amounts
         not matching vol/cost, direction reversed, a third asset) raises:
         a mis-joined ledger must never silently rewrite a trade."""
-        ctx = f"trade {row.get('txid')!r} ({pair}, {row.get('time')!r})"
+        ctx = f"trade {_mask(row.get('txid'))} ({pair}, {row.get('time')!r})"
         by_asset: Dict[str, list] = {}
         kfee_paid = False
         for lg in legs:
@@ -582,7 +591,7 @@ class KrakenBrokerage(BaseBrokerage):
                 pair = row.get('pair') or ''
                 time_raw = row.get('time') or ''
                 dt = self._local_dt(time_raw, f"trades row (pair={pair!r})")
-                ctx = f"trades {path.name} txid={row.get('txid')!r}"
+                ctx = f"trades {shown_name(path)} txid={_mask(row.get('txid'))}"
 
                 price = self._num(row, 'price', ctx, required=True)
                 cost = abs(self._num(row, 'cost', ctx, required=True))
@@ -600,11 +609,11 @@ class KrakenBrokerage(BaseBrokerage):
                 elif _rb in _CASH_STABLECOINS and _rq == 'USD':
                     warn_depeg(_rb, price, abs(vol),
                                dt.strftime('%Y-%m-%d'),
-                               f"Kraken trades {path.name}")
+                               f"Kraken trades {shown_name(path)}")
                 elif _rq in _CASH_STABLECOINS and _rb == 'USD' and price:
                     warn_depeg(_rq, 1.0 / price, abs(cost),
                                dt.strftime('%Y-%m-%d'),
-                               f"Kraken trades {path.name}")
+                               f"Kraken trades {shown_name(path)}")
                 base = self._norm(base)
                 quote = self._norm(quote)
                 self._check_fill_money(ctx, pair, price, cost, fee, vol,
@@ -613,7 +622,7 @@ class KrakenBrokerage(BaseBrokerage):
                         and base in _FIAT_CURRENCIES
                         and quote in _STABLECOINS):
                     raise ValueError(
-                        f"Kraken trades {path.name}: pair {pair!r} "
+                        f"Kraken trades {shown_name(path)}: pair {pair!r} "
                         f"prices dollars in a stablecoin — with "
                         f"stablecoins as property (a US project) that is "
                         f"a sale or purchase of {quote} this parser does "
@@ -646,7 +655,7 @@ class KrakenBrokerage(BaseBrokerage):
                     # false gain (S061-11).
                     self._same_property_swap(
                         abs(vol), abs(cost), base,
-                        f"trades {path.name} line {line} "
+                        f"trades {shown_name(path)} line {line} "
                         f"({pair})")
                     continue
 
@@ -673,7 +682,7 @@ class KrakenBrokerage(BaseBrokerage):
                                 warn_depeg(_rq, abs(strict_money(
                                     _au, 'amountusd', ctx)) / _am, _am,
                                     dt.strftime('%Y-%m-%d'),
-                                    f"Kraken trades {path.name}")
+                                    f"Kraken trades {shown_name(path)}")
                 else:
                     base_coins, base_fee, quote_fee = abs(vol), 0.0, fee
                     unverified += 1
@@ -811,7 +820,7 @@ class KrakenBrokerage(BaseBrokerage):
             # quiet `note:` only the .sum showed (re-audit A2-0245).
             detail = ', '.join(f"{k} x{v}"
                                for k, v in sorted(ignored_types.items()))
-            print(f"warning: UNBOOKED: Kraken trades {path.name}: "
+            print(f"warning: UNBOOKED: Kraken trades {shown_name(path)}: "
                   f"{sum(ignored_types.values())} row(s) whose type is "
                   f"neither buy nor sell ({detail}) are NOT in the books "
                   f"— fix the type cell, or enter each fill via a .tt "
@@ -821,7 +830,7 @@ class KrakenBrokerage(BaseBrokerage):
                      "the same folder" if ledger_idx is None else
                      "the ledgers export(s) beside it do not contain "
                      "them")
-            print(f"warning: Kraken trades {path.name}: the fee currency "
+            print(f"warning: Kraken trades {shown_name(path)}: the fee currency "
                   f"of {unverified} fill(s) can't be verified — {where}. "
                   f"Kraken's trades CSV states every fee in quote units "
                   f"even when Kraken took it in the traded coin, which "
@@ -829,19 +838,19 @@ class KrakenBrokerage(BaseBrokerage):
                   f"these dates beside the trades file.",
                   file=sys.stderr)
         if margin_fills:
-            print(f"warning: Kraken trades {path.name}: {margin_fills} "
+            print(f"warning: Kraken trades {shown_name(path)}: {margin_fills} "
                   f"fill(s) carry a nonzero `margin` value — they are "
                   f"booked as ordinary SPOT buys/sells. The margin "
                   f"position's rollover (financing) and settlement "
                   f"ledger rows are NOT modeled; hand-check these "
                   f"positions (R1-107).", file=sys.stderr)
         if getattr(self, '_kfee_fills', 0):
-            print(f"note: Kraken trades {path.name}: {self._kfee_fills} "
+            print(f"note: Kraken trades {shown_name(path)}: {self._kfee_fills} "
                   f"fill(s) paid their fee with Kraken fee credits (KFEE) "
                   f"— booked with no fee (the credits cost nothing).",
                   file=sys.stderr)
         if coin_fee_fills:
-            print(f"note: Kraken trades {path.name}: {coin_fee_fills} "
+            print(f"note: Kraken trades {shown_name(path)}: {coin_fee_fills} "
                   f"fill(s) had the fee taken in the traded coin (per the "
                   f"ledger) — booked as fewer coins received / more "
                   f"coins given, with no quote-currency fee; those fees "
@@ -887,7 +896,7 @@ class KrakenBrokerage(BaseBrokerage):
                     if prev is not None:
                         if prev != ident:
                             raise ValueError(
-                                f"Kraken ledger {path.name} line "
+                                f"Kraken ledger {shown_name(path)} line "
                                 f"{line}: ledger txid "
                                 f"{txid[:2]}*** appears twice with "
                                 f"DIFFERENT content — the file is "
@@ -906,7 +915,7 @@ class KrakenBrokerage(BaseBrokerage):
                               f"asset={asset_raw!r})")
                 date = dt.strftime("%Y-%m-%d")
                 time = dt.strftime("%H:%M:%S")
-                ctx = f"ledger {path.name} txid={txid!r}"
+                ctx = f"ledger {shown_name(path)} txid={_mask(txid)}"
                 amount = self._num(row, 'amount', ctx, required=True)
                 fee = self._num(row, 'fee', ctx)
                 asset = self._norm(asset_raw)
@@ -1055,7 +1064,7 @@ class KrakenBrokerage(BaseBrokerage):
                         # re-audit A2-1003).
                         warn_depeg(asset_name, usd_v / abs(amount),
                                    abs(amount), date,
-                                   f"Kraken ledger {path.name}")
+                                   f"Kraken ledger {shown_name(path)}")
                     if asset in side:
                         # Split settlement: a refid can carry two rows
                         # of the same leg — assignment silently
@@ -1122,7 +1131,7 @@ class KrakenBrokerage(BaseBrokerage):
         if trade_rows:
             self._check_trade_coverage(path, trade_rows, trade_refids)
         if repeated:
-            print(f"note: Kraken ledger {path.name}: {repeated} repeated "
+            print(f"note: Kraken ledger {shown_name(path)}: {repeated} repeated "
                   f"ledger row(s) (same txid and content as an earlier "
                   f"row — overlapping exports pasted together) skipped.",
                   file=sys.stderr)
@@ -1132,7 +1141,7 @@ class KrakenBrokerage(BaseBrokerage):
                 kinds[k] = kinds.get(k, 0) + 1
             dates = sorted(d for _k, d, _a, _m in unbooked)
             assets = sorted({a for _k, _d, a, _m in unbooked})
-            print(f"warning: UNBOOKED: Kraken ledger {path.name}: "
+            print(f"warning: UNBOOKED: Kraken ledger {shown_name(path)}: "
                   f"{len(unbooked)} row(s) of type(s) the parser does not "
                   f"book ({', '.join(f'{k} x{n}' for k, n in sorted(kinds.items()))}"
                   f"; {dates[0]}..{dates[-1]}; assets "
@@ -1143,7 +1152,7 @@ class KrakenBrokerage(BaseBrokerage):
         if ignored_types:
             detail = ', '.join(f"{k} x{v}" for k, v in sorted(ignored_types.items()))
             print(
-                f"note: Kraken ledger {path.name}: ignored "
+                f"note: Kraken ledger {shown_name(path)}: ignored "
                 f"{sum(ignored_types.values())} fiat-cash or zero-amount "
                 f"row(s) "
                 f"({detail}) — moving your own cash to or from Kraken (a "
@@ -1237,7 +1246,7 @@ class KrakenBrokerage(BaseBrokerage):
         if not missing:
             self.zero_tx_reason = (f"its {trade_rows} trade row(s) are "
                                    f"booked from the trades export")
-            print(f"note: Kraken ledger {path.name}: {trade_rows} trade "
+            print(f"note: Kraken ledger {shown_name(path)}: {trade_rows} trade "
                   f"row(s) ({len(trade_refids)} trade(s)) are booked from "
                   f"the trades export beside it — every one matched.",
                   file=sys.stderr)
@@ -1249,7 +1258,7 @@ class KrakenBrokerage(BaseBrokerage):
                "in the same folder" if txids is None else
                "the trades export(s) beside it do not contain them — "
                "they likely cover a shorter date range")
-        print(f"warning: UNBOOKED: Kraken ledger {path.name}: "
+        print(f"warning: UNBOOKED: Kraken ledger {shown_name(path)}: "
               f"{len(missing)} trade(s) of {len(trade_refids)} "
               f"({dates[0]}..{dates[-1]}; refids {masked}{more}) are NOT "
               f"booked — {why}. The ledger's trade rows are not parsed; "
@@ -1295,8 +1304,8 @@ class KrakenBrokerage(BaseBrokerage):
         """DIVIDEND (+ acquisition) rows for one reward credit.
 
         Same-currency fee (every real export so far: feecurrency ==
-        asset): Kraken's balance moves by amount − fee — a 0.19842 SOL
-        reward with a 0.04961 SOL commission credits 0.14882 SOL.
+        asset): Kraken's balance moves by amount − fee — a 0.20 SOL
+        reward with a 0.05 SOL commission credits 0.15 SOL.
         Booking the gross minted phantom units and overstated the
         income by the commission; both the income and the acquired
         quantity are the NET coins, the USD value net likewise
@@ -1457,14 +1466,14 @@ class KrakenBrokerage(BaseBrokerage):
                           f"counter-leg (truncated export?) or enter the "
                           f"trade manually via a .tt file.",
                           file=sys.stderr)
-                    self.count_skip(f"orphan {leg_type} (refid {refid})")
+                    self.count_skip(f"orphan {leg_type} (refid {_mask(refid)})")
             return []
         if len(spends) == 1 and len(recvs) == 1:
             return self._build_instant_trade(
                 {'spend': spends[0], 'receive': recvs[0]}, refid)
         if len(spends) > 1 and len(recvs) > 1:
             raise ValueError(
-                f"Kraken ledger refid {refid!r}: {len(spends)} spend and "
+                f"Kraken ledger refid {_mask(refid)}: {len(spends)} spend and "
                 f"{len(recvs)} receive legs — no defensible way to pair "
                 f"them. Enter this conversion via a .tt file{_TT_REMOVE}.")
         many, one, many_side = ((spends, recvs[0], 'spend')
@@ -1478,7 +1487,7 @@ class KrakenBrokerage(BaseBrokerage):
         else:
             shares = [1.0 / len(many)] * len(many)
             basis = 'equal shares (no amountusd in this export)'
-        print(f"note: Kraken ledger refid {refid!r}: {len(many)} "
+        print(f"note: Kraken ledger refid {_mask(refid)}: {len(many)} "
               f"{many_side} legs ({', '.join(l['asset'] for l in many)}) "
               f"share one {one['asset']} {'receipt' if many_side == 'spend' else 'payment'} "
               f"— split by {basis}; each asset is booked separately.",
@@ -1533,7 +1542,7 @@ class KrakenBrokerage(BaseBrokerage):
                       f"counter-leg (truncated export?) or enter the "
                       f"trade manually via a .tt file.",
                       file=sys.stderr)
-                self.count_skip(f"orphan {leg_type} (refid {refid})")
+                self.count_skip(f"orphan {leg_type} (refid {_mask(refid)})")
             return []
         spend = trade['spend']
         recv = trade['receive']

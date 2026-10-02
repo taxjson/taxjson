@@ -237,8 +237,8 @@ class BrokerageParseError(ValueError):
     is unparseable, a row's money does not add up (|proceeds| far from
     |qty| x price x multiplier), the file is a different report than the
     parser reads, or the parsed rows disagree with the broker's own
-    totals. Reading a missing column as 0 once inflated a filed return
-    by ~41k — failing closed is the point. `taxjson-brokerage` turns it
+    totals. Reading a missing column as 0 can inflate a return by
+    thousands — failing closed is the point. `taxjson-brokerage` turns it
     into a one-line error and a nonzero exit."""
 
 
@@ -263,6 +263,28 @@ def shown_name(path) -> str:
             return tok
         return tok[:2] + '***'
     return _NAME_DIGITS_RE.sub(_mask, _NAME_IB_ID_RE.sub(_mask, name))
+
+
+def source_key(path) -> str:
+    """The dedup key beside a row's `source` (its shown_name): '' when
+    the name has nothing masked, else sha256 of the real file name,
+    first 10 hex — so two files whose names differ only in a masked
+    account-number token (manual_55500001.tt / manual_55500002.tt)
+    stay two sources, while no id is written out (audit A2-0159)."""
+    name = Path(str(path)).name
+    if shown_name(path) == name:
+        return ''
+    import hashlib
+    return hashlib.sha256(name.encode('utf-8')).hexdigest()[:10]
+
+
+def source_identity(source, key) -> str:
+    """One string per input file for dedup: the shown name, plus the
+    key when the name was masked (the form of metadata.source_accounts
+    keys)."""
+    source = str(source or '')
+    key = str(key or '')
+    return f"{source}#{key}" if key and source else source
 
 
 def decode_broker_text(raw: bytes, name: str = '') -> str:
@@ -706,8 +728,8 @@ class BaseBrokerage:
         (audit R1-93); a thousands comma (`1,234.56`) is fine.
         REQUIRED money/quantity cells must use
         `parse_strict_number` instead: a garbage-to-0 read of a
-        required field is how a missing column once inflated a filed
-        return by ~41k."""
+        required field is how a missing column can inflate a return
+        by thousands."""
         if raw is None or raw == '':
             return default
         s = str(raw).strip()
