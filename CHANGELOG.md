@@ -75,6 +75,54 @@
   - The error for a bad sends.json no longer suggests deleting the
     file.
 
+- `taxjson export`: a gains / inventory file whose rows hold text in a
+  number field (or a non-text symbol) is a one-line error naming the file
+  and row, exit 2, instead of a float() traceback (A2-0793, export part).
+- `taxjson-sum-income` reads its rows through the same checks as
+  taxjson-gains: an impossible date, a NaN/inf amount or a text amount is
+  a one-line error with exit 2 instead of being summed (or a traceback)
+  (A2-1448).
+- `.tt` files: a symbol with no market suffix (MSFT for MSFT.US) on a
+  line of an account that is not `crypto = true` is now warned about in
+  the run diagnostics like an unknown suffix — it is its own ACB pool and
+  the broker's rows for the real listing go short (A2-0777).
+- IB parser: an AUD/HKD/JPY/SGD/NZD fill on a system with no time-zone
+  database is a one-line error saying to install `tzdata` (now a declared
+  dependency on Windows), not a ZoneInfoNotFoundError traceback
+  (A2-1447).
+- Generic importer: a mapping .toml that is not UTF-8 is reported against
+  the .toml, not as the CSV being unreadable (A2-1452).
+- Webull parser: a row whose Action Code is blank but that carries a
+  date, quantity, price or proceeds is refused naming the file line; the
+  trade was dropped at rc 0 (A2-0788).
+- IB parser: a Dividends or Withholding Tax row whose Description has
+  no leading `TICKER (ISIN)` token is refused naming the file line; it
+  was booked on UNKNOWN.US (or a word of the text) and a Canadian
+  eligible dividend was estimated as foreign. A withholding row on
+  credit interest is booked on CASH, like the interest (A2-0780).
+- `taxjson export`: a tv_exchange.map saved with a BOM keeps its first
+  rule, and a holdings TOML row whose quantity or total_cost is not a
+  number (or whose symbol is blank) is refused naming the row in every
+  mode (A2-0806, A2-1410, A2-1442, A2-1443, A2-1441).
+- Web UI: `accounts = 5` (or a list) in taxjson.toml is the one-line
+  config error `taxjson serve` gives for the other bad shapes, and a
+  dangling work/*_base.json symlink no longer breaks the wash-radar page
+  (A2-0807, A2-0787).
+- `taxjson handoff`: a prior-year lock whose fields are the wrong shape
+  (dispositions, settle_next_year, year_end, schema_version, ...) is one
+  `taxjson handoff: error:` line naming the file and field, exit 2; a
+  BOM'd lock loads. `close-year --filed-dispositions` refuses a short row
+  or a blank symbol naming file:line, and the hand-off reads the gains
+  and base books through the shared work-file check (A2-0769, A2-0803,
+  A2-1396, A2-1397, A2-0794 handoff part, A2-0776).
+- `taxjson checklist`: a checklist.json that is a directory or a looping
+  symlink, a wrong-shape mark entry, or a file that cannot be written or
+  removed (read-only project, full disk) is now one `taxjson checklist:`
+  line; a failed write keeps the old file and leaves no .part; a BOM'd
+  hand-edited file loads (A2-0768, A2-0789, A2-1393, A2-1414, A2-0776).
+- `taxjson watch`: a .watch_state.json whose inner radar entries or
+  harvest_now are the wrong shape records a new baseline with a warning
+  instead of crashing with exit 1 (A2-1430).
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

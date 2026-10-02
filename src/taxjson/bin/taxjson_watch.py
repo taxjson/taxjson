@@ -167,6 +167,25 @@ def diff_harvest(prev_now: Optional[float], cur_now: float,
                     f"{cur_now:,.2f} ({delta:+,.2f})"}
 
 
+def _bad_inner(doc: Dict[str, Any]) -> str:
+    """Why a state document's inner entries are unusable, or ''."""
+    radar = doc.get("radar", {})
+    if not isinstance(radar, dict):
+        return "damaged (radar is not a table)"
+    for t, rec in radar.items():
+        if not isinstance(rec, dict):
+            return f"damaged (radar entry {t!r} is not a table)"
+        for k in ("category", "advisory", "clears_at"):
+            if not isinstance(rec.get(k), (str, type(None))):
+                return f"damaged (radar entry {t!r}: {k} is not text)"
+    hn = doc.get("harvest_now")
+    if hn is not None and (isinstance(hn, bool)
+                           or not isinstance(hn, (int, float))
+                           or hn != hn or abs(hn) == float("inf")):
+        return "damaged (harvest_now is not a number)"
+    return ""
+
+
 def load_state(path: Path) -> Optional[Dict[str, Any]]:
     """The saved baseline, or None (the caller then records a new one).
     A state file that EXISTS but cannot be used re-baselined silently,
@@ -176,7 +195,7 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
         return None
     why = ""
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        doc = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e:
         doc, why = None, f"unreadable ({e})"
     # Valid JSON of the wrong shape (a list) is no baseline either — it
@@ -189,6 +208,14 @@ def load_state(path: Path) -> Optional[Dict[str, Any]]:
         why = (f"schema_version {doc.get('schema_version')!r}, this "
                f"version reads {STATE_VERSION}")
         doc = None
+    if doc is not None:
+        # Inner entries too: a radar list or a "SHOP.TO": "x" record
+        # crashed diff_radar, a harvest_now string crashed round() --
+        # and the crash exited 1, watch --exit-code's "changes" code
+        # (A2-1430).
+        bad = _bad_inner(doc)
+        if bad:
+            doc, why = None, bad
     if doc is None:
         print(f"taxjson watch: warning: state file {path.name} is {why} "
               f"— recording a NEW baseline; changes since the previous "

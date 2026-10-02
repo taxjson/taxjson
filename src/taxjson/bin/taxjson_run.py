@@ -10777,9 +10777,10 @@ def cmd_checklist(args: argparse.Namespace) -> None:
                       + (f" (recorded in {cl.STATE_FILE})." if changed
                          else "."))
     if args.reset:
-        _state = root / cl.STATE_FILE
-        existed = _state.exists()
-        _state.unlink(missing_ok=True)
+        try:
+            existed = cl.reset_state(root)
+        except cl.StateFileError as e:
+            sys.exit(f"taxjson checklist: {e}")
         recorded.append({"step": None, "mark": "reset", "changed": existed})
         if not args.json:
             print(f"taxjson checklist: {cl.STATE_FILE} removed." if existed
@@ -12794,7 +12795,11 @@ def cmd_handoff(args: argparse.Namespace) -> None:
                  f"`taxjson close-year` in the previous year's project, "
                  f"then set [settings] prior_year_record to its "
                  f"filed/<year>.json (or pass --prior).")
-    record = _json.loads(rp.read_text(encoding="utf-8"))
+    try:
+        record = _handoff.load_record(rp)        # A2-0803: one line
+    except _handoff.RecordError as e:
+        print(f"taxjson handoff: error: {e}", file=sys.stderr)
+        raise SystemExit(2)
     from taxjson.bin.taxjson_filed import lock_country_problem
     _cp = lock_country_problem(record, settings, str(rp))
     if _cp:
