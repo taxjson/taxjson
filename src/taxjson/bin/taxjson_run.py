@@ -9579,7 +9579,11 @@ def cmd_check_dates(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         sys.exit("taxjson check-dates: no work/ — run `taxjson run` first.")
-    doc = analyze(root, cfg, account=args.account)
+    try:
+        doc = analyze(root, cfg, account=args.account)
+    except ValueError as e:
+        # [settings] futures_settle refused as `run` refuses it (A2-0697).
+        sys.exit(f"taxjson check-dates: {e}")
     if not doc["sources"]:
         sys.exit("taxjson check-dates: no parsed sources in work/ — run "
                  "`taxjson run` first.")

@@ -78,11 +78,20 @@ def _t(s: Any) -> Optional[dtime]:
 
 
 def _rows(path: Path) -> List[Dict[str, Any]]:
+    """The rows of one parsed file ([] when it does not exist). A file
+    that exists but cannot be read raises ValueError naming it: dropping
+    it silently turned an ERROR into a clean exit 0 (audit A2-0385)."""
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return []
+    except (OSError, ValueError) as e:
+        raise ValueError(f"work/{path.name} cannot be read "
+                         f"({str(e)[:120]}) — re-run `taxjson run`") from None
     rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
+    if not isinstance(rows, list):
+        raise ValueError(f"work/{path.name} has no transactions list — "
+                         f"re-run `taxjson run`")
     return [r for r in rows if isinstance(r, dict)]
 
 
@@ -115,10 +124,13 @@ def sources(cache: Path, account: str) -> List[Tuple[str, str, Path]]:
 
 def asset_class(symbol: str, crypto_account: bool) -> str:
     from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.futures import _FUTURES_PREFIXES
     s = (symbol or "").upper()
     if crypto_account:
         return "crypto"
-    if s.startswith("F:"):
+    # Every futures spelling lib/futures reads (F:, /, \): a /ESH5 row
+    # was classed a US stock and checked on the NYSE calendar (A2-1194).
+    if s.startswith(_FUTURES_PREFIXES):
         return "futures"
     if is_option_symbol(s):
         return "option"
@@ -159,7 +171,12 @@ def check_trade_time(cls: str, d: date, t: Optional[dtime], symbol: str,
         from datetime import timedelta
         cme_closed = {date(d.year, 12, 25), date(d.year, 1, 1),
                       mc._easter(d.year) - timedelta(days=2)}
-        if d in cme_closed:
+        # Globex reopens at 18:00 Eastern on Christmas and New Year's Day
+        # evenings for the next trade date: those fills are normal
+        # (A2-1191). Good Friday has no evening session.
+        evening = (t is not None and t >= dtime(18, 0)
+                   and (d.month, d.day) in ((12, 25), (1, 1)))
+        if d in cme_closed and not evening:
             return ("WARN", "futures-holiday",
                     "CME is closed on Christmas, New Year's Day and "
                     "Good Friday")
@@ -203,6 +220,17 @@ def check_trade_time(cls: str, d: date, t: Optional[dtime], symbol: str,
     return None
 
 
+def _tt_settle_horizon(today: date, cls: str, symbol: str,
+                       currency: str) -> date:
+    """The latest date a .tt line written today may carry: the
+    settlement date of a trade made today (crypto and futures: today)."""
+    if cls in ("crypto", "futures"):
+        return today
+    mkt = _market(cls, symbol, currency) or "USD"
+    return _d(settlement_date(today.isoformat(), mkt,
+                              cls == "option")) or today
+
+
 def _settle_day_anywhere(d: date) -> bool:
     return mc.is_settlement_day(d, "USD") or mc.is_settlement_day(d, "CAD")
 
@@ -214,7 +242,10 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
     today = today or date.today()
     settings = cfg.get("settings", {}) or {}
     year = int(settings.get("year") or today.year)
-    futures_settle = settings.get("futures_settle") or "trade"
+    # The one validator `run` and tax-logic use: a typo is refused, not
+    # read as next_day (audit A2-0697).
+    from taxjson.lib.country import futures_settle_mode
+    futures_settle = futures_settle_mode(settings)
     issues: List[Dict[str, Any]] = []
     checked = 0
     per_source: Dict[str, int] = {}
@@ -233,7 +264,13 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
             continue
         crypto = bool((acfg or {}).get("crypto"))
         for kind, label, path in sources(cache, acct):
-            rows = _rows(path)
+            try:
+                rows = _rows(path)
+            except ValueError as e:
+                per_source[f"{acct}: {label}"] = 0
+                add("ERROR", "unreadable", str(e), acct, label,
+                    {"symbol": "-", "action": "-", "date": "-"})
+                continue
             per_source[f"{acct}: {label}"] = len(rows)
             for r in rows:
                 action = r.get("action")
@@ -243,12 +280,22 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                     add("ERROR", "bad-date", "trade date does not parse",
                         acct, label, r)
                     continue
-                if td > today:
-                    add("ERROR", "future-date", "dated after today",
-                        acct, label, r)
                 if td.year < 1990 or td.year > year + 1:
+                    # One error per bad date: a far-future row was also
+                    # counted as dated after today (A2-1192).
                     add("ERROR", "out-of-range",
                         f"far outside the project year {year}",
+                        acct, label, r)
+                elif td > today and not (
+                        kind == "tt" and td <= _tt_settle_horizon(
+                            today, asset_class(r.get("symbol") or "",
+                                               crypto),
+                            r.get("symbol") or "",
+                            (r.get("currency") or "").upper())):
+                    # A .tt line carries the SETTLEMENT date: a trade
+                    # made today is written with a date up to one
+                    # settlement cycle ahead (A2-1193).
+                    add("ERROR", "future-date", "dated after today",
                         acct, label, r)
                 if action in INCOME_ACTIONS:
                     if td.weekday() >= 5 and not crypto:
@@ -292,7 +339,32 @@ def analyze(root: Path, cfg: Dict[str, Any], *, today: Optional[date] = None,
                         add("NOTE", "futures-settle",
                             "futures settle on the trade date "
                             "(futures_settle = \"trade\")", acct, label, r)
+                    if sd.weekday() == 5 or (sd.weekday() == 6
+                                             and sd != td):
+                        add("ERROR", "settle-weekend",
+                            "settles on a weekend", acct, label, r)
+                    elif sd.weekday() == 6:
+                        # A Sunday-evening Globex fill dated its clock
+                        # day: CME's trade date is Monday (A2-1191).
+                        add("NOTE", "futures-sunday-date",
+                            "a Sunday-evening Globex fill dated (and "
+                            "settled) on its clock day; CME's trade date "
+                            "is the Monday", acct, label, r)
                     continue
+                if is_option_symbol(sym):
+                    from taxjson.lib.core import parse_option_expiry
+                    _exp = _d(parse_option_expiry(sym))
+                    if (_exp and sd > _exp and td <= _exp
+                            and abs(float(r.get("price") or 0)) < 1e-9):
+                        # An expiry/zero-price close settling after the
+                        # contract expired: on a settle basis its gain or
+                        # loss moves to the settle year (A2-0386).
+                        add("WARN", "settle-after-expiry",
+                            "an option expiry (price 0) settles after the "
+                            "contract's expiry date", acct, label, r,
+                            f"expiry {_exp}; on tax_date = \"settle\" "
+                            f"it lands in {sd.year}" if sd.year != _exp.year
+                            else f"expiry {_exp}")
                 expiry_like = (sd == td and is_option_symbol(sym)
                                and abs(float(r.get("price") or 0)) < 1e-9)
                 if action == "ASSIGN" or expiry_like:
