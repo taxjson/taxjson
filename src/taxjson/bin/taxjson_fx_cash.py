@@ -39,6 +39,8 @@ of the s.39(1.1) number and where to file it.
 import sys
 from typing import Any, Dict, List, Optional
 
+from taxjson.lib.brokerages._crypto_common import USD_STABLECOINS
+
 CA_EXEMPTION = 200.0
 
 # Cash-moving actions and their direction. Sign-preserving amounts:
@@ -49,9 +51,13 @@ _OUTFLOW = ("TAX", "FEE")
 
 
 # Fiat and USD-pegged coins: a reward or trade leg IN one of these is
-# cash (the crypto parsers fold stablecoins to their fiat quote).
-_CASH_LIKE = ("USD", "CAD", "EUR", "GBP", "AUD", "JPY", "CHF",
-              "USDC", "USDT", "DAI")
+# cash (the crypto parsers fold stablecoins to their fiat quote). The
+# stablecoins come from the parsers' shared list: PYUSD/GUSD were left
+# out here, so a Canadian PYUSD reward never entered the USD pool
+# (re-audit A2-0589). A US book's base is USD, so a US stablecoin flow
+# never reaches the ledger.
+_CASH_LIKE = (frozenset({"USD", "CAD", "EUR", "GBP", "AUD", "JPY", "CHF"})
+              | USD_STABLECOINS)
 
 
 def _non_cash(tx: Dict[str, Any]) -> bool:
@@ -64,6 +70,10 @@ def _non_cash(tx: Dict[str, Any]) -> bool:
     # Crypto-for-crypto: Kraken trade/instant-trade legs, Coinbase
     # Convert legs. Both sides are priced in USD; neither moves USD.
     if "crypto-to-crypto" in low or low.startswith("convert ("):
+        return True
+    # A fee Kraken took in a coin (withdrawal, deposit, Hybrid Earn
+    # withdrawal): the coins left, no dollars came in (A2-0576).
+    if "(disposed at fmv)" in low:
         return True
     # In-kind staking reward in a coin (the income row and its
     # acquisition row). A reward paid in fiat or a stablecoin is cash.
@@ -169,9 +179,14 @@ def build_ledger(transactions: List[Dict[str, Any]], base: str,
                              "each close's P/L)")
         transactions = settle_futures_dicts(list(transactions),
                                             method_for(country))
+    # Settle date, then TRADE date, then clock time: a holiday makes a
+    # Friday sale and a Monday buy settle the same day, and clock time
+    # alone walked the buy first — a phantom overdraft (A2-0244; the
+    # futures and distribution walks already sort this way).
     rows = sorted(transactions,
                   key=lambda t: (str(t.get("date_settle")
                                      or t.get("date") or ""),
+                                 str(t.get("date") or ""),
                                  str(t.get("time") or "")))
     year_end = f"{ystr}-12-31"
     pools_ye: Optional[Dict[str, Dict[str, float]]] = None
