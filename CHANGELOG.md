@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson option-boundary` (and the checklist step that runs it) reads
+  the lock named by `[settings] prior_year_record` like a local
+  filed/<year>.json: the per-year layout got "no filed-year locks" and a
+  "no amendment required" checklist row where a local copy of the same
+  lock gave ATTENTION (re-audit A2-0360).
 - A crypto-only Canada project no longer gets the
   `option_grant_timing_since is not set` warning from `carryover` and
   `option-boundary` (run and the checklist already skipped it: it writes

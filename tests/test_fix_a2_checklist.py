@@ -709,3 +709,40 @@ class TestGrantSinceGate(unittest.TestCase):
             st = {"year": 2025, "country": "canada"}
             self.assertIsNotNone(_grant_since_warning(st, {"m": {"type": "taxable"}}))
             self.assertIsNone(_grant_since_warning(st, {"c": {"type": "taxable", "crypto": True}}))
+
+
+class TestOptionBoundaryPriorYearRecord(unittest.TestCase):
+    TT = ("BUYSELL 2025-02-03 10:00:00 YYY.US 100 CAD 20.0 -2000.0 0\n"
+          "BUYSELL 2025-06-03 10:00:00 YYY.US -100 CAD 10.0 1000.0 0\n"
+          "BUYSELL 2025-12-15 10:00:00 ZZZ260116C00050000.US -1 CAD 3.99 399.0 0\n"
+          "BUYSELL 2026-01-10 10:00:00 ZZZ260116C00050000.US 1 CAD 1.01 -101.0 0\n")
+
+    @rule("CA-OPT-01")
+    def test_lock_via_prior_year_record(self):
+        """A2-0360: the 2025 lock the 2026 project names in
+        prior_year_record is read like a local filed/2025.json."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            p25 = make_project(base / "p2025", toml=TOML, book=self.TT)
+            tj(p25, "close-year")
+            outs = {}
+            for name, extra, local in (("w", 'prior_year_record = "../p2025/filed/2025.json"\n', False),
+                                       ("x", "", True)):
+                toml = TOML.replace("year = 2025", "year = 2026").replace(
+                    "option_grant_timing_since = 2025\n",
+                    "option_grant_timing_since = 2026\n" + extra)
+                p = make_project(base / f"p2026{name}", toml=toml, book=self.TT, run=False)
+                if local:
+                    (p / "filed").mkdir()
+                    shutil.copy(p25 / "filed" / "2025.json", p / "filed" / "2025.json")
+                tj(p, "run", "--no-input")
+                doc = json.loads(tj(p, "option-boundary", "--json").stdout)
+                outs[name] = (doc["filed_years"], doc["attention"],
+                              cl.d_option_boundary(cl.Ctx(
+                                  root=p, cfg=ctx(p).cfg, year=2026, today=date(2026, 9, 1),
+                                  run_sub=lambda argv, timeout=900, p=p: (lambda r: (
+                                      r.returncode, r.stdout, r.stderr))(tj(p, *argv, check=False)))).status)
+        self.assertEqual(outs["x"][0], [2025])
+        self.assertEqual(outs["w"], outs["x"])
+        self.assertGreaterEqual(outs["w"][1], 1)
+        self.assertEqual(outs["w"][2], "attention")

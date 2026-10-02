@@ -9751,37 +9751,29 @@ def cmd_option_boundary(args: argparse.Namespace) -> None:
     _w = _grant_since_warning(settings, cfg.get("accounts") or {})
     if _w:
         print(f"taxjson option-boundary: warning: {_w}", file=sys.stderr)
-    filed_years = set()
-    filed_timing: Dict[int, Dict[str, Any]] = {}
+    # Every lock the project can see — its own filed/<year>.json and the
+    # previous year's record named by prior_year_record (the per-year
+    # layout the owner uses was read as "no filed-year locks", A2-0360).
+    # An unreadable lock's timing is unknown: said, not read as "none
+    # recorded" (S044-08).
+    from taxjson.lib.option_boundary import filed_locks
+    filed_years, filed_timing = filed_locks(
+        root, settings,
+        warn=lambda t: print(f"taxjson option-boundary: warning: {t} The "
+                             f"advice below assumes no timing was "
+                             f"recorded.", file=sys.stderr))
+    # A lock taken before its year ended is a snapshot, not a filed
+    # return (A2-1164): said beside the year.
     partial_locks: Dict[int, str] = {}
     from taxjson.bin.taxjson_filed import partial_year_note
     for f in (root / "filed").glob("*.json"):
         try:
-            fy = int(f.stem)
-        except ValueError:
+            _pn = partial_year_note(
+                json.loads(f.read_text(encoding="utf-8")), int(f.stem))
+        except (OSError, ValueError):
             continue
-        filed_years.add(fy)
-        try:
-            _lock_doc = json.loads(f.read_text(encoding="utf-8")) or {}
-            _ot = _lock_doc.get("option_timing")
-            # A lock taken before its year ended is a snapshot, not a
-            # filed return (A2-1164): said beside the year.
-            _pn = partial_year_note(_lock_doc, fy)
-            if _pn:
-                partial_locks[fy] = _pn
-        except (OSError, ValueError, AttributeError) as e:
-            # The lock's recorded timing drives the advice below: an
-            # unreadable lock silently read as "no timing recorded" and
-            # the advice flipped to ATTENTION / since = <locked year>
-            # (S044-08).
-            print(f"taxjson option-boundary: warning: cannot read "
-                  f"filed/{f.name} ({e}) — its recorded option timing "
-                  f"is unknown, so the advice for {fy} below assumes "
-                  f"none was recorded; `taxjson check-filed` checks the "
-                  f"lock.", file=sys.stderr)
-            _ot = None
-        if isinstance(_ot, dict):
-            filed_timing[fy] = _ot
+        if _pn:
+            partial_locks[int(f.stem)] = _pn
     rows = []
     books = 0
     missing = []
