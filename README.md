@@ -704,7 +704,8 @@ its printed (cent-rounded) rows.
   "DIST ON ...", RBC activity "Distribution") on a Canadian issuer (a
   Canadian listing, or a CA ISIN) is dated by the record date it prints
   ("REC 12/30/24 PAY 01/06/25" is 2024 income) — in `divs-sum`, the .sum,
-  the estimate and instalments. Split-share corporations (BK, DF, DFN, DGS,
+  the estimate, instalments and the tax-year window of the `divs` / `roc` /
+  `events` views (the row still shows its pay date). Split-share corporations (BK, DF, DFN, DGS,
   ENS, FFN, FTN, GDV, LBS, LCS, LFE, PDV, PIC, PWI, SBC, SBN, WFS, XMF,
   XTD, YCM, and any row whose description says "SPLIT CORP") also say
   "Distribution" but are corporations: dated when paid, like any issuer
