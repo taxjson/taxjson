@@ -847,7 +847,7 @@ def _die_input(msg: str) -> None:
 
 
 _ESTIMATE_KEYS = ("other_income", "other_losses", "deductions",
-                  "carrying_charges")
+                  "carrying_charges", "long_term_losses")
 
 
 def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
@@ -877,6 +877,30 @@ def _estimate_deductions(root: Path, args) -> Tuple[float, float]:
                  f"amount you deduct, as a positive figure), got {v!r}")
         out.append(f)
     return out[0], out[1]
+
+
+def _estimate_lt_losses(root: Path, args) -> float:
+    """The US long-term capital loss carryover (Schedule D line 14):
+    --long-term-losses, else [estimate] long_term_losses, else 0
+    (`--other-losses` is then the short-term carryover; tax-logic
+    US-EST-CARRY-TERM, re-audit A2-0481 / A2-0809). Both are refused in
+    a Canada project (lib/country FLAG_COUNTRY / CONFIG_COUNTRY)."""
+    import math as _math
+    v = getattr(args, "long_term_losses", None)
+    src = "--long-term-losses"
+    if v is None:
+        cfg = _soft_config(root).get("estimate") or {}
+        v, src = cfg.get("long_term_losses"), "[estimate] long_term_losses"
+    if isinstance(v, bool):
+        _die(f"{src} must be a number, got {v!r}")
+    try:
+        f = float(v or 0.0)
+    except (TypeError, ValueError):
+        _die(f"{src} must be a number, got {v!r}")
+    if not _math.isfinite(f) or f < 0:
+        _die(f"{src} must be a non-negative finite number (enter loss "
+             f"carryovers as positive amounts), got {v!r}")
+    return f
 
 
 def _estimate_inputs(root: Path, args) -> Tuple[float, float]:
@@ -9184,9 +9208,11 @@ def cmd_summary(args: argparse.Namespace) -> None:
                      or getattr(args, "other_losses", None) is not None
                      or getattr(args, "deductions", None) is not None
                      or getattr(args, "carrying_charges", None) is not None
+                     or getattr(args, "long_term_losses", None) is not None
                      or getattr(args, "estimate", False))
     _oi, _ol = _estimate_inputs(root, args)
     _ded, _cc = _estimate_deductions(root, args)
+    _ltl = _estimate_lt_losses(root, args)
     _foreign_by_acct: Dict[str, float] = {}
     cfg = load_config(root) if (root / "taxjson.toml").exists() else {}
     taxable_accounts = {n for n, c in cfg.get("accounts", {}).items()
@@ -9596,7 +9622,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
             doc["estimate"] = _tax_estimate_result(
                 cfg, est,
                 other_income=_oi, other_losses=_ol,
-                deductions=_ded, carrying_charges=_cc,
+                deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
                 province=getattr(args, "province", None),
                 actual_withheld=_actual_withholding(
                     cache, set(files) & taxable_accounts,
@@ -9758,7 +9784,7 @@ def cmd_summary(args: argparse.Namespace) -> None:
         _print_tax_estimate(
             cfg, est, base,
             other_income=_oi, other_losses=_ol,
-            deductions=_ded, carrying_charges=_cc,
+            deductions=_ded, carrying_charges=_cc, lt_losses=_ltl,
             province=getattr(args, "province", None),
             verbose=getattr(args, "verbose", False),
             actual_withheld=_actual_withholding(
@@ -10163,7 +10189,8 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                          province: Optional[str],
                          actual_withheld: Optional[float] = None,
                          deductions: float = 0.0,
-                         carrying_charges: float = 0.0
+                         carrying_charges: float = 0.0,
+                         lt_losses: float = 0.0
                          ) -> Dict[str, Any]:
     """Resolve country/province and run the estimator — shared by the
     text block and `sum --json` so the two can never disagree. For usa,
@@ -10212,8 +10239,11 @@ def _tax_estimate_result(cfg: Dict[str, Any], est: Dict[str, float], *,
                      qualified_div=est["div_ca"] + est["div_foreign"],
                      pil=est["pil"] + est.get("staking", 0.0),
                      other_income=other_income,
-                     other_losses=other_losses)
+                     other_losses=other_losses,
+                     lt_losses=lt_losses)
     r["st_input"] = round(st_in, 2)
+    r["carryover_short_term"] = round(other_losses, 2)
+    r["carryover_long_term"] = round(lt_losses, 2)
     s1256 = float(est.get("s1256") or 0.0)
     r["section_1256_gain"] = round(s1256, 2)
     if abs(s1256) > 0.005:
@@ -10234,6 +10264,7 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                         province: Optional[str],
                         deductions: float = 0.0,
                         carrying_charges: float = 0.0,
+                        lt_losses: float = 0.0,
                         verbose: bool = False,
                         actual_withheld: Optional[float] = None,
                         root: Optional[Path] = None,
@@ -10248,7 +10279,8 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
                              other_losses=other_losses, province=province,
                              actual_withheld=actual_withheld,
                              deductions=deductions,
-                             carrying_charges=carrying_charges)
+                             carrying_charges=carrying_charges,
+                             lt_losses=lt_losses)
     # The result carries the vintage apply_vintage() actually selected
     # for the project year — never the import-time module default.
     RATE_VINTAGE = r.get("vintage", "?")
@@ -10447,9 +10479,11 @@ def _print_tax_estimate(cfg: Dict[str, Any], est: Dict[str, float],
         rows = [
             ("Other income", other_income, ""),
             ("Short-term gains (net)", r["st_net"],
-             f"[{money(st_in)} before other losses]"),
+             f"[{money(st_in)} before carryovers; short-term "
+             f"carryover {money(r.get('carryover_short_term', 0.0))}]"),
             ("Long-term gains (net)", r["lt_net"],
-             f"[{money(est['lt'])} before other losses]"),
+             f"[{money(est['lt'])} before carryovers; long-term "
+             f"carryover {money(r.get('carryover_long_term', 0.0))}]"),
             ("Qualified dividends",
              est["div_ca"] + est["div_foreign"], ""),
             ("Payments in lieu", est["pil"], "[ordinary]"),
@@ -16825,6 +16859,16 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"  3. run: taxjson -C {_shlex.quote(str(root))} run")
 
 
+# The carryover flag means what each country's return does with it
+# (re-audit A2-0481: the help cited the Canadian 50% inclusion in a US
+# project).
+_OTHER_LOSSES_HELP = ("Prior-year capital loss carryover applied, in "
+                      "FULL dollars (Canada: net capital losses, netted "
+                      "against the gains before the 50%% inclusion; US: "
+                      "the SHORT-term carryover — give the long-term one "
+                      "with --long-term-losses)")
+
+
 def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
     """--deductions / --carrying-charges for the Canada estimate
     (`sum` and `estimate`); [estimate] deductions / carrying_charges
@@ -16840,6 +16884,13 @@ def _add_deduction_flags(p: argparse.ArgumentParser) -> None:
                         "22100), deducted in full from regular income "
                         "and at 50%% in the AMT base (default: "
                         "[estimate] carrying_charges, else 0)")
+    p.add_argument("--long-term-losses", type=float, default=None,
+                   metavar="AMT",
+                   help="US: the LONG-term capital loss carryover "
+                        "(Schedule D line 14), netted against long-term "
+                        "gains first; --other-losses is then the "
+                        "short-term one (default: [estimate] "
+                        "long_term_losses, else 0)")
 
 
 def _interrupt_note() -> str:
@@ -17104,10 +17155,8 @@ def _main() -> None:
                             "investment income stacks on top of — turns "
                             "on the tax-estimate block")
     p_sum.add_argument("--other-losses", type=float, default=None,
-                       metavar="AMT",
-                       help="Prior-year capital losses (full dollars) to "
-                            "net against this year's gains — turns on "
-                            "the tax-estimate block")
+                       metavar="AMT", help=_OTHER_LOSSES_HELP
+                       + " — turns on the tax-estimate block")
     for _p in (p_sum,):
         _add_deduction_flags(_p)
     p_sum.add_argument("account", nargs="?",
@@ -17140,10 +17189,7 @@ def _main() -> None:
                        help="Employment/other income the investment "
                             "income stacks on top of (default: 0)")
     p_est.add_argument("--other-losses", type=float, default=None,
-                       metavar="AMT",
-                       help="Prior-year capital losses applied, in "
-                            "FULL dollars (netted before the 50%% "
-                            "inclusion)")
+                       metavar="AMT", help=_OTHER_LOSSES_HELP)
     _add_deduction_flags(p_est)
     p_est.add_argument("--province", default=None,
                        help="Canada: ON|BC|AB (default: `province` "
