@@ -601,5 +601,41 @@ class TestBuyRowsWithASaleSign(unittest.TestCase):
         self.assertIn(-0.5, [t["quantity"] for t in txs])
 
 
+
+class TestReinvestmentMoneyIdentity(unittest.TestCase):
+    """A2-0268: a DRIP row whose cash is 10x units x price is refused when
+    the price is in the row's currency, and kept when the REINV@ marker
+    is in another currency (real cross-currency rows)."""
+
+    def test_rbc(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        bad = row("April 18, 2025", "Dividends", "SRU.UN", "SMARTCENTRES",
+                  "10", "", "-3224.00", "CAD",
+                  "REI - SMARTCENTRES REINV@C$32.24")
+        with self.assertRaises(RbcFormatError):
+            parse_one(bad)
+        ok = bad.replace("-3224.00", "-322.40")
+        txs, _err, _ = parse_one(ok)
+        self.assertEqual([t["net_amount"] for t in txs], [322.4])
+        cross = bad.replace("REINV@C$", "REINV@U$")
+        txs, _err, _ = parse_one(cross)
+        self.assertEqual([t["net_amount"] for t in txs], [3224.0])
+
+    def test_questrade(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+
+        def rei(net, marker="C$"):
+            return q(td="2025-06-30", action="REI", sym="SRU.UN.TO",
+                     desc=f"SMARTCENTRES REINV@{marker}32.24", qty="10",
+                     price="0", gross="0", comm="0", net=net, cur="CAD",
+                     act="Dividend reinvestment")
+        with self.assertRaises(BrokerageParseError):
+            qt_parse(rei("-3224.00"))
+        txs, _err, _ = qt_parse(rei("-322.40"))
+        self.assertEqual([t["net_amount"] for t in txs], [322.4])
+        txs, _err, _ = qt_parse(rei("-3224.00", "U$"))
+        self.assertEqual([t["net_amount"] for t in txs], [3224.0])
+
+
 if __name__ == "__main__":
     unittest.main()

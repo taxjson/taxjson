@@ -81,6 +81,26 @@ _RBC_BOOK_VALUE_RE = re.compile(
     r'\bBOOK\s+VALUE\s+\$?\s*-?' + DESC_NUMBER_RE, re.I)
 _RBC_REINV_PRICE_RE = re.compile(
     r'\bREINV\s*@\s*[A-Z]{0,2}\$?\s*' + DESC_NUMBER_RE, re.I)
+# The currency letters of the REINV@ marker: C$ = CAD, U$ = USD.
+_REINV_CUR_RE = re.compile(r'\bREINV\s*@\s*([A-Z]{1,2})\$', re.I)
+_REINV_CUR = {'C': 'CAD', 'U': 'USD', 'US': 'USD', 'CA': 'CAD'}
+
+
+def reinvest_identity_error(qty: float, cash: float, price: Optional[float],
+                            price_cur: str, row_cur: str) -> Optional[str]:
+    """A dividend reinvestment buys |qty| units at the stated price for
+    the cash: the money identity the trade path enforces (re-audit
+    A2-0268 — a 10x Value booked as ACB with only a schema ATTENTION).
+    Skipped when the price is in ANOTHER currency than the row (the
+    REINV@C$ marker on a USD row, U$ on a CAD row: real exports carry
+    those). None = fits (or cannot be judged)."""
+    if not price or price <= 0 or not qty or price_cur != row_cur:
+        return None
+    expect = abs(qty) * price
+    if abs(abs(cash) - expect) <= max(0.05, 0.05 * expect):
+        return None
+    return (f"the cash {abs(cash):,.2f} does not fit |Quantity| {abs(qty):g}"
+            f" x the reinvestment price {price:g} = {expect:,.2f}")
 
 # A forward/reverse stock split booked as ONE 'Reorganization' row with the
 # net shares moved in Quantity and "... STK SPLIT ON <base> SHS ..." e.g.
@@ -2026,6 +2046,17 @@ class RbcBrokerage(BaseBrokerage):
         # S064-21); a decimal comma falls back to the cash / units.
         price = r.price or (desc_number(m.group(1), strict=False) if m
                             else None) or round(net / qty, 6)
+        mc = _REINV_CUR_RE.search(r.desc)
+        price_cur = (r.currency if r.price else
+                     _REINV_CUR.get(mc.group(1).upper(), '?') if mc
+                     else r.currency)
+        bad = reinvest_identity_error(qty, net, price if (r.price or m)
+                                      else None, price_cur, r.currency)
+        if bad:
+            raise _err(Path(self._fname), r.line,
+                       f"reinvestment row: {bad} ({r.desc[:60]!r}) — a "
+                       f"wrong or shifted column; refusing to book it as "
+                       f"the units' cost.")
         tx = {
             'action': 'BUYSELL',
             'date': r.date, 'time': self._time(r),

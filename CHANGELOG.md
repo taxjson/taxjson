@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **RBC / Questrade: a dividend-reinvestment row must fit units x price.**
+  A REI row whose cash was 10x its units at the REINV@ price was booked
+  as the units' cost with only a schema note; the trade path refuses
+  the same numbers. It is refused now when the price is in the row's
+  currency; a REINV@ marker in the other currency (C$ on a USD row, U$
+  on a CAD row, as real exports carry) is not judged (re-audit
+  A2-0268).
 - **RBC / Questrade / Webull / Coinbase: a Buy row signed as a sale is
   refused.** An RBC Buy with a negative Quantity was booked as a sale
   with negative proceeds (a 4,880 swing under `--strict`); Questrade
