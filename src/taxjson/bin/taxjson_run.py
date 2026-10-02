@@ -10419,8 +10419,8 @@ def cmd_positions(args: argparse.Namespace) -> None:
     if as_of:
         # Positions AS OF a date: recompute each account's books from
         # its base.json (already ticker.map-consolidated) up to the
-        # date. Deferred wash within the account is kept, but it is
-        # PER-ACCOUNT ACB (no s.47 blend across taxable accounts) and
+        # date. Deferred wash within the account is kept (the run's
+        # _wash_flags), but it is PER-ACCOUNT ACB (no s.47 blend across taxable accounts) and
         # before the cross-account wash pass (that exists only for full
         # runs) — the basis label says so (S044-21, R1-282).
         import re as _re
@@ -10480,15 +10480,21 @@ def cmd_positions(args: argparse.Namespace) -> None:
                 continue
             cmd = [sys.executable, "-m", "taxjson.bin.taxjson_gains",
                    "--country", country, "--year", year,
-                   "--as-of", as_of, "--no-wash"] + option_timing_flags(
+                   "--as-of", as_of] + option_timing_flags(
                        settings) + income_dating_flags(settings)
             # income_dating_flags: [settings] corporate_distributions
             # keeps a listed corporation's ROC on its pay date, as in
             # the run (audit A2-0995, A2-0996).
             if _asof_basis_set:
                 cmd += ["--tax-date", _asof_basis]
-            if accounts_cfg.get(n, {}).get("type") == "taxable":
-                cmd.append("--taxable")
+            # The run's own wash flags: --taxable, with the in-account
+            # superficial-loss / wash-sale deferral the README and the
+            # basis label promise (it ran --no-wash and dropped it,
+            # audit A2-0391, A2-0392, A2-0701); --no-wash only on a US
+            # crypto book, as in the run (§1091 does not reach it).
+            _acfg = accounts_cfg.get(n, {}) or {}
+            cmd += _wash_flags(_acfg.get("type") == "taxable",
+                               bool(_acfg.get("crypto")), country)
             # The same phantom openings every other recompute applies:
             # without them each phantom-backed position showed as a
             # large short (R1-187).
@@ -10651,17 +10657,41 @@ def cmd_positions(args: argparse.Namespace) -> None:
 
 
 def _books_horizon(cache: Path, accounts: List[str]) -> Optional[str]:
-    """Latest transaction date across these accounts' base books."""
-    import json as _json
+    """Latest transaction date across these accounts' base books, on
+    the project's date basis: a settle-basis book has already applied
+    a Dec-31 trade's January settlement, so its horizon is that
+    settlement date (audit A2-0698). A base book that exists but cannot
+    be read is named on stderr instead of silently moving the date
+    earlier (A2-0702)."""
+    from taxjson.lib.country import (CountryError, resolve_tax_date,
+                                     settings_country)
+    try:
+        _s = _soft_settings(cache.parent)
+        settle = resolve_tax_date(settings_country(_s),
+                                  _s.get("tax_date")) == "settle"
+    except CountryError:
+        settle = False        # no usable config: the trade date
     last = None
     for a in accounts:
+        p = cache / f"{a}_base.json"
         try:
-            txs = _read_work_doc(cache / f"{a}_base.json").get(
-                "transactions", [])
-        except (OSError, ValueError, AttributeError):
+            doc = _read_work_doc(p)
+            txs = doc.get("transactions", []) if isinstance(doc, dict) \
+                else doc
+            if not isinstance(txs, list):
+                raise ValueError("no transactions list")
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"taxjson: warning: work/{p.name} cannot be read "
+                  f"({str(e)[:120]}) — the 'as of' date leaves account "
+                  f"{a} out; re-run `taxjson run`.", file=sys.stderr)
             continue
         for t in txs:
-            d = str(t.get("date") or "")[:10]
+            if not isinstance(t, dict):
+                continue
+            d = str((t.get("date_settle") if settle else None)
+                    or t.get("date") or "")[:10]
             if len(d) == 10 and (last is None or d > last):
                 last = d
     return last
@@ -14961,8 +14991,9 @@ def main() -> None:
                             "(settlement date unless tax_date = "
                             "\"trade\"); phantoms.json applied; "
                             "per-account ACB (no s.47 blend across "
-                            "taxable accounts), before the cross-account "
-                            "wash pass")
+                            "taxable accounts), with the in-account "
+                            "superficial-loss / wash-sale deferral but "
+                            "before the cross-account wash pass")
     p_pos.add_argument("--negative", action="store_true",
                        help="Show only positions with negative quantity "
                             "(short positions — or, in accounts that "

@@ -771,7 +771,9 @@ class TestListAsOf(unittest.TestCase):
                              .returncode, 0)
             r = _run_cli(root, "list")
             self.assertNotIn("as of tax year", r.stdout)
-            self.assertIn("2025-12-31", r.stdout)
+            # A settle-basis book's horizon is its last SETTLEMENT date:
+            # the Dec 31 trades settle Jan 2 (re-audit A2-0698).
+            self.assertIn("(2026-01-02)", r.stdout)
             r = _run_cli(root, "list", "--date", "2025-06-30")
             self.assertNotIn("as of tax year", r.stdout)
             self.assertIn("as of 2025-06-30", r.stdout)
