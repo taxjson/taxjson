@@ -527,5 +527,61 @@ class TestSplitGainsSameStampSplitFirst(unittest.TestCase):
                          {'XYZ.TO': '2025-06-02'})
 
 
+class TestShelteredFlagRepeatable(unittest.TestCase):
+    """A2-0194: taxjson-explain / taxjson-audit take --sheltered more than
+    once, as taxjson-gains does; the first file is never dropped."""
+
+    def _files(self, td):
+        import json
+        from pathlib import Path
+        def w(name, rows):
+            p = Path(td) / name
+            p.write_text(json.dumps({'transactions': rows}))
+            return str(p)
+        def r(d, sym, q, net, acct):
+            return {'action': 'BUYSELL', 'date': d, 'date_settle': d,
+                    'time': '09:30:00', 'symbol': sym, 'quantity': q,
+                    'net_amount': net, 'currency': 'CAD', 'account': acct}
+        main = w('main.json', [r('2025-01-10', 'AAA.TO', 100, -10000.0, 'm'),
+                               r('2025-03-03', 'AAA.TO', -100, 7000.0, 'm')])
+        tfsa = w('tfsa.json', [r('2025-03-10', 'AAA.TO', 100, -7000.0, 't')])
+        rrsp = w('rrsp.json', [r('2025-02-01', 'ZZZ.TO', 10, -100.0, 'r')])
+        return main, tfsa, rrsp
+
+    def _run(self, *argv):
+        import subprocess
+        import sys
+        return subprocess.run([sys.executable, '-m', *argv],
+                              capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL)
+
+    @rule("CA-SL-03")
+    def test_explain_keeps_both_files(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            main, tfsa, rrsp = self._files(td)
+            r = self._run('taxjson.bin.taxjson_explain', '--country',
+                          'canada', '--year', '2025',
+                          '--option-premium-timing', 'close',
+                          '--sheltered', tfsa, '--sheltered', rrsp, main)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('disallowed +$3,000.00', r.stdout + r.stderr)
+
+    @rule("CA-SL-03")
+    def test_audit_keeps_both_files(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            main, tfsa, rrsp = self._files(td)
+            r = self._run('taxjson.bin.taxjson_audit', '--country',
+                          'canada', '--year', '2025',
+                          '--option-premium-timing', 'close',
+                          '--base', main, '--sheltered', tfsa,
+                          '--sheltered', rrsp, '--summary')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            line = next(l for l in r.stdout.splitlines()
+                        if 'total disallowed' in l)
+            self.assertIn('3,000.00', line)
+
+
 if __name__ == '__main__':
     unittest.main()

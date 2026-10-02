@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson-explain` and `taxjson-audit` take `--sheltered` more than
+  once, as `taxjson-gains` does; a second file used to replace the first
+  silently, and the superficial-loss denial it backed disappeared
+  (A2-0194).
+
 - Canada blended books: a split and a trade at the same stamp are walked
   split first in the per-account split of the blended pass (and in the
   distribution balance walk), as the engine does (CA-DATE-14): a buy
