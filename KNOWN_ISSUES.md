@@ -231,7 +231,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Workaround:** add the affiliated person's account as `type = "sheltered"`: the loss is then denied (permanently for you, as s.53(1)(f) puts the ACB bump on the affiliated holder). The account then also shows in the SHELTERED tables and the radar as if it were your registered plan — read it as theirs.
 
 ### Transfers TO a registered plan at a loss (s.40(2)(g)(iv))
-- **Where:** taxable-account TRANSFER rows are dropped at parse and rejected by the engine.
+- **Where:** taxable-account TRANSFER rows go to the transfer sidecar at parse (never into the books) and are rejected by the engine.
 - **Current behavior:** the taxable-side disposition of an in-kind contribution is booked only if you record it as a `.tt` BUYSELL at fair market value in the taxable account. A loss on it is then denied indirectly (as a superficial loss against the plan's acquisition, permanent), which coincides with s.40(2)(g)(iv) — a loss on a transfer to an RRSP/TFSA is nil — in the common case; a gain is taxable as usual.
 - **Workaround:** record the contribution day as a BUYSELL sell at FMV in the taxable account (and the plan's acquisition with `transfers = true`).
 
@@ -239,9 +239,9 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 - **Where:** `src/taxjson/lib/core.py` (the deferral ADJUST is dated the trigger).
 - **Current behavior:** with a rebuy, a partial sale inside the window and the rest sold later, the inner sale inherits part of the bump and can itself be denied and re-deferred; T4037 attributes the whole denied amount to the shares still held at day 30. Year totals agree unless the inner and outer sales straddle a year end; the extra DISALLOW row shows in `wash-sales`.
 
-### Estimate classifies dividends by listing suffix
-- **Where:** `taxjson estimate` / `lib/tax_estimate.py`.
-- **Current behavior:** a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign (15% FTC assumed). A Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson scan` flags the cross-listing case. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
+### Estimate classifies dividends by listing suffix when the books carry no ISIN
+- **Where:** `taxjson estimate` / `lib/tax_estimate.py`; the issuer test in `taxjson_run.py` (`_issuer_is_canadian_by_symbol`).
+- **Current behavior:** the estimate takes the issuer's country from its ISIN when the books carry one (IB rows); otherwise a `.TO` payer is treated as eligible-Canadian and a `.US` payer as foreign. The foreign tax credit uses the books' TAX rows (15% is assumed only when there are none). Without an ISIN (Questrade, RBC) a Canadian corporation held via its US line, or a US issuer on a `.TO` line, is misclassified; `taxjson scan` flags the cross-listing case. The s.126 credit is capped at 15% of the foreign dividends, not at the Canadian tax otherwise payable on them.
 
 ### Estimate has no input for a minimum tax carryover
 - **Where:** `taxjson estimate` / `taxjson instalments` (`lib/tax_estimate.py`).
@@ -346,7 +346,7 @@ Capabilities one broker parser has that a comparable one lacks. The ones below a
 
 ## Known engine corner cases (latent — not on the standard `taxjson run` path)
 
-These are real bugs in code paths the standard `taxjson run` flow never exercises. They're documented so anyone repurposing the engine knows.
+Corner cases the engine handles conservatively or only flags (the first is flagged on every `taxjson run`); documented so they are known.
 
 ### US: a move between two of your own taxable accounts does not carry the lot
 - **Where:** `taxjson run` with `transfers = false` (the default) in a US project.
@@ -365,8 +365,8 @@ These are real bugs in code paths the standard `taxjson run` flow never exercise
 - **Where:** `lib/core.py` folds one merger's rename SPLITs with different per-account ratios into a single holdings-weighted ratio (2026-09). Totals and the shared ACB pool are right; each account's wash-walk balance can be a fraction of a share off.
 
 ### Payments in lieu: what the exports cannot say
-- **Where:** `lib/income_dating.py` (`pil_is_dividend`), `lib/brokerages/ib_extractor.py`, `rbc_direct.py`.
-- **Current behaviour:** in a Canada project a payment in lieu on a Canadian issuer's share paid by a Canadian dealer is a taxable (eligible) dividend (ITA s.260; tax-logic CA-INC-03); the dealer comes from the IB statement's BrokerName ("Interactive Brokers Canada Inc."). An IB file without that header row leaves the dealer unknown and the payment ordinary income. A payment in lieu on a Canadian TRUST unit is trust income under s.260(5.1)(b), not a dividend; the exports do not say which issuers are trusts, so it is counted as a dividend. RBC books its "CASH IN LIEU OF DIVIDEND" rows as plain dividends (RBC is a Canadian dealer, so the Canadian-issuer case is right; a foreign issuer's is a foreign dividend rather than other income).
+- **Where:** `lib/income_dating.py` (`pil_is_dividend`), `lib/brokerages/ib_extractor.py`, `rbc_direct.py`, `questrade.py`.
+- **Current behaviour:** in a Canada project a payment in lieu on a Canadian issuer's share paid by a Canadian dealer is a taxable (eligible) dividend (ITA s.260; tax-logic CA-INC-03); the dealer comes from the IB statement's BrokerName ("Interactive Brokers Canada Inc."). An IB file without that header row leaves the dealer unknown and the payment ordinary income. A payment in lieu on a Canadian TRUST unit is trust income under s.260(5.1)(b), not a dividend; the exports do not say which issuers are trusts, so it is counted as a dividend. RBC's "CASH IN LIEU OF DIVIDEND" and Questrade's "SUBST PAY ... IN LIEU OF DIVIDEND" rows are payments in lieu from a Canadian dealer (a Canadian issuer's is a dividend, a foreign issuer's ordinary income).
 - **Workaround:** the dealer's T5 (box 24 and the other income boxes) is authoritative; compare with the TAXABLE line of `divs-sum` and with `dil-sum`.
 
 ### US January fund and REIT dividends need a list
