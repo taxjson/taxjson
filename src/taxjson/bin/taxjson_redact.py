@@ -1567,11 +1567,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     for f in args.files:
         src = Path(f)
         if not src.is_file():
-            # A missing input is a usage error: `error:` and exit 2, like
-            # the other tools' named inputs (re-audit A2-1435).
-            print(f"taxjson redact: error: {f}: not a file", file=sys.stderr)
-            rc = max(rc, 2)
-            continue
+            # A missing input is exit 2, never the `--check` finding
+            # code 1 (re-audit A2-0164).
+            print(f"taxjson redact: error: {f}: not a file", file=sys.stderr); rc = 2; continue
         if src.stem.endswith(".redacted"):
             print(f"taxjson redact: {f}: already a redacted copy — skipped", file=sys.stderr); continue
         try:
@@ -1580,15 +1578,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                                    known_ids, written, pseudonyms)
         except InputRefused as e:
             print(f"taxjson redact: {e}", file=sys.stderr)
-            rc = max(rc, 1)
+            rc = 2
             continue
         except OSError as e:
             # An unreadable input or an unwritable --out: one line, and
             # the rest of the batch is still redacted (S036-24, S037-01).
             what = e.filename or f
-            print(f"taxjson redact: error: {f}: {e.strerror or e} "
-                  f"({what}) — nothing written for it", file=sys.stderr)
-            rc = max(rc, 2)
+            print(f"taxjson redact: {f}: {e.strerror or e} ({what}) — "
+                  f"nothing written for it", file=sys.stderr)
+            rc = 2
             continue
         print_report(src, dst, rep)
         if args.check and rep.found_anything():

@@ -179,8 +179,9 @@ def main():
 
     file_path = args.csv
     if not file_path.exists():
-        print(f"File not found: {file_path}", file=sys.stderr)
-        sys.exit(1)
+        print(f"taxjson-detect-brokerage: error: no such file: "
+              f"{file_path}", file=sys.stderr)
+        sys.exit(2)                 # a missing input (A2-0164)
     
     brokerage = detect_brokerage(file_path)
     

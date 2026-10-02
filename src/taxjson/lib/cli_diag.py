@@ -147,36 +147,73 @@ def console_prog(module: str) -> str:
 BROKEN_PIPE_EXIT = 141
 
 
-def silence_stdout() -> None:
-    """Point the stdout file descriptor at /dev/null after a broken pipe,
-    so the interpreter's final flush does not print 'Exception ignored
-    ... BrokenPipeError' (and exit 120)."""
+def tolerant_stdout() -> None:
+    """Report text that the terminal's encoding cannot show degrades to
+    '?' instead of a UnicodeEncodeError traceback: with
+    PYTHONIOENCODING=ascii (or latin-1) every report that printed an em
+    dash died mid-table (re-audit A2-0786). Top level only — a tool run
+    in-process prints into its caller's buffer."""
+    for stream, errors in ((sys.stdout, "replace"),
+                           (sys.stderr, "backslashreplace")):
+        try:
+            stream.reconfigure(errors=errors)
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _stdout_closed_exit() -> None:
+    """The reader of our stdout went away (`taxjson trades | head -1`):
+    stop quietly with the shell's SIGPIPE status, 141, and no traceback
+    (re-audit A2-0785). stdout is pointed at /dev/null first so the
+    interpreter's own flush at exit cannot fail again (exit 120)."""
     import os
     try:
-        fd = sys.stdout.fileno()
-    except (AttributeError, OSError, ValueError):
-        return                              # a StringIO (in-process)
-    try:
         devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, fd)
-        os.close(devnull)
-    except OSError:
+        os.dup2(devnull, sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
         pass
+    raise SystemExit(BROKEN_PIPE_EXIT)
 
 
-def tolerant_stdout() -> None:
-    """Replace, rather than crash on, characters the terminal's encoding
-    cannot show: under an ASCII locale (PYTHONIOENCODING=ascii, LANG=C on
-    an old system) a '—' or '→' in a report raised UnicodeEncodeError
-    and exit 1 (re-audit A2-1427)."""
-    out = sys.stdout
-    enc = (getattr(out, "encoding", None) or "").lower().replace("-", "")
-    if enc in ("utf8", "utf8sig") or not hasattr(out, "reconfigure"):
-        return
+def _flush_stdout() -> None:
     try:
-        out.reconfigure(errors="replace")
-    except (AttributeError, ValueError, OSError):
+        sys.stdout.flush()
+    except BrokenPipeError:
+        _stdout_closed_exit()
+    except (OSError, ValueError, AttributeError):
         pass
+
+
+def run_top_level(prog, fn, *a, interrupt_note="", **kw):
+    """Run a command's main at the top of the process (the `taxjson`
+    entry point and every `taxjson-*` console script): Ctrl-C is one
+    `<prog>: interrupted` line with exit 130 (re-audit A2-0782 /
+    A2-1425: a 25-50 line KeyboardInterrupt traceback), and a closed
+    stdout pipe exits 141 quietly (A2-0785). Never used around a tool
+    run in-process by another: its Ctrl-C must stop the whole run."""
+    tolerant_stdout()
+    try:
+        r = fn(*a, **kw)
+        _flush_stdout()
+        return r
+    except SystemExit:
+        _flush_stdout()
+        raise
+    except BrokenPipeError:
+        _stdout_closed_exit()
+    except KeyboardInterrupt:
+        try:
+            sys.stdout.flush()
+        except Exception:                                # noqa: BLE001
+            pass
+        print("", file=sys.stderr)          # end the ^C line
+        # (both may be callables: `taxjson` knows its command only once
+        # argv is parsed)
+        prog = prog() if callable(prog) else prog
+        note_ = interrupt_note() if callable(interrupt_note) \
+            else interrupt_note
+        error(prog, "interrupted" + (f" — {note_}" if note_ else ""))
+        raise SystemExit(130)
 
 
 def describe_input_error(exc: BaseException) -> str:
@@ -216,7 +253,8 @@ def _is_symlink_loop(exc: BaseException) -> bool:
     return isinstance(exc, RuntimeError) and "symlink loop" in str(exc).lower()
 
 
-def _flush_stdout() -> None:
+def _guard_flush() -> None:
+    # A BrokenPipeError propagates to guard_main's handler.
     try:
         sys.stdout.flush()
     except (AttributeError, ValueError):
@@ -240,13 +278,12 @@ def guard_main(prog: str, *, value_errors: bool = False):
                 try:
                     r = fn(*a, **kw)
                 except SystemExit:
-                    _flush_stdout()
+                    _guard_flush()
                     raise
-                _flush_stdout()     # a broken pipe surfaces here, not
+                _guard_flush()      # a broken pipe surfaces here, not
                 return r            # at interpreter exit (exit 120)
             except BrokenPipeError:
-                silence_stdout()
-                raise SystemExit(BROKEN_PIPE_EXIT)
+                _stdout_closed_exit()       # quiet, exit 141
             except _INPUT_ERRORS + (json.JSONDecodeError, OSError) as e:
                 error(prog, describe_input_error(e))
                 raise SystemExit(2)

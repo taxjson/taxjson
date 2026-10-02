@@ -2731,32 +2731,23 @@ class Manifest:
         # and on Windows (Python 3.3+).
         import os
         import tempfile
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(
-                prefix=f".{path.name}.", suffix='.tmp', dir=str(path.parent),
-            )
-        except OSError as exc:
-            raise ManifestError(f"cannot write the manifest at {path} "
-                                f"({exc.strerror or exc}) — nothing was "
-                                f"saved") from None
+        # A write failure (read-only folder, full disk) propagates as an
+        # OSError: the commands report it as one 'cannot write' line,
+        # exit 2 (re-audit A2-1418), and the old manifest is untouched.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix='.tmp', dir=str(path.parent),
+        )
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
             os.replace(tmp_path, path)
-        except Exception as exc:
+        except Exception:
             # Best-effort cleanup of the tempfile if the rename failed.
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-            if isinstance(exc, OSError):
-                # A read-only project or a full disk: one line, and the
-                # old manifest is untouched (re-audit A2-0463).
-                raise ManifestError(
-                    f"cannot write the manifest at {path} "
-                    f"({exc.strerror or exc}) — the saved elections are "
-                    f"unchanged") from None
             raise
 
     def migrate_legacy(self, events: List["CorporateAction"]) -> int:

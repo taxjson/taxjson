@@ -58,7 +58,8 @@ def main():
         cli_diag.error(PROG, "one or more inputs are missing or "
                              "unreadable; refusing to emit a partial "
                              "merge.")
-        sys.exit(1)
+        # exit 2: an input that cannot be read, not a finding (A2-0164)
+        sys.exit(2)
 
     output = {
         "transactions": merged_transactions,

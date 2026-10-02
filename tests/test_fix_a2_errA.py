@@ -383,27 +383,32 @@ class TestManifest(unittest.TestCase):
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
                      "root writes a read-only folder")
-    def test_save_to_a_read_only_folder_is_a_manifest_error(self):
-        from taxjson.lib.corp_actions import Manifest, ManifestError
+    def test_save_to_a_read_only_folder_raises_oserror(self):
+        # An OSError, which the commands report as one 'cannot write'
+        # line with exit 2 (A2-1418); the old manifest is untouched.
+        from taxjson.lib.corp_actions import Manifest
         with tempfile.TemporaryDirectory() as td:
             d = Path(td) / "ro"
             d.mkdir()
             d.chmod(0o500)
             try:
-                with self.assertRaisesRegex(ManifestError, "cannot write"):
+                with self.assertRaises(OSError):
                     Manifest({}).save(d / "manifest.json")
             finally:
                 d.chmod(0o700)
 
-    def test_resolve_manifest_returns_a_looping_link(self):
+    def test_resolve_manifest_refuses_a_looping_link(self):
+        # Never written through (A2-0160 ELOOP traceback, A2-1400).
         from taxjson.bin.taxjson_run import _resolve_manifest
         with tempfile.TemporaryDirectory() as td:
             acct = Path(td) / "inputs" / "margin"
             acct.mkdir(parents=True)
             (acct / "manifest.json").symlink_to("manifest.json")
-            got = _resolve_manifest(acct, Path(td) / "work", "margin",
-                                    create=True)
-        self.assertEqual(got.name, "manifest.json")
+            with contextlib.redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit) as cm:
+                _resolve_manifest(acct, Path(td) / "work", "margin",
+                                  create=True)
+        self.assertEqual(cm.exception.code, 2)
 
 
 class TestBomJson(unittest.TestCase):

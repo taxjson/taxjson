@@ -539,9 +539,13 @@ def save_decisions(path: Path, doc: Dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         write_text_atomic(path, text)
     except OSError as e:
+        # An OSError (OutputWriteError): the commands report an
+        # unwritable output as one line with exit 2 (re-audit A2-1416).
+        from taxjson.lib.cli_diag import OutputWriteError
         msg = str(e) if str(path) in str(e) else \
             f"cannot write {path}: {e.strerror or e}"
-        raise ValueError(f"{msg} — the decision was not saved.") from None
+        raise OutputWriteError(f"{msg} — the decision was not saved.") \
+            from None
 
 
 def record_decision(path: Path, sid: str, decision: str,

@@ -216,7 +216,7 @@ class TestLegacyMergeRefusesPartial(unittest.TestCase):
             bad = Path(d) / "bad.json"
             bad.write_text('{"transactions": [{"action": "BUY')
             r = self._merge(self._good(d), bad)
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 2)       # A2-0164
         self.assertEqual(r.stdout, "")
         self.assertIn("taxjson-merge: error: cannot read", r.stderr)
         self.assertIn("partial merge", r.stderr)
@@ -224,7 +224,7 @@ class TestLegacyMergeRefusesPartial(unittest.TestCase):
     def test_missing_input_is_fatal(self):
         with tempfile.TemporaryDirectory() as d:
             r = self._merge(self._good(d), Path(d) / "ghost.json")
-        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.returncode, 2)       # A2-0164
         self.assertEqual(r.stdout, "")
         self.assertIn("not found", r.stderr)
 

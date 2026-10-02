@@ -17,7 +17,7 @@ import re
 import sys
 from typing import Any, Callable
 
-from taxjson.lib.cli_diag import console_prog, guard_main, tolerant_stdout
+from taxjson.lib.cli_diag import console_prog, guard_main, run_top_level
 
 
 def private_umask() -> None:
@@ -32,9 +32,6 @@ def __getattr__(name: str) -> Callable[[], Any]:
 
     def run() -> Any:
         private_umask()
-        # A report's '—' under an ASCII locale is replaced, not a
-        # UnicodeEncodeError (re-audit A2-1427).
-        tolerant_stdout()
         main = importlib.import_module(f"taxjson.bin.{name}").main
         # An unreadable input path (missing, a directory, not UTF-8,
         # not JSON) is one `<prog>: error:` line with exit 2 for every
@@ -42,7 +39,10 @@ def __getattr__(name: str) -> Callable[[], Any]:
         # a closed pipe is a quiet exit (A2-1426).
         prog = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] \
             else console_prog(name)
-        return guard_main(prog)(main)()
+        # Ctrl-C and a closed stdout pipe: one line / a quiet exit, not
+        # a traceback (re-audit A2-1425, A2-0785); run_top_level also
+        # replaces unencodable characters (A2-1427).
+        return run_top_level(prog, guard_main(prog)(main))
 
     run.__name__ = name
     return run

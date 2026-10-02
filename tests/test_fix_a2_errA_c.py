@@ -256,7 +256,8 @@ class TestDecisionsFile(unittest.TestCase):
             with mock.patch.object(Path, "write_text",
                                    side_effect=PermissionError(
                                        13, "Permission denied")):
-                with self.assertRaises(ValueError) as cm:
+                # An OSError: one 'cannot write' line, exit 2 (A2-1416).
+                with self.assertRaises(OSError) as cm:
                     cs.save_decisions(p, {"sends": {}})
             self.assertIn("cannot write", str(cm.exception))
             self.assertFalse((Path(td) / "sends.json.part").exists())

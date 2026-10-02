@@ -108,7 +108,7 @@ def _project_doc_near(path) -> Dict[str, Any]:
         cfg = d / 'taxjson.toml'
         if cfg.is_file():
             try:
-                return tomllib.loads(cfg.read_text(encoding='utf-8')) or {}
+                return tomllib.loads(cfg.read_text(encoding='utf-8-sig')) or {}
             except (OSError, ValueError):
                 return {}
     return {}
@@ -1057,8 +1057,9 @@ def format_suggestions(candidates: List[PhantomCandidate]) -> str:
 
 def load_phantoms(path: Path) -> Set[Tuple[str, str]]:
     """Load phantoms.json. Returns a set of (symbol, account) pairs.
-    Underscore-prefixed metadata fields are ignored."""
-    # utf-8-sig: a hand-edited file's BOM is dropped (re-audit A2-0776).
+    Underscore-prefixed metadata fields are ignored. A leading BOM
+    (an editor's UTF-8 save) is dropped, as for every other user-edited
+    file (re-audit A2-1453)."""
     with open(path, 'r', encoding='utf-8-sig') as f:
         try:
             data = json.load(f)
