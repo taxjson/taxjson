@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `.sum` per-asset block: under grant timing each written option is one
+  trade whose result is its premium plus a same-year buy-back; the block
+  dropped every premium (an expired write vanished, a bought-back one
+  showed only its loss) while TOTAL REALIZED OPTION GAIN kept it
+  (re-audit A2-1114).
+
 - Schedule 3 / reconcile-slips: under grant timing a buy-back nets
   against this year's write only when it closes a write of the same
   year; a buy-back of an earlier year's write (grant or pre-`since`

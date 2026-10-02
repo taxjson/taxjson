@@ -322,3 +322,46 @@ class TestReconcileSlipsGrantStraddle(unittest.TestCase):
                               f"{self.S},3,400.00,63.00\n")
         rep = reconcile(slip, comp, 1.0)
         self.assertFalse(rep["clean"])
+
+
+class TestSumGainsGrantWrites(unittest.TestCase):
+    """A2-1114: the .sum per-asset block counts a grant-timing write as
+    one trade whose result is its premium plus a same-year buy-back."""
+
+    @staticmethod
+    def _e(sym, date, qty, gain, grant=False, gc=None, days=0):
+        e = {"symbol": sym, "date": date, "date_settle": date, "qty": qty,
+             "gain": gain, "cost": -gain if grant else 0.0,
+             "proceeds": 0.0 if grant else gain, "currency": "CAD",
+             "direction": "SHORT", "grant": grant, "days_held": days}
+        if gc is not None:
+            e["grant_closed"] = gc
+        return e
+
+    def _dollars(self, txs):
+        from taxjson.bin.taxjson_sum_gains import summarize_gains
+        out = summarize_gains({"transactions": txs,
+                               "summary": {"year": 2025}})
+        return sorted(round(x, 2) for x in
+                      out["returns_by_asset"]["Options"]["CAD"]["dollars"])
+
+    @rule("CA-OPT-01")
+    def test_a2_1114_write_premium_in_per_asset_block(self):
+        A, B = "XYZ250620C00060000.TO", "XYZ250718C00065000.TO"
+        txs = [self._e(A, "2025-03-04", 2, 600.0, grant=True),
+               self._e(B, "2025-03-04", 1, 200.0, grant=True),
+               self._e(B, "2025-04-02", 1, -50.0,
+                       gc={"2025": {"units": 1.0, "premium": 200.0}},
+                       days=29)]
+        self.assertEqual(self._dollars(txs), [150.0, 600.0])
+        # a gains file written before grant_closed: same pairing
+        txs[2].pop("grant_closed")
+        self.assertEqual(self._dollars(txs), [150.0, 600.0])
+
+    @rule("CA-OPT-01")
+    def test_a2_1114_prior_year_write_buyback_is_its_own_trade(self):
+        B = "XYZ250718C00065000.TO"
+        txs = [self._e(B, "2025-02-03", 1, -100.0,
+                       gc={"2024": {"units": 1.0, "premium": 300.0}}),
+               self._e(B, "2025-03-04", 1, 250.0, grant=True)]
+        self.assertEqual(self._dollars(txs), [-100.0, 250.0])
