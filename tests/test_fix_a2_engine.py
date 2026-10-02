@@ -418,5 +418,65 @@ class TestRawPassForeignCurrencyAdjust(unittest.TestCase):
         self.assertNotIn('taxjson_convert_currency', msg)
 
 
+_TRUST_ROWS = [
+    {'action': 'BUYSELL', 'date': '2025-02-03', 'date_settle': '2025-02-04',
+     'time': '10:00:00', 'symbol': 'XYZ.UN.TO', 'quantity': 100.0,
+     'price': 10.0, 'net_amount': 1000.0, 'currency': 'CAD',
+     'account': 'margin', 'id': 'b1'},
+    {'action': 'ADJUST', 'type': 'roc', 'date': '2026-01-08',
+     'date_settle': '2026-01-08', 'time': '09:30:00',
+     'symbol': 'XYZ.UN.TO', 'quantity': 0.0, 'price': 0.0,
+     'net_amount': -20.0, 'currency': 'CAD', 'account': 'margin',
+     'record_date': '2025-12-30', 'id': 'r1'},
+]
+
+
+class TestAsOfTrustRocRecordDate(unittest.TestCase):
+    """A2-0554 / A2-0960 / A2-0202: an as-of cutoff judges a trust ROC by
+    the record date the engine books it on (CA-INC-DATE-ROC-TRUST)."""
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_gains_as_of_keeps_a_january_paid_roc(self):
+        import json
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / 'm.json'
+            f.write_text(json.dumps({'transactions': _TRUST_ROWS}))
+            r = subprocess.run(
+                [sys.executable, '-m', 'taxjson.bin.taxjson_gains',
+                 '--country', 'canada', '--option-premium-timing', 'close',
+                 '--as-of', '2025-12-31', str(f)],
+                capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            inv = {h['symbol']: h for h in json.loads(r.stdout)['inventory']}
+            self.assertAlmostEqual(inv['XYZ.UN.TO']['total_cost'], 980.0)
+
+    @rule("CA-INC-DATE-ROC-TRUST")
+    def test_close_year_snapshot_keeps_a_january_paid_roc(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from taxjson.lib import handoff
+        seen = {}
+
+        def fake_run_gains(args, out):
+            src = Path(args[-1])
+            seen[src.name] = json.loads(src.read_text())['transactions']
+            out.write_text(json.dumps({'transactions': [], 'inventory': [],
+                                       'wash_sales': []}))
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            (cache / 'margin_base.json').write_text(
+                json.dumps({'transactions': _TRUST_ROWS}))
+            cfg = {'settings': {'country': 'canada', 'year': 2025},
+                   'accounts': {'margin': {'type': 'taxable'}}}
+            handoff.snapshot(cache, cfg, '2025-12-31', fake_run_gains, [])
+        kept = seen['equity_asof.json']
+        self.assertIn('r1', [r.get('id') for r in kept])
+
+
 if __name__ == '__main__':
     unittest.main()

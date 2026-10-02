@@ -350,15 +350,29 @@ def _main():
             # The same date basis as the year filter (R1-10): a
             # trade-date cutoff on a settle project dropped a Dec-31
             # sale that is a next-year disposition everywhere else.
-            _basis = GainsRequest(country=args.country,
-                                  tax_date=args.tax_date).effective_tax_date()
-            if _basis == "settle":
-                transactions = [t for t in transactions
-                                if (t.date_settle or t.date or "9999")
-                                <= args.as_of]
-            else:
-                transactions = [t for t in transactions
-                                if (t.date or "9999") <= args.as_of]
+            _areq = GainsRequest(
+                country=args.country, tax_date=args.tax_date,
+                corporate_distributions=tuple(
+                    args.corporate_distribution or ()),
+                ric_january_dividends=tuple(
+                    args.ric_january_dividend or ()))
+            _basis = _areq.effective_tax_date()
+            # A Canadian trust's return of capital lowers the ACB on its
+            # record date (CA-INC-DATE-ROC-TRUST): the engine moves it
+            # there, so the cutoff must judge it by that date too, not
+            # drop a January-paid ROC whose record date is before the
+            # cutoff (A2-0554/0960).
+            _ir = _areq.income_rules()
+
+            def _asof_date(t):
+                _rec = _ir.roc_record_date(t)
+                if _rec:
+                    return _rec
+                if _basis == "settle":
+                    return t.date_settle or t.date or "9999"
+                return t.date or "9999"
+            transactions = [t for t in transactions
+                            if _asof_date(t) <= args.as_of]
 
         sheltered_transactions = []
         for sheltered_path in args.sheltered:

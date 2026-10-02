@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Canada: `taxjson list --date` and the close-year `year_end` snapshot
+  judge a trust's return of capital by its record date, as the books do
+  (CA-INC-DATE-ROC-TRUST): a January-paid ROC with a December record
+  date used to be cut off, so the as-of ACB differed from the engine's
+  (A2-0554/0960/0202).
+
 - **A cost adjustment in another currency no longer stops `taxjson run`.**
   A USD return of capital or notional distribution on a TSX listing
   (RBC, Questrade, IB, in either country), or a CAD `.tt` ADJUST /
