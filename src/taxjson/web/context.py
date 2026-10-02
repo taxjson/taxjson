@@ -84,7 +84,12 @@ class ProjectContext:
         # Flags are TOML booleans, as `taxjson run` requires
         # (validate_config): bool("false") is True, so a quoted "false"
         # turned an equity account into a crypto one here (S078-15).
-        for name, a in (cfg.get("accounts") or {}).items():
+        _accts = cfg.get("accounts") or {}
+        # `accounts = 5` / `accounts = [..]`: account_type_problems has
+        # already said so; .items() here was an AttributeError traceback
+        # out of `taxjson serve` (A2-0807).
+        for name, a in (_accts.items() if isinstance(_accts, dict)
+                        else ()):
             if not isinstance(a, dict):
                 continue
             for flag in ("crypto", "transfers"):

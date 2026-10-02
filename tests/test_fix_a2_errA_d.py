@@ -314,5 +314,39 @@ class TestHandoffGainsShape(_Tmp):
             handoff._rows(p)
 
 
+# ------------------------------------------------------------------ web
+class TestWebShapes(_Tmp):
+    """A2-0787, A2-0807."""
+
+    def test_context_accounts_not_a_table_one_line(self):
+        from taxjson.web.context import ProjectContext
+        for bad in ("accounts = 5\n", 'accounts = ["margin"]\n'):
+            (self.root / "taxjson.toml").write_text(
+                bad + '[settings]\nyear = 2025\ncountry = "canada"\n')
+            with self.assertRaises(ValueError) as cm:
+                ProjectContext.load(self.root)
+            self.assertIn("[accounts] must be a table", str(cm.exception))
+
+    def test_radar_staleness_dangling_book(self):
+        from taxjson.web import data
+        from taxjson.web.context import ProjectContext
+        (self.root / "taxjson.toml").write_text(TOML)
+        ctx = ProjectContext.load(self.root)
+        ctx.reports.mkdir()
+        ctx.cache.mkdir()
+        (ctx.reports / "wash_radar_margin.json").write_text("{}")
+        os.symlink("missing.json", ctx.cache / "old_base.json")
+        self.assertIsNone(data.radar_staleness(ctx, "margin"))
+
+    def test_freshness_dangling_sum(self):
+        from taxjson.web import data
+        from taxjson.web.context import ProjectContext
+        (self.root / "taxjson.toml").write_text(TOML)
+        ctx = ProjectContext.load(self.root)
+        ctx.reports.mkdir()
+        os.symlink("missing.sum", ctx.reports / "old.sum")
+        data.freshness(ctx)
+
+
 if __name__ == "__main__":
     unittest.main()

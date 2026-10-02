@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Web UI: `accounts = 5` (or a list) in taxjson.toml is the one-line
+  config error `taxjson serve` gives for the other bad shapes, and a
+  dangling work/*_base.json symlink no longer breaks the wash-radar page
+  (A2-0807, A2-0787).
 - `taxjson handoff`: a prior-year lock whose fields are the wrong shape
   (dispositions, settle_next_year, year_end, schema_version, ...) is one
   `taxjson handoff: error:` line naming the file and field, exit 2; a
