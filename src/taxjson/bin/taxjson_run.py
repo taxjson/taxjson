@@ -9605,7 +9605,17 @@ def cmd_edge_cases(args: argparse.Namespace) -> None:
     cfg = load_config(root)
     if not (root / "work").is_dir():
         sys.exit("taxjson edge-cases: no work/ directory — run `taxjson run` first.")
-    doc = analyze(root, cfg, margin=args.margin, account=args.account)
+    if args.margin < 0:
+        # A negative margin emptied the window-edge section at rc 0
+        # (audit A2-1198); winners --top refuses < 1 the same way.
+        sys.exit(f"taxjson edge-cases: --margin must be >= 0, got "
+                 f"{args.margin}")
+    try:
+        doc = analyze(root, cfg, margin=args.margin, account=args.account)
+    except ValueError as e:
+        # An unreadable work file or an invalid futures_settle: named,
+        # never a silent "None." (audit A2-1199, A2-0697).
+        sys.exit(f"taxjson edge-cases: {e}")
     if getattr(args, "json", False):
         _json_out(doc)
         return

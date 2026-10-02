@@ -108,14 +108,16 @@ class EdgeCaseProject(unittest.TestCase):
         self.assertIn("lot that was sold", deff[-29]["why"])
         self.assertNotIn("lot that was sold", deff[30]["why"])
 
-    def test_basis_flip_flagged(self):
+    def test_no_basis_flip_claim(self):
+        # The window is counted on the engine's fixed dates (settle in
+        # Canada) whatever tax_date says, so the other date never
+        # "decides" a verdict (audit A2-0135): no flag, no claim.
         cfg = json.loads(json.dumps(self.CFG))
         doc = analyze(self.root, cfg, margin=5)
         items = [i for r in doc["window_edges"] for i in r["items"]]
-        # ABC rebuy settling 04-04 is day 31 on settle, day 31 on trade
-        # (03-03 -> 04-03): no flip; RRSP 04-02 is day 29 / 29.
-        self.assertFalse(any(i["basis_flip"] for i in items
-                             if i["date"] == "2025-04-02"))
+        self.assertTrue(items)
+        self.assertFalse(any("basis_flip" in i for i in items))
+        self.assertNotIn("DECIDES", "\n".join(render_text(doc)))
 
     def test_call_in_window_is_advisory(self):
         doc = analyze(self.root, self.CFG)
