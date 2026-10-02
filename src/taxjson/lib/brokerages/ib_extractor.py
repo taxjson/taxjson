@@ -1610,6 +1610,9 @@ class IbBrokerage(BaseBrokerage):
         # Cash takeovers booked as sales, and merger rows left to
         # taxjson-corp-actions — one note each at end of parse.
         cash_takeovers: List[str] = []
+        # Warnings about a translated Corporate Actions row, printed at
+        # the end of the parse so a later `Ca` of the row withdraws them.
+        late_warnings: List[str] = []
         corp_owned_rows: List[str] = []
         # Corporate Actions rows that are real events nothing books (an
         # option adjustment, a spin-off debit on a short parent, a
@@ -1764,6 +1767,8 @@ class IbBrokerage(BaseBrokerage):
                     info['tx']['quantity'] = info['text_ratio']
                     _ib_refine_split_ratio(info)
             elif kind == 'cil':
+                if eff.get('msg') in late_warnings:
+                    late_warnings.remove(eff['msg'])
                 info = eff.get('split')
                 if info is not None:
                     info['cil'] -= eff['frac']
@@ -1778,6 +1783,9 @@ class IbBrokerage(BaseBrokerage):
                 if eff.get('cash'):
                     tl['cash_qty'] -= -eff['qty']
                     tl['cash'] -= eff['cash']
+            elif kind == 'cash_takeover':
+                if eff.get('msg') in cash_takeovers:
+                    cash_takeovers.remove(eff['msg'])
             elif kind in ('corp_owned', 'spinoff'):
                 if eff['desc'] in corp_owned_rows:
                     corp_owned_rows.remove(eff['desc'])
@@ -1792,6 +1800,13 @@ class IbBrokerage(BaseBrokerage):
                 unhandled_ca_tickers[t] = unhandled_ca_tickers.get(t, 0) - 1
                 if unhandled_ca_tickers[t] <= 0:
                     del unhandled_ca_tickers[t]
+            tl = eff.get('tender')
+            if tl is not None:
+                # The cancelled journal row leaves the tender note's row
+                # tally and dates (audit A2-1031 / A2-1034).
+                tl['rows'] -= 1
+                if eff['date'] in tl['dates']:
+                    tl['dates'].remove(eff['date'])
             _cat = eff.get('skip_cat')
             if _cat and self._skip_counts.get(_cat):
                 # The cancelled original is resolved, not skipped: the
@@ -2950,6 +2965,15 @@ class IbBrokerage(BaseBrokerage):
                         'kind': 'none', 'txs': [], 'consumed': False,
                         'currency': currency, 'cat': _ca_cat}
 
+                def _ne(label, _eff=_eff):
+                    # A recognized non-event Corporate Actions row: the
+                    # label is kept on its effect, so a later `Ca` of the
+                    # row takes it back out of the tally (audit A2-0600
+                    # / A2-1030 / A2-1034).
+                    _cat = _NE + label
+                    self.count_skip(_cat)
+                    _eff['skip_cat'] = _cat
+
                 def _unbooked(msg, _eff=_eff):
                     unbooked_ca.append(msg)
                     _cat = f"{section} row not booked (see UNBOOKED warning)"
@@ -2971,7 +2995,7 @@ class IbBrokerage(BaseBrokerage):
                             f"translated; book the old and the adjusted "
                             f"contract by hand in a .tt file.")
                     else:
-                        self.count_nonevent(f"{section} zero-quantity row")
+                        _ne(f"{section} zero-quantity row")
                         _ca_record(_eff)
                     continue
 
@@ -2980,9 +3004,10 @@ class IbBrokerage(BaseBrokerage):
                     _tsym = f"{_troot}.{ext}"
                     _tl = tender_legs.setdefault(_tsym, {
                         'rows': 0, 'parked': 0.0, 'cash_qty': 0.0,
-                        'cash': 0.0, 'dates': set(), 'currency': currency})
+                        'cash': 0.0, 'dates': [], 'currency': currency})
                     _tl['rows'] += 1
-                    _tl['dates'].add(date)
+                    _tl['dates'].append(date)
+                    _eff['tender'] = _tl
                     # Which leg touches the placeholder line is
                     # fixed by the row kind, not by the leading
                     # token (IB may reuse the root's description
@@ -3017,8 +3042,7 @@ class IbBrokerage(BaseBrokerage):
                     if abs(proceeds) < 0.005:
                         if _is_placeholder:
                             _tl['parked'] += qty
-                        self.count_nonevent(
-                            f"{section} tender/voluntary-offer share "
+                        _ne(f"{section} tender/voluntary-offer share "
                             f"journal (zero proceeds)")
                         _ca_record(_eff)
                         continue
@@ -3051,8 +3075,11 @@ class IbBrokerage(BaseBrokerage):
                         continue
                     # Cash on a POSITIVE leg is a shape we have not
                     # seen — loud bucket, never a silent drop.
-                    self.count_skip(f"{section} tender row with "
-                                    f"proceeds on a positive quantity")
+                    _cat = (f"{section} tender row with proceeds on a "
+                            f"positive quantity")
+                    self.count_skip(_cat)
+                    _eff['skip_cat'] = _cat
+                    _ca_record(_eff)
                     continue
 
                 # Split 3 for 2. NOT gated on qty > 0: a reverse split's
@@ -3082,13 +3109,15 @@ class IbBrokerage(BaseBrokerage):
                     # to be replaced by it, booking a gain nobody was
                     # paid (audit S058-17).
                     cash = abs(proceeds)
+                    _cil_msg = None
                     if cash < 0.005:
-                        print(f"warning: {where}: {symbol}: cash in lieu "
-                              f"of {-qty:g} share(s) with Proceeds 0 — "
-                              f"booked as a disposal for no cash (IB's "
-                              f"Value {val:,.2f} is a market value, not "
-                              f"cash paid). Check the statement.",
-                              file=sys.stderr)
+                        _cil_msg = (
+                            f"warning: {where}: {symbol}: cash in lieu "
+                            f"of {-qty:g} share(s) with Proceeds 0 — "
+                            f"booked as a disposal for no cash (IB's "
+                            f"Value {val:,.2f} is a market value, not "
+                            f"cash paid). Check the statement.")
+                        late_warnings.append(_cil_msg)
                     _ctx = {
                         'action': 'BUYSELL',
                         'date': date,
@@ -3106,7 +3135,7 @@ class IbBrokerage(BaseBrokerage):
                     transactions.append(_ctx)
                     cil_seen.add((symbol, date, round(-qty, 6)))
                     _eff.update(kind='cil', txs=[_ctx], symbol=symbol,
-                                frac=-qty, split=None)
+                                frac=-qty, split=None, msg=_cil_msg)
                     # The fraction belongs to the split of this symbol
                     # NEAREST its date, within a week, in either row
                     # order: "the latest split on or before" folded an
@@ -3205,8 +3234,7 @@ class IbBrokerage(BaseBrokerage):
                         and ib_spinoff_parts(description) is not None):
                     _eff.update(kind='spinoff')
                     corp_owned_rows.append(description)
-                    self.count_nonevent(
-                        f"{section} spin-off row (booked by "
+                    _ne(f"{section} spin-off row (booked by "
                         f"taxjson-corp-actions after the election)")
                     _ca_record(_eff)
                     continue
@@ -3238,14 +3266,17 @@ class IbBrokerage(BaseBrokerage):
                             'description': description,
                         }
                         transactions.append(_ttx)
-                        cash_takeovers.append(
-                            f"{_ticker}.{ext} {-qty:g} sh for {_cash:.2f} "
-                            f"{currency} on {date}")
-                        _eff.update(kind='cash_takeover', txs=[_ttx])
+                        _ct_msg = (f"{_ticker}.{ext} {-qty:g} sh for "
+                                   f"{_cash:.2f} {currency} on {date}")
+                        cash_takeovers.append(_ct_msg)
+                        _eff.update(kind='cash_takeover', txs=[_ttx],
+                                    msg=_ct_msg)
                         self.note_row_consumed()
                     else:
-                        self.count_skip(f"{section} cash-takeover row "
-                                        f"with a positive quantity")
+                        _cat = (f"{section} cash-takeover row with a "
+                                f"positive quantity")
+                        self.count_skip(_cat)
+                        _eff['skip_cat'] = _cat
                     _ca_record(_eff)
                     continue
 
@@ -3292,8 +3323,7 @@ class IbBrokerage(BaseBrokerage):
                 if not handled and ib_merger_owned(description):
                     corp_owned_rows.append(description)
                     _eff.update(kind='corp_owned')
-                    self.count_nonevent(
-                        f"{section} merger row (booked by "
+                    _ne(f"{section} merger row (booked by "
                         f"taxjson-corp-actions after the election)")
                     _ca_record(_eff)
                     continue
@@ -3315,7 +3345,7 @@ class IbBrokerage(BaseBrokerage):
                     _eff.update(kind='unhandled', ticker=ticker,
                                 skip_cat=_cat)
                 else:
-                    self.count_nonevent(f"{section} zero-quantity row")
+                    _ne(f"{section} zero-quantity row")
                 _ca_record(_eff)
 
             elif section == 'Transfers':
@@ -3669,7 +3699,9 @@ class IbBrokerage(BaseBrokerage):
                 print(_ib_cil_unmatched_note(_c), file=sys.stderr)
 
         for _tsym, _tl in sorted(tender_legs.items()):
-            _dates = ', '.join(sorted(_tl['dates']))
+            if _tl['rows'] <= 0:
+                continue                # every row was cancelled (Ca)
+            _dates = ', '.join(sorted(set(_tl['dates'])))
             if _tl['cash_qty'] > 0:
                 # taxjson-corp-actions skips tender rows, so no election
                 # can replace this sale (audit S059-05): the advice is a
@@ -3786,6 +3818,8 @@ class IbBrokerage(BaseBrokerage):
                 tx['quantity'] = q
                 tx['price'] = round(abs(amt) / meta['po_qty'], 8)
 
+        for _w in late_warnings:
+            print(_w, file=sys.stderr)
         for _ct in cash_takeovers:
             print(f"NOTE: cash takeover booked as a sale: {_ct} "
                   f"({shown_name(path)}).", file=sys.stderr)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- IB: a Corporate Actions row IB cancelled (`Ca`) leaves no trace in
+  the parse output: a merger, spin-off or tender journal row leaves the
+  non-event tally and the tender note's row count and dates, a
+  cancelled cash takeover no longer prints its `NOTE: cash takeover
+  booked as a sale`, and a cancelled zero-proceeds cash in lieu no
+  longer warns (audit A2-0600, A2-1030, A2-0606, A2-1029, A2-1031,
+  A2-1034).
 - **IB: overlapping statements of one account no longer resurrect a
   cancelled or refunded row.** A statement pairs a `Ca` cancellation
   with its original (Trades, Transfers, Corporate Actions), folds a

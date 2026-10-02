@@ -253,5 +253,89 @@ class TestCorporateActionCaIdentity(unittest.TestCase):
         self.assertIn('original row is not in', err)
 
 
+# --------------------------------------- Ca undo leaves no tally or note
+def _tender(root, isin, qty, kind, when, proceeds=0):
+    if kind == 'out':
+        d = (f'{root}({isin}) Tendered to 99999998 1 FOR 1 ({root}.TEN, '
+             f'{root} CORP - TENDER, {isin})')
+    elif kind == 'in':
+        d = (f'{root}.TEN({isin}) Tendered to 99999998 1 FOR 1 '
+             f'({root}.TEN, {root} CORP - TENDER, {isin})')
+    elif kind == 'back':
+        d = (f'{root}.TEN(99999998) Merged(Voluntary Offer Allocation) '
+             f'WITH {isin} 1 for 1 ({root}, {root} CORP, {isin})')
+    else:
+        d = (f'{root}.TEN(99999998) Merged(Voluntary Offer Allocation) '
+             f'WITH {isin} 1 for 1 ({root}.TEN, {root} CORP - TENDER, '
+             f'{isin})')
+    return _ca(d, qty, proceeds=proceeds, cur='CAD', when=when)
+
+
+class TestCancelledCorporateActionLeavesNoTrace(unittest.TestCase):
+    """A2-0600 / A2-1030 / A2-0606 / A2-1029 / A2-1031 / A2-1034: a row
+    IB cancelled (Ca) stayed in a tally, a NOTE or a warning."""
+
+    def test_cancelled_merger_row_leaves_the_tally(self):
+        old = ('QZM(US9990000701) Merged(Acquisition) WITH US9990000702 1 '
+               'for 1 (QZM, QZM INC, US9990000701)')
+        new = ('QZM(US9990000701) Merged(Acquisition) WITH US9990000702 1 '
+               'for 1 (QZN, QZN INC, US9990000702)')
+        _, _, err = _parse_ib(HEAD + CA_H + _ca(old, -10) + _ca(old, 10,
+                              code='Ca') + _ca(old, -10) + _ca(new, 10))
+        self.assertIn('2 merger/spin-off', err)
+        self.assertIn('merger row (booked by taxjson-corp-actions after '
+                      'the election): 2', err)
+
+    def test_cancelled_spinoff_row_leaves_the_tally(self):
+        d = ('QZPA(CA9990000001) Spinoff  1 for 5 (QZSP, SPINCO CORP, '
+             'CA9990000002)')
+        _, _, err = _parse_ib(HEAD + CA_H + _ca(d, 20, cur='CAD')
+                              + _ca(d, -20, cur='CAD', code='Ca')
+                              + _ca(d, 20, cur='CAD',
+                                    when='2025-03-03, 20:25:00'))
+        self.assertIn('1 merger/spin-off', err)
+        self.assertIn('spin-off row (booked by taxjson-corp-actions after '
+                      'the election): 1', err)
+
+    def test_cancelled_cash_takeover_prints_no_note(self):
+        d = 'QZCT(US9990000801) Merged(Acquisition) FOR USD 30.00 PER SHARE'
+        d31 = 'QZCT(US9990000801) Merged(Acquisition) FOR USD 31.00 PER SHARE'
+        _, txs, err = _parse_ib(HEAD + CA_H + _ca(d, -100, proceeds=3000)
+                                + _ca(d, 100, proceeds=-3000, code='Ca')
+                                + _ca(d31, -100, proceeds=3100))
+        self.assertEqual([t['net_amount'] for t in txs], [3100.0])
+        self.assertNotIn('for 3000.00', err)
+        self.assertIn('for 3100.00', err)
+
+    def test_cancelled_positive_takeover_row_leaves_the_skip_count(self):
+        d = 'QZCT(US9990000801) Merged(Acquisition) FOR USD 30.00 PER SHARE'
+        _, _, err = _parse_ib(HEAD + CA_H + _ca(d, 100)
+                              + _ca(d, -100, code='Ca'))
+        self.assertNotIn('cash-takeover row with a positive quantity', err)
+
+    def test_cancelled_tender_leg_leaves_the_journal_tally(self):
+        out = ('QZAU(CA9990000021) Tendered to 99999998 1 FOR 1 '
+               '(QZAU.TEN, QZAU CORP - TENDER, CA9990000021)')
+        cancelled = (_ca(out, -100, cur='CAD', when='2025-06-02, 20:25:00')
+                     + _ca(out, 100, cur='CAD', when='2025-06-02, 20:25:00',
+                           code='Ca'))
+        trip = ''.join(_tender('QZAU', 'CA9990000021', q, k,
+                               '2025-06-03, 20:25:00')
+                       for q, k in ((-100, 'out'), (100, 'in'),
+                                    (-100, 'alloc'), (100, 'back')))
+        _, txs, err = _parse_ib(HEAD + CA_H + cancelled + trip)
+        self.assertEqual(txs, [])
+        self.assertIn('QZAU.TO: 4 tender/voluntary-offer journal row(s) '
+                      '(2025-06-03)', err)
+
+    def test_cancelled_zero_proceeds_cil_prints_no_warning(self):
+        d = ('QZF(US9990000901) Cash in Lieu of Fractional Shares (QZF, '
+             'QZF CORP, US9990000901)')
+        _, txs, err = _parse_ib(HEAD + CA_H + _ca(d, -0.5)
+                                + _ca(d, 0.5, code='Ca'))
+        self.assertEqual(txs, [])
+        self.assertNotIn('Proceeds 0', err)
+
+
 if __name__ == '__main__':
     unittest.main()
