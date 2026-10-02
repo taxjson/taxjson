@@ -623,6 +623,16 @@ class SplitTimeline:
                         break
         return qty, sym
 
+    def end_factor(self, symbol: str, from_date: str, *,
+                   inclusive: bool = False) -> float:
+        """Factor taking a quantity of `symbol` denominated at
+        `from_date` into the units it has after every later event in
+        the book (the wash radar compares quantities from different
+        dates in these 'today' units — audit A2-0382)."""
+        f, _sym = self._lineage_end_state(symbol, from_date,
+                                          inclusive=inclusive)
+        return f or 1.0
+
     def lineage_factor(self, symbol: str, from_date: str,
                        ref_symbol: str, ref_date: str, *,
                        from_inclusive: bool = False,

@@ -57,6 +57,7 @@ from taxjson.lib.core import AmbiguousTransferDateError as _AmbiguousXferErr
 from taxjson.lib.pipeline import (GainsRequest, TransferValidationError,
                                   run_gains)
 from taxjson.lib.report_model import fmt_money
+from taxjson.bin.taxjson_convert_currency import norm_currency
 
 _INCOME_ACTIONS = ('DIVIDEND', 'DIVIDEND_IN_LIEU', 'TAX', 'INTEREST', 'FEE')
 US_ORDINARY_OFFSET = 3000.0
@@ -684,6 +685,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "Dec 31 of the prior year; repeatable "
                              "([settings] ric_january_dividends).")
     parser.add_argument("--base-currency", default=None,
+                        type=norm_currency,
                         help="The books' currency: must be the country's "
                              "own (CAD for canada, USD for usa — the "
                              "default); any other is refused, as are rows "

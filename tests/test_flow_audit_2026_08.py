@@ -672,7 +672,9 @@ class TestBuyCheckLastLossLine(unittest.TestCase):
 class TestBuyCheckShelteredSide(unittest.TestCase):
     def test_sheltered_recent_buy_flows_into_the_verdict(self):
         # Taxable loss sold 40 days ago (outside the window) but the
-        # RRSP bought the same name 10 days ago and still holds:
+        # RRSP bought the same name 6 days ago and still holds (outside
+        # the OLD loss's window too: a buy settling on its day 30 backs
+        # that denial and is spent — CA-SL-08, A2-0377):
         # buying is safe TODAY (no recent taxable loss) but the open
         # window — driven by the SHELTERED buy — must surface as
         # SAFE*, proving sheltered acquisitions feed buy-check.
@@ -696,7 +698,7 @@ class TestBuyCheckShelteredSide(unittest.TestCase):
                 f"D,-100,8.00,800.00,0.00,800.00,CAD,1,Trades,Ind\n")
             (root / "inputs" / "rrsp" / "questrade.csv").write_text(
                 _QT_HEADER +
-                f"{d(10)} 09:30:00 AM,{d(9)} 12:00:00 AM,Buy,XEI.TO,"
+                f"{d(6)} 09:30:00 AM,{d(5)} 12:00:00 AM,Buy,XEI.TO,"
                 f"D,50,8.50,425.00,0.00,-425.00,CAD,1,Trades,Ind\n")
             r = _cli(root, "run", "--no-input")
             self.assertEqual(r.returncode, 0, r.stderr)

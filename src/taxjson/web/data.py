@@ -62,6 +62,16 @@ def load_holdings(ctx: ProjectContext, account: str) -> List[Dict[str, Any]]:
             f"{path.name} has no [[holding]] table array (holding = "
             f"{type(rows).__name__}) — re-run `taxjson run` or fix/delete "
             f"the file")
+    # A row's trade history is iterated by the detail page: `trades = 5`
+    # was a TypeError there and an HTTP 500 (A2-1187).
+    for h in rows:
+        tr = h.get("trades", [])
+        if not isinstance(tr, list) or any(not isinstance(t, dict)
+                                           for t in tr):
+            raise ReportArtifactError(
+                f"{path.name}: holding {str(h.get('symbol', '?'))!r} has "
+                f"trades = {type(tr).__name__}, not a list of tables — "
+                f"re-run `taxjson run` or fix/delete the file")
     return rows
 
 
@@ -84,6 +94,20 @@ def find_holding(ctx: ProjectContext, account: str, symbol: str
 
 
 # -------------------------------------------------------------- wash radar
+# Row fields the page renders, and which of them may be null.
+_RADAR_TEXT_FIELDS = ("ticker", "taxable_display", "sheltered_display",
+                      "clears_at", "advisory", "category")
+_RADAR_NULLABLE = ("clears_at", "category")
+
+
+def wash_radar_scope_note(ctx: ProjectContext, account: str) -> str:
+    """The CA-PLAN-04 / US-PLAN-04 disclosure for the radar page: the
+    verdicts cover the project's own accounts only (A2-0374 — the text
+    report and its sidecar carried it, the page did not). Always the
+    project country's own wording."""
+    return _scope_note(ctx.country)
+
+
 def _clears_in_display(clears_at: Optional[str],
                        today: Optional[date] = None) -> str:
     """VIEW-TIME countdown from an absolute clears_at date. The generation-day
@@ -166,7 +190,11 @@ def wash_radar_sections(ctx: ProjectContext, account: str = "margin",
             doc = _json.loads(json_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
             raise _bad(e) from e
-        secs = doc.get("sections", []) if isinstance(doc, dict) else None
+        # A document without the "sections" key is not a radar report
+        # ({} fell through to the stale .rpt, {"Sections": ...} read as
+        # "no report yet" — A2-1188), and a row field of the wrong type
+        # 500'd the page with a raw TypeError (A2-0696).
+        secs = doc.get("sections") if isinstance(doc, dict) else None
         if not isinstance(secs, list) or any(
                 not isinstance(sec, dict)
                 or not isinstance(sec.get("rows", []), list)
@@ -174,52 +202,61 @@ def wash_radar_sections(ctx: ProjectContext, account: str = "margin",
                 for sec in secs):
             raise _bad("not a radar document: expected {\"sections\": "
                        "[{\"title\", \"rows\": [{...}]}]}")
-        if doc:
-            sections: List[Dict[str, Any]] = []
-            for sec in secs:
-                def _row(r):
-                    ci = _clears_in_display(r.get("clears_at"), today)
-                    adv = r.get("advisory", "")
-                    if r.get("category") == "VIOLATION":
-                        # A VIOLATION's date is the rescue DEADLINE: the
-                        # LAST trade date for the full exit, inclusive
-                        # (the radar's own text says "by" it). The
-                        # deadline day itself is still actionable — it
-                        # rendered as "deadline passed" (S079-06).
-                        vdays = _days_until(r.get("clears_at"), today)
-                        if vdays == 0:
-                            ci = (f"{r.get('clears_at')} (0d — sell "
-                                  f"TODAY, last trade day)")
-                        elif vdays is not None and vdays < 0:
-                            ci = "deadline passed — loss denied"
-                            if adv:
-                                adv += (" [rescue deadline has PASSED "
-                                        "since this report was generated "
-                                        "— unless the position was "
-                                        "exited in time, the loss is "
-                                        "denied; re-run `taxjson run` to "
-                                        "reclassify]")
-                    elif ci == "cleared" and adv:
-                        # Category membership and advisory text are
-                        # GENERATION-time; weeks later the page said
-                        # LOCKED/"do not sell" next to "cleared"
-                        # (2026-09 audit). Say which one is current.
-                        adv += (" [window has CLEARED since this "
-                                "report was generated — re-run "
-                                "`taxjson run` to reclassify]")
-                    return {
-                        "ticker": r.get("ticker", ""),
-                        "taxable": r.get("taxable_display", ""),
-                        "sheltered": r.get("sheltered_display", ""),
-                        "clears_in": ci,
-                        "advisory": adv + stale_tag,
-                    }
-                rows = [_row(r) for r in sec.get("rows", [])]
-                if rows:
-                    sections.append({"title": f"{sec.get('title', '')} "
-                                              f"({len(rows)})",
-                                     "rows": rows})
-            return sections
+        for sec in secs:
+            if not isinstance(sec.get("title", ""), str):
+                raise _bad("a section title is not text")
+            for r in sec.get("rows", []):
+                for k in _RADAR_TEXT_FIELDS:
+                    v = r.get(k, "")
+                    if not (isinstance(v, str)
+                            or (v is None and k in _RADAR_NULLABLE)):
+                        raise _bad(f"row field {k!r} is "
+                                   f"{type(v).__name__}, not text")
+        sections: List[Dict[str, Any]] = []
+        for sec in secs:
+            def _row(r):
+                ci = _clears_in_display(r.get("clears_at"), today)
+                adv = r.get("advisory", "")
+                if r.get("category") == "VIOLATION":
+                    # A VIOLATION's date is the rescue DEADLINE: the
+                    # LAST trade date for the full exit, inclusive
+                    # (the radar's own text says "by" it). The
+                    # deadline day itself is still actionable — it
+                    # rendered as "deadline passed" (S079-06).
+                    vdays = _days_until(r.get("clears_at"), today)
+                    if vdays == 0:
+                        ci = (f"{r.get('clears_at')} (0d — sell "
+                              f"TODAY, last trade day)")
+                    elif vdays is not None and vdays < 0:
+                        ci = "deadline passed — loss denied"
+                        if adv:
+                            adv += (" [rescue deadline has PASSED "
+                                    "since this report was generated "
+                                    "— unless the position was "
+                                    "exited in time, the loss is "
+                                    "denied; re-run `taxjson run` to "
+                                    "reclassify]")
+                elif ci == "cleared" and adv:
+                    # Category membership and advisory text are
+                    # GENERATION-time; weeks later the page said
+                    # LOCKED/"do not sell" next to "cleared"
+                    # (2026-09 audit). Say which one is current.
+                    adv += (" [window has CLEARED since this "
+                            "report was generated — re-run "
+                            "`taxjson run` to reclassify]")
+                return {
+                    "ticker": r.get("ticker", ""),
+                    "taxable": r.get("taxable_display", ""),
+                    "sheltered": r.get("sheltered_display", ""),
+                    "clears_in": ci,
+                    "advisory": adv + stale_tag,
+                }
+            rows = [_row(r) for r in sec.get("rows", [])]
+            if rows:
+                sections.append({"title": f"{sec.get('title', '')} "
+                                          f"({len(rows)})",
+                                 "rows": rows})
+        return sections
     path = ctx.reports / f"wash_radar_{account}.rpt"
     if not path.exists():
         return []
@@ -280,10 +317,11 @@ def freshness(ctx: ProjectContext) -> Optional[Dict[str, Any]]:
         why = _fingerprint_diff(recorded, input_fingerprint(ctx.root, cfg))
         extra = [ctx.root / "crypto_ticker.map"]
     else:
+        # The checklist's own input set (its run-clean fallback): every
+        # file under inputs/ counted before, so a Finder .DS_Store or a
+        # stray notes file marked the dashboard stale while the
+        # checklist called the run clean (A2-1185).
         extra = _input_paths(ctx.root, cfg) + [ctx.root / "crypto_ticker.map"]
-        inputs_dir = ctx.root / "inputs"
-        if inputs_dir.is_dir():
-            extra += [p for p in inputs_dir.rglob("*") if p.is_file()]
     if not why:
         newer = [p for p in extra
                  if p.is_file() and p.stat().st_mtime > oldest + 1]
@@ -308,8 +346,9 @@ def _price_to_base(ctx: ProjectContext, price: float,
     base.
 
     The rate is the LATEST one on or before `on` (rates end at the last
-    `taxjson run`), labelled with its date when it is more than a few
-    days old — the same rule as `taxjson harvest`. A hardcoded 1.35 used
+    `taxjson run`), labelled with its date when it is older than
+    harvest's _STALE_RATE_DAYS — the same rule as `taxjson harvest`
+    (the page used 4 days against harvest's 7, A2-1179). A hardcoded 1.35 used
     to replace any rate more than 5 days old, and was applied to GBP or
     EUR prices too (R1-149)."""
     base = ctx.base_currency.strip().upper()
@@ -335,7 +374,8 @@ def _price_to_base(ctx: ProjectContext, price: float,
                - datetime.strptime(rate_date, "%Y-%m-%d")).days
     except ValueError:
         age = 0
-    if age > 4:
+    from taxjson.bin.taxjson_harvest import _STALE_RATE_DAYS
+    if age > _STALE_RATE_DAYS:
         note = (f"{cur}->{base} rate {rate:g} is from {rate_date}, "
                 f"{age} days before {on} (rates end at the last "
                 f"`taxjson run`) — re-run `taxjson run` for a current "
@@ -403,12 +443,29 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     # and double-loading it made its own buys act as their own wash
     # triggers (2026-07b audit, web §1).
     sheltered_raw: List[TaxTransaction] = []
+    missing_sheltered = []
     for a in ctx.sheltered():
         if a.name == account:
             continue
         f = ctx.cache / f"{a.name}_base.json"
         if f.exists():
             sheltered_raw.extend(load_transactions(f))
+        elif _has_inputs(ctx, a.name):
+            # A registered account with activity files but no book (a
+            # deleted work/ file, a run that stopped before it): its
+            # purchases are missing from the wash context, so a loss
+            # they deny PERMANENTLY showed as fully allowed with no
+            # warning (audit A2-0383; the taxable twins below warn).
+            missing_sheltered.append(a.name)
+    if missing_sheltered:
+        warnings.append(
+            f"no work/<account>_base.json for registered account(s) "
+            f"{', '.join(missing_sheltered)} although they have inputs — "
+            f"their purchases are NOT in this "
+            f"{'wash-sale' if ctx.country == 'usa' else 'superficial-loss'}"
+            f" check, so a loss they make "
+            f"{'a wash sale' if ctx.country == 'usa' else 'superficial'} "
+            f"can show as allowed; run `taxjson run`.")
 
     # Shared preprocessing: TRANSFER handling (incl. stripping sheltered
     # TRANSFERs so they can't act as wash triggers) + the root
@@ -471,41 +528,61 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
 
     # Contract multiplier: the form asks for the per-share QUOTE (the
     # price brokers show, and what the trade table lists), and the
-    # books store an equity option at qty x price x 100 (core.py's
-    # convention; every broker parser). proceeds = qty x price dropped
-    # the x100 and showed a ~99% loss on every option (2026-09 audit).
-    # A futures option's multiplier depends on the contract — refuse
-    # rather than guess.
+    # books store an option at qty x price x its contract size. The
+    # size is the one the book's rows declare (a mini option's x10, a
+    # futures option's CL 1000 / ES 50 — audit S026-22, A2-0131,
+    # A2-0384); an equity option with none declared is the standard
+    # 100. A futures option with no declared size is refused rather
+    # than guessed.
     from taxjson.lib.core import is_option_symbol
+    from taxjson.lib.futures import is_plain_future
     from taxjson.lib.pipeline import declared_multipliers
+    if is_plain_future(symbol):
+        # A plain future's gain is its settled P/L (lib/futures: the
+        # notional is never paid, the base book carries the P/L of each
+        # close), which a sale price alone cannot reproduce: priced at
+        # x1 the what-if showed a +83.71 gain for a -1,418.80 loss
+        # (A2-0131) and dated it as an equity T+1 sale (A2-0132).
+        return {"ok": False, "warnings": warnings,
+                "reason": f"{symbol} is a plain futures contract — its gain "
+                          f"is the settled P/L of the contract, which the "
+                          f"what-if does not simulate; use "
+                          f"`taxjson-explain` on a booked close."}
+    _declared = declared_multipliers(txs).get(symbol)
     multiplier = 1
-    is_futopt = False
-    if is_option_symbol(symbol):
-        if symbol.upper().startswith(("F:", "/", "\\")):
-            # The contract size the book's rows declare (IB's
-            # instrument list: CL 1000, ES 50 — audit S026-22); never
-            # the equity 100.
-            _declared = declared_multipliers(txs).get(symbol)
-            if not _declared:
-                return {"ok": False, "warnings": warnings,
-                        "reason": f"{symbol} is a futures option whose "
-                                  f"contract multiplier no booked row "
-                                  f"declares — the what-if cannot price "
-                                  f"it; use `taxjson-explain` on a booked "
-                                  f"sale."}
-            multiplier = _declared
-            is_futopt = True
-        else:
-            multiplier = 100
+    is_option = is_option_symbol(symbol)
+    is_futopt = is_option and symbol.upper().startswith(("F:", "/", "\\"))
+    if is_futopt and not _declared:
+        return {"ok": False, "warnings": warnings,
+                "reason": f"{symbol} is a futures option whose "
+                          f"contract multiplier no booked row "
+                          f"declares — the what-if cannot price "
+                          f"it; use `taxjson-explain` on a booked "
+                          f"sale."}
+    if is_option:
+        multiplier = _declared or 100
+        if multiplier == int(multiplier):
+            multiplier = int(multiplier)
     proceeds = abs(qty) * price * multiplier
+    acct_cfg = ctx.account(account)
     # The simulated trade settles like a real one (era- and holiday-
     # aware, T+1 today): the superficial-loss window and the tax year
     # both run on the settle date for a Canadian project. A Dec-31 sale
     # settles in January — a loss the what-if called "deductible now"
-    # lands in the NEXT tax year (R1-197).
-    from taxjson.lib.dates import settlement_date
-    mkt_cur = (price_currency or ctx.base_currency or "CAD").strip().upper()
-    settle_on = settlement_date(on, mkt_cur, multiplier == 100)
+    # lands in the NEXT tax year (R1-197). The calendar is the LISTING's
+    # market (AEM.US on the US one, DLR.U.TO on the Canadian one),
+    # never the currency the price was typed in: the same sale flipped
+    # between superficial and allowed with the price currency (A2-0375,
+    # A2-0437, A2-1189).
+    from taxjson.lib.dates import listing_market_currency, settlement_date
+    mkt_cur = listing_market_currency(
+        symbol, (price_currency or ctx.base_currency or "CAD")
+        .strip().upper())
+    settle_on = settlement_date(on, mkt_cur, is_option)
+    if acct_cfg is not None and acct_cfg.crypto:
+        # A crypto trade settles when it fills (the parsers' date_settle
+        # = date; the radar's same-day bound, R1-240).
+        settle_on = on
     if is_futopt:
         # A futures option settles as the project's futures_settle says
         # (the parser's rule: the trade date, or the next business day).
@@ -537,14 +614,13 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         quantity=(-abs(qty) if side == "sell" else abs(qty)),
         price=price, net_amount=proceeds, proceeds=proceeds,
         currency=ctx.base_currency, account=account,
-        multiplier=float(multiplier) if is_futopt else 0.0,
+        multiplier=float(_declared) if _declared else 0.0,
         id=f"whatif-simulated-{symbol}-{on}")
 
     # Same wash policy as the CLI (GainsRequest.effective_detect_wash +
     # the usa-crypto carve-out): only taxable accounts get wash detection,
     # and US crypto is property — §1091 doesn't reach it. Previously
     # hard-set True, so sheltered simulations wash-checked themselves.
-    acct_cfg = ctx.account(account)
     is_usa = ctx.country == "usa"
     detect_wash = (acct_cfg is not None and acct_cfg.type == "taxable"
                    and not (acct_cfg.crypto and is_usa))
@@ -560,7 +636,33 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
     if _timing_kw:
         _timing_kw["option_grant_basis"] = basis
 
+    # Canada: a trust ROC with a printed record date lowers the ACB on
+    # it, as run_gains books it (CA-INC-DATE-ROC-TRUST); the what-if
+    # priced a sale between the record and pay dates on the unreduced
+    # ACB (A2-1175). IncomeRules answers '' outside Canada.
+    from taxjson.lib.income_dating import IncomeRules
+    try:
+        _income = IncomeRules.from_settings(ctx.settings)
+    except Exception as exc:
+        _income = None
+        warnings.append(
+            f"income-dating settings could not be applied ({exc}) — a "
+            f"trust return of capital stays on its pay date here.")
+    # The engine's option/right-replacement flags (US-WASH-12/14/15,
+    # CA-SL-14/15: warn-only, numbers unchanged) for the simulated sale
+    # go into the result, not the server's stderr (A2-0687).
+    rules.emit_replacement_stderr = False
+    replacement_flags: List[str] = []
+
     def _simulate(main_rows, context_rows, **extra_kw):
+        if _income is not None:
+            # The same move run_gains makes (pipeline.
+            # apply_roc_record_dates, which takes the run's request).
+            for _t in main_rows:
+                _rec = _income.roc_record_date(_t)
+                if _rec:
+                    _t.date = _rec
+                    _t.date_settle = _rec
         try:
             after = rules.compute_gains(
                 main_rows + [synth], sheltered_transactions=context_rows,
@@ -569,6 +671,14 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         except AmbiguousTransferDateError as e:
             # Surface as a structured error instead of a 500.
             raise ValueError(str(e))
+        from taxjson.lib.core import format_option_replacement_warning
+        for _w in after.get("option_replacement_warnings") or []:
+            if (_w.get("loss_symbol") == symbol
+                    and _w.get("loss_date") in (on, settle_on)):
+                _txt = format_option_replacement_warning(
+                    _w, country=ctx.country)
+                if _txt not in replacement_flags:
+                    replacement_flags.append(_txt)
         # The US (FIFO) engine emits ONE gain entry PER CLOSED LOT, all
         # sharing the selling tx's id — reading only the first falsely
         # rejected any sell spanning multiple lots. Aggregate them.
@@ -705,6 +815,10 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
                     "the blended (s.47) simulation produced no matching "
                     "disposition — showing this account's own book.")
 
+    for _txt in replacement_flags:
+        if _txt not in warnings:
+            warnings.append(_txt)
+
     def _sum(key, alt=None):
         return sum(float(t.get(key, (t.get(alt, 0) if alt else 0)) or 0)
                    for t in entries)
@@ -749,7 +863,7 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         "price_base": round(price, 6),             # converted to base
         "fx_rate": round(fx_rate, 6),
         "fx_note": fx_note,
-        "multiplier": multiplier,                  # 100 per option contract
+        "multiplier": multiplier,                  # declared, else 100
         "proceeds": round(proceeds, 2),            # base-currency
         "cost_basis": round(_sum("cost"), 2),
         "economic_gain": round(economic, 2),      # true gain/loss on the sale
@@ -774,6 +888,13 @@ def what_if_sell(ctx: ProjectContext, account: str, symbol: str,
         "days_held": entry.get("days_held"),
         "currency": ctx.base_currency,
     }
+
+
+def _has_inputs(ctx: ProjectContext, account: str) -> bool:
+    """The account has activity files `taxjson run` reads (so a missing
+    book is a gap, not an account that never traded)."""
+    from taxjson.lib.checklist import _data_files
+    return bool(_data_files(ctx.root / "inputs" / account))
 
 
 def _scope_note(country):

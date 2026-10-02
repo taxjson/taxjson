@@ -16,6 +16,19 @@ def is_loopback(host: str) -> bool:
         return False
 
 
+def _url_host(host: str) -> str:
+    """`host` as it goes in a URL: an IPv6 address in brackets
+    ("http://::1:8765" is not a URL — A2-0695, A2-1186)."""
+    h = host.strip()
+    bare = h.strip("[]")
+    try:
+        if ipaddress.ip_address(bare).version == 6:
+            return f"[{bare}]"
+    except ValueError:
+        pass
+    return h
+
+
 def serve(root=".", host: str = "127.0.0.1", port: int = 8765,
           require_token: bool = False) -> int:
     """`require_token` (`taxjson serve --token`) issues the per-run token on
@@ -65,6 +78,10 @@ def serve(root=".", host: str = "127.0.0.1", port: int = 8765,
     # Any non-loopback bind also requires a per-run random token (URL
     # ?token= once, then an HttpOnly cookie): without it anyone on the
     # network could read the books (2026-09 security audit).
+    # uvicorn binds a bare IPv6 address; "[::1]" is accepted as input.
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    url_host = _url_host(host)
     token = (secrets.token_urlsafe(24)
              if require_token or not is_loopback(host) else None)
     if host in ("0.0.0.0", "::", "*"):
@@ -72,17 +89,17 @@ def serve(root=".", host: str = "127.0.0.1", port: int = 8765,
     else:
         app = create_app(ctx, allowed_hosts=[host], auth_token=token)
     if token and is_loopback(host):
-        print(f"taxjson serve → http://{host}:{port}/?token={token}   "
+        print(f"taxjson serve → http://{url_host}:{port}/?token={token}   "
               f"(project: {ctx.root}; token required)", file=sys.stderr)
     elif token:
         print(f"warning: binding to {host} exposes your tax data on the "
               f"network (plain HTTP, token-protected). Prefer 127.0.0.1 "
               f"and reach it remotely via an SSH tunnel.",
               file=sys.stderr)
-        print(f"taxjson serve → http://{host}:{port}/?token={token}   "
+        print(f"taxjson serve → http://{url_host}:{port}/?token={token}   "
               f"(project: {ctx.root})", file=sys.stderr)
     else:
-        print(f"taxjson serve → http://{host}:{port}   (project: {ctx.root})",
+        print(f"taxjson serve → http://{url_host}:{port}   (project: {ctx.root})",
               file=sys.stderr)
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0

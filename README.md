@@ -823,11 +823,27 @@ pool) and each registered account on its own back a denial only with units they
 account held before the window never do, and in Canada a new short sale or
 written option is not an acquisition (`country = "usa"` keeps §1091's re-short
 rule, and an IRA purchase in the window locks the loss even after the IRA sold).
-A VIOLATION names who must sell what to rescue the loss; a LOCKED row states how
+Each replacement unit backs **one** denial, as in the engine (CA-SL-08): a sale
+split into fills, two losses, or a loss whose window closed long ago share a
+rebuy, and units an earlier loss already used are not counted again — for an
+existing loss or for a sale today (a US IRA purchase the engine already matched
+is not "at risk" twice). Quantities on either side of a split are compared in
+today's units, and a long call counts at its declared contract size (100 for a
+standard equity option). A warrant, a call on an adjusted series (XYZ1) or a
+futures option on the loss's contract is a **note to check by hand**, as the
+engines flag it (CA-SL-14/15, US-WASH-14/15) — never a VIOLATION. A VIOLATION
+names who must sell what to rescue the loss, by the last trade date on the
+listing's own calendar (a TSX USD unit trades on TSX days); once that date has
+passed it says the loss is denied, with no sell-by date. A LOCKED row states how
 many of your taxable shares' loss a sale today would lose. A rebuy denies the
 loss only on as many shares as it buys (BLOCKED and `buy-check` print the amount
-per unit). A crypto VIOLATION's last day is the settle bound itself (a coin
-settles on its trade date). `buy-check`, `sell-check`, `watch` and `harvest`'s
+per unit). A crypto or futures VIOLATION's last day is the settle bound itself or
+the last trading day before it (both settle on their trade date). A short
+position is worded as one (cover, re-short). A `.tt` line dated after today in a
+settle-date project was traded on the last trading day that settles by it, and
+is in the books from then. The radar's own pool (used outside the gains files'
+year) books a Canadian trust's return of capital on its record date and floors
+the ACB at nil (s.40(3)), as the engine does. `buy-check`, `sell-check`, `watch` and `harvest`'s
 ADVISORY column read the same radar. Every verdict covers **this project's
 accounts only** and says so: a purchase by your spouse or common-law partner or a
 corporation you control (Canada: affiliated persons, s.251.1; US: IRS Pub. 550)
@@ -1357,7 +1373,21 @@ the radar live. With `--options`, a contract that ticker.map renamed
 onto another listing's code is quoted as the contract actually held.
 Accounts marked `crypto = true` are **excluded by default** (the price
 chain serves stock snapshots; crypto symbols mostly fail to price) —
-pass `--crypto` to include them.
+pass `--crypto` to include them. A coin is quoted under the same Yahoo
+spelling the books were priced with (the built-ins plus the project's
+`crypto_ticker.map`). In a **US** project a crypto account's losses are
+outside the wash-sale rule (US-WASH-13): they count as claimable now and
+the ADVISORY reads `no-wash-rule(crypto)`; a Canadian crypto loss stays
+under the superficial-loss rule like a share. A `VIOLATION` whose rescue
+deadline has passed (`VIOLATION(deadline-passed:…)`) is not claimable
+now: a sale today waits until the registered account's last in-window
+buy ages out (31 days), or has no clear date without the sheltered
+books. An LSE (`.L`) quote that does not say whether it is in pence or
+pounds — a price-cache entry written before the unit was recorded, or a
+tier that reports no unit — is left out with a warning, never valued as
+pounds. In a US project an open short shows `ST` under `LT_IN`: covering
+it is short-term (US-HOLD-03). `--json` carries the scope note
+(`scope_note`) like the radar's.
 
 `EXIT@` is the **native-currency price at which a full exit today books no
 base-currency loss** — the position's base book cost converted back at today's
@@ -1371,7 +1401,8 @@ Option positions (e.g. LEAPS) are also excluded by default. Pass
 illiquid strikes, so with no TWS/Gateway running the contracts are
 listed as unpriced rather than marked from a bad source. Option rows
 show `PRICE` and `COST/SH` in per-share premium terms (`UNREALIZED`
-carries the ×100 contract multiplier), a `DTE` days-to-expiry column
+carries the contract size the rows declare — a `.tt` line's `xN`, a
+broker's multiplier — and ×100 when none is declared), a `DTE` days-to-expiry column
 appears, and premium currency follows the underlying's listing. Note
 the radar does not track option contracts — rebuying the *same*
 contract within 30 days of a loss sale still triggers the
@@ -1511,7 +1542,8 @@ fees report uses too:
   or settle date match. Delete the `.tt` line if it is that trade;
 - one broker account's export placed under two `inputs/<account>/` folders
   is booked in both: `taxjson run` prints an ATTENTION line naming the two
-  taxjson accounts.
+  taxjson accounts (the same file copied into two folders is named file by
+  file, for every broker and for `.tt` files), and `run --strict` stops.
 
 ### When you can't get the real cost basis
 
