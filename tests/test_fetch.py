@@ -97,10 +97,20 @@ class TestQuestradeCsv(unittest.TestCase):
         self.assertNotIn("CORP  COM", text)
 
     def test_rows_sorted_and_byte_stable(self):
-        a2 = dict(_ACT, transactionDate="2026-08-01T00:00:00-04:00",
-                  symbol="AAA.TO")
-        self.assertEqual(qt_to_csv([dict(_ACT), a2], "1"),
-                         qt_to_csv([a2, dict(_ACT)], "1"))
+        # Rows sort by trade date; rows of ONE day keep the API's order
+        # (Questrade stamps midnight, so that order is the only record
+        # of a same-day sale before a rebuy — CA-DATE-14, audit
+        # A2-0084). This test used to pin a (date, symbol, action) sort
+        # that made two orders of one day render identically.
+        early = dict(_ACT, tradeDate="2026-08-01T00:00:00-04:00",
+                     symbol="AAA.TO")
+        same_day = dict(_ACT, symbol="AAA.TO")
+        self.assertEqual(qt_to_csv([dict(_ACT), early], "1"),
+                         qt_to_csv([early, dict(_ACT)], "1"))
+        self.assertEqual(qt_to_csv([dict(_ACT)], "1"),
+                         qt_to_csv([dict(_ACT)], "1"))
+        self.assertNotEqual(qt_to_csv([dict(_ACT), same_day], "1"),
+                            qt_to_csv([same_day, dict(_ACT)], "1"))
 
 
 class TestQtWindow(unittest.TestCase):

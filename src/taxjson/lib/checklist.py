@@ -413,6 +413,37 @@ def d_inputs_frozen(ctx: Ctx) -> Result:
                              if p.suffix.lower() == ".csv") if a]
         if _asof and max(_asof) < cutoff.isoformat():
             early.append(f"{n} (RBC export as of {max(_asof)})")
+    # IB statements carry their Period: an account whose statements stop
+    # before Dec 31 of the year — or hold none of it — cannot hold the
+    # rest of it (audit A2-0262, the RBC twin above).
+    from taxjson.lib.brokerages.ib_extractor import ib_year_coverage
+    from taxjson.lib.brokerages.base import decode_broker_text
+    ib_short = []
+    for n in _accounts_of(ctx, "taxable"):
+        _ib = []
+        for p in _data_files(ctx.root / "inputs" / n):
+            if p.suffix.lower() != ".csv":
+                continue
+            try:
+                head = decode_broker_text(p.read_bytes(), p.name)[:64]
+            except (OSError, UnicodeError, ValueError):
+                continue
+            if head.lstrip().startswith("Statement,Header"):
+                _ib.append(p)
+        for acct, end in ib_year_coverage(_ib, ctx.year):
+            who = f" {acct}" if acct else ""
+            ib_short.append(
+                f"{n} (IB statements{who} end {end.isoformat()})" if end
+                else f"{n} (no IB statement{who} covers {ctx.year})")
+    if ib_short:
+        if ctx.today <= date(ctx.year, 12, 31):
+            return Result("inputs-frozen", "todo",
+                          f"year still open — {', '.join(ib_short)}; "
+                          f"download the rest of {ctx.year} after it ends")
+        return Result("inputs-frozen", "attention",
+                      f"{', '.join(ib_short)} — {ctx.year} activity after "
+                      f"it is not in the books; download the statement "
+                      f"that covers the rest of the year")
     if early:
         if ctx.today <= cutoff:
             return Result("inputs-frozen", "todo",

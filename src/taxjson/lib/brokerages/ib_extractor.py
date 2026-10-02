@@ -109,7 +109,8 @@ def _split_known_ext(symbol: str):
 def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
                                     extra_held=None, fallback_held=None,
                                     isins_by_root=None,
-                                    mismatches=None) -> None:
+                                    mismatches=None, open_qty=None,
+                                    ambiguous=None) -> None:
     """Rewrite each DIVIDEND/TAX suffix to match the position held for the same
     ticker in this file, correcting ISIN-vs-listing mismatches. Leaves the
     ISIN-derived suffix untouched when the account holds no position for that
@@ -135,7 +136,18 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     vs Telus's T.TO, Equifax vs Enerflex EFX.TO) keeps its ISIN-derived
     suffix (audit S059-24 / S060-19); the (symbol, ISIN) pairs skipped
     are added to `mismatches`. A row whose ISIN, or whose root's listing
-    ISIN, is unknown is rebound as before."""
+    ISIN, is unknown is rebound as before.
+
+    A root held under several listings is narrowed to the listings held
+    ON THE PAYMENT DATE: a TSX buy months after an NYSE-line ROC moved
+    the ROC onto the TSX line (an EMPTY pool, a false s.40(3) gain, a
+    currency clash) and made the row differ between overlapping
+    downloads (audit A2-0089). The position on a date is this
+    statement's trades and transfers up to it on top of the opening
+    position — `open_qty` (the Open Positions quantities, when the
+    section is present) less the statement's net, else the least
+    opening the trades need. Rows still ambiguous are added to
+    `ambiguous` as (symbol, date)."""
     held: Dict[str, set] = {}
     for full in (extra_held or ()):
         root, ext = _split_known_ext(full)
@@ -154,6 +166,29 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
     held.update(fb)
     if not held:
         return
+    pos: Dict[tuple, list] = {}
+    for t in transactions:
+        if t.get('action') in _POSITION_ACTIONS:
+            root, ext = _split_known_ext(t.get('symbol'))
+            if ext:
+                pos.setdefault((root, ext), []).append(
+                    (t.get('date') or '', float(t.get('quantity') or 0.0)))
+
+    def _held_on(root, ext, day) -> bool:
+        rows = sorted(pos.get((root, ext)) or ())
+        if not rows:
+            return True              # no dated evidence: cannot exclude
+        net = sum(q for _d, q in rows)
+        if open_qty is not None:
+            opening = float(open_qty.get(f"{root}.{ext}", 0.0)) - net
+        else:
+            run_q, low = 0.0, 0.0
+            for _d, q in rows:
+                run_q += q
+                low = min(low, run_q)
+            opening = -low
+        q_on = opening + sum(q for d, q in rows if d <= day)
+        return abs(q_on) > 1e-9
     for t in transactions:
         # ROC ADJUSTs come out of the same ISIN-suffixed Dividends section
         # as income rows, so they need the same held-listing rebind — an
@@ -166,6 +201,13 @@ def _reattribute_income_to_holdings(transactions: List[Dict[str, Any]],
         if ext is None:
             continue
         suffixes = held.get(root)
+        if suffixes and len(suffixes) > 1:
+            on_day = {e for e in suffixes
+                      if _held_on(root, e, t.get('date') or '')}
+            if len(on_day) == 1:
+                suffixes = on_day
+            elif ambiguous is not None:
+                ambiguous.add((t.get('symbol'), t.get('date')))
         if suffixes and len(suffixes) == 1:
             want = next(iter(suffixes))
             if want != ext:
@@ -235,7 +277,7 @@ def get_ib_settlement(date_str: str, asset_cat: str,
     days = settlement_lag_days(date_str, currency, is_option=not is_equity)
     return add_settlement_days(date_str, days, currency).isoformat()
 
-from taxjson.lib.core import STOCK_DIVIDEND
+from taxjson.lib.core import STOCK_DIVIDEND, is_option_symbol
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          OPTION_STRIKE_RE,
                                          _parse_div_qty_rate,
@@ -270,6 +312,12 @@ _IB_METADATA_SECTIONS = frozenset({
     # Comm/Fee column (see the Transaction Fees note in parse_file).
     'Transaction Fees',
 })
+# Money / position sections whose Data rows IB writes at the header's
+# full width (a shorter row is a truncated export).
+_IB_FULL_WIDTH_SECTIONS = frozenset({
+    'Trades', 'Dividends', 'Withholding Tax', 'Interest', 'Fees',
+    'Commission Adjustments', 'Corporate Actions', 'Transfers',
+    'Options Expirations'})
 # Header columns that mark a section as carrying money.
 _IB_MONEY_COLUMNS = frozenset({
     'Amount', 'Proceeds', 'Comm/Fee', 'Net Amount', 'Gross Amount',
@@ -334,44 +382,167 @@ def _ib_period(raw: str):
     return None
 
 
-def _warn_coverage_gaps(periods, today=None) -> None:
-    """Warn when an account's IB statements leave days of a FINISHED
-    calendar year uncovered: a gap between two statements, or a last
-    statement that stops before Dec 31 (the 2024 statement that ended
-    Dec 27 dropped a Dec 30 sale silently — audit R1-2 / R1-195). The
-    first statement may start mid-year (an account opened in May); the
-    current year is still open, so its end is not checked."""
+def _ib_no_trading_gap(g0, g1) -> bool:
+    """True when every day of the gap [g0, g1] is a weekend day or Jan 1
+    / Dec 25 — no exchange trades and IB books nothing then, so a
+    Friday-to-Monday split between two statements is not a hole (audit
+    A2-0609)."""
+    d = g0
+    while d <= g1:
+        if d.weekday() < 5 and (d.month, d.day) not in ((1, 1), (12, 25)):
+            return False
+        d += timedelta(days=1)
+    return True
+
+
+def _coverage_groups(periods):
+    """{broker account: (merged spans [[start, end, name]], gaps)} of a
+    label's IB statement periods — (name, start, end) or (name, start,
+    end, accounts) — merged across weekend-only gaps. A statement naming
+    no account covers every account of the label."""
+    named = sorted(set().union(*(per[3] for per in periods
+                                 if len(per) > 3 and per[3])))
+    groups: Dict[str, list] = {}
+    for per in periods:
+        n, a, b = per[0], per[1], per[2]
+        accts = (sorted(per[3]) if len(per) > 3 and per[3]
+                 else named or [''])
+        for acct in accts:
+            groups.setdefault(acct, []).append((a, b, n))
+    out = {}
+    for acct, spans in groups.items():
+        spans.sort()
+        merged = [[spans[0][0], spans[0][1], spans[0][2]]]
+        gaps = []
+        for a, b, n in spans[1:]:
+            cur = merged[-1]
+            if (a <= cur[1] + timedelta(days=1)
+                    or _ib_no_trading_gap(cur[1] + timedelta(days=1),
+                                          a - timedelta(days=1))):
+                if b > cur[1]:
+                    cur[1], cur[2] = b, n
+            else:
+                gaps.append((cur[1] + timedelta(days=1),
+                             a - timedelta(days=1), cur[2], n))
+                merged.append([a, b, n])
+        out[acct] = (merged, gaps)
+    return out
+
+
+def _year_shortfall(merged, tax_year):
+    """(end, statement name) when an account's merged statement spans
+    stop before Dec 31 of `tax_year` — end None when none covers the
+    year but an earlier one exists — else None."""
+    from datetime import date as _date
+    y0, y1 = _date(tax_year, 1, 1), _date(tax_year, 12, 31)
+    covering = [m for m in merged if m[0] <= y1 and m[1] >= y0]
+    if not covering:
+        last = max(merged, key=lambda m: m[1])
+        return (None, last[2]) if last[1] < y0 else None
+    end = max(m[1] for m in covering)
+    if end >= y1:
+        return None
+    return end, next(m[2] for m in covering if m[1] == end)
+
+
+def ib_year_coverage(paths, tax_year: int) -> List[tuple]:
+    """[(masked account or '', end or None)] for each IB account whose
+    statements among `paths` stop before Dec 31 of `tax_year` (end None:
+    no statement covers the year) — the checklist's per-statement test
+    (audit A2-0262). Unreadable files are skipped."""
+    periods = []
+    for path in paths:
+        try:
+            rows = IbBrokerage._read_rows(Path(path))
+            pre = _ib_prescan(rows, shown_name(path))
+        except (OSError, UnicodeError, BrokerageParseError, csv.Error):
+            continue
+        for row in rows:
+            if (len(row) >= 4 and row[0] == 'Statement'
+                    and row[1] == 'Data' and row[2] == 'Period'):
+                span = _ib_period(row[3])
+                if span:
+                    periods.append((shown_name(path), *span,
+                                    frozenset(pre['accounts'])))
+                break
+    out = []
+    for acct, (merged, _gaps) in sorted(_coverage_groups(periods).items()):
+        short = _year_shortfall(merged, tax_year)
+        if short is not None:
+            out.append((_mask_account(acct) if acct else '', short[0]))
+    return out
+
+
+def _warn_coverage_gaps(periods, today=None, tax_year=None) -> None:
+    """Warn when an IB account's statements leave days uncovered: a gap
+    between two statements (weekend-only gaps excepted), or statements
+    that stop before Dec 31 of the tax year (the 2024 statement that
+    ended Dec 27 dropped a Dec 30 sale silently — audit R1-2 / R1-195).
+
+    Per broker ACCOUNT (Account Information): one label may hold the
+    statements of two IB accounts, and one account's full year hid the
+    other's missing half-year (audit A2-0091 / A2-0261).
+
+    `tax_year` (taxjson run passes the project year): an account whose
+    statements stop before Dec 31 of that FINISHED year — or hold
+    nothing of it — is reported; a statement running into the next year
+    covers it (A2-0262 / A2-0609). Without it, the year of the last
+    statement is checked when that year is over (the first statement
+    may start mid-year: an account opened in May)."""
     from datetime import date as _date
     if not periods:
         return
     today = today or _date.today()
-    spans = sorted((a, b, n) for n, a, b in periods)
-    merged = [[spans[0][0], spans[0][1], spans[0][2]]]
-    gaps = []
-    for a, b, n in spans[1:]:
-        cur = merged[-1]
-        if a <= cur[1] + timedelta(days=1):
-            if b > cur[1]:
-                cur[1], cur[2] = b, n
-        else:
-            gaps.append((cur[1] + timedelta(days=1),
-                         a - timedelta(days=1), cur[2], n))
-            merged.append([a, b, n])
-    for g0, g1, before, after in gaps:
-        print(f"{ATTENTION_PREFIX} IB statements leave {g0.isoformat()} .. "
-              f"{g1.isoformat()} uncovered (between {before} and {after}) "
-              f"— any trade or income in those days is missing from the "
-              f"books. Download the statement for that period.",
-              file=sys.stderr)
-    last_end, last_name = merged[-1][1], merged[-1][2]
-    if last_end.year < today.year and (last_end.month, last_end.day) != (12, 31):
-        print(f"{ATTENTION_PREFIX} {last_name}: the account's IB statements "
-              f"end {last_end.isoformat()}, before the end of "
-              f"{last_end.year} — any trade or income from "
-              f"{(last_end + timedelta(days=1)).isoformat()} to "
-              f"{last_end.year}-12-31 is missing from the books. Download "
-              f"the statement that covers the rest of the year.",
-              file=sys.stderr)
+    groups = _coverage_groups(periods)
+    many = len(groups) > 1
+    for acct, (merged, gaps) in sorted(groups.items()):
+        who = (f" (IB account {_mask_account(acct)})"
+               if many and acct else '')
+        for g0, g1, before, after in gaps:
+            print(f"{ATTENTION_PREFIX} IB statements{who} leave "
+                  f"{g0.isoformat()} .. {g1.isoformat()} uncovered "
+                  f"(between {before} and {after}) — any trade or income "
+                  f"in those days is missing from the books. Download "
+                  f"the statement for that period.", file=sys.stderr)
+        last_end, last_name = merged[-1][1], merged[-1][2]
+        if tax_year is not None:
+            if today <= _date(tax_year, 12, 31):
+                continue                 # the year is still open
+            short = _year_shortfall(merged, tax_year)
+            if short is None:
+                continue
+            end, end_name = short
+            if end is None:
+                print(f"{ATTENTION_PREFIX} {end_name}: the account's IB "
+                      f"statements{who} end {last_end.isoformat()} — none "
+                      f"covers {tax_year}, so any {tax_year} trade or "
+                      f"income is missing from the books. Download the "
+                      f"{tax_year} statement.", file=sys.stderr)
+            else:
+                print(f"{ATTENTION_PREFIX} {end_name}: the account's IB "
+                      f"statements{who} end {end.isoformat()}, before the "
+                      f"end of {tax_year} — any trade or income from "
+                      f"{(end + timedelta(days=1)).isoformat()} to "
+                      f"{tax_year}-12-31 is missing from the books. "
+                      f"Download the statement that covers the rest of "
+                      f"the year.", file=sys.stderr)
+            continue
+        if (last_end.year < today.year
+                and (last_end.month, last_end.day) != (12, 31)):
+            print(f"{ATTENTION_PREFIX} {last_name}: the account's IB "
+                  f"statements{who} end {last_end.isoformat()}, before the "
+                  f"end of {last_end.year} — any trade or income from "
+                  f"{(last_end + timedelta(days=1)).isoformat()} to "
+                  f"{last_end.year}-12-31 is missing from the books. "
+                  f"Download the statement that covers the rest of the "
+                  f"year.", file=sys.stderr)
+
+
+def _ib_cil_unmatched_note(c: Dict[str, Any]) -> str:
+    return (f"note: {c['where']}: {c['symbol']}: cash in lieu of "
+            f"{c['frac']:g} share(s) on {c['date']} matched no split "
+            f"of the symbol within {_IB_CIL_WINDOW} days — booked as a "
+            f"sale of the fraction only.")
 
 
 def unmatched_ca_warning(ca: Dict[str, Any]) -> str:
@@ -393,45 +564,69 @@ def _ib_split_datetime(raw: str, where: str):
         raise BrokerageParseError(
             f"{where}: Date/Time {raw!r} is not IB's 'YYYY-MM-DD, "
             f"HH:MM:SS' — refusing to guess the date")
-    if len(time.split(':')) == 2:
-        time += ':00'
-    return date, time
+    hms = [int(x) for x in time.split(':')] + [0]
+    h, m, s = hms[0], hms[1], hms[2]
+    if h > 23 or m > 59 or s > 59:
+        raise BrokerageParseError(
+            f"{where}: Date/Time {raw!r} holds an impossible clock time "
+            f"(hour 00-23, minute and second 00-59) — refusing to guess "
+            f"the date")
+    # Zero-padded: the session rules and every (date, time) sort compare
+    # the time as TEXT, and '9:45:00' sorts after '20:00:00' (audit
+    # A2-0082 / A2-0607).
+    return date, f"{h:02d}:{m:02d}:{s:02d}"
 
 
-# IB stamps Trades rows with the US Eastern CLOCK time. Two kinds of fill
-# have an official trade date other than that clock date (tax-logic
+# IB stamps Trades rows with the US Eastern CLOCK time. These fills have
+# an official trade date other than that clock date (tax-logic
 # CA-DATE-SESSION / US-DATE-SESSION):
 #   * a US-listed stock or ETF filled in the overnight session (20:00 ET
-#     onward, Sunday to Thursday nights) trades on the NEXT trading day;
-#   * an ASX fill is stamped in the ET evening, which is already the next
-#     day in Sydney: its trade date is the Sydney date.
+#     onward, Sunday to Thursday nights — and its after-midnight half on
+#     a day the NYSE is closed) trades on the NEXT trading day;
+#   * a US-dollar futures or futures-option fill in the CME Globex
+#     evening session (18:00 ET onward, Sunday to Thursday) or on a
+#     weekday the exchange is closed trades on the next trading day;
+#   * an SPX/SPXW/XSP/VIX option filled in Cboe Global Trading Hours
+#     (20:15 ET onward) trades on the next trading day;
+#   * a fill on the ASX, HKEX, Tokyo, Singapore or NZX exchanges (every
+#     asset class) is dated in the exchange's local time.
 _IB_OVERNIGHT_OPEN = '20:00:00'
+_IB_OVERNIGHT_CLOSE = '04:00:00'        # the session ends 03:50 ET
+_IB_CME_EVENING_OPEN = '18:00:00'
+_IB_GTH_OPEN = '20:15:00'
+_IB_GTH_ROOTS = frozenset({'SPX', 'SPXW', 'XSP', 'VIX', 'VIXW'})
 _IB_CLOCK_TZ = 'America/New_York'
-_IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney'}
+_IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney',
+                            'HKD': 'Asia/Hong_Kong', 'JPY': 'Asia/Tokyo',
+                            'SGD': 'Asia/Singapore',
+                            'NZD': 'Pacific/Auckland'}
+# The settlement market (calendar and cycle) of a stock/warrant listing
+# whose suffix names a venue in another currency: a USD unit listed on
+# the TSX settles through CDS, a USD line listed on the LSE on the UK
+# cycle (audit A2-0595 / A2-0081).
+_IB_EXT_SETTLE_MARKET = {'TO': 'CAD', 'L': 'GBP', 'AX': 'AUD', 'US': 'USD'}
+
+
+def _ib_next_trading_day(d, include_today: bool = False):
+    from taxjson.lib.market_calendar import is_trading_day
+    nxt = d if include_today else d + timedelta(days=1)
+    while not is_trading_day(nxt, 'USD'):
+        nxt += timedelta(days=1)
+    return nxt
 
 
 def _ib_market_trade_date(date: str, time: str, asset_cat: str,
-                          currency: str, ext: str):
+                          currency: str, ext: str, symbol: str = ''):
     """(trade date, time, broker stamp) of a Trades row whose exchange
     trade date is not the clock date IB printed; the broker stamp is ''
-    when nothing changes. An overnight fill is placed at 00:00:00 of
-    its trade date — before that day's regular session, the fills of
+    when nothing changes. A fill moved to the next trading day is placed
+    at 00:00:00 of that day — before its regular session, the fills of
     one night keeping their export (clock) order. A Friday- or
     Saturday-night US fill is left as stamped: there is no session
     then, and `taxjson check-dates` flags it."""
-    if asset_cat != 'Stocks':
-        return date, time, ''
     stamp = f"{date} {time} ET"
-    if ext == 'US' and time >= _IB_OVERNIGHT_OPEN:
-        from taxjson.lib.market_calendar import is_trading_day
-        d = datetime.strptime(date, "%Y-%m-%d").date()
-        if d.weekday() in (6, 0, 1, 2, 3):          # Sunday .. Thursday
-            nxt = d + timedelta(days=1)
-            while not is_trading_day(nxt, 'USD'):
-                nxt += timedelta(days=1)
-            return nxt.isoformat(), '00:00:00', stamp
-        return date, time, ''
-    zone = _IB_LOCAL_TZ_BY_CURRENCY.get((currency or '').upper())
+    cur = (currency or '').upper()
+    zone = _IB_LOCAL_TZ_BY_CURRENCY.get(cur)
     if zone:
         from zoneinfo import ZoneInfo
         clock = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M:%S")
@@ -440,6 +635,39 @@ def _ib_market_trade_date(date: str, time: str, asset_cat: str,
         ld, lt = local.strftime("%Y-%m-%d"), local.strftime("%H:%M:%S")
         if ld != date:
             return ld, lt, stamp
+        return date, time, ''
+    d = datetime.strptime(date, "%Y-%m-%d").date()
+    sun_thu = d.weekday() in (6, 0, 1, 2, 3)
+    from taxjson.lib.market_calendar import is_trading_day
+    if asset_cat in FUTURES_CATEGORIES:
+        if cur != 'USD':
+            return date, time, ''
+        if time >= _IB_CME_EVENING_OPEN and sun_thu:
+            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
+        if d.weekday() < 5 and not is_trading_day(d, 'USD'):
+            # A holiday session (MLK day): its trade date is the next
+            # trading day.
+            return (_ib_next_trading_day(d).isoformat(), '00:00:00',
+                    stamp)
+        return date, time, ''
+    if asset_cat == 'Equity and Index Options':
+        root = (symbol or '').strip().split(' ')[0].upper()
+        if (cur == 'USD' and root in _IB_GTH_ROOTS
+                and time >= _IB_GTH_OPEN and sun_thu):
+            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
+        return date, time, ''
+    if asset_cat != 'Stocks' or ext != 'US':
+        return date, time, ''
+    if time >= _IB_OVERNIGHT_OPEN:
+        if sun_thu:
+            return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
+        return date, time, ''
+    if (time < _IB_OVERNIGHT_CLOSE and d.weekday() < 5
+            and not is_trading_day(d, 'USD')):
+        # The after-midnight half of an overnight session on an NYSE
+        # holiday (audit A2-0597): the same trade date as its
+        # pre-midnight half.
+        return _ib_next_trading_day(d).isoformat(), '00:00:00', stamp
     return date, time, ''
 
 
@@ -488,6 +716,54 @@ def _ib_posted_dividends(rows) -> List[tuple]:
     return out
 
 
+def _ib_accrual_facts(rows) -> List[Dict[str, Any]]:
+    """The dividend-accrual facts of a statement's Change in Dividend
+    Accruals section (symbol, pay dates, ex date, currency, the Po row's
+    rate and share count), one per dividend — the account-wide evidence
+    for a posting in ANOTHER statement (audit A2-0601). Read leniently:
+    a malformed row is the statement parse's to report."""
+    out: Dict[tuple, Dict[str, Any]] = {}
+    hm: Dict[str, int] = {}
+    for row in rows:
+        if len(row) < 2 or row[0] != 'Change in Dividend Accruals':
+            continue
+        if row[1] == 'Header':
+            hm = {c: i for i, c in enumerate(row)}
+            continue
+        if row[1] != 'Data' or not hm:
+            continue
+
+        def g(col, _row=row):
+            i = hm.get(col)
+            return _row[i].strip() if i is not None and i < len(_row) else ''
+        toks = set(re.split(r'[;,\s]+', g('Code')))
+        code = 'Po' if 'Po' in toks else 'Re' if 'Re' in toks else ''
+        sym = g('Symbol').replace(' ', '.')
+        if not code or not sym:
+            continue
+        ex, pay = g('Ex Date'), g('Pay Date')
+        key = ((g('Account'), sym, 'ex', ex) if ex
+               else (g('Account'), sym, 'pay', pay))
+        m = out.setdefault(key, {'symbol': sym, 'pay_date': pay,
+                                 'pay_dates': set(),
+                                 'currency': _norm_ccy(g('Currency'))})
+        if pay:
+            m['pay_date'] = pay
+            m['pay_dates'].add(pay)
+        if _IB_DATE_RE.match(ex or ''):
+            m['ex_date'] = ex
+        if code == 'Po':
+            for col, fld in (('Gross Rate', 'po_rate'),
+                             ('Quantity', 'po_qty')):
+                try:
+                    v = abs(parse_strict_number(g(col), field=col))
+                except (BrokerageParseError, ValueError):
+                    v = 0.0
+                if v:
+                    m[fld] = v
+    return list(out.values())
+
+
 def _norm_ccy(v: str) -> str:
     """A Currency cell as IB writes it: a 3-letter code upper-cased (a
     hand-edited 'usd' became the suffix .usd and split the pool, audit
@@ -504,7 +780,7 @@ def _ib_tender_is_placeholder(description: str, qty: float) -> bool:
     return (tender_in and qty > 0) or (not tender_in and qty < 0)
 
 
-def _ib_tender_parked(rows) -> Dict[str, float]:
+def _ib_tender_parked(rows, fii=None) -> Dict[str, float]:
     """Shares a statement leaves on the tender placeholder line, per
     suffixed root symbol — the parse's own tally, for the account-wide
     check (a tender in one statement resolved in the next, audit
@@ -537,7 +813,14 @@ def _ib_tender_parked(rows) -> Dict[str, float]:
                                            allow_blank=True, blank=0.0)
         except BrokerageParseError:
             continue
-        sym = f"{root}.{_IB_CURRENCY_EXT.get(cur, cur)}"
+        _base = _IB_CURRENCY_EXT.get(cur, cur)
+        _e = _base
+        if fii:
+            for _raw in (root, root.replace('.', ' ')):
+                _e = _ib_listing_ext(cat or 'Stocks', _raw, cur, fii)
+                if _e != _base:
+                    break
+        sym = f"{root}.{_e}"
         if 'Ca' in re.split(r'[;,\s]+', g('Code')):
             if _ib_tender_is_placeholder(desc, -qty):
                 out[sym] = out.get(sym, 0.0) + qty
@@ -584,8 +867,16 @@ def _root_aliases(occ_by_conid, underlying_by_conid):
         roots = {o[0] for o in occs}
         if len(roots) < 2:
             continue
-        und = (underlying_by_conid.get(conid) or '').strip()
-        canon = und if und in roots else _canonical_root(roots)
+        und = underlying_by_conid.get(conid) or ''
+        # Every Underlying any of the account's statements names for the
+        # conid: one statement said DFDV and a re-download DFDV1, and
+        # the file being parsed won — one put series split across two
+        # symbols (audit A2-0087). Among several, the prefix rule.
+        unds = ({u.strip() for u in und} if isinstance(und, (set, frozenset))
+                else {und.strip()}) & roots
+        canon = (next(iter(unds)) if len(unds) == 1
+                 else _canonical_root(unds) if unds
+                 else _canonical_root(roots))
         for r in roots:
             if r != canon:
                 root_alias[r] = canon
@@ -595,6 +886,7 @@ def _root_aliases(occ_by_conid, underlying_by_conid):
 
 # Canadian listing venues as IB's Financial Instrument Information names
 # them (Listing Exch).
+_IB_LSE_VENUES = frozenset({'LSE', 'LSEETF', 'LSEIOB1'})
 _IB_CA_VENUES = frozenset({'TSE', 'VENTURE', 'TSXV', 'CSE', 'NEO', 'AEQLIT',
                            'PURE', 'OMEGA', 'CHIXCA', 'ALPHA', 'LYNX'})
 
@@ -610,12 +902,18 @@ def _ib_listing_ext(asset_cat: str, raw_symbol: str, currency: str,
     interlisted ordinary share (MDA on the NYSE) must keep `.US`."""
     ext = _ib_currency_ext(currency)
     s = (raw_symbol or '').strip()
-    if (ext != 'TO' and asset_cat in ('Stocks', 'Warrants')
-            and re.search(r'[.\s]U$', s)):
-        info = (fii.get((asset_cat, s))
-                or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
-        if (info.get('exch') or '').upper() in _IB_CA_VENUES:
-            return 'TO'
+    if asset_cat not in ('Stocks', 'Warrants') or ext in ('TO', 'L'):
+        return ext
+    info = (fii.get((asset_cat, s))
+            or fii.get((asset_cat, re.sub(r'\s+', ' ', s))) or {})
+    exch = (info.get('exch') or '').upper()
+    if re.search(r'[.\s]U$', s) and exch in _IB_CA_VENUES:
+        return 'TO'
+    if exch in _IB_LSE_VENUES:
+        # A USD line of an LSE-listed fund or GDR (CSPX-style UCITS
+        # ETF): an LSE security on the UK cycle, not a fictional `.US`
+        # one on the US T+1 calendar (audit A2-0081).
+        return 'L'
     return ext
 
 
@@ -626,21 +924,58 @@ def _ib_stock_symbol(asset_cat: str, raw_symbol: str, currency: str,
     return f"{sym}.{_ib_listing_ext(asset_cat, raw_symbol, currency, fii)}"
 
 
-def _warn_stock_aliases(conid_syms: Dict[str, set], where: str) -> None:
+def _warn_stock_aliases(conid_syms: Dict[str, set], where: str,
+                        first_seen=None, listing=None,
+                        mapping=None) -> None:
     """One stock conid listed under several symbols (a ticker change
     with no corporate-action row): the parser books each symbol as its
     own security, so the position splits into two pools (audit S059-13 /
-    S060-17). Said on the console with the ticker.map fix."""
+    S060-17). Said on the console with the ticker.map fix: the OLD
+    symbol (first traded) first, each with the listing suffix it is
+    booked under (an alphabetical pair with a hard-coded .US joined
+    nothing, or renamed new to old — audit A2-0611); quiet once the
+    project's ticker.map (`mapping`) joins them."""
+    first_seen = first_seen or {}
+    listing = listing or {}
     for conid, syms in sorted(conid_syms.items()):
         if len(syms) < 2:
             continue
-        a, b = sorted(syms)[:2]
+        order = sorted(syms, key=lambda x: (first_seen.get(x) or '9999',
+                                            x))
+        full = [listing.get(x) or f"{x}.US" for x in order]
+        if mapping is not None:
+            from taxjson.bin.taxjson_ticker_map import map_symbol
+            if len({map_symbol(f, mapping) for f in full}) == 1:
+                continue
+        a, b = full[0], full[-1]
         print(f"{ATTENTION_PREFIX} {where}: IB lists one stock (contract "
-              f"id {conid}) under several symbols: {', '.join(sorted(syms))}"
+              f"id {conid}) under several symbols: {', '.join(order)}"
               f" — a ticker change. Each symbol is booked as its own "
               f"security until you join them in ticker.map, e.g. "
-              f"`GLOBAL {a}.US {b}.US` (old symbol first; use the listing's "
-              f"suffix).", file=sys.stderr)
+              f"`GLOBAL {a} {b}` (old symbol first, as first traded).",
+              file=sys.stderr)
+
+
+def _project_ticker_map(paths):
+    """The rename map of the project ticker.map next to inputs/<account>/
+    <statement>, or None (a statement outside a project, no map, or a
+    map that does not parse)."""
+    for path in paths:
+        try:
+            pp = Path(path).resolve().parents
+            root = pp[2] if pp[1].name == 'inputs' else None
+        except (IndexError, OSError):
+            root = None
+        if root is None or not (root / 'ticker.map').is_file():
+            continue
+        try:
+            from taxjson.bin.taxjson_ticker_map import (_parse_map_file,
+                                                        merge_renames)
+            return merge_renames(_parse_map_file(root / 'ticker.map')[0],
+                                 True)
+        except Exception:               # the run reports a bad map
+            return None
+    return None
 
 
 def _ib_prescan(rows, where: str) -> Dict[str, Any]:
@@ -657,6 +992,7 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
         'has_order_level': False, 'order_levels': {},
         'stock_isins': {}, 'stock_conid_syms': {}, 'opt_underlying': {},
         'held_rows': [], 'broker_name': '', 'cash_bad': {},
+        'first_seen': {}, 'stock_listing': {},
     }
     occ_by_conid: Dict[str, set] = {}
     contract_conids: Dict[tuple, set] = {}
@@ -686,6 +1022,12 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
             # them (prepare_files).
             out['held_rows'].append((g('Symbol'), g('Asset Category'),
                                      g('Currency')))
+            _sroot = re.sub(r'\s+', '.', g('Symbol'))
+            _sday = (g('Date/Time') or g('Date')).replace(',', ' ').split()
+            if _sday and _IB_DATE_RE.match(_sday[0]):
+                _prev = out['first_seen'].get(_sroot)
+                if _prev is None or _sday[0] < _prev:
+                    out['first_seen'][_sroot] = _sday[0]
         if (sec == 'Trades'
                 and g('DataDiscriminator') in ('Order', 'Trade')):
             # Quantity per (category, symbol, trade day) and detail
@@ -749,7 +1091,8 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                         out['stock_conid_syms'].setdefault(
                             info['conid'], set()).add(_root)
             elif info['conid'] and info['underlying']:
-                out['opt_underlying'][info['conid']] = info['underlying']
+                out['opt_underlying'].setdefault(info['conid'], set()).add(
+                    info['underlying'])
             if g('Description'):
                 texts.append(g('Description'))
             for t in texts:
@@ -785,6 +1128,10 @@ def _ib_prescan(rows, where: str) -> Dict[str, Any]:
                 continue
             out['cash'][(line, cur)] = out['cash'].get((line, cur),
                                                        0.0) + tot
+    for _sym, _cat, _cur in out['held_rows']:
+        out['stock_listing'].setdefault(
+            re.sub(r'\s+', '.', _sym), _ib_stock_symbol(_cat, _sym, _cur,
+                                                        out['fii']))
     out['occ_by_conid'] = occ_by_conid
     out['root_alias'], out['alias_conids'] = _root_aliases(
         occ_by_conid, out['opt_underlying'])
@@ -813,6 +1160,67 @@ _IB_COMM_ADJ_TRADE_RE = re.compile(
     r'(\d{4}-\d{2}-\d{2})\s*\)')
 
 
+def _ib_trade_key(t: Dict[str, Any], negate: bool = False) -> tuple:
+    """A Trades row's identity across overlapping statements of one
+    account: symbol, currency, trade date and clock time, quantity and
+    price (the money columns may differ — a refund folded in one copy).
+    `negate` gives the key of the original a `Ca` row reverses."""
+    q = float(t.get('quantity') or 0.0)
+    return (t.get('symbol'), t.get('currency'), t.get('date'),
+            t.get('time') or '', round(-q if negate else q, 9),
+            round(float(t.get('price') or 0.0), 8))
+
+
+def _ib_refund_hits(adj: Dict[str, Any], txs) -> List[Dict[str, Any]]:
+    """The trade(s) of `txs` a Commission Adjustments refund names
+    (ticker, signed quantity, trade date). An exact quantity first; else
+    the ONE same-symbol, same-date, same-sign trade whose quantity
+    covers the named one — IB names an execution of a statement that
+    lists only the Order row (a real 'Refund (KWEB, -400, ...)' for a
+    -440 order, audit A2-0604)."""
+    def _base(t):
+        return (t.get('action') == 'BUYSELL'
+                and t.get('type') != TRADE_CANCEL_TYPE
+                and t.get('currency') == adj['currency']
+                and _split_known_ext(t.get('symbol'))[0] == adj['ticker']
+                and adj['trade_date'] in (
+                    t.get('date'), (t.get('broker_time') or '')[:10]))
+    cands = [t for t in txs if _base(t)]
+    exact = [t for t in cands
+             if abs(float(t.get('quantity') or 0) - adj['qty']) < 1e-9]
+    if exact:
+        return exact
+    q = adj['qty']
+    return [t for t in cands
+            if (float(t.get('quantity') or 0) > 0) == (q > 0)
+            and abs(float(t.get('quantity') or 0)) >= abs(q) - 1e-9]
+
+
+def _ib_option_ref(ex, raw: str, fii, root_alias, aliased_roots,
+                   where: str) -> Optional[str]:
+    """The OCC symbol (no exchange suffix) of an equity option named in
+    a Commission Adjustments description ('QZK 21MAR25 10 C'), or None
+    for a stock ticker: the refund of an option trade never matched the
+    OCC-coded trade (audit A2-1032)."""
+    from taxjson.lib.core import is_option_symbol
+    if not re.search(r'\s', raw or ''):
+        return None
+    occ = ex._option_symbol(raw, 'Equity and Index Options', fii,
+                            root_alias, aliased_roots, where, strict=False)
+    return occ if is_option_symbol(occ) else None
+
+
+def _ib_fold_refund(t: Dict[str, Any], amount: float) -> None:
+    """Net a commission refund (cash, positive) into its trade: the fee
+    falls, a purchase costs less and a sale brings in more
+    (tax-logic CA-ACB-COMMREFUND / US-BASIS-COMMREFUND)."""
+    t['fee'] = round(float(t.get('fee') or 0.0) - amount, 10)
+    if float(t.get('quantity') or 0) > 0:
+        t['net_amount'] = round(t['net_amount'] - amount, 10)
+    else:
+        t['net_amount'] = round(t['net_amount'] + amount, 10)
+
+
 class IbBrokerage(BaseBrokerage):
     # How an IB "(Return of Capital)" distribution from a NON-Canadian
     # issuer (ISIN country != CA) is booked: "acb" (default — the
@@ -833,16 +1241,18 @@ class IbBrokerage(BaseBrokerage):
     account_context = None
 
     @classmethod
-    def prepare_files(cls, paths) -> Dict[str, Any]:
+    def prepare_files(cls, paths, tax_year=None) -> Dict[str, Any]:
         """Read ALL of one account's IB statements once, before any is
-        parsed: statement periods (coverage check below) and the facts a
-        per-file parse cannot see alone. Account-level warnings print
-        here, once."""
+        parsed: statement periods (coverage check below, per broker
+        account and against `tax_year` when taxjson-brokerage passes it)
+        and the facts a per-file parse cannot see alone. Account-level
+        warnings print here, once."""
         ctx: Dict[str, Any] = {
             'periods': [], 'occ_by_conid': {}, 'contract_conids': {},
             'opt_underlying': {}, 'stock_conid_syms': {},
             'stock_isins': {}, 'held': set(), 'posted_dividends': [],
-            'tender_parked': {}}
+            'tender_parked': {}, 'accrual_facts': [],
+            'file_accounts': {}, 'first_seen': {}, 'stock_listing': {}}
         for path in paths:
             name = Path(path).name
             try:
@@ -850,12 +1260,15 @@ class IbBrokerage(BaseBrokerage):
                 pre = _ib_prescan(rows, shown_name(path))
             except (OSError, UnicodeError, BrokerageParseError):
                 continue                 # parse_file reports it
+            accts = frozenset(pre['accounts'])
+            ctx['file_accounts'][name] = accts
             for row in rows:
                 if (len(row) >= 4 and row[0] == 'Statement'
                         and row[1] == 'Data' and row[2] == 'Period'):
                     span = _ib_period(row[3])
                     if span:
-                        ctx['periods'].append((shown_name(path), *span))
+                        ctx['periods'].append((shown_name(path), *span,
+                                               accts))
                     break
             # Identity facts learned from ANY of the account's
             # statements: an option root alias listed only in last
@@ -868,22 +1281,278 @@ class IbBrokerage(BaseBrokerage):
                 tgt = ctx['contract_conids'].setdefault(key, {})
                 for root, ids in by_root.items():
                     tgt.setdefault(root, set()).update(ids)
-            ctx['opt_underlying'].update(pre['opt_underlying'])
+            for conid, unds in pre['opt_underlying'].items():
+                ctx['opt_underlying'].setdefault(conid, set()).update(unds)
             for conid, syms in pre['stock_conid_syms'].items():
                 ctx['stock_conid_syms'].setdefault(conid, set()).update(syms)
             for root, ids in pre['stock_isins'].items():
                 ctx['stock_isins'].setdefault(root, set()).update(ids)
+            for root, d in pre['first_seen'].items():
+                if d < ctx['first_seen'].get(root, '9999'):
+                    ctx['first_seen'][root] = d
+            for root, full in pre['stock_listing'].items():
+                ctx['stock_listing'].setdefault(root, full)
             for sym, cat, cur in pre['held_rows']:
                 ctx['held'].add(_ib_stock_symbol(cat, sym, cur, pre['fii']))
+            # Postings and accrual facts carry their statement's broker
+            # accounts: another IB account's dividend never pays this
+            # account's accrual (audit A2-1035 / A2-1039).
             ctx['posted_dividends'].extend(
-                (name, t, d) for t, d in _ib_posted_dividends(rows))
-            for sym, n in _ib_tender_parked(rows).items():
+                (name, t, d, accts) for t, d in _ib_posted_dividends(rows))
+            ctx['accrual_facts'].extend(
+                dict(m, file=name, accounts=accts)
+                for m in _ib_accrual_facts(rows))
+            for sym, n in _ib_tender_parked(rows, pre['fii']).items():
                 ctx['tender_parked'][sym] = (
                     ctx['tender_parked'].get(sym, 0.0) + n)
-        _warn_coverage_gaps(ctx['periods'])
+        _warn_coverage_gaps(ctx['periods'], tax_year=tax_year)
+        _accts = set().union(*ctx['file_accounts'].values()) \
+            if ctx['file_accounts'] else set()
+        if len(_accts) > 1 and not any(
+                a >= _accts for a in ctx['file_accounts'].values()):
+            # Separate statements of several IB accounts in one label:
+            # booked as ONE account (right only for one tax entity).
+            print(f"{ATTENTION_PREFIX} this account's IB statements "
+                  f"belong to {len(_accts)} IB accounts ("
+                  f"{', '.join(sorted(_mask_account(a) for a in _accts))}"
+                  f") — every row is booked to ONE account label. That is "
+                  f"right only when they are one tax entity (e.g. two "
+                  f"taxable margin accounts); give a registered account "
+                  f"(TFSA/RRSP) its own folder.", file=sys.stderr)
         _warn_stock_aliases(ctx['stock_conid_syms'],
-                            'the account\'s IB statements')
+                            'the account\'s IB statements',
+                            first_seen=ctx['first_seen'],
+                            listing=ctx['stock_listing'],
+                            mapping=_project_ticker_map(paths))
         return ctx
+
+    @classmethod
+    def reconcile_files(cls, parsed) -> None:
+        """Cross-statement pass over one account's parsed statements
+        (taxjson-brokerage calls it with [(path, extractor, txs)], every
+        txs list mutated in place), before the books de-duplicate the
+        overlapping rows.
+
+        Each statement pairs a `Ca` cancellation with its original,
+        folds a commission refund into its trade and joins a cash in
+        lieu to its split ON ITS OWN. An overlapping download of the
+        same account taken earlier (before IB posted the cancellation or
+        the refund) still holds the unadjusted row, which no longer
+        matches the adjusted copy, so dedup kept both: a cancelled split
+        or sale stayed booked, a refunded buy was booked twice (audit
+        A2-0023 / A2-0024 / A2-0088 / A2-0258 / A2-0259 / A2-1038). And
+        an adjustment whose row is in ANOTHER statement (a December
+        trade refunded in January, a Dec 30 split's cash in lieu paid
+        Jan 5) was never applied (A2-0605 / A2-1032 / A2-1036 /
+        A2-1037). Here every adjustment one statement made is repeated
+        on the account's other statements that hold the same original
+        row but not the adjustment, and the unmatched ones are offered
+        to the other statements. Statements of DIFFERENT broker accounts
+        (Account Information) never touch each other."""
+        files = [(p, ex, txs) for p, ex, txs in parsed
+                 if isinstance(ex, IbBrokerage)]
+        if not files:
+            return
+
+        def same_acct(a, b) -> bool:
+            x, y = a.statement_accounts(), b.statement_accounts()
+            return not x or not y or bool(x & y)
+
+        def nm(i) -> str:
+            return shown_name(files[i][0])
+
+        # --- 1. Corporate Actions `Ca` rows.
+        def _ca_key(ca):
+            return (ca['desc'], ca['date'], round(ca['qty'], 9),
+                    ca.get('currency') or '', ca.get('cat') or '')
+
+        cas: Dict[tuple, Dict[str, Any]] = {}
+        for i, (_p, ex, _t) in enumerate(files):
+            for ca in getattr(ex, 'ca_seen', None) or ():
+                e = cas.setdefault(_ca_key(ca), {
+                    'ca': ca, 'odate': None, 'seen': set()})
+                e['seen'].add(i)
+            for ca, odate in getattr(ex, 'ca_pairs', None) or ():
+                cas[_ca_key(ca)]['odate'] = odate
+        for e in cas.values():
+            ca, seen = e['ca'], e['seen']
+            others = [j for j in range(len(files) - 1, -1, -1)
+                      if j not in seen and any(
+                          same_acct(files[j][1], files[k][1])
+                          for k in seen)]
+            odate = e['odate']
+            undone = []
+            if odate is None:
+                # Paired nowhere: the original sits in another
+                # statement — the latest one first (audit S059-04).
+                for j in others:
+                    eff = files[j][1].ca_undo(ca)
+                    if eff:
+                        odate = eff['date']
+                        undone.append(j)
+                        break
+            for j in others:
+                if j in undone or odate is None:
+                    continue
+                if files[j][1].ca_undo(ca, exact_date=odate):
+                    undone.append(j)
+            src = nm(min(seen))
+            for j in undone:
+                print(f"note: {src}: IB cancelled (Ca) {ca['desc']!r} "
+                      f"({ca['qty']:g} on {ca['date']}); its original in "
+                      f"{nm(j)} is undone.", file=sys.stderr)
+            if odate is None:
+                print(unmatched_ca_warning(ca), file=sys.stderr)
+
+        # --- 2. Cash in lieu and its split.
+        cils: Dict[tuple, Dict[str, Any]] = {}
+        for i, (_p, ex, _t) in enumerate(files):
+            open_keys = {(c['symbol'], c['date'], round(c['frac'], 6))
+                         for c in getattr(ex, 'unmatched_cil', None) or ()}
+            for c in getattr(ex, 'unmatched_cil', None) or ():
+                cils.setdefault((c['symbol'], c['date'],
+                                 round(c['frac'], 6)),
+                                {'c': c, 'joined': False, 'seen': set()})
+            for key in getattr(ex, 'cil_seen', None) or ():
+                e = cils.setdefault(key, {
+                    'c': {'symbol': key[0], 'date': key[1],
+                          'frac': key[2], 'where': nm(i)},
+                    'joined': False, 'seen': set()})
+                e['seen'].add(i)
+                if key not in open_keys:
+                    e['joined'] = True
+        for key, e in cils.items():
+            hit = False
+            for j, (_p, ex, _t) in enumerate(files):
+                if j in e['seen'] or not any(
+                        same_acct(ex, files[k][1]) for k in e['seen']):
+                    continue
+                if ex.cil_join(e['c']):
+                    hit = True
+                    print(f"note: {nm(j)}: {key[0]}: cash in lieu of "
+                          f"{key[2]:g} share(s) on {key[1]} (in "
+                          f"{e['c']['where']}) joined the split it "
+                          f"settles.", file=sys.stderr)
+            if not hit and not e['joined']:
+                print(_ib_cil_unmatched_note(e['c']), file=sys.stderr)
+
+        # --- 3. Trades `Ca` cancellations.
+        pairs: Dict[tuple, int] = {}
+        for _p, ex, _t in files:
+            per: Dict[tuple, int] = {}
+            for o, _c in getattr(ex, 'trade_pairs', None) or ():
+                k = _ib_trade_key(o)
+                per[k] = per.get(k, 0) + 1
+            for k, n in per.items():
+                pairs[k] = max(pairs.get(k, 0), n)
+        for k, n in pairs.items():
+            owners = [i for i, (_p, ex, _t) in enumerate(files)
+                      if any(_ib_trade_key(o) == k
+                             for o, _c in getattr(ex, 'trade_pairs', ()))]
+            for j, (_p, ex, txs) in enumerate(files):
+                if (j in owners or k in getattr(ex, 'trade_ca_keys', ())
+                        or not any(same_acct(ex, files[i][1])
+                                   for i in owners)):
+                    continue
+                hits = [t for t in txs
+                        if t.get('action') in ('BUYSELL', 'ASSIGN')
+                        and t.get('type') != TRADE_CANCEL_TYPE
+                        and _ib_trade_key(t) == k][-n:]
+                if not hits:
+                    continue
+                gone = {id(t) for t in hits}
+                txs[:] = [t for t in txs if id(t) not in gone]
+                print(f"note: {nm(j)}: the {k[0]} trade of {k[4]:g} @ "
+                      f"{k[5]:g} on {k[2]} was cancelled (Ca) by IB in "
+                      f"{nm(owners[0])} — dropped from this overlapping "
+                      f"statement too.", file=sys.stderr)
+
+        # --- 4. Transfers `Ca` cancellations.
+        xpairs: Dict[tuple, tuple] = {}
+        for i, (_p, ex, _t) in enumerate(files):
+            for ok, ck in getattr(ex, 'xfer_pairs', None) or ():
+                xpairs.setdefault(ok, (ck, i))
+        for ok, (ck, owner) in xpairs.items():
+            for j, (_p, ex, txs) in enumerate(files):
+                if (j == owner or ck in getattr(ex, 'xfer_ca_keys', ())
+                        or not same_acct(ex, files[owner][1])):
+                    continue
+                hit = next((t for t in reversed(txs)
+                            if t.get('action') == 'TRANSFER'
+                            and (t.get('symbol'), t.get('description'),
+                                 t.get('date'),
+                                 float(t.get('quantity') or 0)) == ok),
+                           None)
+                if hit is None:
+                    continue
+                txs[:] = [t for t in txs if t is not hit]
+                print(f"note: {nm(j)}: the {ok[0]} transfer of {ok[3]:g} "
+                      f"on {ok[2]} was cancelled (Ca) by IB in "
+                      f"{nm(owner)} — dropped from this overlapping "
+                      f"statement too.", file=sys.stderr)
+
+        # --- 5. Commission refunds.
+        folds: Dict[tuple, tuple] = {}
+        for i, (_p, ex, _t) in enumerate(files):
+            for f in getattr(ex, 'refund_folds', None) or ():
+                folds.setdefault(f['refund'], (f, i))
+
+        def _drop_fee_rows(rkey):
+            for _p, ex, txs in files:
+                for adj in getattr(ex, 'unmatched_refunds', None) or ():
+                    if adj['key'] == rkey:
+                        txs[:] = [t for t in txs if t is not adj['fee_tx']]
+
+        for rkey, (f, owner) in folds.items():
+            for j, (_p, ex, txs) in enumerate(files):
+                if (j == owner or rkey in getattr(ex, 'refund_seen', ())
+                        or not same_acct(ex, files[owner][1])):
+                    continue
+                hit = next((t for t in txs
+                            if t.get('action') == 'BUYSELL'
+                            and _ib_trade_key(t) == f['key']
+                            and abs(float(t.get('fee') or 0.0)
+                                    - f['fee']) < 1e-9), None)
+                if hit is not None:
+                    _ib_fold_refund(hit, f['amount'])
+                    print(f"note: {nm(j)}: the commission refund of "
+                          f"{f['amount']:+.2f} on the {f['key'][0]} trade "
+                          f"of {f['key'][2]} (in {nm(owner)}) is folded "
+                          f"into this overlapping statement's copy too.",
+                          file=sys.stderr)
+            # An overlapping copy of the REFUND (its trade not in that
+            # statement) must not stay as a FEE row next to the fold.
+            _drop_fee_rows(rkey)
+        open_refunds: Dict[tuple, tuple] = {}
+        for i, (_p, ex, _t) in enumerate(files):
+            for adj in getattr(ex, 'unmatched_refunds', None) or ():
+                if adj['key'] not in folds:
+                    open_refunds.setdefault(adj['key'], (adj, i))
+        for rkey, (adj, owner) in open_refunds.items():
+            hits = []
+            for j, (_p, ex, txs) in enumerate(files):
+                if j != owner and same_acct(ex, files[owner][1]):
+                    hits += _ib_refund_hits(adj, txs)
+            keys = {_ib_trade_key(t) for t in hits}
+            if len(keys) == 1:
+                for t in hits:
+                    _ib_fold_refund(t, adj['amount'])
+                _drop_fee_rows(rkey)
+                print(f"note: {nm(owner)}: commission adjustment of "
+                      f"{adj['amount']:+.2f} {adj['currency']} on "
+                      f"{adj['date']} ({adj['ticker']} {adj['qty']:g} on "
+                      f"{adj['trade_date']}) folded into its trade in the "
+                      f"account's other statement.", file=sys.stderr)
+            else:
+                print(f"note: {nm(owner)}: commission adjustment of "
+                      f"{adj['amount']:+.2f} {adj['currency']} on "
+                      f"{adj['date']} ({adj['ticker']} {adj['qty']:g} on "
+                      f"{adj['trade_date']}) matches "
+                      f"{'no' if not keys else len(keys)} trade(s) in "
+                      f"the account's statements — kept as a FEE row, "
+                      f"outside the trade's cost; adjust the trade by "
+                      f"hand if it is in a taxable account.",
+                      file=sys.stderr)
 
     # ------------------------------------------------------------ helpers
 
@@ -1021,7 +1690,8 @@ class IbBrokerage(BaseBrokerage):
                     f"or mislabelled column, or a wrong contract "
                     f"multiplier; refusing to book it.")
             if ((qty > 0 and proceeds > 0.005)
-                    or (qty < 0 and proceeds < -0.005)) and not getattr(
+                    or (qty < 0 and proceeds < -0.005)) and not (
+                        price < 0 and exact) and not getattr(
                         self, '_sign_warned', False):
                 self._sign_warned = True
                 print(f"warning: {where}: {symbol}: Proceeds "
@@ -1075,7 +1745,8 @@ class IbBrokerage(BaseBrokerage):
 
     def _option_symbol(self, raw: str, asset_cat: str, fii: Dict[tuple, Any],
                        root_alias: Dict[str, str],
-                       aliased_roots: Dict[str, str], where: str) -> str:
+                       aliased_roots: Dict[str, str], where: str,
+                       strict: bool = True) -> str:
         """OCC symbol for an IB option row ("XSP 16JAN26 68.5 P",
         futures-option monthly "CL JAN26 52 P", legacy "SPX 20241220 P
         4000"). The root is canonicalized through the statement's
@@ -1088,7 +1759,9 @@ class IbBrokerage(BaseBrokerage):
         opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
         opt_match_monthly = (re.search(r'^(.+?)\s+([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
                              if not opt_match else None)
-        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+' + OPTION_STRIKE_RE, raw)
+        # Anchored at the end: a decimal-comma strike ('4,00') was read
+        # as its integer part (audit A2-1041).
+        opt_match_legacy = (re.search(r'^(.+?)\s+(\d{8})\s+([PC])\s+' + OPTION_STRIKE_RE + r'\s*$', raw)
                             if not (opt_match or opt_match_monthly) else None)
         if opt_match:
             base, day, mon, yr, strike, right = opt_match.groups()
@@ -1135,8 +1808,20 @@ class IbBrokerage(BaseBrokerage):
             strike = option_strike_text(strike)
             base = base.replace(' ', '.')
             symbol = f"{base}{exp[2:]}{right}{encode_occ_strike(strike)}"
-        # Strip all spaces as a fallback / cleanup
-        return symbol.replace(' ', '')
+        # Strip all spaces as a fallback / cleanup (an OCC-padded
+        # symbol 'QZY   250321C00050000' is already the contract).
+        symbol = symbol.replace(' ', '')
+        if strict and not is_option_symbol(symbol):
+            # An option description no form reads ('XSP 16JAN26 6,85 P',
+            # a decimal-comma strike) became a raw non-option symbol —
+            # a phantom security, silently (audit A2-1041).
+            raise BrokerageParseError(
+                f"{where}: {asset_cat} symbol {raw!r} is not an option "
+                f"description this parser reads (UNDERLYING DDMMMYY "
+                f"STRIKE P|C, a decimal point in the strike) — refusing "
+                f"to guess the contract. Re-export the statement in "
+                f"English.")
+        return symbol
 
     def _alias_root(self, base: str, yymmdd: str, right: str, strike: str,
                     root_alias: Dict[str, str],
@@ -1250,6 +1935,9 @@ class IbBrokerage(BaseBrokerage):
         # Cash takeovers booked as sales, and merger rows left to
         # taxjson-corp-actions — one note each at end of parse.
         cash_takeovers: List[str] = []
+        # Warnings about a translated Corporate Actions row, printed at
+        # the end of the parse so a later `Ca` of the row withdraws them.
+        late_warnings: List[str] = []
         corp_owned_rows: List[str] = []
         # Corporate Actions rows that are real events nothing books (an
         # option adjustment, a spin-off debit on a short parent, a
@@ -1278,11 +1966,16 @@ class IbBrokerage(BaseBrokerage):
         # emitted (see _ib_refine_split_ratio); one never claimed is
         # said at the end.
         pending_cil: List[Dict[str, Any]] = []
+        # (symbol, date, fraction) of every cash-in-lieu row booked: an
+        # overlapping statement that holds the same row joins it to its
+        # own split (reconcile_files).
+        cil_seen: set = set()
 
         # Full symbols from the Open Positions section, used to seed the
         # income-reattribution holdings map (covers buy-and-hold years with
         # no trade rows, and disambiguates interlisted same-ticker names).
         open_position_syms: set = set()
+        open_position_qty: Dict[str, float] = {}
 
         # Year-end dividend accruals. IB accrues a declared dividend
         # ('Po' code) and reverses the accrual ('Re') once the cash
@@ -1358,6 +2051,14 @@ class IbBrokerage(BaseBrokerage):
         # suffix mapping (fell back to .US).
         isin_fallback: set = set()
         pending_ca: List[Dict[str, Any]] = []
+        # Every Corporate Actions `Ca` row of this statement, and the
+        # ones paired here with their original's date: an OVERLAPPING
+        # statement of the account that holds the original but not the
+        # cancellation (a download taken before IB posted it) must undo
+        # its copy too, or dedup keeps the cancelled row (audit A2-0023
+        # / A2-0024; IbBrokerage.reconcile_files).
+        ca_rows_seen: List[Dict[str, Any]] = []
+        ca_pairs: List[tuple] = []
         # Transfers rows coded `Ca` listed before their original (or
         # whose original is in an earlier statement): consumed by a
         # later original, else kept as a reversing leg at the end.
@@ -1380,6 +2081,8 @@ class IbBrokerage(BaseBrokerage):
             kind = eff['kind']
             if kind == 'split':
                 info = eff['split']
+                if eff.get('renames'):
+                    info['tx']['symbol_new'] = info['tx']['symbol']
                 if eff['qty'] > 0:
                     info['new'] -= eff['qty']
                 elif eff['qty'] < 0:
@@ -1392,6 +2095,8 @@ class IbBrokerage(BaseBrokerage):
                     info['tx']['quantity'] = info['text_ratio']
                     _ib_refine_split_ratio(info)
             elif kind == 'cil':
+                if eff.get('msg') in late_warnings:
+                    late_warnings.remove(eff['msg'])
                 info = eff.get('split')
                 if info is not None:
                     info['cil'] -= eff['frac']
@@ -1406,6 +2111,9 @@ class IbBrokerage(BaseBrokerage):
                 if eff.get('cash'):
                     tl['cash_qty'] -= -eff['qty']
                     tl['cash'] -= eff['cash']
+            elif kind == 'cash_takeover':
+                if eff.get('msg') in cash_takeovers:
+                    cash_takeovers.remove(eff['msg'])
             elif kind in ('corp_owned', 'spinoff'):
                 if eff['desc'] in corp_owned_rows:
                     corp_owned_rows.remove(eff['desc'])
@@ -1420,6 +2128,13 @@ class IbBrokerage(BaseBrokerage):
                 unhandled_ca_tickers[t] = unhandled_ca_tickers.get(t, 0) - 1
                 if unhandled_ca_tickers[t] <= 0:
                     del unhandled_ca_tickers[t]
+            tl = eff.get('tender')
+            if tl is not None:
+                # The cancelled journal row leaves the tender note's row
+                # tally and dates (audit A2-1031 / A2-1034).
+                tl['rows'] -= 1
+                if eff['date'] in tl['dates']:
+                    tl['dates'].remove(eff['date'])
             _cat = eff.get('skip_cat')
             if _cat and self._skip_counts.get(_cat):
                 # The cancelled original is resolved, not skipped: the
@@ -1433,27 +2148,39 @@ class IbBrokerage(BaseBrokerage):
                                    if id(t) not in drop]
 
         def _ca_matches(ca: Dict[str, Any], eff: Dict[str, Any]) -> bool:
+            # The currency and asset category are part of the row's
+            # identity: a CAD leg's Ca undid a USD-leg split with the
+            # same description (audit A2-0603).
             return (not eff['consumed'] and eff['desc'] == ca['desc']
-                    and abs(eff['qty'] + ca['qty']) < 1e-9)
+                    and abs(eff['qty'] + ca['qty']) < 1e-9
+                    and (eff.get('currency') or '') == (ca.get('currency')
+                                                        or '')
+                    and (eff.get('cat') or '') == (ca.get('cat') or ''))
 
-        def _ca_undo(ca: Dict[str, Any], same_date_only: bool = False) -> bool:
+        def _ca_undo(ca: Dict[str, Any], same_date_only: bool = False,
+                     exact_date: Optional[str] = None):
             """A `Ca` row: undo the latest matching original (same
-            description, negated quantity, dated on or before the
-            cancellation; same date preferred). `same_date_only` (the
-            row walk) leaves a Ca with no same-date original waiting,
-            so a rebooked row listed before the original is never the
-            one undone (audit R1-300); the end of the walk and the
-            account's other statements take the latest earlier
-            original."""
+            description, currency and category, negated quantity, dated
+            on or before the cancellation; same date preferred).
+            `same_date_only` (the row walk) leaves a Ca with no
+            same-date original waiting, so a rebooked row listed before
+            the original is never the one undone (audit R1-300); the
+            end of the walk and the account's other statements take the
+            latest earlier original. `exact_date` (an overlapping copy
+            of the statement that already paired the Ca) undoes only
+            the original dated that day. Returns the undone original's
+            record, or None."""
             cands = [e for e in ca_effects if _ca_matches(ca, e)
-                     and e['date'] <= ca['date']]
+                     and e['date'] <= ca['date']
+                     and (exact_date is None or e['date'] == exact_date)]
             if not cands:
-                return False
+                return None
             same = [e for e in cands if e['date'] == ca['date']]
             if same_date_only and not same:
-                return False
-            _ca_apply_undo((same or cands)[-1])
-            return True
+                return None
+            eff = (same or cands)[-1]
+            _ca_apply_undo(eff)
+            return eff
 
         def _ca_record(eff: Dict[str, Any]) -> None:
             """Remember a translated row; a same-date `Ca` row that
@@ -1464,6 +2191,7 @@ class IbBrokerage(BaseBrokerage):
                 if _ca_matches(ca, eff) and eff['date'] == ca['date']:
                     pending_ca.pop(i)
                     _ca_apply_undo(eff)
+                    ca_pairs.append((ca, eff['date']))
                     self.note_row_consumed()      # the waiting Ca row
                     return
 
@@ -1488,6 +2216,11 @@ class IbBrokerage(BaseBrokerage):
         # calmer of the two summary notes.
         self._rows_seen = 0
         _NE = self.KNOWN_NONEVENT_PREFIX
+        # Transfers `Ca` rows and the (original, Ca) pairs consumed here
+        # (reconcile_files: an overlapping statement's copy of the
+        # cancelled transfer, audit A2-1038).
+        self.xfer_ca_keys: set = set()
+        self.xfer_pairs: List[tuple] = []
         self._placeholder_warned: set = set()
         self._sign_warned = False
         self._tag_warned: set = set()
@@ -1502,15 +2235,19 @@ class IbBrokerage(BaseBrokerage):
             occ = {c: set(v) for c, v in pre['occ_by_conid'].items()}
             for c, v in ctx.get('occ_by_conid', {}).items():
                 occ.setdefault(c, set()).update(v)
-            und = dict(ctx.get('opt_underlying', {}))
-            und.update(pre['opt_underlying'])
+            und = {c: set(v) for c, v in
+                   ctx.get('opt_underlying', {}).items()}
+            for c, v in pre['opt_underlying'].items():
+                und.setdefault(c, set()).update(v)
             pre['root_alias'], pre['alias_conids'] = _root_aliases(occ, und)
             for key, by_root in ctx.get('contract_conids', {}).items():
                 tgt = pre['contract_conids'].setdefault(key, {})
                 for root, ids in by_root.items():
                     tgt.setdefault(root, set()).update(ids)
         else:
-            _warn_stock_aliases(pre['stock_conid_syms'], shown_name(path))
+            _warn_stock_aliases(pre['stock_conid_syms'], shown_name(path),
+                                first_seen=pre['first_seen'],
+                                listing=pre['stock_listing'])
         self._ib_pre = pre
         self._check_statement_kind(pre, path)
         fii = pre['fii']
@@ -1523,7 +2260,9 @@ class IbBrokerage(BaseBrokerage):
         root_alias = pre['root_alias']
         aliased_roots: Dict[str, str] = {}
         if len(pre['accounts']) > 1:
-            print(f"warning: {shown_name(path)}: IB statement spans "
+            # ATTENTION (the run's console): a TFSA/RRSP inside a
+            # consolidated statement lands in this book (audit A2-0610).
+            print(f"{ATTENTION_PREFIX} {shown_name(path)}: IB statement spans "
                   f"{len(pre['accounts'])} accounts ("
                   f"{', '.join(sorted(_mask_account(a) for a in pre['accounts']))}"
                   f") — every row is booked to ONE account label. That "
@@ -1531,6 +2270,7 @@ class IbBrokerage(BaseBrokerage):
                   f"taxable margin accounts); export a registered "
                   f"account (TFSA/RRSP) separately.", file=sys.stderr)
         header_maps = {} # section -> header_map
+        header_lens: Dict[str, int] = {}
         unknown_row_types: Dict[str, int] = {}
 
         for lineno, row in enumerate(rows, 1):
@@ -1542,6 +2282,7 @@ class IbBrokerage(BaseBrokerage):
 
             if type_ == 'Header':
                 header_maps[section] = {col: i for i, col in enumerate(row)}
+                header_lens[section] = len(row)
                 continue
 
             if type_ != 'Data':
@@ -1562,6 +2303,19 @@ class IbBrokerage(BaseBrokerage):
                 self.count_skip(f"section {section}: Data row with "
                                 f"no Header row")
                 continue
+            if (section in _IB_FULL_WIDTH_SECTIONS
+                    and len(row) < header_lens.get(section, 0)):
+                # A row cut short (a truncated or hand-edited export)
+                # read its missing cells as blank: a Trades row without
+                # its Code booked an assignment leg as a plain trade,
+                # silently (audit A2-1042 — the Webull/RBC/Kraken
+                # refusal). IB writes every money row at full width.
+                raise BrokerageParseError(
+                    f"{shown_name(path)} line {lineno}: {section} row has "
+                    f"{len(row)} cells but its header has "
+                    f"{header_lens[section]} — the row is cut short; "
+                    f"refusing to read its missing cells as blank. "
+                    f"Re-download the statement.")
 
             if section == 'Trades' or section == 'Options Expirations':
                 where = f"{shown_name(path)} line {lineno} ({section})"
@@ -1728,12 +2482,18 @@ class IbBrokerage(BaseBrokerage):
                 # The exchange's trade date when it is not the ET clock
                 # date (an overnight-session US fill, an ASX fill):
                 # tax-logic CA-DATE-SESSION / US-DATE-SESSION.
+                _listing = (_ib_listing_ext(asset_cat, symbol, currency,
+                                            fii)
+                            if asset_cat in ('Stocks', 'Warrants') else '')
                 date, time, broker_time = _ib_market_trade_date(
-                    date, time, asset_cat, currency,
-                    _ib_listing_ext(asset_cat, symbol, currency, fii)
-                    if asset_cat in ('Stocks', 'Warrants') else '')
-                date_settle = get_ib_settlement(date, asset_cat, currency,
-                                                futures_settle=self.futures_settle)
+                    date, time, asset_cat, currency, _listing,
+                    symbol=symbol)
+                # Settled in the listing's market: a USD unit on the TSX
+                # through CDS, a USD line on the LSE on the UK cycle.
+                date_settle = get_ib_settlement(
+                    date, asset_cat,
+                    _IB_EXT_SETTLE_MARKET.get(_listing, currency),
+                    futures_settle=self.futures_settle)
                 qty = _num('Quantity')
                 opt_exp = section == 'Options Expirations'
                 price = _num('T. Price', optional=opt_exp)
@@ -1758,6 +2518,16 @@ class IbBrokerage(BaseBrokerage):
                 # sell brings in Proceeds + Comm/Fee.
                 comm_fee = 0.0 - comm_signed   # (no -0.0 for a zero charge)
                 net_amount = (gross_proceeds + comm_fee) if qty > 0 else (gross_proceeds - comm_fee)
+                if asset_cat == 'Futures':
+                    # A futures price can be negative (WTI, April 2020):
+                    # the notional's SIGN is kept — a sale at -37.63
+                    # pays 37,630, a buy at -37.63 receives it. The
+                    # magnitude booked a loss as a gain (audit A2-0092;
+                    # S053-13 only silenced the schema error). Same
+                    # numbers as before for a positive price.
+                    net_amount = (-(proceeds_signed + comm_signed)
+                                  if qty > 0
+                                  else proceeds_signed + comm_signed)
                 action = 'BUYSELL'
                 # IB packs multiple per-trade codes into one cell
                 # (separators are `;`, `,`, or whitespace) — e.g.
@@ -1782,6 +2552,22 @@ class IbBrokerage(BaseBrokerage):
                 if (('A' in code_tokens or 'Ex' in code_tokens)
                         and abs(price) < 1e-5):
                     action = 'ASSIGN'
+                    if asset_cat == 'Warrants' and qty < 0:
+                        # The engines roll an OPTION's premium into the
+                        # exercised shares; a warrant's cost is not
+                        # rolled yet (no s.49(3) / basis carryover for
+                        # it): the leg is a disposal at 0 — a capital
+                        # loss of the warrant's cost. Said, not silent
+                        # (audit A2-0090, deferred).
+                        print(f"{ATTENTION_PREFIX} {where}: warrant "
+                              f"{symbol} exercised ({-qty:g}, code "
+                              f"{code}) — booked as a disposal at 0, so "
+                              f"the warrant's cost becomes a capital "
+                              f"loss instead of part of the shares' cost "
+                              f"(ITA s.49(3); US basis carryover). "
+                              f"Correct it by hand: the warrant's cost "
+                              f"belongs in the shares acquired.",
+                              file=sys.stderr)
 
                 # Expiry: the `Ep` code, a row of the Options
                 # Expirations section, or a zero-price zero-proceeds
@@ -1891,6 +2677,21 @@ class IbBrokerage(BaseBrokerage):
                 # in an earlier statement is paired by taxjson-merge2.
                 # The Cash Report booking below keeps both rows (IB's
                 # own totals include both).
+                if (asset_cat in ('Stocks', 'Warrants') and qty > 0
+                        and section == 'Trades'
+                        and abs(price) < 1e-9 and gross_proceeds < 0.005
+                        and 'Ca' not in code_tokens
+                        and not ('A' in code_tokens or 'Ex' in code_tokens)):
+                    # A stock BUY at ZERO cost books a $0 ACB, and the
+                    # whole sale later becomes gain: almost always a
+                    # transfer or journal row (the generic importer
+                    # refuses it, R1-120; audit A2-0263).
+                    print(f"{ATTENTION_PREFIX} {where}: {full_symbol}: a "
+                          f"buy of {qty:g} at ZERO cost (T. Price and "
+                          f"Proceeds 0) — booked at $0 cost. A zero-cost "
+                          f"buy is almost always a transfer or journal "
+                          f"row: give the real cost in a .tt file and "
+                          f"remove the row, if so.", file=sys.stderr)
                 if 'Ca' in code_tokens:
                     # (description stays the raw symbol: the security
                     # overrides key on it, and the original must get the
@@ -2081,8 +2882,15 @@ class IbBrokerage(BaseBrokerage):
                 self._check_symbol_tag(re.sub(
                     r'\.(TO|US|AX|L)$', '', symbol.strip(),
                     flags=re.IGNORECASE), shown_name(path))
-                open_position_syms.add(_ib_stock_symbol(
-                    asset_cat, symbol, currency, fii))
+                _op_full = _ib_stock_symbol(asset_cat, symbol, currency,
+                                            fii)
+                open_position_syms.add(_op_full)
+                try:
+                    open_position_qty[_op_full] = (
+                        open_position_qty.get(_op_full, 0.0)
+                        + parse_strict_number(qty_raw, field='Quantity'))
+                except ValueError:
+                    pass
                 self.note_row_consumed()      # read into parser state
 
             elif section == 'Statement':
@@ -2183,6 +2991,8 @@ class IbBrokerage(BaseBrokerage):
                 if pay_date:
                     _meta['pay_date'] = pay_date
                     _meta['pay_dates'].add(pay_date)
+                if re.fullmatch(r'\d{4}-\d{2}-\d{2}', ex_date or ''):
+                    _meta['ex_date'] = ex_date
                 # The per-share rate and share count of the dividend, so
                 # a Payment-in-Lieu row — which has neither in its own
                 # description — can be reconciled to shares below. Taken
@@ -2417,10 +3227,20 @@ class IbBrokerage(BaseBrokerage):
                 _book('Commissions', currency, amount)
                 _m = _IB_COMM_ADJ_TICKER_RE.search(description or '')
                 if _m:
-                    _tk = _m.group(1).strip().replace(' ', '.')
-                    _tk = re.sub(r'\.(TO|US|AX|L)$', '', _tk,
-                                 flags=re.IGNORECASE)
-                    symbol = f"{_tk}.{_ib_currency_ext(currency)}"
+                    _raw_tk = _m.group(1).strip()
+                    _occ = _ib_option_ref(self, _raw_tk, fii, root_alias,
+                                          aliased_roots, where)
+                    if _occ:
+                        symbol = f"{_occ}.{_ib_currency_ext(currency)}"
+                    else:
+                        _tk = re.sub(r'\.(TO|US|AX|L)$', '',
+                                     _raw_tk.replace(' ', '.'),
+                                     flags=re.IGNORECASE)
+                        # The listing rule of the trades (S010-06): a
+                        # TSX USD unit's refund sits on X.U.TO with its
+                        # trades, not X.U.US (audit A2-0086).
+                        symbol = (f"{_tk}."
+                                  f"{_ib_listing_ext('Stocks', _raw_tk, currency, fii)}")
                 else:
                     symbol = 'CASH'
                 transactions.append({
@@ -2446,11 +3266,20 @@ class IbBrokerage(BaseBrokerage):
                     except BrokerageParseError:
                         _aq = None
                     if _aq:
+                        _adj_tk = _tm.group(1).strip()
+                        _adj_occ = _ib_option_ref(self, _adj_tk, fii,
+                                                  root_alias, aliased_roots,
+                                                  where)
                         comm_adjustments.append({
                             'fee_tx': transactions[-1], 'amount': amount,
-                            'ticker': _tm.group(1).strip().replace(' ', '.'),
+                            'ticker': (_adj_occ or re.sub(
+                                r'\.(TO|US|AX|L)$', '',
+                                _adj_tk.replace(' ', '.'),
+                                flags=re.IGNORECASE)),
                             'qty': _aq, 'trade_date': _tm.group(3),
-                            'currency': currency, 'date': date})
+                            'currency': currency, 'date': date,
+                            'key': (currency, date, round(amount, 6),
+                                    description)})
 
             elif section == 'Corporate Actions':
                 # Required columns resolved by header name; a missing
@@ -2491,6 +3320,29 @@ class IbBrokerage(BaseBrokerage):
 
                 ext = _ib_currency_ext(currency)
 
+                def _cx(ticker, _cat=_ca_cat or 'Stocks', _cur=currency,
+                        _base=ext):
+                    """The listing suffix of a corporate action's
+                    stock: the S010-06 / A2-0081 listing rule of the
+                    trades (a TSX USD unit stays X.U.TO, an LSE USD line
+                    .L) — the currency suffix alone put a split or cash
+                    takeover of ZSP.U on ZSP.U.US while its trades sat
+                    on ZSP.U.TO (audit A2-0086)."""
+                    for _raw in (ticker, ticker.replace('.', ' ')):
+                        _e = _ib_listing_ext(_cat, _raw, _cur, fii)
+                        if _e != _base:
+                            return _e
+                    return _base
+
+                # The security the row DELIVERS: the first token of its
+                # trailing `(TICKER, NAME, ISIN)` parenthetical (the
+                # tender branch's S013-06 reading, now shared by the
+                # split, stock-dividend and cash-in-lieu branches —
+                # audit A2-0085 / A2-0093 / A2-0257 / A2-1033).
+                _dm_all = _IB_DELIVERED_RE.search(description)
+                _deliv = (_dm_all.group(1).strip().replace(' ', '.')
+                          if _dm_all else '')
+
                 # Cancel/rebook restatements: IB re-lists a corrected
                 # corporate action as original + `Ca` cancellation
                 # (same description, negated quantity) + rebooked
@@ -2508,8 +3360,12 @@ class IbBrokerage(BaseBrokerage):
                 _cacode = self._cell(row, header_map, 'Code')
                 if 'Ca' in re.split(r'[;,\s]+', _cacode or ''):
                     _ca = {'desc': description, 'date': date,
-                           'qty': qty, 'where': where}
-                    if _ca_undo(_ca, same_date_only=True):
+                           'qty': qty, 'where': where,
+                           'currency': currency, 'cat': _ca_cat}
+                    ca_rows_seen.append(_ca)
+                    _orig = _ca_undo(_ca, same_date_only=True)
+                    if _orig:
+                        ca_pairs.append((_ca, _orig['date']))
                         self.note_row_consumed()  # undid its original
                     else:
                         pending_ca.append(_ca)
@@ -2528,7 +3384,17 @@ class IbBrokerage(BaseBrokerage):
                 # tally the way every other non-split/spinoff
                 # corporate action does.
                 _eff = {'desc': description, 'date': date, 'qty': qty,
-                        'kind': 'none', 'txs': [], 'consumed': False}
+                        'kind': 'none', 'txs': [], 'consumed': False,
+                        'currency': currency, 'cat': _ca_cat}
+
+                def _ne(label, _eff=_eff):
+                    # A recognized non-event Corporate Actions row: the
+                    # label is kept on its effect, so a later `Ca` of the
+                    # row takes it back out of the tally (audit A2-0600
+                    # / A2-1030 / A2-1034).
+                    _cat = _NE + label
+                    self.count_skip(_cat)
+                    _eff['skip_cat'] = _cat
 
                 def _unbooked(msg, _eff=_eff):
                     unbooked_ca.append(msg)
@@ -2551,18 +3417,19 @@ class IbBrokerage(BaseBrokerage):
                             f"translated; book the old and the adjusted "
                             f"contract by hand in a .tt file.")
                     else:
-                        self.count_nonevent(f"{section} zero-quantity row")
+                        _ne(f"{section} zero-quantity row")
                         _ca_record(_eff)
                     continue
 
                 _troot = ib_tender_root(description)
                 if _troot is not None:
-                    _tsym = f"{_troot}.{ext}"
+                    _tsym = f"{_troot}.{_cx(_troot)}"
                     _tl = tender_legs.setdefault(_tsym, {
                         'rows': 0, 'parked': 0.0, 'cash_qty': 0.0,
-                        'cash': 0.0, 'dates': set(), 'currency': currency})
+                        'cash': 0.0, 'dates': [], 'currency': currency})
                     _tl['rows'] += 1
-                    _tl['dates'].add(date)
+                    _tl['dates'].append(date)
+                    _eff['tender'] = _tl
                     # Which leg touches the placeholder line is
                     # fixed by the row kind, not by the leading
                     # token (IB may reuse the root's description
@@ -2597,8 +3464,7 @@ class IbBrokerage(BaseBrokerage):
                     if abs(proceeds) < 0.005:
                         if _is_placeholder:
                             _tl['parked'] += qty
-                        self.count_nonevent(
-                            f"{section} tender/voluntary-offer share "
+                        _ne(f"{section} tender/voluntary-offer share "
                             f"journal (zero proceeds)")
                         _ca_record(_eff)
                         continue
@@ -2631,8 +3497,11 @@ class IbBrokerage(BaseBrokerage):
                         continue
                     # Cash on a POSITIVE leg is a shape we have not
                     # seen — loud bucket, never a silent drop.
-                    self.count_skip(f"{section} tender row with "
-                                    f"proceeds on a positive quantity")
+                    _cat = (f"{section} tender row with proceeds on a "
+                            f"positive quantity")
+                    self.count_skip(_cat)
+                    _eff['skip_cat'] = _cat
+                    _ca_record(_eff)
                     continue
 
                 # Split 3 for 2. NOT gated on qty > 0: a reverse split's
@@ -2654,7 +3523,13 @@ class IbBrokerage(BaseBrokerage):
                 cil_match = _IB_CIL_RE.search(description)
                 if cil_match and qty < 0:
                     ticker = cil_match.group(1).strip().replace(' ', '.')
-                    symbol = f"{ticker}.{ext}"
+                    if (_deliv and _deliv.upper() != ticker.upper()
+                            and not _deliv.upper().endswith('.OLD')):
+                        # The fraction is of the DELIVERED security (a
+                        # merger's or a renaming split's new line): the
+                        # parent may no longer exist (audit A2-1033).
+                        ticker = _deliv
+                    symbol = f"{ticker}.{_cx(ticker)}"
                     self._check_symbol_tag(ticker, where)
                     # Proceeds is the cash paid (a required column; a
                     # blank one is refused). Value is IB's MARKET value
@@ -2662,13 +3537,15 @@ class IbBrokerage(BaseBrokerage):
                     # to be replaced by it, booking a gain nobody was
                     # paid (audit S058-17).
                     cash = abs(proceeds)
+                    _cil_msg = None
                     if cash < 0.005:
-                        print(f"warning: {where}: {symbol}: cash in lieu "
-                              f"of {-qty:g} share(s) with Proceeds 0 — "
-                              f"booked as a disposal for no cash (IB's "
-                              f"Value {val:,.2f} is a market value, not "
-                              f"cash paid). Check the statement.",
-                              file=sys.stderr)
+                        _cil_msg = (
+                            f"warning: {where}: {symbol}: cash in lieu "
+                            f"of {-qty:g} share(s) with Proceeds 0 — "
+                            f"booked as a disposal for no cash (IB's "
+                            f"Value {val:,.2f} is a market value, not "
+                            f"cash paid). Check the statement.")
+                        late_warnings.append(_cil_msg)
                     _ctx = {
                         'action': 'BUYSELL',
                         'date': date,
@@ -2684,8 +3561,9 @@ class IbBrokerage(BaseBrokerage):
                         'description': description
                     }
                     transactions.append(_ctx)
+                    cil_seen.add((symbol, date, round(-qty, 6)))
                     _eff.update(kind='cil', txs=[_ctx], symbol=symbol,
-                                frac=-qty, split=None)
+                                frac=-qty, split=None, msg=_cil_msg)
                     # The fraction belongs to the split of this symbol
                     # NEAREST its date, within a week, in either row
                     # order: "the latest split on or before" folded an
@@ -2695,7 +3573,7 @@ class IbBrokerage(BaseBrokerage):
                     # S058-18 / S060-14).
                     _near = [(abs(_days_between(d, date)), d, i)
                              for (s_, d, _r), i in emitted_splits.items()
-                             if s_ == symbol
+                             if symbol in (s_, i['tx'].get('symbol_new'))
                              and abs(_days_between(d, date)) <= _IB_CIL_WINDOW]
                     if _near:
                         _info = min(_near, key=lambda x: (x[0], x[1]))[2]
@@ -2721,7 +3599,7 @@ class IbBrokerage(BaseBrokerage):
                                                  field='split ratio',
                                                  where=where)
                     ratio = new_sh / old_sh if old_sh != 0 else 1.0
-                    symbol = f"{ticker}.{ext}"
+                    symbol = f"{ticker}.{_cx(ticker)}"
                     split_key = (symbol, date, round(ratio, 9))
                     info = emitted_splits.get(split_key)
                     if info is None:
@@ -2755,6 +3633,23 @@ class IbBrokerage(BaseBrokerage):
                         info['old'] += -qty
                     _ib_refine_split_ratio(info)
                     _eff.update(kind='split', split=info)
+                    if (qty > 0 and _deliv
+                            and _deliv.upper() != ticker.upper()):
+                        # The new leg names ANOTHER line: a split that
+                        # also renames the security (OLDT 1-for-10 into
+                        # NEWT). The pool moves to it — it stayed on the
+                        # old ticker and the NEWT sale went short (audit
+                        # A2-0085 / A2-0257). Tax-logic CA-ACB-04.
+                        info['tx']['symbol_new'] = f"{_deliv}.{_cx(_deliv)}"
+                        _eff['renames'] = True
+                        for _c in [c for c in pending_cil
+                                   if c['symbol'] == info['tx']['symbol_new']
+                                   and abs(_days_between(c['date'], date))
+                                   <= _IB_CIL_WINDOW]:
+                            info['cil'] += _c['frac']
+                            _c['eff']['split'] = info
+                            pending_cil.remove(_c)
+                        _ib_refine_split_ratio(info)
                     handled = True
 
                 # Spinoff 1 for 10. Gated on `not handled` so a
@@ -2784,8 +3679,7 @@ class IbBrokerage(BaseBrokerage):
                         and ib_spinoff_parts(description) is not None):
                     _eff.update(kind='spinoff')
                     corp_owned_rows.append(description)
-                    self.count_nonevent(
-                        f"{section} spin-off row (booked by "
+                    _ne(f"{section} spin-off row (booked by "
                         f"taxjson-corp-actions after the election)")
                     _ca_record(_eff)
                     continue
@@ -2805,7 +3699,7 @@ class IbBrokerage(BaseBrokerage):
                             'date': date,
                             'time': time,
                             'date_settle': date,
-                            'symbol': f"{_ticker}.{ext}",
+                            'symbol': f"{_ticker}.{_cx(_ticker)}",
                             'quantity': qty,
                             'currency': currency,
                             'price': round(_cash / -qty, 8),
@@ -2817,14 +3711,17 @@ class IbBrokerage(BaseBrokerage):
                             'description': description,
                         }
                         transactions.append(_ttx)
-                        cash_takeovers.append(
-                            f"{_ticker}.{ext} {-qty:g} sh for {_cash:.2f} "
-                            f"{currency} on {date}")
-                        _eff.update(kind='cash_takeover', txs=[_ttx])
+                        _ct_msg = (f"{_ticker}.{_cx(_ticker)} {-qty:g} sh for "
+                                   f"{_cash:.2f} {currency} on {date}")
+                        cash_takeovers.append(_ct_msg)
+                        _eff.update(kind='cash_takeover', txs=[_ttx],
+                                    msg=_ct_msg)
                         self.note_row_consumed()
                     else:
-                        self.count_skip(f"{section} cash-takeover row "
-                                        f"with a positive quantity")
+                        _cat = (f"{section} cash-takeover row with a "
+                                f"positive quantity")
+                        self.count_skip(_cat)
+                        _eff['skip_cat'] = _cat
                     _ca_record(_eff)
                     continue
 
@@ -2836,8 +3733,27 @@ class IbBrokerage(BaseBrokerage):
                 # country's rule (partition INPUTS-01).
                 _sd = _IB_STOCK_DIV_RE.match(description)
                 if _sd and not handled:
+                    _sd_tk = _sd.group(1).strip().replace(' ', '.')
+                    if (qty > 0 and _deliv
+                            and _deliv.upper() != _sd_tk.upper()):
+                        # Shares of ANOTHER security (another class:
+                        # GOOGL paying GOOG) are not new shares of the
+                        # parent: booked into its pool they inflated it
+                        # and the delivered line's sale went short. The
+                        # cost split between two securities is each
+                        # country's rule (CA-STKDIV-01, US-STKDIV-02):
+                        # not guessed here (audit A2-0093).
+                        _unbooked(
+                            f"{shown_name(path)} {date}: stock dividend "
+                            f"on {_sd_tk} paid {qty:g} share(s) of "
+                            f"ANOTHER security, {_deliv} "
+                            f"({description[:90]!r}) — not booked: enter "
+                            f"the new shares and their cost by hand in a "
+                            f".tt file (BUYSELL; a US filer also moves "
+                            f"part of {_sd_tk}'s basis, §307).")
+                        continue
                     if qty > 0:
-                        _sym = f"{_sd.group(1).strip().replace(' ', '.')}.{ext}"
+                        _sym = f"{_sd_tk}.{_cx(_sd_tk)}"
                         _stx = {
                             'action': 'BUYSELL', 'date': date, 'time': time,
                             'date_settle': date, 'symbol': _sym,
@@ -2871,8 +3787,7 @@ class IbBrokerage(BaseBrokerage):
                 if not handled and ib_merger_owned(description):
                     corp_owned_rows.append(description)
                     _eff.update(kind='corp_owned')
-                    self.count_nonevent(
-                        f"{section} merger row (booked by "
+                    _ne(f"{section} merger row (booked by "
                         f"taxjson-corp-actions after the election)")
                     _ca_record(_eff)
                     continue
@@ -2894,7 +3809,7 @@ class IbBrokerage(BaseBrokerage):
                     _eff.update(kind='unhandled', ticker=ticker,
                                 skip_cat=_cat)
                 else:
-                    self.count_nonevent(f"{section} zero-quantity row")
+                    _ne(f"{section} zero-quantity row")
                 _ca_record(_eff)
 
             elif section == 'Transfers':
@@ -2993,6 +3908,7 @@ class IbBrokerage(BaseBrokerage):
                 _xleg = {'symbol': symbol, 'desc': xfer_desc,
                          'qty': qty, 'date': date}
                 if 'Ca' in re.split(r'[;,\s]+', _xcode or ''):
+                    self.xfer_ca_keys.add((symbol, xfer_desc, date, qty))
                     _hits = [
                         _i for _i, _t in enumerate(transactions)
                         if (_t.get('action') == 'TRANSFER'
@@ -3004,6 +3920,11 @@ class IbBrokerage(BaseBrokerage):
                     _same = [_i for _i in _hits
                              if transactions[_i].get('date') == date]
                     if _hits:
+                        _xo = transactions[(_same or _hits)[-1]]
+                        self.xfer_pairs.append((
+                            (symbol, xfer_desc, _xo.get('date'),
+                             float(_xo.get('quantity') or 0)),
+                            (symbol, xfer_desc, date, qty)))
                         del transactions[(_same or _hits)[-1]]
                         self.note_row_consumed()  # + original
                     else:
@@ -3021,6 +3942,9 @@ class IbBrokerage(BaseBrokerage):
                     _c = next((_c for _c in _waiting if _c['date'] == date),
                               _waiting[0])
                     pending_xfer_ca.remove(_c)
+                    self.xfer_pairs.append((
+                        (symbol, xfer_desc, date, qty),
+                        (symbol, xfer_desc, _c['date'], _c['qty'])))
                     self.note_row_consumed()      # this original
                     self.note_row_consumed()      # the waiting Ca row
                     continue
@@ -3108,14 +4032,23 @@ class IbBrokerage(BaseBrokerage):
         # Corporate Actions `Ca` rows with no same-date original: the
         # latest earlier original in this statement, if any.
         for _ca in list(pending_ca):
-            if _ca_undo(_ca):
+            _orig = _ca_undo(_ca)
+            if _orig:
                 pending_ca.remove(_ca)
+                ca_pairs.append((_ca, _orig['date']))
                 self.note_row_consumed()
 
+        # Trades `Ca` rows (keys of the originals they reverse) and the
+        # pairs dropped here — offered to the account's overlapping
+        # statements (reconcile_files, audit A2-0259 / A2-0088).
+        self.trade_ca_keys = {_ib_trade_key(c, negate=True)
+                              for c in trade_cancels}
+        self.trade_pairs: List[tuple] = []
         if trade_cancels:
             _partials: list = []
             _kept, _pairs, _unpaired = pair_cancellations(
                 transactions, partials=_partials)
+            self.trade_pairs = [(dict(_o), dict(_c)) for _o, _c in _pairs]
             # A Ca of one execution of a multi-fill order (A2-0298).
             for _o, _c, _r in _partials:
                 print(f"note: {shown_name(path)}: IB cancelled (Ca) "
@@ -3148,17 +4081,24 @@ class IbBrokerage(BaseBrokerage):
         # purchase commission stayed in the ACB (audit R1-58). Folded
         # into the ONE matching trade of this statement; otherwise kept
         # as the FEE row, and said.
+        # A refund whose trade is in ANOTHER statement of the account
+        # (a December trade refunded in January) is folded there by
+        # reconcile_files (audit A2-0605 / A2-1032 / A2-1036); every
+        # fold made here is repeated on an overlapping statement's copy
+        # of the trade that lacks the refund row, so dedup still sees one
+        # trade (A2-0258 / A2-0088).
         _folded = 0
+        self.refund_folds: List[Dict[str, Any]] = []
+        self.unmatched_refunds: List[Dict[str, Any]] = []
+        self.refund_seen = {_adj['key'] for _adj in comm_adjustments}
         for _adj in comm_adjustments:
-            _hits = [
-                t for t in transactions
-                if t.get('action') == 'BUYSELL'
-                and t.get('currency') == _adj['currency']
-                and _split_known_ext(t.get('symbol'))[0] == _adj['ticker']
-                and abs(float(t.get('quantity') or 0) - _adj['qty']) < 1e-9
-                and _adj['trade_date'] in (
-                    t.get('date'), (t.get('broker_time') or '')[:10])]
+            _hits = _ib_refund_hits(_adj, transactions)
             if len(_hits) != 1:
+                if not _hits and ctx is not None:
+                    # The account's other statements are searched once
+                    # every one is parsed; the note is said there.
+                    self.unmatched_refunds.append(_adj)
+                    continue
                 print(f"note: {shown_name(path)}: commission adjustment of "
                       f"{_adj['amount']:+.2f} {_adj['currency']} on "
                       f"{_adj['date']} ({_adj['ticker']} {_adj['qty']:g} on "
@@ -3169,12 +4109,10 @@ class IbBrokerage(BaseBrokerage):
                       f"in a taxable account.", file=sys.stderr)
                 continue
             _t = _hits[0]
-            _amt = _adj['amount']           # cash: a refund is positive
-            _t['fee'] = round(float(_t.get('fee') or 0.0) - _amt, 10)
-            if float(_t.get('quantity') or 0) > 0:
-                _t['net_amount'] = round(_t['net_amount'] - _amt, 10)
-            else:
-                _t['net_amount'] = round(_t['net_amount'] + _amt, 10)
+            self.refund_folds.append({
+                'key': _ib_trade_key(_t), 'fee': float(_t.get('fee') or 0.0),
+                'amount': _adj['amount'], 'refund': _adj['key']})
+            _ib_fold_refund(_t, _adj['amount'])   # cash: a refund is +
             transactions[:] = [t for t in transactions
                                if t is not _adj['fee_tx']]
             _folded += 1
@@ -3194,6 +4132,8 @@ class IbBrokerage(BaseBrokerage):
         # rows no statement matched; a lone parse warns here.
         self.ca_undo = _ca_undo
         self.unmatched_ca = list(pending_ca)
+        self.ca_seen = ca_rows_seen
+        self.ca_pairs = ca_pairs
         for _ca in pending_ca:
             if self.account_context is None:
                 print(unmatched_ca_warning(_ca), file=sys.stderr)
@@ -3206,14 +4146,35 @@ class IbBrokerage(BaseBrokerage):
         #     == Commissions + Transaction Fees.
         self._reconcile_cash_report(pre, cash_booked, path)
 
-        for _c in pending_cil:
-            print(f"note: {shown_name(path)}: {_c['symbol']}: cash in lieu of "
-                  f"{_c['frac']:g} share(s) on {_c['date']} matched no split "
-                  f"of the symbol within {_IB_CIL_WINDOW} days — booked as a "
-                  f"sale of the fraction only.", file=sys.stderr)
+        # A fraction whose split is in ANOTHER statement of the account
+        # (a Dec 30 reverse split, its cash in lieu paid Jan 5) joins it
+        # there (reconcile_files, audit A2-1037): the split's new leg
+        # counts the fraction, and the sale below removes it once.
+        def _cil_join(c: Dict[str, Any]) -> bool:
+            near = [(abs(_days_between(d, c['date'])), d, i)
+                    for (s_, d, _r), i in emitted_splits.items()
+                    if c['symbol'] in (s_, i['tx'].get('symbol_new'))
+                    and abs(_days_between(d, c['date'])) <= _IB_CIL_WINDOW]
+            if not near:
+                return False
+            info = min(near, key=lambda x: (x[0], x[1]))[2]
+            info['cil'] += c['frac']
+            _ib_refine_split_ratio(info)
+            return True
+
+        self.cil_join = _cil_join
+        self.cil_seen = cil_seen
+        self.unmatched_cil = [
+            {'symbol': _c['symbol'], 'date': _c['date'], 'frac': _c['frac'],
+             'where': shown_name(path)} for _c in pending_cil]
+        if ctx is None:
+            for _c in self.unmatched_cil:
+                print(_ib_cil_unmatched_note(_c), file=sys.stderr)
 
         for _tsym, _tl in sorted(tender_legs.items()):
-            _dates = ', '.join(sorted(_tl['dates']))
+            if _tl['rows'] <= 0:
+                continue                # every row was cancelled (Ca)
+            _dates = ', '.join(sorted(set(_tl['dates'])))
             if _tl['cash_qty'] > 0:
                 # taxjson-corp-actions skips tender rows, so no election
                 # can replace this sale (audit S059-05): the advice is a
@@ -3267,15 +4228,28 @@ class IbBrokerage(BaseBrokerage):
             except (TypeError, ValueError):
                 return None
 
+        def _same_acct(accts) -> bool:
+            mine = set(pre['accounts'])
+            return not accts or not mine or bool(set(accts) & mine)
+
+        # The accrual facts of the account's OTHER statements (same IB
+        # account): a dividend whose Po/Re rows sit in the previous
+        # statement kept no ex date or share count (audit A2-0601).
+        _ext_metas = [m for m in ((ctx or {}).get('accrual_facts') or ())
+                      if m.get('file') != path.name
+                      and _same_acct(m.get('accounts'))]
+
         def _accrual_for(ticker: str, date: str, currency: str):
             """The accrual of the dividend a posting on `date` pays: same
             ticker, a pay date within a week (the exact date first), the
             posting's currency first — two listings of one ticker can pay
             on the same day (audit S057-22 / S058-05), and IB posts some
             dividends a day or more after the accrued pay date
-            (S058-12)."""
+            (S058-12). This statement's accruals first, then the
+            account's other statements'."""
             best = None
-            for meta in accrual_meta.values():
+            for _n, meta in enumerate(list(accrual_meta.values())
+                                      + _ext_metas):
                 if meta['symbol'] != ticker:
                     continue
                 dists = [d for d in (_days_apart(pd, date) for pd in
@@ -3283,7 +4257,8 @@ class IbBrokerage(BaseBrokerage):
                          if d is not None]
                 if not dists or min(dists) > 7:
                     continue
-                rank = (min(dists), meta['currency'] != currency)
+                rank = (min(dists), meta['currency'] != currency,
+                        _n >= len(accrual_meta))
                 if best is None or rank < best[0]:
                     best = (rank, meta)
             return best[1] if best else None
@@ -3291,19 +4266,23 @@ class IbBrokerage(BaseBrokerage):
         for tx in transactions:
             if tx.get('action') not in ('DIVIDEND', 'DIVIDEND_IN_LIEU'):
                 continue
-            _ex = accrual_ex.get(((tx.get('symbol') or '').rsplit('.', 1)[0],
-                                  tx.get('date')))
+            ticker = (tx.get('symbol') or '').rsplit('.', 1)[0]
+            meta = _accrual_for(ticker, tx.get('date') or '',
+                                tx.get('currency') or '')
+            # The ex date of the accrual this posting pays — matched the
+            # way the share count is (a posting a day after the accrued
+            # pay date kept no ex date, so the US §852(b)(7) advisory
+            # never fired: audit A2-0602).
+            _ex = (meta or {}).get('ex_date') or accrual_ex.get(
+                (ticker, tx.get('date')))
             if _ex and _ex <= (tx.get('date') or ''):
                 tx['ex_date'] = _ex
             if tx.get('price'):          # description already gave a rate
                 continue
-            ticker = (tx.get('symbol') or '').rsplit('.', 1)[0]
             # SIGNED amount: a reversal row back-computes a NEGATIVE share
             # count, matching _parse_div_qty_rate's convention (qty carries
             # the row's sign; the positive per-share rate stays positive).
             amt = float(tx.get('net_amount') or 0.0)
-            meta = _accrual_for(ticker, tx.get('date') or '',
-                                tx.get('currency') or '')
             if meta is None or not amt:
                 continue
             rate = meta.get('po_rate') or 0.0
@@ -3330,6 +4309,8 @@ class IbBrokerage(BaseBrokerage):
                 tx['quantity'] = q
                 tx['price'] = round(abs(amt) / meta['po_qty'], 8)
 
+        for _w in late_warnings:
+            print(_w, file=sys.stderr)
         for _ct in cash_takeovers:
             print(f"NOTE: cash takeover booked as a sale: {_ct} "
                   f"({shown_name(path)}).", file=sys.stderr)
@@ -3383,9 +4364,9 @@ class IbBrokerage(BaseBrokerage):
         # December accrual is often paid in the next year's statement
         # (R1-327).
         postings = list(posted_dividend_keys) + [
-            (_s, _d) for _n, _s, _d in
+            (_s, _d) for _n, _s, _d, _a in
             ((ctx or {}).get('posted_dividends') or ())
-            if _n != path.name]
+            if _n != path.name and _same_acct(_a)]
         used = [False] * len(postings)
 
         def _claim(meta, window: int) -> bool:
@@ -3431,8 +4412,10 @@ class IbBrokerage(BaseBrokerage):
                 f"{sym} pay:{pay or '?'} ~{amt:.2f} {cur}".rstrip()
                 for sym, pay, amt, cur in open_accruals
             )
+            # ATTENTION: income the books may be missing (the run's
+            # console, not only .sum/.diag — audit A2-0264).
             print(
-                f"warning: {len(open_accruals)} dividend(s) in {shown_name(path)} are "
+                f"{ATTENTION_PREFIX} {len(open_accruals)} dividend(s) in {shown_name(path)} are "
                 f"accrued but not yet booked as posted dividends ({details}). "
                 f"IB books the cash with a lag — accruals are estimates and "
                 f"are NOT counted as income. If a more recent statement "
@@ -3446,12 +4429,21 @@ class IbBrokerage(BaseBrokerage):
         # dual-listed names). Runs after the full file is parsed so it sees
         # every position regardless of section order.
         _isin_mismatch: set = set()
+        _ambiguous: set = set()
         _reattribute_income_to_holdings(
             transactions, extra_held=open_position_syms,
             fallback_held=(ctx or {}).get('held'),
             isins_by_root={**(ctx or {}).get('stock_isins', {}),
                            **pre['stock_isins']},
-            mismatches=_isin_mismatch)
+            mismatches=_isin_mismatch,
+            open_qty=(open_position_qty if 'Open Positions' in header_maps
+                      else None),
+            ambiguous=_ambiguous)
+        for _sym, _day in sorted(_ambiguous):
+            print(f"note: {shown_name(path)}: income on {_sym} of {_day} "
+                  f"kept its ISIN listing: the account held more than one "
+                  f"listing of the ticker that day (add a ticker.map rule "
+                  f"if it belongs to the other).", file=sys.stderr)
         for t in transactions:
             t.pop('_isin', None)
         for _sym, _isin, _held in sorted(_isin_mismatch):
@@ -3488,10 +4480,28 @@ class IbBrokerage(BaseBrokerage):
         for _st in assign_stock_legs:
             _root, _ext = _split_known_ext(_st['symbol'])
             _stock_by_key.setdefault((_root, _ext, _st['date']), _st)
+        def _root_forms(r):
+            # The option root as the stock leg may spell it: itself, the
+            # adjusted contract's root without OCC's digit (QZX1 ->
+            # QZX), a class share without its dot (BRKB vs BRK.B) —
+            # the exact-root match left those legs on two settle dates
+            # (audit A2-1028).
+            base = re.sub(r'\d+$', '', r) or r
+            return [r, base]
+
+        _stock_flat = {}
+        for (_r, _e, _d), _st in _stock_by_key.items():
+            _stock_flat.setdefault((_r.replace('.', ''), _e, _d), _st)
         for _ol in assign_option_legs:
             _om = re.match(r'^(.+?)\d{6}[CP]\d{8}\.(\w+)$', _ol['symbol'])
-            _st = (_stock_by_key.get((_om.group(1), _om.group(2),
-                                      _ol['date'])) if _om else None)
+            _st = None
+            if _om:
+                for _r in _root_forms(_om.group(1)):
+                    _st = (_stock_by_key.get((_r, _om.group(2), _ol['date']))
+                           or _stock_flat.get((_r.replace('.', ''),
+                                               _om.group(2), _ol['date'])))
+                    if _st is not None:
+                        break
             if _st is not None:
                 _ol['date_settle'] = _st['date_settle']
 
