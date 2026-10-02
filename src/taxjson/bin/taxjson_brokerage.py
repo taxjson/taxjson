@@ -35,6 +35,7 @@ from taxjson.lib.cli_diag import guard_main, tax_year
 from taxjson.lib.core import (register_brokerage, TaxTransaction,
                               load_brokerage, is_option_symbol)
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
+                                         decode_broker_text,
                                          shown_name)
 from taxjson.lib.country import country_arg
 from taxjson.lib.brokerages.schema import ATTENTION_TAG as SCHEMA_ATTENTION_TAG
@@ -72,7 +73,31 @@ _CANONICAL_ID = {'interactive_brokers': 'ib', 'rbc': 'rbc_direct',
 # Parser fields that are evidence only (not TaxTransaction fields): kept
 # on the raw rows (the --transfers-out sidecar carries them) and dropped
 # quietly from the book rows. 'qty' is the legacy alias of 'quantity'.
-_EVIDENCE_KEYS = frozenset({'qty', 'book_value'})
+_EVIDENCE_KEYS = frozenset({'qty', 'book_value', 'broker_account'})
+
+
+def hash_broker_account(acct) -> str:
+    """The form a broker account id takes in work/ files: sha256 of the
+    id the export prints, first 10 hex (the id itself never leaves the
+    parse). Dedup compares these per row and per file (R1-296, A2-0008)."""
+    return hashlib.sha256(str(acct).strip().encode()).hexdigest()[:10]
+
+
+def stamp_source_accounts(rows, file_accounts) -> None:
+    """Replace each parser row's raw `broker_account` (when the parser
+    read one) with its hash in `source_account`; a row without one gets
+    the statement's account when the file names exactly one. Rows of a
+    file naming several accounts and none per row stay unstamped (the
+    per-file set in metadata.source_accounts still applies)."""
+    single = (hash_broker_account(next(iter(file_accounts)))
+              if len(file_accounts) == 1 else '')
+    for t in rows:
+        raw = t.pop('broker_account', None)
+        t.pop('source_account', None)
+        if raw is not None and str(raw).strip():
+            t['source_account'] = hash_broker_account(raw)
+        elif single:
+            t['source_account'] = single
 
 
 class SecurityOverrideError(ValueError):
@@ -125,6 +150,9 @@ def load_security_overrides(path: Path):
     return overrides
 
 
+_FUTURES_PREFIXES = ('F:', '/', '\\')
+
+
 def _override_matches(desc_sub: str, desc: str) -> bool:
     """`desc_sub` occurs in `desc` as whole words: IB's description is
     the bare ticker, so a plain substring test made 'BN' rewrite ABNB
@@ -143,12 +171,15 @@ def apply_security_override(tx: dict, overrides, hits=None) -> None:
     (IB's plain-split spelling) follows the rewrite, or the split would
     become a rename back to the un-overridden listing (S001-02).
     `hits`, when given, counts matches per override index. Mutates `tx`
-    in place; a no-op when `overrides` is empty."""
+    in place; a no-op when `overrides` is empty. Returns the index of
+    the override that matched (None when none did)."""
     if not overrides:
-        return
+        return None
     sym = tx.get('symbol') or ''
-    if sym.startswith('F:') or is_option_symbol(sym):
-        return
+    # Every futures spelling (F:, '/', '\\') is exempt, not only F:
+    # (audit A2-1092).
+    if sym.startswith(_FUTURES_PREFIXES) or is_option_symbol(sym):
+        return None
     desc = (tx.get('description') or '').lower()
     currency = (tx.get('currency') or '').upper()
     for i, (desc_sub, ovr_currency, symbol) in enumerate(overrides):
@@ -159,7 +190,57 @@ def apply_security_override(tx: dict, overrides, hits=None) -> None:
             tx['symbol'] = symbol
             if hits is not None:
                 hits[i] = hits.get(i, 0) + 1
-            return
+            return i
+    return None
+
+
+_CUT_NUMBER_RE = re.compile(r'[-+(]?[$]?[\d,]*\.?\d+\)?')
+
+
+def final_record_cut(path: Path) -> str:
+    """Is the export's last record possibly cut short (a truncated
+    download, a partial copy)? Every parser reads a cut-off final cell as
+    a smaller amount ('183.00' -> '18') at exit 0 (audit A2-0110).
+
+    A file that ends with a line break is whole. One that does not and
+    whose last line leaves a quoted cell open was cut inside it: refused
+    (BrokerageParseError). One whose last line ends in an unquoted
+    number may have lost digits: the returned text is an ATTENTION line
+    (RBC exports end without a line break, on a quoted cell). '' when
+    nothing looks cut."""
+    try:
+        text = decode_broker_text(Path(path).read_bytes(), path.name)
+    except (OSError, BrokerageParseError):
+        return ''               # the parser reports an unreadable file
+    if not text or text[-1] in '\r\n':
+        return ''
+    last = text.splitlines()[-1]
+    n = len(text.splitlines())
+    if last.count('"') % 2:
+        raise BrokerageParseError(
+            f"{shown_name(path)} line {n}: the file ends inside a quoted "
+            f"cell — the export was cut short; refusing a partial last "
+            f"row. Download it again.")
+    cell = last.rsplit(',', 1)[-1].strip()
+    if ',' in last and _CUT_NUMBER_RE.fullmatch(cell):
+        return (f"the file does not end with a line break and its last "
+                f"line (line {n}) ends in the number {cell!r} — if the "
+                f"download was cut short, that amount lost digits. "
+                f"Compare it with the broker's statement.")
+    return ''
+
+
+def _only_nonevents(extractor) -> int:
+    """The number of rows the parser counted as recognized non-events
+    when that is ALL it skipped (no unclassified skip, no lint finding);
+    0 otherwise."""
+    counts = getattr(extractor, '_skip_counts', None) or {}
+    pfx = getattr(extractor, 'KNOWN_NONEVENT_PREFIX', None)
+    if not counts or not pfx or getattr(extractor, 'lint_findings', None):
+        return 0
+    if any(not str(c).startswith(pfx) for c in counts):
+        return 0
+    return sum(counts.values())
 
 
 def _refusal(e: Exception) -> str:
@@ -190,6 +271,10 @@ def _dedup_evidence(per_file) -> list:
                                         if k in valid}).id
             except (TypeError, ValueError):
                 key = json.dumps(t, sort_keys=True, default=str)
+            # Identical custody moves of two DIFFERENT broker accounts
+            # are two moves (audit A2-1093 / A2-1094): the account
+            # (hashed, stamped before this) is part of the key.
+            key = (key, t.get('source_account') or '')
             mine.setdefault(key, []).append(t)
         for key, ts in mine.items():
             if key not in best:
@@ -307,7 +392,8 @@ Examples:
         "--futures-settle", dest="futures_settle",
         choices=("trade", "next_day"), default="trade",
         help=(
-            "IB only: settle date of futures and futures options — "
+            "IB and the generic importer: settle date of futures and "
+            "futures options — "
             "'trade' (default; variation margin settles the P/L daily, so "
             "the disposition is the trade date) or 'next_day' (the "
             "clearing house's premium settlement day)."
@@ -368,6 +454,8 @@ Examples:
     # the rename through --override-log (S004-00).
     override_renamed: dict = {}
     override_kept: set = set()
+    # override index -> the distinct raw symbols it rewrote (A2-0109).
+    override_raw: dict = {}
     normalized = []
     # Parser-declared contract multipliers, parallel to `normalized`:
     # they feed the schema notional check below (an ERROR for rows that
@@ -442,7 +530,11 @@ Examples:
         if args.account_type and hasattr(extractor, 'account_taxable'):
             extractor.account_taxable = args.account_type == 'taxable'
         try:
+            _cut = final_record_cut(input_path)
             transactions = extractor.parse_file(input_path)
+            if _cut:
+                print(f"warning: ATTENTION: {shown_name(input_path)}: "
+                      f"{_cut}", file=sys.stderr)
         except csv.Error as e:
             # A >128KB field (or other csv-module limit) surfaced as a
             # raw traceback; name the file and the limit instead
@@ -537,11 +629,18 @@ Examples:
         _source_names[id(extractor)] = _nm
         _accts = extractor.statement_accounts() \
             if hasattr(extractor, 'statement_accounts') else set()
+        # The accounts the parser read per row count too (a Questrade
+        # export of two accounts, an RBC Account column) — every parser
+        # that sees the broker account reports it (audit A2-0008).
+        _accts = {str(a).strip() for a in _accts if str(a).strip()} | {
+            str(t['broker_account']).strip() for t in _txs
+            if str(t.get('broker_account') or '').strip()}
         if _accts:
             source_accounts[_nm] = sorted(
-                hashlib.sha256(str(a).encode()).hexdigest()[:10]
-                for a in _accts)
+                hash_broker_account(a) for a in _accts)
+        stamp_source_accounts(_txs, _accts)
 
+    _bare_warned: set = set()
     for input_path, extractor, transactions in parsed_files:
         _kept_this_file = 0     # TRANSFER evidence rows set aside below
         _source = _source_names[id(extractor)]
@@ -553,13 +652,32 @@ Examples:
         # downstream tool see the right symbol.
         for t in transactions:
             _before = t.get('symbol') or ''
-            apply_security_override(t, overrides, override_hits)
+            _hit = apply_security_override(t, overrides, override_hits)
+            if _hit is not None and _before:
+                override_raw.setdefault(_hit, set()).add(
+                    f"{_before} ({(t.get('currency') or '').upper()})")
             if overrides and _before and not is_option_symbol(_before) \
-                    and not _before.startswith('F:'):
+                    and not _before.startswith(_FUTURES_PREFIXES):
                 _key = f"{_before}|{(t.get('currency') or '').upper()}"
                 if t.get('symbol') != _before:
                     override_renamed.setdefault(_key, set()).add(
                         t.get('symbol'))
+                    # A listed symbol renamed to a bare one (A2-0304).
+                    from taxjson.bin.taxjson_ticker_map import \
+                        bare_rename_target
+                    if (bare_rename_target(_before, t.get('symbol'))
+                            and (_before, t.get('symbol'))
+                            not in _bare_warned):
+                        _bare_warned.add((_before, t.get('symbol')))
+                        print(f"warning: ATTENTION: "
+                              f"ticker_extraction_overrides.txt renames "
+                              f"{_before} to {t.get('symbol')}, which has "
+                              f"no market suffix — a bare symbol is read "
+                              f"as crypto / an unknown listing (a Canadian "
+                              f"dividend on it is counted as foreign). "
+                              f"Write the listing "
+                              f"({t.get('symbol')}.TO, "
+                              f"{t.get('symbol')}.US).", file=sys.stderr)
                 else:
                     override_kept.add(_key)
 
@@ -581,8 +699,13 @@ Examples:
                       f"events — view with `taxjson transfers`)",
                       file=sys.stderr)
                 if brokerage_id in ('kraken', 'kr', 'coinbase', 'cb'):
+                    # A Kraken Hybrid Earn move is still yours
+                    # (crypto-sends decides it `self` automatically):
+                    # not a possible disposition (audit A2-1078).
                     _sends = sum(1 for t in _tr
-                                 if float(t.get('quantity') or 0) < 0)
+                                 if float(t.get('quantity') or 0) < 0
+                                 and not str(t.get('description') or '')
+                                 .lower().startswith('hybridearn'))
                     if _sends:
                         print(
                             f"  NOTE: {_sends} crypto withdrawal/"
@@ -621,6 +744,16 @@ Examples:
             # ignore real ones.
             print(f"  {shown_name(input_path)}: 0 tax objects "
                   f"({extractor.zero_tx_reason})", file=sys.stderr)
+        elif (not transactions and file_size > 0
+              and _only_nonevents(extractor)):
+            # Every row was recognized and counted as a non-event (a
+            # deposit-only RBC file, a Questrade FX conversion, a Kraken
+            # Earn allocation, a stablecoin buy): the parser read it all
+            # — not the regression the warning below is for (audit
+            # A2-0301, A2-0303).
+            print(f"  {shown_name(input_path)}: 0 tax objects "
+                  f"({_only_nonevents(extractor)} recognized non-event "
+                  f"row(s))", file=sys.stderr)
         elif not transactions and file_size > 0:
             print(
                 f"warning: {shown_name(input_path)} parsed to 0 transactions "
@@ -688,6 +821,21 @@ Examples:
             clean['source'] = _source
             normalized.append(TaxTransaction(**clean))
             multipliers.append(t.get('multiplier'))
+
+    # One override line that rewrote two DIFFERENT raw securities pools
+    # them (IB 'LEN' vs 'LEN B', 'BN' vs 'BN PRA': the key matches
+    # whole words, and a class letter or series is a word of its own —
+    # audit A2-0109): said loudly, with the line to narrow.
+    for _i, _syms in sorted(override_raw.items()):
+        if len(_syms) > 1:
+            _d, _c, _s = overrides[_i]
+            print(f"warning: ATTENTION: security override "
+                  f"'{_d} | {_c} | {_s}' rewrote {len(_syms)} different "
+                  f"raw symbols into {_s}: {', '.join(sorted(_syms))} — "
+                  f"they now share ONE cost pool. If they are different "
+                  f"securities (a share class, a preferred series, a "
+                  f"warrant), make the description key longer so it "
+                  f"matches only one.", file=sys.stderr)
 
     for key, n in sorted(dropped_keys.items()):
         print(f"warning: parser emitted unknown field {key!r} on {n} "

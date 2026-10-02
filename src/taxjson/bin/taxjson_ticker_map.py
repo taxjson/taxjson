@@ -325,6 +325,35 @@ def generate_summary(transactions: List[TaxTransaction]) -> Dict[str, Any]:
         "generated_at": datetime.now().strftime("%Y-%m-%d")
     }
 
+def bare_rename_target(frm: str, to: str) -> bool:
+    """True when a rename takes a listed symbol (a known market suffix:
+    RY.TO, XYZ.US) to a bare one (RY). A bare symbol is read as crypto
+    or as an unknown listing: a Canadian eligible dividend on RY became
+    a foreign dividend with an assumed foreign tax credit (audit
+    A2-0304). Options, futures and cash are not judged."""
+    from taxjson.lib.brokerages.schema import KNOWN_SUFFIXES
+    from taxjson.lib.core import is_option_symbol
+    frm, to = str(frm or ''), str(to or '')
+    if (not frm or not to or '.' in to or to.upper() == 'CASH'
+            or is_option_symbol(frm) or is_option_symbol(to)
+            or frm.startswith(('F:', '/', '\\'))
+            or to.startswith(('F:', '/', '\\'))):
+        return False
+    return '.' in frm and frm.rsplit('.', 1)[1].upper() in KNOWN_SUFFIXES
+
+
+def bare_target_warnings(symbols, mapping: Dict[str, str]) -> List[str]:
+    """One ATTENTION text per rename rule that takes a listed symbol the
+    book holds to a bare symbol (bare_rename_target)."""
+    held = set(symbols)
+    return [f"ticker.map: {frm} -> {to}: the target has no market suffix "
+            f"— a bare symbol is read as crypto / an unknown listing (a "
+            f"Canadian dividend on it is counted as foreign). Write the "
+            f"listing ({to}.TO, {to}.US)."
+            for frm, to in sorted(mapping.items())
+            if frm in held and bare_rename_target(frm, to)]
+
+
 def map_symbol(symbol: str, mapping: Dict[str, str]) -> str:
     """The rename a mapping implies for ONE symbol — exact match first,
     else options map through their UNDERLYING (AEM.US -> AEM.TO also
@@ -442,6 +471,9 @@ def main():
         transactions = apply_drops(transactions, tmap.delete)
         mapping = guard_option_listing_collisions(
             [t.symbol for t in transactions], mapping)
+        for _w in bare_target_warnings([t.symbol for t in transactions],
+                                       mapping):
+            print(f"warning: ATTENTION: {_w}", file=sys.stderr)
         updated_transactions = []
 
         for tx in transactions:

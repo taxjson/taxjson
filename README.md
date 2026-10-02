@@ -103,9 +103,13 @@ inputs folder and describe its layout in a TOML mapping — either a sidecar
 folder. Start from the template in
 [`examples/generic_wealthsimple.toml`](./examples/generic_wealthsimple.toml):
 map your CSV's header names in `[columns]`, its date format in `[formats]`, and
-each action value to one of `buy | sell | dividend | tax | interest | fee |
-skip` in `[actions]`. An optional `[broker] name = "wealthsimple"` names the
-real broker. `taxjson run` then parses that broker's generic files on their own
+each action value to one of `buy | sell | dividend | dividend_in_lieu | tax |
+interest | fee | skip` in `[actions]` (`dividend_in_lieu` books a payment in
+lieu: ordinary income, never a dividend). An optional `[broker] name =
+"wealthsimple"` names the real broker; an optional `[broker] account =
+"<id>"` (or a per-row `[columns] account = "<header>"`, which wins) names the
+broker account the rows belong to, so cross-file dedup keeps identical rows of
+two different broker accounts apart (the id is stored hashed, never as is). `taxjson run` then parses that broker's generic files on their own
 (`work/<acct>_generic-wealthsimple.json`) and records them as
 `generic:wealthsimple`, so the fees report gives each broker its own row.
 Without a name, every generic file goes into one `generic` row. Conventions match the hand-written parsers: signed
@@ -116,7 +120,11 @@ silently dropped — an unmapped row that carries a quantity or an amount is an
 references columns the CSV doesn't have refuses loudly. A `fee` row is booked
 positive = charged, like every broker parser: the default `[formats] fee_sign =
 "cash"` flips a CSV that shows a charge as negative cash; `fee_sign =
-"charged"` takes the cell as is. Every buy/sell row is cross-checked — |amount|
+"charged"` takes the cell as is. A buy/sell row's commission keeps its
+direction: with an amount column the amount decides (a buy that cost less
+than qty × price was credited a rebate), else an explicit `fee_sign` does; a
+rebate is booked as a negative fee. With neither, the fee cell is a charge
+whatever its sign. Every buy/sell row is cross-checked — |amount|
 must equal qty × price (× 100 for an OCC option symbol) ± fee within 1%, a fee
 above 5% of the gross needs `[options] allow_large_fees = true`, two fields may
 not share one header, and the currency must be mapped or set in `[defaults]`
@@ -124,8 +132,12 @@ not share one header, and the currency must be mapped or set in `[defaults]`
 wrong money. With no `fee` column mapped, the commission is inferred from
 |amount| − qty × price (a commission-inclusive Net column); a row with no price
 is checked against its amount instead (a fee at least a buy's whole amount is
-refused). A futures symbol (`F:` or `/` prefix) needs the `amount` column: the
-contract size is never guessed. The import also refuses:
+refused). A futures symbol (`F:`, `/` or `\` prefix, all spelled `F:`) needs
+the `amount` column: the contract size is never guessed. The mapping has no
+exercise/assignment target: a $0 option close beside a stock trade at the
+strike is an ATTENTION line on the console — map those rows to skip and enter
+both legs as `.tt` `ASSIGN` rows so the premium folds into the shares' cost.
+UTF-16 exports are read like UTF-8 ones. The import also refuses:
 
 - an unknown section or key in the mapping (`ammount`, `commission`,
   `[format]`, `tax_sgn` …), with a did-you-mean suggestion;
@@ -140,7 +152,14 @@ contract size is never guessed. The import also refuses:
 - a decimal-comma number (`12,50`, `1.234,56`): only a thousands comma
   (`1,234.56`) is accepted. Re-export with a decimal point.
 - a record with more cells than the header, or a cell holding a line break —
-  the mark of an unescaped quote in a text cell swallowing the next row.
+  the mark of an unescaped quote in a text cell swallowing the next row;
+- a record with fewer cells than the header, a last record that ends on a
+  separator with no line break after it, or a currency cell that is not a
+  currency code — a cut-off export (`[defaults]` never fills a cell the cut
+  took away);
+- a `[defaults]` or `[formats]` value that is not a quoted string, and a
+  sidecar mapping that is a dangling link (the shared `generic.toml` is never
+  used in its place).
 
 **Symbols.** Symbols are upper-cased (`xyz` and `XYZ` are one security). A symbol written with an exchange suffix (`.TO`, `.V`, `.CN`,
 `.NE`, `.US`, `.AX`, `.L`) keeps it — `DLR.U.TO` bought in USD stays
@@ -154,8 +173,12 @@ before, T+3 before September 2017, options T+1 — counted in settlement days of
 the listing's market (the Canadian calendar for `.TO`/`.V`/`.CN`/`.NE`, the US
 one for `.US`, else the row currency), skipping weekends and holidays. With
 `tax_date = "settle"` a sale on Dec 31 therefore lands in January. A settle
-date before the trade date is refused. Dividend, tax, interest and fee rows are
-dated `date`. For a crypto-only export set `[options] settle_on_trade_date =
+date before the trade date, or more than 31 days after it, is refused; one more
+than 7 days after it is an ATTENTION line. Futures settle on the trade date, or
+on the next settlement day under `futures_settle = "next_day"`. An option
+closed at $0 on its expiry day is dated and settled that day (a $0 close posted
+up to 7 days after the expiry is moved back to it). Dividend, tax, interest and
+fee rows are dated `date`. For a crypto-only export set `[options] settle_on_trade_date =
 true` (crypto has no settlement cycle).
 
 Kraken and Coinbase timestamps are UTC; rows are dated in local time
@@ -306,7 +329,7 @@ year = 2026                    # tax year the pipeline reports on
 country = "canada"             # canada | ca | usa | us — REQUIRED by every command
 base_currency = "CAD"          # the country's currency: CAD for canada, USD for usa (another is refused)
 tax_date = "settle"            # settle (CRA default) | trade (IRS default)
-# futures_settle = "trade"     # IB futures & futures options: TRADE date (daily variation
+# futures_settle = "trade"     # futures & futures options (IB, generic): TRADE date (daily variation
 #                              # margin settles the P/L) | next_day (clearing premium date)
 # local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone
 source_currencies = ["USD"]    # currencies you hold besides base_currency (FX rates fetched)
@@ -1379,8 +1402,9 @@ BUYSELL  <date>  <time>  <symbol>  <qty>  <currency>  <price>  <total>  <fee>
 | `x<size>` | optional, last on a BUYSELL/ASSIGN line: the contract size — `x1000` for a CL futures option, `x50` for ES, `x0.1` for a micro crypto future. The typo check then uses qty×price×size (an equity option is checked at 100 without it), and the size is kept on the row for the holdings export. `taxjson-convert-tt book.json` writes it for futures rows and for any option whose size is not 100. |
 | `qty` | shares — **positive = buy, negative = sell** |
 | `price` | per-share price |
-| `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount), written as a positive number. A negative sell total is refused (a cash-signed `-2000` used to be booked as negative proceeds); if the commission exceeds the proceeds, enter `0`. |
+| `total` | net cash amount: **buy = qty×price + commission; sell = qty×price − commission** (your confirmation's net amount), written as a positive number. A sale whose commission exceeds its gross (a penny option close) has a NEGATIVE total, qty×price − commission (e.g. `-8.95` for a 0.01 close with a 9.95 commission): it is read when the line's commission explains it (a futures line also needs its `x<size>`); any other negative sell total is refused (a cash-signed `-2000` used to be booked as negative proceeds). `0` there leaves the excess commission out of the loss and warns. |
 | `fee` | commission (optional) |
+| income facts | optional `key=value` tokens at the END of a DIVIDEND / DIVIDEND_IN_LIEU / TAX / ADJUST line: `record=YYYY-MM-DD` (the record date that dates trust income and ROC), `ex=YYYY-MM-DD`, `label=distribution`, `dealer=CA` / `issuer=CA` (a Canadian dealer's payment in lieu is an s.260 deemed dividend), and on ADJUST `type=roc` (a return of capital, listed by `roc`). `taxjson-convert-tt book.json` writes them, so a json→tt→json round trip keeps them. Not part of the row id. |
 | INTEREST lines | `INTEREST date time CURRENCY amount` — income with no symbol, e.g. a T5 box-13 interest figure a broker's trade export does not carry (Webull): `INTEREST 2025-12-31 16:00:00 USD 1149.27`. |
 | FEE lines | `FEE date time CURRENCY amount` — a charge is POSITIVE, a refund or rebate NEGATIVE (the sign `fees` and `fx-cash` read; the opposite of a cash-statement sign). |
 
@@ -1413,19 +1437,38 @@ transfers are combined, not de-duplicated away).
 re-download, a 2025 export that runs into January next to the 2026 one) hold
 the same rows twice, and the books keep each row once. The rule, which the
 fees report uses too:
+- every parser that sees the broker account (the IB statement's account,
+  the Questrade `Account #` and RBC `Account` columns, the Webull preamble,
+  a generic mapping's account column or `[broker].account`) stamps each row
+  with it, hashed; rows of two DIFFERENT broker accounts are never one row,
+  whatever the files look like (two accounts with the same holdings get the
+  same distributions);
 - two identical rows in ONE file are one row, unless the parser marked them
   as separate fills (`[fill #2]`);
 - the same row in two exports is one row when the files overlap as copies:
   on the dates both files cover, one file's rows are a subset of the
   other's, and they share at least two rows;
 - identical lines in two `.tt` files are separate records, so both are
-  booked; identical rows in IB statements of two different broker accounts
-  are both booked as well;
+  booked; a `.tt` line equal to an exported row stands for that row (each
+  exported row absorbs at most one `.tt` line), and the result does not
+  depend on the order the files are listed in;
 - anything else (the files share only that one row, the files disagree on
   the dates they both cover, or a `.tt` line equals an exported row) is booked
   once, and `taxjson run` prints `warning: ATTENTION: dedup: ...` with both
-  file names. If they really are two trades, enter the second one as a `.tt`
-  line. If a `.tt` line was typed into two files, delete one copy.
+  file names. When the files disagree, the line also names the rows only one
+  of them holds: a newer statement that restated a row (a commission refund
+  folded into the trade, a cancelled trade) leaves the older version booked
+  too, so keep only the newer file. If they really are two trades, enter the
+  second one as a `.tt` line. If a `.tt` line was typed into two files,
+  delete one copy;
+- a `.tt` line that repeats an exported row by hand never has the row's id
+  (the export's description and settle date differ), so both are booked:
+  `taxjson run` prints `warning: ATTENTION: dedup: <file>.tt line ...
+  repeats the exported row ...` when the symbol, quantity, money and trade
+  or settle date match. Delete the `.tt` line if it is that trade;
+- one broker account's export placed under two `inputs/<account>/` folders
+  is booked in both: `taxjson run` prints an ATTENTION line naming the two
+  taxjson accounts.
 
 ### When you can't get the real cost basis
 

@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
-                                         OPTION_STRIKE_RE, parse_strict_number)
-from taxjson.lib.core import is_option_symbol
+                                         OPTION_STRIKE_RE, parse_strict_number,
+                                         read_broker_text)
+from taxjson.lib.core import is_option_symbol, parse_option_expiry
 
 
 # Webull's option descriptions run the ticker directly into the date with
@@ -20,6 +21,10 @@ _WEBULL_OPTION_RE = re.compile(
 )
 
 
+# First cells a cut-short data row can start with ('C' .. 'USD').
+_CURRENCY_PREFIXES = frozenset({'U', 'US', 'USD', 'C', 'CA', 'CAD'})
+
+
 class WebullBrokerage(BaseBrokerage):
     DEFAULT_ACCOUNT = "WB"
     # Webull's CSVs only carry USD/CAD positions; anything else falls back to US.
@@ -29,11 +34,20 @@ class WebullBrokerage(BaseBrokerage):
     def _option_description_patterns(self):
         return (_WEBULL_OPTION_RE,)
 
+    def statement_accounts(self) -> set:
+        """The broker account the last parsed export names in its
+        preamble ('Account Number / Numéro de compte'); empty when it
+        names none. Cross-file dedup tells two Webull accounts' identical
+        rows apart by it (audit A2-0286)."""
+        return set(getattr(self, '_accounts', None) or ())
+
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
+        self._accounts = set()
         parsed = self._parse_rows(path)
         if parsed is None:
             return []
         transactions, expiries, skipped_actions = parsed
+        self._accounts = set(getattr(self, '_last_accounts', ()) or ())
         # Assignment pairing looks at the Webull exports BESIDE this one
         # too (audit S065-24): the files are settlement-dated, so a put
         # assigned on Dec 31 closes in one year's file while its stock
@@ -51,27 +65,48 @@ class WebullBrokerage(BaseBrokerage):
                 pool_exp.extend(sp[1])
         self._mark_assignments(pool, pool_exp, own=transactions,
                                source=path.name)
+        self._check_zero_closes(pool, expiries, path.name)
         self.clamp_settlement_to_expiry(transactions, expiries)
-        for t in transactions:
+        # Ticker-change hint over every export of the folder (audit
+        # A2-1067 / A2-1070): a rename across yearly files is named
+        # when the file holding the new symbol's short is parsed.
+        self._warn_ticker_changes(pool, path.name, own=transactions)
+        for t in pool:
             t.pop('_under', None)
+            t.pop('_where', None)
         # Parser-level disambiguation so a downstream `taxjson-sort --dedup`
         # can't collapse byte-identical split-fill rows.
         self.disambiguate_split_fills(transactions)
         if skipped_actions:
-            detail = ", ".join(f"{n}× {a}" for a, n in sorted(skipped_actions.items()))
+            detail = ", ".join(f"{len(v)}× {a}" for a, v in
+                               sorted(skipped_actions.items()))
             # Expiry and exercise/assignment ARE booked (from the $0
             # BUY/SELL rows); only these other action codes are not
-            # (audit S065-22).
+            # (audit S065-22). A skipped row that moves shares or cash
+            # is UNBOOKED — the channel `taxjson run` echoes to the
+            # console and `--strict` refuses, as every other parser
+            # uses (audit A2-0285 / A2-0288 / A2-0289 / A2-1069).
             print(
                 f"warning: Webull parser books only BUY/SELL rows — "
-                f"skipped {sum(skipped_actions.values())} row(s) with "
-                f"other action codes ({detail}); those events (a "
-                f"dividend, a transfer) are NOT booked. Enter any that "
-                f"matter via a .tt file, and check no position is left "
-                f"phantom.",
+                f"skipped {sum(len(v) for v in skipped_actions.values())} "
+                f"row(s) with other action codes ({detail}); those "
+                f"events (a dividend, a transfer) are NOT booked. Enter "
+                f"any that matter via a .tt file, and check no position "
+                f"is left phantom.",
                 file=sys.stderr,
             )
-        self._warn_ticker_changes(transactions, path.name)
+            for code, rows in sorted(skipped_actions.items()):
+                for where, sym, qty, amount in rows:
+                    if not (qty or amount):
+                        continue
+                    what = ", ".join(x for x in (
+                        f"quantity {qty}" if qty else "",
+                        f"amount {amount}" if amount else "") if x)
+                    print(f"warning: UNBOOKED: {where}: Webull {code} row "
+                          f"{sym or '-'} ({what}) is not booked — enter "
+                          f"it as a .tt line if it is a dividend, a "
+                          f"transfer or another taxable event.",
+                          file=sys.stderr)
         return transactions
 
     @staticmethod
@@ -94,13 +129,17 @@ class WebullBrokerage(BaseBrokerage):
         """(transactions, expiries, skipped_actions) for one export, or
         None when it has no Trading Summary header. No assignment
         pairing — parse_file does that across the folder."""
-        with open(path, 'r', encoding='utf-8-sig') as f:
-            content = f.read()
+        # The shared decoder (audit A2-0101 / A2-1451): a UTF-16 re-save
+        # is read like the IB/Questrade/RBC twins read it, never refused
+        # as 'not UTF-16'.
+        content = read_broker_text(path)
         lines = content.splitlines()
 
         header_index = self._find_header(lines)
         if header_index == -1:
             return None
+        account = self._preamble_account(lines[:header_index])
+        self._last_accounts = {account} if account else set()
 
         reader = csv.reader(io.StringIO("\n".join(lines[header_index:])))
         # Resolve columns by their HEADER LABELS, never by position. The
@@ -125,7 +164,7 @@ class WebullBrokerage(BaseBrokerage):
         # (dividend, option assignment/expiry, transfer) would be dropped
         # silently, leaving a phantom open position. Count those so the loss
         # is surfaced rather than invisible.
-        skipped_actions: Dict[str, int] = {}
+        skipped_actions: Dict[str, List[tuple]] = {}
         # Option expiry rows (see is_expiry below).
         expiries: List[Dict[str, Any]] = []
 
@@ -135,12 +174,23 @@ class WebullBrokerage(BaseBrokerage):
 
         width = len(header_row)
         for row in reader:
-            if not row or len(row) < 3:
-                continue
             # File line of this record (the header record is the first
             # one the reader returns; line_num counts physical lines
             # read so far, so a record's LAST physical line).
             where = f"{path.name} line {header_index + reader.line_num}"
+            if (row and len(row) < width and any(c.strip() for c in row)
+                    and row[0].strip().upper() in _CURRENCY_PREFIXES):
+                # A data row cut short — the last line of a download
+                # that stopped early ('CAD,12-12-2024,'): it used to
+                # fall through as a preamble or blank continuation row
+                # and the trade vanished at rc 0 (audit A2-0028).
+                raise BrokerageParseError(
+                    f"{where}: a row starting {','.join(row)[:40]!r} has "
+                    f"{len(row)} cell(s) but the header has {width} — the "
+                    f"row is cut short (an export that stopped early?). "
+                    f"Re-download the file; refusing to drop the row.")
+            if not row or len(row) < 3:
+                continue
             currency = cell(row, 'currency').upper()
             date_raw = cell(row, 'date')
             action_raw = cell(row, 'action').upper()
@@ -161,7 +211,9 @@ class WebullBrokerage(BaseBrokerage):
                 # A populated action we don't handle is a real dropped event;
                 # an empty action is just a blank continuation row.
                 if action_raw:
-                    skipped_actions[action_raw] = skipped_actions.get(action_raw, 0) + 1
+                    skipped_actions.setdefault(action_raw, []).append(
+                        (where, cell(row, 'symbol').lstrip('@'),
+                         cell(row, 'quantity'), cell(row, 'proceeds')))
                 continue
             if not date_raw:
                 # A dated trade row with its Date cut off was reported as
@@ -190,9 +242,9 @@ class WebullBrokerage(BaseBrokerage):
                 raise BrokerageParseError(
                     f"{where}: {action_raw} row has {len(row)} cells but "
                     f"the header has {width} — misaligned columns "
-                    f"(two export layouts mixed in one file, or a hand "
-                    f"edit); refusing to read Proceeds from the wrong "
-                    f"column.")
+                    f"(two export layouts mixed in one file, a hand "
+                    f"edit, or a row cut short); refusing to read "
+                    f"Proceeds from the wrong column.")
             symbol_raw = cell(row, 'symbol')
             description_raw = cell(row, 'description')
             qty_raw = cell(row, 'quantity')
@@ -222,8 +274,16 @@ class WebullBrokerage(BaseBrokerage):
             if type_raw:
                 current_type = type_raw
 
-            dt = self.parse_date(date_raw, "%d-%m-%Y")
-            date_str = dt.strftime("%Y-%m-%d") if dt else date_raw
+            dt = self.parse_date(date_raw, "%d-%m-%Y", "%Y-%m-%d")
+            if dt is None:
+                # Passed through verbatim before, as both date and
+                # settle date, with only a schema warning (audit
+                # A2-0618).
+                raise BrokerageParseError(
+                    f"{where}: {action_raw} row has Date {date_raw!r} — "
+                    f"not DD-MM-YYYY (Webull's format) or YYYY-MM-DD; "
+                    f"refusing to guess the date.")
+            date_str = dt.strftime("%Y-%m-%d")
 
             # Strict parses named by file line (audit R1-91): a blank,
             # garbage ('N/A') or decimal-comma cell is an error, never a
@@ -315,6 +375,20 @@ class WebullBrokerage(BaseBrokerage):
             # clamped to the expiry (clamp_settlement_to_expiry below).
             is_expiry = (is_option and abs(price) < 1e-9
                          and abs(net_amount) < 1e-9)
+            if (not is_option and abs(price) < 1e-9
+                    and abs(net_amount) < 1e-9):
+                # Shares at no price and no cash: a row whose Price and
+                # Proceeds were cut (a spreadsheet re-save pads the
+                # cells back), or a transfer/journal row — booking it
+                # put the shares in at $0 or took the sale's proceeds
+                # to $0 at rc 0 (audit A2-0102 / A2-0619). The generic
+                # importer refuses the same row.
+                raise BrokerageParseError(
+                    f"{where}: {action_raw} {qty_raw} {current_symbol} has "
+                    f"no Price and no Proceeds — a share trade at $0 is a "
+                    f"cut row or a transfer, not a trade; refusing to book "
+                    f"it at $0. Fix the cells, or enter a transfer as a "
+                    f".tt line.")
             if not is_expiry and abs(price) > 1e-9:
                 self._check_trade_money(where, action_raw, qty, price,
                                         net_amount, is_option)
@@ -338,7 +412,12 @@ class WebullBrokerage(BaseBrokerage):
                 'gross_amount': self.theoretical_gross(qty, price, is_option),
                 'account': self.DEFAULT_ACCOUNT,
                 'description': current_description,
+                '_where': where,
             }
+            if account:
+                # The broker account the export names (cross-file dedup
+                # keeps two accounts' identical rows apart: A2-0286).
+                _tx['broker_account'] = account
             if under_sym:
                 _tx['_under'] = under_sym
             transactions.append(_tx)
@@ -350,7 +429,48 @@ class WebullBrokerage(BaseBrokerage):
             raise BrokerageParseError(
                 f"{path}: Webull row accounting failed — {data_rows} "
                 f"BUY/SELL rows but {len(transactions)} transactions")
+        transactions = self._oldest_first(transactions)
         return transactions, expiries, skipped_actions
+
+    def _oldest_first(self, transactions):
+        """The rows in replay order. Webull groups its rows by security
+        and prints no clock time, so rows at one date keep the order the
+        parser emits them (tax-logic CA-DATE-14 / US-DATE-13). A
+        newest-first export is read bottom-up: each security group whose
+        dates never increase is reversed, and a group with one date
+        follows the file's other groups when they all agree (audit
+        A2-1068)."""
+        groups: Dict[str, List[int]] = {}
+        for i, t in enumerate(transactions):
+            groups.setdefault(t['symbol'], []).append(i)
+        verdict: Dict[str, bool] = {}
+        for sym, idx in groups.items():
+            ds = [transactions[i]['date_settle'] for i in idx]
+            if len(set(ds)) > 1:
+                verdict[sym] = self.newest_first(ds)
+        default = set(verdict.values()) == {True}
+        out = list(transactions)
+        for sym, idx in groups.items():
+            if verdict.get(sym, default):
+                for i, t in zip(idx, [transactions[i] for i in idx][::-1]):
+                    out[i] = t
+        return out
+
+    @staticmethod
+    def _preamble_account(lines) -> str:
+        """The broker account id the preamble names ('Account Number /
+        Numéro de compte:,,,,,,,<id>,' or 'Account Number: <id>'), or ''."""
+        for line in lines:
+            cells = next(csv.reader([line]), [])
+            if not cells or not cells[0].strip().lower().startswith(
+                    'account number'):
+                continue
+            head, _, rest = cells[0].partition(':')
+            for c in [rest] + cells[1:]:
+                c = c.strip()
+                if c:
+                    return c
+        return ''
 
     def _check_trade_money(self, where, action, qty, price, net,
                            is_option) -> None:
@@ -456,6 +576,11 @@ class WebullBrokerage(BaseBrokerage):
                    else {id(t) for t in transactions})
         cands = []          # (gap, option index, stock index)
         rejected = []       # (option index, stock index)
+        # A $0 close and a stock trade at the strike with the $1.00
+        # charge whose quantities do not match one-to-one (2 contracts
+        # vs two 100-share rows): named, never silently an expiry
+        # (audit A2-0617).
+        qty_mismatch = []   # (option index, stock index)
         meta = []
         for oi, opt in enumerate(expiries):
             m = re.match(r'^([A-Z.\d]+?)(\d{6})([CP])(\d{8})\.(\w+)$',
@@ -478,8 +603,10 @@ class WebullBrokerage(BaseBrokerage):
             for i, t in enumerate(transactions):
                 if t is opt or t['symbol'] != under:
                     continue
+                if t.get('broker_account') != opt.get('broker_account'):
+                    continue        # another Webull account's export
                 q = float(t['quantity'])
-                if (q > 0) != want_buy or abs(abs(q) - contracts * 100) > 1e-6:
+                if (q > 0) != want_buy:
                     continue
                 if abs(float(t['price']) - strike) > 0.005:
                     continue
@@ -489,8 +616,13 @@ class WebullBrokerage(BaseBrokerage):
                     continue
                 if not -1 <= gap <= 7:
                     continue
-                if abs(abs(float(t.get('fee') or 0.0))
-                       - self._EXERCISE_FEE) > 0.011:
+                exercise_fee = abs(abs(float(t.get('fee') or 0.0))
+                                   - self._EXERCISE_FEE) <= 0.011
+                if abs(abs(q) - contracts * 100) > 1e-6:
+                    if exercise_fee:
+                        qty_mismatch.append((oi, i))
+                    continue
+                if not exercise_fee:
                     rejected.append((oi, i))
                     continue
                 cands.append((gap, oi, i))
@@ -519,6 +651,13 @@ class WebullBrokerage(BaseBrokerage):
             # stage the premium before the stock leg consumes it.
             stock['date'] = opt['date']
             stock['time'] = '16:00:01'
+            # ...and the option leg settles with its stock leg: an
+            # exercise or assignment takes its stock leg's date
+            # (tax-logic CA-DATE-04 / US-DATE-04; IB's S058-01 twin).
+            # On the expiry date alone an unrelated trade settling
+            # between the two legs sorted inside the pair (audit
+            # A2-1065 / A2-1071).
+            opt['date_settle'] = stock['date_settle']
         for oi, i in rejected:
             if oi in used_opt or i in used_stock:
                 continue
@@ -538,38 +677,121 @@ class WebullBrokerage(BaseBrokerage):
                   f"premium belongs in the shares' cost ({meta[oi][1]}) — see "
                   f"KNOWN_ISSUES 'Webull exercise/assignment inference'.",
                   file=sys.stderr)
+        named = set()
+        for oi, i in qty_mismatch:
+            if oi in used_opt or i in used_stock or oi in named:
+                continue
+            opt, stock = expiries[oi], transactions[i]
+            if not (id(opt) in own_ids or id(stock) in own_ids):
+                continue
+            named.add(oi)
+            print(f"warning: Webull {source}: {opt['symbol']} "
+                  f"({abs(float(opt['quantity'])):g} contract(s)) closed at "
+                  f"$0 on {opt['date']} and {abs(float(stock['quantity'])):g} "
+                  f"{stock['symbol']} traded at the strike {meta[oi][0]:g} "
+                  f"settling {stock['date_settle']} with Webull's $1.00 "
+                  f"exercise/assignment charge, but the quantities differ "
+                  f"(the close or the stock leg is split across rows), so "
+                  f"exercise/assignment was NOT inferred: booked as an "
+                  f"expiry plus a separate trade. If the statement shows "
+                  f"an exercise/assignment, the premium belongs in the "
+                  f"shares' cost ({meta[oi][1]}) — book it by hand (see "
+                  f"KNOWN_ISSUES 'Webull exercise/assignment inference').",
+                  file=sys.stderr)
+
+    def _check_zero_closes(self, pool, expiries, source) -> None:
+        """A $0 option row (no Price, no Proceeds) is booked only as a
+        close: at its expiry, or earlier as the option leg of a paired
+        exercise/assignment. A $0 row that OPENS a position (a write or
+        a buy with no premium: before the expiry with nothing held, or
+        on the side of what is held) is a cut or mangled row and is
+        refused; a $0 close before the expiry that found no stock leg is
+        named (audit A2-0284). At the expiry a row with nothing held in
+        the data closes a position bought before the first export."""
+        def key(t):
+            return (t['date'], t['time'])
+        for e in expiries:
+            if e['action'] == 'ASSIGN':
+                continue
+            held = sum(float(t['quantity']) for t in pool
+                       if t is not e and t['symbol'] == e['symbol']
+                       and t.get('broker_account') == e.get('broker_account')
+                       and key(t) <= key(e))
+            q = float(e['quantity'])
+            where = e.get('_where') or source
+            exp = parse_option_expiry(e['symbol'])
+            at_expiry = bool(exp) and e['date'] >= exp
+            # At the expiry, nothing held in the data is a position
+            # opened before the first export (missing history, not a
+            # cut row); before it, or against a position on the same
+            # side, a $0 row cannot be a close.
+            if (abs(held) < 1e-9 and not at_expiry) \
+                    or (abs(held) > 1e-9 and ((held > 0) == (q > 0)
+                                              or abs(q) > abs(held) + 1e-9)):
+                raise BrokerageParseError(
+                    f"{where}: {'BUY' if q > 0 else 'SELL'} "
+                    f"{abs(q):g} {e['symbol']} at $0 (no Price, no "
+                    f"Proceeds) opens a position (held before it: "
+                    f"{held:g}) — only a close at expiry or an "
+                    f"exercise/assignment is booked at $0; a cut or "
+                    f"mangled row? Refusing to book a premium-free "
+                    f"{'write' if q < 0 else 'buy'}.")
+            if exp and not at_expiry:
+                print(f"warning: Webull {source}: {e['symbol']} closed at "
+                      f"$0 on {e['date']}, before its expiry {exp}, and no "
+                      f"stock leg at the strike was found — booked as an "
+                      f"expiry (the premium is realized on its own). An "
+                      f"early exercise/assignment folds the premium into "
+                      f"the shares: check the statement.", file=sys.stderr)
 
     @staticmethod
-    def _warn_ticker_changes(transactions, source) -> None:
+    def _warn_ticker_changes(transactions, source, own=None) -> None:
         """Webull identifies a security by its Symbol column only. A
         ticker change with no reorganization row shows up as two
-        symbols sharing one Security Description, the new one opening
-        with a sale — a phantom long plus a short (audit S066-10).
-        Name the pair; a ticker.map GLOBAL rename joins them."""
-        first: Dict[tuple, Dict[str, Any]] = {}
+        symbols sharing one Security Description, the new one going
+        SHORT — a phantom long plus a short (audit S066-10). The new
+        symbol may open with the sale or with a small buy before a sale
+        larger than it (audit A2-0290), and the old symbol may sit in an
+        earlier yearly export (A2-1067 / A2-1070): `transactions` is
+        every export of the folder, and a pair is named only when the
+        row that takes the new symbol short is one of `own` (this
+        file's rows), so it is named once. Name the pair; a ticker.map
+        GLOBAL rename joins them."""
+        own_ids = ({id(t) for t in own} if own is not None
+                   else {id(t) for t in transactions})
+        groups: Dict[tuple, Dict[str, List[Dict[str, Any]]]] = {}
         for t in sorted(transactions, key=lambda t: (t['date'],
                                                      t['time'])):
             desc = (t.get('description') or '').strip().upper()
             if not desc or is_option_symbol(t['symbol']):
                 continue
-            first.setdefault((desc, t['currency']), {}).setdefault(
-                t['symbol'], t)
-        for (desc, _cur), syms in first.items():
+            groups.setdefault((desc, t['currency'],
+                               t.get('broker_account') or ''), {}
+                              ).setdefault(t['symbol'], []).append(t)
+        for (desc, _cur, _acct), syms in groups.items():
             if len(syms) < 2:
                 continue
-            ordered = list(syms.values())
-            for prev, t in zip(ordered, ordered[1:]):
-                if float(t['quantity']) < 0:
-                    # ATTENTION: on the run console (re-audit A2-0279;
-                    # the plain warning reached only the .sum).
-                    print(f"warning: ATTENTION: Webull {source}: {t['symbol']} "
-                          f"opens with a SALE on {t['date']} and shares "
-                          f"the Security Description {desc!r} with "
-                          f"{prev['symbol']} — likely a ticker change "
-                          f"Webull reported without a reorganization row. "
-                          f"If so, add `GLOBAL {prev['symbol']} "
-                          f"{t['symbol']}` to ticker.map so both are one "
-                          f"position.", file=sys.stderr)
+            ordered = list(syms.items())
+            for (prev_sym, _rows), (sym, rows) in zip(ordered, ordered[1:]):
+                held = 0.0
+                for t in rows:
+                    held += float(t['quantity'])
+                    if held < -1e-9:
+                        break
+                else:
+                    continue
+                if id(t) not in own_ids:
+                    continue
+                # ATTENTION: on the run console (re-audit A2-0279; the
+                # plain warning reached only the .sum).
+                print(f"warning: ATTENTION: Webull {source}: {sym} goes "
+                      f"short with "
+                      f"a SALE on {t['date']} and shares the Security "
+                      f"Description {desc!r} with {prev_sym} — likely a "
+                      f"ticker change Webull reported without a "
+                      f"reorganization row. If so, add `GLOBAL {prev_sym} "
+                      f"{sym}` to ticker.map so both are one position.",
+                      file=sys.stderr)
 
     @staticmethod
     def _find_header(lines):

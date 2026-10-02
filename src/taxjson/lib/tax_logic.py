@@ -290,7 +290,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             year_rule,
             Rule("CA-DATE-03",
                  "Settle dates come from the broker when printed (one "
-                 "earlier than the trade date is refused)."),
+                 "earlier than the trade date is refused; one more than 7 "
+                 "days after it is booked as printed and flagged)."),
             Rule("CA-DATE-04",
                  "Otherwise: T+1 (from 2024-05-27 in CAD, 2024-05-28 in "
                  "USD), T+2 from 2017-09-05, T+3 before; other markets "
@@ -307,9 +308,12 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "a US-dollar line listed on the LSE is an LSE security "
                  "(.L) on the UK cycle.", cont=True),
             Rule("CA-DATE-06",
-                 "The generic importer uses a mapped settle column, else "
-                 "this cycle (settle_on_trade_date = true keeps the trade "
-                 "date).", cont=True),
+                 "The generic importer uses a mapped settle column (one "
+                 "more than 31 days after the trade is refused, more than "
+                 "7 is flagged), else this cycle (settle_on_trade_date = "
+                 "true keeps the trade date); its futures and its $0 "
+                 "option closes on the expiry day follow the two rules "
+                 "below.", cont=True),
             Rule("CA-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
             Rule("CA-DATE-08", "an option expiry is dated its expiry day.",
@@ -477,12 +481,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "The single pool needs a full `taxjson run` (not "
                  "`--account`, and no elections pending).", cont=True),
             Rule("CA-ACB-04",
-                 "Identical property is the same symbol with its currency "
-                 "suffix (.TO, .US, .V). Two listings are one security "
-                 "only when ticker.map joins them. Renames and splits "
-                 "carry the pool forward; a renamed ticker that trades "
-                 "again after its rename stays identical to the new "
-                 "symbol for the superficial-loss rule and is flagged "
+                 "Identical property is the same symbol with its listing "
+                 "suffix (.TO, .US). A Canadian listing is one symbol "
+                 "whatever venue the input names: ROOT.TO, with a TSX "
+                 "preferred series dotted (FTN.PR.A.TO) — .V (on a CAD "
+                 "row), .VN, .CN and .NE fold into .TO for broker exports "
+                 "and .tt lines alike. Two other listings are one "
+                 "security only when ticker.map joins them. Renames and "
+                 "splits carry the pool forward; a renamed ticker that "
+                 "trades again after its rename stays identical to the "
+                 "new symbol for the superficial-loss rule and is flagged "
                  "(ATTENTION) — it may be another company reusing it."),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
@@ -897,7 +905,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   keys=("tax_date",))),
             Rule("US-DATE-04",
                  "Settle dates come from the broker when printed (one "
-                 "earlier than the trade date is refused). "
+                 "earlier than the trade date is refused; one more than 7 "
+                 "days after it is booked as printed and flagged). "
                  "Otherwise: T+1 (from 2024-05-28 in USD, 2024-05-27 in "
                  "CAD), T+2 from 2017-09-05, T+3 before; other markets T+2 "
                  "(UK, EU and Swiss T+1 from 2027-10-11); options T+1, but "
@@ -912,9 +921,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "a US-dollar line listed on the LSE is an LSE security "
                  "(.L) on the UK cycle.", cont=True),
             Rule("US-DATE-06",
-                 "The generic importer uses a mapped settle column, else "
-                 "this cycle (settle_on_trade_date = true keeps the trade "
-                 "date).", cont=True),
+                 "The generic importer uses a mapped settle column (one "
+                 "more than 31 days after the trade is refused, more than "
+                 "7 is flagged), else this cycle (settle_on_trade_date = "
+                 "true keeps the trade date); its futures and its $0 "
+                 "option closes on the expiry day follow the two rules "
+                 "below.", cont=True),
             Rule("US-DATE-07", "Crypto settles on the trade date;",
                  cont=True),
             Rule("US-DATE-08", "an option expiry is dated its expiry day.",
@@ -1044,11 +1056,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-BASIS-06",
                  "Identical property is the same symbol with its listing "
-                 "suffix (.US, .TO); two listings are one security only "
-                 "when ticker.map joins them. A renamed ticker that "
-                 "trades again after its rename stays identical to the "
-                 "new symbol for the wash-sale rule and is flagged "
-                 "(ATTENTION) — it may be another company reusing it."),
+                 "suffix (.US, .TO). A Canadian listing is ROOT.TO "
+                 "whatever venue the input names (.V on a CAD row, .VN, "
+                 ".CN, .NE; a dotted preferred series), for broker "
+                 "exports and .tt lines alike; two other listings are one "
+                 "security only when ticker.map joins them. A renamed "
+                 "ticker that trades again after its rename stays "
+                 "identical to the new symbol for the wash-sale rule and "
+                 "is flagged (ATTENTION) — it may be another company "
+                 "reusing it."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line). "
@@ -1305,7 +1321,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "negative price keeps its sign) is "
                  "taken first in, first out from the open contracts, and "
                  "a non-USD contract's P/L is converted at the closing "
-                 "leg's rate."),
+                 "leg's rate. A fill at a negative price keeps its signed "
+                 "money (a buy then receives cash: a negative cost)."),
             Rule("US-FUT-02",
                  "Not modelled: §1256 year-end marking to market and the "
                  "60/40 split; report them on Form 6781 by hand.",

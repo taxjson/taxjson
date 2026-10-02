@@ -1754,6 +1754,16 @@ class IbBrokerage(BaseBrokerage):
         DFDV1 251121P... after a corporate action), so the opening and
         the assigned leg share ONE symbol and the premium folds."""
         symbol = raw
+
+        def _strike(text: str) -> str:
+            # The shared strike reader refuses a decimal comma; name
+            # the row so the user can find it (audit A2-1041).
+            try:
+                return option_strike_text(text)
+            except BrokerageParseError as exc:
+                raise BrokerageParseError(
+                    f"{where}: {asset_cat} symbol {raw!r}: {exc}") from exc
+
         # Strikes may carry a thousands separator (5,000): OPTION_STRIKE_RE
         # tries the grouped form first; the commas are dropped below.
         opt_match = re.search(r'^(.+?)\s+(\d{2})([A-Z]{3})(\d{2})\s+' + OPTION_STRIKE_RE + r'\s+([PC])$', raw)
@@ -1765,7 +1775,7 @@ class IbBrokerage(BaseBrokerage):
                             if not (opt_match or opt_match_monthly) else None)
         if opt_match:
             base, day, mon, yr, strike, right = opt_match.groups()
-            strike = option_strike_text(strike)
+            strike = _strike(strike)
             month = _MON_MAP.get(mon.upper())
             if month:
                 if asset_cat == 'Equity and Index Options':
@@ -1776,7 +1786,7 @@ class IbBrokerage(BaseBrokerage):
                 symbol = f"{base}{yr}{month}{day}{right}{encode_occ_strike(strike)}"
         elif opt_match_monthly:
             base, mon, yr, strike, right = opt_match_monthly.groups()
-            strike = option_strike_text(strike)
+            strike = _strike(strike)
             month = _MON_MAP.get(mon.upper())
             if month:
                 base = base.replace(' ', '.')
@@ -1805,7 +1815,7 @@ class IbBrokerage(BaseBrokerage):
                 symbol = f"{base}{ymd}{right}{encode_occ_strike(strike)}"
         elif opt_match_legacy:
             base, exp, right, strike = opt_match_legacy.groups()
-            strike = option_strike_text(strike)
+            strike = _strike(strike)
             base = base.replace(' ', '.')
             symbol = f"{base}{exp[2:]}{right}{encode_occ_strike(strike)}"
         # Strip all spaces as a fallback / cleanup (an OCC-padded
@@ -4045,8 +4055,17 @@ class IbBrokerage(BaseBrokerage):
                               for c in trade_cancels}
         self.trade_pairs: List[tuple] = []
         if trade_cancels:
-            _kept, _pairs, _unpaired = pair_cancellations(transactions)
+            _partials: list = []
+            _kept, _pairs, _unpaired = pair_cancellations(
+                transactions, partials=_partials)
             self.trade_pairs = [(dict(_o), dict(_c)) for _o, _c in _pairs]
+            # A Ca of one execution of a multi-fill order (A2-0298).
+            for _o, _c, _r in _partials:
+                print(f"note: {shown_name(path)}: IB cancelled (Ca) "
+                      f"{-_c['quantity']:g} of the {_o['symbol']} order of "
+                      f"{_o['quantity']:g} @ {_o['price']:g} on "
+                      f"{_o['date']} (one execution) — the order is "
+                      f"booked as {_r['quantity']:g}.", file=sys.stderr)
             _gone = {id(t) for pr in _pairs for t in pr}
             transactions[:] = _kept
             expiry_txs[:] = [t for t in expiry_txs if id(t) not in _gone]

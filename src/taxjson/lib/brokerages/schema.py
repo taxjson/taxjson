@@ -89,9 +89,14 @@ SCHEMA: Dict[str, Dict[str, Tuple[str, ...]]] = {
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # Market suffixes the toolkit understands. Bare symbols (no dot) are
 # legitimate crypto assets and are not suffix-checked.
-KNOWN_SUFFIXES = frozenset({'TO', 'US', 'AX', 'L', 'V', 'CN', 'NE'})
+# The Canadian venues are the one shared set (income_dating; .VN was
+# Canadian to the parsers but "unknown" here — audit A2-1077).
+from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
+KNOWN_SUFFIXES = frozenset({'US', 'AX', 'L'}) | _CA_VENUES
 
 _QTY_EPS = 1e-9
+# Futures symbol prefixes (lib/futures.py).
+_FUTURES_PREFIXES = ('F:', '/', '\\')
 _MONEY_EPS = 0.005
 
 
@@ -162,19 +167,24 @@ def validate_transactions(txs: List[Dict[str, Any]],
             # engine books those negative proceeds (core._trade_money).
             # Refusing them failed every `taxjson run` on a routine
             # penny close (audit S017-00). A negative BUY is still wrong.
-            # ... except a plain futures fill at a negative price (it
-            # receives money: a negative cost, audit A2-0092).
+            _sym = str(tx.get('symbol') or '')
+            _fut = _sym.startswith(_FUTURES_PREFIXES)
+            # A plain-futures BUY at a negative price RECEIVES cash: its
+            # signed (negative) cost is the right money, and the
+            # magnitude this rule used to force booked the loss as a
+            # gain (audit A2-0302).
+            _neg_fut_buy = (_fut and not is_option_symbol(_sym)
+                            and price < -_MONEY_EPS)
             if (net < -_MONEY_EPS and not qty < -_QTY_EPS
-                    and not (str(tx.get('symbol') or '').startswith('F:')
-                             and price < -_MONEY_EPS)):
+                    and not _neg_fut_buy):
                 errors.append(f"{_who(tx, i)}: trade net_amount must be "
                               f">= 0 (got {net}); direction belongs in "
                               f"the quantity sign")
             # A futures price can be negative (WTI, April 2020; a
             # calendar spread): booked correctly, so not an error
-            # there (audit S053-13).
-            if price < -_MONEY_EPS and not str(
-                    tx.get('symbol') or '').startswith('F:'):
+            # there (audit S053-13) — whichever futures prefix the
+            # symbol carries (F:, / or \, A2-1087/A2-1089).
+            if price < -_MONEY_EPS and not _fut:
                 errors.append(f"{_who(tx, i)}: negative price {price}")
             # Notional sanity: net_amount vs qty * price * multiplier
             # (brokers round, and fees sit inside net for buys / outside
@@ -190,8 +200,18 @@ def validate_transactions(txs: List[Dict[str, Any]],
             # strike) is checked too, net 0 included: a wrong or blank
             # Proceeds on it booked silently, even a negative ACB (audit
             # S017-02). A zero-price leg (the option side) is exempt.
+            _declared_raw = tx.get('multiplier')
+            try:
+                _has_size = float(_declared_raw or 0.0) > 0
+            except (TypeError, ValueError):
+                _has_size = False
+            # A futures contract size is never guessed: the 1 (or 100)
+            # guess put an ATTENTION on every generic-importer futures
+            # row (audit A2-1082). Checked only when declared.
             if price > 0 and (net > 0 if action == 'BUYSELL'
-                              else abs(qty) > _QTY_EPS):
+                              else abs(qty) > _QTY_EPS) \
+                    and not (_fut and not (_has_size
+                                           and action == 'BUYSELL')):
                 declared = tx.get('multiplier')
                 try:
                     declared = float(declared) if declared else 0.0
@@ -249,6 +269,22 @@ def validate_transactions(txs: List[Dict[str, Any]],
             warnings.append(f"{_who(tx, i)}: bare (crypto) symbol settles "
                             f"{tx['date_settle']}, not on its trade date "
                             f"— crypto has no settlement cycle")
+
+        # An option EXPIRY (a no-money BUYSELL leg) is dated its expiry
+        # day: one that expires Dec 31 and "settles" Jan 2 moves its loss
+        # to the next year (CA-DATE-08 / US-DATE-08; the twin of the
+        # crypto check, audit A2-1088). A trade or an exercise on the
+        # expiry day really settles T+1 (CA-DATE-04) and is not flagged.
+        if action == 'BUYSELL' and tx.get('date_settle') \
+                and abs(price) < _MONEY_EPS and abs(net) < _MONEY_EPS \
+                and is_option_symbol(_bare):
+            from taxjson.lib.core import parse_option_expiry
+            _exp = parse_option_expiry(_bare)
+            if _exp and str(tx['date_settle']) > _exp:
+                warnings.append(f"{_who(tx, i)}: the option expiry "
+                                f"settles {tx['date_settle']}, after the "
+                                f"expiry day {_exp} — an expiry is dated "
+                                f"its expiry day")
 
         # Suffix sanity: dotted symbols must end in a known market
         # suffix (bare symbols are crypto and exempt). OCC option
