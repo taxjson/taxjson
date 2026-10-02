@@ -53,6 +53,34 @@ class TestPendingClaimCarrybackWindow(unittest.TestCase):
         self.assertAlmostEqual(ledger["final_carryforward"], 5000.0)
         self.assertAlmostEqual(ledger["unmatched_claims"], 2000.0)
 
+    def test_carryback_reaches_the_third_prior_year_only(self):
+        # A2-1489 / A2-0838 (RPT10): a 2025 loss is offered back to
+        # 2022, 2023 and 2024 (T1A), never to 2021, earliest year first.
+        nets = {2021: {"net": 1000.0, "dispositions": 1},
+                2022: {"net": 2000.0, "dispositions": 1},
+                2023: {"net": 3000.0, "dispositions": 1},
+                2024: {"net": 4000.0, "dispositions": 1},
+                2025: {"net": -20000.0, "dispositions": 1}}
+        ledger = build_canada_ledger(nets, {})
+        by_year = {r["year"]: r for r in ledger["rows"]}
+        self.assertEqual(by_year[2025]["carryback_candidates"],
+                         [{"year": 2022, "amount": 2000.0},
+                          {"year": 2023, "amount": 3000.0},
+                          {"year": 2024, "amount": 4000.0}])
+
+    def test_pending_claim_three_years_back_is_met(self):
+        # The edge of the pending-claim window: a claim under 2022 is met
+        # by a 2025 loss (2025 = 2022 + 3), one under 2021 is not.
+        nets = {2021: {"net": 1000.0, "dispositions": 1},
+                2022: {"net": 1000.0, "dispositions": 1},
+                2025: {"net": -5000.0, "dispositions": 1}}
+        err = io.StringIO()
+        with redirect_stderr(err):
+            ledger = build_canada_ledger(nets, {2021: 1000.0,
+                                                2022: 1000.0})
+        self.assertAlmostEqual(ledger["final_carryforward"], 4000.0)
+        self.assertAlmostEqual(ledger["unmatched_claims"], 1000.0)
+
 
 class TestClaimedThousands(unittest.TestCase):
     """S027-13: '1,234.56' and '$1,234.56' are the forms a T1 / NOA

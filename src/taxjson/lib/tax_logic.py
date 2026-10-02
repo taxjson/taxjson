@@ -1554,6 +1554,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
+            Rule("US-EST-CARRY-ORDER",
+                 "A capital loss carryover entered as other losses has no "
+                 "character in the estimate: it offsets short-term gains "
+                 "first, then long-term gains, then up to $3,000 of "
+                 "ordinary income (Schedule D keeps a short- and a "
+                 "long-term carryover apart; the estimate does not).",
+                 cont=True),
             Rule("US-EST-NIIT-LOSS",
                  "That up-to-$3,000 capital loss deduction also reduces "
                  "net investment income for NIIT (Form 8960 line 5a).",

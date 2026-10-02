@@ -81,6 +81,7 @@ class TestCanadaTablesPinned(_EstimateCase):
 class TestCanadaAmtPinned(_EstimateCase):
     """G1-5: a binding AMT with every ATI term, to the cent."""
 
+    @rule("CA-RPT-03")
     def test_binding_amt_exact(self):
         r = te.estimate_canada(year=2026, realized=600000, eligible_div=0,
                                foreign_div=20000, pil=10000, staking=5000,
