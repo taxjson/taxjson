@@ -904,8 +904,18 @@ def prepare_books(transactions, sheltered_transactions=(),
         candidates = detect_phantoms(
             transactions + sheltered_transactions + affiliated_transactions,
             registered_accounts=_types)
+        # Options coded CLOSING that the books cannot back — a sale or a
+        # purchase, with the held contract under another root named
+        # (audit A2-0006: an RBC CLOSE CONTRACT booked as a new write).
+        from taxjson.lib.core import is_option_symbol as _is_opt
+        from taxjson.lib.option_close_check import (
+            unbacked_option_close_messages)
+        for _m in unbacked_option_close_messages(
+                transactions + sheltered_transactions
+                + affiliated_transactions):
+            print(_m, file=sys.stderr)
         for c in candidates:
-            if c.broker_says_closing:
+            if c.broker_says_closing and not _is_opt(c.symbol):
                 # The broker coded the sale CLOSING (IB code C): what it
                 # sold was bought before the data — not a short, not a
                 # written option, whatever the books do with it until

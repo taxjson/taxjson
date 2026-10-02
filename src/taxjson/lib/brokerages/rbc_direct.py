@@ -125,6 +125,9 @@ _RBC_REINVEST_AT_RE = re.compile(
 _RBC_TRANSFER_OUT_RE = re.compile(
     r'^\s*(?:TF[OW]\b|(?:[A-Z]{2,4}\s*-\s*)?(?:TRANSFER\s+OUT|DELIVER)\b)',
     re.I)
+# RBC's open/close marker at the end of an option trade's description:
+# "CALL .RCI.B 01/15/27 46 ROGERS COMMUNICATIONS INC CA CLOSE CONTRACT".
+_RBC_OPEN_CLOSE_RE = re.compile(r'\b(OPEN|CLOSE)\s+CONTRACT\b', re.I)
 _RBC_CIL_FRACTION_RE = re.compile(
     r'CASH\s+IN\s+LIEU\s+(?:OF\s+)?(?:A\s+)?FRAC', re.I)
 
@@ -1710,7 +1713,7 @@ class RbcBrokerage(BaseBrokerage):
             self._note(f"line {r.line}: non-option expiry (rights/warrants) "
                        f"booked as a $0 disposition of {symbol}")
 
-        return {
+        tx = {
             'action': action,
             'date': date,
             'time': '16:00:00' if is_expiry else self._time(r),
@@ -1730,6 +1733,29 @@ class RbcBrokerage(BaseBrokerage):
             'description': desc,
             '_expiry': is_expiry,
         }
+        oc = self._open_close(r, bool(occ))
+        if oc:
+            tx['open_close'] = oc
+        return tx
+
+    def _open_close(self, r, is_option: bool) -> str:
+        """The broker's own open/close marker on an option row, as the
+        neutral `open_close` evidence code IB rows carry ('O' / 'C'):
+        RBC writes "... OPEN CONTRACT" / "... CLOSE CONTRACT" at the end
+        of every option trade's description, and an expiry or an
+        assignment always closes. Read only for options (audit
+        A2-0006): a CLOSE CONTRACT sale whose position the books do not
+        hold — a .tt hand-off or an earlier export under another root,
+        RCI vs RCI.B — was booked as a NEW written call with no warning;
+        with the code, the gains run's broker-closing check names it."""
+        if not is_option:
+            return ''
+        m = _RBC_OPEN_CLOSE_RE.search(r.desc or '')
+        if m:
+            return 'O' if m.group(1).upper() == 'OPEN' else 'C'
+        if r.cls in ('expiry', 'assignment') or r.code in ('EXP', 'ASN'):
+            return 'C'
+        return ''
 
     def _check_trade_money(self, r, qty, price, net, is_option,
                            is_retraction) -> None:

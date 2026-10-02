@@ -1151,15 +1151,27 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
     # the trade that opened them in the books): the missing row is the
     # purchase, not the expiry (audit S013-00).
     _closing: set = set()
+    # One contract under two roots (a CLOSING row booked on RCX.B while
+    # the books hold RCX, audit A2-0266): both legs stay open past the
+    # expiry, and the fix is the ticker.map line, not a missing row.
+    _redescribed: Dict[str, str] = {}
     if any(is_option_symbol(str(h.get("symbol") or "")) for h in inv):
         try:
             from taxjson.lib.core import load_transactions
             from taxjson.lib.option_boundary import expired_open
+            from taxjson.lib.option_close_check import (
+                unbacked_option_closes)
             _base = cache / f"{name}_base.json"
             if _base.exists():
+                _txs = load_transactions(_base)
                 _closing = {x["symbol"] for x in expired_open(
-                    load_transactions(_base), int(year))
-                    if x.get("broker_closing")}
+                    _txs, int(year)) if x.get("broker_closing")}
+                for _f in unbacked_option_closes(_txs):
+                    if len(_f["partners"]) == 1:
+                        _p = _f["partners"][0][0]
+                        _fix = f"GLOBAL {_p} {_f['symbol']}"
+                        _redescribed.setdefault(_f["symbol"], _fix)
+                        _redescribed.setdefault(_p, _fix)
         except (OSError, ValueError, TypeError):
             _closing = set()
     for h in inv:
@@ -1174,11 +1186,20 @@ def _warn_expired_open_options(name: str, gains_json: Path, cache: Path,
         if not exp or exp >= cutoff:
             continue
         side = "long" if qty > 0 else "written"
+        if sym in _redescribed:
+            lines.append(
+                f"warning: {name}: {sym} expired {exp} and the books still "
+                f"hold {qty:g} ({side}): a CLOSING row was booked under "
+                f"another root of the same contract (see the ATTENTION "
+                f"line) — add to ticker.map:  {_redescribed[sym]}  — not "
+                f"a missing row.")
+            continue
         if sym in _closing:
             lines.append(
                 f"warning: {name}: {sym} expired {exp} and the books still "
                 f"hold {qty:g} ({side}), but the broker coded the trade "
-                f"that opened it CLOSING (IB code C): it closed a position "
+                f"that opened it CLOSING (IB code C / RBC CLOSE CONTRACT): "
+                f"it closed a position "
                 f"opened before the data — add the missing "
                 f"{'write' if qty > 0 else 'purchase'} (`taxjson "
                 f"find-missing-history`), not an expiry row.")
@@ -2452,6 +2473,10 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     if force or needs_rebuild(gains_json, *gains_deps):
         print("  gains")
         run_to_file(cmd, gains_json)
+    # The gains stage's ATTENTION lines (a broker-coded CLOSING row the
+    # books cannot back, audit A2-0006) — from the persisted .diag on
+    # EVERY run, cached or not; they sat only in the .sum.
+    echo_attention_lines(gains_json)
     if is_taxable:
         _warn_expired_open_options(name, gains_json, cache, year)
 

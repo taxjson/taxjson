@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **RBC: a CLOSE CONTRACT row the books cannot back is said out loud.**
+  RBC re-describes an option between yearly exports (.RCI in 2024,
+  .RCI.B in 2025; an adjusted .TRX1). With the opening position in a
+  `.tt` under the old root, the close was booked as a NEW written (or
+  long) option — its premium taxed in full, the real position left
+  open — with rc 0 and no warning. The parser now carries RBC's OPEN /
+  CLOSE CONTRACT marker (and expiries and assignments as closing) as
+  the `open_close` code, and the run console prints an ATTENTION line
+  for any option row coded closing that the books cannot back, naming
+  the contract held under the related root and the exact `ticker.map`
+  GLOBAL line. The expired-option warning points at that line instead
+  of a missing expiry row, and `taxjson handoff` accepts a re-described
+  root (same expiry, strike, quantity and cost) while failing a `.tt`
+  whose root this year's export closes under another spelling
+  (re-audit A2-0006, A2-0095, A2-0266, A2-0267).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those
