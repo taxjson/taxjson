@@ -388,6 +388,7 @@ option_grant_timing_since = 2025    # contracts written before this year keep cl
 # other_losses = 0
 # deductions = 0               # Canada: RRSP 20800, FHSA, RPP ... (full under AMT)
 # carrying_charges = 0         # Canada: line 22100 (50% under the 2024+ AMT)
+# long_term_losses = 0         # US: long-term carryover (other_losses is then the short-term one)
 
 # Optional — Canadian tax instalments (`taxjson instalments`, and a
 # compact block inside `taxjson estimate`):
@@ -478,7 +479,7 @@ Files the pipeline reads and writes (all map files are optional):
 | `taxjson ccd-sum` | Covered-call (short call) realized-gain summary per underlying over a window (default: tax year) — the windowed query twin of `reports/ccd.rpt`. Covers every account; the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
 | `taxjson leaps-sum` | Per-contract LEAPS summary — long option buys placed >3 months to expiry (default: tax year); only the long position's dispositions (a later write/buy-back of the same contract is covered-call P&L, in `ccd-sum`); the total is split into TAXABLE and SHELTERED parts when registered accounts contribute. |
 | `taxjson instalments` | Canadian tax instalments: what each of the four dates (Mar/Jun/Sep/Dec 15) calls for under your chosen basis, what you have paid, and the **offset interest** plus **s.163.1 penalty** that follow from any gap. The current-year basis is driven by `taxjson estimate` itself (AMT included). Interest uses CRA's published quarterly rates (built in; `prescribed_rate(s)` overrides), credit interest runs from the later of the payment date and January 1, and net interest of $25 or less is not charged; CRA charges instalment interest only if it sent you a reminder for the year, which the report says. Configure `[instalments]` in `taxjson.toml`; `--json` for machines. |
-| `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses`, and for Canada `--deductions` (RRSP 20800, FHSA, RPP ...) / `--carrying-charges` (line 22100) (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
+| `taxjson estimate` | The realized-gains summary table followed by the marginal tax **estimate**: tax(other income + investment income) − tax(other income). Canada projects also get an **AMT check** (post-2024 rules: gains at 100%, no DTC, 20.5% over the exemption + provincial piggyback) — shown binding-or-not, with the top-up and 7-year carryforward when it binds. Canada: 50% inclusion, eligible gross-up/DTC, FTC from the books' actual TAX rows, ON/BC/AB (`--province`, or `province` under `[settings]`). `--other-income`/`--other-losses` (in a US project the short-term carryover; `--long-term-losses` the long-term one), and for Canada `--deductions` (RRSP 20800, FHSA, RPP ...) / `--carrying-charges` (line 22100) (or the `[estimate]` config block, which `instalments` reads too), `--verbose` trace, `--json`. Planning numbers, never filing numbers. |
 | `taxjson sum` / `list` / `divs-sum` / `trades-sum` / `fees-sum` | Roll-up summaries — see below. `list --date YYYY-MM-DD` shows positions AS OF that date (each account's books recomputed alone via the engine's `--as-of` cutoff, on the project's date basis — the settlement date unless `tax_date = "trade"`, so a sale traded Dec 31 that settles in January is still held at Dec 31, as in the gains year and `t1135`: per-account ACB — not the s.47 blend across taxable accounts that plain `list` and the return use — with in-account deferred wash and phantoms.json applied; the books are already ticker.map-consolidated, and the cross-account wash pass is not in it); plain `list` shows the positions at the end of the books (the header names the date); `list --negative` shows only negative-quantity positions — real shorts, or (in accounts that can't short) missed corporate actions / import gaps. Ends with a **FOR THE RETURN** block over the taxable accounts — Canada: one row per Schedule 3 line (line 4 shares & fund units 13199/13200; line 6 options, futures & other properties 15199/15300; line 7 crypto-assets 15200/15301 — 15199/15300 before 2025; for 2024, January 1 – June 24 on the Period 1 codes 10689/10690 and 10693/10694) with PROCEEDS, COST(ACB), OUTLAYS, GAIN and the superficial losses DENIED, on the Schedule 3 convention (a short sale's proceeds as PROCEEDS and its cover as ACB, sell commissions as outlays; a denied loss REDUCES the ACB shown so proceeds − ACB − outlays is the allowed gain, the denial going onto the replacement's ACB), plus the `fx-cash` estimate for line 15300; USA: Form 8949's own Part I/II (d) proceeds, (e) cost, (g) adjustment, (h) gain (from 2025 the crypto accounts' digital-asset boxes G/H/I and J/K/L on rows of their own). Rows equal `form-export`'s line totals (each row rounded to the cent, as filed — when that differs from the gains files' unrounded total by a cent or more the block says so, and `--json` carries `engine_gain_unrounded`); `--json` adds the per-account split. |
 | `taxjson shares [--options] [--taxable\|--sheltered] [--sort qty] [--json]` | Combined quantity held of each symbol across all accounts (post ticker.map, wash-adjusted where built) with a per-account breakdown and combined book cost; shorts net against longs. Option contracts only with `--options`; futures contracts are left out. Like `list`, it is the end of the books (the header says the date), not the tax year's Dec 31. |
 | `taxjson option-boundary [--json]` | Written options whose write and close straddle a tax-year boundary, or that are open at year end: where the premium and any later amount land under ITA s.49 for the timing in force, and — using the `filed/` locks — whether a filed year needs a T1-ADJ (an assignment after the grant year was filed, s.49(4)). |
@@ -654,7 +655,10 @@ the earliest table also says the post-2024 AMT shown did not apply).
   carrying charges at 50%. Deductions not entered are not modelled, so
   an RRSP year left at 0 overstates the tax. Canadian-listed
   dividends are treated as eligible (38% gross-up + DTC) — non-eligible
-  dividends are not modelled; foreign dividends as ordinary income, credited (FTC) with the foreign
+  dividends are not modelled, and a Canadian trust's distribution (ETF,
+  REIT or fund units) is counted the same way, because the export does
+  not carry its T3 split (box 49 eligible dividends, 26 other income, 21
+  capital gains, 42 return of capital): take the real split from the T3; foreign dividends as ordinary income, credited (FTC) with the foreign
   tax the books actually withheld (TAX rows, capped at 15% of the
   dividends; the treaty 15% is assumed for an account whose books carry
   no TAX rows). A crypto account's dividends are staking rewards:
@@ -682,8 +686,11 @@ the earliest table also says the post-2024 AMT shown did not apply).
   instalments due); the output says so. See KNOWN_ISSUES.
 - **USA**: single filer, standard deduction. ST gains are ordinary; LT
   gains and (assumed-qualified) dividends stack on top at the 0/15/20%
-  brackets; losses net ST first, then LT, then up to $3,000 of ordinary
-  income (a net-loss year shows a negative estimate — a saving), and
+  brackets; a capital loss carryover keeps its term — `--other-losses`
+  is the short-term carryover (Schedule D line 6) and
+  `--long-term-losses` (or `[estimate] long_term_losses`) the long-term
+  one (line 14): each nets against its own term's gains first, then the
+  other term's, then up to $3,000 of ordinary income (a net-loss year shows a negative estimate — a saving), and
   that deduction also reduces net investment income; the carryforward
   shown counts as used only what taxable income absorbs (Capital Loss
   Carryover Worksheet line 4); NIIT 3.8% above $200k MAGI; no foreign

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- tax-logic states every rule the estimate and instalments apply:
+  Canada's loss netting and s.111(1)(b) cap, deductions and carrying
+  charges (50% in the AMT base), the BPA phase-down, the provinces
+  modelled (ON surtax and Health Premium; QC refused), the provincial
+  foreign tax credit (T2036), the AMT base, the rate-table vintage
+  fallback (both countries), that a Canadian trust's distribution is
+  counted as an eligible dividend because the T3 split is not in the
+  export (also in the printed assumptions), and the instalment rules —
+  the ITA 161(4.01) least-cumulative schedule, credit interest
+  offsetting but never refunded, the $25 floor, the s.163.1 penalty and
+  an unknown prior year assumed to meet the test (CA-EST-*, US-EST-
+  VINTAGE, CA-INST-*; re-audit A2-0821, A2-0824, A2-1463, A2-1464,
+  A2-0828, A2-0825).
+- US estimate: a capital loss carryover keeps its term — --other-losses
+  is the short-term carryover (Schedule D line 6) and the new --long-
+  term-losses (or [estimate] long_term_losses) the long-term one (line
+  14); each offsets its own term's gains first. A long-term carryover
+  used to be applied to short-term gains first, understating the tax.
+  The --other-losses help no longer cites the Canadian 50% inclusion in
+  a US project; --long-term-losses is refused in a Canada project (US-
+  EST-CARRY-TERM; re-audit A2-0481, A2-0809).
 - tax-logic states rules the code already applies: a US project keeps
   sheltered (IRA) accounts out of Form 8949 and the totals (US-
   BASIS-07); the T1135 test covers these books only and the $250,000

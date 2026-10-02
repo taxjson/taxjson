@@ -23,8 +23,10 @@ and disclosed by the caller:
     BPA phase-down, the Ontario surtax and the Ontario Health Premium
     are modelled; QC abatement and low-income reductions are NOT.
   - USA: single filer, standard deduction; dividends assumed QUALIFIED
-    (stack with LT); PIL and staking ordinary; --other-losses net ST
-    first, then LT, excess offsets up to $3,000 of ordinary income;
+    (stack with LT); PIL and staking ordinary; --other-losses is the
+    short-term carryover and --long-term-losses the long-term one, each
+    netted in its own column, then across, excess offsets up to $3,000
+    of ordinary income;
     NIIT 3.8% over $200k MAGI; no state tax.
 
 `_VINTAGES` holds one table set per published tax year;
@@ -595,7 +597,10 @@ def _canada_notes(prov_key: str, prov: Dict[str, Any],
 
 CA_ASSUMPTIONS = (
     "Assumes: Canadian issuers' dividends are all ELIGIBLE (non-eligible "
-    "dividends would be taxed higher) except the T5 box 18 capital-gains "
+    "dividends would be taxed higher) — a Canadian trust's distribution "
+    "too (its T3 split into eligible dividends, other income, capital "
+    "gains and return of capital is not in the export) — except the T5 "
+    "box 18 capital-gains "
     "dividends named in capital_gains_dividends.map (taxed as capital "
     "gains); foreign withholding creditable "
     "up to 15%; crypto staking is ordinary income; no QC abatement or "
@@ -755,15 +760,25 @@ def _usa_tax(ordinary: float, pref: float) -> Dict[str, Any]:
 def estimate_usa(*, st: float, lt: float, qualified_div: float,
                  year=None,
                  pil: float, other_income: float,
-                 other_losses: float) -> Dict[str, Any]:
+                 other_losses: float,
+                 lt_losses: float = 0.0) -> Dict[str, Any]:
+    """`other_losses`: the SHORT-term capital loss carryover (Schedule D
+    line 6); `lt_losses`: the LONG-term one (line 14). Each nets in its
+    own column first (lines 7 and 15), then the columns cross-net
+    (line 16) and a net loss offsets up to $3,000 of ordinary income
+    (tax-logic US-EST-CARRY-TERM; re-audit A2-0481 / A2-0809: one
+    carryover applied to short-term gains first understated the tax of
+    a long-term carryover)."""
+    import math
+    for _n, _v in (("other_losses", other_losses),
+                   ("lt_losses", lt_losses)):
+        if not math.isfinite(float(_v)) or float(_v) < 0:
+            raise ValueError(f"{_n} must be a non-negative finite "
+                             f"amount, got {_v!r}")
     pick = apply_vintage(year)
-    # Carryover losses net ST first (highest-taxed), then LT; excess
-    # offsets up to $3,000 of ordinary income; the rest carries on.
-    loss = other_losses
-    st_net = st - min(loss, max(0.0, st)) if st > 0 else st
-    loss = max(0.0, loss - max(0.0, st - st_net))
-    lt_net = lt - min(loss, max(0.0, lt)) if lt > 0 else lt
-    loss = max(0.0, loss - max(0.0, lt - lt_net))
+    st_net = st - float(other_losses)
+    lt_net = lt - float(lt_losses)
+    loss = 0.0
     # Schedule D cross-netting BEFORE any clamping: a loss in one
     # character offsets the other's gain (the residual loss keeps its
     # own character). Clamping first silently discarded the losing

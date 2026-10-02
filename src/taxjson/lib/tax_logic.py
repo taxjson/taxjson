@@ -1003,6 +1003,62 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "foreign dividends as ordinary income with withholding "
                  "credited up to 15%;", cont=True),
             Rule("CA-RPT-06", "interest is left out.", cont=True),
+            Rule("CA-EST-TRUST",
+                 "A Canadian trust's distribution (an ETF, REIT or fund "
+                 "unit's T3 income) is counted with the eligible "
+                 "dividends too: the export does not give the T3 split "
+                 "(box 49 eligible dividends, box 26 other income, box "
+                 "21 capital gains, box 42 return of capital), so the "
+                 "estimate is close for an equity fund that flows out "
+                 "eligible dividends and off for a REIT or bond fund — "
+                 "the T3 decides.", cont=True),
+            Rule("CA-EST-LOSSES",
+                 "Net capital losses carried forward (--other-losses, "
+                 "full dollars) are netted against the year's gains "
+                 "before the 50% inclusion and used only up to them "
+                 "(s.111(1)(b)); the rest is shown as unused. They are "
+                 "deducted below net income (line 25300), so the "
+                 "net-income tests (the BPA phase-down) still see the "
+                 "gain."),
+            Rule("CA-EST-DEDUCT",
+                 "--deductions (lines 20700-23500 the AMT allows in "
+                 "full: RRSP, FHSA, RPP ...) and --carrying-charges "
+                 "(line 22100) lower net and taxable income, other "
+                 "income first, never below zero; the AMT base takes the "
+                 "deductions in full and the carrying charges at 50%."),
+            Rule("CA-EST-BPA",
+                 "The federal basic personal amount phases down on net "
+                 "income from the enhanced amount to the minimum between "
+                 "the starts of the 29% and 33% brackets; it is the only "
+                 "non-refundable credit modelled.", cont=True),
+            Rule("CA-EST-PROV",
+                 "Provinces: Ontario (with its surtax and the Ontario "
+                 "Health Premium, added after every credit), British "
+                 "Columbia and Alberta. Quebec and the other provinces "
+                 "are refused (no Quebec abatement, no low-income "
+                 "reductions)."),
+            Rule("CA-EST-FTC",
+                 "Foreign withholding is credited up to 15% of the "
+                 "foreign dividends (the books' TAX rows, else 15% "
+                 "assumed); what federal tax cannot absorb is credited "
+                 "against provincial tax (form T2036), limited to the "
+                 "provincial tax times foreign income over net income.",
+                 cont=True),
+            Rule("CA-EST-AMT",
+                 "The AMT check (post-2024 rules): 20.5% over an "
+                 "exemption at the start of the 29% bracket, on gains at "
+                 "100% (the claimable carryforward at 50%), dividends at "
+                 "their actual amount with no credit, the other income, "
+                 "the BPA credit at 50% and the foreign tax credit in "
+                 "full; the provincial share is the province's factor of "
+                 "the federal excess (Ontario's surtax recomputed on it)."),
+            Rule("CA-EST-VINTAGE",
+                 "Rates, brackets and credits are the tax year's own "
+                 "table; a year with none uses the newest earlier table "
+                 "and a year before the earliest uses the earliest (the "
+                 "printed vintage and a note say so — for such an early "
+                 "year the AMT shown is the post-2024 regime, which did "
+                 "not apply then)."),
             Rule("CA-RPT-10",
                  "`taxjson carryover`: the net-capital-loss ledger in 100% "
                  "amounts (the inclusion rate is applied on the return); a "
@@ -1025,6 +1081,24 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "s.161 interest at CRA's prescribed rate. A payment "
                  "made before January 1 counts only when its row says "
                  "`tax_year = YEAR`, and earns credit from January 1."),
+            Rule("CA-INST-PRIOR",
+                 "The prior-year test fails only when both earlier years' "
+                 "net tax is given and both are $3,000 or less; a year "
+                 "not given is assumed to meet it, so instalments are "
+                 "reported as required.", cont=True),
+            Rule("CA-INST-LEAST",
+                 "Interest is charged on the deemed schedule of ITA "
+                 "161(4.01): on each due date the least cumulative "
+                 "amount of the current-year, prior-year and "
+                 "CRA-reminder methods the figures support.", cont=True),
+            Rule("CA-INST-INTEREST",
+                 "Interest earned on early or extra payments offsets the "
+                 "charge but is never refunded, and net interest of $25 "
+                 "or less is not charged.", cont=True),
+            Rule("CA-INST-PENALTY",
+                 "The s.163.1 penalty is 50% of the net interest over "
+                 "the greater of $1,000 and 25% of the interest had "
+                 "nothing been paid.", cont=True),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "
@@ -1692,6 +1766,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "offsetting up to "
                  "$3,000 of ordinary income; foreign tax credits, "
                  "interest and state tax are left out.", cont=True),
+            Rule("US-EST-CARRY-TERM",
+                 "A capital loss carryover keeps its term: --other-losses "
+                 "is the short-term carryover (Schedule D line 6) and "
+                 "--long-term-losses the long-term one (line 14); each "
+                 "offsets gains of its own term first, the rest the other "
+                 "term's (line 16).", cont=True),
             Rule("US-EST-NIIT-LOSS",
                  "That up-to-$3,000 capital loss deduction also reduces "
                  "net investment income for NIIT (Form 8960 line 5a).",
@@ -1700,6 +1780,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "The carryforward it shows counts as used only the part "
                  "of the $3,000 that taxable income absorbs (Capital Loss "
                  "Carryover Worksheet line 4).", cont=True),
+            Rule("US-EST-VINTAGE",
+                 "Brackets, the standard deduction and the capital-gain "
+                 "brackets are the tax year's own table; a year with none "
+                 "uses the newest earlier table and a year before the "
+                 "earliest uses the earliest (the printed vintage and a "
+                 "note say so).", cont=True),
             Rule("US-RPT-08",
                  "`taxjson carryover`: the short- and long-term capital "
                  "loss carryover (Schedule D worksheet), assuming the "

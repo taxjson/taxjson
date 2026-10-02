@@ -276,6 +276,7 @@ CONFIG_COUNTRY: Dict[str, str] = {
     "[instalments]": CANADA,
     "[estimate] deductions": CANADA,
     "[estimate] carrying_charges": CANADA,
+    "[estimate] long_term_losses": USA,
 }
 
 CONFIG_WHY: Dict[str, str] = {
@@ -283,6 +284,9 @@ CONFIG_WHY: Dict[str, str] = {
                      "not modelled",
     "[estimate] deductions": "lines 20700-23500 of the Canadian return",
     "[estimate] carrying_charges": "line 22100 of the Canadian return",
+    "[estimate] long_term_losses": "the long-term capital loss carryover "
+                                   "(Schedule D line 14); a Canadian net "
+                                   "capital loss has no term",
 }
 
 # CLI flags owned by one country: the engine CLIs' (taxjson-gains,
@@ -296,6 +300,7 @@ FLAG_COUNTRY: Dict[str, str] = {
     "--province": CANADA,
     "--deductions": CANADA,
     "--carrying-charges": CANADA,
+    "--long-term-losses": USA,
     "--corporate-distribution": CANADA,
     "--ric-january-dividend": USA,
     "--slip-gains": CANADA,
@@ -310,6 +315,9 @@ FLAG_WHY: Dict[str, str] = {
     "--province": "provincial tax in the Canadian estimate",
     "--deductions": "lines 20700-23500 of the Canadian return",
     "--carrying-charges": "line 22100 of the Canadian return",
+    "--long-term-losses": "the long-term capital loss carryover (Schedule "
+                          "D line 14); a Canadian net capital loss has "
+                          "no term",
     "--corporate-distribution": "ITA s.104(13) trust income dating",
     "--ric-january-dividend": "IRC §852(b)(7) / §857(b)(9)",
     "--slip-gains": "T5 box 18 capital-gains dividends (ITA s.130.1(4) / "
@@ -537,6 +545,7 @@ _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
                "--province": "province",
                "--deductions": "deductions",
                "--carrying-charges": "carrying_charges",
+               "--long-term-losses": "long_term_losses",
                "--corporate-distribution": "corporate_distribution",
                "--ric-january-dividend": "ric_january_dividend",
                "--slip-gains": "slip_gains",
