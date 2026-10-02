@@ -44,6 +44,56 @@
   "unconsumed" warning names that window instead of saying the leg
   never arrived. tax-logic CA-OPT-08 / US-OPT-05 (audit A2-0050,
   A2-0051, A2-0052, A2-0195, A2-0196, A2-0203).
+- **US: an unapplied return of capital or notional distribution is on
+  the console.** A basis adjustment the US engine cannot apply (no
+  shares held after a full sale, or the position short) printed only to
+  the .sum; `taxjson run` now echoes it as `warning: ATTENTION:
+  unapplied basis adjustment: ...`, and a basis increase is no longer
+  called a return of capital (A2-0199, A2-0964). The US stock-dividend
+  notes print only for the tax year's dividends (A2-0956).
+- tax-logic states engine behaviour that only KNOWN_ISSUES described:
+  Canada's basis increase on an emptied pool goes to the next purchase
+  and an ADJUST on a short is the short seller's compensation payment
+  (CA-ACB-13/14); the US leaves both unapplied (US-ROC-04); §1091(e)(1)
+  is not modelled (US-WASH-19); an IRA buy sold before the loss still
+  makes it permanent (US-WASH-11); Schedule 3's acquisition year comes
+  from trade-date days held (CA-DISP-07) (A2-0062, A2-0962, A2-0963,
+  A2-0964).
+- **US: a loss on a futures contract (or an option on one) is no longer
+  disallowed as a wash sale.** A §1256 contract is not stock or
+  securities; a re-bought F:CLG7 had its whole loss disallowed with no
+  flag. The re-purchase is now flagged for a manual check
+  (`futures_vs_loss`); Canada keeps denying (s.54 covers any property)
+  (tax-logic US-WASH-18; A2-0053).
+- **US: same-moment replacement lots of two accounts follow the
+  taxjson.toml order**, as US-DATE-13 states, not the account label:
+  renaming an account moved a wash-sale deferral to the other account's
+  lot (A2-0200, A2-0208).
+- **US: a stock dividend posted after the shares were sold is not a
+  wash-sale purchase** (US-STKDIV-01); it washed part of the loss. The
+  warning now names the sold-before-paid case (A2-0205).
+- **US: wash-sale replacement lots keep the right shares, units and
+  holding periods.** A replacement bought before a split got the
+  disallowed loss on the pre-split share count (half the matched
+  shares), creating a fake loss and an inflated gain at its sale
+  (A2-0054); a later purchase matched by two losses became one merged
+  block with an averaged bump and the earliest tacked date, so a
+  short-term block was reported long-term (A2-0060: now one block per
+  matched loss); a short-side replacement bigger than the loss spread
+  the proceeds reduction over every share of the new short, moving loss
+  into a later year (A2-0206: now share for share, as on the long side).
+- **US: shares closed by one sale never wash each other.** A sale that
+  closed an old lot together with shares bought in the last 30 days
+  washed the old lot's loss into the very shares it was selling, split
+  them, and cascaded one chunk at a time: a 1-share old lot sold with
+  100 recent shares gave 101 Form 8949 rows (100 code W, 55,500 of
+  adjustments on a 1,060 loss, the short-term loss reported long-term),
+  and a 0.001-share lot 100,001 rows. Shares (or shorts) closed by the
+  same sale or cover — one row, or the same-second fills of one order —
+  are no longer replacements for each other; shares kept after the sale
+  still are (tax-logic US-WASH-17; audit A2-0001, A2-0017, A2-0553).
+  The wash radar's US EXITABLE advice now says the full exit must be
+  one order.
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

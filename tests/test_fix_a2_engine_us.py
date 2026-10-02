@@ -1,0 +1,439 @@
+"""Re-audit-2 fixes in the US engine (lib/core.USATaxRules).
+
+All data is synthetic.
+"""
+import contextlib
+import io
+import time
+import unittest
+
+from taxjson.lib.core import TaxTransaction, USATaxRules
+from tax_rules import rule, rule_absent
+from tax_rules.dual import gains_both, tx
+
+
+def _t(d, q, p, *, sym='XYZ.US', acct='T1', tm='10:00:00', action='BUYSELL',
+       **kw):
+    return TaxTransaction(action=action, date=d, date_settle=d, time=tm,
+                          symbol=sym, quantity=q, price=p,
+                          net_amount=round(abs(q * p), 6), currency='USD',
+                          account=acct, **kw)
+
+
+def _us(rows, **kw):
+    with contextlib.redirect_stderr(io.StringIO()):
+        return USATaxRules().compute_gains(rows, **kw)
+
+
+class TestSameSaleNoCascade(unittest.TestCase):
+    """A2-0001 / A2-0017 / A2-0553: shares (or shorts) closed by the SAME
+    sale (cover) are never replacements for each other's losses — no
+    cascade, no fragmentation, no compounding of the tacked holding
+    period."""
+
+    @rule("US-WASH-17")
+    def test_tiny_old_lot_whole_position_sold(self):
+        # A2-0001: A 1 sh @100 (2024), B 100 @50 (2025-02-20), sell 101 @40.
+        for a in (1.0, 0.001):
+            rows = [_t('2024-06-03', a, 100), _t('2025-02-20', 100, 50),
+                    _t('2025-03-03', -(100 + a), 40)]
+            t0 = time.time()
+            r = _us(rows)
+            self.assertLess(time.time() - t0, 2.0)
+            tr = r['transactions']
+            self.assertEqual(len(tr), 2, a)
+            self.assertEqual(r['wash_sales'], [])
+            self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
+            self.assertAlmostEqual(r['summary']['total_gain'],
+                                   -(a * 60 + 1000), places=4)
+            self.assertTrue(all(x['term'] == 'SHORT_TERM' for x in tr))
+
+    @rule("US-WASH-17")
+    def test_buy_time_split_seed(self):
+        # A2-0017: a washed fraction seeds the buy-time sub-lot; the whole
+        # replacement is then sold in one sale: 2 rows, no new wash sale.
+        for a in (1.0, 0.001):
+            rows = [_t('2024-06-03', a, 60), _t('2025-03-03', -a, 40),
+                    _t('2025-03-10', 100, 45), _t('2025-03-20', -100, 40)]
+            r = _us(rows)
+            w = [x for x in r['transactions'] if x['date'] == '2025-03-20']
+            self.assertEqual(len(w), 2, a)
+            self.assertTrue(all(x['disallowed_amount'] == 0 for x in w))
+            self.assertEqual(len(r['wash_sales']), 1)
+            self.assertAlmostEqual(r['summary']['total_gain'],
+                                   -(a * 20 + 500), places=4)
+
+    @rule("US-WASH-17")
+    def test_one_cover_closes_two_shorts(self):
+        # A2-0553 short side: one buy-to-cover of 200 closes an old short
+        # and one opened 4 days earlier; neither replaces the other.
+        rows = [_t('2026-01-02', -100, 50), _t('2026-03-02', -100, 45),
+                _t('2026-03-06', 200, 60)]
+        r = _us(rows)
+        self.assertEqual(r['wash_sales'], [])
+        self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
+        self.assertAlmostEqual(r['summary']['total_gain'], -2500.0)
+
+    @rule("US-WASH-06", "US-WASH-17")
+    def test_retained_shares_of_same_purchase_still_replace(self):
+        # US-WASH-06 is kept: shares KEPT after the sale (bought within 30
+        # days before it) are replacements. A 100 old, B 100 recent; sell
+        # A and 50 of B: A's loss washes into B's 50 retained shares.
+        rows = [_t('2024-06-03', 100, 100), _t('2025-02-20', 100, 50),
+                _t('2025-03-03', -150, 40)]
+        r = _us(rows)
+        self.assertAlmostEqual(r['summary']['total_disallowed'], 3000.0,
+                               places=4)
+        self.assertEqual(len(r['transactions']), 2)
+
+    @rule("US-WASH-17")
+    def test_same_second_fills_of_one_order(self):
+        # A full exit split into two fills at one timestamp is one
+        # disposition: no wash between the fills.
+        rows = [_t('2024-06-03', 100, 100), _t('2026-03-02', 100, 55),
+                _t('2026-03-06', -150, 40, tm='10:31:07'),
+                _t('2026-03-06', -50, 40, tm='10:31:07')]
+        r = _us(rows)
+        self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
+        self.assertEqual(r['wash_sales'], [])
+
+
+class TestFullExitPlanningAgrees(unittest.TestCase):
+    """A2-0553: the radar's US EXITABLE advice ("a full exit is fine")
+    now matches the engine, and says the exit must be one order."""
+
+    @rule("US-WASH-17", "US-PLAN-01")
+    def test_engine_full_exit_one_sale_not_washed(self):
+        rows = [_t('2024-06-03', 100, 100), _t('2026-03-02', 100, 55),
+                _t('2026-03-06', -200, 40)]
+        r = _us(rows)
+        self.assertEqual(r['wash_sales'], [])
+        st = [x for x in r['transactions'] if x['acquired_date']
+              == '2026-03-02']
+        self.assertEqual(st[0]['term'], 'SHORT_TERM')
+
+    @rule("US-PLAN-01")
+    def test_radar_us_exitable_says_one_order(self):
+        import json
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        from test_fix_planning import REPO_ROOT, _row
+        tax = [_row("2024-06-03", "XYZ.US", 100, 10000.0, currency="USD"),
+               _row("2026-09-28", "XYZ.US", 100, 5500.0, currency="USD")]
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp) / "margin_base.json"
+            t.write_text(json.dumps({"transactions": tax}))
+            r = subprocess.run(
+                [sys.executable, "-m", "taxjson.bin.taxjson_wash_radar",
+                 "--country", "usa", "--taxable", str(t), "--date",
+                 "2026-10-01", "--all", "--json"], cwd=REPO_ROOT,
+                capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = {row["ticker"]: row for sec in json.loads(r.stdout)["sections"]
+                for row in sec["rows"]}
+        adv = rows["XYZ.US"]["advisory"]
+        self.assertIn("EXITABLE", adv)
+        self.assertIn("in one order at a loss is fine now", adv)
+
+
+def _by_year(res):
+    out = {}
+    for g in res['transactions']:
+        if g.get('raw_gain') is None:
+            continue
+        y = g['date'][:4]
+        out[y] = round(out.get(y, 0.0) + g['gain'], 2)
+    return out
+
+
+class TestReplacementSubLots(unittest.TestCase):
+    """A2-0054 (split units), A2-0060 (one sub-lot per matched loss),
+    A2-0206 (short side split share for share)."""
+
+    def _split_book(self, split):
+        k = 2 if split else 1
+
+        def row(d, q, p, acct):
+            return TaxTransaction(action='BUYSELL', date=d, date_settle=d,
+                                  time='10:00:00', symbol='XYZ.US',
+                                  quantity=q, price=p, net_amount=-q * p,
+                                  currency='USD', account=acct)
+        rows = [row('2025-03-11', 140, 8, 'B')]
+        if split:
+            rows.append(TaxTransaction(
+                action='SPLIT', date='2025-03-20', date_settle='2025-03-20',
+                time='00:00:01', symbol='XYZ.US', quantity=2.0,
+                currency='USD', account='B'))
+        rows += [row('2025-04-04', 30 * k, 11 / k, 'A'),
+                 row('2025-04-07', -30 * k, 8 / k, 'A'),
+                 row('2025-06-23', -140 * k, 11 / k, 'B')]
+        ira = [row('2025-06-30', 10 * k, 11 / k, 'IRA')]
+        return _us(rows, sheltered_transactions=ira, per_account_basis=True)
+
+    @rule("US-WASH-09", "US-CORP-01")
+    def test_bump_lands_on_post_split_matched_shares(self):
+        a, b = self._split_book(False), self._split_book(True)
+        ta = sum(e['gain'] for e in a['transactions'])
+        tb = sum(e['gain'] for e in b['transactions'])
+        self.assertAlmostEqual(ta, 330.0, places=2)
+        self.assertAlmostEqual(tb, 330.0, places=2)
+        bsale = [e for e in b['transactions'] if e['account'] == 'B']
+        self.assertAlmostEqual(bsale[0]['qty'], 60.0)
+        self.assertAlmostEqual(bsale[0]['cost'], 330.0, places=2)
+
+    @rule("US-WASH-10")
+    def test_later_purchase_matched_by_two_losses_keeps_two_blocks(self):
+        txs = [_t('2023-01-05', 100, 50), _t('2025-01-02', 100, 60),
+               _t('2025-03-03', -100, 40), _t('2025-03-04', -100, 40),
+               _t('2025-03-10', 200, 40),
+               _t('2025-06-02', -100, 45), _t('2025-07-01', -100, 45)]
+        r = _us(txs)
+        later = [e for e in r['transactions'] if e['date'] >= '2025-06-01']
+        self.assertEqual([round(e['cost'], 2) for e in later],
+                         [5000.0, 6000.0])
+        self.assertEqual([e['term'] for e in later],
+                         ['LONG_TERM', 'SHORT_TERM'])
+        self.assertEqual([round(e['gain'], 2) for e in later],
+                         [-500.0, -1500.0])
+
+    @rule("US-WASH-02", "US-WASH-05")
+    def test_short_replacement_bigger_than_loss_is_split(self):
+        def row(d, q, p):
+            return _t(d, q, p, sym='XYZ.US', acct='margin')
+        pending = [row('2025-01-02', -100, 10), row('2025-02-03', 100, 12),
+                   row('2025-02-10', -300, 11), row('2025-12-15', 100, 11),
+                   row('2026-01-15', 200, 11)]
+        existing = [row('2025-01-02', -100, 10), row('2025-01-27', -300, 11),
+                    row('2025-02-03', 100, 12), row('2025-12-15', 100, 11),
+                    row('2026-01-15', 200, 11)]
+        for book in (pending, existing):
+            yrs = _by_year(_us(book))
+            self.assertEqual(yrs, {'2025': -200.0, '2026': 0.0})
+
+
+class TestSameMomentAccountOrder(unittest.TestCase):
+    """A2-0200 / A2-0208: same-moment replacement lots of different
+    accounts follow the merged book's order (taxjson.toml order), never
+    the account label."""
+
+    def _book(self, first, second):
+        a = [_t('2025-01-06', 100, 20, acct='zeta'),
+             _t('2025-03-03', -100, 18, acct='zeta'),
+             _t('2025-03-10', 100, 10, acct='zeta', tm='09:30:00'),
+             _t('2025-11-03', -100, 9, acct='zeta')]
+        b = [_t('2025-03-10', 100, 10, acct='alpha', tm='09:30:00')]
+        rows = a + b if first == 'zeta' else b + a
+        return _us(rows, per_account_basis=True)
+
+    @rule("US-DATE-13")
+    def test_toml_order_not_label(self):
+        z = self._book('zeta', 'alpha')
+        late = [e for e in z['transactions'] if e['date'] == '2025-11-03']
+        self.assertAlmostEqual(late[0]['cost'], 1200.0)
+        a = self._book('alpha', 'zeta')
+        late = [e for e in a['transactions'] if e['date'] == '2025-11-03']
+        self.assertAlmostEqual(late[0]['cost'], 1000.0)
+
+
+class TestStockDividendAfterSale(unittest.TestCase):
+    """A2-0205: a stock dividend posted after the shares were sold is not
+    a §1091 purchase (US-STKDIV-01); the warning names the case."""
+
+    @rule("US-STKDIV-01")
+    def test_not_a_replacement_with_nothing_held(self):
+        rows = [_t('2025-01-02', 100, 100), _t('2025-03-10', -100, 80),
+                TaxTransaction(action='BUYSELL', date='2025-03-20',
+                               date_settle='2025-03-20', time='10:00:00',
+                               symbol='XYZ.US', quantity=5, price=0.0,
+                               net_amount=0.0, currency='USD',
+                               account='T1', type='stock_dividend')]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            r = USATaxRules().compute_gains(rows)
+        self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
+        self.assertAlmostEqual(r['summary']['total_gain'], -2000.0)
+        self.assertIn("sold before it was paid", err.getvalue())
+
+
+class TestFuturesOutside1091(unittest.TestCase):
+    """A2-0053: the US engine never disallows a loss on a futures
+    contract or an option on one (flag only); Canada's s.54 covers any
+    property and keeps denying."""
+
+    @rule("US-WASH-18")
+    @rule_absent("US-WASH-18", country="canada")
+    def test_rebought_future_flagged_not_denied(self):
+        for sym, loss in (("F:CLG7.US", 10000.0), ("F:ESZ6.US", 5000.0),
+                          ("F:CL261216C00070000.US", 1000.0)):
+            book = [tx("BUYSELL", "2025-03-03", sym, 1, 20000),
+                    tx("BUYSELL", "2025-03-10", sym, -1, 20000 - loss),
+                    tx("BUYSELL", "2025-03-18", sym, 1, 20000 - loss)]
+            r = gains_both(book, year=2025)
+            self.assertAlmostEqual(
+                r["usa"]["summary"]["total_disallowed"], 0.0, msg=sym)
+            self.assertAlmostEqual(
+                r["canada"]["summary"]["total_disallowed"], loss, msg=sym)
+            rules = [w["rule"] for w in
+                     r["usa"].get("option_replacement_warnings") or []]
+            self.assertIn("futures_vs_loss", rules, sym)
+
+    @rule("US-WASH-18")
+    def test_flag_printed(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            USATaxRules().compute_gains(
+                [_t("2025-03-03", 1, 200, sym="F:CLG7.US"),
+                 _t("2025-03-10", -1, 100, sym="F:CLG7.US"),
+                 _t("2025-03-18", 1, 100, sym="F:CLG7.US")])
+        self.assertIn("[futures_vs_loss]", err.getvalue())
+        self.assertIn("NOT denied", err.getvalue())
+
+
+def _us_run(book, year):
+    """run_gains (the `taxjson run` gains stage) under the US only."""
+    from taxjson.lib.pipeline import GainsRequest, run_gains
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        r = run_gains(book, [], [], req=GainsRequest(
+            country="usa", taxable=True, year=year))
+    r["_stderr"] = err.getvalue()
+    return r
+
+
+class TestUnappliedAdjustAndNotes(unittest.TestCase):
+    """A2-0199 / A2-0963 / A2-0964 / A2-0956."""
+
+    def _book(self, amount):
+        return [tx("BUYSELL", "2025-01-02", "XYZ.US", 100, 1000),
+                tx("BUYSELL", "2025-03-03", "XYZ.US", -100, 1200),
+                tx("ADJUST", "2025-06-30", "XYZ.US", 0, amount,
+                   type="dist" if amount > 0 else "roc"),
+                tx("BUYSELL", "2025-07-02", "XYZ.US", 100, 1000),
+                tx("BUYSELL", "2025-08-01", "XYZ.US", -100, 1100)]
+
+    @rule("CA-ACB-13")
+    @rule_absent("CA-ACB-13", country="usa")
+    @rule("US-ROC-04")
+    @rule_absent("US-ROC-04", country="canada")
+    def test_positive_adjust_on_empty_pool(self):
+        r = gains_both(self._book(50.0), year=2025)
+        # Canada: carried into the next purchase's ACB (warned).
+        ca = [g for g in r["canada"]["transactions"]
+              if g.get("date") == "2025-08-01"]
+        self.assertAlmostEqual(ca[0]["cost"], 1050.0, places=6)
+        self.assertIn("EMPTY pool", r["canada"]["_stderr"])
+        # US: not applied; ATTENTION worded as a basis increase.
+        us = [g for g in r["usa"]["transactions"]
+              if g.get("date") == "2025-08-01"]
+        self.assertAlmostEqual(us[0]["cost"], 1000.0, places=6)
+        err = r["usa"]["_stderr"]
+        self.assertIn("warning: ATTENTION: unapplied basis adjustment: "
+                      "XYZ.US ADJUST of +50.00", err)
+        self.assertIn("basis increase", err)
+        self.assertNotIn("return of capital", err)
+
+    @rule("US-ROC-03")
+    def test_roc_after_full_sale_is_attention(self):
+        r = _us_run(self._book(-500.0), 2025)
+        self.assertIn("warning: ATTENTION: unapplied basis adjustment: "
+                      "XYZ.US ADJUST of -500.00", r["_stderr"])
+        self.assertIn("(the position was closed)", r["_stderr"])
+
+    @rule("US-ROC-04")
+    def test_adjust_while_short_not_applied(self):
+        book = [tx("BUYSELL", "2025-01-02", "XYZ.US", -100, 1000),
+                tx("ADJUST", "2025-02-03", "XYZ.US", 0, 30.0, type="dist"),
+                tx("BUYSELL", "2025-03-03", "XYZ.US", 100, 900)]
+        r = _us_run(book, 2025)
+        self.assertIn("(the position is short)", r["_stderr"])
+        self.assertAlmostEqual(r["summary"]["total_gain"], 100.0, places=6)
+
+    @rule("CA-ACB-14")
+    def test_canada_adjust_on_short_is_compensation(self):
+        book = [tx("BUYSELL", "2025-01-02", "XYZ.TO", -100, 1000,
+                   currency="CAD"),
+                tx("ADJUST", "2025-02-03", "XYZ.TO", 0, 30.0, type="dist",
+                   currency="CAD"),
+                tx("BUYSELL", "2025-03-03", "XYZ.TO", 100, 900,
+                   currency="CAD")]
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = run_gains(book, [], [], req=GainsRequest(
+                country="canada", taxable=True, year=2025))
+        self.assertAlmostEqual(r["summary"]["total_gain"], 70.0, places=6)
+
+    @rule("US-STKDIV-01")
+    def test_stock_dividend_note_only_in_its_year(self):
+        def stk(d, q):
+            return tx("BUYSELL", d, "ABC.US", q, 0.0, price=0.0,
+                      type="stock_dividend")
+        book = [tx("BUYSELL", "2023-01-03", "ABC.US", 100, 1000),
+                stk("2023-06-26", 10),
+                tx("BUYSELL", "2025-02-03", "ABC.US", -110, 1500)]
+        e25 = _us_run(book, 2025)["_stderr"]
+        e23 = _us_run(book, 2023)["_stderr"]
+        self.assertNotIn("stock dividend of 10", e25)
+        self.assertIn("stock dividend of 10", e23)
+
+    @rule("US-ROC-03")
+    def test_run_console_echoes_unapplied_roc(self):
+        import tempfile
+        from pathlib import Path
+        from tax_rules.dual import cli, settings_for
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "p"
+            (root / "inputs" / "m").mkdir(parents=True)
+            (root / "taxjson.toml").write_text(
+                settings_for("usa", year=2025)
+                + '[accounts.m]\ntype = "taxable"\n')
+            (root / "inputs" / "m" / "book.tt").write_text(
+                "BUYSELL 2025-01-06 10:00:00 XYZ.US 100 USD 10 -1000 0\n"
+                "BUYSELL 2025-03-03 10:00:00 XYZ.US -100 USD 12 1200 0\n"
+                "ADJUST 2025-06-30 09:30:00 XYZ.US USD -500\n")
+            r = cli(root, "run", "--no-input")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ATTENTION: unapplied basis adjustment: XYZ.US",
+                      r.stdout)
+
+
+class TestSpecStatesEngineBehaviour(unittest.TestCase):
+    """A2-0062 / A2-0962: behaviours KNOWN_ISSUES documented are stated
+    in tax-logic and pinned."""
+
+    @rule("US-WASH-19")
+    def test_long_sale_after_short_cover_loss_not_a_trigger(self):
+        b = [_t('2025-03-03', -100, 100), _t('2025-03-10', 200, 110),
+             _t('2025-03-24', -100, 105)]
+        r = _us(b)
+        self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
+
+    @rule("US-WASH-11")
+    def test_ira_buy_sold_before_loss_still_permanent(self):
+        loss = [_t("2025-04-01", 100, 10, sym="III.US"),
+                _t("2025-06-15", -100, 8, sym="III.US")]
+        ira = [_t("2025-05-20", 100, 9, sym="III.US", acct="ira"),
+               _t("2025-05-25", -100, 9, sym="III.US", acct="ira")]
+        r = _us(loss, sheltered_transactions=ira)
+        self.assertAlmostEqual(
+            sum(g.get('permanently_disallowed', 0) or 0
+                for g in r['transactions']), 200.0)
+
+    @rule("CA-DISP-07")
+    def test_schedule3_acquisition_year_from_trade_days(self):
+        from taxjson.bin.taxjson_form_export import _acquired_date
+        from taxjson.lib.pipeline import GainsRequest, run_gains
+        b = [tx("BUYSELL", "2024-12-31", "AAA.TO", 100, 1000,
+                settle="2025-01-02", currency="CAD"),
+             tx("BUYSELL", "2025-06-02", "AAA.TO", -100, 1200,
+                settle="2025-06-03", currency="CAD")]
+        with contextlib.redirect_stderr(io.StringIO()):
+            r = run_gains(b, [], [], req=GainsRequest(
+                country="canada", taxable=True, year=2025))
+        g = [x for x in r["transactions"] if x.get("proceeds")][0]
+        self.assertEqual(_acquired_date(g), "2024-12-31")
+
+
+if __name__ == '__main__':
+    unittest.main()

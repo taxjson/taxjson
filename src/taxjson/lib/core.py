@@ -644,6 +644,11 @@ def _emit_option_replacement_stderr(warnings, *, country: str) -> None:
                        f"right to acquire them (its deliverable is not in "
                        f"the books), so {_LOSS_TERM[country]} — review "
                        f"it by hand")
+        elif w['rule'] == 'futures_vs_loss':
+            verdict = ("a futures contract (or an option on one) is a "
+                       "§1256 contract, not stock or securities, and "
+                       "usually outside §1091: the loss is NOT denied — "
+                       "review it by hand")
         elif w['rule'] == 'futures_option_vs_loss':
             verdict = (f"a call on the same futures contract is a right "
                        f"to acquire it, so {_LOSS_TERM[country]}"
@@ -4445,6 +4450,9 @@ class USATaxRules(TaxRules):
       (Each needs "substantially identical" reasoning beyond a simple
       symbol match.)
     - §1259 constructive sale of appreciated long when hedged by short.
+    - §1091(e)(1): a SALE of substantially identical stock within ±30
+      days of a short-cover loss does not disallow it (only a re-short
+      registers as a short-side replacement) — tax-logic US-WASH-19.
     - Section 1256 60/40 mark-to-market for futures and broad-based
       index options. (Affects symbols like SPX, NDX, futures.)
     """
@@ -4520,6 +4528,17 @@ class USATaxRules(TaxRules):
         # Rows below the lot epsilon (1e-8 units) are not booked; they
         # are named once instead of vanishing silently (audit S070-09).
         _us_dust: List[TaxTransaction] = []
+        # Notes tied to one dated row (stock dividends, an unapplied
+        # basis adjustment): printed now by a direct caller, or by
+        # run_gains after its year filter (audit A2-0956: a 2023 stock
+        # dividend's note landed in every later year's .sum).
+        _dated_notes: List[tuple] = []
+
+        def _note(date_: str, text: str) -> None:
+            if getattr(self, 'emit_replacement_stderr', True):
+                print(text, file=sys.stderr)
+            else:
+                _dated_notes.append((date_, text))
 
         # === PRE-PASS: classify each event and build replacement indexes. ===
         # The "opening portion" of each transaction is what's eligible to be
@@ -4661,19 +4680,19 @@ class USATaxRules(TaxRules):
                 # A nontaxable stock dividend (§305(a)) is not an
                 # acquisition "by purchase": it never replaces a loss
                 # (§1091), it only grows the position (partition
-                # INPUTS-01). With nothing held it is booked as a $0
-                # purchase by the main pass (and warned), so it stays a
-                # replacement there.
-                _held = (other_qty_state.get((ev.account, sym), 0.0)
-                         if is_other_scope else prev)
-                if _held > epsilon:
-                    if not is_other_scope:
-                        net_qty_state[_nkey(ev.account, sym)] = \
-                            prev + ev.quantity
-                    else:
-                        other_qty_state[(ev.account, sym)] = \
-                            _held + ev.quantity
-                    continue
+                # INPUTS-01). With nothing held the main pass books it as
+                # a $0 purchase (and warns) — shares sold before the pay
+                # date, or missing history — but it is still not a
+                # purchase for §1091 (US-STKDIV-01, audit A2-0205: a
+                # dividend posted after a loss sale washed 5% of it).
+                if not is_other_scope:
+                    net_qty_state[_nkey(ev.account, sym)] = \
+                        prev + ev.quantity
+                else:
+                    _ok = (ev.account, sym)
+                    other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
+                                            + ev.quantity)
+                continue
 
             if ev.quantity > 0:
                 # Taxable buys close any taxable shorts first; leftover
@@ -4743,6 +4762,7 @@ class USATaxRules(TaxRules):
                     short_replacements.setdefault(_rep_key(sym), []).append({
                         'tx': ev,
                         'date': ev.date,
+                        'open_qty': open_qty,
                         'remaining_qty': open_qty,
                         'is_sheltered': is_sheltered_ev,
                         'is_affiliated': is_affiliated_ev,
@@ -4869,20 +4889,54 @@ class USATaxRules(TaxRules):
             # sheltered same-date lot could beat an earlier-acquired taxable
             # one, flipping a deferral into a permanent denial. Tie-break by
             # intra-day time; at the SAME moment the taxpayer's own
-            # (taxable) lot first, then sheltered, then affiliated, then
-            # by account label — never by the content-hash id alone,
-            # which let a one-cent change on an IRA row flip a deferral
-            # into a permanent denial (audit S018-06).
+            # (taxable) lot first, then sheltered, then affiliated —
+            # never by the content-hash id, which let a one-cent change
+            # on an IRA row flip a deferral into a permanent denial
+            # (audit S018-06), and never by the account LABEL: renaming
+            # an account moved the deferral (audit A2-0200/A2-0208).
             out.sort(key=lambda r: (r['date'], r['tx'].time or '',
                                     2 if r['is_affiliated']
-                                    else 1 if r['is_sheltered'] else 0,
-                                    r['tx'].account or ''))
+                                    else 1 if r['is_sheltered'] else 0))
             # (Stable sort: rows still tied keep the pre-pass order,
-            # which is the export's row order — the only evidence of
+            # which is the merged book's row order — the export's row
+            # order within an account and the accounts' taxjson.toml
+            # order across accounts (US-DATE-13), the only evidence of
             # acquisition order for same-moment lots. A content-hash id
             # rung let a one-cent price change move the deferral to the
             # other lot, audit S070-12.)
             return out
+
+        # §1091 covers "stock or securities": a commodity or broad-index
+        # futures contract (or an option on one) is a §1256 contract,
+        # marked to market, usually outside it. Its loss is never denied;
+        # a re-purchase in the window is flagged for a manual check
+        # (tax-logic US-WASH-18; audit A2-0053 — a re-bought F:CLG7 had
+        # its whole 10,000 loss disallowed with no flag). Canada's s.54
+        # covers any property and keeps denying.
+        _fut_flags: Dict[str, Dict[str, Any]] = {}
+
+        def _outside_1091(sym: str) -> bool:
+            if is_option_symbol(sym):
+                return bool(_FUTURES_PREFIX_RE.match(
+                    parse_option_underlying(sym) or ''))
+            return bool(_FUTURES_PREFIX_RE.match(sym or ''))
+
+        def _flag_futures_loss(loss_tx, loss_amt, cands):
+            rec = _fut_flags.get(loss_tx.id)
+            if rec is None:
+                rec = _fut_flags[loss_tx.id] = {
+                    'rule': 'futures_vs_loss',
+                    'loss_symbol': loss_tx.symbol,
+                    'loss_date': loss_tx.date,
+                    'loss_amount': 0.0,
+                    'loss_id': loss_tx.id,
+                    'option_symbol': cands[0]['tx'].symbol,
+                    'option_acquired': min(c['date'] for c in cands),
+                    'option_qty': sum(c['remaining_qty'] for c in cands),
+                    'held_at_window_end': None,
+                    'statute': "IRS §1091 ('stock or securities')",
+                }
+            rec['loss_amount'] = round(rec['loss_amount'] + loss_amt, 2)
 
         # === MAIN PASS ===
         # Each option ASSIGN's own stock leg is paired by identity in
@@ -4921,6 +4975,85 @@ class USATaxRules(TaxRules):
                     or tx.action not in ('BUYSELL', 'ASSIGN')):
                 return 0.0
             return pending_option_adjustments.take(tx)
+
+        # One disposition = one sale (or cover) row, or the same-second
+        # fills of one order: consecutive BUYSELL rows of one account and
+        # symbol, same direction, same date and a real clock time (a
+        # date-only or midnight stamp is no evidence of one order). Lots
+        # drawn by one disposition are never replacements for each
+        # other's losses (tax-logic US-WASH-17; audit A2-0001/A2-0017/
+        # A2-0553: a 1-share old lot sold with 100 recent shares washed
+        # its loss into the very shares being sold, split them, and
+        # cascaded one share at a time — 100,001 Form 8949 W rows).
+        _disp_total: Dict[str, float] = {}   # lead row id -> group qty
+        _disp_member: set = set()            # non-lead fill ids
+        _disp_prev: Dict[Any, tuple] = {}
+
+        def _real_stamp(tm) -> bool:
+            return bool(tm) and tm not in ('00:00:00', '00:00')
+        for _t in taxable_sorted:
+            if non_capital(_t.action, _t.type):
+                continue
+            _k = (_t.account, _t.symbol)
+            if _t.action != 'BUYSELL' or abs(_t.quantity or 0) < epsilon:
+                _disp_prev.pop(_k, None)
+                continue
+            _p = _disp_prev.get(_k)
+            if (_p is not None and _real_stamp(_t.time)
+                    and _p[0].date == _t.date and _p[0].time == _t.time
+                    and (_p[0].quantity > 0) == (_t.quantity > 0)):
+                _disp_total[_p[1]] += abs(_t.quantity)
+                _disp_member.add(_t.id)
+                _disp_prev[_k] = (_t, _p[1])
+            else:
+                _disp_total[_t.id] = abs(_t.quantity)
+                _disp_prev[_k] = (_t, _t.id)
+
+        def _plan_draw(inv, ikey_, sym, q, on_date, ref_key, amt_key):
+            """Reserve the lots this disposition draws (FIFO, `q` units):
+            the boundary lot is split so the KEPT units are their own lot
+            (and the replacement record's ref follows them), and every
+            replacement record whose lot is drawn loses that capacity
+            now, before any of the disposition's losses is matched."""
+            lots = inv.get(ikey_, [])
+            reps = (long_replacements if ref_key == 'lot_ref'
+                    else short_replacements).get(_rep_key(sym), [])
+            left = q
+            i = 0
+            while left > epsilon and i < len(lots):
+                lot = lots[i]
+                take = min(lot['qty'], left)
+                if lot['qty'] > take + epsilon:
+                    frac = D(take) / D(lot['qty'])
+                    keep = dict(lot)
+                    keep['qty'] = lot['qty'] - take
+                    keep[amt_key] = lot[amt_key] * (1 - frac)
+                    _wd = lot.get('wash_deferred', Decimal(0))
+                    keep['wash_deferred'] = _wd * (1 - frac)
+                    lot['qty'] = take
+                    lot[amt_key] = lot[amt_key] - keep[amt_key]
+                    lot['wash_deferred'] = _wd - keep['wash_deferred']
+                    lots.insert(i + 1, keep)
+                    for r in reps:
+                        if r.get(ref_key) is lot:
+                            r[ref_key] = keep
+                    drawn = keep
+                else:
+                    drawn = lot
+                for r in reps:
+                    if r.get(ref_key) is drawn:
+                        _cuf = _rep_units_factor(sym, r['date'], on_date)
+                        r['remaining_qty'] = max(
+                            0.0, r['remaining_qty'] - take / (_cuf or 1.0))
+                left -= take
+                i += 1
+
+        def _plan_disposition(inv, ikey_, tx_, ref_key, amt_key):
+            if not detect_wash_sales or tx_.id in _disp_member:
+                return
+            _plan_draw(inv, ikey_, tx_.symbol,
+                       _disp_total.get(tx_.id, abs(tx_.quantity)),
+                       tx_.date, ref_key, amt_key)
 
         # Blended (combined multi-account) mode: FIFO basis pools are
         # per-(account, symbol) — the IRS keys basis per account — while
@@ -5089,14 +5222,30 @@ class USATaxRules(TaxRules):
                 lots = inventory_long.get(ikey, [])
                 open_qty = sum(l['qty'] for l in lots)
                 if open_qty <= epsilon:
-                    print(
-                        f"warning: {symbol} ADJUST of {tx.net_amount:.2f} "
-                        f"on {tx.date} found no open long lots (position "
-                        f"closed or short) — a return of capital with no "
-                        f"basis to reduce is a taxable event needing "
-                        f"manual review; the row was NOT applied.",
-                        file=sys.stderr,
-                    )
+                    # Not applied (tax-logic US-ROC-03 / US-ROC-04): a
+                    # return of capital with no basis left is a §301(c)(3)
+                    # gain to report by hand; a basis INCREASE (a notional
+                    # distribution) has no lot to raise. Console-visible
+                    # ATTENTION (audit A2-0199), worded by sign (A2-0964:
+                    # an increase was called a return of capital).
+                    _amt = float(tx.net_amount)
+                    _where = ('the position is short'
+                              if inventory_short.get(ikey)
+                              else 'the position was closed')
+                    if _amt < 0:
+                        _what = ("a return of capital with no basis to "
+                                 "reduce is a taxable gain (§301(c)(3)) "
+                                 "to report by hand")
+                    else:
+                        _what = ("a basis increase (e.g. a notional "
+                                 "distribution) has no lot to raise — "
+                                 "re-date it before the sale or adjust "
+                                 "that sale by hand")
+                    _note(tx.date,
+                          f"warning: ATTENTION: unapplied basis adjustment: "
+                          f"{symbol} ADJUST of {_amt:+.2f} on {tx.date} "
+                          f"found no open long lots ({_where}) — {_what}; "
+                          f"the row was NOT applied.")
                     continue
                 delta = D(tx.net_amount)
                 applied = Decimal(0)
@@ -5188,24 +5337,29 @@ class USATaxRules(TaxRules):
                     _ratio = (_held + tx.quantity) / _held
                     for _lot in _lots:
                         _lot['qty'] = _lot['qty'] * _ratio
-                    print(f"note: {symbol}: stock dividend of "
+                    _note(tx.date,
+                          f"note: {symbol}: stock dividend of "
                           f"{tx.quantity:g} share(s) on {tx.date} — "
                           f"nontaxable (§305(a)): the basis of the "
                           f"{_held:g} share(s) held is spread over old "
                           f"and new (§307) and their purchase dates carry "
                           f"over; if it was taxable (§305(b), e.g. a cash "
-                          f"option), enter it by hand.", file=sys.stderr)
+                          f"option), enter it by hand.")
                     if trace:
                         symbol_traces[symbol].append(
                             f"# {tx.date} STOCK DIVIDEND +{tx.quantity:g} "
                             f"sh | spread over {len(_lots)} lot(s), "
                             f"{_held:.4f} sh held")
                     continue
-                print(f"warning: {symbol}: stock dividend of "
+                _note(tx.date,
+                      f"warning: {symbol}: stock dividend of "
                       f"{tx.quantity:g} share(s) on {tx.date} with no "
-                      f"shares held — booked as a $0 purchase; add the "
-                      f"missing purchase history so it can share their "
-                      f"basis (§307).", file=sys.stderr)
+                      f"shares held — booked as a $0 purchase (not a "
+                      f"wash-sale replacement). If the shares were sold "
+                      f"before it was paid, the sold shares' basis should "
+                      f"have been spread over old and new (§307): adjust "
+                      f"it by hand; otherwise add the missing purchase "
+                      f"history.")
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);
@@ -5331,6 +5485,9 @@ class USATaxRules(TaxRules):
                 # trade sorted between the option leg and the stock leg
                 # used to hijack the premium.
                 option_adj = _take_option_adj(tx)
+                if not is_option_assign:
+                    _plan_disposition(inventory_short, ikey, tx,
+                                      'short_lot_ref', 'proceeds')
 
                 # --- buy-to-close: pop short lots FIFO ---
                 while qty_remaining > epsilon and inventory_short[ikey]:
@@ -5436,6 +5593,10 @@ class USATaxRules(TaxRules):
                             short_replacements.get(_rep_key(symbol), []),
                             tx.date,
                         )
+                        if _outside_1091(symbol):
+                            if candidates:
+                                _flag_futures_loss(tx, raw_gain, candidates)
+                            candidates = []
                         for rep in candidates:
                             if remaining_loss_qty <= epsilon:
                                 break
@@ -5476,11 +5637,41 @@ class USATaxRules(TaxRules):
                                     # and track the embedded deferral so
                                     # inventory reports show it (the
                                     # long side already did; short-side
-                                    # deferrals were invisible).
-                                    rep['short_lot_ref']['proceeds'] -= match_disallowed_d
-                                    rep['short_lot_ref']['wash_deferred'] = (
-                                        rep['short_lot_ref'].get(
-                                            'wash_deferred', Decimal(0))
+                                    # deferrals were invisible). Share
+                                    # for share, as on the long side: a
+                                    # replacement short bigger than the
+                                    # match is split, the matched shares
+                                    # first in FIFO carry the whole
+                                    # reduction (audit A2-0206 — it was
+                                    # spread over every share, moving
+                                    # loss into a later year).
+                                    _sl = rep['short_lot_ref']
+                                    if _sl['qty'] > match_qty + epsilon:
+                                        _sfr = D(match_qty) / D(_sl['qty'])
+                                        _srem = dict(_sl)
+                                        _srem['qty'] = _sl['qty'] - match_qty
+                                        _srem['proceeds'] = (
+                                            _sl['proceeds'] * (1 - _sfr))
+                                        _swd0 = _sl.get('wash_deferred',
+                                                        Decimal(0))
+                                        _srem['wash_deferred'] = (
+                                            _swd0 * (1 - _sfr))
+                                        _sl['qty'] = match_qty
+                                        _sl['proceeds'] = (
+                                            _sl['proceeds']
+                                            - _srem['proceeds'])
+                                        _sl['wash_deferred'] = (
+                                            _swd0 - _srem['wash_deferred'])
+                                        for _sls in inventory_short.values():
+                                            for _si, _s in enumerate(_sls):
+                                                if _s is _sl:
+                                                    _sls.insert(_si + 1,
+                                                                _srem)
+                                                    break
+                                        rep['short_lot_ref'] = _srem
+                                    _sl['proceeds'] -= match_disallowed_d
+                                    _sl['wash_deferred'] = (
+                                        _sl.get('wash_deferred', Decimal(0))
                                         + match_disallowed_d)
                                 else:
                                     rep['pending_proceeds_reduction'] += match_disallowed_d
@@ -5589,66 +5780,76 @@ class USATaxRules(TaxRules):
                         None,
                     )
                     leftover_share = qty_remaining / tx_qty_abs
-                    leftover_cost_d = D(leftover_share) * D(tx_net)
-                    pending_wash_d = (rep_record['pending_basis_add']
-                                      if rep_record is not None
-                                      else Decimal(0))
-                    if rep_record is not None:
-                        leftover_cost_d += rep_record['pending_basis_add']
-                    # Apportion the leftover share of the option-assignment
-                    # premium (the buy-to-close branch already consumed its
-                    # share above — see the pop at the top of the BUY
-                    # path). For a short put assignment, the premium
-                    # received reduces the cost basis of the stock acquired
-                    # at strike (per IRS Pub 550). Stored as -gain (Canada
-                    # convention), so adding it here yields cost - premium.
+                    # The plain cost of the shares opened (the option-
+                    # assignment premium share included; for a short put
+                    # assignment the premium received reduces the cost of
+                    # the stock acquired at strike, Pub 550 — stored as
+                    # -gain, Canada convention, so adding it yields cost -
+                    # premium). The buy-to-close branch already consumed
+                    # its share of the premium above.
+                    base_cost_d = D(leftover_share) * D(tx_net)
                     if option_adj != 0:
-                        leftover_cost_d += D(option_adj * leftover_share)
-                    lot = {
-                        'qty': qty_remaining,
-                        'cost_basis': leftover_cost_d,
-                        'wash_deferred': pending_wash_d,
-                        'date': tx.date,
-                        'effective_acq_date': rep_record['effective_acq_date'] if rep_record else tx.date,
-                        'id': tx.id,
-                    }
-                    inventory_long[ikey].append(lot)
+                        base_cost_d += D(option_adj * leftover_share)
                     # A replacement matched BEFORE its own buy (the loss
                     # preceded it): only the matched shares carry the
-                    # tacked holding period and the deferred basis —
-                    # the rest of the buy is an ordinary lot. Split at
-                    # creation (the post-loss twin of the split in the
-                    # match loop); the matched sub-lot is `lot`, the
-                    # remainder follows it in FIFO order and becomes
-                    # the rep's lot_ref for later matches.
+                    # tacked holding period and the deferred basis, one
+                    # block per matched loss in match order (audit
+                    # A2-0060); the rest of the buy is an ordinary lot
+                    # behind them in FIFO order and becomes the rep's
+                    # lot_ref for later matches.
+                    _pend = (list(rep_record.get('pending_matches') or [])
+                             if rep_record is not None else [])
+                    _blocks = []          # (qty, bump, effective date)
+                    _left = qty_remaining
+                    for _pq, _pb, _pe in _pend:
+                        if _left <= epsilon:
+                            # Sub-epsilon overshoot: fold the bump into
+                            # the last block so no deferral is lost.
+                            if _blocks:
+                                _q0, _b0, _e0 = _blocks[-1]
+                                _blocks[-1] = (_q0, _b0 + _pb, _e0)
+                            continue
+                        _bq = min(_pq, _left)
+                        if _left - _bq <= epsilon:
+                            _bq = _left
+                        _blocks.append((_bq, _pb, min(_pe, tx.date)))
+                        _left -= _bq
+                    if not _blocks:
+                        _blocks.append((qty_remaining, Decimal(0), tx.date))
+                        _left = 0.0
+                    _new_lots = []
+                    _alloc = Decimal(0)
+                    for _bq, _pb, _pe in _blocks:
+                        _c = base_cost_d * D(_bq) / D(qty_remaining)
+                        _alloc += _c
+                        _new_lots.append({
+                            'qty': _bq,
+                            'cost_basis': _c + _pb,
+                            'wash_deferred': _pb,
+                            'date': tx.date,
+                            'effective_acq_date': _pe,
+                            'id': tx.id,
+                        })
+                    if _left > epsilon:
+                        _new_lots.append({
+                            'qty': _left,
+                            'cost_basis': base_cost_d - _alloc,
+                            'wash_deferred': Decimal(0),
+                            'date': tx.date,
+                            'effective_acq_date': tx.date,
+                            'id': tx.id,
+                        })
+                    else:
+                        # The last block absorbs the division remainder.
+                        _new_lots[-1]['cost_basis'] += base_cost_d - _alloc
+                    inventory_long[ikey].extend(_new_lots)
+                    lot = _new_lots[0]
                     if rep_record is not None:
-                        _matched = (rep_record.get('open_qty', 0.0)
-                                    - rep_record['remaining_qty'])
-                        if epsilon < _matched < qty_remaining - epsilon:
-                            _frac = D(_matched) / D(qty_remaining)
-                            _rem = {
-                                'qty': qty_remaining - _matched,
-                                'cost_basis': (D(leftover_share) * D(tx_net)
-                                               * (1 - _frac)),
-                                'wash_deferred': Decimal(0),
-                                'date': tx.date,
-                                'effective_acq_date': tx.date,
-                                'id': tx.id,
-                            }
-                            if option_adj != 0:
-                                _rem['cost_basis'] += (
-                                    D(option_adj * leftover_share)
-                                    * (1 - _frac))
-                            lot['qty'] = _matched
-                            lot['cost_basis'] = (
-                                leftover_cost_d - _rem['cost_basis'])
-                            inventory_long[ikey].append(_rem)
-                            rep_record['lot_ref'] = (
-                                _rem if rep_record['remaining_qty']
-                                > epsilon else lot)
-                        else:
-                            rep_record['lot_ref'] = lot
+                        # The unmatched remainder (or, fully matched,
+                        # the last block) answers any later match.
+                        rep_record['lot_ref'] = _new_lots[-1]
                         rep_record['pending_basis_add'] = Decimal(0)
+                        rep_record['pending_matches'] = []
                     if trace:
                         symbol_traces[symbol].append(
                             f"# {tx.date} BUY-OPEN  {qty_remaining:10.4f} @ {tx.price:10.4f} | "
@@ -5669,6 +5870,9 @@ class USATaxRules(TaxRules):
             # — subtracting it from per-chunk proceeds yields proceeds + gain.
             # Same marked-leg gate as the BUY path above.
             option_adj_sell = _take_option_adj(tx)
+            if not is_option_assign:
+                _plan_disposition(inventory_long, ikey, tx,
+                                  'lot_ref', 'cost_basis')
 
             # --- sell-to-close: pop long lots FIFO ---
             while qty_remaining > epsilon and inventory_long[ikey]:
@@ -5750,6 +5954,10 @@ class USATaxRules(TaxRules):
                         long_replacements.get(_rep_key(symbol), []),
                         tx.date,
                     )
+                    if _outside_1091(symbol):
+                        if candidates:
+                            _flag_futures_loss(tx, raw_gain, candidates)
+                        candidates = []
                     for rep in candidates:
                         if remaining_loss_qty <= epsilon:
                             break
@@ -5799,7 +6007,12 @@ class USATaxRules(TaxRules):
                         # LONG_TERM).
                         _tack_lot = rep.get('lot_ref')
                         if _tack_lot is not None:
-                            _mq = match_qty / (_uf or 1.0)
+                            # Inventory lots are rescaled by every SPLIT
+                            # row, so the lot is already in the loss
+                            # date's units, like match_qty — dividing by
+                            # the rep's units factor put the bump on the
+                            # pre-split share count (audit A2-0054).
+                            _mq = match_qty
                             if _tack_lot['qty'] > _mq + epsilon:
                                 _frac = D(_mq) / D(_tack_lot['qty'])
                                 _rem = dict(_tack_lot)
@@ -5858,6 +6071,14 @@ class USATaxRules(TaxRules):
                                     + match_disallowed_d)
                             else:
                                 rep['pending_basis_add'] += match_disallowed_d
+                                # One block per matched loss: each keeps
+                                # its own bump and tacked holding period
+                                # (§1223(3), audit A2-0060 — one merged
+                                # sub-lot averaged the bumps and gave every
+                                # share the earliest tacked date).
+                                rep.setdefault('pending_matches', []).append(
+                                    (match_qty / (_uf or 1.0),
+                                     match_disallowed_d, _tacked_eff))
                         replacement_ids.append(rep['tx'].id)
                         wash_reps.append({
                             'tx_id': rep['tx'].id,
@@ -5966,6 +6187,28 @@ class USATaxRules(TaxRules):
                 inventory_short[ikey].append(short_lot)
                 if rep_record is not None:
                     rep_record['short_lot_ref'] = short_lot
+                    # Share for share (audit A2-0206): only the matched
+                    # shorts carry the reduction; the rest is an
+                    # ordinary short behind them in FIFO order.
+                    _smatched = (rep_record.get('open_qty', 0.0)
+                                 - rep_record['remaining_qty'])
+                    if (rep_record['pending_proceeds_reduction']
+                            and epsilon < _smatched
+                            < qty_remaining - epsilon):
+                        _sfr = D(_smatched) / D(qty_remaining)
+                        _plain_d = leftover_proceeds_d + \
+                            rep_record['pending_proceeds_reduction']
+                        _srem = dict(short_lot)
+                        _srem['qty'] = qty_remaining - _smatched
+                        _srem['proceeds'] = _plain_d * (1 - _sfr)
+                        _srem['wash_deferred'] = Decimal(0)
+                        short_lot['qty'] = _smatched
+                        short_lot['proceeds'] = (leftover_proceeds_d
+                                                 - _srem['proceeds'])
+                        inventory_short[ikey].append(_srem)
+                        rep_record['short_lot_ref'] = (
+                            _srem if rep_record['remaining_qty'] > epsilon
+                            else short_lot)
                     rep_record['pending_proceeds_reduction'] = Decimal(0)
                 if trace:
                     symbol_traces[symbol].append(
@@ -6071,6 +6314,7 @@ class USATaxRules(TaxRules):
                 date_of=lambda t: t.date,
                 canonical=split_timeline.canonical,
                 statute_label="IRS §1091 ('option to acquire')")
+        option_replacement_warnings += list(_fut_flags.values())
         if getattr(self, 'emit_replacement_stderr', True):
             # run_gains turns this off and prints the warnings after its
             # year filter (audit S070-04).
@@ -6177,6 +6421,7 @@ class USATaxRules(TaxRules):
             'by_ticker': by_ticker,
             'wash_sales': wash_sale_records,
             'option_replacement_warnings': option_replacement_warnings,
+            'dated_notes': [list(n) for n in _dated_notes],
             'inventory': inventory_report,
             'summary': {
                 'total_gain': sum(g['gain'] for g in realized_gains),
