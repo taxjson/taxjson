@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **IB: a cancelled execution of a multi-fill order cancels that part
+  of the order.** IB lists an order filled 400 + 40 as one 440-share
+  Order row; a `Ca` naming the 40-share execution never matched it and
+  stayed booked as a phantom 40-share sale (with a false "original in
+  none of the inputs" warning). The order is now reduced pro rata to
+  400 shares, in the statement and across statements (audit A2-0298).
 - **A rename to a bare symbol is an ATTENTION line.** A ticker.map
   rule (`GLOBAL RY.TO RY`) or a `ticker_extraction_overrides.txt` line
   that turns a listed symbol into a bare one used to be accepted in

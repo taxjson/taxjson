@@ -377,5 +377,77 @@ class TestBareRenameTargets(unittest.TestCase):
                           r.stderr)
 
 
+class TestPartialTradeCancel(unittest.TestCase):
+    """A2-0298: a Ca naming one execution of a multi-fill Order cancels
+    that part of the aggregated Order row."""
+
+    HEAD = ('Statement,Header,Field Name,Field Value\n'
+            'Statement,Data,BrokerName,Interactive Brokers\n'
+            'Statement,Data,Title,Activity Statement\n'
+            'Trades,Header,DataDiscriminator,Asset Category,Currency,'
+            'Account,Symbol,Date/Time,Quantity,T. Price,C. Price,'
+            'Proceeds,Comm/Fee,Basis,Realized P/L,MTM P/L,Code\n')
+
+    @staticmethod
+    def _tr(when, qty, price, comm, code, disc='Order'):
+        proceeds = round(-qty * price, 6)
+        return (f'Trades,Data,{disc},Stocks,USD,U5550001,QZK,"{when}",'  # pii-ok
+                f'{qty},{price},{price},{proceeds},{comm},0,0,0,{code}\n')
+
+    def _parse_ib(self, body):
+        from taxjson.lib.brokerages.ib_extractor import IbBrokerage
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "ib.csv"
+            p.write_text(self.HEAD + body, encoding="utf-8")
+            return _quiet(IbBrokerage().parse_file, p)
+
+    def test_execution_cancel_reduces_the_order(self):
+        w = '2025-03-03, 10:00:00'
+        body = (self._tr(w, 440, 10, -2.2, 'O')
+                + self._tr(w, 400, 10, -2.0, 'O', 'Trade')
+                + self._tr(w, 40, 10, -0.2, 'O', 'Trade')
+                + self._tr(w, -40, 10, 0.2, 'Ca')
+                + self._tr(w, -40, 10, 0.2, 'Ca', 'Trade')
+                + self._tr(w, 40, 10.05, -0.2, 'O')
+                + self._tr(w, 40, 10.05, -0.2, 'O', 'Trade'))
+        txs, err = self._parse_ib(body)
+        trades = sorted((t['quantity'], t['price']) for t in txs
+                        if t['action'] == 'BUYSELL')
+        self.assertEqual(trades, [(40, 10.05), (400, 10)])
+        order = next(t for t in txs if t['quantity'] == 400)
+        self.assertAlmostEqual(order['net_amount'], 4002.0, places=6)
+        self.assertIn("one execution", err)
+
+    def test_merge2_reduces_an_order_from_another_statement(self):
+        from taxjson.bin.taxjson_merge2 import cancel_trade_pairs
+        from taxjson.lib.core import TaxTransaction
+        from taxjson.lib.trade_cancel import TRADE_CANCEL_TYPE
+        base = dict(action='BUYSELL', date='2025-03-03', time='10:00:00',
+                    symbol='QZK.US', currency='USD', price=10.0,
+                    account='m')
+        order = TaxTransaction(**base, quantity=440, net_amount=4402.2,
+                               fee=2.2)
+        ca = TaxTransaction(**base, quantity=-40, net_amount=400.2,
+                            fee=-0.2, type=TRADE_CANCEL_TYPE)
+        kept, err = _quiet(cancel_trade_pairs, [order, ca])
+        self.assertEqual([(t.quantity, round(t.net_amount, 6))
+                          for t in kept], [(400, 4002.0)])
+        self.assertNotIn("none of this account's inputs", err)
+
+    def test_two_candidate_orders_stay_unmatched(self):
+        from taxjson.lib.trade_cancel import (TRADE_CANCEL_TYPE,
+                                              pair_cancellations)
+        base = dict(action='BUYSELL', date='2025-03-03', time='10:00:00',
+                    symbol='QZK.US', currency='USD', price=10.0,
+                    account='m')
+        rows = [dict(base, quantity=440, net_amount=4400.0),
+                dict(base, quantity=300, net_amount=3000.0),
+                dict(base, quantity=-40, net_amount=400.0,
+                     type=TRADE_CANCEL_TYPE)]
+        kept, pairs, unmatched = pair_cancellations(rows)
+        self.assertEqual(len(unmatched), 1)
+        self.assertEqual(len(kept), 3)
+
+
 if __name__ == '__main__':
     unittest.main()

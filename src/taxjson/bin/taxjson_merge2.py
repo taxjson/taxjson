@@ -170,7 +170,13 @@ def cancel_trade_pairs(txs):
     """Drop each marked trade cancellation (IB `Ca`) with the original it
     reverses; warn about one whose original is in none of the inputs (it
     stays booked as a reversing trade)."""
-    kept, pairs, unmatched = pair_cancellations(txs)
+    partials: list = []
+    kept, pairs, unmatched = pair_cancellations(txs, partials=partials)
+    for orig, ca, red in partials:
+        print(f"note: the broker cancelled (Ca) {-ca.quantity:g} of the "
+              f"{orig.symbol} order of {orig.quantity:g} @ {orig.price:g} "
+              f"on {orig.date} (one execution); the order is booked as "
+              f"{red.quantity:g}.", file=sys.stderr)
     for orig, _ca in pairs:
         print(f"note: dropped the {orig.symbol} trade of "
               f"{orig.quantity:g} @ {orig.price:g} on {orig.date} and "
