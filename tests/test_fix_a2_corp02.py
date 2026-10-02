@@ -390,5 +390,145 @@ class TestLineageSameDayChain(unittest.TestCase):
         self.assertEqual(len(gains), 1, gains)
 
 
+class TestFastFingerprintCoversDecisions(unittest.TestCase):
+    """A2-0224 / A2-0985 / A2-1229: run --fast's content fingerprint left
+    out the elections manifest, sends.json and taxjson.toml, so a copy
+    restored with an older mtime kept the previous books at exit 0."""
+
+    @rule("CA-CORP-06")
+    def test_manifest_restored_with_old_mtime(self):
+        from test_fix_corp import _gains, _ib_spinoff_project, _pending
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _ib_spinoff_project(tmp)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 3)
+            eid = _pending(root)[0]["event_id"]
+            e = _run_cli(root, "elect", "margin", "--set",
+                         f"{eid}=rollover_s_86_1", "--hint",
+                         "allocated_acb_cad=1000")
+            self.assertEqual(e.returncode, 0, e.stderr)
+            r = _run_cli(root, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(_gains(root)[1]["SPNCO.TO"], (20, 1000.0))
+            man = root / "inputs" / "margin" / "manifest.json"
+            doc = json.loads(man.read_text())
+            doc["elections"][eid]["hints"]["allocated_acb_cad"] = 2500.0
+            old = man.stat().st_mtime - 86400
+            man.write_text(json.dumps(doc))
+            os.utime(man, (old, old))
+            r = _run_cli(root, "run", "--fast", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(_gains(root)[1]["SPNCO.TO"], (20, 2500.0))
+
+    def test_config_and_sends_in_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "taxjson.toml").write_text(CONFIG_CA)
+            acct = root / "inputs" / "margin"
+            acct.mkdir(parents=True)
+            (acct / "questrade_2025.csv").write_text(QT_SPLIT)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            fp = root / "work" / "margin_inputs.fingerprint"
+            names = [ln.split()[0] for ln in fp.read_text().splitlines()]
+            self.assertIn("taxjson.toml", names)
+            gains = root / "work" / "margin_gains.json"
+            # unchanged inputs: --fast keeps the cached books
+            t0 = gains.stat().st_mtime_ns
+            self.assertEqual(_run_cli(root, "run", "--fast", "--no-input")
+                             .returncode, 0)
+            self.assertEqual(gains.stat().st_mtime_ns, t0)
+            # a setting edited in a file carrying an OLDER mtime rebuilds
+            toml = root / "taxjson.toml"
+            old = toml.stat().st_mtime - 86400
+            toml.write_text(CONFIG_CA.replace(
+                "option_grant_timing_since = 2025",
+                "option_grant_timing_since = 2024"))
+            os.utime(toml, (old, old))
+            self.assertEqual(_run_cli(root, "run", "--fast", "--no-input")
+                             .returncode, 0)
+            self.assertNotEqual(gains.stat().st_mtime_ns, t0)
+            self.assertIn("option_grant_timing_since = 2024", toml.read_text())
+            # a sends.json (crypto send decisions) is fingerprinted too
+            (acct / "sends.json").write_text("{}")
+            self.assertEqual(_run_cli(root, "run", "--fast", "--no-input")
+                             .returncode, 0)
+            self.assertIn("sends.json", fp.read_text())
+
+
+class TestRedoPassesRunFlags(unittest.TestCase):
+    """A2-0981 / A2-0982: `elect --redo` ran corp-actions without the
+    --rates / --base-currency / --ticker-map that `run` passes."""
+
+    def test_redo_command_matches_run(self):
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+        import taxjson.bin.taxjson_run as R
+        from test_fix_corp import _ib_spinoff_project, _pending
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _ib_spinoff_project(tmp)
+            (root / "ticker.map").write_text("GLOBAL QQQQ.TO QQQR.TO\n")
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 3)
+            eid = _pending(root)[0]["event_id"]
+            self.assertEqual(_run_cli(
+                root, "elect", "margin", "--set",
+                f"{eid}=taxable_deemed_dividend").returncode, 0)
+            self.assertEqual(_run_cli(root, "run", "--no-input")
+                             .returncode, 0)
+            calls = []
+            args = argparse.Namespace(dir=str(root), account="margin",
+                                      redo=True, reset=False, event=None)
+            with mock.patch.object(R, "run_to_file",
+                                   lambda cmd, out, **kw: calls.append(cmd)), \
+                    mock.patch.object(R.sys.stdin, "isatty",
+                                      lambda: True), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                R.cmd_elect(args)
+        self.assertEqual(len(calls), 1)
+        cmd = calls[0]
+        for flag, val in (("--rates", str(root / "work" / "to_base.csv")),
+                          ("--base-currency", "CAD"),
+                          ("--ticker-map", str(root / "ticker.map"))):
+            self.assertIn(flag, cmd)
+            self.assertEqual(cmd[cmd.index(flag) + 1], val)
+
+
+class TestLegacyManifestMigrationAtomic(unittest.TestCase):
+    """A2-0218: the legacy work/ manifest was copied in place; a failed
+    write left a truncated canonical copy that won from then on."""
+
+    def test_failed_copy_leaves_legacy_authoritative(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from taxjson.bin.taxjson_run import _resolve_manifest
+        text = json.dumps({"elections": {"e1": {
+            "election": "rollover_s_86_1",
+            "hints": {"allocated_acb_cad": 1234.5},
+            "summary": "x" * 5000}}})
+        real_write = Path.write_text
+
+        def failing_write(self, data, *a, **k):
+            real_write(self, data[: len(data) // 3], *a, **k)
+            raise OSError(27, "File too large")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            acct_dir, cache = root / "inputs" / "m", root / "work"
+            cache.mkdir()
+            (cache / "m_manifest.json").write_text(text)
+            with mock.patch.object(Path, "write_text", failing_write), \
+                    self.assertRaises(OSError):
+                _resolve_manifest(acct_dir, cache, "m")
+            self.assertFalse((acct_dir / "manifest.json").exists())
+            self.assertEqual(list(acct_dir.iterdir()), [])
+            with contextlib.redirect_stdout(io.StringIO()):
+                p = _resolve_manifest(acct_dir, cache, "m")
+            self.assertEqual(p.read_text(), text)
+
+
 if __name__ == "__main__":
     unittest.main()

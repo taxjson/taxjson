@@ -1484,8 +1484,16 @@ def _resolve_manifest(acct_dir: Path, cache: Path, name: str,
         return user_manifest
     if legacy.exists():
         acct_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        user_manifest.write_text(legacy.read_text(encoding="utf-8"),
-                                 encoding="utf-8")
+        # Atomic (tmp + replace, as Manifest.save writes): a failed write
+        # left a truncated canonical manifest that then won over the
+        # intact legacy copy on every later run (A2-0218).
+        tmp = user_manifest.with_name(user_manifest.name + ".part")
+        try:
+            tmp.write_text(legacy.read_text(encoding="utf-8"),
+                           encoding="utf-8")
+            tmp.replace(user_manifest)
+        finally:
+            tmp.unlink(missing_ok=True)
         print(f"  migrated elections manifest → {user_manifest} "
               f"(version-control this file; the work/ copy is no longer "
               f"read once this exists)")
@@ -1793,6 +1801,18 @@ _PROJECT_ROOT_INPUTS = ("ticker.map", "ticker_extraction_overrides.txt",
                         "crypto_ticker.map")
 
 
+def _is_empty_manifest(path: Path) -> bool:
+    """An elections manifest with no elections — the file the corp stage
+    creates on an account's first run — is the same as none, so its
+    appearance does not invalidate the --fast cache."""
+    import json as _json
+    try:
+        return _json.loads(path.read_text(encoding="utf-8")) == {
+            "elections": {}}
+    except (OSError, ValueError):
+        return False
+
+
 def _inputs_fingerprint(paths: List[Path]) -> str:
     """One line per existing file: name, size and SHA-256 of the
     content (mtimes deliberately left out — see R1-253)."""
@@ -1943,7 +1963,16 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
         + [_c.with_name(_c.name + ".toml")
            for _c in _generic_files(grouped)]
         + [acct_dir / "generic.toml"]
-        + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS])
+        + [inputs_dir.parent / _m for _m in _PROJECT_ROOT_INPUTS]
+        # The elections manifest (and its legacy work/ copy), a crypto
+        # account's sends.json and taxjson.toml itself change the books
+        # too: restored with an older mtime they kept the previous
+        # election / setting under --fast (A2-0224, A2-0985, A2-1229).
+        + [_m for _m in (acct_dir / "manifest.json",
+                         cache / f"{name}_manifest.json")
+           if not _is_empty_manifest(_m)]
+        + [acct_dir / "sends.json"]
+        + ([_CONFIG_PATH] if _CONFIG_PATH is not None else []))
     if (not _fp_file.exists()
             or _fp_file.read_text(encoding="utf-8") != _fp_txt):
         _fp_file.write_text(_fp_txt, encoding="utf-8")
@@ -4400,6 +4429,20 @@ def cmd_elect(args: argparse.Namespace) -> None:
     # Any failure or Ctrl-C mid-prompt RESTORES the pre-clear manifest —
     # elections are the one non-rebuildable user artifact (REVIEW #4).
     grouped = group_inputs(acct_dir)
+    # The same valuation inputs `taxjson run` passes (event-date rates,
+    # base currency, ticker.map): without them a cross-currency merger's
+    # new shares were booked in the wrong currency, and a following
+    # `run --fast` kept that corp file (A2-0981, A2-0982).
+    _redo_corp_flags: List[str] = []
+    _rates = cache / "to_base.csv"
+    if _rates.exists():
+        _redo_corp_flags += ["--rates", str(_rates)]
+    _base_cur = (cfg.get("settings") or {}).get("base_currency")
+    if _base_cur:
+        _redo_corp_flags += ["--base-currency", str(_base_cur)]
+    _tmap = root / "ticker.map"
+    if _tmap.exists():
+        _redo_corp_flags += ["--ticker-map", str(_tmap)]
     ran = False
     try:
         for broker, csvs in grouped.items():
@@ -4409,7 +4452,7 @@ def cmd_elect(args: argparse.Namespace) -> None:
             cmd = _cmd("taxjson-corp-actions") + [
                 "--account-name", name, "--country", country,
                 "--brokerage", broker, "--manifest", str(manifest_path),
-            ] + [str(p) for p in csvs]
+            ] + _redo_corp_flags + [str(p) for p in csvs]
             run_to_file(cmd, out, interactive=True)
             ran = True
     except (subprocess.CalledProcessError, KeyboardInterrupt):
