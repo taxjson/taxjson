@@ -344,7 +344,8 @@ def parse_tt_line(line: str, account_name: str = 'default',
     # total, so json -> tt -> json round-trips (A2-0292, A2-0620,
     # A2-0621, A2-0622, A2-0623, A2-1073, A2-1226, A2-1227). A negative
     # BUY total cannot mean anything but the cash sign (qty x price +
-    # fee is never negative) and stays read as its magnitude.
+    # fee is never negative): the row keeps it as typed, and the engines
+    # take a buy's cost as its magnitude (core _trade_money).
     if (action in ('BUYSELL', 'ASSIGN') and tx.get('quantity', 0) < 0
             and tx.get('net_amount', 0) < 0
             and not _excess_commission_sale(tx)):
