@@ -5576,6 +5576,9 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
                   f"skipping.", file=sys.stderr)
             continue
         data = _load_json_or_die(native)
+        # The tax withheld on a payment is dated with it (A2-0396).
+        _wh = (_rules.withholding_dates(data.get("transactions", []))
+               if _rules is not None else {})
         for tx in data.get("transactions", []):
             if actions is not None and tx.get("action") not in actions:
                 continue
@@ -5590,6 +5593,8 @@ def _run_tx_view(args: argparse.Namespace, actions, label: str,
             elif (_rules is not None and tx.get("action") in
                   ("DIVIDEND", "DIVIDEND_IN_LIEU", "ADJUST")):
                 _wd = _rules.row_date(tx) or d
+            elif id(tx) in _wh:
+                _wd = _wh[id(tx)]
             else:
                 _wd = d
             if keep(_wd):

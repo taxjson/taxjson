@@ -308,6 +308,21 @@ class TestWithholdingFollowsItsDividend(unittest.TestCase):
         self.assertEqual(self._withheld(self._us(), 2026, st), 3.0)
 
     @rule("CA-INC-DATE-TRUST")
+    def test_events_view_dates_withholding_with_the_payment(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _tt_project(td, [
+                "BUYSELL 2025-06-02 10:00:00 ZXT.TO 100 CAD 50 -5000 0",
+                "DIVIDEND 2026-01-15 10:00:00 ZXT.TO 100 CAD 0.5 50 "
+                "label=distribution record=2025-12-30",
+                "TAX 2026-01-15 10:00:00 ZXT.TO 100 CAD 0.075 7.5"])
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-1500:])
+            r25 = _cli(root, home, "events", "2025").stdout
+            r26 = _cli(root, home, "events", "2026").stdout
+            self.assertIn("TAX ", r25)
+            self.assertNotIn("TAX ", r26)
+
+    @rule("CA-INC-DATE-TRUST")
     def test_ca_trust_withholding_moves_with_the_distribution(self):
         st = {"country": "canada"}
         self.assertEqual(self._withheld(self._ca(), 2025, st), 7.5)
