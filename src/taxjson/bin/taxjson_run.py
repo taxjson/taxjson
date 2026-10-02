@@ -9099,9 +9099,12 @@ def cmd_spinoffs(args: argparse.Namespace) -> None:
     """`taxjson spinoffs`: every spin-off, its election, the value per
     share used and what was booked (lib/corp_views). Exit 1 when one
     needs attention (zero value, no election, ignored)."""
-    from taxjson.lib.corp_views import render_spinoffs, spinoffs
+    from taxjson.lib.corp_views import ViewError, render_spinoffs, spinoffs
     root = Path(args.dir).resolve()
-    doc = spinoffs(root, load_config(root), args.account)
+    try:
+        doc = spinoffs(root, load_config(root), args.account)
+    except ViewError as e:
+        _die(str(e))
     if getattr(args, "json", False):
         _json_out(doc)
     else:
@@ -9116,9 +9119,12 @@ def cmd_splits(args: argparse.Namespace) -> None:
     books with holdings before and after, flagging a split applied twice,
     a no-op row and a fractional result (lib/corp_views). Exit 1 on a
     likely double application."""
-    from taxjson.lib.corp_views import render_splits, splits
+    from taxjson.lib.corp_views import ViewError, render_splits, splits
     root = Path(args.dir).resolve()
-    items = splits(root, load_config(root), args.account)
+    try:
+        items = splits(root, load_config(root), args.account)
+    except ViewError as e:
+        _die(str(e))
     if getattr(args, "json", False):
         _json_out({"splits": items})
     else:
