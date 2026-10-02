@@ -287,7 +287,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             year_rule,
             Rule("CA-DATE-03",
                  "Settle dates come from the broker when printed (one "
-                 "earlier than the trade date is refused)."),
+                 "earlier than the trade date is refused; one more than 7 "
+                 "days after it is booked as printed and flagged)."),
             Rule("CA-DATE-04",
                  "Otherwise: T+1 (from 2024-05-27 in CAD, 2024-05-28 in "
                  "USD), T+2 from 2017-09-05, T+3 before; other markets "
@@ -813,7 +814,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                   keys=("tax_date",))),
             Rule("US-DATE-04",
                  "Settle dates come from the broker when printed (one "
-                 "earlier than the trade date is refused). "
+                 "earlier than the trade date is refused; one more than 7 "
+                 "days after it is booked as printed and flagged). "
                  "Otherwise: T+1 (from 2024-05-28 in USD, 2024-05-27 in "
                  "CAD), T+2 from 2017-09-05, T+3 before; other markets T+2 "
                  "(UK, EU and Swiss T+1 from 2027-10-11); options T+1, but "

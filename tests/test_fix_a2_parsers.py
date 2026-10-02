@@ -429,3 +429,180 @@ class TestTransferEvidencePerAccount(unittest.TestCase):
         # The raw id never stays on a row.
         self.assertNotIn("broker_account", a[0])
         self.assertNotEqual(a[0]["source_account"], _A)
+
+
+def _brokerage(brokerage, files, *extra):
+    td = Path(tempfile.mkdtemp())
+    try:
+        paths = []
+        for n, body in files.items():
+            (td / n).write_text(body)
+            paths.append(str(td / n))
+        r = subprocess.run(
+            [sys.executable, "-m", "taxjson.bin.taxjson_brokerage",
+             "--brokerage", brokerage] + list(extra) + paths,
+            capture_output=True, text=True, env=_env(), cwd=str(td))
+        txs = json.loads(r.stdout)["transactions"] if r.stdout.strip() else []
+        return r, txs
+    finally:
+        shutil.rmtree(td, True)
+
+
+class TestZeroTransactionGuard(unittest.TestCase):
+    """A2-0301 / A2-0303: a file whose rows are all recognized non-events
+    is not the 'NONE of its rows are in the books' regression."""
+
+    def test_questrade_fx_conversion_only(self):
+        row = ("2025-03-03 12:00:00 AM,2025-03-03 12:00:00 AM,FXT,,"
+               "CONVERSION - USD/CAD,0,0,0,0,-100,USD,55500001,"  # pii-ok
+               "FX conversion,Individual margin")
+        r, txs = _brokerage("questrade", {"q.csv": _QH + "\n" + row + "\n"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(txs, [])
+        self.assertNotIn("parsed to 0 transactions", r.stderr)
+        self.assertIn("0 tax objects (1 recognized non-event row(s))",
+                      r.stderr)
+
+    def test_an_unclassified_row_still_warns(self):
+        row = ("2025-03-03 12:00:00 AM,2025-03-03 12:00:00 AM,ZZZ,XEI.TO,"
+               "SOMETHING NEW,0,0,0,0,0,CAD,55500001,Other,"  # pii-ok
+               "Individual margin")
+        r, txs = _brokerage("questrade", {"q.csv": _QH + "\n" + row + "\n"})
+        self.assertIn("parsed to 0 transactions", r.stderr)
+
+
+class TestSecurityOverrides(unittest.TestCase):
+
+    def _ib(self, rows):
+        return (_ib_head(_A, "January 1, 2025 - December 31, 2025")
+                + _IB_TRADES_H + "".join(rows))
+
+    def test_one_line_rewriting_two_raw_symbols_is_loud(self):
+        """A2-0109: 'LEN' matches the whole word in 'LEN B' too."""
+        stmt = self._ib([
+            _ib_trade("LEN", "2025-03-03, 10:00:00", 100, 120),
+            _ib_trade("LEN B", "2025-03-03, 10:00:00", 100, 110)])
+        td = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, td, True)
+        (td / "ov.txt").write_text("LEN | USD | LEN.NE\n")
+        r, txs = _brokerage("ib", {"ib.csv": stmt}, "--security-overrides",
+                            str(td / "ov.txt"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ATTENTION: security override 'len | USD | LEN.NE' "
+                      "rewrote 2 different raw symbols", r.stderr)
+
+    def test_slash_futures_are_never_rewritten(self):
+        """A2-1092: every futures spelling is exempt, not only F:."""
+        from taxjson.bin.taxjson_brokerage import apply_security_override
+        ovr = [("buy", "*", "BUY.US")]
+        for sym in ("F:ESZ5.US", "/ESZ5.US", "\\ESZ5.US"):
+            tx = {"symbol": sym, "description": "BUY", "currency": "USD"}
+            apply_security_override(tx, ovr)
+            self.assertEqual(tx["symbol"], sym)
+        tx = {"symbol": "XYZ.US", "description": "BUY", "currency": "USD"}
+        apply_security_override(tx, ovr)
+        self.assertEqual(tx["symbol"], "BUY.US")
+
+
+class TestKrakenSendNote(unittest.TestCase):
+
+    def test_hybrid_earn_move_is_not_counted_as_a_send(self):
+        """A2-1078: crypto-sends decides a Hybrid Earn move `self`; the
+        parse NOTE no longer counts it as a possible disposition."""
+        head = ('"txid","refid","time","type","subtype","aclass",'
+                '"subclass","asset","wallet","amount","fee","balance",'
+                '"amountusd","feeusd","balanceusd","feecurrency"\n')
+        body = (
+            '"L1","FTQZQZQ","2026-05-12 09:14:41","hybridearnwithdrawal",'
+            '"","currency","stable_coin","USDC","spot / main",'
+            '"-500.00000000","0","0.00000032","-499.9","0","0",""\n'
+            '"L2","FTQZQZR","2026-05-13 09:14:41","withdrawal",'
+            '"","currency","cryptocurrency","ETH","spot / main",'
+            '"-1.00000000","0","0","-3000","0","0",""\n')
+        r, _ = _brokerage("kraken", {"kr_ledgers_2026.csv": head + body})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("NOTE: 1 crypto withdrawal/send(s)", r.stderr)
+
+
+class TestStrictNumbersAndStrikes(unittest.TestCase):
+
+    def test_stacked_currency_signs_are_refused(self):
+        """A2-0633: at most one currency sign."""
+        from taxjson.lib.brokerages.base import (BrokerageParseError,
+                                                 parse_strict_number)
+        for bad in ("$€5", "$-€5", "€$5"):
+            with self.assertRaises(BrokerageParseError, msg=bad):
+                parse_strict_number(bad)
+        self.assertEqual(parse_strict_number("$-12.00"), -12.0)
+        self.assertEqual(parse_strict_number("-$12.00"), -12.0)
+        self.assertEqual(parse_strict_number("€5"), 5.0)
+
+    def test_a_decimal_comma_strike_is_refused(self):
+        """A2-0632: '2,50' / '12,5' / '1,0000' were cut at the comma."""
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        from taxjson.lib.brokerages.questrade import QuestradeBrokerage
+        qt = QuestradeBrokerage()
+        for bad in ("2,50", "12,5", "1,0000"):
+            with self.assertRaises(BrokerageParseError, msg=bad):
+                qt.parse_option_from_description(f"CALL BKQ 06/20/25 {bad}")
+        for good, want in (("1,000", "1000"), ("7,500.50", "7500.50"),
+                           ("12,345", "12345"), ("150.00", "150.00"),
+                           ("30", "30")):
+            got = qt.parse_option_from_description(
+                f"CALL BKQ 06/20/25 {good} BKQ HOLDINGS")
+            self.assertEqual(got["strike"], want, good)
+
+
+from tax_rules import rule  # noqa: E402
+
+
+class TestFarLateSettleDate(unittest.TestCase):
+
+    @rule("CA-DATE-03")
+    @rule("US-DATE-04")
+    def test_a_settle_date_a_year_out_is_flagged(self):
+        """A2-0104: a printed settle date 366 days after the trade moved
+        the sale into the next tax year with no console line."""
+        sell = ("2025-12-15 12:00:00 AM,2026-12-16 12:00:00 AM,Sell,XEI.TO,"
+                "XEI CORP,-100,30,3000,-4.95,2995.05,CAD,55500001,Trades,"  # pii-ok
+                "Individual margin")
+        ok = ("2025-12-15 12:00:00 AM,2025-12-16 12:00:00 AM,Sell,XEI.TO,"
+              "XEI CORP,-100,30,3000,-4.95,2995.05,CAD,55500001,Trades,"  # pii-ok
+              "Individual margin")
+        r, txs = _brokerage("questrade", {"q.csv": _QH + "\n" + sell + "\n"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(txs[0]["date_settle"], "2026-12-16")
+        self.assertIn("warning: ATTENTION:", r.stderr)
+        self.assertIn("366 days after the trade date", r.stderr)
+        r, txs = _brokerage("questrade", {"q.csv": _QH + "\n" + ok + "\n"})
+        self.assertNotIn("days after the trade date", r.stderr)
+
+
+class TestCutShortExport(unittest.TestCase):
+    """A2-0110: a last line cut short was booked as a smaller amount."""
+
+    DEMO = Path(__file__).resolve().parents[1] / "examples"
+
+    def test_cut_number_is_flagged(self):
+        body = (self.DEMO / "rbc_direct_demo.csv").read_text()
+        cut = body.rstrip("\n")[:-4]          # ...,183.00 -> ...,18
+        self.assertTrue(cut.endswith(",18"))
+        r, txs = _brokerage("rbc_direct", {"rbc.csv": cut})
+        self.assertIn("warning: ATTENTION: rbc.csv: the file does not end "
+                      "with a line break", r.stderr)
+        r, txs = _brokerage("rbc_direct", {"rbc.csv": body})
+        self.assertNotIn("does not end with a line break", r.stderr)
+
+    def test_open_quote_is_refused(self):
+        body = (self.DEMO / "coinbase_demo.csv").read_text().rstrip("\n")
+        cut = body[:body.rindex(",") + 1] + '"Sold 0.25 ETH'
+        r, txs = _brokerage("coinbase", {"cb.csv": cut})
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("ends inside a quoted cell", r.stderr)
+
+    def test_a_quoted_last_cell_without_line_break_is_whole(self):
+        body = (self.DEMO / "coinbase_demo.csv").read_text().rstrip("\n")
+        whole = body[:body.rindex(",") + 1] + '"Sold 0.25 ETH for $967.20 USD"'
+        r, txs = _brokerage("coinbase", {"cb.csv": whole})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("line break", r.stderr)

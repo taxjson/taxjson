@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Parse checks (audit A2-0104, A2-0110, A2-0109, A2-0632, A2-0633):
+  a broker-printed settle date more than 7 days after the trade is
+  booked as printed but flagged ATTENTION (CA-DATE-03 / US-DATE-04); an
+  export cut inside a quoted last cell is refused, and one that ends
+  without a line break on a number is flagged; one security-override
+  line that rewrites two different raw symbols (IB `LEN` and `LEN B`)
+  is flagged; a decimal-comma option strike (`2,50`, `1,0000`) and a
+  stacked currency sign (`$€5`) are refused instead of misread.
+- A file whose rows are all recognized non-events (a deposit-only RBC
+  file, a Questrade FX conversion, a Kraken Earn allocation) prints
+  `0 tax objects (N recognized non-event row(s))` instead of the
+  `parsed to 0 transactions` warning that failed `run --strict`
+  (A2-0301, A2-0303); a Kraken Hybrid Earn move is no longer counted as
+  a possible taxable send (A2-1078); security overrides never rewrite a
+  `/` or `\` futures row (A2-1092).
+
 - Dedup per broker account (audit A2-0008, A2-0625, A2-0296, A2-1085,
   A2-0286): every parser that reads the broker account (IB, Questrade
   `Account #`, RBC `Account`) stamps each row with it, hashed
