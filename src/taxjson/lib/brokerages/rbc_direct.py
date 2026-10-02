@@ -1187,6 +1187,8 @@ class RbcBrokerage(BaseBrokerage):
         dups = ctx.duplicate_of.get(key, {})
         self._extra_tag = ctx.extra_tag.get(key, {})
         rows = ctx.rows(key)
+        self._rbc_accounts = {r.account.strip() for r in rows
+                              if r.account.strip()}
         for n in exp.notes:
             self._note(n)
         self._rows_seen = len(exp.rows) + exp.n_footers
@@ -1241,6 +1243,9 @@ class RbcBrokerage(BaseBrokerage):
             cls = r.cls
             if id(r) in leg_done:
                 self.note_row_consumed()
+                for _t in reorg_out.get(r.order, []):
+                    if r.account.strip():
+                        _t.setdefault('broker_account', r.account.strip())
                 transactions.extend(reorg_out.get(r.order, []))
                 continue
             if cls in _NONEVENT_CLASSES:
@@ -1283,6 +1288,11 @@ class RbcBrokerage(BaseBrokerage):
             out = self._dispatch(r)
             tag = self._extra_tag.get(r.order)
             for tx in out:
+                # The row's broker account (the Account column): cross-
+                # file dedup never collapses two accounts' identical
+                # rows (audit A2-0008, A2-0296).
+                if r.account.strip():
+                    tx.setdefault('broker_account', r.account.strip())
                 if not tx.get('description') and r.symdesc.strip():
                     # A blank Description falls back to the Symbol
                     # Description, so a name-keyed --security-overrides
@@ -1323,6 +1333,11 @@ class RbcBrokerage(BaseBrokerage):
         self.disambiguate_split_fills(transactions)
         self.emit_skip_summary(path.name)
         return transactions
+
+    def statement_accounts(self) -> set:
+        """The Account column's values in the last parsed export (audit
+        A2-0008 / A2-0296)."""
+        return set(getattr(self, '_rbc_accounts', set()))
 
     # ------------------------------------------------------ pre-pass maps
     def _row_occ(self, r) -> Optional[str]:
@@ -1694,6 +1709,8 @@ class RbcBrokerage(BaseBrokerage):
             price = round(abs(net) / abs(qty), 6)
         self._check_trade_money(r, qty, price, net, bool(occ),
                                 is_retraction)
+        if not occ and activity.strip().lower() == 'buy':
+            self.warn_zero_cost_buy(self._at(r), r.symbol, qty, price, net)
 
         is_option_symbol = bool(occ)
         action = 'BUYSELL'

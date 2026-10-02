@@ -125,6 +125,13 @@ class TaxTransaction:
     # .plan_dedup, audit R1-296). NOT part of compute_id, omitted when
     # empty.
     source: str = ''
+    # The broker account the row came from, HASHED (sha256 of the id the
+    # export prints, first 10 hex — never the id itself), stamped by
+    # taxjson-brokerage from the parser's per-row `broker_account` or
+    # the statement's single account. Cross-file dedup never collapses
+    # two rows of different broker accounts (audit A2-0008, R1-296).
+    # NOT part of compute_id, omitted when empty.
+    source_account: str = ''
 
     def __post_init__(self):
         if self.id is None:
@@ -178,7 +185,8 @@ INCOME_FACT_FIELDS = ('record_date', 'ex_date', 'income_label',
                       'dealer_country', 'issuer_country')
 # The other optional evidence fields, omitted from to_dict() when empty.
 EVIDENCE_FIELDS = ('broker_time', 'security_name', 'open_close',
-                   'broker_basis', 'multiplier', 'source')
+                   'broker_basis', 'multiplier', 'source',
+                   'source_account')
 
 # OCC option-symbol pattern: [F:|/|\]<base><yymmdd><C|P><strike-8d>[.<ext>]
 # e.g. "AAPL250120C00150000.US", "MDA251219P00029000.TO", or

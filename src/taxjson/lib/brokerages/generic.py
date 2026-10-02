@@ -15,6 +15,7 @@ one shared `generic.toml` in the same folder. Example:
     amount   = "Net Amount"     # fee-INCLUSIVE signed total
     fee      = "Commission"
     currency = "Currency"       # else defaults.currency
+    account  = "Account"        # optional: the broker account of the row
 
     [formats]
     date = "%m/%d/%Y"           # strptime; default %Y-%m-%d
@@ -23,8 +24,9 @@ one shared `generic.toml` in the same folder. Example:
     fee_sign = "cash"           # or "charged" (positive = charged)
 
     [actions]                   # CSV action value -> taxjson action
-    "BUY"  = "buy"              # buy | sell | dividend | tax |
-    "SELL" = "sell"             #   interest | fee | skip
+    "BUY"  = "buy"              # buy | sell | dividend |
+    "SELL" = "sell"             #   dividend_in_lieu | tax |
+                                #   interest | fee | skip
     "DIV"  = "dividend"
     "WHT"  = "tax"
     "JNL"  = "skip"             # explicit ignore (still counted)
@@ -41,6 +43,10 @@ one shared `generic.toml` in the same folder. Example:
                                 # parses each named broker on its own;
                                 # its rows are recorded as
                                 # generic:wealthsimple (fees report)
+    account = "<id>"            # optional: the broker account every row
+                                # belongs to (a mapped account column
+                                # wins); cross-file dedup never collapses
+                                # identical rows of two broker accounts
 
 The mapping is validated strictly: an unknown section or key (a typo
 such as `ammount`, `commission` or `[format]`) is refused with a
@@ -89,6 +95,13 @@ So every BUY/SELL row is cross-checked and the import REFUSES when:
   CSV (futures rows skip the qty × price comparison);
 * a record has more cells than the header, or a cell holding a line
   break (an unescaped quote swallowed the next row);
+* a record has FEWER cells than the header, or the file's last record
+  ends on a separator with no line break after it, or a currency cell
+  is not a currency code (a cut-off export: [defaults] never fills a
+  cell the cut took away);
+* a mapped settle date more than 31 days after the trade (a typo that
+  would move the sale into a later tax year); one more than 7 days
+  after it is an ATTENTION line;
 
 * the quantity is blank or zero, or neither price nor amount is given
   (the fee alone became the cost), or a stock buy costs exactly 0;
@@ -101,6 +114,21 @@ So every BUY/SELL row is cross-checked and the import REFUSES when:
 and WARNS when amount equals qty × price to the cent while the fee is
 nonzero (the GROSS column is probably mapped as `amount`). The
 currency must be mapped or set in [defaults] — there is no silent USD.
+
+A trade row's commission keeps its direction: with an amount column the
+amount decides (a buy that cost less than qty × price was credited a
+rebate), else an explicit [formats].fee_sign does; a rebate is booked as
+a NEGATIVE fee (Questrade's convention). With neither, the fee cell is a
+charge whatever its sign.
+
+Futures (`F:`, `/` or `\` prefix, all spelled `F:`) settle on the trade
+date, or on the next settlement day under `futures_settle = "next_day"`
+(the project setting, passed by taxjson-brokerage). An option closed at
+$0 on its expiry day is dated and settled that day; one posted up to 7
+days after the expiry is clamped to it. The mapping has no exercise /
+assignment target: a $0 option close beside a stock trade at the strike
+is named on the console (ATTENTION) — book such a pair as .tt ASSIGN
+rows (the premium folds into the shares' cost).
 """
 
 import csv
@@ -115,8 +143,9 @@ from taxjson.lib.tomlcompat import tomllib
 
 from taxjson.lib.brokerages.base import (BaseBrokerage, BrokerageParseError,
                                          canonical_ca_listing,
+                                         decode_broker_text,
                                          parse_strict_number)
-from taxjson.lib.core import is_option_symbol
+from taxjson.lib.core import is_option_symbol, parse_option_expiry
 from taxjson.lib.dates import settlement_date
 
 # Row-level cross-check tolerance — the same 1% + $0.05 the .tt
@@ -128,23 +157,32 @@ _ABS_TOL = 0.05
 _MAX_FEE_SHARE = 0.05
 _OPTIONS = ("allow_large_fees", "settle_on_trade_date")
 
-_VALID_TARGETS = ("buy", "sell", "dividend", "tax", "interest", "fee",
-                  "skip")
+_VALID_TARGETS = ("buy", "sell", "dividend", "dividend_in_lieu", "tax",
+                  "interest", "fee", "skip")
 # Income-style targets book the amount cell as the money: it must be
 # mapped and non-blank (an unmapped amount booked every dividend as 0).
-_INCOME_TARGETS = ("dividend", "tax", "interest", "fee")
+_INCOME_TARGETS = ("dividend", "dividend_in_lieu", "tax", "interest", "fee")
+# A mapped settle date this many calendar days after the trade is named
+# (ATTENTION); past the hard limit it is refused: no listed security
+# settles a month late, and the tax year follows the settle date
+# (audit A2-1075).
+_SETTLE_LATE_DAYS = 7
+_SETTLE_REFUSE_DAYS = 31
+# A currency cell: a 3-5 letter code (CAD, USD, USDC). A cut-off 'US'
+# or 'C' is refused (audit A2-0030).
+_CURRENCY_RE = re.compile(r"^[A-Z]{3,5}$")
 
 # The mapping vocabulary. Anything else is a typo that used to be
 # ignored without a word (`ammount`, `commission`, `[format]`,
 # `tax_sgn`), so it is refused with a suggestion.
 _SECTIONS = ("columns", "formats", "actions", "defaults", "options",
              "broker")
-_BROKER_KEYS = ("name",)
+_BROKER_KEYS = ("name", "account")
 # A broker name becomes part of a work/ file name and of the
 # `generic:<name>` source label.
 _BROKER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 _COLUMN_KEYS = ("date", "settle", "action", "symbol", "quantity", "price",
-                "amount", "fee", "currency")
+                "amount", "fee", "currency", "account")
 _FORMAT_KEYS = ("date", "settle", "tax_sign", "fee_sign")
 _DEFAULT_KEYS = ("currency", "action", "symbol")
 # Common spellings difflib cannot guess.
@@ -165,7 +203,7 @@ _KEY_ALIASES = {
 # symbol is the LISTING and is kept; the row currency is only the
 # settlement currency (DLR.U.TO bought in USD is still DLR.U.TO).
 _KNOWN_SUFFIXES = ("TO", "V", "CN", "NE", "US", "AX", "L")
-_CA_SUFFIXES = (".TO", ".V", ".CN", ".NE")
+_CA_SUFFIXES = (".TO", ".V", ".VN", ".CN", ".NE")
 # Futures symbol prefixes (lib/futures.py): the contract size is not in
 # the row, so it is never guessed.
 _FUTURES_PREFIXES = ("F:", "/", "\\")
@@ -190,10 +228,25 @@ def _check_keys(path_name: str, section: str, table, valid) -> None:
                 f"silently (and its column never read).")
 
 
+def mapping_path(csv_path: Path) -> Path:
+    """The mapping that applies to `csv_path`: its sidecar
+    `<csv>.toml` when one is there, else the folder's `generic.toml`
+    (which may not exist). A sidecar that is there but cannot be read
+    (a dangling link) is refused: falling back to the shared mapping
+    parsed the CSV with another file's columns (audit A2-0299)."""
+    sidecar = csv_path.with_name(csv_path.name + ".toml")
+    if sidecar.is_symlink() and not sidecar.exists():
+        raise ValueError(
+            f"generic importer: the mapping {sidecar.name} for "
+            f"{csv_path.name} is a link to a file that does not exist — "
+            f"fix or remove it. (The shared generic.toml is NOT used in "
+            f"its place: it describes other files' columns.)")
+    return sidecar if sidecar.exists() else csv_path.parent / "generic.toml"
+
+
 def _load_mapping(csv_path: Path) -> Dict[str, Any]:
     sidecar = csv_path.with_name(csv_path.name + ".toml")
-    shared = csv_path.parent / "generic.toml"
-    path = sidecar if sidecar.exists() else shared
+    path = mapping_path(csv_path)
     if not path.exists():
         raise ValueError(
             f"generic importer: no mapping for {csv_path.name} — write "
@@ -208,6 +261,9 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
         # utf-8-sig: a mapping saved with a BOM failed as "Invalid
         # statement (at line 1, column 1)" (S038-04).
         mapping = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+    except OSError as e:
+        raise ValueError(f"generic importer: cannot read the mapping "
+                         f"{path.name}: {e.strerror or e}")
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"generic importer: {path.name}: bad TOML: {e}")
     for sec, val in mapping.items():
@@ -237,6 +293,23 @@ def _load_mapping(csv_path: Path) -> Dict[str, Any]:
                 f"short name of letters, digits, '-' or '_' (e.g. "
                 f"\"wealthsimple\"), got {raw_name!r}")
         mapping["broker"]["name"] = bname
+    if "account" in (mapping.get("broker") or {}):
+        acct = mapping["broker"]["account"]
+        if not isinstance(acct, str) or not acct.strip():
+            raise ValueError(
+                f"generic importer: {path.name}: [broker].account must be "
+                f"the broker account id as a quoted string, got a "
+                f"{type(acct).__name__}")
+        mapping["broker"]["account"] = acct.strip()
+    # Every [defaults] / [formats] value is text: a TOML true, 5 or a
+    # list was str()-coerced and booked (currency 'TRUE', symbol
+    # "['AAPL'].TRUE") or crashed strptime (audit A2-1081).
+    for sec in ("defaults", "formats"):
+        for k, v in (mapping.get(sec) or {}).items():
+            if not isinstance(v, str):
+                raise ValueError(
+                    f"generic importer: {path.name}: [{sec}].{k} must be "
+                    f"a quoted string, got {v!r}")
     for k, v in cols.items():
         if not isinstance(v, str):
             raise ValueError(
@@ -325,15 +398,37 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
                      amount: float, fee: float, mult: float,
                      allow_large_fees: bool, fee_mapped: bool = True,
                      is_future: bool = False,
-                     amount_given: bool = False) -> float:
+                     amount_given: bool = False,
+                     fee_sign: Optional[str] = None) -> float:
     """Refuse a BUY/SELL row whose numbers don't hang together — the
     signature of a mis-mapped column. See the module docstring. Returns
-    the fee to book: the mapped fee, or — with no fee column mapped —
-    the commission inferred from |amount| vs qty x price (S056-23)."""
+    the fee to book, SIGNED (positive = charged, negative = a credited
+    rebate): the mapped fee, or — with no fee column mapped — the
+    commission inferred from |amount| vs qty x price (S056-23).
+
+    Direction of a mapped fee (audit A2-0626 / A2-1079; abs() booked
+    every ECN rebate as a charge): with an amount and a price, the
+    amount decides — the reading (charge or rebate) closer to the cash
+    the row shows wins; otherwise an explicit `fee_sign` ("cash":
+    negative = charged, "charged": positive = charged) does; with
+    neither, the cell is a charge whatever its sign (the importer's
+    long-standing reading, kept so a file of positive commissions is
+    never flipped into rebates)."""
     # A futures contract size is never guessed (S012-01): no qty x
     # price comparison is possible, so check against the amount only.
     gross = 0.0 if is_future else abs(qty) * abs(price) * mult
+    raw_fee = fee
     fee = abs(fee)
+    if fee and amount and gross > 0:
+        charge_net = gross + fee if target == "buy" else gross - fee
+        rebate_net = gross - fee if target == "buy" else gross + fee
+        if abs(abs(amount) - rebate_net) + 0.005 < abs(abs(amount)
+                                                       - abs(charge_net)):
+            fee = -fee
+    elif fee and fee_sign in ("cash", "charged"):
+        charged = raw_fee < 0 if fee_sign == "cash" else raw_fee > 0
+        if not charged:
+            fee = -fee
     hint = ("check the [columns] mapping — is the fee, gross or amount "
             "column mapped to the wrong field?")
     if amount_given and not amount and gross > 0:
@@ -367,24 +462,24 @@ def _check_trade_row(where: str, target: str, qty: float, price: float,
         # cross-check cannot run, but a fee against the booked total
         # still can — a swapped fee/amount mapping books the commission
         # as the cost (S011-03).
-        if target == "buy" and fee and fee >= abs(amount) - 0.005:
+        if target == "buy" and fee > 0 and fee >= abs(amount) - 0.005:
             raise ValueError(
                 f"generic importer: {where}: fee {fee:.2f} is not less "
                 f"than the buy's whole amount {abs(amount):.2f} — {hint}")
-        if fee and fee > _MAX_FEE_SHARE * abs(amount) \
+        if fee and abs(fee) > _MAX_FEE_SHARE * abs(amount) \
                 and not allow_large_fees:
             raise ValueError(
-                f"generic importer: {where}: fee {fee:.2f} is "
-                f"{fee / abs(amount):.2%} of the amount {abs(amount):.2f} "
+                f"generic importer: {where}: fee {abs(fee):.2f} is "
+                f"{abs(fee) / abs(amount):.2%} of the amount {abs(amount):.2f} "
                 f"(limit {_MAX_FEE_SHARE:.0%}) "
                 f"(no price to cross-check qty x price) — {hint} If the "
                 f"fee really is that large, set `[options] "
                 f"allow_large_fees = true` in the mapping.")
-    if fee and gross > 0 and fee > _MAX_FEE_SHARE * gross \
+    if fee and gross > 0 and abs(fee) > _MAX_FEE_SHARE * gross \
             and not allow_large_fees:
         raise ValueError(
-            f"generic importer: {where}: fee {fee:.2f} is "
-            f"{fee / gross:.2%} of the gross {gross:.2f} "
+            f"generic importer: {where}: fee {abs(fee):.2f} is "
+            f"{abs(fee) / gross:.2%} of the gross {gross:.2f} "
             f"(limit {_MAX_FEE_SHARE:.0%}) "
             f"(qty {abs(qty):g} x price {abs(price):g}"
             f"{' x 100' if mult > 1 else ''}) — {hint} If the fee really "
@@ -425,10 +520,12 @@ def _trade_net(fname: str, target: str, qty: float, price: float,
     refused as a mis-mapping (S057-02)."""
     gross = 0.0 if is_future else abs(qty) * abs(price) * mult
     if amount or amount_given:
-        if target == "sell" and gross > 0 and abs(fee) > gross:
+        if target == "sell" and gross > 0 and fee > gross:
             return -abs(amount)
         return abs(amount)
-    return gross + (abs(fee) if target == "buy" else -abs(fee))
+    # `fee` is signed: a rebate (negative) lowers a buy's cost and
+    # raises a sale's proceeds (A2-0626).
+    return gross + (fee if target == "buy" else -fee)
 
 
 class GenericBrokerage(BaseBrokerage):
@@ -443,6 +540,11 @@ class GenericBrokerage(BaseBrokerage):
         missed (audit R1-122). A bare symbol still takes its suffix from
         the currency (XEI in CAD -> XEI.TO)."""
         sym = symbol_raw.strip()
+        # A futures contract is spelled F: everywhere downstream (IB,
+        # check-dates, the engines): '/ESZ5' and '\\ESZ5' are the same
+        # contract as 'F:ESZ5' (audit A2-0107 / A2-0294).
+        if sym[:1] in ("/", "\\"):
+            sym = "F:" + sym[1:].lstrip()
         # One security, one spelling (audit S010-04): the ACB pool and
         # the superficial-loss match key on the exact symbol string.
         #  * An OCC symbol padded to 21 characters ('XYZ   250321C...')
@@ -487,6 +589,16 @@ class GenericBrokerage(BaseBrokerage):
     # The real broker named by the last parsed file's mapping
     # ([broker].name), None when unnamed (audit S027-05).
     broker_name: Optional[str] = None
+    # The project's futures_settle ("trade" | "next_day"), set by
+    # taxjson-brokerage like on the IB parser (CA-DATE-09/10,
+    # US-DATE-09/12; audit A2-0103 — it used to reach IB only).
+    futures_settle: str = "trade"
+
+    def statement_accounts(self) -> set:
+        """The broker account ids the last parsed file's rows carry
+        ([columns].account cells and/or [broker].account) — empty when
+        the mapping declares none (audit A2-1085)."""
+        return set(getattr(self, "_accounts", None) or ())
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         mapping = _load_mapping(path)
@@ -506,6 +618,12 @@ class GenericBrokerage(BaseBrokerage):
         settle_fmt = formats.get("settle", date_fmt)
         tax_sign = formats.get("tax_sign", "cash")
         fee_sign = formats.get("fee_sign", "cash")
+        # A trade row's commission sign is read only under an EXPLICIT
+        # fee_sign (A2-0626): the default is documented for FEE rows,
+        # and files of positive commissions must not become rebates.
+        trade_fee_sign = formats.get("fee_sign")
+        broker_account = (mapping.get("broker") or {}).get("account")
+        self._accounts: set = set()
         if fee_sign not in ("cash", "charged"):
             raise ValueError(
                 f"generic importer: {mapping['_path']}: [formats]."
@@ -529,13 +647,26 @@ class GenericBrokerage(BaseBrokerage):
         # (where, target, raw signed quantity) per trade row, for the
         # file-level sign-convention check after the loop.
         trade_signs: List[tuple] = []
+        # The shared decoder: UTF-16 (BOM) like every parser and broker
+        # detection read it; a legacy encoding is refused naming the file
+        # (audit A2-1083).
         try:
-            text = path.read_text(encoding="utf-8-sig")
-        except UnicodeDecodeError as e:
-            raise ValueError(
-                f"generic importer: {path.name} is not UTF-8 ({e}) — "
-                f"re-export as UTF-8 CSV (UTF-16/latin-1 exports must "
-                f"be converted first).")
+            text = decode_broker_text(path.read_bytes(), path.name)
+        except BrokerageParseError as e:
+            raise ValueError(f"generic importer: {e}")
+        # The file's last record has no line break after it: a cut-off
+        # export ends this way (audit A2-0030).
+        _unterminated = bool(text) and not text.endswith(("\n", "\r"))
+        _last_line = (len(text.rstrip("\r\n").splitlines())
+                      if text else 0)
+        # (where, target, amount) per trade row: the file's amount-sign
+        # convention check after the loop (A2-0106).
+        trade_amounts: List[tuple] = []
+        # Option rows closed at $0 and stock trades, for the exercise/
+        # assignment check after the loop (A2-0629).
+        zero_closes: List[Dict[str, Any]] = []
+        expiry_clamped: List[str] = []
+        late_settles: List[str] = []
         import io as _io
         if True:
             reader = csv.DictReader(_io.StringIO(text))
@@ -612,6 +743,30 @@ class GenericBrokerage(BaseBrokerage):
                 _nl = [k for k, v in row.items()
                        if k is not None and isinstance(v, str)
                        and ("\n" in v or "\r" in v)]
+                # FEWER cells than the header: DictReader fills the
+                # missing ones with None, and [defaults] used to fill a
+                # currency the cut took away (a USD trade booked as a CAD
+                # .TO security) — a cut-off export (audit A2-0030).
+                _short = [k for k, v in row.items()
+                          if k is not None and v is None]
+                if _short:
+                    raise ValueError(
+                        f"generic importer: {path.name} record ending on "
+                        f"line {reader.line_num}: "
+                        f"{len(fieldnames) - len(_short)} cell(s), "
+                        f"fewer cells than the header's {len(fieldnames)} "
+                        f"(missing: {', '.join(map(repr, _short[:3]))}) — "
+                        f"a cut-off or hand-trimmed row. Re-export the "
+                        f"file (or fill the row in full).")
+                if (_unterminated and reader.line_num >= _last_line
+                        and fieldnames
+                        and not (row.get(fieldnames[-1]) or "").strip()):
+                    raise ValueError(
+                        f"generic importer: {path.name} line "
+                        f"{reader.line_num}: the file ends on a separator "
+                        f"with no line break — its last record looks cut "
+                        f"off (the {fieldnames[-1]!r} cell is missing). "
+                        f"Re-export the file.")
                 if _extra or _nl:
                     raise ValueError(
                         f"generic importer: {path.name} record ending on "
@@ -674,6 +829,15 @@ class GenericBrokerage(BaseBrokerage):
                         f"generic importer: {where}: empty currency cell "
                         f"and no [defaults].currency in "
                         f"{mapping['_path']} — refusing to assume USD.")
+                if not _CURRENCY_RE.match(currency):
+                    raise ValueError(
+                        f"generic importer: {where}: currency {currency!r} "
+                        f"is not a currency code (CAD, USD ...) — a cut-off "
+                        f"row or a mis-mapped [columns].currency.")
+                row_account = (str(cell(row, "account")).strip()
+                               or broker_account or "")
+                if row_account:
+                    self._accounts.add(row_account)
                 symbol_raw = (str(cell(row, "symbol")).strip()
                               or str(defaults.get("symbol", "")))
                 symbol = (self._listing_symbol(symbol_raw, currency)
@@ -694,15 +858,43 @@ class GenericBrokerage(BaseBrokerage):
                     is_future = symbol.startswith(_FUTURES_PREFIXES)
                     self._check_trade_shape(
                         where, target, raw_action, qty, price_v, amount_v,
-                        fee, mult, is_future)
+                        abs(fee), mult, is_future)
                     trade_signs.append((where, target, qty))
+                    trade_amounts.append((where, target, amount_v))
                     fee = _check_trade_row(
                         where, target, qty, price, amount, fee, mult,
                         allow_large_fees, fee_mapped, is_future,
-                        amount_given=amount_v is not None)
-                    date_settle = self._settle_for(
-                        row, cell, where, date, settle_fmt, symbol,
-                        currency, mult > 1, settle_on_trade_date)
+                        amount_given=amount_v is not None,
+                        fee_sign=trade_fee_sign)
+                    # An option closed at $0 on (or posted just after)
+                    # its expiry IS the expiry: dated and settled on the
+                    # expiry day (CA-DATE-08 / US-DATE-08), not T+1 —
+                    # a Dec-31 expiry's loss moved into the next year
+                    # (audit A2-0628).
+                    _exp = (parse_option_expiry(symbol)
+                            if mult > 1 and not is_future else None)
+                    _zero = (not price and not amount)
+                    if _exp and _zero and _exp < date and \
+                            self._days(_exp, date) <= 7:
+                        expiry_clamped.append(
+                            f"{where}: {symbol} $0 close dated {date} -> "
+                            f"its expiry {_exp}")
+                        date = _exp
+                    if _exp and _zero and date == _exp:
+                        date_settle = _exp
+                    else:
+                        date_settle = self._settle_for(
+                            row, cell, where, date, settle_fmt, symbol,
+                            currency, mult > 1, settle_on_trade_date,
+                            self.futures_settle)
+                        if self._days(date, date_settle) > _SETTLE_LATE_DAYS:
+                            late_settles.append(
+                                f"{where} ({symbol} trade {date}, settle "
+                                f"{date_settle})")
+                    if mult > 1 and not is_future and _zero:
+                        zero_closes.append({"where": where,
+                                            "symbol": symbol, "date": date,
+                                            "qty": qty, "target": target})
                     transactions.append({
                         "action": "BUYSELL",
                         "date": date, "time": "09:30:00",
@@ -719,14 +911,17 @@ class GenericBrokerage(BaseBrokerage):
                             mult, is_future,
                             amount_given=amount_v is not None),
                         "gross_amount": (
-                            # Futures: the implied qty x price x size.
-                            abs(amount) + (abs(fee) if target == "sell"
-                                           else -abs(fee))
+                            # Futures: the implied qty x price x size;
+                            # the fee is signed (a rebate is negative).
+                            abs(amount) + (fee if target == "sell"
+                                           else -fee)
                             if is_future else self.theoretical_gross(
                                 qty, abs(price), is_option=(mult > 1))),
-                        "fee": abs(fee),
+                        "fee": fee,
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
+                        **({"broker_account": row_account}
+                           if row_account else {}),
                     })
                     continue
                 # Income-style rows: the amount IS the money. A blank
@@ -738,9 +933,14 @@ class GenericBrokerage(BaseBrokerage):
                         f"refusing to book it as 0. Fill it in, or map "
                         f"the action to skip if the row carries no "
                         f"money.")
-                if target == "dividend":
+                if target in ("dividend", "dividend_in_lieu"):
+                    # A payment in lieu (a short-loan substitute payment)
+                    # is ordinary income, never a dividend (CA-INC-03 /
+                    # US-INC-01): its own action and type, like IB's
+                    # (audit A2-1076).
+                    _pil = target == "dividend_in_lieu"
                     transactions.append({
-                        "action": "DIVIDEND",
+                        "action": "DIVIDEND_IN_LIEU" if _pil else "DIVIDEND",
                         "date": date, "time": "09:30:00",
                         # Income is dated its payment day: no
                         # settlement cycle.
@@ -750,9 +950,11 @@ class GenericBrokerage(BaseBrokerage):
                         # SIGNED: reversals stay negative (schema).
                         "net_amount": amount,
                         "gross_amount": amount,
-                        "type": "dividend",
+                        "type": "dividend_in_lieu" if _pil else "dividend",
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
+                        **({"broker_account": row_account}
+                           if row_account else {}),
                     })
                 elif target in ("tax", "interest", "fee"):
                     transactions.append({
@@ -778,6 +980,8 @@ class GenericBrokerage(BaseBrokerage):
                         "type": target,
                         "account": self.DEFAULT_ACCOUNT,
                         "description": raw_action,
+                        **({"broker_account": row_account}
+                           if row_account else {}),
                     })
         # A file that signs its quantities (a sell row carried a
         # negative quantity) must not also carry a sell row with a
@@ -792,6 +996,36 @@ class GenericBrokerage(BaseBrokerage):
                     f"carry negative quantities — this row is a buy by "
                     f"the file's own sign convention. Check the "
                     f"[actions] mapping ({len(bad)} such row(s)).")
+        # Amounts: a file whose buy rows carry NEGATIVE (cash-out)
+        # amounts signs its cash, so a buy-mapped row with a POSITIVE
+        # amount is cash in — a sale under one action mapped to buy,
+        # booked as a buy (the R1-121 fix covered only the quantity
+        # sign; audit A2-0106).
+        if any(t == "buy" and (a or 0) < 0 for _, t, a in trade_amounts):
+            bad = [w for w, t, a in trade_amounts
+                   if t == "buy" and (a or 0) > 0]
+            if bad:
+                raise ValueError(
+                    f"generic importer: {bad[0]}: a buy row with a "
+                    f"POSITIVE amount (cash in) in a file whose other buy "
+                    f"rows carry negative amounts (cash out) — this row is "
+                    f"a sale by the file's own sign convention. Map buys "
+                    f"and sells to separate action values ({len(bad)} "
+                    f"such row(s)).")
+        if expiry_clamped:
+            print(f"note: generic importer: {path.name}: "
+                  f"{len(expiry_clamped)} option close(s) at $0 posted "
+                  f"after the contract's expiry are dated the expiry day "
+                  f"(CA-DATE-08 / US-DATE-08): "
+                  f"{'; '.join(expiry_clamped[:5])}", file=sys.stderr)
+        if late_settles:
+            print(f"warning: ATTENTION: generic importer: {path.name}: "
+                  f"{len(late_settles)} trade(s) settle more than "
+                  f"{_SETTLE_LATE_DAYS} days after the trade date: "
+                  f"{'; '.join(late_settles[:5])}. The tax year follows "
+                  f"the settle date — check the settle cells.",
+                  file=sys.stderr)
+        self._warn_assignment_shapes(path.name, zero_closes, transactions)
         if unbooked:
             shown = "; ".join(unbooked[:5])
             more = (f" (+{len(unbooked) - 5} more)"
@@ -870,9 +1104,66 @@ class GenericBrokerage(BaseBrokerage):
                 f"own signs. Map buys to their own action value.")
 
     @staticmethod
+    def _days(a: str, b: str) -> int:
+        """Calendar days from ISO date `a` to `b` (0 when either is not
+        an ISO date)."""
+        try:
+            return (datetime.strptime(b, "%Y-%m-%d")
+                    - datetime.strptime(a, "%Y-%m-%d")).days
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _warn_assignment_shapes(name: str, zero_closes, transactions
+                                ) -> None:
+        """The mapping has no exercise/assignment target, so an assigned
+        or exercised option arrives as a $0 option close plus a stock
+        trade at the strike, booked as an expiry plus an unrelated trade:
+        the premium is realized as its own gain instead of folding into
+        the shares' cost or proceeds (CA-OPT-06, s.49(3)/(3.1); audit
+        A2-0629). The pairing is not inferred (no broker-specific
+        exercise fee tells it from a trade at a round strike); each
+        candidate is an ATTENTION line."""
+        import re as _re
+        hits = []
+        for z in zero_closes:
+            m = _re.match(r'^([A-Z0-9.]+?)(\d{6})([CP])(\d{8})(?:\.(\w+))?$',
+                          z["symbol"])
+            if not m:
+                continue
+            under = m.group(1) + (f".{m.group(5)}" if m.group(5) else "")
+            strike = int(m.group(4)) / 1000.0
+            shares = abs(z["qty"]) * 100
+            for t in transactions:
+                if t.get("action") != "BUYSELL" or t["symbol"] != under:
+                    continue
+                if abs(abs(float(t["quantity"])) - shares) > 1e-6:
+                    continue
+                if abs(float(t.get("price") or 0) - strike) > 0.005:
+                    continue
+                gap = GenericBrokerage._days(z["date"], t["date"])
+                if -1 <= gap <= 7:
+                    hits.append(f"{z['symbol']} closed at $0 on "
+                                f"{z['date']} ({z['where']}) + "
+                                f"{abs(float(t['quantity'])):g} {under} at "
+                                f"the strike {strike:g} on {t['date']}")
+                    break
+        if hits:
+            print(f"warning: ATTENTION: generic importer: {name}: "
+                  f"{len(hits)} possible exercise/assignment(s) booked as "
+                  f"an expiry plus a separate trade: {'; '.join(hits[:5])}"
+                  f". The mapping cannot express an exercise or "
+                  f"assignment, so the premium is NOT folded into the "
+                  f"shares' cost or proceeds (s.49(3)/(3.1); a US "
+                  f"premium adjusts basis or amount realized). If the "
+                  f"statement shows one, map those rows to skip and enter "
+                  f"both legs as .tt ASSIGN rows.", file=sys.stderr)
+
+    @staticmethod
     def _settle_for(row, cell, where: str, date: str, settle_fmt: str,
                     symbol: str, currency: str, is_option: bool,
-                    settle_on_trade_date: bool) -> str:
+                    settle_on_trade_date: bool,
+                    futures_settle: str = "trade") -> str:
         """Settlement date of a trade row: the mapped `settle` column
         when the cell is filled, else the standard cycle from the
         shared holiday-aware helper (T+1 since the 2024 cutover, T+2
@@ -881,7 +1172,9 @@ class GenericBrokerage(BaseBrokerage):
         .US on the US one, otherwise the row currency). Booking the
         trade date put a Dec-31 sale in the wrong Canadian tax year
         (audits R1-123/R1-185). `[options] settle_on_trade_date = true`
-        (crypto) and futures (`F:` symbols) settle on the trade date."""
+        (crypto) settles on the trade date; futures (`F:`, `/`, `\\`)
+        on the trade date, or the next settlement day under
+        futures_settle = "next_day" (CA-DATE-09/10, US-DATE-09/12)."""
         raw = str(cell(row, "settle")).strip()
         if raw:
             try:
@@ -896,8 +1189,22 @@ class GenericBrokerage(BaseBrokerage):
                     f"generic importer: {where}: settle date {settle} is "
                     f"before the trade date {date} — are the date and "
                     f"settle columns swapped?")
+            if GenericBrokerage._days(date, settle) > _SETTLE_REFUSE_DAYS:
+                raise ValueError(
+                    f"generic importer: {where}: settle date {settle} is "
+                    f"more than {_SETTLE_REFUSE_DAYS} days after the trade "
+                    f"date {date} — no listed security settles that late, "
+                    f"and the tax year follows the settle date. Fix the "
+                    f"cell (or blank it for the standard cycle).")
             return settle
-        if settle_on_trade_date or symbol.upper().startswith("F:"):
+        if symbol.upper().startswith(_FUTURES_PREFIXES):
+            if futures_settle == "next_day":
+                from taxjson.lib.market_calendar import add_settlement_days
+                market = "CAD" if symbol.upper().endswith(_CA_SUFFIXES) \
+                    else "USD" if symbol.upper().endswith(".US") else currency
+                return add_settlement_days(date, 1, market).isoformat()
+            return date
+        if settle_on_trade_date:
             return date
         up = symbol.upper()
         market = ("CAD" if up.endswith(_CA_SUFFIXES)

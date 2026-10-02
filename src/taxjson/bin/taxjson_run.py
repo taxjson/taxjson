@@ -2566,6 +2566,8 @@ def stage_account(name: str, acfg: Dict[str, Any], settings: Dict[str, Any],
     # not — a row booked once (or twice) on a guess must not scroll by.
     echo_attention_lines(cache / f"{name}_sorted.json" if is_crypto
                          else base_json, prefix="dedup: ")
+    # A ticker.map rename to a bare symbol (audit A2-0304).
+    echo_attention_lines(base_json, prefix="ticker.map: ")
     # A split booked twice with a rounded ratio (A2-0070): one event,
     # applied once — on the console, so the manual line gets deleted.
     if not is_crypto:
@@ -3172,6 +3174,39 @@ def stage_exports(equity_gains: List[Path], reports_dir: Path) -> None:
         run_to_file(_cmd("taxjson-export") + flags + files, exports_dir / fname,
                     capture_diag=False)
     print(f"  → {exports_dir}/")
+
+
+def _warn_shared_broker_accounts(bases: List[Tuple[str, Path]]) -> None:
+    """One broker account's export in TWO taxjson accounts books every
+    row twice (audit A2-0293, A2-0630). The rows carry their broker
+    account (hashed, `source_account`); name each pair of taxjson
+    accounts that share one, with the count of identical rows."""
+    import json
+    seen: Dict[str, Dict[str, set]] = {}
+    for name, base in bases:
+        try:
+            rows = json.loads(Path(base).read_text()).get("transactions")
+        except (OSError, ValueError, AttributeError):
+            continue
+        per: Dict[str, set] = {}
+        for t in rows or ():
+            if isinstance(t, dict) and t.get("source_account"):
+                # The id hashes the taxjson account label: compare the
+                # row's content instead.
+                per.setdefault(t["source_account"], set()).add(
+                    (t.get("date"), t.get("action"), t.get("symbol"),
+                     t.get("quantity"), t.get("net_amount")))
+        seen[name] = per
+    names = sorted(seen)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            for h in sorted(set(seen[a]) & set(seen[b])):
+                same = len(seen[a][h] & seen[b][h])
+                print(f"  {ATTENTION_PREFIX} the same broker account "
+                      f"(#{h[:6]}) feeds two taxjson accounts, {a} and "
+                      f"{b} ({same} identical row(s)) — every row of it "
+                      f"is booked in BOTH. Put each broker account's "
+                      f"exports under ONE inputs/<account>/ folder.")
 
 
 def _warn_cross_taxable_overlap(taxable_bases: List[Tuple[str, Path]],
@@ -3919,6 +3954,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         _warn_cross_taxable_overlap(
             [(n, o["base"]) for n, o, c in taxable_outputs if not c],
             settings)
+        _warn_shared_broker_accounts(
+            [(n, o["base"]) for n, o in sheltered_outputs]
+            + [(n, o["base"]) for n, o, _c in taxable_outputs])
         if _crypto_blend:
             _warn_cross_taxable_overlap(
                 [(n, o["base"]) for n, o, c in taxable_outputs if c],
@@ -4088,7 +4126,7 @@ country           = "{country}"{country_pad}# canada | ca | usa | us
 {province_line}base_currency     = "{base_currency}"{base_pad}# report currency (the country's); CAD: Bank of Canada rates, USD: Yahoo
 source_currencies = ["{source_currency}"]{source_pad}# currencies you hold besides base_currency (FX rates fetched)
 tax_date          = "{tax_date}"{tax_pad}# settle | trade (default: settle for canada — CRA; trade for usa — IRS)
-# futures_settle = "trade"            # trade | next_day: IB futures & futures options settle on the TRADE date
+# futures_settle = "trade"            # trade | next_day: futures & futures options (IB, generic) settle on the TRADE date
 #                                     #   (daily variation margin); next_day = the clearing premium date
 # local_timezone = "America/Toronto"  # crypto UTC timestamps are dated in this zone (IANA name)
 # prior_year_record = "../{prev_year}/filed/{prev_year}.json"
@@ -4926,7 +4964,19 @@ def _tx_display_line(tx: dict, settle: bool = False) -> Optional[str]:
     # negative proceeds as positive, so the "round-trippable" view
     # flipped both on re-import (audit S039-11).
     if action in ("BUYSELL", "ASSIGN"):
-        return f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
+        line = f"{action} {date} {time} {sym} {sig(qty)} {cur} {sig(price)} {money(net)} {money(fee)}"
+        # The declared contract size rides along as `x<size>`, as in
+        # tx_to_tt_line: without it a re-imported x10 mini or a CL
+        # future lost its multiplier (A2-0621).
+        from taxjson.lib.core import is_option_symbol
+        try:
+            _m = float(tx.get("multiplier") or 0.0)
+        except (TypeError, ValueError):
+            _m = 0.0
+        if _m > 0 and (str(sym).startswith(("F:", "/", "\\"))
+                       or (is_option_symbol(str(sym)) and _m != 100.0)):
+            line += f" x{_m:g}"
+        return line
     if action == "TRANSFER":
         # The opt-in DECLARED token rides along as in tx_to_tt_line, or a
         # re-import loses the declaration (audit A2-0989).

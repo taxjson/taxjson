@@ -4045,8 +4045,17 @@ class IbBrokerage(BaseBrokerage):
                               for c in trade_cancels}
         self.trade_pairs: List[tuple] = []
         if trade_cancels:
-            _kept, _pairs, _unpaired = pair_cancellations(transactions)
+            _partials: list = []
+            _kept, _pairs, _unpaired = pair_cancellations(
+                transactions, partials=_partials)
             self.trade_pairs = [(dict(_o), dict(_c)) for _o, _c in _pairs]
+            # A Ca of one execution of a multi-fill order (A2-0298).
+            for _o, _c, _r in _partials:
+                print(f"note: {shown_name(path)}: IB cancelled (Ca) "
+                      f"{-_c['quantity']:g} of the {_o['symbol']} order of "
+                      f"{_o['quantity']:g} @ {_o['price']:g} on "
+                      f"{_o['date']} (one execution) — the order is "
+                      f"booked as {_r['quantity']:g}.", file=sys.stderr)
             _gone = {id(t) for pr in _pairs for t in pr}
             transactions[:] = _kept
             expiry_txs[:] = [t for t in expiry_txs if id(t) not in _gone]

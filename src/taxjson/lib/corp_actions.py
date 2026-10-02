@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import re
 import sys
@@ -394,7 +395,14 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
     # parser's `fii` shape, so merger legs follow its listing rule.
     fii: Dict[tuple, Dict[str, str]] = {}
     statement_account = ''
-    with Path(csv_path).open('r', encoding='utf-8') as f:
+    # Decoded the way the IB transaction parser reads the same file
+    # (base.decode_broker_text): a UTF-16 re-save, or a UTF-8 BOM, is
+    # read, not refused (audit A2-0101). A legacy encoding still raises
+    # UnicodeDecodeError, which the CLI reports in one line.
+    _raw = Path(csv_path).read_bytes()
+    _text = (_raw.decode('utf-16') if _raw[:2] in (b'\xff\xfe', b'\xfe\xff')
+             else _raw.decode('utf-8-sig'))
+    with io.StringIO(_text.replace('\r\n', '\n').replace('\r', '\n')) as f:
         reader = csv.reader(f)
         header_map: Dict[str, int] = {}
         info_header: Dict[str, int] = {}

@@ -50,7 +50,7 @@ _PAIR_CURRENCIES = frozenset({"USD", "CAD", "EUR", "GBP", "AUD", "JPY",
                               "CHF", "HKD", "NZD", "SGD", "SEK", "NOK",
                               "DKK", "MXN", "BRL", "INR", "KRW", "CNY",
                               "ZAR", "ILS"})
-_CA_SUFFIXES = frozenset({"TO", "V", "CN", "NE"})
+from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_SUFFIXES
 
 
 @dataclass
