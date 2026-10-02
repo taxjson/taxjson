@@ -394,8 +394,11 @@ class TestReturnFooters(unittest.TestCase):
             (root / "work" / "margin_gains.json").write_text(json.dumps(
                 {"summary": {"year": 2025}, "transactions": [e]}))
             t = _cli(root, "sum").stdout.split("FOR THE RETURN")[1]
-            self.assertIn("adds it to their own ACB", t)
-            self.assertNotIn("lost for good", t)
+            t = " ".join(t.split())
+            self.assertIn("affiliated person's acquisition is permanent "
+                          "for this return (that person adds it to their "
+                          "own ACB", t)
+            self.assertNotIn("(affiliated) acquisition is lost for good", t)
             with tempfile.TemporaryDirectory() as td2:
                 g = _write(td2, "g.json", [e])
                 _rc, out, _err = _main([str(g), "--form", "schedule3",
