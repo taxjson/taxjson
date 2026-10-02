@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -332,6 +333,7 @@ class TestMalformedTickerMapLine(unittest.TestCase):
         self.assertIn("ticker.map:2", buf.getvalue())
 
 
+@rule("CA-RPT-03")
 class TestEstimateDeductions(unittest.TestCase):
     """R1-213: the estimate had no input for deductions below line
     15000 (RRSP 20800, carrying charges 22100) and other_income had to

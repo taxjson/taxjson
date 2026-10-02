@@ -320,6 +320,7 @@ class TestSpinoffBrokerValue(unittest.TestCase):
 
 
 # --------------------------------------------------------------- R1-136
+@rule("CA-CORP-03")
 class TestIbMergerShapes(unittest.TestCase):
     """R1-136: IB cash takeovers are sales; decimal-ratio and class-share
     mergers are booked; a stock+cash merger stops the run by name."""
@@ -384,6 +385,7 @@ class TestIbMergerShapes(unittest.TestCase):
 
 
 # --------------------------------------------------------------- R1-142 / S019-07
+@rule("CA-CORP-03")
 class TestOneValuation(unittest.TestCase):
     def _merger(self, **kw):
         from taxjson.lib.corp_actions import CorporateAction
@@ -471,6 +473,7 @@ class TestOneValuation(unittest.TestCase):
 
 
 # --------------------------------------------------------------- S002-04 / S019-04
+@rule("CA-CORP-03")
 class TestEventInTwoBrokerAccounts(unittest.TestCase):
     D = 'ABC(CA0000000001) Merged(Acquisition) WITH CA0000000002 1 for 2'
 
@@ -552,6 +555,7 @@ _QT_H = ('Transaction Date,Settlement Date,Action,Symbol,Description,'
          'Activity Type,Account #,Account Type\n')
 
 
+@rule("CA-CORP-06")
 class TestQuestradeSpinoffParent(unittest.TestCase):
     def test_s020_04_parent_from_another_export(self):
         from taxjson.bin.taxjson_corp_actions import extract_events

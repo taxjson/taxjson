@@ -138,6 +138,8 @@ def _qt(rows):
     return _parse(QuestradeBrokerage(), QT_HEAD + ''.join(rows))
 
 
+@rule("CA-OPT-06")
+@rule("US-OPT-02")
 class TestQuestradeAssignmentWords(unittest.TestCase):
     """R1-63: only zero-cash option legs are zeroed."""
 
@@ -214,6 +216,8 @@ class TestQuestradeAssignmentWords(unittest.TestCase):
                          'QZX CORP ASSIGNMENT OF PUT', 100, 0, 0, 0, 0)])
 
 
+@rule("CA-DIST-03")
+@rule("US-DIST-03")
 class TestQuestradeReversals(unittest.TestCase):
     """R1-66: CIL / REI keep their sign; a reversal cancels."""
 

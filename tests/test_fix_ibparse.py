@@ -612,6 +612,8 @@ class TestIbIncomeRebindNeedsTheSameIsin(unittest.TestCase):
         self.assertFalse(any(k.startswith('_') for t in txs for k in t))
 
 
+@rule("CA-INC-DATE-ROC")
+@rule("US-ROC-01")
 class TestIbIncomeRebindAcrossStatements(unittest.TestCase):
     """S060-00: a statement with only a ROC row (no trades, no Open
     Positions) kept the ISIN suffix: a gain on a phantom BTG.TO."""

@@ -21,6 +21,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -79,6 +80,7 @@ def _disp(rid, date_, symbol, qty, raw_gain, cost=1.0, direction="LONG",
                 account=account, **kw)
 
 
+@rule("CA-PLAN-01")
 class TestUnsettledTradesAreBooked(unittest.TestCase):
     """R1-225: a trade made today settles tomorrow (T+1); it is already
     an acquisition / a loss inside its window."""
@@ -124,6 +126,7 @@ class TestUnsettledTradesAreBooked(unittest.TestCase):
         self.assertEqual(rows["TRP.TO"]["category"], "CLEAR")
 
 
+@rule("CA-PLAN-01")
 class TestEngineDecidesLosses(unittest.TestCase):
     """R1-226: the engine's raw_gain decides whether a sale was a loss."""
 
@@ -169,6 +172,7 @@ class TestEngineDecidesLosses(unittest.TestCase):
             ], "2026-09-29", gains=[g])
         self.assertEqual(rows["XYZ.TO"]["category"], "")
 
+    @rule("CA-SL-11")
     def test_grant_timed_buyback_loss_is_not_a_wash_loss(self):
         opt = "XYZ270115C00010000.TO"
         base = [_row("2026-09-01", opt, -1, 100.0, rid="w1"),
@@ -189,6 +193,7 @@ class TestEngineDecidesLosses(unittest.TestCase):
         self.assertEqual(r_on[opt]["category"], "COOLING")
 
 
+@rule("CA-PLAN-01")
 class TestPhantomOpenings(unittest.TestCase):
     """S006-09: phantom-backed positions are longs, not shorts."""
 
@@ -250,6 +255,7 @@ def _verdicts(r):
     return {x["symbol"]: x["verdict"] for x in doc["results"]}
 
 
+@rule("CA-PLAN-01")
 class TestChecksEndToEnd(unittest.TestCase):
     def test_todays_trades_and_engine_losses_reach_the_checks(self):
         today = date.today()
@@ -342,6 +348,7 @@ def _buy(symbol, qty, price, net, date_="2026-03-02"):
             "currency": "CAD", "account": "margin"}
 
 
+@rule("CA-PLAN-03")
 class TestWhatIfOptions(unittest.TestCase):
     def test_option_sale_applies_the_contract_multiplier(self):
         # R1-227: 1 call bought @5 (cost 500); what-if sell 1 @4.00

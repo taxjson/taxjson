@@ -65,6 +65,7 @@ def _http_error(code, body, ctype="text/html"):
         code, "Not Found", {"Content-Type": ctype}, io.BytesIO(body))
 
 
+@rule("CA-FX-03")
 class TestValet404IsNotSticky(_FxCase):
     def test_html_404_is_a_failed_fetch_not_series_not_found(self):
         err = _http_error(404, b"<html><body>Maintenance</body></html>")

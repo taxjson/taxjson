@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 from taxjson.lib.brokerages.rbc_direct import RbcBrokerage
+from tax_rules import rule
 
 REPO = Path(__file__).resolve().parent.parent
 ACCT = "55500001"  # pii-ok (synthetic)
@@ -138,6 +139,7 @@ ZZQ_ROWS = [
 ]
 
 
+@rule("CA-ACB-04")
 class TestIncomeListingWithSharedBareTicker(unittest.TestCase):
     def _check(self, txs, err):
         div = of(txs, action='DIVIDEND')
@@ -183,6 +185,7 @@ GLDX_ROC = row("July 15, 2025", "Dividends", "GLDX", "GOLDX MINING CORP", "",
                "CAPITAL ON 1000 SHS REC 07/01/25 PAY 07/15/25")
 
 
+@rule("CA-ACB-04")
 class TestMarketCurrencyAcrossFiles(unittest.TestCase):
     def test_usd_income_of_a_tsx_stock_in_a_no_trade_year(self):
         split, err, _ = parse_files({'rbc_2024.csv': GLDX_BUY,
@@ -235,6 +238,7 @@ RCI_SELL = row("December 29, 2025", "Sell", "8ZZRCI1", "", "-3", "5.00",
                "CLOSE CONTRACT")
 
 
+@rule("CA-ACB-RENAME")
 class TestOptionIdentityAcrossFiles(unittest.TestCase):
     def test_xch_then_close_in_the_next_export(self):
         split, err, _ = parse_files({'rbc_2024.csv': TRP_XCH_IN + TRP_XCH_OUT
@@ -281,6 +285,7 @@ ORCX_ROWS = [
 ]
 
 
+@rule("CA-ACB-RENAME")
 class TestTickerChangeWithoutReorganization(unittest.TestCase):
     def test_one_file_warns_with_the_ticker_map_line(self):
         _, err, _ = parse_one(''.join(ORCX_ROWS))
@@ -312,6 +317,7 @@ ABC_SELL = row("August 3, 2026", "Sell", "NEWQ", "NEWQO INC COM", "-100", "12",
                "1200", "CAD", "NEWQO INC COM UNSOLICITED")
 
 
+@rule("CA-ACB-RENAME")
 class TestTemporaryCodeAcrossFiles(unittest.TestCase):
     def test_resolved_by_name_in_the_earlier_export(self):
         split, err, _ = parse_files({'rbc_2025.csv': ABC_BUY,
