@@ -87,6 +87,33 @@
 - US harvest: a crypto account's losses are claimable now with no
   wash-sale advice (US-WASH-13, new US-PLAN-05); an open short shows ST,
   never LT (US-HOLD-03) (re-audit A2-1173, A2-1176).
+- `taxjson serve` on an IPv6 address (`--host ::1`, `[::1]`, or a LAN
+  IPv6 address) answers requests instead of refusing every one with 400
+  "Invalid host header", and prints the URL with the address in brackets
+  (re-audit A2-0695, A2-1186).
+
+- Web: the wash-radar page shows the scope note (verdicts cover the
+  project's own accounts only, CA-PLAN-04 / US-PLAN-04); a radar sidecar
+  without "sections" or with a row field of the wrong type, and a
+  holdings row whose `trades` is not a list, are an error banner instead
+  of "no report yet", the stale .rpt, or an HTTP 500; the stale-rate
+  label uses harvest's threshold (7 days, not 4); and the freshness
+  fallback counts the same input files as the checklist (a Finder
+  .DS_Store no longer marks the dashboard stale) (re-audit A2-0374,
+  A2-0696, A2-1187, A2-1188, A2-1179, A2-1185).
+
+- Web what-if: an option is priced at the contract size the book's rows
+  declare (a x10 mini option was priced at x100, a 10 loss shown as a
+  350 gain), and a plain futures contract is refused instead of priced
+  at x1 and dated as an equity T+1 sale; the simulated sale settles on
+  the listing's market calendar, not the calendar of the currency the
+  price was typed in; a Canadian trust's return of capital is booked on
+  its record date first, as the run does; a registered account with
+  inputs but no built book is named in the warnings; and the engine's
+  warn-only option-replacement flag (a call bought in the window) is
+  listed in the result (re-audit A2-0131, A2-0384, A2-0132, A2-0375,
+  A2-0437, A2-1189, A2-1175, A2-0383, A2-0687).
+
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
   Questrade row with fewer cells than the header is refused instead of

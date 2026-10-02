@@ -884,7 +884,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "pool of the taxable accounts of its kind, with the "
                  "registered accounts as context, so a sibling account's "
                  "purchase in the window denies the loss as the filing "
-                 "would."),
+                 "would. It prices an option at the contract size the "
+                 "book's rows declare (100 for an equity option with "
+                 "none), settles the sale on the listing's market "
+                 "calendar whatever currency the price is typed in, "
+                 "books a trust's return of capital on its record date "
+                 "first, refuses a plain futures contract (its gain is "
+                 "the settled P/L), and lists the engine's warn-only "
+                 "replacement flags for the sale."),
             Rule("CA-PLAN-04",
                  "Their verdicts cover the project's own accounts only and "
                  "say so: a purchase by your spouse or common-law partner, "
@@ -1396,7 +1403,14 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-PLAN-03",
                  "The web what-if runs a sale with every taxable "
                  "account's purchases and the IRAs as wash-sale context, "
-                 "on the account's own FIFO basis."),
+                 "on the account's own FIFO basis. It prices an option "
+                 "at the contract size the book's rows declare (100 for "
+                 "an equity option with none), settles the sale on the "
+                 "listing's market calendar whatever currency the price "
+                 "is typed in, refuses a plain futures contract (its "
+                 "gain is the settled P/L), and lists the engine's "
+                 "warn-only replacement flags for the sale (a long call "
+                 "bought in the window, US-WASH-12)."),
             Rule("US-PLAN-04",
                  "Their verdicts cover the project's own accounts only and "
                  "say so: a purchase by your spouse or by a corporation "

@@ -1054,6 +1054,21 @@ def annotate_inventory_multipliers(results: dict, transactions) -> None:
             item['multiplier'] = m
 
 
+def apply_roc_record_dates(transactions, income_rules) -> None:
+    """A Canadian trust's return of capital lowers the ACB when it becomes
+    payable (s.53(2)(h)): an ADJUST with a printed record date is booked
+    on it (tax-logic CA-INC-DATE-ROC-TRUST). The row keeps its id; only
+    its dates move. IncomeRules.roc_record_date answers '' outside Canada,
+    so a US book is never touched. Shared by run_gains and the web
+    what-if, which priced a sale between the two dates on the unreduced
+    ACB (audit A2-1175)."""
+    for _t in transactions:
+        _rec = income_rules.roc_record_date(_t)
+        if _rec:
+            _t.date = _rec
+            _t.date_settle = _rec
+
+
 def run_gains(transactions, sheltered_transactions=(),
               affiliated_transactions=(), req: GainsRequest = None, *,
               trace_sink: Optional[Callable[[dict], None]] = None,
@@ -1091,15 +1106,7 @@ def run_gains(transactions, sheltered_transactions=(),
     for _w in income_rules.warnings(transactions, _warn_year):
         print(f"warning: {_w}", file=sys.stderr)
     if req.country == 'canada':
-        # A Canadian trust's return of capital lowers the ACB when it
-        # becomes payable (s.53(2)(h)): an ADJUST with a printed record
-        # date is booked on it (tax-logic CA-INC-DATE-ROC-TRUST). The
-        # row keeps its id; only its dates move.
-        for _t in transactions:
-            _rec = income_rules.roc_record_date(_t)
-            if _rec:
-                _t.date = _rec
-                _t.date_settle = _rec
+        apply_roc_record_dates(transactions, income_rules)
     if req.country == 'canada':
         # The parsers book a stock dividend as a neutral $0 event; the
         # Canadian cost is its declared amount, which the export does
