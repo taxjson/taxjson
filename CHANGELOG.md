@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Docs that contradicted each other or the code (re-audit A2-0947 to
+  A2-0954, A2-1619 to A2-1629): `distributions.map` per-share amounts
+  are in the project's base currency (README, `--help`, tax-logic
+  CA-DIST-01 / US-DIST-01, and the run's NOTE name it); the stale
+  KNOWN_ISSUES entry calling US January fund dividends deferred is gone
+  (`ric_january_dividends` implements it); the deck names Webull's
+  Trading Summary CSV and its missing income; SECURITY.md and the deck
+  give the Bank of Canada noon-rate period (Yahoo only before May
+  2007); the crypto-send pairing texts say "another of your crypto
+  accounts, from 10 minutes before to 3 days after"; README says the
+  generic importer spells `.V`/`.CN`/`.NE` as `.TO`; KNOWN_ISSUES says
+  the RBC ticker-change hint needs the old symbol's rows in an export;
+  `taxjson --help` states the exit codes (2 = usage or an unreadable
+  input, 1 = failure or a finding); README documents
+  `crypto-sends --unpair`.
+
 - Errors are one line with a consistent exit code in more places
   (re-audit A2-0161, A2-0791, A2-0770, A2-1421, A2-1435, A2-1436,
   A2-1428, A2-1432): `taxjson <tool>` runs a tool under the same guard
@@ -2011,7 +2027,8 @@
   outlay, as for a sale; the gain is unchanged. Line 6 proceeds and
   outlays each rise by the year's write commissions. reconcile-slips'
   gross proceeds match (audit R1-40; tax-logic CA-DISP-06). A year
-  locked by `taxjson filed` reports the moved line 6 proceeds as drift.
+  locked by `close-year` reports the moved line 6 proceeds as drift in
+  `check-filed`.
 
 - **Adjusted-series and futures calls are flagged as possible
   replacement property.** A call on an adjusted option series (root +
@@ -2069,7 +2086,7 @@
   the opposite T1-ADJ advice (audit S045-23, S045-24, S046-02, S044-07,
   S044-06, S044-08).
 - **Every `--year` is a plausible tax year** (1900..next year): `audit`,
-  `close-year`, `find-missing-history`, `taxjson-fees`,
+  `close-year`, `find-missing-history`, `taxjson-fees-sum`,
   `taxjson-missing-history`, `taxjson-reconcile-slips`,
   `taxjson-sum-income` (`audit --year 2204` printed an all-checkmark
   reconciliation of nothing; `--year 0` meant all years).
@@ -2183,7 +2200,8 @@
   S025-00, S025-04).
 - Docs and samples: README T1135 (suffix-less symbols are the CRYPTO
   bucket), the git-identity exception to "nothing personal leaves the
-  machine", form-export's outlays split (long sales only), REFERENCES
+  machine", form-export's outlays split (long sales, and under grant timing a
+  written option's write commission), REFERENCES
   (no s.53(1)(h) citation), SECURITY.md egress list; `examples/README`
   step 3 passes `--taxable`, the IB and Webull demo rows are fabricated
   and self-consistent; real trade figures are gone from this changelog
@@ -2968,10 +2986,9 @@
   `" Grant "` timing rendered close timing; `"nextday"` / `"ACB"` were
   described although the run refuses them), refuses an unknown country
   instead of rendering Canada, and now states the income dating rules
-  explicitly: dividends, payments in lieu, returns of capital and trust
-  distributions are dated by the pay date in both countries (the
-  Canadian trust payable-date rule and the US January-paid fund
-  dividend rule are stated as not applied yet), plus which settings and
+  explicitly (how dividends, payments in lieu, returns of capital and
+  trust distributions are dated in each country: CA-INC-DATE-TRUST,
+  CA-INC-DATE-ROC-TRUST, US-INC-DATE-RIC), plus which settings and
   commands the project's country refuses.
 
 - **FX before March 2017 uses the Bank of Canada noon rate.** Folio
