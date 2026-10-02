@@ -298,5 +298,50 @@ class TestBuySellCheck(unittest.TestCase):
         self.assertIn("this is the ETH listing", b["canada"].stdout)
 
 
+
+class TestWashSalesNamesTheRule(unittest.TestCase):
+    """A2-0748, A2-1249, A2-1265, A2-1326, A2-1333, A2-1352, A2-1360,
+    A2-1371, A2-1372: Canada's wash-sales report, its --explain trace
+    and the single-account run note said 'wash sale' and 'cost basis'."""
+
+    BOOK = ("BUYSELL 2025-03-03 10:00:00 ZZW.US 100 USD 20.00 -2000.00 0.00\n"
+            "BUYSELL 2025-04-03 10:00:00 ZZW.US -100 USD 15.00 1500.00 0.00\n"
+            "BUYSELL 2025-04-10 10:00:00 ZZW.US 100 USD 16.00 -1600.00 0.00\n")
+
+    @rule("CA-SL-01")
+    @rule_absent("CA-SL-01", country="usa")
+    @rule("US-WASH-01")
+    def test_each_country_names_its_rule(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = projects_both(td, files={"inputs/margin/m.tt": self.BOOK})
+            for c, root in p.items():
+                r = cli(root, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, (c, r.stderr[-2000:]))
+            w = cli_both(p, "wash-sales")
+            x = cli_both(p, "wash-sales", "--explain")
+            one = cli_both(p, "run", "--no-input", "--account", "margin")
+            empty = projects_both(Path(td) / "e", files={
+                "inputs/margin/m.tt": self.BOOK.splitlines(True)[0]})
+            for c, root in empty.items():
+                cli(root, "run", "--no-input")
+            n = cli_both(empty, "wash-sales")
+        ca, us = w["canada"].stdout, w["usa"].stdout
+        self.assertIn("SUPERFICIAL LOSSES", ca)
+        self.assertIn("1 superficial loss(es)", ca)
+        self.assertIn("ACB of the substituted property", ca)
+        self.assertNotIn("wash sale", ca.lower())
+        self.assertIn("WASH SALES", us)
+        self.assertIn("1 wash sale(s)", us)
+        self.assertIn("cost basis of the repurchased shares", us)
+        self.assertNotIn("superficial", us.lower())
+        self.assertNotIn("WASH SALE", x["canada"].stdout)
+        self.assertIn("cross-account superficial-loss detection",
+                      one["canada"].stderr)
+        self.assertIn("cross-account wash-sale detection",
+                      one["usa"].stderr)
+        self.assertIn("No superficial losses", n["canada"].stdout)
+        self.assertIn("No wash sales", n["usa"].stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

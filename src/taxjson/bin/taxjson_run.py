@@ -4556,9 +4556,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         # exports/ccd/leaps/crosslistings with one-account truncations).
         # `<account>_wash.sum` and the combined reports keep whatever the
         # last FULL run wrote.
+        # Canada's rule is the superficial-loss rule (audit A2-1360).
+        _rule_n = ("wash-sale" if _country(settings) == "usa"
+                   else "superficial-loss")
         print(
-            f"\n  ! Single-account run ({args.account}): cross-account wash-sale "
-            f"detection and the combined exports/cross reports were skipped — "
+            f"\n  ! Single-account run ({args.account}): cross-account "
+            f"{_rule_n} detection and the combined exports/cross reports "
+            f"were skipped — "
             f"they keep the last full run's contents. Run `taxjson run` "
             f"with no --account before filing.",
             file=sys.stderr,
@@ -11850,9 +11854,13 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
                    "basis": gains_basis_label(resolved)})
         return
 
+    # The rule's own name: never "wash sale" in a Canadian project
+    # (audit A2-0748, A2-1249, A2-1326, A2-1352, A2-1371, A2-1372).
+    _usa = _country(_soft_settings(root)) == "usa"
     if not rows:
         scope = f" for account {args.account!r}" if args.account else ""
-        print(f"No wash sales{scope} — no losses were denied.")
+        print(f"No {'wash sales' if _usa else 'superficial losses'}{scope}"
+              f" — no losses were denied.")
         return
 
     out_lines = [" ".join(header)]
@@ -11872,8 +11880,8 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
         total_perm += perm
 
     base = _base_currency(root)
-    _usa = _country(_soft_settings(root)) == "usa"
-    print(f"WASH SALES — {base}, tax year {year}, basis: "
+    print(f"{'WASH SALES' if _usa else 'SUPERFICIAL LOSSES'} — {base}, "
+          f"tax year {year}, basis: "
           f"{gains_basis_label(resolved)}  "
           f"(losses denied under "
           f"{'the wash-sale rule, §1091' if _usa else 'the superficial-loss rule, s.54'})")
@@ -11881,13 +11889,17 @@ def cmd_wash_sales(args: argparse.Namespace) -> None:
     _print_report_table(out_lines)
     perm_note = (f" ({money(total_perm)} permanently denied)"
                  if total_perm > 0.005 else "")
-    print(f"\n{len(rows)} wash sale(s); {money(total_denied)} {base} of losses "
-          f"denied{perm_note}.")
+    print(f"\n{len(rows)} "
+          f"{'wash sale(s)' if _usa else 'superficial loss(es)'}; "
+          f"{money(total_denied)} {base} of losses denied{perm_note}.")
     if embedded > 0.005:
         print(f"Currently embedded in OPEN positions: {money(embedded)} "
               f"{base} of deferred losses (see `taxjson list` DEFERRED).")
-    print("DENIED is added to the cost basis of the repurchased shares (you "
-          "recover it on a later sale) — except any permanently-denied amount"
+    print(("DENIED is added to the cost basis of the repurchased shares "
+           "(you recover it on a later sale)" if _usa else
+           "DENIED is added to the ACB of the substituted property "
+           "(s.53(1)(f); you recover it on a later sale)")
+          + " — except any permanently-denied amount"
           + (" from a repurchase in an IRA, which is lost for good."
              if _usa else
              # An affiliated person's purchase: their own ACB, not

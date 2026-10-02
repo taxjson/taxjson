@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- A Canadian project's `wash-sales` report is titled SUPERFICIAL LOSSES,
+  counts "superficial loss(es)", says the denial goes onto the ACB of the
+  substituted property (s.53(1)(f)), and its `--explain` trace and the
+  single-account run note name the superficial-loss rule; the US keeps
+  the wash-sale wording (audit A2-0748, A2-1249, A2-1326, A2-1352,
+  A2-1360, A2-1371, A2-1372).
 - `buy-check` / `sell-check`: in a US project a bare coin held in a
   crypto account (`buy-check ETH`) is answered as outside the wash-sale
   rule instead of taking ETH.US's verdict or saying "no tracked taxable

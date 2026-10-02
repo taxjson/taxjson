@@ -893,12 +893,13 @@ ACCOUNT   DATE         SYMBOL    QTY     PROCEEDS    COST        GAIN       DENI
 margin    2025-10-08   ZZA.US    120     9,840.00    10,320.00   -480.00    400.00   -80.00
 margin    2025-10-17   ZZB.US    25      3,150.00    3,700.00    -550.00    550.00   0.00
 
-2 wash sale(s); 950.00 CAD of losses denied.
+2 superficial loss(es); 950.00 CAD of losses denied.
 ```
 
-A DENIED loss is added to the cost basis of the repurchased shares (recovered on
-a later sale), except any amount permanently denied by a repurchase in a
-registered account.
+A DENIED loss is added to the ACB of the substituted property (s.53(1)(f);
+recovered on a later sale), except any amount permanently denied by a
+repurchase in a registered account. A Canadian project titles the report
+SUPERFICIAL LOSSES; a US one WASH SALES, with the §1091 basis wording.
 
 Add **`--explain`** to see *how* each denial was computed — the full ACB /
 superficial-loss calculation trace (pool build-up, the triggering repurchase,
