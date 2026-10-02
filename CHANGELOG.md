@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `taxjson list --date`: verified on the owner-shaped case of a long call
+  sold at a loss and bought back (OWNER-LIST-ASOF-WASH: two T calls on
+  the 2025 books showed 14,817.50 / 9,069.25 where the engine carries
+  15,305.50 / 9,313.25); fixed by the A2-0391 / A2-0701 change above,
+  pinned by an option test.
 - `taxjson option-boundary` (and the checklist step that runs it) reads
   the lock named by `[settings] prior_year_record` like a local
   filed/<year>.json: the per-year layout got "no filed-year locks" and a

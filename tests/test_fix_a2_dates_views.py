@@ -741,6 +741,32 @@ class TestListAsOf(unittest.TestCase):
                                        places=2, msg=c)
 
 
+class TestListAsOfOwnerCalls(unittest.TestCase):
+    """OWNER-LIST-ASOF-WASH: on the owner's 2025 books `list --date
+    2025-12-31` gave two long-call lines (T ... calls) a cost below the
+    engine's by the in-account superficial-loss addition (14,817.50 vs
+    15,305.50). The same shape, synthetic: a long call sold at a loss
+    and bought back within 30 days."""
+
+    @rule("CA-SL-09")
+    def test_long_call_rebuy_keeps_the_denied_loss(self):
+        sym = "ZZT270115C00022000.TO"
+        rows = [_bt("2025-03-03", "2025-03-04", sym, 2, 1000.0, "CAD"),
+                _bt("2025-04-01", "2025-04-02", sym, -2, 600.0, "CAD"),
+                _bt("2025-04-10", "2025-04-11", sym, 2, 500.0, "CAD")]
+        with tempfile.TemporaryDirectory() as td:
+            root = projects_both(td, year=2025)["canada"]
+            (root / "work").mkdir(exist_ok=True)
+            (root / "work" / "margin_base.json").write_text(
+                json.dumps({"transactions": rows}))
+            r = cli(root, "list", "--date", "2025-12-31", "--json")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            row = [x for x in json.loads(r.stdout)["rows"]
+                   if x["symbol"] == sym][0]
+        self.assertAlmostEqual(row["cost"], 900.0, places=2)
+        self.assertAlmostEqual(row["deferred_wash"], 400.0, places=2)
+
+
 class TestBooksHorizon(unittest.TestCase):
 
     def _project(self, td, base_rows, extra=None):
