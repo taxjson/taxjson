@@ -414,7 +414,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "ATTENTION line. A distribution its record date moves "
                  "into another year than its pay date is listed on the "
                  "console (ATTENTION): one of the two project years "
-                 "leaves it out. A foreign fund keeps the pay date, and so does an IB "
+                 "leaves it out. The tax withheld on a payment is dated "
+                 "with it. A foreign fund keeps the pay date, and so does an IB "
                  "row: IB prints no record date and calls a trust's "
                  "distribution a dividend, so a trust cannot be told from "
                  "a corporation (the ex date IB's accruals give is not "
@@ -1009,7 +1010,10 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "\"SYMBOL YYYY-01-DD\"; a bare root is that fund's US "
                  "listing only, never another class or a .TO listing"
                  + (f"; now: {', '.join(_ric_list(s))}" if _ric_list(s)
-                    else "") + ") on Dec 31 of the prior year. Form "
+                    else "") + ") on Dec 31 of the prior year; a moved "
+                 "payment is listed on the console (ATTENTION) in both "
+                 "project years, since one of them leaves it out, and the "
+                 "tax withheld on it moves with it. Form "
                  "1099-DIV is authoritative.",
                  keys=("ric_january_dividends",)),
         ]),

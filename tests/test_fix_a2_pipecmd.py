@@ -260,5 +260,79 @@ class TestRocMovedIntoAClosedYearNamesTheSale(unittest.TestCase):
         self.assertNotIn(" sale", err)
 
 
+# ---------------------------------------------------------------- A2-0396
+class TestWithholdingFollowsItsDividend(unittest.TestCase):
+    """A TAX row withheld on a payment is in the same year as the
+    payment's dividend when income dating moves the dividend (a US
+    January RIC dividend on Dec 31; a Canadian trust's distribution on
+    its record date)."""
+
+    def _us(self):
+        from tax_rules.dual import tx
+        return [tx("BUYSELL", "2025-06-02", "VXUS.US", 100, 5000),
+                tx("DIVIDEND", "2026-01-05", "VXUS.US", 0, 92.0,
+                   gross_amount=100.0, description="VXUS DIVIDEND"),
+                tx("TAX", "2026-01-05", "VXUS.US", 0, 8.0,
+                   description="VXUS DIVIDEND"),
+                tx("TAX", "2026-02-05", "VXUS.US", 0, 3.0,
+                   description="VXUS other")]
+
+    def _ca(self):
+        from tax_rules.dual import tx
+        return [tx("BUYSELL", "2025-06-02", "ZXT.TO", 100, 5000,
+                   currency="CAD"),
+                tx("DIVIDEND", "2026-01-15", "ZXT.TO", 0, 50.0,
+                   gross_amount=50.0, currency="CAD",
+                   record_date="2025-12-30", income_label="distribution",
+                   description="DIST ON 100 SHS REC 12/30/25 PAY 01/15/26"),
+                tx("TAX", "2026-01-15", "ZXT.TO", 0, 7.5, currency="CAD",
+                   description="DIST ON 100 SHS REC 12/30/25 PAY 01/15/26")]
+
+    @staticmethod
+    def _withheld(rows, year, settings):
+        from taxjson.bin.taxjson_sum_income import summarize_income
+        from taxjson.lib.income_dating import IncomeRules
+        rules = IncomeRules.from_settings(settings)
+        res = summarize_income([t.to_dict() for t in rows], year,
+                               rules=rules)
+        return round(sum(float(c.get("tax", 0.0) or 0.0)
+                         for per in res["ticker_stats"].values()
+                         for c in per.values()), 2)
+
+    @rule("US-INC-DATE-RIC")
+    def test_us_ric_withholding_moves_with_the_dividend(self):
+        st = {"country": "usa",
+              "ric_january_dividends": ["VXUS.US 2026-01-05"]}
+        self.assertEqual(self._withheld(self._us(), 2025, st), 8.0)
+        # The unpaired February withholding keeps its pay date.
+        self.assertEqual(self._withheld(self._us(), 2026, st), 3.0)
+
+    @rule("CA-INC-DATE-TRUST")
+    def test_ca_trust_withholding_moves_with_the_distribution(self):
+        st = {"country": "canada"}
+        self.assertEqual(self._withheld(self._ca(), 2025, st), 7.5)
+        self.assertEqual(self._withheld(self._ca(), 2026, st), 0.0)
+
+# ---------------------------------------------------------------- A2-0398
+class TestListedRicDividendIsNamed(unittest.TestCase):
+    """A January dividend listed in ric_january_dividends leaves the pay
+    year's books: both project years say so on the ATTENTION channel."""
+
+    @rule("US-INC-DATE-RIC")
+    def test_both_years_name_the_moved_dividend(self):
+        from tax_rules.dual import tx
+        book = [tx("BUYSELL", "2025-06-02", "VTI.US", 10, 2000),
+                tx("DIVIDEND", "2026-01-05", "VTI.US", 0, 90.0,
+                   gross_amount=90.0, description="VTI DIVIDEND")]
+        kw = dict(ric_january_dividends=("VTI.US 2026-01-05",))
+        e26 = _gains_one(book, "usa", year=2026, **kw)["_stderr"]
+        e25 = _gains_one(book, "usa", year=2025, **kw)["_stderr"]
+        self.assertIn("ATTENTION: income year: VTI.US: dividend 90.00", e26)
+        self.assertIn("NOT in 2026's numbers", e26)
+        self.assertIn("counted in 2025 here", e25)
+        e24 = _gains_one(book, "usa", year=2024, **kw)["_stderr"]
+        self.assertNotIn("VTI.US", e24)
+
+
 if __name__ == "__main__":
     unittest.main()

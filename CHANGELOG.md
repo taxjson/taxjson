@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The tax withheld on a dividend now moves with it when income dating
+  re-dates the payment (a US January RIC dividend, a Canadian trust's
+  record-date distribution), so one payment's income and withholding are
+  in the same year; a listed US January RIC dividend is named on the
+  console as `ATTENTION: income year:` in both project years (re-audit
+  A2-0396, A2-0398).
 - A Canadian trust's return of capital is booked on its record date by
   taxjson-audit, taxjson-explain and the web what-if too (they used the
   pay date and contradicted the .sum; audit failed its own tie-out), and

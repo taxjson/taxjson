@@ -421,7 +421,11 @@ class TestUsJanuaryFundDividends(unittest.TestCase):
                                usa={"ric_january_dividends": (spec,)})
                 (e,) = _income(r["usa"])
                 self.assertEqual(e["income_date"], "2024-12-31")
-                self.assertNotIn("§852", r["usa"]["_stderr"])
+                # No "list it" advice for a listed payment; the move
+                # itself is named (re-audit A2-0398).
+                self.assertNotIn("to move it", r["usa"]["_stderr"])
+                self.assertIn("ATTENTION: income year: SPY.US",
+                              r["usa"]["_stderr"])
         # Another pay date is not the listed payment.
         self.assertEqual(
             self._years(self._book(), usa={"ric_january_dividends": (
