@@ -960,6 +960,17 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "offset method, nothing charged at $25 or less). A payment "
                  "made before January 1 counts only when its row says "
                  "`tax_year = YEAR`, and earns credit from January 1."),
+            Rule("CA-SCAN-01",
+                 "`taxjson scan`: a US-listed dividend payer held in a "
+                 "TFSA is flagged — the 15% US withholding is "
+                 "unrecoverable there, while an RRSP is exempt under the "
+                 "Canada-US treaty (not checked) and a taxable account "
+                 "can claim the foreign tax credit."),
+            Rule("CA-SCAN-02",
+                 "A Canadian issuer held through its US listing in a "
+                 "taxable account or TFSA while it pays dividends is "
+                 "flagged: its .TO line pays the eligible dividend in CAD "
+                 "with no conversion.", cont=True),
             Rule("CA-RPT-07",
                  "`taxjson edge-cases`: every trade whose year or "
                  "superficial-loss verdict turns on a boundary — window "
