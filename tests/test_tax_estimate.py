@@ -169,6 +169,7 @@ class TestSumEstimateCli(unittest.TestCase):
              str(root), "sum", *args],
             cwd=REPO_ROOT, capture_output=True, text=True)
 
+    @rule("CA-INC-01", "CA-RPT-04")
     def test_estimate_block_canada(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = self._sum(self._project(tmp),

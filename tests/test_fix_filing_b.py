@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -398,6 +399,7 @@ class TestRunStateSurfaced(unittest.TestCase):
             r = _cli(root, "check-filed")
             self.assertIn("not the clean result", r.stderr)
 
+    @rule("CA-ACB-03")
     def test_unblended_books_are_not_locked(self):
         """S046-01: only `run --account` ran — no blended pass."""
         with tempfile.TemporaryDirectory() as td:

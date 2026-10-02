@@ -4,7 +4,7 @@ import contextlib
 import io
 import unittest
 
-from taxjson.lib.core import CanadaTaxRules, TaxTransaction
+from taxjson.lib.core import CanadaTaxRules, TaxTransaction, USATaxRules
 from tax_rules import rule
 
 
@@ -47,6 +47,37 @@ class TestCaSameMomentHolderRank(unittest.TestCase):
     def test_pre_loss_same_moment_taxable_before_affiliated(self):
         res = _ca(self.BOOK, aff=[_row('2025-02-20', 50, 45, 'spouse')])
         self.assertEqual(_sales(res), [('2025-03-03', 416.67, 0.0)])
+
+
+class TestBaselineStatementsPinned(unittest.TestCase):
+    """A2-0851: statements the unpinned baseline still listed."""
+
+    @rule("CA-DISP-04")
+    def test_ca_short_is_realized_on_the_cover(self):
+        # Short in December, covered in January: one disposition, dated
+        # (and settled) on the cover, gain = proceeds - cost of cover.
+        res = _ca([_row('2024-12-16', -100, 50), _row('2025-01-15', 100, 40)])
+        rows = [(e['date'], e['date_settle'], round(e['gain'], 2))
+                for e in res['transactions'] if 'proceeds' in e]
+        self.assertEqual(rows, [('2025-01-15', '2025-01-15', 1000.0)])
+        res = _ca([_row('2024-12-16', -100, 50), _row('2025-01-15', 100, 60)])
+        self.assertEqual([round(e['gain'], 2) for e in res['transactions']
+                          if 'proceeds' in e], [-1000.0])
+
+    @rule("US-WASH-03")
+    def test_us_identical_option_rebought_washes_the_option_loss(self):
+        c = 'XYZ250620C00050000.US'
+        rows = [_row('2025-02-03', 1, 5, sym=c, cur='USD'),
+                _row('2025-03-03', -1, 2, sym=c, cur='USD'),
+                _row('2025-03-10', 1, 2.5, sym=c, cur='USD')]
+        for r in rows:
+            r.net_amount = round(abs(r.quantity * r.price * 100), 2)
+        with contextlib.redirect_stderr(io.StringIO()):
+            res = USATaxRules().compute_gains(rows)
+        sale, = [e for e in res['transactions'] if 'proceeds' in e]
+        self.assertAlmostEqual(sale['disallowed_amount'], 300.0, places=2)
+        lot, = [i for i in res['inventory'] if i['symbol'] == c]
+        self.assertAlmostEqual(lot['total_cost'], 550.0, places=2)
 
 
 if __name__ == '__main__':

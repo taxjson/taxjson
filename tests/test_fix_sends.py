@@ -400,6 +400,42 @@ class TestUsGift(unittest.TestCase):
                      f"{TAO_ID}=payment")
             self.assertEqual(p.returncode, 0, p.stderr)
 
+    @rule("US-SEND-01")
+    def test_us_payment_is_written_as_a_sale_at_fair_value(self):
+        # A2-0851: a payment in a US project is a sale at fair value in
+        # crypto_sends.tt, booked by the next run (US-SEND-01).
+        with tempfile.TemporaryDirectory() as td:
+            root, home = _project(td, country="usa")
+            (root / "taxjson.toml").write_text(
+                '[settings]\nyear = 2026\ncountry = "usa"\n'
+                'base_currency = "USD"\nsource_currencies = ["CAD"]\n'
+                '[accounts.crypto]\ntype = "taxable"\ncrypto = true\n')
+            _cad_usd_rates_file(root / "work" / "to_base.csv")
+            (root / "inputs" / "crypto" / "cb_2025.csv").unlink()
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            p = _cli(root, home, "crypto-sends", "crypto", "--set",
+                     f"{TAO_ID}=payment")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            w = _cli(root, home, "crypto-sends", "crypto", "--write")
+            self.assertEqual(w.returncode, 0, w.stderr)
+            body = (root / "inputs" / "crypto" / "crypto_sends.tt"
+                    ).read_text()
+            lines = [ln for ln in body.splitlines()
+                     if ln.startswith("BUYSELL") and " TAO " in ln]
+            self.assertEqual(len(lines), 1, body)
+            self.assertTrue(lines[0].startswith(
+                "BUYSELL 2026-05-04 18:50:14 TAO -0.1 "), lines[0])
+            r = _cli(root, home, "run", "--no-input")
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            base = json.loads((root / "work" / "crypto_base.json")
+                              .read_text())["transactions"]
+            sale = [t for t in base if t["symbol"] == "TAO"
+                    and t["action"] == "BUYSELL"
+                    and abs(float(t["quantity"]) + 0.1) < 1e-12]
+            self.assertEqual(len(sale), 1)
+            self.assertGreater(float(sale[0]["net_amount"]), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
