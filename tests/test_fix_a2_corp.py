@@ -286,6 +286,55 @@ class TestIbCancellations(unittest.TestCase):
         self.assertNotIn('by hand', err)
 
 
+_FII_H = ('Financial Instrument Information,Header,Asset Category,Symbol,'
+          'Description,Conid,Security ID,Underlying,Listing Exch,'
+          'Multiplier,Expiry,Delivery Month,Type,Strike,Code\n')
+
+
+def _fii(sym, exch, isin, conid):
+    return (f'Financial Instrument Information,Data,Stocks,{sym},{sym} '
+            f'UNITS,{conid},{isin},,{exch},1,,,COMMON,,\n')
+
+
+class TestIbCorpListingRule(unittest.TestCase):
+    """A2-0209, A2-0219 (S010-06 twin): a merger of a TSX USD unit uses
+    the statement parser's listing rule (QZAA.U.TO), not the currency."""
+
+    def test_usd_unit_merger_stays_on_the_tsx_listing(self):
+        m = ('QZAA.U(CA0000000501) Merged(Acquisition) WITH CA0000000502 '
+             '1 for 1 ({t}, {n}, {i})')
+        rows = [_ca(m.format(t='QZAA.U', n='QZAA UNITS', i='CA0000000501'),
+                    -100, -1000),
+                _ca(m.format(t='QZBB.U', n='QZBB UNITS', i='CA0000000502'),
+                    100, 1000)]
+        head = _IB_HEAD + _FII_H + _fii('QZAA.U', 'TSE', 'CA0000000501',
+                                        '990000501')
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, rows, head=head)
+        self.assertEqual([(e.source_symbol, e.target_symbol) for e in evs],
+                         [('QZAA.U.TO', 'QZBB.U.TO')], err)
+
+    def test_nyse_usd_trade_keeps_us(self):
+        rows = [_ca(_M_OUT, -100, -2500), _ca(_M_IN, 50, 2500)]
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, rows)
+        self.assertEqual([(e.source_symbol, e.target_symbol) for e in evs],
+                         [('ABC.US', 'XYZ.US')], err)
+
+    def test_a2_0556_currency_tagged_target_warns(self):
+        m = ('SSX(CA0000000001) Merged(Acquisition) WITH US0000000002 '
+             '1 for 16 ({t}, {n}, {i})')
+        rows = [_ca(m.format(t='SSX', n='SSX GOLD', i='CA0000000001'),
+                    -1600, -25920, cur='CAD'),
+                _ca(m.format(t='RGX.CAD', n='RGX GOLD', i='US0000000002'),
+                    100, 25840, cur='CAD')]
+        with tempfile.TemporaryDirectory() as tmp:
+            evs, err = _ib_events(tmp, rows)
+        self.assertEqual([e.target_symbol for e in evs], ['RGX.CAD.TO'])
+        self.assertIn("'RGX.CAD'", err)
+        self.assertIn('ticker.map', err)
+
+
 class TestIbDateTimeOrder(unittest.TestCase):
     def test_a2_0984_unpadded_hour_sorts_as_a_time(self):
         with tempfile.TemporaryDirectory() as tmp:

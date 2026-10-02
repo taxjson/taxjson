@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- IB corporate actions use the statement parser's listing rule: a
+  merger or spin-off of a TSX-listed USD unit (QZAA.U) is booked on
+  `.U.TO`, where its trades are, not on a phantom `.US` line (A2-0209,
+  A2-0219), and a leg on a currency-tagged IB line (RGLD.CAD) is
+  warned about with the ticker.map fix (A2-0556).
 - **IB: a cancelled (`Ca`) corporate action is no longer offered for
   election** (A2-0018, A2-0019, A2-0020, A2-0068, A2-0069, A2-0212,
   A2-0220, A2-0970, A2-0971): each `Ca` row removes its original (same

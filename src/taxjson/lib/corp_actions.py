@@ -390,12 +390,35 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
     cancels: List[Dict[str, Any]] = []
     # Merger-shaped rows neither regex understands (see _IB_ANY_MERGER_RE).
     odd_rows: List[Dict[str, Any]] = []
+    # Financial Instrument Information listing venues, in the statement
+    # parser's `fii` shape, so merger legs follow its listing rule.
+    fii: Dict[tuple, Dict[str, str]] = {}
     statement_account = ''
     with Path(csv_path).open('r', encoding='utf-8') as f:
         reader = csv.reader(f)
         header_map: Dict[str, int] = {}
         info_header: Dict[str, int] = {}
+        fii_header: Dict[str, int] = {}
         for raw_row in reader:
+            if (raw_row and raw_row[0] == 'Financial Instrument Information'
+                    and len(raw_row) > 1):
+                if raw_row[1] == 'Header':
+                    fii_header = {c: i for i, c in enumerate(raw_row)}
+                elif raw_row[1] == 'Data' and fii_header:
+                    def _g(col):
+                        i = fii_header.get(col)
+                        return (raw_row[i] if i is not None
+                                and i < len(raw_row) else '').strip()
+                    cat = _g('Asset Category')
+                    if cat in ('Stocks', 'Warrants'):
+                        for t in _g('Symbol').split(','):
+                            t = t.strip()
+                            for k in (re.sub(r'\s+', ' ', t),
+                                      re.sub(r'\s+', '.', t)):
+                                if k:
+                                    fii.setdefault(
+                                        (cat, k), {'exch': _g('Listing Exch')})
+                continue
             if (raw_row and raw_row[0] == 'Account Information'
                     and len(raw_row) > 1):
                 if raw_row[1] == 'Header':
@@ -493,8 +516,49 @@ def _read_ib_corporate_actions(csv_path: Path) -> Dict[str, Any]:
     for r in rows + spin_rows + cancels + odd_rows:
         r['stmt'] = statement_account
     return {'rows': rows, 'spin_rows': spin_rows,
-            'cancels': cancels, 'odd_rows': odd_rows,
+            'cancels': cancels, 'odd_rows': odd_rows, 'fii': fii,
             'statement_account': statement_account}
+
+
+def _ib_leg_symbol(sym: str, currency: str, fii: Dict[tuple, Any],
+                   tsx_unit: bool = False) -> str:
+    """An IB corporate-action leg's symbol under the statement parser's
+    listing rule (`_ib_listing_ext`): a USD unit of a TSX-listed fund
+    (QZAA.U) is the Canadian listing X.U.TO, not a fictional `.US`
+    security — the currency-only suffix left the real position open and
+    disposed of a pool that never existed (A2-0209, A2-0219, the S010-06
+    twin). `tsx_unit`: the other leg is such a unit, so a `.U` successor
+    with no instrument row of its own is one too."""
+    from taxjson.lib.brokerages.ib_extractor import _ib_listing_ext
+    ext = _ib_listing_ext('Stocks', sym, currency, fii)
+    if (ext != 'TO' and tsx_unit and re.search(r'[.\s]U$', sym or '')
+            and (currency or '').upper() == 'USD'):
+        ext = 'TO'
+    return _apply_suffix(sym, ext)
+
+
+def _ib_warn_currency_tags(events: List[CorporateAction]) -> None:
+    """Say once per symbol when an event's leg is an IB currency/venue
+    tagged line (RGLD.CAD): booked as a security of its own, apart from
+    the plain listing. The statement parser's R1-59 warning never saw a
+    symbol that appears only in a merger or spin-off (A2-0556)."""
+    from taxjson.lib.brokerages.ib_extractor import _IB_CURRENCY_TAGS
+    seen = set()
+    for ev in events:
+        for sym in (ev.source_symbol, ev.target_symbol):
+            root = (sym or '').rsplit('.', 1)[0]
+            if '.' not in root or root in seen:
+                continue
+            base, tag = root.rsplit('.', 1)
+            if tag.upper() not in _IB_CURRENCY_TAGS:
+                continue
+            seen.add(root)
+            print(f"warning: IB corporate action {ev.event_id or ev.date}: "
+                  f"symbol {root!r} ends in the currency/venue tag .{tag} "
+                  f"— booked as {sym}, a security of its own apart from "
+                  f"{base}. If it is the same security, join it in "
+                  f"ticker.map (e.g. `GLOBAL {sym} {base}."
+                  f"{sym.rsplit('.', 1)[1]}`).", file=sys.stderr)
 
 
 def _ib_norm_date_time(s: str) -> str:
@@ -622,6 +686,10 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
         return _ib_union(own[key], [o[key] for o in others])
     rows, spin_rows, odd_rows = _all('rows'), _all('spin_rows'), \
         _all('odd_rows')
+    fii: Dict[tuple, Any] = {}
+    for src in [own] + others:
+        for k, v in src.get('fii', {}).items():
+            fii.setdefault(k, v)
     _ib_apply_cancellations(_all('cancels'), rows, spin_rows, odd_rows)
 
     def _acct(recs) -> str:
@@ -773,11 +841,11 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
                 continue
             cur = outs[-1]['currency']
             tgt = ins[-1]
-            src_symbol = _apply_suffix(
-                bucket['src_sym'], _CURRENCY_SUFFIX.get(cur, cur))
-            tgt_symbol = _apply_suffix(
-                tgt['sym'], _CURRENCY_SUFFIX.get(tgt['currency'],
-                                                 tgt['currency']))
+            src_symbol = _ib_leg_symbol(bucket['src_sym'], cur, fii)
+            tgt_symbol = _ib_leg_symbol(
+                tgt['sym'], tgt['currency'], fii,
+                tsx_unit=(src_symbol.endswith('.U.TO')
+                          and tgt['currency'] == cur))
             date_part, _, time_part = bucket['date_time'].partition(',')
             events.append(CorporateAction(
                 date=date_part.strip(),
@@ -839,11 +907,11 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
                     return rn, ro
             return 1.0, 1.0
 
-        src_suffix = _CURRENCY_SUFFIX.get(mb['currency'], mb['currency'])
-        src_symbol = _apply_suffix(mb['src_sym'], src_suffix)
-        cont_symbol = _apply_suffix(
-            cont['sym'],
-            _CURRENCY_SUFFIX.get(cont['currency'], cont['currency']))
+        src_symbol = _ib_leg_symbol(mb['src_sym'], mb['currency'], fii)
+        unit = src_symbol.endswith('.U.TO')
+        cont_symbol = _ib_leg_symbol(
+            cont['sym'], cont['currency'], fii,
+            tsx_unit=unit and cont['currency'] == mb['currency'])
         date_part, _, time_part = mb['date_time'].partition(',')
         date = date_part.strip()
         # One second below the event clamp: the spin-off legs below sit
@@ -865,9 +933,9 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
             if leg is cont:
                 continue
             rn, ro = _pair_for(leg)
-            leg_symbol = _apply_suffix(
-                leg['sym'],
-                _CURRENCY_SUFFIX.get(leg['currency'], leg['currency']))
+            leg_symbol = _ib_leg_symbol(
+                leg['sym'], leg['currency'], fii,
+                tsx_unit=unit and leg['currency'] == mb['currency'])
             events.append(CorporateAction(
                 # +1s: the spinoff's rows must sort AFTER the merger's
                 # rename so the parent pool exists to allocate from.
@@ -882,7 +950,7 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
                 account=account, raw_descriptions=mb['descriptions'],
                 fractional_delivery=True, broker_account=_acct(mb['recs'])))
 
-    events.extend(_ib_spinoff_events(spin_rows, account, _acct))
+    events.extend(_ib_spinoff_events(spin_rows, account, _acct, fii))
     events.extend(_ib_unsupported_events(
         [r for r in odd_rows if r.get('own')], account, _acct))
     # Half / short mergers: a blocking `unsupported` event (the run stops
@@ -891,7 +959,9 @@ def parse_ib_corporate_actions(csv_path: Path, account: str = 'IB',
     events.extend(_ib_unsupported_events(
         [r for _why, recs in blocked for r in recs], account, _acct,
         quiet=True))
-    return _collapse_cross_listing_chains(events)
+    events = _collapse_cross_listing_chains(events)
+    _ib_warn_currency_tags(events)
+    return events
 
 
 parse_ib_corporate_actions.accepts_context = True
@@ -904,7 +974,7 @@ def _ib_ext(currency: str) -> str:
     return _ib_currency_ext(currency)
 
 
-def _ib_spinoff_events(spin_rows, account, acct_of
+def _ib_spinoff_events(spin_rows, account, acct_of, fii=None
                        ) -> List[CorporateAction]:
     """IB `Spinoff` rows -> spin-off events. The statement parser used
     to book every one as a dividend at IB's Value with no election
@@ -925,12 +995,13 @@ def _ib_spinoff_events(spin_rows, account, acct_of
         if not any(r.get('own', True) for r in recs):
             continue
         parts = recs[0]['parts']
-        ext = _ib_ext(currency)
         qty = sum(r['qty'] for r in recs)
         val = abs(sum(r['value'] for r in recs))
         date_part, _, time_part = date_time.partition(',')
-        parent = (f"{parts['parent']}.{ext}" if parts['parent']
-                  else '(unknown parent)')
+        parent = (_ib_leg_symbol(parts['parent'], currency, fii or {})
+                  if parts['parent'] else '(unknown parent)')
+        target = _ib_leg_symbol(parts['target'], currency, fii or {},
+                                tsx_unit=parent.endswith('.U.TO'))
         if not parts['parent']:
             print(f"warning: IB spin-off row names no parent ticker "
                   f"({desc[:90]!r}) — a s.86.1 rollover's parent-ACB "
@@ -940,7 +1011,7 @@ def _ib_spinoff_events(spin_rows, account, acct_of
             action_type='spinoff',
             source_symbol=parent,
             source_isin=parts['parent_isin'] or parts['parent'],
-            target_symbol=f"{parts['target']}.{ext}",
+            target_symbol=target,
             target_isin=parts['target_isin'] or parts['target'],
             ratio_new=parts['ratio_new'] or qty,
             ratio_old=parts['ratio_old'] or 1.0,
