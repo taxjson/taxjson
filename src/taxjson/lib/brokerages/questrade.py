@@ -971,6 +971,51 @@ class QuestradeBrokerage(BaseBrokerage):
                     self.count_nonevent("zero-amount fee row")
                 continue
 
+            _cash_q = parse_strict_number(
+                row.get('Quantity'), field='Quantity',
+                where=self._where(lineno), allow_blank=True, blank=0.0)
+            if abs(_cash_q) < 1e-9 and not (row.get('Symbol') or '').strip():
+                # Cash-only rows (re-audit A2-0277 / A2-0614): they were
+                # 'unclassified ... needs a new branch'.
+                if (activity_type in ('Deposits', 'Withdrawals',
+                                      'Contributions')
+                        or action_raw in ('CON', 'DEP', 'EFT', 'EWD',
+                                          'WDR', 'CTR')):
+                    self.count_nonevent(f"cash deposit/withdrawal "
+                                        f"({action_raw or activity_type})")
+                    continue
+                if action_raw == 'INT' or activity_type == 'Interest':
+                    # Interest credited (+) or margin interest charged
+                    # (-), sign kept, as RBC's interest rows.
+                    _net = self._num(row, 'Net Amount', lineno)
+                    if abs(_net) < 0.005:
+                        self.count_nonevent("zero interest row")
+                        continue
+                    _d = self._date(row, 'Transaction Date', lineno)
+                    self.note_row_consumed()
+                    transactions.append({
+                        'action': 'INTEREST',
+                        'date': _d.strftime('%Y-%m-%d'),
+                        'time': '09:30:00',
+                        'date_settle': _d.strftime('%Y-%m-%d'),
+                        'symbol': 'CASH', 'quantity': 0.0,
+                        'currency': currency, 'net_amount': _net,
+                        'type': 'interest',
+                        'account': self.DEFAULT_ACCOUNT,
+                        'description': desc,
+                    })
+                    continue
+                if action_raw == 'LFJ':
+                    # Stock-lending income: real income no branch books.
+                    _net = self._num(row, 'Net Amount', lineno)
+                    if abs(_net) >= 0.005:
+                        self.count_skip("stock-lending income (LFJ)")
+                        self._unbooked(
+                            lineno, f"stock-lending income {_net:,.2f} "
+                            f"{currency} ({desc[:50]!r}) — NOT booked; "
+                            f"take it from the slip (a T5 / 1099-MISC).")
+                        continue
+
             if action_raw == 'CIL' and _CIL_RE.search(desc):
                 # Cash in lieu of a FRACTIONAL share (a stock dividend
                 # or consolidation that would have delivered x.5

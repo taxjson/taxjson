@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Questrade: deposit, contribution and withdrawal rows are recognised
+  cash non-events (they were 'unclassified ... needs a new branch'),
+  INT rows are booked as interest with their sign (credit interest was
+  dropped), and stock-lending income is an UNBOOKED warning (re-audit
+  A2-0277, A2-0614).
 - **Questrade / RBC: payments in lieu of a dividend.** A Questrade
   'SUBST PAY ... IN LIEU OF DIVIDEND' row and an RBC 'CASH / PAYMENT IN
   LIEU OF DIVIDEND' row were booked as dividends: in Canada a PIL on a

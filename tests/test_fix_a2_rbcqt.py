@@ -895,5 +895,41 @@ class TestPaymentsInLieuFromCanadianDealers(unittest.TestCase):
             self.assertNotIn("deemed_dividend", inc["usa"][sym])
 
 
+
+class TestQuestradeCashRows(unittest.TestCase):
+    """A2-0277 / A2-0614: deposits, withdrawals, interest and lending."""
+
+    def _cash(self, action, atype, desc, net, cur="CAD"):
+        return q(action=action, sym="", desc=desc, qty="0", price="0",
+                 gross="0", comm="0", net=net, cur=cur, act=atype)
+
+    def test_deposits_and_withdrawals_are_recognised_non_events(self):
+        body = "".join(self._cash(a, t, d, n) for a, t, d, n in (
+            ("EWD", "Withdrawals", "ELECTRONIC FUND TRANSFER", "-18000"),
+            ("WDR", "Withdrawals", "WITHDRAWAL", "-500"),
+            ("CON", "Deposits", "CONTRIBUTION", "1000"),
+            ("DEP", "Deposits", "DEPOSIT", "1000"),
+            ("EFT", "Deposits", "ELECTRONIC FUNDS TRANSFER", "1000")))
+        txs, err, _ = qt_parse(body)
+        self.assertEqual(txs, [])
+        self.assertNotIn("unclassified", err)
+
+    def test_interest_is_booked_with_its_sign(self):
+        body = (self._cash("INT", "Interest", "INTEREST ON CREDIT BALANCE",
+                           "12.34")
+                + self._cash("INT", "Interest", "INTEREST CHARGED ON DEBIT "
+                             "BALANCE", "-45.67", cur="USD"))
+        txs, err, _ = qt_parse(body)
+        self.assertEqual(sorted((t["action"], t["net_amount"]) for t in txs),
+                         [("INTEREST", -45.67), ("INTEREST", 12.34)], err)
+
+    def test_stock_lending_income_is_unbooked_out_loud(self):
+        txs, err, _ = qt_parse(self._cash("LFJ", "Other",
+                                          "STOCK LENDING INCOME", "3.21",
+                                          cur="USD"))
+        self.assertEqual(txs, [])
+        self.assertIn("warning: UNBOOKED:", err)
+
+
 if __name__ == "__main__":
     unittest.main()
