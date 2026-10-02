@@ -538,8 +538,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "them): a ledger row that disagrees is "
                              "flagged — the return, not this recompute, "
                              "is what CRA's balance is built on.")
-    parser.add_argument("--base-currency", default="CAD",
-                        help="Label for amounts (default: CAD)")
+    parser.add_argument("--base-currency", default=None,
+                        help="The books' currency: must be the country's "
+                             "own (CAD for canada, USD for usa — the "
+                             "default); any other is refused, as are rows "
+                             "in another currency (not just a label)")
     parser.add_argument("--json", action="store_true",
                         help="Emit the report as JSON instead of text")
     # The written-option premium timing the filing pipeline uses (the
@@ -578,7 +581,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # The ledger is labelled in --base-currency and its balance feeds
     # T1A / line 25300: a native USD book (a raw broker file) printed a
     # 5,000 USD loss as a 5,000.00 CAD carryforward (S028-02).
-    base_cur = str(args.base_currency or "").strip().upper()
+    from taxjson.lib.country import home_currency as _home_currency
+    _home = _home_currency(args.country)
+    base_cur = str(args.base_currency or _home).strip().upper()
+    if base_cur != _home:
+        # A matching --base-currency dodged the row check: a Canada
+        # ledger in USD, or the US $3,000 ordinary-income offset applied
+        # to CAD amounts, at exit 0 (A2-1118).
+        print(f"taxjson-carryover: --base-currency {base_cur} does not "
+              f"match the {args.country} return's currency {_home} — "
+              f"pass the {_home} books (work/<account>_base.json, or "
+              f"`taxjson carryover` in the project)", file=sys.stderr)
+        return 2
+    args.base_currency = base_cur
 
     def _load_base(p: Path):
         txs = _ltx("taxjson-carryover", p)

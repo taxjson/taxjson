@@ -137,7 +137,7 @@ class TestReconcile(unittest.TestCase):
         rep = reconcile(slip, computed, 1.0)
         by = {r["symbol"]: r for r in rep["rows"]}
         self.assertEqual(by["NVDA"]["status"], "MISSING_FROM_COMPUTED")
-        self.assertEqual(by["AAPL"]["status"], "MISSING_FROM_SLIP")
+        self.assertEqual(by["AAPL.US"]["status"], "MISSING_FROM_SLIP")
         self.assertFalse(rep["clean"])
 
     def test_tainted_rows_flagged(self):

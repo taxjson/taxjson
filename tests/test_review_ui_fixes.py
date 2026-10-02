@@ -348,7 +348,10 @@ class TestR5_EstimateMath(unittest.TestCase):
                           ("--other-losses", "nan")):
                 r = _run(root, "sum", "--province", "ON", *flags)
                 self.assertNotEqual(r.returncode, 0, flags)
-                self.assertIn("non-negative finite number", r.stderr)
+                # Names the flag: the CLI guard, not a later check
+                # (A2-1123).
+                self.assertIn(f"{flags[0]} must be a non-negative "
+                              f"finite number", r.stderr)
 
     def test_json_output_never_emits_nan_tokens(self):
         with tempfile.TemporaryDirectory() as tmp:

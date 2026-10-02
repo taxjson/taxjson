@@ -64,10 +64,16 @@ def form_lines(entries: List[Dict[str, Any]], *, crypto: bool = False,
         if any(e.get("term") in ("SHORT_TERM", "LONG_TERM")
                for e in entries):
             rep = FE.build_8949(entries)
-            return {f"{part}_{k}": float(v)
-                    for part in ("I", "II")
-                    for k, v in (rep.get(f"part_{part}_totals") or {}).items()
-                    if rep.get(f"part_{part}")}
+            out = {f"{part}_{k}": float(v)
+                   for part in ("I", "II")
+                   for k, v in (rep.get(f"part_{part}_totals") or {}).items()
+                   if rep.get(f"part_{part}")}
+            if rep.get("section_1256"):
+                # §1256 contracts are off Form 8949 (Form 6781 by hand,
+                # US-FUT-02): their net is locked on its own line.
+                out["6781_gain"] = float(
+                    rep["section_1256_totals"]["gain"])
+            return out
         rep = FE.build_schedule3(FE.mark_crypto(entries) if crypto
                                  else entries, year)
     return {k.split("_", 1)[1]: float(v)
