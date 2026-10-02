@@ -471,7 +471,8 @@ class TruncatedUtf16(unittest.TestCase):
             good.write_text("Date,Symbol,Qty\n2025-01-01,XYZ,1\n")
             r = _run(str(bad), str(good), "--no-denylist", "--out", str(d / "o"),
                      env=_env(d))
-            self.assertEqual(r.returncode, 1)
+            # exit 2: an input that cannot be read (re-audit A2-0164)
+            self.assertEqual(r.returncode, 2)
             self.assertNotIn("Traceback", r.stderr)
             self.assertIn("bad.csv", r.stderr)
             self.assertTrue((d / "o" / "good.redacted.csv").exists())
