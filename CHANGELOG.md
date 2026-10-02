@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **distributions.map adjustments reach the holder of record's lots in
+  the US.** The ADJUST was stamped at the end of the record date, so in
+  a trade-date engine a sale traded on the record date (still the
+  holder of record under T+1) left it "found no open lots ... NOT
+  applied" (and called a basis increase a return of capital), and a buy
+  traded on the record date shared it. A trade straddling the record
+  date now moves the stamp to the day before it (the record date stays
+  the settle date). A map return of capital now warns when the book
+  already has that ROC (broker row or .tt ADJUST, by pay or record
+  date — also in `roc-sum` across the year end) or when its cash is
+  still a DIVIDEND row counted in full as income (A2-0071, A2-0072,
+  A2-0232, A2-0988).
+
 - **Per-account holdings and distributions.map sizing follow each
   ticker's own shares.** The record-date balance walk (used to size a
   distributions.map adjustment and to split a blended Canada pool by

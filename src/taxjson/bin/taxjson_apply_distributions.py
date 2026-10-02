@@ -281,6 +281,83 @@ def resolve_live_symbol(transactions: List[dict], symbol: str,
     return cur
 
 
+def _stamp_date(txs: List[dict], symbol: str, record_date: str,
+                account: str) -> str:
+    """The trade date to stamp a map ADJUST with. Sized on the settled
+    position (the holder of record), it must also reach exactly those
+    lots in a trade-date-ordered engine (the US, or tax_date = trade):
+    a trade executed on or before the record date that settles AFTER it
+    is not the record holder's, so the ADJUST goes at the end of the day
+    BEFORE the earliest such trade (audit A2-0071: a sale traded on the
+    record date dropped the ADJUST as 'no open lots'; A2-0988: a buy
+    traded on the record date shared it). The settle date stays the
+    record date, so settle-ordered books are unchanged."""
+    straddle = [str(t.get("date") or "") for t in txs
+                if t.get("symbol") == symbol
+                and t.get("action") in ("BUYSELL", "ASSIGN", "TRANSFER")
+                and (not account or not t.get("account")
+                     or str(t.get("account")) == str(account))
+                and str(t.get("date") or "") <= record_date
+                < str(t.get("date_settle") or "")]
+    if not straddle:
+        return record_date
+    first = _dt.date.fromisoformat(min(straddle))
+    return (first - _dt.timedelta(days=1)).isoformat()
+
+
+def _warn_roc_overlaps(txs: List[dict], symbol: str, key: str,
+                       date: str, account: str, amount: float,
+                       country: Optional[str]) -> None:
+    """A map return of capital the book may already carry, or whose cash
+    is still counted as income:
+
+    - the broker's own ROC (an ADJUST of type 'roc', or a .tt ADJUST)
+      dated on the map date — its pay date or its printed record date:
+      both lower the cost, so the ACB is cut twice (audit A2-0072; the
+      R1-163 check compared raw dates only, and only in roc-sum);
+    - a DIVIDEND row of the same distribution (paid within 60 days of
+      the record date): the cash stays in dividend income while the map
+      row lowers the cost, so the same dollars count twice (A2-0232)."""
+    def _acct_ok(t: dict) -> bool:
+        return (not account or not t.get("account")
+                or str(t.get("account")) == str(account))
+    for t in txs:
+        if (t.get("action") != "ADJUST" or t.get("symbol") != symbol
+                or str(t.get("id") or "").startswith("DIST-")
+                or float(t.get("net_amount") or 0.0) >= 0
+                or not _acct_ok(t)):
+            continue
+        dates = {str(t.get("date") or ""), str(t.get("record_date") or "")}
+        if date in dates:
+            print(f"{PROG}: warning: distributions.map {key} {date}: the "
+                  f"book already has a return-of-capital ADJUST of "
+                  f"{float(t.get('net_amount') or 0.0):.2f} on {symbol} "
+                  f"(dated {t.get('date')}"
+                  + (f", record date {t.get('record_date')}"
+                     if t.get("record_date") else "")
+                  + ") — if both are the same distribution the cost is "
+                  f"reduced TWICE. Delete the map line (or the .tt "
+                  f"ADJUST).", file=sys.stderr)
+    try:
+        lo = _dt.date.fromisoformat(date)
+    except ValueError:
+        return
+    hi = (lo + _dt.timedelta(days=60)).isoformat()
+    divs = [t for t in txs
+            if t.get("action") == "DIVIDEND" and t.get("symbol") == symbol
+            and _acct_ok(t) and date <= str(t.get("date") or "") <= hi]
+    slip = ("the T3 box 42" if country != "usa"
+            else "Form 1099-DIV box 3")
+    if divs:
+        d = min(divs, key=lambda t: str(t.get("date") or ""))
+        print(f"{PROG}: warning: distributions.map {key} {date}: the "
+              f"return of capital ({amount:+.2f}) lowers the cost, but the "
+              f"cash of the distribution paid {d.get('date')} is booked as "
+              f"a DIVIDEND row and still counted IN FULL as income by "
+              f"taxjson (divs-sum, the estimate). Report income from the "
+              f"slip ({slip} part is not income).", file=sys.stderr)
+
+
 def _phantom_openings(txs: List[dict], phantoms) -> List[dict]:
     """The OPENING_BALANCE rows the gains stage will synthesize from
     phantoms.json for this book — the SAME synthesize_openings call, so
@@ -369,9 +446,10 @@ def apply_distributions(doc: dict, map_rows, account: str,
             rid = f"DIST-{sym}-{date}-{account}-{n}"
             n += 1
         used_ids.add(rid)
+        adj_date = _stamp_date(txs, sym, date, account)
         txs.append({
             "action": "ADJUST",
-            "date": date, "time": "23:59:58", "date_settle": date,
+            "date": adj_date, "time": "23:59:58", "date_settle": date,
             "symbol": sym, "quantity": 0.0,
             "currency": doc.get("metadata", {}).get("target_currency", ""),
             "net_amount": amount, "gross_amount": 0.0,
@@ -389,6 +467,9 @@ def apply_distributions(doc: dict, map_rows, account: str,
                   f"{_INCOME_SLIP[country]} — it is not counted as income "
                   f"by taxjson (estimate, divs-sum)." if per_share > 0
                   else "")
+        if per_share < 0:
+            _warn_roc_overlaps(txs, sym, key, date, account, amount,
+                               country)
         print(f"NOTE: {key}{via} {date}: {kind} — {bal:g} sh x "
               f"{per_share:g} = {amount:+.2f} "
               f"{'basis' if country == 'usa' else 'ACB'} "

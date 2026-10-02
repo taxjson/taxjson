@@ -4841,9 +4841,13 @@ class USATaxRules(TaxRules):
                     print(
                         f"warning: {symbol} ADJUST of {tx.net_amount:.2f} "
                         f"on {tx.date} found no open long lots (position "
-                        f"closed or short) — a return of capital with no "
-                        f"basis to reduce is a taxable event needing "
-                        f"manual review; the row was NOT applied.",
+                        f"closed or short) — "
+                        + ("a return of capital with no basis to reduce "
+                           "is a taxable event needing manual review"
+                           if tx.net_amount < 0 else
+                           "a basis increase with no shares to carry it "
+                           "needs manual review")
+                        + "; the row was NOT applied.",
                         file=sys.stderr,
                     )
                     continue

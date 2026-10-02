@@ -6178,7 +6178,11 @@ def _dist_adjust_rows(cache: Path, accounts, keep) -> List[Tuple[str, dict]]:
                   else doc) or []:
             if (t.get("action") == "ADJUST"
                     and (t.get("type") or "").lower() == "dist"):
-                d = t.get("date") or ""
+                # The map's own date (the record date) is date_settle:
+                # the trade-date stamp can sit a day earlier so a
+                # trade-ordered engine reaches the record holder's lots
+                # (audit A2-0071).
+                d = t.get("date_settle") or t.get("date") or ""
                 if _ISO_DATE_RE.match(d) and keep(d):
                     out.append((acct, t))
     return out
@@ -6609,14 +6613,35 @@ def cmd_roc_sum(args: argparse.Namespace) -> None:
     if _acct_arg:
         _accts = [_acct_arg]
     dist_rows = _dist_adjust_rows(_root / "work", _accts, _keep)
-    # The same ROC entered as a .tt ADJUST AND in distributions.map
-    # reduces the ACB twice — say so (audit R1-163).
-    _manual_keys = {(a, str(t.get("symbol") or ""), t.get("date"))
-                    for a, t in rows}
-    for a, t in dist_rows:
-        if (a, str(t.get("symbol") or ""), t.get("date")) in _manual_keys:
+    # The same ROC entered as a .tt ADJUST (or booked by the broker) AND
+    # in distributions.map reduces the ACB twice — say so (audit
+    # R1-163). Matched over ALL rows, not the window's: the broker row
+    # is windowed on its record date and the map row on its own date,
+    # so a pair straddling the year end never met (audit A2-0072). The
+    # map date may be either the pay date or the printed record date.
+    _all_native: List[Tuple[str, dict]] = []
+    for _a in _accts:
+        _nf = _native_tx_file(_root / "work", _a)
+        if _nf is None:
+            continue
+        _all_native += [(_a, t) for t in
+                        (_load_json_or_die(_nf).get("transactions") or [])
+                        if t.get("action") == "ADJUST"]
+    _all_dist = _dist_adjust_rows(_root / "work", _accts, lambda _d: True)
+    _book_keys: Dict[Tuple[str, str, str], str] = {}
+    for a, t in _all_native:
+        if float(t.get("net_amount") or 0.0) >= 0:
+            continue
+        _w = _rules.roc_date(t) if _rules else str(t.get("date") or "")
+        for _d in (t.get("date"), t.get("record_date")):
+            if _d:
+                _book_keys[(a, str(t.get("symbol") or ""), str(_d))] = _w
+    for a, t in _all_dist:
+        _md = str(t.get("date_settle") or t.get("date") or "")
+        _w = _book_keys.get((a, str(t.get("symbol") or ""), _md))
+        if _w is not None and (_keep(_md) or _keep(_w)):
             print(f"taxjson roc-sum: warning: {t.get('symbol')} "
-                  f"{t.get('date')} ({a}) has an ADJUST in the books AND "
+                  f"{_md} ({a}) has an ADJUST in the books AND "
                   f"a distributions.map row — the ACB is reduced twice "
                   f"if both are the same distribution.", file=sys.stderr)
     rows = list(rows) + dist_rows

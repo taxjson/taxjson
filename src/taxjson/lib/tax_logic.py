@@ -461,9 +461,13 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gains distribution, a late return-of-capital "
                  "factor) becomes an ACB adjustment sized on the shares "
-                 "held on its record date — the settled position. Its "
+                 "held on its record date — the settled position, each "
+                 "ticker's own shares — and booked on those shares only "
+                 "(a trade straddling the record date is not the "
+                 "holder's). Its "
                  "income is on the T3/T5 slip; taxjson does not count "
-                 "it."),
+                 "it. A return-of-capital row warns when the book already "
+                 "has that ROC or still counts its cash as a dividend."),
             Rule("CA-DIST-02",
                  "An RBC \"NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST\" "
                  "row raises the ACB by its amount (a reinvested "
@@ -948,8 +952,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "distributions.map: a non-cash distribution (a reinvested "
                  "capital-gain distribution, a late return-of-capital "
                  "factor) becomes a basis adjustment sized on the shares "
-                 "held on its record date — the settled position. Its "
-                 "income is on Form 1099-DIV; taxjson does not count it."),
+                 "held on its record date — the settled position, each "
+                 "ticker's own shares — and booked on those lots only "
+                 "(a trade straddling the record date is not the "
+                 "holder's). Its "
+                 "income is on Form 1099-DIV; taxjson does not count it. "
+                 "A return-of-capital row warns when the book already has "
+                 "that ROC or still counts its cash as a dividend."),
             Rule("US-DIST-02",
                  "An RBC \"NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST\" "
                  "row raises the basis by its amount (a reinvested "
