@@ -1312,6 +1312,15 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("US-WASH-08",
                  "Matching across accounts needs a full `taxjson run` "
                  "(not `--account`)."),
+            Rule("US-WASH-20",
+                 "Replacements are matched in the order acquired (Reg. "
+                 "§1.1091-1(c)): the earliest purchase in the window first, "
+                 "before or after the sale alike, and losses in the order "
+                 "sold, so an earlier loss takes a shared replacement "
+                 "first. Purchases at the same moment go to your taxable "
+                 "accounts first, then IRAs, then affiliated accounts, "
+                 "then in the export's row order (accounts in "
+                 "taxjson.toml order).", cont=True),
             Rule("US-WASH-09",
                  "The disallowed loss is added to the replacement lot's "
                  "basis"),

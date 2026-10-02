@@ -503,6 +503,40 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
         self.assertNotIn("superficial", r["usa"]["_stderr"])
 
     @rule("CA-ACB-12")
+    @rule("US-BASIS-04")
+    def test_thirty_days_is_the_edge(self):
+        # A2-1497: day 30 is inside the window, day 31 is not — on settle
+        # dates for Canada (both the engine's partial-taint path and the
+        # cross-year detector), on trade dates for the US.
+        from taxjson.lib.phantom_holdings import (
+            detect_superficial_loss_warnings)
+
+        def partial(rebuy_settle):
+            book = [tx("BUYSELL", "2025-01-02", "NNN.US", 100, 2000,
+                       settle="2025-01-03"),
+                    tx("BUYSELL", "2025-03-03", "NNN.US", -150, 1500,
+                       settle="2025-03-04"),
+                    tx("BUYSELL", rebuy_settle, "NNN.US", 100, 1000,
+                       settle=rebuy_settle)]
+            return [w for w in self._run(book)["canada"].get(
+                        "superficial_loss_warnings") or []
+                    if w.get("acquisition_date")]
+        self.assertTrue(partial("2025-04-03"))
+        self.assertFalse(partial("2025-04-04"))
+        for c, key, day30, day31 in (
+                ("canada", "date_settle", "2025-04-03", "2025-04-04"),
+                ("usa", "date", "2025-04-02", "2025-04-03")):
+            tainted = [{"date": "2025-03-03", "date_settle": "2025-03-04",
+                        "symbol": "MMM.US", "qty": -50}]
+            for d, want in ((day30, 1), (day31, 0)):
+                loss = {"date": "2025-01-01", "date_settle": "2025-01-01",
+                        "symbol": "MMM.US", "gain": -200.0}
+                loss[key] = d
+                got = detect_superficial_loss_warnings([loss], tainted,
+                                                       country=c)
+                self.assertEqual(len(got), want, (c, d))
+
+    @rule("CA-ACB-12")
     @rule_absent("CA-ACB-12", country="usa")
     @rule("US-BASIS-04")
     @rule_absent("US-BASIS-04", country="canada")

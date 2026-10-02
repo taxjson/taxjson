@@ -428,13 +428,13 @@ class TestUsReplacementOrderAcquiredByTime(unittest.TestCase):
         inv = {i['symbol']: i for i in res['inventory']}
         return res, inv['AAA.US']['total_cost']
 
-    @rule("US-WASH-09")
+    @rule("US-WASH-09", "US-WASH-20")
     def test_taxable_lot_first(self):
         res, basis = self._run('10:00:00', '14:00:00')
         self.assertEqual(basis, 2100.0)
         self.assertEqual(res['summary']['total_gain'], 0.0)
 
-    @rule("US-WASH-11")
+    @rule("US-WASH-11", "US-WASH-20")
     def test_earlier_ira_lot_makes_it_permanent(self):
         # The IRA lot was acquired first (10:00): it takes the wash, the
         # denial is permanent and the 14:00 taxable lot keeps its cost.

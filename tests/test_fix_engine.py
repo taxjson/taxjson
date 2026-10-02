@@ -242,7 +242,7 @@ class TestSameStampTaxableBeforeRegistered(unittest.TestCase):
         self.assertEqual(seen, {(-850.0, 0.0)},
                          "the row hash decided deferral vs permanent")
 
-    @rule("US-WASH-04", "US-WASH-11")
+    @rule("US-WASH-04", "US-WASH-11", "US-WASH-20")
     def test_usa_same_stamp_is_deferred_whatever_the_price(self):
         seen = {self._run(USATaxRules, 'US', 'USD', p / 100)[1]
                 for p in range(1045, 1065)}
