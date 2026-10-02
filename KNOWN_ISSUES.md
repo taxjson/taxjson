@@ -41,7 +41,7 @@ The codebase has been through seven audit cycles; everything listed here was tri
 
 ### fx-cash: cash folded into a corporate-action sale leg is not ledgered
 - **Where:** `src/taxjson/bin/taxjson_fx_cash.py` — `_non_cash`.
-- **Current behavior:** rows emitted by the corp-actions stage (`corp_event_id` set: share-for-share mergers, taxable exchanges at FMV, spin-off ACB allocations) move no foreign cash and are left out of the s.39(1.1) ledger; so are crypto-for-crypto legs (Kraken swaps, Coinbase Convert) and staking rewards paid in a coin. A standalone cash-in-lieu leg is ledgered. Cash-in-lieu or §356 boot FOLDED into a taxable exchange's sale leg (`_emit_taxable_exchange`, `_emit_boot_exchange`) is not — the row does not say how much of its proceeds was cash. A cash takeover is a sale the broker parser books and is ledgered normally.
+- **Current behavior:** rows emitted by the corp-actions stage (`corp_event_id` set: share-for-share mergers, taxable exchanges at FMV, spin-off ACB allocations) move no foreign cash and are left out of the s.39(1.1) ledger; so are crypto-for-crypto legs (Kraken swaps, Coinbase Convert and Advanced Trade on a crypto-quoted pair), Kraken fees paid in a coin, and staking rewards paid in a coin (a reward in any USD stablecoin, PYUSD and GUSD included, is US-dollar cash in a Canada book). A standalone cash-in-lieu leg is ledgered. Cash-in-lieu or §356 boot FOLDED into a taxable exchange's sale leg (`_emit_taxable_exchange`, `_emit_boot_exchange`) is not — the row does not say how much of its proceeds was cash. A cash takeover is a sale the broker parser books and is ledgered normally.
 - **Evidence / work needed:** emit the cash part of a taxable exchange as its own leg (or a `cash_amount` field) so the ledger can count it; the amounts are fractional-share dust in practice.
 
 ### Kraken fiat conversions are not modeled
@@ -431,7 +431,7 @@ each is a taxable disposition at fair market value"). Coinbase rows
 carry the spot price so the `.tt` FMV sell is copy-paste; Kraken
 ledgers carry no fiat value (price/net stay 0). Stablecoin evidence
 keeps its own name (a USDC gift is a disposition of USDC the
-property) even though trade books fold USDC/USDT/DAI to USD for
+property) even though trade books fold the USD stablecoins to USD for
 pricing. Kraken Earn allocation/deallocation shuffles (paired rows)
 remain ignored — internal moves; a `hybridearnwithdrawal` row has no
 counter-leg and is custody evidence like a withdrawal (a TRANSFER in the

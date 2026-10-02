@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **fx-cash: stablecoins, coin legs and holiday settles.** A PYUSD or
+  GUSD reward in a Canada book now enters the US-dollar pool, as a USDC
+  reward does. fx-cash and the parsers share one stablecoin list. A
+  Coinbase Advanced Trade on a crypto-quoted pair (ETH-BTC) and a Kraken
+  fee paid in a coin no longer count as US dollars acquired and
+  disposed. Rows that settle on the same day are walked in trade-date
+  order, so a holiday no longer puts a later buy before an earlier sale.
+  tax-logic CA-FX-07 now states the loss side of the $200 exemption and
+  the pooled-average-cost method. Re-audit A2-0079, A2-0234, A2-0235,
+  A2-0244, A2-0576, A2-0589, A2-1012, A2-1013, A2-1015 and A2-1016.
 - **Coinbase rows must add up.** A Buy/Sell whose Total is not
   Subtotal ± fee, a Buy/Sell, Convert or staking reward whose value does
   not fit Quantity × Price (5% for spread), and a Convert whose Quantity

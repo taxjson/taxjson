@@ -422,8 +422,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("CA-FX-07",
                  "Gains on holding foreign cash (s.39(1.1)) are NOT in the "
-                 "Schedule 3 totals: `taxjson fx-cash` estimates the net "
-                 "gain beyond the $200 annual exemption.",
+                 "Schedule 3 totals: `taxjson fx-cash` estimates the "
+                 "year's net gain or net loss beyond the $200 annual "
+                 "exemption (a net gain or loss within $200 is nil), from "
+                 "a pooled average cost per currency. Cash moves only on "
+                 "a trade for cash, income, withholding and fees; a "
+                 "coin-for-coin swap, a fee paid in a coin and a reward "
+                 "in a coin move none (a USD stablecoin is US-dollar "
+                 "cash, CA-CRYPTO-02).",
                  keys=("fx_cash_gains",)),
         ]),
         ("Cost base (ACB)", [
