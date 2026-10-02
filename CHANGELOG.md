@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Wash radar (Canada): rows that settle on the same day are replayed in
+  trade-date order, as the engine does — a Friday sale before a holiday
+  is no longer read as a loss against Monday's buy (A2-0443). A written
+  option's buy-back loss outside the gains files' year is exempt
+  (CA-SL-11) unless `option_buyback_loss_superficial = true` (A2-0442).
+- US wash radar / buy-check: a futures contract or an option on one is
+  outside §1091 (US-WASH-18) — no COOLING/BLOCKED re-entry date, buy-check
+  is no longer UNSAFE, and the futures-option note no longer speaks of
+  "shares" (A2-0435, A2-1343). After a short-cover loss a buy is not a
+  replacement (§1091(e)); the radar names a re-short instead (A2-0436,
+  A2-1369).
+- Radar wording: a US LOCKED row says how many shares the IRA bought and
+  what it holds now, not "still holds" (A2-0751, A2-0754); a position held
+  only in sheltered accounts names its recent purchase instead of "No
+  recent buys" (A2-1370).
+- sell-check relays the radar's warn-only flags (warrant, adjusted-series
+  call, futures option, US long call) on every verdict, and harvest stars
+  the ADVISORY cell and lists them (A2-0434, A2-0445, A2-1341).
+
 - Renames are dated events (owner decision, audit A2-0197). On its date
   a ticker change carries the position, the ACB / basis lots and the
   acquisition dates from the old symbol to the new one, and the

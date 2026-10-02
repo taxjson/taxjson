@@ -320,7 +320,14 @@ def load_radar(paths: List[Path]) -> Dict[str, Dict[str, Any]]:
                               # LOCKED: taxable units whose loss a sale
                               # today would lose (the rest is claimable).
                               "at_risk_qty": r.get("at_risk_qty"),
-                              "taxable_qty": r.get("taxable_qty")}
+                              "taxable_qty": r.get("taxable_qty"),
+                              # The engine's warn-only flags (a warrant,
+                              # an adjusted-series call, a futures
+                              # option, a US long call): the ADVISORY
+                              # cell is starred and the flags listed
+                              # (audit A2-0445).
+                              "notes": [str(n) for n in
+                                        (r.get("notes") or [])]}
     return out
 
 
@@ -491,6 +498,14 @@ def _advisory_display(rec: Optional[Dict[str, Any]],
     cells on whitespace."""
     if not rec:
         return "no-radar-data"
+    cell = _advisory_cell(rec, today)
+    # '*': a warn-only flag the engine names for a manual check — listed
+    # under the table (audit A2-0445).
+    return cell + "*" if rec.get("notes") else cell
+
+
+def _advisory_cell(rec: Dict[str, Any],
+                   today: Optional[date] = None) -> str:
     cat = rec.get("category") or "-"
     clears = rec.get("clears_at")
     if clears:
@@ -1082,6 +1097,17 @@ def main(argv: Optional[List[str]] = None,
                       f"prior DENIED losses — UNREALIZED on those rows "
                       f"includes recycled loss, not only new loss "
                       f"(per-row amounts in --json / `taxjson list`).")
+    _flagged = [(r["symbol"], n) for r in rows
+                 for n in ((r.get("radar") or {}).get("notes") or [])
+                 if r.get("verdict") == "LOSS"]
+    if _flagged:
+        # CA-SL-14/15, US-WASH-12/14/15: the engine only warns, so the
+        # loss still counts as claimable — but check it by hand.
+        legend.append("ADVISORY '*': flagged for a manual check (the "
+                      "engine only warns; the loss is counted as "
+                      "claimable):")
+        legend.extend(f"  {sym}: {n}"
+                      for sym, n in dict.fromkeys(_flagged))
     # CA-PLAN-04 / US-PLAN-04 (audit S054-22).
     legend.append(_scope)
     print("\n" + "\n".join(legend))

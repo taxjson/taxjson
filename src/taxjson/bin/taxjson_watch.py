@@ -60,7 +60,18 @@ def flatten_radar(doc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                           # BLOCKED/COOLING: the in-window loss and its
                           # units (buy-check's per-unit denial).
                           "recent_loss": r.get("recent_loss"),
-                          "recent_loss_qty": r.get("recent_loss_qty")}
+                          "recent_loss_qty": r.get("recent_loss_qty"),
+                          # Warn-only flags (a warrant, an adjusted
+                          # series, a long call in the US, a futures
+                          # option): sell-check / buy-check relay them
+                          # (audit A2-0434 / A2-0445 / A2-1341).
+                          "notes": list(r.get("notes") or []),
+                          # US: outside §1091 (US-WASH-18), and a
+                          # short-cover loss only a re-short replaces
+                          # (§1091(e)) — A2-0435 / A2-0436.
+                          "outside_wash_rule": bool(
+                              r.get("outside_wash_rule")),
+                          "short_cover_loss": r.get("short_cover_loss")}
     return out
 
 

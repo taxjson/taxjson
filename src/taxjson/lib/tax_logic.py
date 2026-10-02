@@ -978,12 +978,16 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "no longer held when day 30 settles (VIOLATION prints the "
                  "last trade date that does it, on the listing's "
                  "calendar; once that date has passed it says the loss is "
-                 "denied)."),
+                 "denied). Rows that settle the same day are replayed in "
+                 "trade-date order, as the engine does, and a written "
+                 "option's buy-back loss is exempt (CA-SL-11) outside the "
+                 "gains files' year too."),
             Rule("CA-PLAN-02",
                  "A long call on the shares bought in the window counts "
                  "as a replacement at its contract size; a warrant, an "
                  "adjusted-series call or a futures option is a note to "
-                 "check by hand.", cont=True),
+                 "check by hand, which sell-check and harvest repeat "
+                 "whatever the row's verdict.", cont=True),
             Rule("CA-PLAN-03",
                  "The web what-if runs a taxable sale on the blended s.47 "
                  "pool of the taxable accounts of its kind, with the "
@@ -1580,7 +1584,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "warrant, an adjusted-series call and a futures option; "
                  "an IRA purchase the engine already matched to an "
                  "earlier loss is not counted again (share for share), "
-                 "and a short position's trigger is a new short sale.",
+                 "and a short position's trigger is a new short sale: "
+                 "after a short-cover loss a buy is never a replacement "
+                 "(buy-check says so), only a re-short before the window "
+                 "closes is. A futures contract or an option on one gets "
+                 "no re-entry date (outside §1091, US-WASH-18), and the "
+                 "notes are repeated by sell-check and harvest whatever "
+                 "the row's verdict.",
                  cont=True),
             Rule("US-PLAN-03",
                  "The web what-if runs a sale with every taxable "
