@@ -11361,6 +11361,23 @@ def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
                               lambda *a, **k: (0, "", "")))
     except Exception:                                   # noqa: BLE001
         return []
+    if res.status == "blocked":
+        # No .sum yet: nothing to judge — unless a run aborted after
+        # writing work/ (a first run that died at a later stage). Those
+        # partial books are what sum / t1135 / list read (A2-0658).
+        cache = root / "work"
+        try:
+            partial = any(
+                not p.name.startswith(".")
+                for pat in ("*_gains.json", "*_gains_wash.json",
+                            "*_base.json")
+                for p in cache.glob(pat))
+        except OSError:
+            partial = False
+        if partial:
+            return ["the last `taxjson run` did not finish: reports/ has "
+                    "no .sum, but work/ holds the partial books it wrote"]
+        return []
     if res.status != "attention":
         return []
     return [x.strip() for x in res.detail.split("; ") if x.strip()]

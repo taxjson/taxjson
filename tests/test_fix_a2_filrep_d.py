@@ -191,5 +191,30 @@ class TestBlendedWashSumDiagnostics(unittest.TestCase):
         self.assertNotIn("s.40(3)", wash)
 
 
+class TestAbortedFirstRunBanner(unittest.TestCase):
+    """A2-0658: a first run that aborted after writing work/ (no .sum in
+    reports/) leaves books the report commands still read; the 'not the
+    clean result' banner fires for them."""
+
+    def test_partial_books_without_reports_are_flagged(self):
+        from taxjson.bin import taxjson_run as R
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "work").mkdir()
+            (root / "reports").mkdir()
+            cfg = {"settings": {"year": 2025, "country": "canada"},
+                   "accounts": {"margin": {"type": "taxable"}}}
+            self.assertEqual(R._run_state_problems(root, cfg), [])
+            (root / "work" / "margin_gains.json").write_text(
+                '{"transactions": [], "summary": {}}')
+            probs = R._run_state_problems(root, cfg)
+            self.assertEqual(len(probs), 1, probs)
+            self.assertIn("did not finish", probs[0])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                R._warn_run_state(root, cfg)
+            self.assertIn("not the clean result", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

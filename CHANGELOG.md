@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `sum`, `t1135`, `list` and the other report commands now print the
+  "not the clean result of the current inputs" banner when a first
+  `taxjson run` aborted after writing work/ (no reports yet), instead
+  of serving the partial books silently (re-audit A2-0658).
 - run: the filing-basis `<acct>_wash.sum` of an account in the blended
   s.47 pass no longer repeats the isolated per-account pass's s.40(3)
   notes (return of capital beyond the account's own ACB, or on its
