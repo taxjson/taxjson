@@ -447,9 +447,15 @@ rest (self / gift / payment, saved in `inputs/<acct>/sends.json`) and
 generates the FMV sells into `inputs/<acct>/crypto_sends.tt`
 (tests/test_fix_sends.py); a matched send that arrived short with no
 fee stated (a Coinbase Send) books the shortfall there as the network
-fee, a sale at fair value (2026-10, audit R1-26). Limits: pairing reads the crypto accounts'
+fee, a sale at fair value (2026-10, audit R1-26). The pairing is a
+minimum-loss assignment (also split deposits / merged sends), a Kraken
+Hybrid Earn move is never paired, a saved gift/payment the pairing
+overrides is warned about (`--unpair` keeps it), and a full `run` parses
+every crypto account before pairing (re-audit 2). Limits: pairing reads the crypto accounts'
 sidecars only (a send to an equity or `transfers = true` account looks
-unmatched); the stablecoin pool is rebuilt from Kraken ledgers and
+unmatched); a US move between two crypto accounts does not carry the
+basis (warned; `run --strict` stops — keep both exchanges in one
+account); the stablecoin pool is rebuilt from Kraken ledgers and
 Coinbase exports (a Kraken trades export without its ledger is not
 read for it) and does not add a superficial loss back into the pool's
 cost.

@@ -60,6 +60,12 @@ DISPOSING = ("gift", "payment")
 REFUSED = {"usa": ("gift",)}
 
 
+class UnpricedSends(ValueError):
+    """Gift/payment sends or network fees with no fair value: the .tt
+    was written WITHOUT them; the caller warns (or stops under
+    --strict)."""
+
+
 class RefusedDecision(ValueError):
     """A saved decision the project's country refuses (a US gift). The
     .tt is still written — WITHOUT the refused sends — so nothing books
@@ -69,7 +75,8 @@ class RefusedDecision(ValueError):
 # Canada project (both parsers fold USDC/USDT/DAI/PYUSD/GUSD to USD —
 # Kraken folded only the first three until audit S060-24). A sale line
 # for one would sell a position that does not exist.
-STABLECOINS = frozenset({"USDC", "USDT", "DAI", "PYUSD", "GUSD"})
+from taxjson.lib.brokerages._crypto_common import (  # noqa: E402
+    USD_STABLECOINS as STABLECOINS)
 USD_FAMILY = STABLECOINS | {"USD"}
 
 
@@ -139,14 +146,19 @@ def _dt(row: Dict[str, Any]) -> datetime:
 _FEE_DESC_RE = re.compile(r"\(fee ([0-9.eE+-]+) ([A-Za-z0-9.]+)\)")
 
 
-def load_transfer_rows(cache: Path, accounts: Iterable[str]
+def load_transfer_rows(cache: Path, accounts: Iterable[str],
+                       present: Optional[set] = None
                        ) -> List[Dict[str, Any]]:
-    """TRANSFER evidence rows from the crypto sidecars of `accounts`."""
+    """TRANSFER evidence rows from the crypto sidecars of `accounts`.
+    `present` ({(account, broker)}): only the exports still in inputs/
+    — a sidecar a removed export left behind books nothing."""
     rows: List[Dict[str, Any]] = []
     for acct in accounts:
         for broker in _CRYPTO_BROKERS:
             p = cache / f"{acct}_{broker}_transfers.json"
             if not p.is_file():
+                continue
+            if present is not None and (acct, broker) not in present:
                 continue
             try:
                 doc = json.loads(p.read_text(encoding="utf-8"))
@@ -188,49 +200,259 @@ def load_transfer_rows(cache: Path, accounts: Iterable[str]
     return rows
 
 
-def match_transfers(rows: List[Dict[str, Any]]
+def is_hybrid_earn(row: Dict[str, Any]) -> bool:
+    """A Kraken Hybrid Earn move: the coins stay on Kraken (Earn), so it
+    is never an own-move to another exchange and never paired."""
+    return str(row.get("kind") or "").lower().startswith("hybridearn")
+
+
+def assign_send_ids(rows: List[Dict[str, Any]]) -> None:
+    """Give every outgoing row its send id (``row["sid"]``). Ids have
+    one-second resolution: two sends of the same coin and quantity in
+    the same second on one account get ``-2``, ``-3`` ... in ledger
+    order, so each keeps its own decision (re-audit A2-0586)."""
+    seen: Dict[Tuple[str, str], int] = {}
+    outs = [r for r in rows if r["quantity"] < 0]
+    for n, r in sorted(enumerate(outs), key=lambda t: (_dt(t[1]), t[0])):
+        sid = send_id(r["exchange"], r["date"], r["time"], r["symbol"],
+                      r["quantity"])
+        k = (r["account"], sid)
+        seen[k] = seen.get(k, 0) + 1
+        r["sid"] = sid if seen[k] == 1 else f"{sid}-{seen[k]}"
+
+
+def _fits(o: Dict[str, Any], r: Dict[str, Any], q_in: float
+          ) -> Optional[float]:
+    """Seconds between send `o` and arrival `r` when `q_in` coins of
+    `r` can be the arrival of `o` (another exchange or account, inside
+    the window, no more than was sent, at most MATCH_MAX_LOSS lost),
+    else None."""
+    if r["symbol"] != o["symbol"]:
+        return None
+    if r["exchange"] == o["exchange"] and r["account"] == o["account"]:
+        return None
+    delta = _dt(r) - _dt(o)
+    if delta < -MATCH_BEFORE or delta > MATCH_AFTER:
+        return None
+    q_out = -o["quantity"]
+    if q_in > q_out * (1 + 1e-9) + 1e-12:
+        return None
+    if q_in < q_out * (1 - MATCH_MAX_LOSS):
+        return None
+    return abs(delta.total_seconds())
+
+
+def _assign(costs: List[List[float]]) -> List[int]:
+    """Minimum-cost assignment of every row to a distinct column
+    (rows <= columns; Kuhn-Munkres, O(n^2 m)). Returns the column of
+    each row."""
+    n, m = len(costs), len(costs[0]) if costs else 0
+    INF = float("inf")
+    u, v = [0.0] * (n + 1), [0.0] * (m + 1)
+    p, way = [0] * (m + 1), [0] * (m + 1)
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = [INF] * (m + 1)
+        used = [False] * (m + 1)
+        while True:
+            used[j0] = True
+            i0, delta, j1 = p[j0], INF, 0
+            for j in range(1, m + 1):
+                if not used[j]:
+                    cur = costs[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j], way[j] = cur, j0
+                    if minv[j] < delta:
+                        delta, j1 = minv[j], j
+            for j in range(m + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    col = [-1] * n
+    for j in range(1, m + 1):
+        if p[j]:
+            col[p[j] - 1] = j - 1
+    return col
+
+
+def stale_evidence(cache: Path,
+                   broker_files: Dict[str, List[Tuple[str, Path]]],
+                   skip: Iterable[str] = ()) -> List[str]:
+    """Crypto accounts whose transfer sidecar does not reflect the
+    exports in inputs/ (an export added or replaced since the last
+    parse, or never parsed): pairing against it would call a send that
+    did arrive unmatched (re-audit A2-0077 / A2-1010). One line each."""
+    out: List[str] = []
+    skip = set(skip)
+    for acct, fs in sorted(broker_files.items()):
+        if acct in skip:
+            continue
+        for broker in _CRYPTO_BROKERS:
+            csvs = [p for b, p in fs if b == broker]
+            if not csvs:
+                continue
+            side = cache / f"{acct}_{broker}_transfers.json"
+            if not side.is_file():
+                out.append(f"{acct} ({broker}: not parsed yet)")
+                continue
+            t = side.stat().st_mtime
+            newer = [p.name for p in csvs if p.stat().st_mtime > t]
+            if newer:
+                out.append(f"{acct} ({', '.join(newer)} changed since the "
+                           f"last parse)")
+    return out
+
+
+def match_transfers(rows: List[Dict[str, Any]],
+                    unpaired: Iterable[Tuple[str, str]] = ()
                     ) -> Tuple[List[Dict[str, Any]],
                                List[Tuple[Dict[str, Any], Dict[str, Any]]]]:
     """(unmatched sends, [(send, arrival)]). Each send is paired with at
     most one arrival and vice versa: same coin, another exchange or
-    account, inside the time window, arrival <= sent and within the
-    network-fee loss. Sends are taken in time order; each picks the
-    closest-in-time candidate."""
+    account, from MATCH_BEFORE before to MATCH_AFTER after the send,
+    arrival <= sent and within the network-fee loss.
+
+    The pairing is a minimum-loss ASSIGNMENT per coin, not first come
+    first served (re-audit A2-0078 / A2-0239): as many sends as possible
+    are paired, then the fewest coins lost, then the closest in time —
+    a send never takes an arrival that fits another send better.
+    Leftovers then try a split: one send that landed as two deposits,
+    or two sends that landed as one (A2-1006); the arrival returned
+    for those is a synthetic row whose ``parts`` are the real ones.
+
+    Never paired: a Kraken Hybrid Earn move (the coins stay on Kraken,
+    A2-0573) and a send the owner unpaired (``unpaired``: (account,
+    send id) pairs saved with ``--unpair``, A2-0004)."""
+    if any("sid" not in r for r in rows if r["quantity"] < 0):
+        assign_send_ids(rows)
+    unpaired = set(unpaired)
     outs = sorted((r for r in rows if r["quantity"] < 0),
                   key=lambda r: (_dt(r), r["exchange"], r["symbol"]))
-    ins = [r for r in rows if r["quantity"] > 0]
+    # Arrivals keep the evidence order: on a full tie the first wins.
+    ins = [r for r in rows if r["quantity"] > 0 and not is_hybrid_earn(r)]
+    pairable = [o for o in outs if not is_hybrid_earn(o)
+                and (o["account"], o.get("sid")) not in unpaired]
+    paired: Dict[int, Dict[str, Any]] = {}
     used: set = set()
-    unmatched: List[Dict[str, Any]] = []
-    pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-    for o in outs:
-        o_dt, q_out = _dt(o), -o["quantity"]
+    for sym in sorted({o["symbol"] for o in pairable}):
+        so = [o for o in pairable if o["symbol"] == sym]
+        si = [r for r in ins if r["symbol"] == sym]
+        if not si:
+            continue
+        top = max(-o["quantity"] for o in so) or 1.0
+        span = MATCH_AFTER.total_seconds() + MATCH_BEFORE.total_seconds()
+        BIG = 1e6                  # one more pair always beats any loss
+        costs = []
+        for k, o in enumerate(so):
+            row = []
+            for r in si:
+                secs = _fits(o, r, r["quantity"])
+                row.append(float("inf") if secs is None else
+                           1000.0 * (-o["quantity"] - r["quantity"]) / top
+                           + secs / span)
+            row += [BIG if j == k else float("inf")
+                    for j in range(len(so))]
+            costs.append(row)
+        for k, j in enumerate(_assign(costs)):
+            if 0 <= j < len(si):
+                paired[id(so[k])] = si[j]
+                used.add(id(si[j]))
+    # Splits, on what is left: one send -> two arrivals, then two
+    # sends -> one arrival (each send gets its share of the arrival).
+    free_in = [r for r in ins if id(r) not in used]
+    for o in pairable:
+        if id(o) in paired:
+            continue
+        q_out, best = -o["quantity"], None
+        cand = [r for r in free_in if id(r) not in used
+                and r["quantity"] < q_out
+                and _fits(o, r, q_out) is not None]
+        for a in range(len(cand)):
+            for b in range(a + 1, len(cand)):
+                q = cand[a]["quantity"] + cand[b]["quantity"]
+                last = max(cand[a], cand[b], key=_dt)
+                secs = _fits(o, last, q)
+                if secs is None:
+                    continue
+                key = (q_out - q, secs)
+                if best is None or key < best[0]:
+                    best = (key, cand[a], cand[b])
+        if best:
+            _k, a, b = best
+            used.update((id(a), id(b)))
+            paired[id(o)] = dict(a, quantity=a["quantity"] + b["quantity"],
+                                 parts=[a, b])
+    left = [o for o in pairable if id(o) not in paired]
+    for r in free_in:
+        if id(r) in used:
+            continue
         best = None
-        best_key = None
-        for i, r in enumerate(ins):
-            if i in used or r["symbol"] != o["symbol"]:
-                continue
-            if r["exchange"] == o["exchange"] and r["account"] == o["account"]:
-                continue
-            delta = _dt(r) - o_dt
-            if delta < -MATCH_BEFORE or delta > MATCH_AFTER:
-                continue
-            q_in = r["quantity"]
-            if q_in > q_out * (1 + 1e-9) + 1e-12:
-                continue
-            if q_in < q_out * (1 - MATCH_MAX_LOSS):
-                continue
-            key = (abs(delta.total_seconds()), q_out - q_in)
-            if best_key is None or key < best_key:
-                best, best_key = i, key
-        if best is None:
-            unmatched.append(o)
-        else:
-            used.add(best)
-            pairs.append((o, ins[best]))
+        for x in range(len(left)):
+            for y in range(x + 1, len(left)):
+                o1, o2 = left[x], left[y]
+                if id(o1) in paired or id(o2) in paired:
+                    continue
+                if o1["account"] != o2["account"]:
+                    continue
+                both = dict(o1, quantity=o1["quantity"] + o2["quantity"])
+                secs = _fits(both, r, r["quantity"])
+                if secs is None or _fits(dict(o2, quantity=both["quantity"]),
+                                         r, r["quantity"]) is None:
+                    continue
+                key = (-both["quantity"] - r["quantity"], secs)
+                if best is None or key < best[0]:
+                    best = (key, o1, o2)
+        if best:
+            _k, o1, o2 = best
+            used.add(id(r))
+            tot = -(o1["quantity"] + o2["quantity"])
+            for o in (o1, o2):
+                paired[id(o)] = dict(r, quantity=r["quantity"]
+                                     * -o["quantity"] / tot, parts=[r])
+    unmatched = [o for o in outs if id(o) not in paired]
+    pairs = [(o, paired[id(o)]) for o in outs if id(o) in paired]
     return unmatched, pairs
 
 
+def arrival_rows(arrival: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The real sidecar rows behind a paired arrival (a split arrival
+    is a synthetic row over its ``parts``)."""
+    return list(arrival.get("parts") or [arrival])
+
+
 # ------------------------------------------------------------- manifest
+# A hand price below this cannot be told apart from "no price" by
+# fill-crypto (it re-prices the line from Yahoo), so it is refused.
+MIN_PRICE = 1e-8
+# The decision a `<send id>-fee` entry (a network fee hidden in a send
+# that arrived short) takes when the owner prices it by hand.
+FEE_DECISION = "fee"
+
+
+def price_problem(price: Any) -> Optional[str]:
+    """Why `price` is not a usable hand price per coin (None: it is)."""
+    if isinstance(price, bool) or not isinstance(price, (int, float)):
+        return f"{price!r} is not a number"
+    if not math.isfinite(price):
+        return f"{price!r} is not a finite number"
+    if price < MIN_PRICE:
+        return (f"{price!r} is not a positive value of at least "
+                f"{MIN_PRICE:.8f} per coin")
+    return None
+
+
 def load_decisions(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         return {"schema_version": 1, "sends": {}}
@@ -243,11 +465,29 @@ def load_decisions(path: Path) -> Dict[str, Any]:
     if not isinstance(doc, dict) or not isinstance(doc.get("sends"), dict):
         raise ValueError(f"{path}: expected {{\"sends\": {{ID: {{...}}}}}}.")
     for sid, rec in doc["sends"].items():
-        if not isinstance(rec, dict) or rec.get("decision") not in DECISIONS:
+        ok = (DECISIONS + (FEE_DECISION,) if str(sid).endswith("-fee")
+              else DECISIONS)
+        if not isinstance(rec, dict) or rec.get("decision") not in ok:
             raise ValueError(
                 f"{path}: send {sid!r} has decision "
                 f"{(rec or {}).get('decision') if isinstance(rec, dict) else rec!r}"
-                f" — expected one of {', '.join(DECISIONS)}.")
+                f" — expected one of {', '.join(ok)}.")
+        # A hand-edited price is checked like --price: NaN/0/Infinity
+        # booked a 0-proceeds sale, a negative one broke convert-tt, a
+        # string dropped the line with a WARNING (re-audit A2-0241).
+        if "price" in rec and rec["price"] is not None:
+            why = price_problem(rec["price"])
+            if why:
+                raise ValueError(
+                    f"{path}: send {sid!r} has price {why} — fix it or "
+                    f"remove the \"price\" key (the fair value is then "
+                    f"looked up).")
+        if rec.get("decision") == FEE_DECISION and rec.get("price") is None:
+            raise ValueError(f"{path}: send {sid!r} is `{FEE_DECISION}` "
+                             f"without a price — give one or remove it.")
+        if "unpair" in rec and not isinstance(rec["unpair"], bool):
+            raise ValueError(f"{path}: send {sid!r} has unpair "
+                             f"{rec['unpair']!r} — expected true or false.")
     doc.setdefault("schema_version", 1)
     return doc
 
@@ -255,7 +495,9 @@ def load_decisions(path: Path) -> Dict[str, Any]:
 def save_decisions(path: Path, doc: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".part")
-    tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
+    # Strict JSON: an Infinity/NaN never reaches the manifest.
+    tmp.write_text(json.dumps(doc, indent=2, sort_keys=True,
+                              allow_nan=False) + "\n",
                    encoding="utf-8")
     os.replace(tmp, path)
 
@@ -263,12 +505,25 @@ def save_decisions(path: Path, doc: Dict[str, Any]) -> None:
 def record_decision(path: Path, sid: str, decision: str,
                     note: Optional[str] = None,
                     price: Optional[float] = None,
-                    summary: str = "") -> None:
-    if decision not in DECISIONS:
+                    summary: str = "",
+                    unpair: Optional[bool] = None) -> None:
+    """Save one decision. A hand price belongs to the decision it was
+    given with: re-deciding a send to ANOTHER decision without --price
+    drops it, so a typo is never stuck (re-audit A2-0572). `unpair`
+    True keeps the send out of the automatic pairing (A2-0004)."""
+    ok = (DECISIONS + (FEE_DECISION,) if sid.endswith("-fee")
+          else DECISIONS)
+    if decision not in ok:
         raise ValueError(f"decision {decision!r} — expected one of "
-                         f"{', '.join(DECISIONS)}")
+                         f"{', '.join(ok)}")
+    if price is not None:
+        why = price_problem(price)
+        if why:
+            raise ValueError(f"--price {why}.")
     doc = load_decisions(path)
     rec = dict(doc["sends"].get(sid) or {})
+    if price is None and rec.get("decision") != decision:
+        rec.pop("price", None)
     rec["decision"] = decision
     if summary:
         rec["summary"] = summary
@@ -279,6 +534,11 @@ def record_decision(path: Path, sid: str, decision: str,
             rec.pop("note", None)
     if price is not None:
         rec["price"] = float(price)
+    if unpair is not None:
+        if unpair:
+            rec["unpair"] = True
+        else:
+            rec.pop("unpair", None)
     doc["sends"][sid] = rec
     save_decisions(path, doc)
 
@@ -286,22 +546,38 @@ def record_decision(path: Path, sid: str, decision: str,
 # ---------------------------------------------------------------- rates
 def load_rates(path: Path) -> Dict[str, Dict[str, Tuple[float, str]]]:
     """{currency: {date: (rate, source)}} from work/to_base.csv
-    (`DATE TIME FROM TO RATE [SOURCE]`)."""
+    (`DATE TIME FROM TO RATE [SOURCE]`), read like convert-currency
+    reads it (re-audit A2-0999): a rate that parses but is not a
+    positive finite number (NaN, 0, a negative) is refused — it used to
+    be skipped and the send priced at an earlier day's rate without a
+    word; an unreadable rate is skipped with a warning; the FIRST row of
+    a currency and date wins (the noon row, not today's spot row)."""
     out: Dict[str, Dict[str, Tuple[float, str]]] = {}
     if not path.is_file():
         return out
-    for line in path.read_text(encoding="utf-8").splitlines():
+    bad: List[str] = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(),
+                             1):
         parts = line.split()
         if len(parts) < 5 or not re.match(r"^\d{4}-\d{2}-\d{2}$", parts[0]):
             continue
         try:
             rate = float(parts[4])
         except ValueError:
+            bad.append(f"line {n}: {line.strip()!r}")
             continue
         if not (rate > 0 and math.isfinite(rate)):
-            continue
-        out.setdefault(parts[2].upper(), {})[parts[0]] = (
-            rate, parts[5].lower() if len(parts) > 5 else "")
+            raise ValueError(
+                f"rates file {path}, line {n}: rate {parts[4]!r} for "
+                f"{parts[2]}->{parts[3]} on {parts[0]} is not a positive "
+                f"finite number — refusing to value a send with it. Fix "
+                f"or regenerate the rates file (`taxjson run`).")
+        out.setdefault(parts[2].upper(), {}).setdefault(parts[0], (
+            rate, parts[5].lower() if len(parts) > 5 else ""))
+    if bad:
+        print(f"taxjson crypto-sends: warning: {path.name}: skipped "
+              f"{len(bad)} line(s) with an unreadable rate (e.g. "
+              f"{bad[0]}).", file=sys.stderr)
     return out
 
 
@@ -347,7 +623,11 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
     (TAXJSON_OFFLINE) it answers from the cache only."""
     from taxjson.bin import fill_crypto_prices as F
     from taxjson.lib.offline import offline_enabled
-    overrides = F.load_symbol_overrides([str(project_root)])
+    # The same folders, in the same order, as `taxjson run` gives
+    # fill-crypto: the project root, then the folder of its input file
+    # (work/) — later wins (re-audit A2-0242).
+    overrides = F.load_symbol_overrides([str(project_root),
+                                         str(Path(project_root) / "work")])
     state: Dict[str, Any] = {"cache": None}
 
     def lookup(symbol: str, day: str) -> Tuple[Optional[float], str]:
@@ -368,8 +648,12 @@ def yahoo_usd_price(project_root: Path) -> Callable[[str, str],
             F.SYMBOL_OVERRIDES.clear()
             F.SYMBOL_OVERRIDES.update(saved)
         if p and p > 0:
-            cache[key] = p
-            F.save_cache(cache)
+            # A close for UTC today or later is the still-open candle:
+            # used, never cached (fill-crypto's rule, audit S025-08 —
+            # this shared cache re-opened it, re-audit A2-0570).
+            if day < F._utc_today():
+                cache[key] = p
+                F.save_cache(cache)
             return float(p), ysym
         return None, ysym
     return lookup
@@ -552,15 +836,30 @@ def coinbase_pool_flows(path: Path) -> List[Dict[str, Any]]:
         asset = col(row, "asset").strip().upper()
         cur = (col(row, "price currency") or "USD").strip().upper()
         notes = col(row, "notes") or ""
+        ctx = f"{path.name} Notes {notes!r}"
+        if "convert" in tl:
+            # One row carries BOTH legs in its Notes, and Coinbase names
+            # either leg in the Asset column (the parser accepts both):
+            # read the stablecoin flow from the Notes alone, so the same
+            # Convert moves the pool the same way whichever leg the
+            # Asset column names (re-audit A2-0243 / A2-0574). Numbers
+            # go through the strict reader: '0,125' is a decimal comma,
+            # never 125 (A2-1008).
+            m = C._CONVERT_NOTES_RE.search(notes)
+            if m:
+                units = 0.0
+                if m.group(2).upper() in STABLECOINS:
+                    units -= strict_money(m.group(1), "Convert quantity",
+                                          ctx)
+                if m.group(4).upper() in STABLECOINS:
+                    units += strict_money(m.group(3), "Convert quantity",
+                                          ctx)
+                if units:
+                    out.append({"dt": dt, "units": units, "cad": 0.0,
+                                "what": "Coinbase Convert"})
+            continue
         if asset in STABLECOINS:
             qty = abs(num(row, "quantity transacted"))
-            if "convert" in tl:
-                m = C._CONVERT_NOTES_RE.search(notes)
-                if m and m.group(4).upper() not in USD_FAMILY:
-                    out.append({"dt": dt, "units": -float(
-                        m.group(1).replace(",", "")), "cad": 0.0,
-                        "what": "Coinbase Convert"})
-                continue
             if C._STAKING_RE.search(type_raw):
                 out.append({"dt": dt, "units": qty, "cad": 0.0,
                             "what": f"Coinbase {type_raw}"})
@@ -575,17 +874,10 @@ def coinbase_pool_flows(path: Path) -> List[Dict[str, Any]]:
             continue
         m = C._ADV_NOTES_RE.search(notes)
         if m and m.group(5).upper() in STABLECOINS:
-            n = float(m.group(4).replace(",", ""))
+            n = strict_money(m.group(4), "Advanced Trade quantity", ctx)
             out.append({"dt": dt,
                         "units": -n if m.group(1).lower() == "bought" else n,
                         "cad": 0.0, "what": f"Coinbase {type_raw}"})
-            continue
-        if "convert" in tl:
-            m = C._CONVERT_NOTES_RE.search(notes)
-            if m and m.group(4).upper() in STABLECOINS:
-                out.append({"dt": dt,
-                            "units": float(m.group(3).replace(",", "")),
-                            "cad": 0.0, "what": "Coinbase Convert"})
     return out
 
 
@@ -606,13 +898,15 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
     for f in flows:
         events.append((f["dt"], 1, "flow", f))
     paired = {id(o): i for o, i in pairs}
+    paired_in = {id(r) for _o, i in pairs for r in arrival_rows(i)}
     for t in transfers:
         if t["symbol"] not in USD_FAMILY:
             continue
         if t["quantity"] > 0:
-            if any(i is t for i in paired.values()):
-                continue
-            events.append((_dt(t), 1, "in", t))
+            # A paired arrival is the same coins coming back: only its
+            # deposit fee leaves the pool (re-audit A2-1011).
+            events.append((_dt(t), 1, "in-paired" if id(t) in paired_in
+                           else "in", t))
         else:
             events.append((_dt(t), 2, "out", t))
     events.sort(key=lambda e: (e[0], e[1]))
@@ -646,6 +940,11 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
 
     for dt, _o, kind, e in events:
         day = dt.strftime("%Y-%m-%d")
+        if kind == "in-paired":
+            if e.get("fee"):
+                dispose(e["fee"], day)
+            after.append((day, units))
+            continue
         if kind in ("flow", "in"):
             n = e["units"] if kind == "flow" else e["quantity"]
             if n > 0:
@@ -660,6 +959,11 @@ def usd_pool(flows: List[Dict[str, Any]], transfers: List[Dict[str, Any]],
                 units += n
                 cost += c
                 acq_dates.append(day)
+                # A deposit's fee (taken in the coin on arrival) leaves
+                # the pool too: the ledger credits only n - fee
+                # (re-audit A2-0592).
+                if kind == "in" and e.get("fee"):
+                    dispose(e["fee"], day)
             else:
                 dispose(-n, day)
         else:                                            # an out-leg
@@ -724,10 +1028,13 @@ def build_report(root: Path, cfg: Dict[str, Any],
                  broker_files: Optional[Dict[str, List[Tuple[str, Path]]]]
                  = None,
                  usd_price=None, want: Optional[str] = None,
-                 with_pool: bool = True) -> Dict[str, Any]:
+                 with_pool: bool = True,
+                 exports_only: bool = False) -> Dict[str, Any]:
     """Everything `crypto-sends` shows, per crypto account.
     `broker_files` ({acct: [(broker, csv)]}) feeds the stablecoin pool;
-    None skips it (the checklist needs only the decisions)."""
+    None skips it (the checklist needs only the decisions).
+    `exports_only`: `broker_files` lists EVERY export in inputs/, and a
+    sidecar left by a removed export is ignored (re-audit A2-1026)."""
     settings = cfg.get("settings") or {}
     from taxjson.lib.country import home_currency, settings_country
     country = settings_country(settings)
@@ -735,13 +1042,19 @@ def build_report(root: Path, cfg: Dict[str, Any],
                or home_currency(country)).upper()
     cache = root / "work"
     accts = crypto_accounts(cfg)
-    rows = load_transfer_rows(cache, accts)
-    unmatched, pairs = match_transfers(rows)
+    present = None
+    if exports_only and broker_files is not None:
+        present = {(a, b) for a, fs in broker_files.items() for b, _p in fs}
+    rows = load_transfer_rows(cache, accts, present)
+    assign_send_ids(rows)
+    man_paths = {a: root / "inputs" / a / MANIFEST_NAME for a in accts}
+    all_decisions = {a: load_decisions(p)["sends"]
+                     for a, p in man_paths.items()}
+    unpaired = {(a, sid) for a, d in all_decisions.items()
+                for sid, rec in d.items() if rec.get("unpair")}
+    unmatched, pairs = match_transfers(rows, unpaired)
     rates = Rates(load_rates(cache / "to_base.csv"), base)
-    ids: Dict[int, str] = {}
-    for s in unmatched:
-        ids[id(s)] = send_id(s["exchange"], s["date"], s["time"],
-                             s["symbol"], s["quantity"])
+    ids: Dict[int, str] = {id(s): s["sid"] for s in unmatched}
     pool = None
     if with_pool and broker_files is not None and base != "USD" and any(
             is_cash_stablecoin(s["symbol"], s["exchange"])
@@ -759,14 +1072,14 @@ def build_report(root: Path, cfg: Dict[str, Any],
     for acct in accts:
         if want and acct != want:
             continue
-        man_path = root / "inputs" / acct / MANIFEST_NAME
-        decisions = load_decisions(man_path)["sends"]
+        man_path = man_paths[acct]
+        decisions = all_decisions[acct]
         sends = []
         for s in sorted((s for s in unmatched if s["account"] == acct),
                         key=lambda s: (_dt(s), ids[id(s)])):
             sid = ids[id(s)]
             rec = decisions.get(sid) or {}
-            if not rec and s["kind"].lower().startswith("hybridearn"):
+            if not rec and is_hybrid_earn(s):
                 # Kraken Hybrid Earn: the coins leave the spot ledger for
                 # Kraken's Earn product and keep earning rewards for you —
                 # still your property. Decided automatically; --set
@@ -789,6 +1102,7 @@ def build_report(root: Path, cfg: Dict[str, Any],
                 "summary": _summary(s), "stable": stable,
                 "decision": rec.get("decision"), "note": rec.get("note", ""),
                 "auto": bool(rec.get("auto")),
+                "unpaired": bool(rec.get("unpair")),
                 "fair_value": fv, "tt": None, "fx": None,
             }
             if rec.get("decision") in REFUSED.get(country, ()):
@@ -804,15 +1118,47 @@ def build_report(root: Path, cfg: Dict[str, Any],
             if stable and pool is not None:
                 entry["fx"] = pool["results"].get(sid)
             sends.append(entry)
-        live = {e["id"] for e in sends}
-        matched = sum(1 for o, _i in pairs if o["account"] == acct)
+        fees = network_fees(pairs, acct, rates, usd_price, country,
+                            decisions)
+        live = {e["id"] for e in sends} | {e["id"] for e in fees}
+        mine = [(o, i) for o, i in pairs if o["account"] == acct]
+        matched_ids = {o["sid"]: (o, i) for o, i in mine}
+        # A saved gift/payment for a send that now PAIRS with an
+        # arrival: the pairing books it as your own move, so the
+        # decision no longer counts — said in the run, the checklist
+        # and the listing, never only here (re-audit A2-0004).
+        overridden = []
+        for sid, rec in sorted(decisions.items()):
+            if sid in matched_ids and rec.get("decision") in DISPOSING:
+                o, i = matched_ids[sid]
+                overridden.append({
+                    "id": sid, "decision": rec["decision"],
+                    "summary": _summary(o),
+                    "arrival": (f"{fmt_qty(i['quantity'])} {i['symbol']} "
+                                f"on {_EXCH_NAME.get(i['exchange'], i['exchange'])}"
+                                f" ({i['account']}) {i['date']} {i['time']}")})
+        # US: basis is per account (US-BASIS-01) and nothing carries a
+        # moved lot's basis and holding period from one account to
+        # another, so a paired move between two crypto accounts leaves
+        # a short on one side and a phantom long on the other
+        # (re-audit A2-0003): listed so the run can stop.
+        cross = []
+        if country == "usa":
+            for o, i in mine:
+                dest = {r["account"] for r in arrival_rows(i)}
+                if dest - {acct}:
+                    cross.append({
+                        "id": o["sid"], "summary": _summary(o),
+                        "to": sorted(dest - {acct})})
         out["accounts"][acct] = {
             "sends": sends,
-            "matched": matched,
+            "matched": len(mine),
             "undecided": sum(1 for e in sends if not e["decision"]),
-            "orphans": sorted(k for k in decisions if k not in live),
-            "network_fees": network_fees(pairs, acct, rates, usd_price,
-                                         country),
+            "orphans": sorted(k for k in decisions
+                              if k not in live and k not in matched_ids),
+            "overridden": overridden,
+            "cross_account_moves": cross,
+            "network_fees": fees,
             "manifest": str(man_path),
             "tt_file": str(root / "inputs" / acct / TT_NAME),
         }
@@ -821,8 +1167,34 @@ def build_report(root: Path, cfg: Dict[str, Any],
     return out
 
 
+def matched_send(report_rows_root: Path, cfg: Dict[str, Any], acct: str,
+                 sid: str, broker_files=None) -> Optional[str]:
+    """A description of the arrival send `sid` of `acct` is paired with
+    (None: not paired) — what `--set` says before a decision on a
+    matched send is accepted."""
+    accts = crypto_accounts(cfg)
+    present = None
+    if broker_files is not None:
+        present = {(a, b) for a, fs in broker_files.items() for b, _p in fs}
+    rows = load_transfer_rows(report_rows_root / "work", accts, present)
+    assign_send_ids(rows)
+    unpaired = {(a, k) for a in accts for k, rec in load_decisions(
+        report_rows_root / "inputs" / a / MANIFEST_NAME)["sends"].items()
+        if rec.get("unpair")}
+    _u, pairs = match_transfers(rows, unpaired)
+    for o, i in pairs:
+        if o["account"] == acct and o["sid"] == sid:
+            return (f"{_summary(o)} arrived as {fmt_qty(i['quantity'])} "
+                    f"{i['symbol']} on "
+                    f"{_EXCH_NAME.get(i['exchange'], i['exchange'])} "
+                    f"({i['account']}) {i['date']} {i['time']}")
+    return None
+
+
 def network_fees(pairs, acct: str, rates: "Rates", usd_price,
-                 country: str) -> List[Dict[str, Any]]:
+                 country: str,
+                 decisions: Optional[Dict[str, Any]] = None
+                 ) -> List[Dict[str, Any]]:
     """The network fees hidden in matched sends of `acct`, as sales.
 
     A matched send that ARRIVED SHORT, from an exchange whose export
@@ -833,7 +1205,10 @@ def network_fees(pairs, acct: str, rates: "Rates", usd_price,
     (`<txid>-fee`; tax-logic CA-CRYPTO-06 / US-CRYPTO-05, audit R1-26,
     owner decision). A send whose fee the ledger states is already
     booked by the parser; a stablecoin's fee is US-dollar cash in a
-    Canada project (CA-CRYPTO-02) and property, at par, in a US one."""
+    Canada project (CA-CRYPTO-02) and property, at par, in a US one.
+    A hand price saved for the `-fee` id (`--set ID-fee=fee --price P`)
+    values it when the lookup cannot (re-audit A2-0240)."""
+    decisions = decisions or {}
     out: List[Dict[str, Any]] = []
     for o, i in pairs:
         if o["account"] != acct or o["fee"]:
@@ -845,11 +1220,13 @@ def network_fees(pairs, acct: str, rates: "Rates", usd_price,
         if gap <= 1e-12:
             continue
         fee_send = dict(o, quantity=-gap)
-        fv = fair_value(fee_send, rates, usd_price,
+        fid = (o.get("sid") or send_id(o["exchange"], o["date"], o["time"],
+                                       o["symbol"], o["quantity"])) + "-fee"
+        manual = (decisions.get(fid) or {}).get("price")
+        fv = fair_value(fee_send, rates, usd_price, manual,
                         stable_cash=country != "usa")
         out.append({
-            "id": send_id(o["exchange"], o["date"], o["time"], o["symbol"],
-                          o["quantity"]) + "-fee",
+            "id": fid,
             "account": acct, "exchange": o["exchange"], "kind": o["kind"],
             "date": o["date"], "time": o["time"], "symbol": o["symbol"],
             "quantity": gap, "sent": -o["quantity"],
@@ -868,7 +1245,8 @@ def tt_entries(acct_doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]],
     """(entries to write, entries that cannot be priced): every
     gift/payment send and every network fee hidden in a matched send
     (``network_fees``). A decision the country refuses (``refused``) is
-    never written."""
+    never written. Each priced entry is written on its own: one that
+    cannot be priced no longer holds back the rest (re-audit A2-0240)."""
     todo = [e for e in acct_doc["sends"]
             if e["decision"] in DISPOSING and not e["stable"]
             and not e.get("refused")]
@@ -981,25 +1359,47 @@ def tt_ids(path: Path) -> Optional[set]:
     return ids
 
 
+# A hand-written quantity this close to a generated one sells the same
+# coins: a network fee folded in (-1000.01 for 1000), or the ledger
+# quantity rounded (re-audit A2-0575 / A2-1005).
+DUP_REL_TOL = 0.005
+
+
+def _hand_qty_close(tok: str, q: float, want: float) -> bool:
+    """Whether hand-written quantity `q` (token `tok`) is `want`."""
+    frac = tok.lstrip("+-").replace(",", "").split(".")
+    half_ulp = 0.5 * 10 ** -len(frac[1]) if len(frac) > 1 else 0.5
+    return abs(q - want) <= max(want * DUP_REL_TOL, half_ulp) + 1e-12
+
+
 def duplicate_lines(acct_dir: Path, entries: List[Dict[str, Any]]
                     ) -> List[Dict[str, Any]]:
     """Hand-written .tt lines that already sell what a generated
-    crypto_sends.tt line sells — the same coin and quantity on the same
-    date — so booking both counts the disposition twice. Every account's
+    crypto_sends.tt line sells — the same coin and about the same
+    quantity (within DUP_REL_TOL, or the hand line's rounding) on the
+    send's local date or the day either side (a hand line dated by the
+    UTC stamp), on one line or split over several lines of one file —
+    so booking both counts the disposition twice. Numbers are read the
+    way convert-tt reads them ('-1,000' is 1000). Every account's
     folder under inputs/ is searched (one pool per coin across accounts
     in Canada). Each hit: {"file": path relative to the project,
     "line": 1-based, "id": send id, "timestamp": the send's date and
     time, "same_time": the .tt line has the send's exact time}. Nothing
     is deleted: which line to keep is the owner's call."""
+    from taxjson.bin.taxjson_convert_tt import _tt_num
     hits: List[Dict[str, Any]] = []
     inputs = acct_dir.parent
-    if not inputs.is_dir():
+    if not inputs.is_dir() or not entries:
         return hits
-    want: Dict[Tuple[str, str, float], Dict[str, Any]] = {
-        (e["date"], e["symbol"].upper(), round(e["quantity"], 10)): e
-        for e in entries}
-    if not want:
-        return hits
+
+    def near(d1: str, d2: str) -> bool:
+        try:
+            a = datetime.strptime(d1, "%Y-%m-%d")
+            b = datetime.strptime(d2, "%Y-%m-%d")
+        except ValueError:
+            return False
+        return abs((a - b).days) <= 1
+
     for d in sorted(p for p in inputs.iterdir() if p.is_dir()):
         for p in sorted(d.iterdir()):
             if (not p.is_file() or p.suffix.lower() != ".tt"
@@ -1009,21 +1409,35 @@ def duplicate_lines(acct_dir: Path, entries: List[Dict[str, Any]]
                 text = p.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
+            lines = []
             for n, ln in enumerate(text.splitlines(), 1):
                 tok = ln.split("#", 1)[0].split()
                 if len(tok) < 5 or tok[0].upper() != "BUYSELL":
                     continue
                 try:
-                    q = float(tok[4])
+                    q = _tt_num(tok[4])
                 except ValueError:
                     continue
-                e = want.get((tok[1], tok[3].upper(), round(-q, 10)))
-                if q < 0 and e is not None:
+                if q < 0:
+                    lines.append((n, tok, -q))
+            for e in entries:
+                sym = e["symbol"].upper()
+                cand = [(n, tok, q) for n, tok, q in lines
+                        if tok[3].upper() == sym and near(tok[1], e["date"])]
+                found = [c for c in cand
+                         if _hand_qty_close(c[1][4], c[2], e["quantity"])]
+                if not found and len(cand) > 1:
+                    tot = sum(q for _n, _t, q in cand)
+                    if abs(tot - e["quantity"]) <= (e["quantity"]
+                                                    * DUP_REL_TOL + 1e-12):
+                        found = cand
+                for n, tok, _q in found:
                     hits.append({
                         "file": f"{inputs.name}/{d.name}/{p.name}",
                         "line": n, "id": e["id"],
                         "timestamp": f"{e['date']} {e['time']}",
-                        "same_time": tok[2] == e["time"],
+                        "same_time": (tok[1] == e["date"]
+                                      and tok[2] == e["time"]),
                         "quantity": e["quantity"],
                         "symbol": e["symbol"]})
     return hits

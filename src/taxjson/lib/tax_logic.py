@@ -678,8 +678,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "de-peg, is not computed; a fill more than 2% off 1.00 "
                  "USD is warned about)."),
             Rule("CA-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin on a move of coins (a "
+                 "withdrawal, a deposit, a transfer to another Kraken user "
+                 "or a Hybrid Earn withdrawal) is a sale of that coin."),
             Rule("CA-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
@@ -687,9 +688,19 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "Moving coins between your own wallets is not a sale. A "
                  "gift or a payment in crypto is a sale at fair value."),
             Rule("CA-CRYPTO-06",
-                 "A send that arrives on another of your exchanges within "
-                 "3 days, with 90% to 100% of the coins sent, is treated as "
-                 "your own move. When fewer coins arrive and the sending "
+                 "A send that arrives on another of your exchanges (or the "
+                 "same exchange in another crypto account) from 10 minutes "
+                 "before it (exchange clocks disagree) to 3 days after it, "
+                 "with 90% to 100% of the coins sent — also as two deposits, "
+                 "or two sends landing as one deposit — is treated as your "
+                 "own move. Sends and arrivals are paired to pair the most "
+                 "sends, then lose the fewest coins, then the closest in "
+                 "time. A Kraken Hybrid Earn withdrawal is never paired (the "
+                 "coins stay on Kraken: your own, decided automatically). A "
+                 "saved gift or payment for a send that pairs is not booked "
+                 "and is warned about (`run --strict` stops) until you "
+                 "confirm it as `self` or unpair it (`--unpair`). When fewer "
+                 "coins arrive and the sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "
                  "arrive paid the network fee: a sale of them at fair "
@@ -703,7 +714,11 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "writes a sale at fair value for each gift or payment to "
                  "crypto_sends.tt: the exchange's price when the row has "
                  "one, otherwise the Yahoo daily close times the Bank of "
-                 "Canada rate of the send date.", cont=True),
+                 "Canada rate of the send date, or a price you give "
+                 "(`--price`, finite and at least 0.00000001; a network fee "
+                 "takes one too). A sale that cannot be priced is not "
+                 "booked: it is warned about and `run --strict` stops.",
+                 cont=True),
             Rule("CA-CRYPTO-08",
                  "A gift or payment of a stablecoin is not written as a "
                  "sale (stablecoins are cash in the books). It is a "
@@ -1102,15 +1117,26 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "in one is valued at its 1.00 USD par; a sale for "
                  "dollars at the fill's price."),
             Rule("US-CRYPTO-03",
-                 "A Kraken withdrawal fee paid in a coin is a sale of that "
-                 "coin."),
+                 "A Kraken fee paid in a coin on a move of coins (a "
+                 "withdrawal, a deposit, a transfer to another Kraken user "
+                 "or a Hybrid Earn withdrawal) is a sale of that coin."),
             Rule("US-CRYPTO-04",
                  "A trade fee taken in a coin reduces the coins bought or "
                  "adds to the coins sold.", cont=True),
             Rule("US-CRYPTO-05",
-                 "A send that arrives on another of your exchanges within "
-                 "3 days, with 90% to 100% of the coins sent, is treated as "
-                 "your own move. When fewer coins arrive and the sending "
+                 "A send that arrives on another of your exchanges (or the "
+                 "same exchange in another crypto account) from 10 minutes "
+                 "before it to 3 days after it, with 90% to 100% of the "
+                 "coins sent — also as two deposits, or two sends landing "
+                 "as one deposit — is treated as your own move; sends and "
+                 "arrivals are paired to pair the most sends, then lose the "
+                 "fewest coins, then the closest in time, and a Kraken "
+                 "Hybrid Earn withdrawal is never paired. Basis stays per "
+                 "account and is not carried from one crypto account to "
+                 "another: a move paired between two accounts is warned "
+                 "about and `run --strict` stops (keep both exchanges in "
+                 "one crypto account). When fewer coins arrive and the "
+                 "sending "
                  "exchange states no fee (a Coinbase Send hides the "
                  "network fee in the quantity), the coins that did not "
                  "arrive paid the network fee: a sale of them at fair "

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Crypto sends: pairing, decisions and prices (re-audit 2).** The
+  send/arrival pairing is a minimum-loss assignment, not first come
+  first served: a send no longer takes another send's arrival and books
+  a phantom network-fee sale; a send that landed as two deposits (or two
+  sends as one) pairs; a Kraken Hybrid Earn move is never paired. A
+  saved gift/payment that a later arrival pairs with is no longer
+  dropped silently: `run` warns, `--strict` stops, the checklist flags
+  it, and `crypto-sends --set ID=gift --unpair` keeps it. A full `run`
+  parses every crypto account before pairing (a new export pairs on the
+  first run; a removed export's sends no longer book); `crypto-sends
+  --set` refuses stale evidence. US: a move paired between two crypto
+  accounts (basis not carried) is warned about and stops `--strict`.
+  `--price` and a hand-edited sends.json price must be finite and at
+  least 0.00000001; re-deciding a send drops its old hand price; a
+  network fee takes `--set ID-fee=fee --price P`; an unpriceable entry no
+  longer holds back the priced ones (it is warned about; `--strict`
+  stops). Same-second sends get distinct ids. The stablecoin pool reads
+  a Coinbase Convert whichever leg the Asset column names, parses Notes
+  numbers strictly and takes deposit fees out. A bad rate in to_base.csv
+  is refused; today's open price is not cached; work/crypto_ticker.map
+  applies as in fill-crypto; the duplicate-line check catches the UTC
+  date, a fee-inclusive or rounded quantity, a thousands comma and a
+  split sale.
+
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

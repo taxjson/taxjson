@@ -174,14 +174,16 @@ class TestMatchTransfers(unittest.TestCase):
         self.assertEqual((un, pairs), ([], []))
 
     def test_each_arrival_pairs_once_and_only_its_coin(self):
-        # m1131 / m1132.
+        # m1131 / m1132. The pairing is an assignment (re-audit
+        # A2-0078): of two equal sends, the one closer in time to the
+        # single arrival takes it.
         rows = [_s(quantity=-1.0, time="07:00:00"),
                 _s(quantity=-1.0, time="07:05:00"),
                 self._arrive(time="07:10:00"),
                 self._arrive(symbol="ETH", time="07:11:00")]
         un, pairs = self._pairs(rows)
         self.assertEqual(len(pairs), 1)
-        self.assertEqual([u["time"] for u in un], ["07:05:00"])
+        self.assertEqual([u["time"] for u in un], ["07:00:00"])
 
     def test_same_exchange_other_account_is_a_move(self):
         # m1241 (and m1134: the same exchange AND account is not).
@@ -244,10 +246,18 @@ class TestDecisions(unittest.TestCase):
             p = Path(tmp) / "sub" / "sends.json"
             cs.record_decision(p, "k", "gift", note="for mum", price=2.5,
                                summary="Kraken withdrawal")
-            cs.record_decision(p, "k", "payment", note="")
+            # Same decision, no --price: the hand price stays.
+            cs.record_decision(p, "k", "gift", note="")
             doc = json.loads(p.read_text())
             self.assertEqual(doc["sends"]["k"],
-                             {"decision": "payment", "price": 2.5,
+                             {"decision": "gift", "price": 2.5,
+                              "summary": "Kraken withdrawal"})
+            # Another decision without --price drops it (re-audit
+            # A2-0572: a typo'd price was stuck for good).
+            cs.record_decision(p, "k", "payment")
+            doc = json.loads(p.read_text())
+            self.assertEqual(doc["sends"]["k"],
+                             {"decision": "payment",
                               "summary": "Kraken withdrawal"})
             with self.assertRaises(ValueError):
                 cs.record_decision(p, "k", "donation")
@@ -271,13 +281,16 @@ class TestRates(unittest.TestCase):
             "2025-01-04 12:00:00 CAD USD 0.73 yahoo",
             "2025-01-05 USD",
             "Jan-06 12:00:00 USD CAD 1.37",
-            "2025-01-07 12:00:00 USD CAD abc",
-            "2025-01-08 12:00:00 USD CAD -1.0",
-            "2025-01-09 12:00:00 USD CAD 0",
-            "2025-01-10 12:00:00 USD CAD inf"]))
+            "2025-01-07 12:00:00 USD CAD abc"]))
         self.assertEqual(t, {"USD": {"2025-01-02": (1.35, "boc"),
                                      "2025-01-03": (1.36, "")},
                              "CAD": {"2025-01-04": (0.73, "yahoo")}})
+        # A rate that parses but is not a positive finite number is
+        # refused, as convert-currency refuses it (re-audit A2-0999).
+        for bad in ("-1.0", "0", "inf", "nan"):
+            with self.assertRaises(ValueError, msg=bad) as cm:
+                self._load(f"2025-01-08 12:00:00 USD CAD {bad}")
+            self.assertIn("not a positive finite number", str(cm.exception))
 
     def test_lookup_labels_and_text(self):
         # m1152 (an unknown source keeps its own name), m1064 (the

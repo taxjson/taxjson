@@ -777,8 +777,11 @@ def d_crypto_sends(ctx: Ctx) -> Result:
     except ValueError as e:
         return Result("crypto-sends", "attention", str(e))
     undecided, stale, total, refused = [], [], 0, []
+    overridden, cross = [], []
     for n, a in rep["accounts"].items():
         total += len(a["sends"])
+        overridden += [o["id"] for o in a.get("overridden") or []]
+        cross += [c["id"] for c in a.get("cross_account_moves") or []]
         if a["undecided"]:
             undecided.append(f"{n}: {a['undecided']}")
         refused += [e["id"] for e in cs.refused_entries(a)]
@@ -792,6 +795,20 @@ def d_crypto_sends(ctx: Ctx) -> Result:
                       f"booked): {', '.join(refused)} — record each as "
                       f"self or payment (`taxjson crypto-sends ACCOUNT "
                       f"--set ID=self`)")
+    if overridden:
+        # A saved gift/payment the pairing overrode is not booked
+        # (re-audit A2-0004): never "every send arrived".
+        return Result("crypto-sends", "attention",
+                      f"saved gift/payment now paired with an arrival "
+                      f"(booked as your own move, NOT as the decision): "
+                      f"{', '.join(overridden)} — `taxjson crypto-sends "
+                      f"ACCOUNT` says how to unpair or confirm it")
+    if cross:
+        return Result("crypto-sends", "attention",
+                      f"US: coins moved between two crypto accounts "
+                      f"(basis is not carried across accounts): "
+                      f"{', '.join(cross)} — keep both exchanges in one "
+                      f"crypto account")
     if undecided:
         return Result("crypto-sends", "attention",
                       f"undecided send(s) — {', '.join(undecided)}; "
