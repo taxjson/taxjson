@@ -369,8 +369,9 @@ def main():
              "each leg's own currency at the event date.",
     )
     parser.add_argument(
-        '--base-currency', metavar='CUR', default='CAD',
-        help="The rates file's target (base) currency (default: CAD).",
+        '--base-currency', metavar='CUR', default=None,
+        help="The rates file's target (base) currency (default: the "
+             "--country's home currency, CAD or USD).",
     )
     parser.add_argument(
         '--ticker-map', metavar='FILE', default=None,
@@ -394,6 +395,10 @@ def main():
              "resolve.",
     )
     args = parser.parse_args()
+    if not args.base_currency:
+        # Country-blind CAD used to be the default (re-audit A2-1363).
+        from taxjson.lib.country import home_currency
+        args.base_currency = home_currency(args.country)
 
     csv_paths = [Path(p) for p in args.inputs]
     missing = [p for p in csv_paths if not p.exists()]

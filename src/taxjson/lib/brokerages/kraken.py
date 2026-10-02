@@ -1081,6 +1081,10 @@ class KrakenBrokerage(BaseBrokerage):
                             'date': date, 'time': time, 'asset': asset,
                             'amount': abs(amount), 'fee': abs(fee),
                             'usd': usd_v,
+                            # The unfolded name (USDC, not USD): the
+                            # fiat-for-fiat branch names the stablecoin
+                            # and checks its peg (re-audit A2-1284).
+                            'raw': asset_name,
                         }
                 else:
                     if type_raw == 'trade':
@@ -1576,8 +1580,22 @@ class KrakenBrokerage(BaseBrokerage):
             # fiat-spend branch below would have booked a BUYSELL of a
             # phantom `CAD`/`USD` asset. Counted, not modeled
             # (KNOWN_ISSUES "Kraken fiat conversions are not modeled").
+            _rs = spend.get('raw') or spend['asset']
+            _rr = recv.get('raw') or recv['asset']
+            # A stablecoin swapped for USD away from the peg drops a
+            # de-peg gain or loss under the cash model: said, as the
+            # trades path and Coinbase say it (CA-CRYPTO-02; re-audit
+            # A2-1284). A leg with amountusd already warned on its row.
+            for _coin, _cl, _usd in ((_rs, spend, recv), (_rr, recv, spend)):
+                if (self.stablecoins_as_cash and _coin in _CASH_STABLECOINS
+                        and _cl.get('usd') is None
+                        and _usd.get('raw', _usd['asset']) == 'USD'
+                        and _cl['amount']):
+                    warn_depeg(_coin, _usd['amount'] / _cl['amount'],
+                               _cl['amount'], _cl['date'],
+                               f"Kraken ledger refid {refid[:2]}***")
             self.count_nonevent(
-                f"forex conversion {spend['asset']}->{recv['asset']} "
+                f"forex conversion {_rs}->{_rr} "
                 f"(instant trade / dust sweep, not modeled — "
                 f"KNOWN_ISSUES)")
             return []

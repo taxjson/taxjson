@@ -153,8 +153,10 @@ class TestHarvest(unittest.TestCase):
     def test_usa_shows_days_to_long_term(self):
         with tempfile.TemporaryDirectory() as td:
             gains, _ = _project(td)
+            # The fixture's books are CAD; a US harvest now defaults to
+            # USD books (re-audit A2-0433), so say the base explicitly.
             rc, out, _ = _run([str(gains), "--no-ibkr",
-                               "--country", "usa"])
+                               "--country", "usa", "--base-currency", "CAD"])
         self.assertEqual(rc, 0)
         self.assertIn("LT_IN", out)
         bbb = next(ln for ln in out.splitlines() if "BBB.US" in ln)

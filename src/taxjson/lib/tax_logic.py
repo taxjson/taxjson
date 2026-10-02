@@ -182,10 +182,11 @@ def _ownership(country: str) -> List[Rule]:
     keys = sorted(_C.owners(_C.SETTING_COUNTRY, other))
     cfg = sorted(_C.owners(_C.CONFIG_COUNTRY, other))
     cmds = sorted(_C.owners(_C.COMMAND_COUNTRY, other))
-    # A value-level entry ("--foreign-roc=dividend") reads as the flag
-    # with that value.
-    flags = sorted(f.replace("=", " ")
-                   for f in _C.owners(_C.FLAG_COUNTRY, other))
+    # A one-country VALUE of a two-country flag (FLAG_VALUE_COUNTRY,
+    # "--foreign-roc dividend") reads as the flag with that value.
+    flags = sorted(list(_C.owners(_C.FLAG_COUNTRY, other))
+                   + [f"{f} {v}" for (f, v), o
+                      in _C.FLAG_VALUE_COUNTRY.items() if o == other])
     files = sorted(_C.owners(_C.PROJECT_FILE_COUNTRY, other))
     plans = [k for k in _C.PLAN_COUNTRY
              if _C.PLAN_COUNTRY[k] == other]
@@ -470,7 +471,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "DIAGNOSTICS, `taxjson checklist`; `run --strict` "
                  "stops), and a currency with no rates at all stops the "
                  "run. `taxjson fx-cash` counts a cash event with no rate "
-                 "row in those 5 days as unrated (named in its report).",
+                 "row in those 5 days as unrated (named in its report), "
+                 "and `taxjson crypto-sends` leaves a send (and a "
+                 "stablecoin pool row) with none unpriced.",
                  cont=True),
             Rule("CA-FX-04",
                  "A futures contract is booked on its settled P/L: nothing "
@@ -919,7 +922,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "history: a superficial loss denied in any year is added "
                  "to the replacement's cost (s.53(1)(f)), an option's "
                  "premium follows the shares on exercise or assignment "
-                 "(s.49(3)), and a futures contract has no cost amount."),
+                 "(s.49(3) for a call, s.49(3.1) for a put), and a "
+                 "futures contract has no cost amount."),
             Rule("CA-RPT-03",
                  "`taxjson estimate`: federal and provincial tax (ON, BC, "
                  "AB) with AMT on top of your other income, for planning "
@@ -997,14 +1001,18 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "no longer held when day 30 settles (VIOLATION prints the "
                  "last trade date that does it, on the listing's "
                  "calendar; once that date has passed it says the loss is "
-                 "denied)."),
+                 "denied). Rows that settle the same day are replayed in "
+                 "trade-date order, as the engine does, and a written "
+                 "option's buy-back loss is exempt (CA-SL-11) outside the "
+                 "gains files' year too."),
             Rule("CA-PLAN-02",
                  "A long call on the shares bought in the window counts "
                  "as a replacement at its contract size (buy-check states "
                  "the denial per share and per standard contract); a "
                  "warrant, an "
                  "adjusted-series call or a futures option is a note to "
-                 "check by hand.", cont=True),
+                 "check by hand, which sell-check and harvest repeat "
+                 "whatever the row's verdict.", cont=True),
             Rule("CA-PLAN-03",
                  "The web what-if runs a taxable sale on the blended s.47 "
                  "pool of the taxable accounts of its kind, with the "
@@ -1170,7 +1178,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "and is a validation ERROR (`run --strict` stops), and a "
                  "currency with no rates at all stops the run. `taxjson "
                  "fx-cash` counts a cash event with no rate row in those "
-                 "5 days as unrated (named in its report).", cont=True),
+                 "5 days as unrated (named in its report), and `taxjson "
+                 "crypto-sends` leaves a send (and a stablecoin pool row) "
+                 "with none unpriced.", cont=True),
             Rule("US-FX-03",
                  "Gains on holding foreign cash (§988) are ordinary "
                  "income, not capital gains, and are NOT in the Form 8949 "
@@ -1608,7 +1618,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "warrant, an adjusted-series call and a futures option; "
                  "an IRA purchase the engine already matched to an "
                  "earlier loss is not counted again (share for share), "
-                 "and a short position's trigger is a new short sale.",
+                 "and a short position's trigger is a new short sale: "
+                 "after a short-cover loss a buy is never a replacement "
+                 "(buy-check says so), only a re-short before the window "
+                 "closes is. A futures contract or an option on one gets "
+                 "no re-entry date (outside §1091, US-WASH-18), and the "
+                 "notes are repeated by sell-check and harvest whatever "
+                 "the row's verdict.",
                  cont=True),
             Rule("US-PLAN-03",
                  "The web what-if runs a sale with every taxable "

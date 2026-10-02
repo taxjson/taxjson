@@ -599,6 +599,9 @@ _IB_CLOCK_TZ = 'America/New_York'
 _IB_LOCAL_TZ_BY_CURRENCY = {'AUD': 'Australia/Sydney',
                             'HKD': 'Asia/Hong_Kong', 'JPY': 'Asia/Tokyo',
                             'SGD': 'Asia/Singapore',
+                            # Shanghai/Shenzhen Stock Connect lines
+                            # trade in CNH (re-audit A2-1302).
+                            'CNH': 'Asia/Shanghai',
                             'NZD': 'Pacific/Auckland'}
 # The settlement market (calendar and cycle) of a stock/warrant listing
 # whose suffix names a venue in another currency: a USD unit listed on
@@ -1317,8 +1320,8 @@ class IbBrokerage(BaseBrokerage):
                   f"{', '.join(sorted(_mask_account(a) for a in _accts))}"
                   f") — every row is booked to ONE account label. That is "
                   f"right only when they are one tax entity (e.g. two "
-                  f"taxable margin accounts); give a registered account "
-                  f"(TFSA/RRSP) its own folder.", file=sys.stderr)
+                  f"taxable margin accounts); give a sheltered (tax-"
+                  f"advantaged) account its own folder.", file=sys.stderr)
         _warn_stock_aliases(ctx['stock_conid_syms'],
                             'the account\'s IB statements',
                             first_seen=ctx['first_seen'],
@@ -1933,8 +1936,7 @@ class IbBrokerage(BaseBrokerage):
         pre = getattr(self, '_ib_pre', None) or {}
         return set(pre.get('accounts') or ())
 
-    @staticmethod
-    def _pair_warrant_exercises(warrant_legs, share_legs) -> None:
+    def _pair_warrant_exercises(self, warrant_legs, share_legs) -> None:
         """Mark each warrant exercise leg with the share listing it
         delivers: the one share leg coded Ex on the same date and in the
         same currency (several: the one whose root starts the warrant's
@@ -1967,9 +1969,10 @@ class IbBrokerage(BaseBrokerage):
                   f"{'no' if not cands else 'more than one'} share leg "
                   f"coded Ex on {w['date']} names the shares — booked as a "
                   f"disposal at 0, so the warrant's cost becomes a capital "
-                  f"loss instead of part of the shares' cost (ITA s.49(3); "
-                  f"US basis carryover). Correct it by hand: the warrant's "
-                  f"cost belongs in the shares acquired.", file=sys.stderr)
+                  f"loss instead of part of the shares' cost"
+                  f"{self.law(' (ITA s.49(3))', ' (US basis carryover)')}. "
+                  f"Correct it by hand: the warrant's cost belongs in the "
+                  f"shares acquired.", file=sys.stderr)
 
     def parse_file(self, path: Path) -> List[Dict[str, Any]]:
         transactions = []
@@ -3499,10 +3502,9 @@ class IbBrokerage(BaseBrokerage):
                             f"{shown_name(path)} {date}: tender/exchange offer "
                             f"for {_tsym} delivered {qty:g} {_delivered} "
                             f"(another security) — a share-for-share "
-                            f"exchange is a disposition of {_tsym} (or a "
-                            f"tax-deferred share exchange): book it by "
-                            f"hand in a .tt "
-                            f"file.")
+                            f"exchange is a disposition of {_tsym}"
+                            f"{self.law(' (or a s.85.1 rollover)', ' (or a §354/§368 reorganization)', ' unless a tax-deferred rollover applies')}"
+                            f": book it by hand in a .tt file.")
                         continue
                     if abs(proceeds) < 0.005:
                         if _is_placeholder:

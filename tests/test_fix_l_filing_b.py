@@ -72,7 +72,7 @@ class TestReconcileSlipCurrency(unittest.TestCase):
             g = _gains(td, [_sell()])
             s = _slip(td, "symbol,quantity,proceeds,box 13\n"
                           "AAPL,100,12000,USD\n")
-            rc, out, err = _run(RS.main, [str(s), "--gains", str(g),
+            rc, out, err = _run(RS.main, ["--country", "canada", str(s), "--gains", str(g),
                                           "--country", "canada"])
         self.assertEqual(rc, 2, out + err)
         self.assertIn("Box 13", err)
@@ -85,7 +85,7 @@ class TestReconcileSlipCurrency(unittest.TestCase):
             g = _gains(td, [_sell()])
             s = _slip(td, "symbol,quantity,proceeds,currency\n"
                           "AAPL,50,6000,CAD\nAAPL,50,6000,\n")
-            rc, out, err = _run(RS.main, [str(s), "--gains", str(g),
+            rc, out, err = _run(RS.main, ["--country", "canada", str(s), "--gains", str(g),
                                           "--country", "canada"])
         self.assertEqual(rc, 0, out + err)
         self.assertIn("1 OK", out)
@@ -95,7 +95,7 @@ class TestReconcileSlipCurrency(unittest.TestCase):
             g = _gains(td, [_sell()])
             s = _slip(td, "symbol,quantity,proceeds,currency\n"
                           "AAPL,100,12000,USD\n")
-            rc, out, err = _run(RS.main, [str(s), "--gains", str(g),
+            rc, out, err = _run(RS.main, ["--country", "canada", str(s), "--gains", str(g),
                                           "--country", "usa",
                                           "--date-basis", "trade"])
         self.assertEqual(rc, 0, out + err)
@@ -111,7 +111,7 @@ class TestReconcileSlipUnreadableCells(unittest.TestCase):
             g = _gains(td, [_sell(qty=-200, proceeds=18000.0,
                                   cost=18000.0, commission=0.0)])
             s = _slip(td, slip_text)
-            return _run(RS.main, [str(s), "--gains", str(g), "--json"])
+            return _run(RS.main, ["--country", "canada", str(s), "--gains", str(g), "--json"])
 
     def test_decimal_comma_proceeds_is_unreadable_not_100x(self):
         rc, out, err = self._rc('symbol,quantity,proceeds\n'
@@ -146,7 +146,7 @@ class TestReconcileSlipUnreadableFile(unittest.TestCase):
     def test_directory_is_a_usage_error(self):
         with tempfile.TemporaryDirectory() as td:
             g = _gains(td, [_sell()])
-            rc, out, err = _run(RS.main, [td, "--gains", str(g)])
+            rc, out, err = _run(RS.main, ["--country", "canada", td, "--gains", str(g)])
         self.assertEqual(rc, 2)
         self.assertIn("not a file", err)
         self.assertNotIn("Traceback", err)
@@ -156,7 +156,7 @@ class TestReconcileSlipUnreadableFile(unittest.TestCase):
             g = _gains(td, [_sell()])
             s = _slip(td, b"symbol,quantity,proceeds\n"
                           b"AAPL,100,11990\n\x81junk,,\n")
-            rc, out, err = _run(RS.main, [str(s), "--gains", str(g)])
+            rc, out, err = _run(RS.main, ["--country", "canada", str(s), "--gains", str(g)])
         self.assertNotIn("Traceback", err)
         self.assertIn("AAPL", out)
 
@@ -172,10 +172,10 @@ class TestReconcileSlipTolerance(unittest.TestCase):
             s = _slip(td, "symbol,quantity,proceeds\nAAPL,100,12000\n")
             for bad in ("nan", "-1", "inf", "-inf"):
                 with self.subTest(tol=bad):
-                    rc, out, err = _run(RS.main, [
+                    rc, out, err = _run(RS.main, ["--country", "canada", 
                         str(s), "--gains", str(g), f"--tolerance={bad}"])
                     self.assertEqual(rc, 2, out + err)
-            rc, out, err = _run(RS.main, [str(s), "--gains", str(g),
+            rc, out, err = _run(RS.main, ["--country", "canada", str(s), "--gains", str(g),
                                           "--tolerance=0"])
             self.assertEqual(rc, 0, out + err)
 

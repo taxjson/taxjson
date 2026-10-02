@@ -36,7 +36,9 @@ one shared `generic.toml` in the same folder. Example:
 
     [options]
     allow_large_fees = false    # fee > 5% of gross refused unless true
-    settle_on_trade_date = false  # true for crypto: no settlement cycle
+    settle_on_trade_date = false  # true: settle on the trade date (the
+                                  # date column is already settlement);
+                                  # not for crypto (a security importer)
 
     [broker]
     name = "wealthsimple"       # optional: the real broker. taxjson run
@@ -1038,6 +1040,19 @@ class GenericBrokerage(BaseBrokerage):
                   f"the settle date — check the settle cells.",
                   file=sys.stderr)
         self._warn_assignment_shapes(path.name, zero_closes, transactions)
+        if settle_on_trade_date and any(
+                t.get("action") == "BUYSELL" for t in transactions):
+            # The README used to route a crypto-only export through here
+            # with this option: the coins became BTC.US / ETH.TO shares
+            # (Schedule 3 line 4, no pooling with the crypto accounts,
+            # and §1091 in a US project) — re-audit A2-0152 / A2-0425.
+            print(f"note: generic importer: {path.name}: "
+                  f"settle_on_trade_date = true settles each trade on its "
+                  f"trade date; the rows are still booked as SECURITIES "
+                  f"(a listing suffix is added). The generic importer is "
+                  f"not a crypto route: coins go in a `crypto = true` "
+                  f"account (its exchange's export, or .tt lines with "
+                  f"the bare coin symbol).", file=sys.stderr)
         if unbooked:
             shown = "; ".join(unbooked[:5])
             more = (f" (+{len(unbooked) - 5} more)"
@@ -1134,8 +1149,7 @@ class GenericBrokerage(BaseBrokerage):
         except ValueError:
             return 0
 
-    @staticmethod
-    def _warn_assignment_shapes(name: str, zero_closes, transactions
+    def _warn_assignment_shapes(self, name: str, zero_closes, transactions
                                 ) -> None:
         """The mapping has no exercise/assignment target, so an assigned
         or exercised option arrives as a $0 option close plus a stock
@@ -1175,8 +1189,9 @@ class GenericBrokerage(BaseBrokerage):
                   f"an expiry plus a separate trade: {'; '.join(hits[:5])}"
                   f". The mapping cannot express an exercise or "
                   f"assignment, so the premium is NOT folded into the "
-                  f"shares' cost or proceeds (s.49(3)/(3.1); a US "
-                  f"premium adjusts basis or amount realized). If the "
+                  f"shares' cost or proceeds"
+                  f"{self.law(' (s.49(3)/(3.1))', ' (Rev. Rul. 78-182)')}"
+                  f". If the "
                   f"statement shows one, map those rows to skip and enter "
                   f"both legs as .tt ASSIGN rows.", file=sys.stderr)
 
@@ -1193,7 +1208,7 @@ class GenericBrokerage(BaseBrokerage):
         .US on the US one, otherwise the row currency). Booking the
         trade date put a Dec-31 sale in the wrong Canadian tax year
         (audits R1-123/R1-185). `[options] settle_on_trade_date = true`
-        (crypto) settles on the trade date; futures (`F:`, `/`, `\\`)
+        settles on the trade date; futures (`F:`, `/`, `\\`)
         on the trade date, or the next settlement day under
         futures_settle = "next_day" (CA-DATE-09/10, US-DATE-09/12)."""
         raw = str(cell(row, "settle")).strip()

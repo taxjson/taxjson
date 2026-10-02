@@ -90,7 +90,9 @@ def is_registered_account(account: str, registered_accounts=None,
 
 def _project_doc_near(path) -> Dict[str, Any]:
     """The project's taxjson.toml, found beside a book file
-    (<root>/work/<acct>_base.json) or one level up; {} when none."""
+    (<root>/work/<acct>_base.json) or one level up; {} when none.
+    Raises InputReadError (an OSError: exit 2 through guard_main) when
+    the file exists but is not UTF-8 or not valid TOML."""
     try:
         import tomllib
     except ImportError:                      # Python < 3.11
@@ -98,14 +100,24 @@ def _project_doc_near(path) -> Dict[str, Any]:
             import tomli as tomllib          # type: ignore
         except ImportError:
             return {}
+    from taxjson.lib.cli_diag import InputReadError, read_text_utf8
     p = Path(path).resolve()
     for d in (p.parent, p.parent.parent):
         cfg = d / 'taxjson.toml'
         if cfg.is_file():
+            # A UTF-8 BOM (what Notepad saves) is dropped, as `taxjson
+            # run` drops it (S038-04); a file that exists but does not
+            # parse stops the command — reading it as "no project" fell
+            # back to Canada's settle basis and label-guessed account
+            # types in a US project (re-audit A2-0419 / A2-0424 /
+            # A2-0429 / A2-0430 / A2-0438).
+            text = read_text_utf8(cfg)
             try:
-                return tomllib.loads(cfg.read_text(encoding='utf-8-sig')) or {}
-            except (OSError, ValueError):
-                return {}
+                return tomllib.loads(text.lstrip('\ufeff')) or {}
+            except ValueError as e:
+                raise InputReadError(
+                    f"{cfg}: not valid TOML ({e}) — fix it (`taxjson "
+                    f"run` reports the same file)") from None
     return {}
 
 

@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from taxjson.lib.corp_actions import ALLOCATED_BASIS_HINT
-from taxjson.lib.country import CANADA, USA, settings_country
+from taxjson.lib.country import (CANADA, USA, display_name, home_currency,
+                                 settings_country)
 
 _FMV_RE = re.compile(r"FMV\s+([\d,]+(?:\.\d+)?)\s+([A-Z]{3})")
 
@@ -158,8 +159,15 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
              account: Optional[str] = None) -> Dict[str, Any]:
     root = Path(root)
     cache = root / "work"
-    base_cur = (cfg.get("settings", {}) or {}).get("base_currency", "CAD")
-    shelter_word = _SHELTER_WORD[settings_country(cfg.get("settings"))]
+    country = settings_country(cfg.get("settings"))
+    # The country's currency when base_currency is unset, as run's
+    # _base() reads it (re-audit A2-1275: a US view said CAD).
+    base_cur = (cfg.get("settings", {}) or {}).get("base_currency") \
+        or home_currency(country)
+    shelter_word = _SHELTER_WORD[country]
+    from taxjson.lib.corp_actions import RULES_BY_COUNTRY, election_keys
+    own_keys = election_keys(country)
+    spin_options = [k for k, _ in RULES_BY_COUNTRY[country]["spinoff"].options]
     out: List[Dict[str, Any]] = []
     stale: List[Dict[str, Any]] = []
     for acct, acfg in sorted((cfg.get("accounts") or {}).items()):
@@ -229,7 +237,18 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
             why: List[str] = []
             if sheltered:
                 why.append(f"{shelter_word}: no tax effect")
-            if election in _FMV_ELECTIONS:
+            if election != "(none)" and election not in own_keys:
+                # Another country's election (a project switched from
+                # canada to usa keeps its rollover_s_86_1): `taxjson run`
+                # refuses it, so it is described as invalid here — never
+                # in the other country's law (re-audit A2-0725).
+                flags.append("WRONG-COUNTRY")
+                why.append(f"{election} is not an election of a "
+                           f"{display_name(country)} project — `taxjson "
+                           f"run` refuses it. Choose one: `taxjson elect "
+                           f"{acct} --set {eid}="
+                           f"<{'|'.join(spin_options)}>`.")
+            elif election in _FMV_ELECTIONS:
                 why.append(_FMV_ELECTIONS[election])
                 if not fmv_ps and not sheltered:
                     flags.append("ZERO-VALUE")
@@ -280,6 +299,26 @@ def spinoffs(root: Path, cfg: Dict[str, Any],
                 "flags": flags, "why": why})
     out.sort(key=lambda x: (x["date"] or "", x["account"]))
     return {"spinoffs": out, "stale": stale}
+
+
+def wrong_country_elections(root: Path, cfg: Dict[str, Any]
+                            ) -> List[Dict[str, str]]:
+    """Saved elections (any corporate action) the project's country does
+    not know — e.g. a Canadian rollover_s_86_1 left in a project switched
+    to usa. `taxjson run` stops on each; `taxjson elect --pending` lists
+    them so 'No pending elections' never hides one (re-audit A2-0725)."""
+    from taxjson.lib.corp_actions import election_keys
+    country = settings_country(cfg.get("settings"))
+    keys = election_keys(country)
+    out: List[Dict[str, str]] = []
+    for acct in sorted(cfg.get("accounts") or {}):
+        for eid, rec in sorted(_manifest(Path(root), acct).items()):
+            el = rec.get("election") or ""
+            if el and el not in keys:
+                out.append({"account": acct, "event_id": eid,
+                            "election": el,
+                            "summary": rec.get("summary") or ""})
+    return out
 
 
 def splits(root: Path, cfg: Dict[str, Any],

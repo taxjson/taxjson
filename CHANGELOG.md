@@ -9,12 +9,11 @@
   the country in work/.inputs_fingerprint.json, and `check-dates` now
   shows the run-state banner too (CA-CTRY-01 / US-CTRY-01; audit
   A2-0147).
-- The country-ownership tables own `--foreign-roc dividend` (a value-level
-  entry) and `--slip-gains`, so tax-logic's CTRY-02 lists them and the
-  refusals come from one place; `scripts/check_tax_rules.py` now checks
-  the tables (a reason for every owned entry, every flag defined by a
-  CLI and seen by the refusal helper, no flag refused for one country
-  outside them), as lib/country said it did (audit A2-0719).
+- `scripts/check_tax_rules.py` check 8 also fails on a source message
+  that refuses an option for one country ("--x ... is Canada-only")
+  when lib/country does not own it, and checks PLAN_COUNTRY's owners;
+  tax-logic's CTRY-02 lists `--foreign-roc dividend` (audit A2-0719,
+  merged with partD's table).
 - `taxjson run`'s native-currency (raw) pass checks the same actions as
   the engines' currency guard: an OPENING_BALANCE in another currency
   than its listing skips the raw view with a warning instead of stopping
@@ -78,6 +77,74 @@
   crypto accounts no longer applies the wash-sale rule to the coins: the
   books go to the ledger's no-wash crypto pass, as in a mixed project
   (US-WASH-13; audit A2-0146, A2-0411, A2-0412).
+- A message never cites the other country's law (re-audit partition
+  lists 07/08). taxjson-brokerage passes the project's country to the
+  parsers, which use it only to pick the citation: the Webull inferred
+  exercise/assignment note cites s.49(3)/(3.1) in Canada and Rev. Rul.
+  78-182 in a US project (and says "cost or proceeds"); the IB
+  share-for-share tender note names s.85.1 or a §354/§368
+  reorganization; Questrade's net-of-tax dividend and transfer-in
+  warnings name the T5/NR4 slip and the ACB in Canada, the 1099-DIV /
+  1042-S and cost basis in the US; RBC's rights note and IB's warrant
+  note follow suit, and the multi-account warnings say "sheltered
+  account". A US `.sum` names Form 8949 and basis (not Schedule 3 /
+  ACB), the audit's rounding note names the country's form, the books'
+  TRANSFER and short-history notes say wash-sale walk / basis /
+  retirement accounts, the run's crypto-sends note offers only self /
+  payment, and `taxjson carryover` names the IRS Schedule D carryover
+  (and not the Canadian option settings) instead of CRA.
+- `taxjson-harvest` and `taxjson-corp-actions` default `--base-currency`
+  to the country's currency (a US harvest refused the project's own USD
+  books). `taxjson spinoffs` labels amounts in the country's currency
+  when `base_currency` is unset, and flags a saved election of the other
+  country (a `rollover_s_86_1` left in a project switched to usa) as
+  WRONG-COUNTRY instead of describing it in Canadian law; `taxjson elect
+  --pending` lists such elections instead of "No pending elections".
+- tax-logic CA-RPT-12 cites s.49(3) for a call and s.49(3.1) for a put.
+- The generic importer is no longer documented as a crypto route: the
+  README, the mapping template and the importer no longer suggest
+  `settle_on_trade_date = true` for a crypto-only export (the coins were
+  booked as BTC.US / ETH.TO shares — Schedule 3 line 4, and §1091 in a
+  US project); coins go in a `crypto = true` account, and the importer
+  says so when the option is set.
+- Coinbase, US project (stablecoins are property): a fill priced in a
+  stablecoin (PYUSD, USDC ...) whose Notes carry no `on BASE-QUOTE` pair
+  no longer folds the stablecoin to USD cash and drops its disposal; the
+  row is booked as a crypto-quoted fill, or refused when Notes cannot
+  give the quantity.
+- Kraken ledger instant trade of a stablecoin for USD away from the peg
+  (USDC -> ZUSD at 0.90) now prints the de-peg ATTENTION the trades
+  export and Coinbase print, and the forex note names the stablecoin.
+- IB: a CNH (Stock Connect) fill printed in the ET evening takes the
+  exchange's next-day trade date, like JPY / HKD / SGD / AUD / NZD.
+- `scripts/check_tax_rules.py` checks the country-ownership tables stay
+  complete (owner and reason for every entry, every one-country flag a
+  real CLI option the refusal reads, every one-country command a
+  `taxjson` subcommand, every `[settings]` key the code reads listed,
+  and every option whose help says "Canada only" / "US only" in a
+  table). `--foreign-roc dividend` (ITA s.90(1)) and
+  `taxjson-carryover --slip-gains` (T5 box 18) are now in the tables.
+- `taxjson wash-sales --explain` in a US project passes
+  `--per-account-basis` explicitly, so the trace of the merged books
+  keeps FIFO per account like the table it explains.
+- Wash radar (Canada): rows that settle on the same day are replayed in
+  trade-date order, as the engine does — a Friday sale before a holiday
+  is no longer read as a loss against Monday's buy (A2-0443). A written
+  option's buy-back loss outside the gains files' year is exempt
+  (CA-SL-11) unless `option_buyback_loss_superficial = true` (A2-0442).
+- US wash radar / buy-check: a futures contract or an option on one is
+  outside §1091 (US-WASH-18) — no COOLING/BLOCKED re-entry date, buy-check
+  is no longer UNSAFE, and the futures-option note no longer speaks of
+  "shares" (A2-0435, A2-1343). After a short-cover loss a buy is not a
+  replacement (§1091(e)); the radar names a re-short instead (A2-0436,
+  A2-1369).
+- Radar wording: a US LOCKED row says how many shares the IRA bought and
+  what it holds now, not "still holds" (A2-0751, A2-0754); a position held
+  only in sheltered accounts names its recent purchase instead of "No
+  recent buys" (A2-1370).
+- sell-check relays the radar's warn-only flags (warrant, adjusted-series
+  call, futures option, US long call) on every verdict, and harvest stars
+  the ADVISORY cell and lists them (A2-0434, A2-0445, A2-1341).
 - Errors are one line, never a traceback, with one exit-code rule:
   2 for a named input or output that cannot be read or written, 1 for a
   command's finding, 130 for Ctrl-C, 141 for a closed stdout pipe
@@ -106,6 +173,63 @@
 - A second `taxjson run` in the same project refuses while one is in
   progress (it used to crash on the shared work/ file names).
 
+- Standalone `taxjson-t1135` says when it falls back to close timing
+  for written options (as `taxjson-gains` does), and `taxjson
+  find-missing-history --gen-phantoms` runs the gains engine with the
+  project's option timing and income dating (re-audit A2-1361).
+- `taxjson-ticker-map` summary mode no longer "maps" every `.US`
+  listing to `.TO` (a hard-coded CAD target, wrong beside a US project
+  and not a real listing in a Canadian one); it lists the symbols with
+  only their option-string normalisation (re-audit A2-1367).
+- An invalid `ric_january_dividends` / `corporate_distributions` entry
+  is refused with an example listing of the setting's own country
+  (XYZ.US for the US-only RIC list), and a bad `--ric-january-dividend`
+  flag is named as the flag, not as a `[settings]` key (re-audit
+  A2-1306).
+- `taxjson harvest` in a US project shows an IRA purchase made within
+  the window in SH_ADD even after the IRA sold it (an IRA buy washes a
+  loss for good whether or not it is still held), and the SH_ADD legend
+  states each country's own rule: in Canada only units the registered
+  account still holds 30 days after the sale deny the loss (re-audit
+  A2-1298, A2-1299).
+- In a US project the web holdings pages and the what-if basis note
+  describe the basis as FIFO per account before the wash-sale pass;
+  they used to cite the s.47 blend and the filing ACB (re-audit
+  A2-0755, A2-1250, A2-1300, A2-1327, A2-1339, A2-1353, A2-1374,
+  A2-1375, A2-1376).
+- Standalone `taxjson-brokerage` without `--country` books Kraken /
+  Coinbase USD stablecoins as property (the neutral answer, as a
+  foreign return of capital already defaults to a cost reduction) and
+  prints a note naming `--country`; it used to take Canada's US-dollar
+  cash model. Its help lists every choice `--country` makes (re-audit
+  A2-0742, A2-1238). `taxjson run` always passes the country.
+- RBC parse notes in a US project name Form 1099-DIV, basis and
+  §305/§307 for rights, not the fund's T3 (box 21 / 42), the ACB or ITA
+  s.15(1)(c); a Canada project's notes are unchanged and the booking is
+  the same in both (taxjson-brokerage --country picks the words; none
+  given: neutral words) (re-audit A2-0729, A2-0731, A2-0733, A2-0736,
+  A2-1254, A2-1309, A2-1313, A2-1314, A2-1315, A2-1321, A2-1344,
+  A2-1345, A2-1346, A2-1347).
+- Standalone `taxjson-reconcile-slips` requires `--country` (a missing
+  one silently meant Canada: CAD amounts and settlement-date year
+  scope), and `--date-basis` defaults to the country's (trade date for
+  the USA, so a Dec-31 sale is on its 1099-B year). In a US run the
+  notes and the currency refusal name the 1099-B, FIFO basis per
+  account and the project's own rates — never the T5008, its boxes,
+  the Bank of Canada or a blended ACB (re-audit A2-0423, A2-0744,
+  A2-0747, A2-0753, A2-1292, A2-1294, A2-1295, A2-1331, A2-1337,
+  A2-1348, A2-1349, A2-1350, A2-1351). `taxjson reconcile-slips` is
+  unchanged.
+- A `taxjson.toml` saved with a UTF-8 byte-order mark (Notepad) is read
+  by `find-missing-history`, `gains --suggest-phantoms`, `convert-tt`
+  and the wash radar the way `taxjson run` reads it; one that does not
+  parse stops those commands instead of being treated as "no project"
+  (which fell back to settle dates and guessed account types in a US
+  project) (re-audit A2-0419, A2-0424, A2-0429, A2-0430, A2-0438).
+- `taxjson crypto-sends` prices a send, and values the stablecoin pool,
+  with a rate from the send's day or the 5 days before it, as the
+  conversion stage does; an older rate (a January rate for a June send)
+  leaves it unpriced instead (re-audit A2-0414).
 - `taxjson redact` and the generate-parser privacy gate no longer lose a
   private-denylist pattern silently: a leading UTF-8 BOM is stripped,
   and a denylist that is UTF-16, not UTF-8, unreadable or a directory

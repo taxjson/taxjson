@@ -40,11 +40,13 @@ def _write(text):
     return Path(f.name)
 
 
-def parse(body, header=HDR):
-    """(transactions, stderr, parser) for a CSV body (newest-first)."""
+def parse(body, header=HDR, country=None):
+    """(transactions, stderr, parser) for a CSV body (newest-first);
+    `country` sets the notes' wording, as taxjson-brokerage does."""
     p = _write(header + body)
     err = io.StringIO()
     par = RbcBrokerage()
+    par.country = country
     try:
         with contextlib.redirect_stderr(err):
             txs = par.parse_file(p)
@@ -547,16 +549,24 @@ class TestAccountingAndSpinoffs(unittest.TestCase):
                          ('spinoff', 'GNX.US', 'GVX.US', 30.0, 120.0))
 
     def test_rights_are_a_noted_nil_cost_acquisition_and_expire(self):
-        txs, err, _ = parse(
+        body = (
             row("October 13, 2023", "Reorganization", "C099008", "", "-1", "", "0",
                 "CAD", f"EXP - RTS CONSTELLO SOFTWARE INC {RTS_EXP} {RTS_EXP} "
                 "AS OF 10/13/23 EXPIRED", settle="October 16, 2023")
             + row("September 8, 2023", "Reorganization", "CSX.RT", "", "1", "", "0",
                   "CAD", f"DIS - RTS CONSTELLO SOFTWARE INC {RTS_EXP} {RTS_EXP} "
                   "RTS DIST  ON       1 SHS REC 09/01/23 PAY 09/08/23"))
+        txs, err, _ = parse(body, country='canada')
         self.assertEqual({t['symbol'] for t in txs}, {'CSX.RT.TO'})
         self.assertAlmostEqual(position(txs, 'CSX.RT.TO'), 0.0)
         self.assertIn('15(1)(c)', err)
+        # The same rows in a US project: the same booking, US words
+        # (re-audit A2-1314: the test pinned the Canadian citation).
+        us_txs, us_err, _ = parse(body, country='usa')
+        self.assertEqual(us_txs, txs)
+        self.assertNotIn('ITA s.', us_err)
+        self.assertNotIn('ACB', us_err)
+        self.assertIn('§305', us_err)
 
 
 # ------------------------------------------------------ LOW + FEE + misc

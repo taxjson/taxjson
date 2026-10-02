@@ -416,6 +416,20 @@ class CoinbaseBrokerage(BaseBrokerage):
                                 f"does not book. Enter the "
                                 f"{crypto_quote} leg via a .tt file and "
                                 f"remove the row.")
+                if (crypto_quote is None and (is_buy or is_sell)
+                        and not is_staking and not self.stablecoins_as_cash
+                        and 'price currency' in header_map):
+                    # Property mode (a US project): a fill PRICED in a
+                    # stablecoin spends or receives that coin even when
+                    # Notes carries no 'on BASE-QUOTE' pair. Folding the
+                    # quote to USD cash dropped the stablecoin's
+                    # disposition (re-audit A2-0730); it is booked as a
+                    # crypto-quoted fill (or refused when Notes cannot
+                    # give its quantity).
+                    _pc = (self._col(row, header_map, 'price currency')
+                           or '').strip().upper()
+                    if _pc in _STABLECOINS and _pc != asset.upper():
+                        crypto_quote = _pc
                 if (asset.upper() in self._cash_coins
                         and (is_buy or is_sell) and not is_staking):
                     # "Bought 3495.67 USDC for 5000 CAD": fiat -> USD

@@ -38,7 +38,11 @@ date = "%Y-%m-%d"
 currency = "CAD"
 
 # [options]
-# settle_on_trade_date = true  # crypto-only export: no settlement cycle
+# settle_on_trade_date = true  # settle every trade on its trade date (the
+#                              # export's date is already settlement). Not
+#                              # for crypto: the generic importer books
+#                              # securities; coins go in a crypto = true
+#                              # account.
 
 # Optional: the real broker. `taxjson run` parses each named broker's
 # generic files on their own and the fees report shows them as

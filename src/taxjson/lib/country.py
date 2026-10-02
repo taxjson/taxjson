@@ -49,14 +49,17 @@ Checks built on the tables (each returns messages; the caller dies):
 - ``command_country_problem(command, country, variant=None)``.
 - ``project_file_problems(root, country)``.
 
-When a Phase-B fix adds a one-country setting, flag or command, add it
-to the table here (with a ``*_WHY`` reason and, in tax-logic, the rule
-that states it). ``scripts/check_tax_rules.py`` checks the tables are
-consistent (every owned entry has a reason, every flag is defined by a
-taxjson CLI, every command is a subcommand) and that no source file
-refuses a flag for one country outside them (a "--flag ... is
-Canada-only" / "does not apply with --country" message names a flag the
-table must own) — it cannot see a gate that says nothing.
+- ``FLAG_VALUE_COUNTRY``: one value of a two-country flag that belongs
+  to one country (``--foreign-roc dividend``: Canada).
+
+When a fix adds a one-country setting, flag or command, add it to the
+table here (with a ``*_WHY`` reason and, in tax-logic, the rule that
+states it); ``scripts/check_tax_rules.py`` checks the tables stay
+complete: every entry has a valid owner and a reason, every flag is a
+real CLI option that ``refuse_foreign_flags`` reads, every command is a
+``taxjson`` subcommand, every ``[settings]`` key the code reads is in
+``SETTING_COUNTRY``, and every CLI option whose help calls itself
+"Canada only" / "US only" is in a flag table.
 
 Test hook: ``check_engine_allowed(country)`` is called by both gains
 engines. When the environment variable ``TAXJSON_TEST_ENGINE_COUNTRY``
@@ -323,9 +326,6 @@ FLAG_COUNTRY: Dict[str, str] = {
     "--corporate-distribution": CANADA,
     "--ric-january-dividend": USA,
     "--slip-gains": CANADA,
-    # A value-level entry ("FLAG=VALUE"): only that value is one
-    # country's (audit A2-0719).
-    "--foreign-roc=dividend": CANADA,
 }
 
 FLAG_WHY: Dict[str, str] = {
@@ -339,11 +339,24 @@ FLAG_WHY: Dict[str, str] = {
     "--carrying-charges": "line 22100 of the Canadian return",
     "--corporate-distribution": "ITA s.104(13) trust income dating",
     "--ric-january-dividend": "IRC §852(b)(7) / §857(b)(9)",
-    "--slip-gains": "T5 box 18 capital-gains dividends, line 17400",
-    "--foreign-roc=dividend": "ITA s.90(1): a foreign issuer's return "
-                              "of capital taxed as a dividend; a US "
-                              "nondividend distribution lowers basis, "
-                              "§301(c)(2)",
+    "--slip-gains": "T5 box 18 capital-gains dividends (ITA s.130.1(4) / "
+                    "s.131(1)); US fund capital-gain distributions are "
+                    "not modelled",
+}
+
+# One VALUE of a two-country flag that belongs to one country: the flag
+# itself means the same in both (how a foreign issuer's return of
+# capital is booked), but "dividend" is ITA s.90(1) (re-audit A2-0719).
+FLAG_VALUE_COUNTRY: Dict[tuple, str] = {
+    ("--foreign-roc", "dividend"): CANADA,
+}
+
+FLAG_VALUE_WHY: Dict[tuple, str] = {
+    ("--foreign-roc", "dividend"): "ITA s.90(1): a non-resident "
+                                   "corporation's distribution is a "
+                                   "dividend; a US filer's nondividend "
+                                   "distribution lowers basis "
+                                   "(§301(c)(2))",
 }
 
 # `taxjson` subcommands (or command:variant) owned by one country.
@@ -477,17 +490,21 @@ def flag_country_problems(country: str, given: Mapping[str, Any], *,
     for flag, val in given.items():
         if val in (None, False, "") or val == []:
             continue
-        # The flag itself, or one of its values ("--foreign-roc=dividend").
-        for key in (flag, f"{flag}={val}" if isinstance(val, str)
-                    else None):
-            owner = FLAG_COUNTRY.get(key) if key else None
-            if owner is None or owner == c:
-                continue
-            shown = key.replace("=", " ")
-            out.append(f"{tool + ': ' if tool else ''}{shown} is "
-                       f"{DISPLAY_NAME[owner]}-only "
-                       f"({FLAG_WHY.get(key, '')}); it does not apply "
-                       f"to country {c}")
+        vkey = (flag, val) if isinstance(val, str) else None
+        if vkey in FLAG_VALUE_COUNTRY:
+            vowner = FLAG_VALUE_COUNTRY[vkey]
+            if vowner != c:
+                out.append(f"{tool + ': ' if tool else ''}{flag} {val} is "
+                           f"{DISPLAY_NAME[vowner]}-only "
+                           f"({FLAG_VALUE_WHY.get(vkey, '')}); it does "
+                           f"not apply to country {c}")
+            continue
+        owner = FLAG_COUNTRY.get(flag)
+        if owner is None or owner == c:
+            continue
+        out.append(f"{tool + ': ' if tool else ''}{flag} is "
+                   f"{DISPLAY_NAME[owner]}-only ({FLAG_WHY.get(flag, '')}); "
+                   f"it does not apply to country {c}")
     return out
 
 
@@ -567,8 +584,8 @@ _FLAG_ATTRS = {"--option-premium-timing": "option_premium_timing",
 
 
 def given_flags(args) -> Dict[str, Any]:
-    """{flag: value} of the FLAG_COUNTRY flags an argparse Namespace
-    carries (absent attributes are None)."""
+    """{flag: value} of the FLAG_COUNTRY / FLAG_VALUE_COUNTRY flags an
+    argparse Namespace carries (absent attributes are None)."""
     return {flag: getattr(args, attr, None)
             for flag, attr in _FLAG_ATTRS.items()}
 
