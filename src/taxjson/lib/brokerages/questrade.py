@@ -221,6 +221,11 @@ class QtAccountContext:
     timelines: Dict[str, List[Tuple[str, float]]]
     messages: List[str] = field(default_factory=list)
     emitted: bool = False
+    # Reversal pairing across ALL of the account's exports (see
+    # _plan_qt_reversals): file -> line numbers of originals a reversal
+    # cancels (every overlapping copy), and of the reversals paired.
+    rev_drop: Dict[str, set] = field(default_factory=dict)
+    rev_paired: Dict[str, set] = field(default_factory=dict)
 
     def emit(self) -> None:
         if self.emitted:
@@ -284,7 +289,99 @@ def build_qt_account_context(paths, *, helper=None) -> QtAccountContext:
     for tl in ctx.timelines.values():
         tl.sort(key=lambda e: (e[0], -e[1]))
     _detect_qt_ticker_changes(ctx, by_name, where)
+    _plan_qt_reversals(ctx, helper)
     return ctx
+
+
+def _qt_reversal_kind(row, helper) -> Optional[Tuple[tuple, bool, str]]:
+    """(key, is_reversal, date) of a stock-dividend / cash-in-lieu / DRIP
+    row the parser pairs with its reversal (the same classification as
+    parse_file), else None. Unparseable cells -> None (parse_file names
+    the row)."""
+    action = _canon_action(row.get('Action'))
+    act = (row.get('Activity Type') or '').strip()
+    desc = row.get('Description') or ''
+    sym = (row.get('Symbol') or '').strip().lstrip('.').upper()
+    try:
+        qty = parse_strict_number(row.get('Quantity'), field='Quantity',
+                                  allow_blank=True, blank=0.0)
+        net = parse_strict_number(row.get('Net Amount'), field='Net Amount',
+                                  allow_blank=True, blank=0.0)
+    except BrokerageParseError:
+        return None
+    dt = helper.parse_date((row.get('Transaction Date') or '').strip(),
+                           *_DATE_FMTS)
+    if dt is None:
+        return None
+    date = dt.strftime('%Y-%m-%d')
+    if helper._is_stock_split(action, act, desc) \
+            and not helper._is_cash_only(row):
+        return None
+    if action == 'DIS' and _STK_DIV_RE.search(desc) and abs(qty) > 1e-9:
+        return ('STK DIV', sym, round(abs(qty), 6), 0.0), qty < 0, date
+    if action == 'CIL' and _CIL_RE.search(desc):
+        frac = float(_CIL_RE.search(desc).group(1))
+        if frac <= 0 or abs(net) <= 0:
+            return None
+        return ('CIL', sym, round(frac, 6), round(abs(net), 2)), net < 0, date
+    if action == 'REI' or act == 'Dividend reinvestment':
+        if abs(qty) <= 1e-12 or abs(net) < 0.005 or (qty > 0) == (net > 0):
+            return None
+        return (('REI', sym, round(abs(qty), 6), round(abs(net), 2)),
+                qty < 0, date)
+    return None
+
+
+def _plan_qt_reversals(ctx: QtAccountContext, helper) -> None:
+    """Pair every CIL / REI / stock-dividend reversal with its original
+    across ALL of the account's exports (re-audit A2-0026, A2-0280,
+    A2-0281, A2-0616, A2-1055). Per file, an overlapping older download
+    kept the original the newer one reversed (phantom shares), and a
+    reversal whose original sat in last year's export refused the whole
+    account. A row in two overlapping downloads is ONE broker row (its
+    copies are counted per file, as RBC's overlap plan does); a reversal
+    cancels the latest original of the same security, quantity and
+    amount on or before its own date (re-audit A2-1063), and every copy
+    of both rows drops out."""
+    # content key -> per file: [line numbers]
+    copies: Dict[tuple, Dict[str, List[int]]] = {}
+    meta: Dict[tuple, Tuple[tuple, bool, str]] = {}
+    for k in ctx.files:
+        for lineno, row in _read_qt_rows(Path(k)):
+            kind = _qt_reversal_kind(row, helper)
+            if kind is None:
+                continue
+            ck = (kind[2], _canon_action(row.get('Action')),
+                  (row.get('Symbol') or '').strip().upper(),
+                  ' '.join((row.get('Description') or '').split()).upper(),
+                  (row.get('Quantity') or '').strip(),
+                  (row.get('Net Amount') or '').strip(),
+                  (row.get('Account #') or '').strip())
+            copies.setdefault(ck, {}).setdefault(k, []).append(lineno)
+            meta[ck] = kind
+    # Logical events: copy i of a content key = the i-th occurrence in
+    # every file that has one.
+    events = []           # (date, is_rev, key, ck, i)
+    for ck, per in copies.items():
+        key, is_rev, date = meta[ck]
+        for i in range(max(len(v) for v in per.values())):
+            events.append((date, is_rev, key, ck, i))
+    events.sort(key=lambda e: (e[0], e[1]))
+    open_orig: Dict[tuple, List[tuple]] = {}
+    for date, is_rev, key, ck, i in events:
+        if not is_rev:
+            open_orig.setdefault(key, []).append((date, ck, i))
+            continue
+        cands = [e for e in open_orig.get(key, []) if e[0] <= date]
+        if not cands:
+            continue                     # unpaired: parse_file refuses it
+        hit = cands[-1]
+        open_orig[key].remove(hit)
+        for (ock, oi), bucket in (((hit[1], hit[2]), ctx.rev_drop),
+                                  ((ck, i), ctx.rev_paired)):
+            for f, lines in copies[ock].items():
+                if oi < len(lines):
+                    bucket.setdefault(f, set()).add(lines[oi])
 
 
 def _detect_qt_ticker_changes(ctx: QtAccountContext, by_name, where) -> None:
@@ -564,6 +661,7 @@ class QuestradeBrokerage(BaseBrokerage):
         # lone file gets a context of its own.
         path = Path(path)
         self._qt_name = path.name
+        self._qt_path = path
         self._ambiguous_warned: set = set()
         self._code_warned: set = set()
         self.lint_findings: List[str] = []
@@ -611,6 +709,11 @@ class QuestradeBrokerage(BaseBrokerage):
         # the end of the parse (the export may list newest first).
         rev_originals: Dict[tuple, List[List[Dict[str, Any]]]] = {}
         reversals: List[tuple] = []
+        # id(original leg group) -> its line (the account-wide plan
+        # names originals by line); stock-dividend notes printed only
+        # for the ones a reversal does not cancel (re-audit A2-1060).
+        self._orig_line: Dict[int, int] = {}
+        sd_notes: List[tuple] = []
         self._rows_seen = 0
         for lineno, row in rows:
             self._rows_seen += 1
@@ -695,11 +798,6 @@ class QuestradeBrokerage(BaseBrokerage):
                     # diluted the ACB (audit R1-65).
                     reversals.append((sd_key, lineno, desc))
                     continue
-                print(f"NOTE: {sym_raw}: stock dividend of {qty:g} "
-                      f"share(s) on {date} booked as a stock-dividend "
-                      f"event — the gains run applies your country's "
-                      f"rule to its cost (`taxjson tax-logic`).",
-                      file=sys.stderr)
                 sd_tx = {
                     'action': 'BUYSELL',
                     'date': date, 'time': '09:30:00',
@@ -713,7 +811,15 @@ class QuestradeBrokerage(BaseBrokerage):
                     'type': STOCK_DIVIDEND,
                 }
                 transactions.append(sd_tx)
-                rev_originals.setdefault(sd_key, []).append([sd_tx])
+                _grp = [sd_tx]
+                rev_originals.setdefault(sd_key, []).append(_grp)
+                self._orig_line[id(_grp)] = lineno
+                sd_notes.append((sd_tx,
+                                 f"NOTE: {sym_raw}: stock dividend of "
+                                 f"{qty:g} share(s) on {date} booked as a "
+                                 f"stock-dividend event — the gains run "
+                                 f"applies your country's rule to its cost "
+                                 f"(`taxjson tax-logic`)."))
                 continue
 
             if action_raw == 'DIV' or activity_type == 'Dividends':
@@ -1117,6 +1223,10 @@ class QuestradeBrokerage(BaseBrokerage):
             if is_expired and not is_assigned:
                 expiries.append(_tx)
         self._pair_reversals(transactions, rev_originals, reversals)
+        _kept = {id(t) for t in transactions}
+        for _tx, _msg in sd_notes:
+            if id(_tx) in _kept:
+                print(_msg, file=sys.stderr)
         self.clamp_settlement_to_expiry(transactions, expiries)
         self.disambiguate_split_fills(transactions)
         if ca_legs:
@@ -1281,27 +1391,36 @@ class QuestradeBrokerage(BaseBrokerage):
              'net_amount': cash, 'gross_amount': cash},
         ]
         rev_originals.setdefault(key, []).append(legs)
+        self._orig_line[id(legs)] = lineno
         return legs
 
     def _pair_reversals(self, transactions, rev_originals, reversals):
-        """Each CIL/REI reversal row cancels one original with the same
-        symbol, quantity and amount: both drop out. A reversal whose
-        original is not in this file is REFUSED — booking it would
-        either duplicate the event (the old abs()) or invent one."""
-        drop = set()
+        """Each CIL/REI/stock-dividend reversal row cancels one original
+        with the same symbol, quantity and amount: both drop out. The
+        pairing is planned across ALL of the account's exports
+        (_plan_qt_reversals): an original in last year's export is
+        cancelled there, and every overlapping copy of it drops out. A
+        reversal whose original is in no export of the account is
+        REFUSED — booking it would either duplicate the event (the old
+        abs()) or invent one."""
+        key_f = str(self._qt_path.resolve())
+        paired = self._ctx.rev_paired.get(key_f, set())
+        dropped = self._ctx.rev_drop.get(key_f, set())
         for key, lineno, desc in reversals:
-            groups = rev_originals.get(key) or []
-            if not groups:
+            if lineno not in paired:
                 kind, sym, qty, amt = key
                 raise BrokerageParseError(
                     f"{self._where(lineno)}: a {kind} reversal "
                     f"({sym} {qty:g}, {amt:,.2f}; {desc[:50]!r}) whose "
-                    f"original {kind} row is not in this file — refusing "
-                    f"to book it as a second event. If the original is "
-                    f"in an earlier export, delete both rows (they "
-                    f"cancel) or book the correction in a .tt file.")
-            for leg in groups.pop():
-                drop.add(id(leg))
+                    f"original {kind} row (on or before it) is in no "
+                    f"export of this account — refusing to book it as a "
+                    f"second event. Add the export that holds the "
+                    f"original, or book the correction in a .tt file.")
+        drop = set()
+        for groups in rev_originals.values():
+            for grp in groups:
+                if self._orig_line.get(id(grp)) in dropped:
+                    drop.update(id(leg) for leg in grp)
         if drop:
             transactions[:] = [t for t in transactions
                                if id(t) not in drop]
@@ -1393,7 +1512,9 @@ class QuestradeBrokerage(BaseBrokerage):
             'account': self.DEFAULT_ACCOUNT,
             'description': desc,
         }
-        rev_originals.setdefault(key, []).append([tx])
+        _grp = [tx]
+        rev_originals.setdefault(key, []).append(_grp)
+        self._orig_line[id(_grp)] = lineno
         return tx
 
     @staticmethod

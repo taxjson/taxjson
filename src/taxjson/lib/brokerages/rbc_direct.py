@@ -855,6 +855,11 @@ class RbcAccountContext:
     # file → ids of its reorganization legs that belong to an event
     # booked from ANOTHER file of the account (the removal's file)
     foreign_legs: Dict[str, set] = field(default_factory=dict)
+    # Reinvestment reversals paired across ALL of the account's files
+    # (_plan_reinvest_reversals): ids of the REI rows a CANCEL cancels,
+    # and of the CANCEL rows paired.
+    rei_drop: set = field(default_factory=set)
+    rei_paired: set = field(default_factory=set)
 
     def rows(self, key: str) -> List['RbcRow']:
         dup = self.duplicate_of.get(key, {})
@@ -1031,7 +1036,33 @@ def build_rbc_account_context(paths, *, helper=None) -> RbcAccountContext:
         for li in per.values():
             li.finish()
     _detect_ticker_changes(ctx, helper)
+    _plan_reinvest_reversals(ctx, chrono)
     return ctx
+
+
+def _plan_reinvest_reversals(ctx: RbcAccountContext, chrono) -> None:
+    """Each reversed reinvestment (REI with Quantity < 0, Value > 0)
+    cancels the latest REI of the same symbol, units and cash on or
+    before its date in ANY of the account's files (re-audit A2-1044 /
+    A2-1048): the original in December's export and its CANCEL in
+    January's was refused, and with an overlapping download the result
+    depended on file order (the full file's REI was the skipped copy)."""
+    opened: Dict[tuple, List] = {}
+    for _fi, r in chrono:
+        if r.cls != 'reinvest' or abs(r.qty) < 1e-12 \
+                or abs(r.value) < 0.005 or (r.qty > 0) == (r.value > 0):
+            continue
+        key = (r.symbol.strip().upper(), r.currency, round(abs(r.qty), 6),
+               round(abs(r.value), 2))
+        if r.qty > 0:
+            opened.setdefault(key, []).append(r)
+            continue
+        cands = [o for o in opened.get(key, []) if o.date <= r.date]
+        if cands:
+            hit = cands[-1]
+            opened[key].remove(hit)
+            ctx.rei_drop.add(id(hit))
+            ctx.rei_paired.add(id(r))
 
 
 def _plan_overlaps(ctx: RbcAccountContext, name_of: Dict[str, str]) -> None:
@@ -1226,6 +1257,7 @@ class RbcBrokerage(BaseBrokerage):
         path = Path(path)
         self._fname = path.name
         self.lint_findings: List[str] = []
+        self.zero_tx_reason = None
         key = str(path.resolve())
         ctx = self.account_context
         if ctx is None or key not in ctx.exports:
@@ -1250,7 +1282,6 @@ class RbcBrokerage(BaseBrokerage):
         self._occ_own = ctx.occ_own
         self._untraded_income: Dict[str, set] = {}
         self._listing_warned: set = set()
-        self._rei_originals: Dict[tuple, List[Dict[str, Any]]] = {}
         self._rei_reversals: List[tuple] = []
 
         pairing = ctx.pairings[key]
@@ -1364,6 +1395,18 @@ class RbcBrokerage(BaseBrokerage):
                 f"`taxjson run`, run it on this file too — do not also "
                 f"enter the shares in a .tt file (that books them twice).")
 
+        if not transactions:
+            # Every row is a copy of a row in an overlapping download,
+            # or a leg/reinvestment booked or cancelled from another
+            # export of the account: the file is covered, not broken —
+            # not taxjson-brokerage's 0-transactions WARNING (re-audit
+            # A2-0269: it failed `run --strict` on correct books).
+            elsewhere = set(ctx.foreign_legs.get(key, set())) \
+                | ctx.rei_drop | ctx.rei_paired
+            if dups or any(id(r) in elsewhere for r in rows):
+                self.zero_tx_reason = (
+                    f"all of its rows are in the account's other RBC "
+                    f"export(s) ({', '.join(sorted(set(dups.values()))) or 'booked there'})")
         self._report_untraded_income()
         self._check_emitted_symbols(transactions)
         self.clamp_settlement_to_expiry(transactions, expiries)
@@ -1906,23 +1949,20 @@ class RbcBrokerage(BaseBrokerage):
 
     def _pair_reinvest_reversals(self, transactions) -> None:
         """Each reversed reinvestment (Quantity < 0, Value > 0) cancels
-        one reinvestment of the same units and cash in this file: both
-        drop out. abs() booked the reversal as a SECOND purchase (audit
-        R1-83). A reversal with no original is refused."""
-        drop = set()
-        for key, r in self._rei_reversals:
-            origs = self._rei_originals.get(key) or []
-            if not origs:
+        one reinvestment of the same units and cash, in ANY file of the
+        account (planned in _plan_reinvest_reversals; the original was
+        not booked in its file): both drop out. abs() booked the
+        reversal as a SECOND purchase (audit R1-83). A reversal with no
+        original in the account's files is refused."""
+        for _key, r in self._rei_reversals:
+            if id(r) not in self._ctx.rei_paired:
                 raise _err(Path(self._fname), r.line,
                            f"a reversed reinvestment ({r.label()}) whose "
-                           f"original REI row is not in this file — "
-                           f"refusing to book it as a second purchase. "
-                           f"Delete both rows if the original is in an "
-                           f"earlier export, or book the correction in a "
-                           f".tt file.")
-            drop.add(id(origs.pop()))
-        if drop:
-            transactions[:] = [t for t in transactions if id(t) not in drop]
+                           f"original REI row (on or before it) is in no "
+                           f"RBC export of this account — refusing to book "
+                           f"it as a second purchase. Add the export that "
+                           f"holds the original, or book the correction in "
+                           f"a .tt file.")
 
     def _build_rights(self, r):
         """Rights/warrants distributed to every shareholder ("DIS - RTS
@@ -1967,6 +2007,8 @@ class RbcBrokerage(BaseBrokerage):
         if r.qty < 0:
             self._rei_reversals.append((rei_key, r))
             return []
+        if id(r) in self._ctx.rei_drop:
+            return []         # cancelled by a reversal (any file)
         self.check_settle_order(r.date, r.settle, where=self._at(r),
                                 what=repr(r.desc[:50]))
         m = _RBC_REINV_PRICE_RE.search(r.desc)
@@ -1985,7 +2027,6 @@ class RbcBrokerage(BaseBrokerage):
             'gross_amount': self.theoretical_gross(qty, price, is_option=False),
             'account': self.DEFAULT_ACCOUNT, 'description': r.desc,
         }
-        self._rei_originals.setdefault(rei_key, []).append(tx)
         return [tx]
 
     def _build_book_adjust(self, r):

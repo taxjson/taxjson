@@ -372,5 +372,129 @@ class TestOneExportManyAccounts(unittest.TestCase):
         self.assertFalse(any("RBC accounts" in ln for ln in _attention(err)))
 
 
+def _stk(td, qty, sym="XTD.TO", cur="CAD"):
+    return q(td=td, action="DIS", sym=sym,
+             desc="XTD SPLIT CORP STK DIV ON 1000 SHS", qty=str(qty),
+             price="0", gross="0", comm="0", net="0", cur=cur,
+             act="Dividends")
+
+
+def _rei(td, qty, net, sym="QZF.TO"):
+    return q(td=td, action="REI", sym=sym, desc="QZF FUND REINV@C$8.34",
+             qty=str(qty), price="0", gross="0", comm="0", net=str(net),
+             cur="CAD", act="Dividend reinvestment")
+
+
+def _qbuy(sym, qty, price, td="2025-01-06"):
+    g = qty * price
+    return q(td=td, sym=sym, desc=f"{sym} WE ACTED AS AGENT", qty=str(qty),
+             price=str(price), gross=f"{-g:.2f}", comm="0", net=f"{-g:.2f}",
+             cur="CAD")
+
+
+def _held(txs):
+    pos = {}
+    for t in txs:
+        if t["action"] in ("BUYSELL", "ASSIGN"):
+            pos[t["symbol"]] = round(pos.get(t["symbol"], 0) + t["quantity"], 6)
+    return {k: v for k, v in pos.items() if v}
+
+
+class TestQtReversalsAcrossExports(unittest.TestCase):
+    """A2-0026, A2-0280, A2-0281, A2-0616, A2-1055, A2-1060, A2-1063:
+    Questrade CIL / REI / stock-dividend reversals pair across all of an
+    account's exports, overlap copies included."""
+
+    def test_overlapping_exports_stock_dividend_reversed_and_reposted(self):
+        h1 = _qbuy("XTD.TO", 1000, 5) + _stk("2025-03-05", 150)
+        fy = (_qbuy("XTD.TO", 1000, 5) + _stk("2025-03-05", 150)
+              + _stk("2025-03-20", -150) + _stk("2025-03-20", 100))
+        txs, err, _ = qt_parse(h1, fy)
+        # Both files' buys come through (taxjson-sort dedups the copy);
+        # neither copy of the reversed +150 does.
+        self.assertEqual(sorted(t["quantity"] for t in txs
+                                if t.get("type") == "stock_dividend"),
+                         [100.0], err)
+
+    def test_overlapping_exports_drip_reversed_in_the_newer(self):
+        old = _qbuy("QZF.TO", 100, 8) + _rei("2025-06-30", 3, -25.02)
+        new = (_qbuy("QZF.TO", 100, 8) + _rei("2025-06-30", 3, -25.02)
+               + _rei("2025-07-10", -3, 25.02))
+        txs, err, _ = qt_parse(old, new)
+        self.assertFalse([t for t in txs if t["quantity"] == 3.0], err)
+
+    def test_original_in_last_years_export(self):
+        y25 = _qbuy("QZF.TO", 100, 8) + _rei("2025-12-30", 3, -25.02)
+        y26 = _rei("2026-01-05", -3, 25.02)
+        txs, err, _ = qt_parse(y25, y26)
+        self.assertEqual(_held(txs), {"QZF.TO": 100.0}, err)
+
+    def test_reversal_with_no_original_is_still_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        with self.assertRaises(BrokerageParseError):
+            qt_parse(_qbuy("QZF.TO", 100, 8), _rei("2026-01-05", -3, 25.02))
+
+    def test_reversed_stock_dividend_has_no_note_and_keeps_the_later_one(self):
+        body = (_qbuy("XTD.TO", 1000, 5) + _stk("2025-03-05", 2)
+                + _stk("2025-03-10", -2) + _stk("2025-06-05", 2))
+        txs, err, _ = qt_parse(body)
+        sd = [t for t in txs if t.get("type") == "stock_dividend"]
+        self.assertEqual([t["date"] for t in sd], ["2025-06-05"], err)
+        self.assertNotIn("on 2025-03-05 booked", err)
+        self.assertIn("on 2025-06-05 booked", err)
+
+
+
+class TestRbcReinvestReversalsAcrossExports(unittest.TestCase):
+    """A2-1044 / A2-1048: an RBC REI CANCEL pairs with its REI in any of
+    the account's exports, whatever the file order with an overlap."""
+    REI = row("December 30, 2025", "Dividends", "SRU.UN", "SMARTCENTRES",
+              "2", "", "-64.48", "CAD", "REI - SMARTCENTRES REINV@C$32.24")
+    CXL = row("January 5, 2026", "Dividends", "SRU.UN", "SMARTCENTRES",
+              "-2", "", "64.48", "CAD",
+              "REI - SMARTCENTRES REINV@C$32.24 CANCEL")
+    BUY = row("March 3, 2025", "Buy", "SRU.UN", "SMARTCENTRES", "110",
+              "25.00", "-2759.95", "CAD", "SMARTCENTRES UNSOLICITED")
+
+    def test_original_in_the_other_export(self):
+        txs, err, _ = parse_files({"rbc_2025.csv": self.REI + self.BUY,
+                                   "rbc_2026.csv": self.CXL})
+        self.assertEqual(_held(txs), {"SRU.UN.TO": 110.0}, err)
+
+    def test_overlap_in_either_order(self):
+        early = self.REI + self.BUY
+        full = self.CXL + self.REI + self.BUY
+        for files in ({"a_early.csv": early, "b_full.csv": full},
+                      {"a_full.csv": full, "b_early.csv": early}):
+            txs, err, _ = parse_files(files)
+            self.assertEqual(_held(txs), {"SRU.UN.TO": 110.0},
+                             (sorted(files), err))
+
+    def test_fully_overlapped_file_is_not_a_zero_row_failure(self):
+        # A2-0269: every row of the older download is in the newer one
+        # (which also cancels the REI): --strict refused correct books.
+        buy = row("March 3, 2025", "Buy", "SRQ.UN", "SRQ REIT", "100", "30",
+                  "-3009.95", "CAD", "SRQ REIT UNSOLICITED DA")
+        rei = row("April 18, 2025", "Dividends", "SRQ.UN", "SRQ REIT", "2",
+                  "", "-64.48", "CAD", "REI - SRQ REIT REINV@C$32.24")
+        cxl = row("April 22, 2025", "Dividends", "SRQ.UN", "SRQ REIT", "-2",
+                  "", "64.48", "CAD", "REI - SRQ REIT REINV@C$32.24 CANCEL")
+        with tempfile.TemporaryDirectory() as d:
+            p = _project(Path(d) / "p", 2025,
+                         {"rbc_older.csv": HDR + buy + rei,
+                          "rbc_newer.csv": HDR + buy + rei + cxl})
+            r = _cli_run(p, "run", "--no-input", "--strict")
+            out = r.stdout + r.stderr
+            self.assertEqual(r.returncode, 0, out)
+            self.assertNotIn("parsed to 0 transactions", out)
+            lst = _cli_run(p, "list")
+        self.assertRegex(lst.stdout, r"SRQ\.UN\.TO\s+100\s")
+
+    def test_no_original_anywhere_is_refused(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        with self.assertRaises(RbcFormatError):
+            parse_files({"rbc_2026.csv": self.CXL})
+
+
 if __name__ == "__main__":
     unittest.main()

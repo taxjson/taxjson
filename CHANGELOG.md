@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Questrade / RBC: reversals pair across all of an account's exports.**
+  A Questrade stock-dividend, cash-in-lieu or DRIP reversal (and an RBC
+  REI CANCEL) cancelled its original only inside its own file: with an
+  overlapping older download the original came back as phantom shares
+  (H1 + full-year exports booked 1,250 shares for 1,100), and an
+  original in last year's export refused the whole account. The
+  pairing is now planned over every export of the account, counting
+  overlap copies once; a reversal cancels the latest original on or
+  before its date (a later identical stock dividend survives), a
+  reversed stock dividend no longer prints its 'booked' note, and an
+  RBC file whose rows all live in the account's other export is no
+  longer a '0 transactions' warning that failed `run --strict`
+  (re-audit A2-0026, A2-0269, A2-0280, A2-0281, A2-0616, A2-1044,
+  A2-1048, A2-1055, A2-1060, A2-1063).
 - **Questrade / RBC: one export holding several broker accounts.** A
   Questrade file whose Account Type puts a registered plan's rows in a
   taxable account (or a taxable account's rows in a registered one) is
