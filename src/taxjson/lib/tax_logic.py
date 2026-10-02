@@ -1391,6 +1391,12 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "ANOTHER security (another class) paid as a stock "
                  "dividend are not booked: the parse says UNBOOKED; enter "
                  "them and the §307 basis split by hand.", cont=True),
+            Rule("US-STKDIV-03",
+                 "A stock dividend with no shares held (sold before the "
+                 "pay date, or missing history) is booked as a $0 lot "
+                 "with a warning — still not a wash-sale replacement; "
+                 "the §307 basis split reaches the sold lots, so adjust "
+                 "their basis by hand (.tt ADJUST rows).", cont=True),
         ]),
         ("Wash sales (§1091)", [
             Rule("US-WASH-01",
@@ -1419,6 +1425,13 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "The disallowed loss is added to the replacement lot's "
                  "basis"),
             Rule("US-WASH-10", "and its holding period carries over.",
+                 cont=True),
+            Rule("US-WASH-20",
+                 "Replacements match in the order acquired (Reg. "
+                 "§1.1091-1(c)); purchases at the same moment go to your "
+                 "taxable accounts first, then IRAs, then affiliated "
+                 "accounts, then in the export's row order (accounts in "
+                 "taxjson.toml order) — never by the account's name.",
                  cont=True),
             Rule("US-WASH-11",
                  "A replacement bought in an IRA makes it permanent, even "

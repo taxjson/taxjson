@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- US tax-logic states the same-moment replacement order (taxable
+  accounts, then IRAs, then affiliated, then row order — never the
+  account's name; US-WASH-20) and the $0-lot fallback for a stock
+  dividend with no shares held, which is never a wash-sale replacement
+  (US-STKDIV-03) (re-audit A2-0485, A2-1486).
 - tax-logic states rules the code already applies: a US project keeps
   sheltered (IRA) accounts out of Form 8949 and the totals (US-
   BASIS-07); the T1135 test covers these books only and the $250,000
