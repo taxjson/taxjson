@@ -184,6 +184,8 @@ def _ownership(country: str) -> List[Rule]:
     cmds = sorted(_C.owners(_C.COMMAND_COUNTRY, other))
     flags = sorted(_C.owners(_C.FLAG_COUNTRY, other))
     files = sorted(_C.owners(_C.PROJECT_FILE_COUNTRY, other))
+    plans = [k for k in _C.PLAN_COUNTRY
+             if _C.PLAN_COUNTRY[k] == other]
 
     def _cmd(c: str) -> str:
         name, _, var = c.partition(":")
@@ -203,6 +205,9 @@ def _ownership(country: str) -> List[Rule]:
     if flags:
         parts.append("the flag" + ("s " if len(flags) > 1 else " ")
                      + ", ".join(flags))
+    if plans:
+        parts.append(f"the {other_name} account plans ([accounts.X] "
+                     f"plan = " + ", ".join(plans) + ")")
     if files:
         parts.append(f"the {other_name}-only project file"
                      + ("s " if len(files) > 1 else " ")

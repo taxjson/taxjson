@@ -1326,7 +1326,11 @@ Lints the whole project for placement mistakes the pipeline can see:
 Registered-plan kinds are inferred from a plan word that is a whole token
 of the account name (`tfsa`, `rrsp2`, `my-tfsa`; not `admiral`); override
 per account with `plan = "tfsa"` in `taxjson.toml` when a name doesn't say
-(an unknown `plan` value is warned about and ignored). An option counts as
+(an unknown `plan` value is warned about and ignored). Plans belong to one
+country: Canada tfsa, rrsp, rrif, lira, lif, lrif, fhsa, resp, rdsp, prpp;
+the US ira, roth, 401k, 403b, 457b, sep, hsa, 529 (plus `taxable` /
+`sheltered` in both). The other country's plan is refused, and a plan that
+contradicts the account's `type` is warned about — the type decides. An option counts as
 a sighting of its underlying's listing for MAP-GAP / US-LISTING. Exit 1 when findings exist, 0 on a clean scan — cron-friendly.
 
 ### Tax-loss harvesting (`taxjson harvest`)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `[accounts.X] plan` kinds belong to one country (lib/country
+  PLAN_COUNTRY): the other country's plan is refused (CA-CTRY-02 /
+  US-CTRY-02), US `hsa`, `403b`, `457b`, `sep`, `529` and Canadian `lif`,
+  `lrif`, `rdsp`, `prpp` are known, the "did you mean" hint names only
+  the project country's plans, and a registered plan on a taxable account
+  is warned about (the scan treats it as taxable) (audit A2-0739,
+  A2-1272, A2-1332).
 - US projects' `roc-sum` (and the roc/roc-sum help), `divs-sum`,
   `trades-sum`, `leaps` / `leaps-sum` / `ccd-sum`, `audit` and
   `missing-history` name basis, Form 1099-DIV (box 3 for nondividend

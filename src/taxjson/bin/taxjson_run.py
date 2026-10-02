@@ -943,10 +943,21 @@ def validate_config(cfg: Dict[str, Any],
         _plan = acfg.get("plan")
         if _plan is not None and str(_plan).strip().lower() \
                 not in _PLAN_KINDS:
+            # Name and suggest only the project's own country's plans
+            # (a US 'hsa' was offered Canada's 'fhsa'; A2-1272).
+            try:
+                _pk = _plan_kinds(_country(cfg.get("settings") or {}))
+            except SystemExit:
+                _pk = list(_PLAN_KINDS)
             warnings.append(
                 f"[accounts.{name}] plan {_plan!r} is not a known plan "
-                f"kind ({' | '.join(_PLAN_KINDS)}) and is ignored"
-                f"{_suggest(str(_plan).strip().lower(), _PLAN_KINDS)}")
+                f"kind ({' | '.join(_pk)}) and is ignored"
+                f"{_suggest(str(_plan).strip().lower(), _pk)}")
+        elif _plan is not None and _ptype_conflict(acfg):
+            warnings.append(
+                f"[accounts.{name}] plan {str(_plan).strip().lower()!r} "
+                f"contradicts type = {acfg.get('type')!r} — the type "
+                f"decides how the account is taxed; fix one of them")
         brok = acfg.get("brokerage")
         if brok is not None and str(brok) not in ("questrade",
                                                   "ibkr_flex"):
@@ -8111,28 +8122,54 @@ def cmd_gains(args: argparse.Namespace) -> None:
         f"{v:,.2f} {c}" for c, v in sorted(totals.items())))
 
 
-_PLAN_NAMES = ("tfsa", "rrsp", "lira", "rrif", "fhsa", "resp", "401k",
-               "roth", "ira")
+# One per-country plan table (lib/country.PLAN_COUNTRY): the HSA, LIF,
+# RDSP ... its phantom_holdings twin knew were missing, and the other
+# country's plans were accepted silently (audit A2-0739, A2-1272,
+# A2-1332).
+from taxjson.lib.country import PLAN_COUNTRY as _PLAN_COUNTRY
+from taxjson.lib.country import plan_kinds as _plan_kinds
+_PLAN_NAMES = tuple(k for k in _PLAN_COUNTRY
+                    if k not in ("taxable", "sheltered"))
+_PLAN_KINDS = tuple(_PLAN_COUNTRY)
 
 
-_PLAN_KINDS = _PLAN_NAMES + ("taxable", "sheltered")
+def _ptype_conflict(acfg: Dict[str, Any]) -> bool:
+    """A registered plan on a taxable account, or plan = "taxable" on a
+    sheltered one (audit A2-1332): the scan read the plan and skipped
+    the account's checks."""
+    plan = str(acfg.get("plan") or "").strip().lower()
+    typ = acfg.get("type")
+    if plan in ("", "sheltered"):
+        return plan == "sheltered" and typ == "taxable"
+    if plan == "taxable":
+        return typ == "sheltered"
+    return plan in _PLAN_NAMES and typ == "taxable"
 
 
-def _account_plan(name: str, acfg: Dict[str, Any]) -> str:
+def _account_plan(name: str, acfg: Dict[str, Any],
+                  country: Optional[str] = None) -> str:
     """Registered-plan kind for scan checks: explicit `plan = "tfsa"` in
     taxjson.toml wins (an unknown value is ignored — validate_config
     warns); else inferred from a plan word that is a whole TOKEN of the
     account NAME (the init scaffold names folders tfsa/rrsp/...; `rrsp2`
     and `my-tfsa` count, `admiral` and `spiral` no longer read as an IRA
     and silently skipped the US-LISTING check, R1-243); else the type."""
+    # Only the project country's plans count, and a taxable account is
+    # taxable whatever its plan says (the scan skipped one with plan =
+    # "401k"; validate_config warns on the contradiction, the other
+    # country's plan is refused — audit A2-0739, A2-1332).
+    kinds = _plan_kinds(country) if country else list(_PLAN_KINDS)
+    if acfg.get("type") == "taxable":
+        return "taxable"
     explicit = str(acfg.get("plan") or "").strip().lower()
-    if explicit in _PLAN_KINDS:
+    if explicit in kinds:
         return explicit
     low = name.lower()
     for p in _PLAN_NAMES:
-        if re.search(rf"(?<![a-z]){re.escape(p)}(?![a-z])", low):
+        if p in kinds and re.search(
+                rf"(?<![a-z]){re.escape(p)}(?![a-z])", low):
             return p
-    return "taxable" if acfg.get("type") == "taxable" else "sheltered"
+    return "sheltered"
 
 
 def _scan_symbol_root(sym: str) -> Tuple[str, str]:
@@ -8361,7 +8398,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     findings = []                     # (check, account, symbol, message)
     if country == "canada":
         for name, acfg in accounts.items():
-            plan = _account_plan(name, acfg)
+            plan = _account_plan(name, acfg, country)
             if plan not in ("taxable", "tfsa"):
                 continue              # RRSP/LIRA: treaty-exempt, no check
             for h in holdings.get(name, []):

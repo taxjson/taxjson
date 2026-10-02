@@ -419,5 +419,67 @@ class TestIncomeViewsWording(unittest.TestCase):
         self.assertIn("No ACB adjustments", empty["canada"].stdout)
 
 
+
+class TestPlanKindsByCountry(unittest.TestCase):
+    """A2-0739, A2-1272, A2-1332: the other country's plan kinds were
+    accepted silently; a US HSA was unknown (and offered Canada's
+    'fhsa'); a registered plan on a taxable account skipped the scan."""
+
+    def _projects(self, td, ca_plan, us_plan, ca_type="sheltered",
+                  us_type="sheltered"):
+        p = projects_both(td, accounts="")
+        for c, plan, typ in (("canada", ca_plan, ca_type),
+                             ("usa", us_plan, us_type)):
+            t = p[c] / "taxjson.toml"
+            t.write_text(t.read_text()
+                         + '[accounts.margin]\ntype = "taxable"\n'
+                         + f'[accounts.reg]\ntype = "{typ}"\n'
+                         + f'plan = "{plan}"\n')
+            (p[c] / "inputs" / "margin").mkdir(parents=True)
+            (p[c] / "inputs" / "margin" / "m.tt").write_text(
+                "BUYSELL 2025-03-03 10:00:00 ZZQ.US 1 USD 10.00 -10.00 "
+                "0.00\n")
+        return p
+
+    @rule("CA-CTRY-02")
+    @rule("US-CTRY-02")
+    def test_other_countrys_plan_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = cli_both(self._projects(td, "roth", "tfsa"), "run",
+                         "--no-input")
+        self.assertNotEqual(r["canada"].returncode, 0)
+        self.assertIn('plan = "roth" is United States-only',
+                      r["canada"].stderr)
+        self.assertNotEqual(r["usa"].returncode, 0)
+        self.assertIn('plan = "tfsa" is Canada-only', r["usa"].stderr)
+
+    @rule("CA-CTRY-02")
+    @rule("US-CTRY-02")
+    def test_own_plans_accepted_and_conflicts_warned(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = cli_both(self._projects(td, "rdsp", "hsa"), "run",
+                         "--no-input")
+            w = cli_both(self._projects(Path(td) / "w", "rrsp", "ira",
+                                        ca_type="taxable",
+                                        us_type="taxable"),
+                         "run", "--no-input")
+        for c in ("canada", "usa"):
+            self.assertEqual(r[c].returncode, 0, (c, r[c].stderr[-1500:]))
+            self.assertNotIn("not a known plan kind", r[c].stderr)
+            self.assertIn("contradicts type = 'taxable'", w[c].stderr, c)
+
+    def test_unknown_plan_suggests_only_this_countrys(self):
+        from taxjson.bin.taxjson_run import validate_config
+        import contextlib
+        import io
+        cfg = {"settings": {"country": "usa", "base_currency": "USD"},
+               "accounts": {"h": {"type": "sheltered", "plan": "hsaa"}}}
+        with contextlib.redirect_stderr(io.StringIO()):
+            ws = validate_config(cfg)
+        msg = "\n".join(ws)
+        self.assertIn("did you mean 'hsa'", msg)
+        self.assertNotIn("tfsa", msg)
+
+
 if __name__ == "__main__":
     unittest.main()
