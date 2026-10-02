@@ -178,6 +178,10 @@ def bool_setting_problems(cfg: Dict[str, Any]) -> List[str]:
     return out
 
 
+# Top-level sections every reader treats as a table.
+_TABLE_SECTIONS = ("estimate", "instalments")
+
+
 def settings_problems(cfg: Dict[str, Any]) -> List[str]:
     """Canonicalise [settings] in place and return what is wrong with
     it: the country (required; one spelling table, lib/country), the
@@ -194,6 +198,13 @@ def settings_problems(cfg: Dict[str, Any]) -> List[str]:
         settings = {}
     if not isinstance(settings, dict):
         return ["[settings] must be a table"]
+    # A top-level `estimate = 5` / `instalments = [..]` (a key where a
+    # section belongs) was an AttributeError traceback in estimate, sum
+    # and instalments (re-audit A2-0469).
+    for _t in _TABLE_SECTIONS:
+        if _t in cfg and not isinstance(cfg[_t], dict):
+            return [f"[{_t}] must be a table (a [{_t}] section), got "
+                    f"`{_t} = {cfg[_t]!r}`"]
     try:
         settings["country"] = settings_country(settings)
         if "settings" not in cfg:
