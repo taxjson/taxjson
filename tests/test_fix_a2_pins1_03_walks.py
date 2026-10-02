@@ -143,5 +143,48 @@ class TestKrakenUsStablecoinFeeAtPar(unittest.TestCase):
         self.assertEqual(fee[0]["net_amount"], 1.0)
 
 
+class TestSumGainsSortBy(unittest.TestCase):
+    """A2-1596: taxjson-sum-gains --sort-by (get_sort_value) was never run
+    by the suite. Each key orders the ticker summary by its own column,
+    largest first."""
+
+    STATS = {
+        "AAA.TO": {"CAD": {"cap": 10.0, "opt": 0.0, "div": 100.0,
+                           "pil": 0.0, "cost": 90.0, "proceeds": 100.0,
+                           "trade_count": 1, "hold_days": [400]}},
+        "MMM.TO": {"CAD": {"cap": 0.0, "opt": 60.0, "div": 0.0,
+                           "pil": 30.0, "cost": 40.0, "proceeds": 100.0,
+                           "trade_count": 1, "hold_days": [5]}},
+        "ZZZ.TO": {"CAD": {"cap": 50.0, "opt": 0.0, "div": 0.0,
+                           "pil": 0.0, "cost": 50.0, "proceeds": 100.0,
+                           "trade_count": 2, "hold_days": [10, 30]}},
+    }
+
+    def _order(self, key):
+        from taxjson.bin.taxjson_sum_gains import format_report
+        out = format_report({"ticker_stats": self.STATS, "total_year": 2025,
+                             "returns_by_asset": {}, "total_fees": {},
+                             "option_fees": {}},
+                            sort_by=key, no_color=True)
+        rows = [ln.split()[0] for ln in out.splitlines()
+                if ln[:6] in ("AAA.TO", "MMM.TO", "ZZZ.TO")]
+        return rows
+
+    def test_each_key(self):
+        self.assertEqual(self._order("ticker"), ["AAA.TO", "MMM.TO", "ZZZ.TO"])
+        self.assertEqual(self._order("total"), ["AAA.TO", "MMM.TO", "ZZZ.TO"])
+        self.assertEqual(self._order("total_gain"),
+                         ["MMM.TO", "ZZZ.TO", "AAA.TO"])
+        self.assertEqual(self._order("capital_gain"),
+                         ["ZZZ.TO", "AAA.TO", "MMM.TO"])
+        self.assertEqual(self._order("option_gain"),
+                         ["MMM.TO", "AAA.TO", "ZZZ.TO"])
+        self.assertEqual(self._order("dividend"),
+                         ["AAA.TO", "MMM.TO", "ZZZ.TO"])
+        self.assertEqual(self._order("pil"), ["MMM.TO", "AAA.TO", "ZZZ.TO"])
+        self.assertEqual(self._order("holding_days"),
+                         ["AAA.TO", "ZZZ.TO", "MMM.TO"])
+
+
 if __name__ == "__main__":
     unittest.main()
