@@ -4398,19 +4398,19 @@ class USATaxRules(TaxRules):
                 # A nontaxable stock dividend (§305(a)) is not an
                 # acquisition "by purchase": it never replaces a loss
                 # (§1091), it only grows the position (partition
-                # INPUTS-01). With nothing held it is booked as a $0
-                # purchase by the main pass (and warned), so it stays a
-                # replacement there.
-                _held = (other_qty_state.get((ev.account, sym), 0.0)
-                         if is_other_scope else prev)
-                if _held > epsilon:
-                    if not is_other_scope:
-                        net_qty_state[_nkey(ev.account, sym)] = \
-                            prev + ev.quantity
-                    else:
-                        other_qty_state[(ev.account, sym)] = \
-                            _held + ev.quantity
-                    continue
+                # INPUTS-01). With nothing held the main pass books it as
+                # a $0 purchase (and warns) — shares sold before the pay
+                # date, or missing history — but it is still not a
+                # purchase for §1091 (US-STKDIV-01, audit A2-0205: a
+                # dividend posted after a loss sale washed 5% of it).
+                if not is_other_scope:
+                    net_qty_state[_nkey(ev.account, sym)] = \
+                        prev + ev.quantity
+                else:
+                    _ok = (ev.account, sym)
+                    other_qty_state[_ok] = (other_qty_state.get(_ok, 0.0)
+                                            + ev.quantity)
+                continue
 
             if ev.quantity > 0:
                 # Taxable buys close any taxable shorts first; leftover
@@ -4607,16 +4607,18 @@ class USATaxRules(TaxRules):
             # sheltered same-date lot could beat an earlier-acquired taxable
             # one, flipping a deferral into a permanent denial. Tie-break by
             # intra-day time; at the SAME moment the taxpayer's own
-            # (taxable) lot first, then sheltered, then affiliated, then
-            # by account label — never by the content-hash id alone,
-            # which let a one-cent change on an IRA row flip a deferral
-            # into a permanent denial (audit S018-06).
+            # (taxable) lot first, then sheltered, then affiliated —
+            # never by the content-hash id, which let a one-cent change
+            # on an IRA row flip a deferral into a permanent denial
+            # (audit S018-06), and never by the account LABEL: renaming
+            # an account moved the deferral (audit A2-0200/A2-0208).
             out.sort(key=lambda r: (r['date'], r['tx'].time or '',
                                     2 if r['is_affiliated']
-                                    else 1 if r['is_sheltered'] else 0,
-                                    r['tx'].account or ''))
+                                    else 1 if r['is_sheltered'] else 0))
             # (Stable sort: rows still tied keep the pre-pass order,
-            # which is the export's row order — the only evidence of
+            # which is the merged book's row order — the export's row
+            # order within an account and the accounts' taxjson.toml
+            # order across accounts (US-DATE-13), the only evidence of
             # acquisition order for same-moment lots. A content-hash id
             # rung let a one-cent price change move the deferral to the
             # other lot, audit S070-12.)
@@ -5032,9 +5034,12 @@ class USATaxRules(TaxRules):
                     continue
                 print(f"warning: {symbol}: stock dividend of "
                       f"{tx.quantity:g} share(s) on {tx.date} with no "
-                      f"shares held — booked as a $0 purchase; add the "
-                      f"missing purchase history so it can share their "
-                      f"basis (§307).", file=sys.stderr)
+                      f"shares held — booked as a $0 purchase (not a "
+                      f"wash-sale replacement). If the shares were sold "
+                      f"before it was paid, the sold shares' basis should "
+                      f"have been spread over old and new (§307): adjust "
+                      f"it by hand; otherwise add the missing purchase "
+                      f"history.", file=sys.stderr)
 
             tx_qty_abs = abs(tx.quantity)
             # A BUY's cost is a magnitude (parsers spell it either sign);

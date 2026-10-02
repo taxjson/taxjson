@@ -212,5 +212,49 @@ class TestReplacementSubLots(unittest.TestCase):
             self.assertEqual(yrs, {'2025': -200.0, '2026': 0.0})
 
 
+class TestSameMomentAccountOrder(unittest.TestCase):
+    """A2-0200 / A2-0208: same-moment replacement lots of different
+    accounts follow the merged book's order (taxjson.toml order), never
+    the account label."""
+
+    def _book(self, first, second):
+        a = [_t('2025-01-06', 100, 20, acct='zeta'),
+             _t('2025-03-03', -100, 18, acct='zeta'),
+             _t('2025-03-10', 100, 10, acct='zeta', tm='09:30:00'),
+             _t('2025-11-03', -100, 9, acct='zeta')]
+        b = [_t('2025-03-10', 100, 10, acct='alpha', tm='09:30:00')]
+        rows = a + b if first == 'zeta' else b + a
+        return _us(rows, per_account_basis=True)
+
+    @rule("US-DATE-13")
+    def test_toml_order_not_label(self):
+        z = self._book('zeta', 'alpha')
+        late = [e for e in z['transactions'] if e['date'] == '2025-11-03']
+        self.assertAlmostEqual(late[0]['cost'], 1200.0)
+        a = self._book('alpha', 'zeta')
+        late = [e for e in a['transactions'] if e['date'] == '2025-11-03']
+        self.assertAlmostEqual(late[0]['cost'], 1000.0)
+
+
+class TestStockDividendAfterSale(unittest.TestCase):
+    """A2-0205: a stock dividend posted after the shares were sold is not
+    a §1091 purchase (US-STKDIV-01); the warning names the case."""
+
+    @rule("US-STKDIV-01")
+    def test_not_a_replacement_with_nothing_held(self):
+        rows = [_t('2025-01-02', 100, 100), _t('2025-03-10', -100, 80),
+                TaxTransaction(action='BUYSELL', date='2025-03-20',
+                               date_settle='2025-03-20', time='10:00:00',
+                               symbol='XYZ.US', quantity=5, price=0.0,
+                               net_amount=0.0, currency='USD',
+                               account='T1', type='stock_dividend')]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            r = USATaxRules().compute_gains(rows)
+        self.assertAlmostEqual(r['summary']['total_disallowed'], 0.0)
+        self.assertAlmostEqual(r['summary']['total_gain'], -2000.0)
+        self.assertIn("sold before it was paid", err.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()

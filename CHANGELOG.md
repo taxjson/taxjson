@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **US: same-moment replacement lots of two accounts follow the
+  taxjson.toml order**, as US-DATE-13 states, not the account label:
+  renaming an account moved a wash-sale deferral to the other account's
+  lot (A2-0200, A2-0208).
+- **US: a stock dividend posted after the shares were sold is not a
+  wash-sale purchase** (US-STKDIV-01); it washed part of the loss. The
+  warning now names the sold-before-paid case (A2-0205).
 - **US: wash-sale replacement lots keep the right shares, units and
   holding periods.** A replacement bought before a split got the
   disallowed loss on the pre-split share count (half the matched
