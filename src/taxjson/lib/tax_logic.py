@@ -988,8 +988,8 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "`handoff` refuse one closed under US rules instead of "
                  "recomputing it under Canadian law.", cont=True),
         ]),
-        ("Planning tools (wash radar, sell-check, buy-check, harvest, "
-         "watch, web)", [
+        ("Planning tools (wash radar, sell-check, buy-check, "
+         "safe-to-sell, harvest, watch, web)", [
             Rule("CA-PLAN-01",
                  "They apply the superficial-loss rule above on settle "
                  "dates, each replacement unit backing one denial (an "
@@ -1618,8 +1618,8 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "closed under Canadian rules instead of recomputing it "
                  "under US law."),
         ]),
-        ("Planning tools (wash radar, sell-check, buy-check, harvest, "
-         "watch, web)", [
+        ("Planning tools (wash radar, sell-check, buy-check, "
+         "safe-to-sell, harvest, watch, web)", [
             Rule("US-PLAN-01",
                  "Each recent loss's verdict is the US engine's own, as "
                  "of the date: the window on trade dates, purchases in "
