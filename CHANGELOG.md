@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- After `country` changes in taxjson.toml, every report command
+  (`list`, `wash-sales`, `sum`, `divs-sum`, `check-dates` ...) refuses
+  the books the last full run built under the other country, instead of
+  printing them under this country's labels at exit 0; the run records
+  the country in work/.inputs_fingerprint.json, and `check-dates` now
+  shows the run-state banner too (CA-CTRY-01 / US-CTRY-01; audit
+  A2-0147).
 - The country-ownership tables own `--foreign-roc dividend` (a value-level
   entry) and `--slip-gains`, so tax-logic's CTRY-02 lists them and the
   refusals come from one place; `scripts/check_tax_rules.py` now checks

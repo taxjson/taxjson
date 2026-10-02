@@ -896,11 +896,29 @@ def record_input_fingerprint(root: Path, cfg: Dict[str, Any]) -> None:
     work = root / "work"
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / (FINGERPRINT_FILE + ".part")
-    tmp.write_text(json.dumps({"version": FINGERPRINT_VERSION,
-                               "files": input_fingerprint(root, cfg)},
-                              indent=1, sort_keys=True) + "\n",
+    doc: Dict[str, Any] = {"version": FINGERPRINT_VERSION,
+                           "files": input_fingerprint(root, cfg)}
+    # The country the books were built under: a report command on books
+    # of the other country refuses (audit A2-0147).
+    try:
+        from taxjson.lib.country import settings_country
+        doc["country"] = settings_country(cfg.get("settings") or {})
+    except ValueError:
+        pass
+    tmp.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n",
                    encoding="utf-8")
     tmp.replace(work / FINGERPRINT_FILE)
+
+
+def books_country(root: Path) -> Optional[str]:
+    """The country the last full run built work/ under (its fingerprint
+    record), or None when the record does not say."""
+    try:
+        doc = _load_fingerprint_doc(root)
+    except FingerprintUnreadable:
+        return None
+    c = (doc or {}).get("country")
+    return c if isinstance(c, str) and c else None
 
 
 class FingerprintUnreadable(ValueError):

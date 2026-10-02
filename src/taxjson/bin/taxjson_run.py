@@ -12584,8 +12584,30 @@ def _run_state_problems(root: Path, cfg: Dict[str, Any]) -> List[str]:
     return [x.strip() for x in res.detail.split("; ") if x.strip()]
 
 
+def _refuse_other_country_books(root: Path, cfg: Dict[str, Any]) -> None:
+    """Die when work/ was built under the other country: its figures
+    follow that country's law (a superficial-loss denial, an s.47 pool,
+    CAD amounts) and every view would print them under this country's
+    labels and citations at exit 0 (audit A2-0147). The country comes
+    from the last full run's record."""
+    from taxjson.lib.checklist import books_country
+    from taxjson.lib.country import CountryError, settings_country
+    built = books_country(root)
+    try:
+        now = settings_country(cfg.get("settings") or {})
+    except CountryError:
+        return
+    if built and built != now:
+        _die(f"the books in work/ were built by the last full run for country = \"{built}\", but "
+             f"taxjson.toml now says \"{now}\" — their figures follow the "
+             f"other country's law. Run `taxjson run` to rebuild them "
+             f"before using any report.")
+
+
 def _warn_run_state(root: Path, cfg: Dict[str, Any]) -> List[str]:
-    """Loud stderr banner for _run_state_problems; returns them."""
+    """Loud stderr banner for _run_state_problems; returns them. Books
+    built under the other country are refused outright."""
+    _refuse_other_country_books(root, cfg)
     probs = _run_state_problems(root, cfg)
     if probs:
         _pfx = f"taxjson {_CURRENT_CMD}" if _CURRENT_CMD else "taxjson"
@@ -17464,6 +17486,7 @@ _RUN_STATE_BANNER_CMDS = frozenset({
     "shares", "list", "ccd-sum", "trades", "divs", "dil", "roc", "events",
     "wash-radar", "sell-check", "buy-check", "harvest", "watch",
     "edge-cases", "option-boundary", "spinoffs", "splits",
+    "check-dates",
 })
 
 

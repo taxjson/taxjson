@@ -220,7 +220,10 @@ def _ownership(country: str) -> List[Rule]:
         Rule(f"{p}-CTRY-01",
              f"The project's country is required ([settings] country = "
              f"\"{country}\"); taxjson never assumes one, and a spelling "
-             f"other than canada, ca, usa or us is refused.",
+             f"other than canada, ca, usa or us is refused. Books built "
+             f"under the other country (the country was changed) are "
+             f"refused by every report until `taxjson run` rebuilds "
+             f"them.",
              keys=("country",)),
         Rule(f"{p}-CTRY-02",
              "Refused in this project: " + "; ".join(parts) + ".",

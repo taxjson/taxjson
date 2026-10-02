@@ -655,5 +655,45 @@ class TestOwnershipTablesComplete(unittest.TestCase):
             ["--foo"])
 
 
+
+class TestCountrySwitchRefusesOldBooks(unittest.TestCase):
+    """A2-0147: books built as one country were served by every report
+    under the other country's labels and law citations at exit 0."""
+
+    BOOK = ("BUYSELL 2025-03-03 10:00:00 ZZW.US 100 USD 20.00 -2000.00 0.00\n"
+            "BUYSELL 2025-04-03 10:00:00 ZZW.US -100 USD 15.00 1500.00 0.00\n"
+            "BUYSELL 2025-04-10 10:00:00 ZZW.US 100 USD 16.00 -1600.00 0.00\n")
+
+    @rule("CA-CTRY-01")
+    @rule("US-CTRY-01")
+    def test_reports_refuse_books_of_the_other_country(self):
+        from tax_rules.dual import settings_for
+        with tempfile.TemporaryDirectory() as td:
+            p = projects_both(td, files={"inputs/margin/m.tt": self.BOOK})
+            for c, root in p.items():
+                r = cli(root, "run", "--no-input")
+                self.assertEqual(r.returncode, 0, (c, r.stderr[-2000:]))
+            # Swap the two projects' countries without re-running.
+            for c, other in (("canada", "usa"), ("usa", "canada")):
+                t = p[c] / "taxjson.toml"
+                t.write_text(settings_for(other, year=2025)
+                             + '[accounts.margin]\ntype = "taxable"\n')
+            for cmd in (("wash-sales",), ("list",), ("sum",),
+                        ("divs-sum",), ("check-dates",)):
+                r = cli_both(p, *cmd)
+                for c in p:
+                    self.assertNotEqual(r[c].returncode, 0, (c, cmd))
+                    self.assertIn("built by the last full run for country",
+                                  r[c].stderr, (c, cmd))
+            # A fresh run rebuilds them; the reports work again.
+            for c, root in p.items():
+                self.assertEqual(cli(root, "run", "--no-input").returncode,
+                                 0, c)
+            w = cli_both(p, "wash-sales")
+        self.assertEqual(w["canada"].returncode, 0, w["canada"].stderr)
+        self.assertIn("WASH SALES", w["canada"].stdout)  # now a US project
+        self.assertIn("SUPERFICIAL LOSSES", w["usa"].stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

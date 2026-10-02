@@ -281,6 +281,9 @@ reports/              # all outputs land here
 
 The full `taxjson.toml` schema and every file the pipeline reads are documented
 in [Project layout and configuration](#project-layout-and-configuration) below.
+The books in `work/` belong to the country they were built under: after
+changing `country`, every report refuses them until `taxjson run` rebuilds
+them (their figures follow the other country's law).
 
 Then, whenever you add new statements:
 
