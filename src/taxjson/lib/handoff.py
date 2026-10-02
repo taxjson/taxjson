@@ -53,6 +53,20 @@ def _label(path: Path) -> str:
     return f"{p.parent.name}/{p.name}"
 
 
+def _work_doc(path: Path) -> Dict[str, Any]:
+    """A work/ book or gains file through json_input.read_work_doc: an
+    unreadable, truncated or wrong-shape file (a bare list, a row that
+    is not an object, a number field holding text) is a BooksError
+    naming it, never an AttributeError (A2-0794 / A2-1396)."""
+    from taxjson.lib.json_input import read_work_doc
+    p = Path(path)
+    try:
+        return read_work_doc(p)
+    except ValueError as e:
+        raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
+                         f"`taxjson run` to rebuild it") from None
+
+
 def _rows(path: Path) -> List[Dict[str, Any]]:
     """The rows of a work/<acct>_base.json; [] when the file does not
     exist (an account with no inputs). An unreadable or damaged file is
@@ -63,16 +77,7 @@ def _rows(path: Path) -> List[Dict[str, Any]]:
     p = Path(path)
     if not p.exists():
         return []
-    try:
-        doc = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise BooksError(f"could not read {_label(p)} ({e}) — re-run "
-                         f"`taxjson run` to rebuild it")
-    rows = doc.get("transactions", []) if isinstance(doc, dict) else doc
-    if not isinstance(rows, list):
-        raise BooksError(f"could not read {_label(p)} (no transaction "
-                         f"list) — re-run `taxjson run` to rebuild it")
-    return [r for r in rows if isinstance(r, dict)]
+    return list(_work_doc(p).get("transactions") or [])
 
 
 def _check_books(path: Path) -> None:
@@ -310,10 +315,11 @@ def dispositions(gains_files: Dict[str, Path], year: int
                  ) -> List[Dict[str, Any]]:
     out = []
     for acct, p in sorted(gains_files.items()):
-        try:
-            doc = json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        if not Path(p).exists():
             continue
+        # An unreadable gains file left its sales out of the lock in
+        # silence (A2-1396).
+        doc = _work_doc(Path(p))
         for t in doc.get("transactions", []):
             if t.get("gain") is None or t.get("action"):
                 continue
@@ -378,6 +384,15 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
                 f"an unescaped quote swallowed the next row(s). Fix "
                 f"the quoting (double an inner quote: \"\") and "
                 f"re-run.")
+        short = [c for c in _FILED_COLS if r.get(c) is None]
+        if short:
+            # A short row ('AAPL.US,2024-05-14') was a TypeError
+            # traceback from float(None) (A2-0769 / A2-1397).
+            raise ValueError(f"{path}:{i}: bad row (no "
+                             f"{', '.join(short)} cell)")
+        if not r["symbol"].strip():
+            # A blank symbol was written into the filed lock (A2-0769).
+            raise ValueError(f"{path}:{i}: bad row (blank symbol)")
         try:
             rows.append({
                 "account": (r.get("account") or "").strip(),
@@ -387,7 +402,7 @@ def load_filed_dispositions(path: Path) -> List[Dict[str, Any]]:
                 "proceeds": round(float(r["proceeds"]), 2),
                 "cost": round(float(r["cost"]), 2),
                 "gain": round(float(r["gain"]), 2)})
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             raise ValueError(f"{path}:{i}: bad row ({e})")
         import math
         if not all(math.isfinite(rows[-1][k])
@@ -488,6 +503,128 @@ def record_fields(root: Path, cfg: Dict[str, Any], year: int,
             "gain": round(sum(r["gain"] for r in fd), 2),
             "source": str(filed_csv)}
     return rec
+
+
+# ------------------------------------------------------- the record
+
+class RecordError(ValueError):
+    """A prior-year lock (filed/<year>.json) whose fields are not the
+    shape close-year writes. One line naming the file and the field;
+    each wrong type was a TypeError / KeyError traceback somewhere in
+    check() (A2-0803)."""
+
+
+def _num(v: Any, *, none_ok: bool = False) -> bool:
+    import math
+    if v is None:
+        return none_ok
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v))
+
+
+def _txt(v: Any, *, none_ok: bool = True) -> bool:
+    return isinstance(v, str) or (none_ok and v is None)
+
+
+# Per list: {field: (check, required)}.
+_REC_LISTS = {
+    "dispositions": {"symbol": (lambda v: _txt(v, none_ok=False)
+                                and bool(v.strip()), True),
+                     "gain": (_num, True), "qty": (_num, False),
+                     "proceeds": (_num, False), "cost": (_num, False),
+                     "date": (_txt, False), "date_settle": (_txt, False)},
+    "filed_dispositions": {"symbol": (lambda v: _txt(v, none_ok=False)
+                                      and bool(v.strip()), True),
+                           "gain": (_num, True), "qty": (_num, True),
+                           "proceeds": (_num, True), "cost": (_num, False),
+                           "date": (_txt, False)},
+    "settle_next_year": {"symbol": (lambda v: _txt(v, none_ok=False)
+                                    and bool(v.strip()), True),
+                         "qty": (_num, True),
+                         "net": (lambda v: _num(v, none_ok=True), False),
+                         "date": (_txt, False),
+                         "date_settle": (_txt, False)},
+    "boundary_rows": {"symbol": (_txt, False), "action": (_txt, False),
+                      "quantity": (lambda v: _num(v, none_ok=True), False),
+                      "net": (lambda v: _num(v, none_ok=True), False),
+                      "date": (_txt, False), "tax_date": (_txt, False)},
+}
+
+
+def validate_record(record: Any, path: Any = "the prior-year record"
+                    ) -> Dict[str, Any]:
+    """`record` when every field the hand-off reads has the shape
+    close-year writes; else RecordError naming `path` and the field."""
+    def bad(field: str, what: str) -> RecordError:
+        return RecordError(f"{path}: {field} is not {what} — fix the "
+                           f"lock or restore it from git (or re-close "
+                           f"that year with `taxjson close-year --force` "
+                           f"in its project)")
+
+    if not isinstance(record, dict):
+        raise bad("the document", "a JSON object")
+    for k in ("schema_version", "year", "record_version"):
+        v = record.get(k)
+        if v is None and (k != "year" or "year_end" not in record):
+            continue
+        if isinstance(v, bool) or not (
+                isinstance(v, int) or (isinstance(v, str)
+                                       and v.strip().isdigit())):
+            raise bad(k, "an integer")
+    for k in ("closed_at", "date_basis"):
+        if not _txt(record.get(k)):
+            raise bad(k, "text")
+    for key, fields in _REC_LISTS.items():
+        rows = record.get(key)
+        if rows is None:
+            continue
+        if not isinstance(rows, list):
+            raise bad(key, "a list")
+        for i, r in enumerate(rows):
+            if not isinstance(r, dict):
+                raise bad(f"{key}[{i}]", "an object")
+            for f, (ok, required) in fields.items():
+                if f not in r:
+                    if required:
+                        raise bad(f"{key}[{i}].{f}", "present")
+                    continue
+                if not ok(r[f]):
+                    raise bad(f"{key}[{i}].{f}", f"valid ({r[f]!r})")
+    ye = record.get("year_end")
+    if ye is not None:
+        if not isinstance(ye, dict):
+            raise bad("year_end", "an object")
+        for g, pos in ye.items():
+            if not isinstance(pos, dict):
+                raise bad(f"year_end.{g}", "an object")
+            for sym, p in pos.items():
+                if not isinstance(p, dict):
+                    raise bad(f"year_end.{g}.{sym}", "an object")
+                for f in ("qty", "acb", "deferred"):
+                    if f in p and not _num(p[f]):
+                        raise bad(f"year_end.{g}.{sym}.{f}", "a number")
+    ot = record.get("option_timing")
+    if ot is not None and not isinstance(ot, dict):
+        raise bad("option_timing", "an object")
+    return record
+
+
+def load_record(path: Any) -> Dict[str, Any]:
+    """Read and validate a prior-year lock (utf-8, a BOM tolerated:
+    A2-0776). Any problem is a RecordError naming the file."""
+    p = Path(path)
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8-sig"))
+    except OSError as e:
+        raise RecordError(f"{p}: cannot read ({e.strerror or e})") \
+            from None
+    except UnicodeDecodeError as e:
+        raise RecordError(f"{p}: not UTF-8 text ({e.reason} at byte "
+                          f"{e.start})") from None
+    except ValueError as e:
+        raise RecordError(f"{p}: not valid JSON ({e}) — restore it "
+                          f"from git") from None
+    return validate_record(doc, p)
 
 
 # ------------------------------------------------------------ check
@@ -1031,12 +1168,9 @@ def check(root: Path, cfg: Dict[str, Any], record: Dict[str, Any],
     for acct, p in resolve_gains_files(cache).items():
         if acct not in taxable:
             continue
-        try:
-            doc = json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            # A skipped gains file hid every double in it (A2-1137).
-            raise BooksError(f"could not read {_label(Path(p))} ({e}) — "
-                             f"re-run `taxjson run` to rebuild it")
+        # A skipped gains file hid every double in it (A2-1137); a
+        # wrong-shape one was an AttributeError (A2-1396).
+        doc = _work_doc(Path(p))
         for t in doc.get("transactions", []):
             if t.get("gain") is None or t.get("action"):
                 continue

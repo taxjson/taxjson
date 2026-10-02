@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `taxjson handoff`: a prior-year lock whose fields are the wrong shape
+  (dispositions, settle_next_year, year_end, schema_version, ...) is one
+  `taxjson handoff: error:` line naming the file and field, exit 2; a
+  BOM'd lock loads. `close-year --filed-dispositions` refuses a short row
+  or a blank symbol naming file:line, and the hand-off reads the gains
+  and base books through the shared work-file check (A2-0769, A2-0803,
+  A2-1396, A2-1397, A2-0794 handoff part, A2-0776).
 - `taxjson checklist`: a checklist.json that is a directory or a looping
   symlink, a wrong-shape mark entry, or a file that cannot be written or
   removed (read-only project, full disk) is now one `taxjson checklist:`

@@ -180,5 +180,139 @@ class TestWatchStateInner(unittest.TestCase):
             self.assertEqual(w.load_state(p)["harvest_now"], -12.5)
 
 
+# --------------------------------------------------- handoff / close-year
+GOOD_LOCK = {
+    "schema_version": 2, "record_version": 2, "year": 2024,
+    "country": "canada", "date_basis": "settle", "closed_at": "2025-04-01",
+    "dispositions": [{"account": "margin", "symbol": "XYZ.TO",
+                      "date": "2024-05-05", "date_settle": "2024-05-06",
+                      "qty": 10.0, "proceeds": 120.0, "cost": 100.0,
+                      "gain": 20.0, "denied": 0.0}],
+    "settle_next_year": [{"group": "equity", "account": "margin",
+                          "symbol": "XYZ.TO", "date": "2024-12-31",
+                          "date_settle": "2025-01-02", "qty": 5.0,
+                          "net": -50.0}],
+    "year_end": {"equity": {"XYZ.TO": {"qty": 5.0, "acb": 50.0,
+                                       "deferred": 0.0}}},
+    "boundary_rows": [],
+}
+
+
+class TestHandoffRecord(_Tmp):
+    """A2-0803: field-level damage in the prior-year lock is one line."""
+
+    def test_good_lock_validates(self):
+        from taxjson.lib import handoff
+        handoff.validate_record(json.loads(json.dumps(GOOD_LOCK)), "f")
+
+    def test_wrong_field_shapes_refused(self):
+        from taxjson.lib import handoff
+        cases = [("dispositions", "x"), ("dispositions", 7),
+                 ("dispositions", {"a": 1}), ("schema_version", "x"),
+                 ("schema_version", [1]), ("settle_next_year", "x"),
+                 ("settle_next_year", 7), ("year_end", [1]),
+                 ("year", "x")]
+        for k, v in cases:
+            rec = json.loads(json.dumps(GOOD_LOCK))
+            rec[k] = v
+            with self.assertRaises(handoff.RecordError, msg=(k, v)) as cm:
+                handoff.validate_record(rec, "filed/2024.json")
+            self.assertIn("filed/2024.json", str(cm.exception))
+        for lst, field in (("dispositions", None),
+                           ("dispositions", "gain"),
+                           ("dispositions", "symbol"),
+                           ("settle_next_year", None),
+                           ("settle_next_year", "symbol"),
+                           ("settle_next_year", "qty")):
+            for v in ("x", 7, None, [1], {"a": 1}, {}):
+                rec = json.loads(json.dumps(GOOD_LOCK))
+                if field is None:
+                    if v == {}:
+                        continue
+                    rec[lst][0] = v
+                else:
+                    if field != "symbol" and v == 7:
+                        continue
+                    if field == "symbol" and v == "x":
+                        continue
+                    rec[lst][0][field] = v
+                with self.assertRaises(handoff.RecordError,
+                                       msg=(lst, field, v)):
+                    handoff.validate_record(rec, "f")
+
+    def test_bom_lock_loads(self):
+        from taxjson.lib import handoff
+        p = self.root / "2024.json"
+        p.write_bytes(b"\xef\xbb\xbf" + json.dumps(GOOD_LOCK).encode())
+        self.assertEqual(handoff.load_record(p)["year"], 2024)
+
+    def test_handoff_cli_one_line_exit_2(self):
+        (self.root / "taxjson.toml").write_text(TOML)
+        (self.root / "filed").mkdir()
+        rec = json.loads(json.dumps(GOOD_LOCK))
+        rec["dispositions"] = "x"
+        (self.root / "filed" / "2024.json").write_text(json.dumps(rec))
+        r = tj(self.root, "handoff")
+        no_tb(self, r)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("dispositions", r.stderr)
+
+
+class TestFiledDispositionsCsv(_Tmp):
+    """A2-0769, A2-1397: short rows, blank symbols, a directory."""
+
+    def load(self, text):
+        from taxjson.lib import handoff
+        p = self.root / "filed.csv"
+        p.write_text("symbol,date,qty,proceeds,cost,gain\n" + text)
+        return handoff.load_filed_dispositions(p)
+
+    def test_short_row(self):
+        with self.assertRaisesRegex(ValueError, r"filed.csv:2: bad row"):
+            self.load("AAPL.US,2024-05-14\n")
+
+    def test_blank_symbol(self):
+        with self.assertRaisesRegex(ValueError, r"filed.csv:2: .*blank"):
+            self.load(",2024-05-14,1,2,3,4\n")
+
+    def test_non_finite(self):
+        with self.assertRaisesRegex(ValueError, r"filed.csv:2"):
+            self.load("AAPL.US,2024-05-14,nan,nan,inf,-inf\n")
+
+    def test_directory(self):
+        from taxjson.lib import handoff
+        (self.root / "d.csv").mkdir()
+        with self.assertRaises(ValueError):
+            handoff.load_filed_dispositions(self.root / "d.csv")
+
+    def test_good_row(self):
+        self.assertEqual(self.load("AAPL.US,2024-05-14,1,2,3,4\n")[0]
+                         ["symbol"], "AAPL.US")
+
+
+class TestHandoffGainsShape(_Tmp):
+    """A2-1396 / A2-0794 (handoff part): a wrong-shape gains file."""
+
+    def test_dispositions_and_check_refuse(self):
+        from taxjson.lib import handoff
+        p = self.root / "brk_gains.json"
+        for bad in ("[]", '{"transactions": ["x"]}',
+                    '{"transactions": 5}'):
+            p.write_text(bad)
+            if bad == "[]":
+                # a bare list is a transaction book: no sales, no crash
+                self.assertEqual(handoff.dispositions({"brk": p}, 2024), [])
+                continue
+            with self.assertRaises(handoff.BooksError):
+                handoff.dispositions({"brk": p}, 2024)
+
+    def test_rows_wrong_row_type(self):
+        from taxjson.lib import handoff
+        p = self.root / "m_base.json"
+        p.write_text('{"transactions": [{"symbol": "A", "quantity": "x"}]}')
+        with self.assertRaises(handoff.BooksError):
+            handoff._rows(p)
+
+
 if __name__ == "__main__":
     unittest.main()
