@@ -174,8 +174,12 @@ class TestStockDividend(unittest.TestCase):
         self.assertAlmostEqual(r["canada"]["summary"]["total_gain"], 1300.0,
                                places=6)
         self.assertNotIn("declared amount", r["canada"]["_stderr"])
-        self.assertIn("declared amount",
-                      gains_both(book, year=2024)["canada"]["_stderr"])
+        r24 = gains_both(book, year=2024)
+        self.assertIn("declared amount", r24["canada"]["_stderr"])
+        # The Canadian declared-amount note never reaches a US run
+        # (A2-0857, A2-1488).
+        self.assertNotIn("declared amount", r24["usa"]["_stderr"])
+        self.assertNotIn("distributions.map", r24["usa"]["_stderr"])
         self.assertNotIn("§307", r["canada"]["_stderr"])
 
     @rule("CA-STKDIV-01")
@@ -452,10 +456,11 @@ class TestManualLossWarningsByCountry(unittest.TestCase):
                                        "account": "margin"}]))
             return gains_both(book, year=2025, incomplete_history=ph, **kw)
 
+    # Not a @rule_absent pair (A2-0830): US FIFO never reaches the
+    # partial-taint path, so this book cannot show the US date basis;
+    # test_cross_year_window_dates is the pair.
     @rule("CA-ACB-12")
-    @rule_absent("CA-ACB-12", country="usa")
     @rule("US-BASIS-04")
-    @rule_absent("US-BASIS-04", country="canada")
     def test_partial_taint_window_dates(self):
         # A phantom-basis loss that settles 03-07 (traded 03-03) and a
         # rebuy that settles 04-04 (traded 04-03): 28 settle days, 31
