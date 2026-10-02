@@ -11,7 +11,7 @@ class TestSettlementDates(unittest.TestCase):
 \"Account: 12345678 - Margin\"
 \"Trades this month: 0\"
 \"Date\",\"Activity\",\"Symbol\",\"Symbol Description\",\"Quantity\",\"Price\",\"Settlement Date\",\"Account\",\"Value\",\"Currency\",\"Description\"
-\"December 29, 2025\",\"Buy\",\"AAPL\",\"APPLE\",\"-10\",\"100.00\",\"December 30, 2025\",\"12345678\",\"-1000\",\"USD\",\"BUY AAPL\"
+\"December 29, 2025\",\"Buy\",\"AAPL\",\"APPLE\",\"10\",\"100.00\",\"December 30, 2025\",\"12345678\",\"-1000\",\"USD\",\"BUY AAPL\"
 """
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
             f.write(content)

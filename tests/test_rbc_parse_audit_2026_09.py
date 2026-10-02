@@ -311,7 +311,8 @@ class TestNamesAreNotIncome(unittest.TestCase):
             self.assertEqual(classify_rbc_row(r), want, desc)
         txs, _, _ = parse(row("March 15, 2024", "Dividends", "XYZ", "XYZ CORP", "",
                               "", "5.00", "CAD", "XYZ CORP CASH IN LIEU OF DIVIDEND"))
-        self.assertEqual([t['action'] for t in txs], ['DIVIDEND'])
+        # Income (a payment in lieu since re-audit A2-0098), not a CIL.
+        self.assertEqual([t['action'] for t in txs], ['DIVIDEND_IN_LIEU'])
 
 
 # ------------------------------------------------ M1 / M2 income variants
