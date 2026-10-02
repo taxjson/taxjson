@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **.tt lines spell Canadian listings like the broker parsers.** A .tt
+  `ABC.V` (on a CAD line), `ABC.VN`, `ABC.CN`, `ABC.NE` or `FTN.PRA.TO`
+  is now `ABC.TO` / `FTN.PR.A.TO`: it used to be its own ACB pool, so a
+  loss sold through a .tt file and the broker's repurchase of `ABC.TO`
+  were never linked as identical property. `.VN` is a Canadian venue to
+  the schema, T1135 (no more '??' REVIEW) and the price chain too, and
+  the venue-split lint catches `.VN` and undotted preferred series
+  (tax-logic CA-ACB-04 / US-BASIS-06; audit A2-0300, A2-0635, A2-1077).
 - **.tt keeps income facts and full precision.** A DIVIDEND /
   DIVIDEND_IN_LIEU / TAX / ADJUST line may end with `record=`, `ex=`,
   `label=`, `dealer=`, `issuer=` and (ADJUST) `type=roc` tokens, and

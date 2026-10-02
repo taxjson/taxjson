@@ -360,9 +360,31 @@ def parse_tt_line(line: str, account_name: str = 'default',
 
     # Not part of the id (as in TaxTransaction.compute_id).
     tx.update(facts)
+    _canonical_ca_symbols(tx)
     _warn_unknown_suffix(tx, line, source)
     tx['id'] = compute_tt_id(tx)
     return tx
+
+
+def _canonical_ca_symbols(tx: dict) -> None:
+    """Spell a Canadian listing as every broker parser does: ROOT.TO
+    with a dotted preferred series (base.canonical_ca_listing). A .tt
+    `ABC.V`, `ABC.VN` or `FTN.PRA.TO` used to stay its own ACB pool, so
+    a loss sold here and the broker's repurchase of ABC.TO were never
+    linked as identical property (audit A2-0300, A2-0635). A `.V` is
+    Venture only on a CAD line (a SPLIT line has no currency: only the
+    unambiguous .VN/.CN/.NE and undotted preferreds are folded)."""
+    from taxjson.lib.brokerages.base import canonical_ca_listing
+    from taxjson.lib.core import is_option_symbol
+    cur = '' if tx.get('action') == 'SPLIT' else tx.get('currency', '')
+    for key in ('symbol', 'symbol_new'):
+        sym = tx.get(key) or ''
+        if (not sym or sym == 'CASH' or is_option_symbol(sym)
+                or sym.startswith(_FUTURES_PREFIXES)):
+            continue
+        canon = canonical_ca_listing(sym, cur)
+        if canon:
+            tx[key] = canon
 
 
 def _check_facts(action: str, facts: dict, line: str, source: str) -> dict:

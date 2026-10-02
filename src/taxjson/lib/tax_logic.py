@@ -442,10 +442,14 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "The single pool needs a full `taxjson run` (not "
                  "`--account`, and no elections pending).", cont=True),
             Rule("CA-ACB-04",
-                 "Identical property is the same symbol with its currency "
-                 "suffix (.TO, .US, .V). Two listings are one security "
-                 "only when ticker.map joins them. Renames and splits "
-                 "carry the pool forward."),
+                 "Identical property is the same symbol with its listing "
+                 "suffix (.TO, .US). A Canadian listing is one symbol "
+                 "whatever venue the input names: ROOT.TO, with a TSX "
+                 "preferred series dotted (FTN.PR.A.TO) — .V (on a CAD "
+                 "row), .VN, .CN and .NE fold into .TO for broker exports "
+                 "and .tt lines alike. Two other listings are one "
+                 "security only when ticker.map joins them. Renames and "
+                 "splits carry the pool forward."),
             Rule("CA-ACB-05",
                  "Accounts typed \"sheltered\" (RRSP, TFSA, FHSA, LIRA, "
                  "RESP...) are tracked but kept out of the filing totals. "
@@ -939,8 +943,11 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  cont=True),
             Rule("US-BASIS-06",
                  "Identical property is the same symbol with its listing "
-                 "suffix (.US, .TO); two listings are one security only "
-                 "when ticker.map joins them."),
+                 "suffix (.US, .TO). A Canadian listing is ROOT.TO "
+                 "whatever venue the input names (.V on a CAD row, .VN, "
+                 ".CN, .NE; a dotted preferred series), for broker "
+                 "exports and .tt lines alike; two other listings are one "
+                 "security only when ticker.map joins them."),
             Rule("US-BASIS-05",
                  "A transfer into a taxable account stops the run until "
                  "the original purchase is declared (.tt ACQUIRED line)."),

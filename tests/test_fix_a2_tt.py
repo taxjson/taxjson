@@ -10,6 +10,7 @@ from pathlib import Path
 
 from taxjson.bin.taxjson_convert_tt import (parse_tt_line, tt_to_json,
                                             tx_to_tt_line)
+from tax_rules import rule
 
 
 def _parse(line):
@@ -178,6 +179,57 @@ class TestRoundTripFacts(unittest.TestCase):
                          "2854.95 4.95\n", encoding="utf-8")
             _, err = _quiet(tt_to_json, p, "m")
             self.assertNotIn("no line end", err)
+
+
+class TestCanadianVenues(unittest.TestCase):
+    """A2-0300, A2-0635, A2-1077: a .tt line spells a Canadian listing
+    as the broker parsers do, and every venue set knows .VN."""
+
+    @rule("CA-ACB-04")
+    @rule("US-BASIS-06")
+    def test_tt_canonicalizes_canadian_listings(self):
+        for raw, want in (("ABC.V", "ABC.TO"), ("ABC.VN", "ABC.TO"),
+                          ("XYZ.CN", "XYZ.TO"), ("QQ.NE", "QQ.TO"),
+                          ("FTN.PRA.TO", "FTN.PR.A.TO"),
+                          ("ABC.TO", "ABC.TO")):
+            with self.subTest(raw=raw):
+                tx, err = _parse(f"BUYSELL 2025-03-03 09:30:00 {raw} -100 "
+                                 f"CAD 4.00 396.00 4.00")
+                self.assertEqual(tx['symbol'], want)
+                self.assertNotIn("not a known market suffix", err)
+        div, _ = _parse("DIVIDEND 2025-03-31 09:30:00 FTN.PRA.TO 100 CAD "
+                        "0.1 10.00")
+        self.assertEqual(div['symbol'], 'FTN.PR.A.TO')
+        # .V outside CAD may be a class letter: kept.
+        tx, _ = _parse("BUYSELL 2025-03-03 09:30:00 BRK.V 1 USD 4.00 "
+                       "4.00 0")
+        self.assertEqual(tx['symbol'], 'BRK.V')
+
+    def test_tt_and_parser_rows_share_one_id_shape(self):
+        a, _ = _parse("BUYSELL 2025-03-03 09:30:00 ABC.VN 100 CAD 4.00 "
+                      "404.00 4.00")
+        b, _ = _parse("BUYSELL 2025-03-03 09:30:00 ABC.TO 100 CAD 4.00 "
+                      "404.00 4.00")
+        self.assertEqual(a['id'], b['id'])
+
+    def test_venue_sets_know_vn(self):
+        from taxjson.lib.brokerages.schema import (KNOWN_SUFFIXES,
+                                                   validate_transactions)
+        self.assertIn('VN', KNOWN_SUFFIXES)
+        _, warns = validate_transactions([{
+            'action': 'BUYSELL', 'date': '2025-01-02', 'symbol': 'QZV.VN',
+            'quantity': 1, 'currency': 'CAD', 'price': 1.0,
+            'net_amount': 1.0}])
+        self.assertFalse([w for w in warns if 'suffix' in w], warns)
+        from taxjson.bin.taxjson_t1135 import classify_country
+        self.assertIsNone(classify_country('QZV.VN', {}))
+
+    def test_lint_flags_vn_and_undotted_preferred_splits(self):
+        from taxjson.bin.taxjson_lint_crosslistings import venue_splits
+        rows = [{'symbol': 'ABC.TO'}, {'symbol': 'ABC.VN'},
+                {'symbol': 'FTN.PRA.TO'}, {'symbol': 'FTN.PR.A.TO'}]
+        roots = {f['root'] for f in venue_splits(rows, [])}
+        self.assertEqual(roots, {'ABC', 'FTN.PR.A'})
 
 
 if __name__ == '__main__':

@@ -191,7 +191,7 @@ def analyze(taxable_txs, sheltered_txs, tobase, journal, distinct=()):
     return findings
 
 
-_CA_VENUES = ("TO", "V", "CN", "NE")
+from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
 
 
 def venue_splits(taxable_txs, sheltered_txs):
@@ -210,6 +210,10 @@ def venue_splits(taxable_txs, sheltered_txs):
             root, ex = s.rsplit(".", 1)
             if ex.upper() not in _CA_VENUES:
                 continue
+            # FTN.PRA.TO and FTN.PR.A.TO are one preferred series, and
+            # .VN is a Canadian venue too (audit A2-0300).
+            from taxjson.lib.brokerages.base import canonical_ca_root
+            root = canonical_ca_root(root)
             d = seen.setdefault(root, {})
             d[s] = d.get(s, False) or taxable
     out = []

@@ -89,7 +89,10 @@ SCHEMA: Dict[str, Dict[str, Tuple[str, ...]]] = {
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # Market suffixes the toolkit understands. Bare symbols (no dot) are
 # legitimate crypto assets and are not suffix-checked.
-KNOWN_SUFFIXES = frozenset({'TO', 'US', 'AX', 'L', 'V', 'CN', 'NE'})
+# The Canadian venues are the one shared set (income_dating; .VN was
+# Canadian to the parsers but "unknown" here — audit A2-1077).
+from taxjson.lib.income_dating import CA_LISTING_SUFFIXES as _CA_VENUES
+KNOWN_SUFFIXES = frozenset({'US', 'AX', 'L'}) | _CA_VENUES
 
 _QTY_EPS = 1e-9
 _MONEY_EPS = 0.005
