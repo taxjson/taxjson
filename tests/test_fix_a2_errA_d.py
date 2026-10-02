@@ -382,5 +382,46 @@ class TestExport(_Tmp):
                 self.assertIn("[[holding]] 1 (XEI.TO)", r.stderr)
 
 
+# ------------------------------------------------------------- parsers
+class TestIbIncomeTicker(unittest.TestCase):
+    """A2-0780: an IB income row with no TICKER(ISIN) token is refused,
+    never booked on UNKNOWN.US or a word of the text."""
+
+    def parse(self, body):
+        from test_fix_ibparse import HEAD, _parse_ib
+        return _parse_ib(HEAD + body)
+
+    def test_clean_row_booked(self):
+        from test_fix_ibparse import DIV_H
+        _p, txs, _e = self.parse(
+            DIV_H + 'Dividends,Data,CAD,2024-02-01,"QZRY (CA9990000017) '
+            'CASH DIVIDEND CAD 1.38 PER SHARE",13.80\n')
+        self.assertEqual([t["symbol"] for t in txs
+                          if t["action"] == "DIVIDEND"], ["QZRY.TO"])
+
+    def test_no_token_refused(self):
+        from taxjson.lib.brokerages.base import BrokerageParseError
+        from test_fix_ibparse import DIV_H, WHT_H
+        for body in (
+                DIV_H + 'Dividends,Data,CAD,2024-02-01,,13.80\n',
+                DIV_H + 'Dividends,Data,CAD,2024-02-01,"CASH DIVIDEND '
+                'CAD 1.38 PER SHARE",13.80\n',
+                DIV_H + 'Dividends,Data,CAD,2024-02-01,"qzry (ca9990000017) '
+                'cash dividend",13.80\n',
+                WHT_H + 'Withholding Tax,Data,USD,2024-02-01,"CASH '
+                'DIVIDEND USD 0.24",-1.20\n'):
+            with self.assertRaisesRegex(BrokerageParseError,
+                                        r"line \d+ .*TICKER \(ISIN\)"):
+                self.parse(body)
+
+    def test_interest_withholding_on_cash(self):
+        from test_fix_ibparse import WHT_H
+        _p, txs, _e = self.parse(
+            WHT_H + 'Withholding Tax,Data,USD,2024-06-03,"Withholding @ '
+            '20% on Credit Interest for MAY-2024",-1.20\n')
+        self.assertEqual([(t["action"], t["symbol"]) for t in txs],
+                         [("TAX", "CASH")])
+
+
 if __name__ == "__main__":
     unittest.main()

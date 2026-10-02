@@ -690,6 +690,28 @@ def _ib_income_ticker(description: str):
     return ticker.replace(' ', '.'), isin
 
 
+def _ib_income_ticker_strict(description: str, where: str,
+                             section: str):
+    """`_ib_income_ticker` for a row that is BOOKED: a Dividends or
+    Withholding Tax description with no leading `TICKER (ISIN)` token
+    is refused naming the file line. The fallback invented UNKNOWN.US or
+    a word of the text ('CASH.DIVIDEND...US') and a CAD-paid Canadian
+    eligible dividend was estimated as a foreign one (A2-0780). A
+    withholding row on credit interest (IB: 'Withholding @ 20% on Credit
+    Interest for MAY-2024') names no security: it is booked on CASH, the
+    symbol the Interest section books the interest itself on."""
+    if _IB_INCOME_TICKER_RE.search(description or ''):
+        return _ib_income_ticker(description)
+    if section == 'Withholding Tax' and 'interest' in (description
+                                                       or '').lower():
+        return 'CASH', ''
+    raise BrokerageParseError(
+        f"{where}: the Description {description!r} has no leading "
+        f"'TICKER (ISIN)' token, so the security this {section} row "
+        f"belongs to is unknown — restore the row from the original IB "
+        f"statement (or download it again)")
+
+
 def _ib_posted_dividends(rows) -> List[tuple]:
     """(ticker, pay date) of every posted Dividends row of a statement
     (subtotals skipped) — the account-wide evidence that an accrual in
@@ -2786,7 +2808,8 @@ class IbBrokerage(BaseBrokerage):
                     self._cell(row, header_map, 'Amount'), field='Amount',
                     where=where)
 
-                ticker, isin = _ib_income_ticker(description)
+                ticker, isin = _ib_income_ticker_strict(description,
+                                                        where, section)
                 # Record (ticker, pay date) so the accrual diagnostic
                 # below can tell whether this dividend's cash has
                 # already been booked in this file.
@@ -3096,16 +3119,18 @@ class IbBrokerage(BaseBrokerage):
                 # from non-US dividends on the same security, so the
                 # foreign-tax-credit pairing broke for any non-US
                 # holding.
-                ticker, isin = _ib_income_ticker(description)
+                ticker, isin = _ib_income_ticker_strict(description,
+                                                        where, section)
 
-                ext = _isin_ext(isin, ticker, isin_fallback)
+                ext = (None if ticker == 'CASH'
+                       else _isin_ext(isin, ticker, isin_fallback))
 
                 transactions.append({
                     'action': 'TAX',
                     'date': date,
                     'time': '09:30:00',
                     'date_settle': date,
-                    'symbol': f"{ticker}.{ext}",
+                    'symbol': f"{ticker}.{ext}" if ext else ticker,
                     'quantity': 0.0,
                     'currency': currency,
                     'net_amount': amount,

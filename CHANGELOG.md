@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- IB parser: a Dividends or Withholding Tax row whose Description has
+  no leading `TICKER (ISIN)` token is refused naming the file line; it
+  was booked on UNKNOWN.US (or a word of the text) and a Canadian
+  eligible dividend was estimated as foreign. A withholding row on
+  credit interest is booked on CASH, like the interest (A2-0780).
 - `taxjson export`: a tv_exchange.map saved with a BOM keeps its first
   rule, and a holdings TOML row whose quantity or total_cost is not a
   number (or whose symbol is blank) is refused naming the row in every
