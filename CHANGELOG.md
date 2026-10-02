@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `taxjson t1135 --year-wash-only`: the superficial loss excluded from the
+  cost columns is the sum of each account's share of a blended pool's
+  deferral, not the largest account's share (re-audit A2-1552).
 - `taxjson close-year` blends the taxable accounts in taxjson.toml order,
   as the run does: with two accounts trading one security at the same
   moment, the year-end record could carry a superficial-loss deferral
