@@ -181,5 +181,61 @@ class TestOverlapReadsUtf16(unittest.TestCase):
         self._check(self._ROWS.encode("utf-8-sig"))
 
 
+class TestFlexSpanIgnoresNumbers(unittest.TestCase):
+    """A2-0083: an 8-decimal P/L ('-26.20190219') or a Mark-to-Market
+    figure is not a date; the span comes from the Statement Period or
+    the activity date columns."""
+
+    _OLD = ('"Statement","Header","Field Name","Field Value"\n'
+            '"Statement","Data","Period","January 1, 2025 - December 31, 2025"\n'
+            '"Trades","Header","DataDiscriminator","Asset Category",'
+            '"Currency","Symbol","Date/Time","Quantity","T. Price"\n'
+            '"Trades","Data","Order","Stocks","USD","XYZ",'
+            '"2025-03-05, 10:00:00","10","5"\n'
+            '"Trades","Data","Order","Stocks","USD","XYZ",'
+            '"2025-11-05, 10:00:00","-10","6"\n')
+    _YTD = ('"Statement","Header","Field Name","Field Value"\n'
+            '"Statement","Data","Period","January 1, 2026 - January 20, 2026"\n'
+            '"Mark-to-Market Performance Summary","Header","Asset Category",'
+            '"Symbol","Mark-to-Market P/L Total"\n'
+            '"Mark-to-Market Performance Summary","Data","Stocks","ABC",'
+            '"-26.20190219"\n'
+            '"Withholding Tax","Header","Currency","Date","Description",'
+            '"Amount"\n'
+            '"Withholding Tax","Data","USD","2025-04-03","ABC adj","1.5"\n'
+            '"Trades","Header","DataDiscriminator","Asset Category",'
+            '"Currency","Symbol","Date/Time","Quantity","T. Price"\n'
+            '"Trades","Data","Order","Stocks","USD","ABC",'
+            '"2026-01-06, 10:00:00","1","5"\n')
+
+    def test_decimal_and_adjustment_do_not_widen_span(self):
+        from taxjson.bin.taxjson_run import _flex_lost_dates, _flex_span
+        self.assertEqual(_flex_span(self._YTD), ("2026-01-01", "2026-01-20"))
+        self.assertEqual(_flex_lost_dates(self._OLD, self._YTD, 2025),
+                         ["2025-03-05", "2025-11-05"])
+
+    def test_no_period_uses_activity_dates_only(self):
+        from taxjson.bin.taxjson_run import (_flex_dates, _flex_lost_dates,
+                                             _flex_span)
+        ytd = "\n".join(l for l in self._YTD.splitlines()
+                        if '"Period"' not in l) + "\n"
+        self.assertNotIn("2019-02-19", _flex_dates(ytd))
+        self.assertEqual(_flex_span(ytd), ("2026-01-06", "2026-01-06"))
+        self.assertEqual(_flex_lost_dates(self._OLD, ytd, 2025),
+                         ["2025-03-05", "2025-11-05"])
+
+    def test_headerless_rows_still_dated(self):
+        # Rows with no section Header (older fixtures): a cell that IS a
+        # date or date-time counts; a number containing digits does not.
+        from taxjson.bin.taxjson_run import _flex_dates
+        text = ('"Trades","Data","Order","Stocks","USD","XYZ",'
+                '"2025-03-05, 10:00:00","10","-26.20190219"\n')
+        self.assertEqual(_flex_dates(text), ["2025-03-05"])
+
+    def test_full_year_replacement_is_not_refused(self):
+        from taxjson.bin.taxjson_run import _flex_lost_dates
+        self.assertEqual(_flex_lost_dates(self._OLD, self._OLD, 2025), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,11 @@
   or UTF-8-BOM Questrade export the way the parser does. A UTF-16
   manual export showed no overlap, so it double-counted next to the
   fetched file with no warning (audit A2-0256, A2-1040).
+- `taxjson fetch` (IBKR Flex): the guard that refuses a download which
+  would drop the tax year's activity takes the download's span from its
+  Statement Period (else its activity dates), not from any digits on any
+  row. An 8-decimal P/L such as -26.20190219 read as 2019-02-19 and
+  silenced the refusal (audit A2-0083).
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

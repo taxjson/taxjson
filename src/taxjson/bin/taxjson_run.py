@@ -12262,34 +12262,93 @@ def _qt_trim_file(path: Path, start_iso: str, end_iso: str) -> int:
     return removed
 
 
-_FLEX_DATE_RE = re.compile(r"(?<!\d)(20\d{2})-?(0[1-9]|1[0-2])-?"
-                           r"(0[1-9]|[12]\d|3[01])(?!\d)")
+# A cell that IS a date or date-time ("2025-03-05", "20250305",
+# "2025-03-05, 10:00:00", "20250305;100000"), never digits inside a
+# number: "-26.20190219" read as 2019-02-19 and widened the download's
+# span so the replace guard stayed silent (audit A2-0083).
+_FLEX_DATE_RE = re.compile(r"^\s*(20\d{2})-?(0[1-9]|1[0-2])-?"
+                           r"(0[1-9]|[12]\d|3[01])"
+                           r"(?:[,; T]\s*\d{1,2}:?\d{2}(?::?\d{2})?)?\s*$")
+# Sections whose rows are not activity (statement metadata, summaries,
+# performance figures): never dated from.
+_FLEX_SKIP_SECTIONS = ("Statement", "Account Information")
+# Activity sections whose dates bound what a download covers when its
+# Statement section names no Period.
+_FLEX_SPAN_SECTIONS = ("Trades", "Dividends", "Transfers")
+
+
+def _flex_rows(text: str):
+    """(section, date-cells) for each Data row of an IB section,Header/
+    Data CSV. With a section Header, only its date columns (a header
+    holding 'Date' — 'Date/Time', 'Date', 'Settle Date', ...) count;
+    without one, every cell that is a whole date counts."""
+    import csv as _csv
+    import io as _io
+    headers: Dict[str, List[str]] = {}
+    for row in _csv.reader(_io.StringIO(text)):
+        if len(row) < 3:
+            continue
+        sec, kind = row[0].lstrip("\ufeff").strip(), row[1].strip()
+        if kind == "Header":
+            headers[sec] = [h.strip() for h in row[2:]]
+            continue
+        if kind != "Data" or sec in _FLEX_SKIP_SECTIONS:
+            continue
+        cells = row[2:]
+        hdr = headers.get(sec)
+        if hdr:
+            cells = [c for h, c in zip(hdr, cells)
+                     if "date" in h.lower() and "ex date" not in h.lower()
+                     and "pay date" not in h.lower()]
+        out = []
+        for c in cells:
+            m = _FLEX_DATE_RE.match(c)
+            if m:
+                out.append(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+        yield sec, out
 
 
 def _flex_dates(text: str) -> List[str]:
-    """Sorted ISO dates found on an IB statement's data rows (the
-    Statement section — generation time, period — is skipped)."""
-    out = set()
-    for line in text.splitlines():
-        if line.lstrip('"').startswith("Statement"):
-            continue
-        for m in _FLEX_DATE_RE.finditer(line):
-            out.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
-    return sorted(out)
+    """Sorted ISO activity dates of an IB statement's data rows (the
+    Statement section — generation time, period — is skipped; with a
+    section Header only its date columns are read)."""
+    return sorted({d for _s, ds in _flex_rows(text) for d in ds})
+
+
+def _flex_span(text: str) -> Optional[Tuple[str, str]]:
+    """(first, last) ISO day a download covers: its Statement Period
+    when it names one, else the span of its Trades / Dividends /
+    Transfers dates (a late withholding-tax adjustment dated in an
+    earlier year does not stretch it). None when nothing is dated."""
+    import csv as _csv
+    import io as _io
+    from taxjson.lib.brokerages.ib_extractor import _ib_period
+    for row in _csv.reader(_io.StringIO(text)):
+        if (len(row) >= 4 and row[0].lstrip("\ufeff").strip() == "Statement"
+                and row[1].strip() == "Data"
+                and row[2].strip() == "Period"):
+            span = _ib_period(row[3])
+            if span:
+                return span[0].isoformat(), span[1].isoformat()
+    days = sorted({d for s, ds in _flex_rows(text)
+                   if s in _FLEX_SPAN_SECTIONS for d in ds})
+    if not days:
+        days = _flex_dates(text)
+    return (days[0], days[-1]) if days else None
 
 
 def _flex_lost_dates(existing: str, new: str, year: Any) -> List[str]:
     """Dates of `year` the existing ib_flex.csv covers but the new
-    download's date range does not: overwriting would delete those
-    rows. A Flex query set to 'Year to date' re-fetched in January
+    download's span (_flex_span) does not: overwriting would delete
+    those rows. A Flex query set to 'Year to date' re-fetched in January
     replaced a whole year of activity at exit 0 (S007-00)."""
     if not year or not existing:
         return []
     old = [d for d in _flex_dates(existing) if d[:4] == str(year)]
-    got = _flex_dates(new)
+    got = _flex_span(new)
     if not got:
         return old
-    return [d for d in old if not got[0] <= d <= got[-1]]
+    return [d for d in old if not got[0] <= d <= got[1]]
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
@@ -12543,7 +12602,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             _existing = (out.read_text(encoding="utf-8", errors="replace")
                          if out.exists() else "")
             _lost = _flex_lost_dates(_existing, text, _pyear)
-            _got = _flex_dates(text)
+            _got = _flex_span(text)
             _span = f"{_got[0]}..{_got[-1]}" if _got else "no dated rows"
             if _lost:
                 _new = out.with_name(out.name + ".new")
