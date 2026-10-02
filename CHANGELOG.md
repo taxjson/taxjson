@@ -123,6 +123,43 @@
   still are (tax-logic US-WASH-17; audit A2-0001, A2-0017, A2-0553).
   The wash radar's US EXITABLE advice now says the full exit must be
   one order.
+- **phantoms.json is applied to the native books too.** The raw
+  holdings pass ran without it, so `reports/<account>_holdings.toml`
+  (and the web positions) listed every phantom pair as a short, and
+  `taxjson gains` showed a phantom-basis sale as a realized gain; both
+  now match `sum` and `list`, and `gains` notes the sales left for
+  manual reporting (audit A2-0111, A2-0305).
+- **A phantoms.json entry on a real short or a written option is
+  flagged.** An entry for a short the broker marks as a short sale
+  (RBC `SHORT.`, IB code `O`) or for an option the broker never coded
+  closing is still applied, but every applier (run, t1135, wash-radar,
+  option-boundary, apply-distributions) prints an ATTENTION line, the
+  run echoes it, and `find-missing-history` and the checklist ask to
+  remove it (audit A2-0308, A2-0310, A2-0311, A2-0637, A2-0638,
+  A2-0639).
+- **find-missing-history:** a buy the broker marks as covering a short
+  (RBC `COVER SHORT.`, IB code `C`) with no short in the data is
+  reported as missing history (A2-0306, A2-0175); an ASSIGN stock leg
+  counts in the $0-basis check (A2-0307); a Norbert's-gambit pair
+  folded by a ticker.map JOURNAL line is no longer a one-day phantom
+  short, and `--gen-phantoms` leaves it out (A2-0309, A2-0636); a
+  decimal-comma merger ratio is left out of the hint instead of read as
+  125 (A2-1096); a Canadian plan name in an account label matches as a
+  whole word, so a taxable `sunlife` is not a LIF (A2-1097).
+- **`find-missing-history --gen-phantoms` never overwrites a reviewed
+  file** (nor does `taxjson-gains --suggest-phantoms`): it stops unless
+  `--force`, which keeps a `.bak` (audit A2-0312).
+- **A dangling symlink for a project map stops the run.** A
+  `ticker.map`, `phantoms.json`, `distributions.map` or
+  `crypto_ticker.map` that exists as a name but cannot be read was
+  treated as absent and the run exited 0 with other gains (A2-0313).
+- **US: a move between two of your own taxable accounts is flagged.**
+  The per-account lots do not carry the moved lot's basis, so the
+  receiving account's sale read as a short and the run exited 0; the
+  run now prints ATTENTION for each such move and `--strict` stops
+  (tax-logic US-BASIS-05; the carry itself is in KNOWN_ISSUES, audit
+  A2-0032).
+
 - Tests: mutation pins for fill-crypto, the tax estimate, merge2,
   option-boundary, crypto-sends, income dating, the country helpers
   and the settlement calendars (audit G1-0): the kill score of those

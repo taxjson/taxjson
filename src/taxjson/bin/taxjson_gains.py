@@ -263,7 +263,17 @@ def _suggest_phantoms_and_exit(args, transactions, sheltered_transactions,
                 f"{year_str}. Use --all-history to include them.",
                 file=sys.stderr,
             )
-    Path(args.suggest_phantoms).write_text(format_suggestions(candidates), encoding='utf-8')
+    _out = Path(args.suggest_phantoms)
+    # A reviewed file (real shorts pruned, pairs added by hand) is a
+    # user record: never rewritten (audit A2-0312). An empty file (the
+    # `find-missing-history --gen-phantoms` wrapper's temp file) is ours.
+    if _out.is_file() and _out.stat().st_size > 0:
+        print(f"taxjson-gains: error: --suggest-phantoms {_out} already "
+              f"exists — not overwritten (it may be a reviewed "
+              f"phantoms.json). Write to a new file and merge by hand, or "
+              f"delete it first.", file=sys.stderr)
+        raise SystemExit(2)
+    _out.write_text(format_suggestions(candidates), encoding='utf-8')
     n_reg = sum(1 for c in candidates if c.registered)
     print(
         f"Wrote {len(candidates)} candidate(s) to {args.suggest_phantoms} "

@@ -40,7 +40,8 @@ from taxjson.lib.cli_diag import tax_year
 from taxjson.lib.core import load_transactions
 from taxjson.lib.phantom_holdings import (
     detect_phantoms, assess_tax_year_relevance, detect_zero_basis_acquisitions,
-    detect_corp_action_links,
+    detect_corp_action_links, detect_unbacked_covers, stale_phantom_entries,
+    stale_entry_message,
 )
 
 
@@ -254,9 +255,21 @@ def main(argv=None):
               "input — a row's tax year is taken from its SETTLEMENT date "
               "(run it on a project's work/ files to use the project's "
               "country and tax_date)", file=sys.stderr)
+    # ticker.map JOURNAL symbols: a same-day Norbert's-gambit pair is
+    # not a one-day phantom short (audit A2-0636 / A2-0309).
+    journal = set()
+    if args.ticker_map:
+        from taxjson.lib.phantom_holdings import journal_targets
+        try:
+            journal = journal_targets(args.ticker_map)
+        except Exception as e:                      # noqa: BLE001
+            print(f"taxjson-missing-history: warning: could not read "
+                  f"{args.ticker_map} ({e}) — JOURNAL pairs are walked "
+                  f"in clock order.", file=sys.stderr)
     candidates = detect_phantoms(txs, include_options=args.include_options,
                                  include_broker_shorts=True,
-                                 registered_accounts=types or None)
+                                 registered_accounts=types or None,
+                                 journal_symbols=journal)
     if args.account:
         candidates = [c for c in candidates if c.account == args.account]
     # A short the broker itself marks as a short sale (RBC "SHORT." /
@@ -266,8 +279,37 @@ def main(argv=None):
     broker_shorts = [c for c in candidates if c.broker_marked_short]
     candidates = [c for c in candidates if not c.broker_marked_short]
     short_rows = [r for r in assess_tax_year_relevance(txs, candidates, args.year,
-                                                       date_basis=basis)
+                                                       date_basis=basis,
+                                                       journal_symbols=journal)
                   if (r.candidate.symbol, r.candidate.account) not in linked_old]
+
+    # --- 1b. Broker-marked covers no short in the data backs (RBC
+    #         "COVER SHORT.", IB code C on a buy): the short was opened
+    #         before the data — the mirror of a sale going short (audit
+    #         A2-0306, IB twin A2-0175). ---
+    covers = [c for c in detect_unbacked_covers(
+                  txs, include_options=args.include_options,
+                  date_basis=basis, journal_symbols=journal)
+              if not args.account or c.account == args.account]
+
+    # --- 1c. phantoms.json entries today's detection would NOT propose
+    #         (a broker-marked real short, a written option): applied by
+    #         the run anyway, so listed for removal (A2-0639 / A2-0311). ---
+    stale = []
+    ph_pairs = set()
+    if args.phantoms:
+        try:
+            for e in json.loads(Path(args.phantoms).read_text(
+                    encoding="utf-8")) or []:
+                if isinstance(e, dict) and e.get("symbol") \
+                        and e.get("account"):
+                    ph_pairs.add((str(e["symbol"]).strip().upper(),
+                                  str(e["account"]).strip()))
+        except (OSError, ValueError):
+            pass                     # reported below (the _ph read)
+        stale = [e for e in stale_phantom_entries(txs, ph_pairs)
+                 if not args.account or e.account == args.account]
+    stale_pairs = {(e.symbol.upper(), e.account) for e in stale}
 
     # --- 2. $0-cost corp-action acquisitions later sold ---
     zero_rows = [r for r in detect_zero_basis_acquisitions(
@@ -285,13 +327,55 @@ def main(argv=None):
                     else "marks the sales SHORT." if c.short_marker
                     in ('', 'SHORT.')
                     else f"marks the sales short ({c.short_marker})")
+            _listed = (str(c.symbol).upper(), c.account) in stale_pairs
             print(f"  {c.symbol} [{c.account}] went short on "
                   f"{c.first_negative_date} (peak {c.peak_short:g}); the "
-                  f"broker {_how} — nothing to fix, do not "
-                  f"add a phantom for it.")
+                  f"broker {_how} — "
+                  + ("but phantoms.json LISTS it: remove that entry."
+                     if _listed else
+                     "nothing to fix, do not add a phantom for it."))
+
+    if stale:
+        # Heading starts with REMOVE: the checklist counts these rows.
+        print(f"\n## phantoms.json entries that are not missing history: "
+              f"{len(stale)}")
+        print("REMOVE from phantoms.json - the run applies them and they "
+              "move a real gain or loss off the totals:")
+        for e in stale:
+            print(f"{e.symbol} {e.account}")
+            print(f"    {stale_entry_message(e)}")
+
+    if covers:
+        print(f"\n## Covers of a short opened before the data (missing "
+              f"history): {len(covers)}")
+        yr_c = str(args.year) if args.year else None
+        aff = [c for c in covers if yr_c is None or c.date.startswith(yr_c)]
+        oth = [c for c in covers if c not in aff]
+        hdr = (f"{'Symbol':<24} {'Account':<10} {'Date':<12} "
+               f"{'Unbacked':>12} {'Cost':>14} {'Marker'}")
+        for title, rows in (
+                ((f"AFFECTS {yr_c} - covering the short is the disposition; "
+                  f"its gain or loss is missing (the books carry the buy "
+                  f"as a new long). Add the short sale that opened it "
+                  f"(date, proceeds) to a .tt file in this account:")
+                 if yr_c else
+                 "Broker-marked covers with no short in the data:", aff),
+                (f"NOT relevant to {yr_c} - covers in other years:", oth)):
+            if not rows:
+                continue
+            print(f"\n{title}")
+            print("-" * len(hdr))
+            print(hdr)
+            print("-" * len(hdr))
+            for c in rows:
+                print(f"{c.symbol:<24} {c.account:<10} {c.date:<12} "
+                      f"{c.unbacked_qty:12.4f} {c.proceeds:14.2f} "
+                      f"{c.marker}")
 
     if not short_rows and not zero_rows and not links:
         scope = f" (account {args.account})" if args.account else ""
+        if stale or covers:
+            return _incomplete(0)
         if unchecked:
             print(f"No missing-cost-basis issues found{scope} in the "
                   f"books that loaded.")

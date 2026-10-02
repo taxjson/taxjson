@@ -866,10 +866,12 @@ def prepare_books(transactions, sheltered_transactions=(),
         # 30" and a permanent superficial-loss denial is missed. Each
         # pair's opening is sized on its own account's rows, so the
         # three books never double-apply one entry.
+        # (Stale-entry ATTENTION lines come from the main book only:
+        # a context book's pair is its own account's stage to flag.)
         sheltered_transactions, _sh_log = synthesize_openings(
-            sheltered_transactions, phantoms)
+            sheltered_transactions, phantoms, flag_stale=False)
         affiliated_transactions, _af_log = synthesize_openings(
-            affiliated_transactions, phantoms)
+            affiliated_transactions, phantoms, flag_stale=False)
         _ctx = {}
         for _label, _log in (('sheltered', _sh_log),
                              ('affiliated', _af_log)):
