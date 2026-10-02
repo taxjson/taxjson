@@ -11,7 +11,7 @@ dropped).
   --sheltered context (A2-0536, S008-07) and the [estimate] deductions
   instalments builds on (A2-0536, R1-213).
 
-Synthetic data only (account 55500001 is fake).
+Synthetic data only (a fake Questrade account number).
 """
 import json
 import os
