@@ -16,6 +16,7 @@ from taxjson.bin import taxjson_filed as F
 from taxjson.bin.taxjson_carryover import (build_canada_ledger, load_claimed,
                                            main, render, yearly_nets)
 from taxjson.lib import checklist as cl
+from tax_rules import rule
 
 
 def tx(date_, qty, net, price, symbol="XEI.TO", currency="CAD"):
@@ -241,6 +242,7 @@ class TestLockFormLines(unittest.TestCase):
 
 class TestSnapshotWrite(unittest.TestCase):
 
+    @rule("CA-RPT-08")
     def test_totals_rounded_once(self):
         # S031-20: three accounts each denying 100.0045 -> 300.01.
         raw = {a: {"disallowed": 100.0045, "realized": 0.0}

@@ -8,6 +8,7 @@ import unittest
 from datetime import date, timedelta
 
 from taxjson.bin import taxjson_instalments as I
+from tax_rules import rule
 
 
 class TestWaived(unittest.TestCase):
@@ -65,6 +66,7 @@ class TestQuartersAddUp(unittest.TestCase):
                          ["paid"] * 4)
 
 
+@rule("CA-RPT-11")
 class TestConfiguredScheduleStartingLate(unittest.TestCase):
     """S034-15"""
 

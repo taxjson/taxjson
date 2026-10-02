@@ -25,6 +25,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -400,6 +401,7 @@ class TestGainsNamesSkippedRawStage(unittest.TestCase):
 
 
 # ------------------------------------------------- S044-21 list --date
+@rule("CA-ACB-01")
 class TestListAsOfSaysPerAccount(unittest.TestCase):
     def test_label_and_note_name_the_per_account_basis(self):
         a = "BUYSELL 2025-03-03 10:00:00 ZZZ.TO 100 CAD 30.00 -3000.00 0.00\n"

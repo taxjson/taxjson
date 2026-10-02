@@ -259,6 +259,7 @@ class TestSplitGainsFeeMap(unittest.TestCase):
         self.assertAlmostEqual(fees['CAD']['total'], 11.15, places=9)
 
 
+@rule("CA-ACB-01")
 class TestSplitGainsBlendedInventoryApportioned(unittest.TestCase):
     """S050-22: an account-less (s.47 blended) inventory row is split by
     each account's own units at the blended ACB per share."""
