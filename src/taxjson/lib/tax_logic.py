@@ -570,7 +570,9 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
             Rule("CA-ACB-06", "Return of capital lowers the ACB."),
             Rule("CA-ACB-07",
                  "Received with no shares held, or beyond the ACB, it is a "
-                 "capital gain and the ACB is nil (s.40(3)).", cont=True),
+                 "capital gain and the ACB is nil (s.40(3)); Schedule 3 "
+                 "shows that gain with no proceeds (13199 = 0, the gain on "
+                 "13200).", cont=True),
             Rule("CA-ACB-13",
                  "A basis increase (a notional distribution) posted after "
                  "the position was fully sold has no shares to raise: it "

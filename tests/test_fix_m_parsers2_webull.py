@@ -10,6 +10,7 @@ from pathlib import Path
 
 from taxjson.lib.brokerages.base import BrokerageParseError
 from taxjson.lib.brokerages.webull import WebullBrokerage
+from tax_rules import rule
 
 _PRE = (",,,,,,,,\n"
         "Account Number / Numéro de compte:,,,,,,,55500001,\n"  # pii-ok: synthetic id
@@ -53,6 +54,8 @@ _LONGCALL = (_PRE + _H25 +
              'USD,25-03-2025,BUY,XYZ,XYZ CORP,SHS,100,50.00,,"({net})"\n')
 
 
+@rule("CA-OPT-06")
+@rule("US-OPT-02")
 class TestAssignmentHeuristic(unittest.TestCase):
     """R1-15 / R1-94 / R1-175: an expiry + an unrelated trade at the
     strike must not silently become an exercise."""
@@ -79,6 +82,8 @@ class TestAssignmentHeuristic(unittest.TestCase):
         self.assertIn("XYZ250321C00050000.US", err)
 
 
+@rule("CA-OPT-06")
+@rule("US-OPT-02")
 class TestAssignmentPairingOrder(unittest.TestCase):
     """S066-12: the option CLOSEST to the stock leg wins, whatever the
     row order."""
@@ -130,6 +135,8 @@ class TestAssignmentUnderlyingFromSymbolColumn(unittest.TestCase):
                          ["ASSIGN", "ASSIGN", "BUYSELL"])
 
 
+@rule("CA-OPT-06")
+@rule("US-OPT-02")
 class TestAssignmentAcrossFiles(unittest.TestCase):
     """S065-24: a Dec-31 assignment whose stock leg settles in January
     sits in the NEXT year's settlement-dated file."""

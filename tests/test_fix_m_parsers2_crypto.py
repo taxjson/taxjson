@@ -25,6 +25,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from tax_rules import rule
 
 CB_HEADER = ("ID,Timestamp,Transaction Type,Asset,Quantity Transacted,"
              "Price Currency,Price at Transaction,Subtotal,"
@@ -234,6 +235,8 @@ class TestSymbolCase(unittest.TestCase):
         self.assertEqual({t["symbol"] for t in _bs(txs)}, {"SOL"})
 
 
+@rule("CA-CRYPTO-01")
+@rule("US-CRYPTO-01")
 class TestBondedStakingCodes(unittest.TestCase):
     """S014-01 / S061-08."""
 
@@ -259,6 +262,8 @@ class TestBondedStakingCodes(unittest.TestCase):
         self.assertEqual({t["symbol"] for t in txs}, {"DOT"})
 
 
+@rule("CA-CRYPTO-01")
+@rule("US-CRYPTO-01")
 class TestEth2IsEth(unittest.TestCase):
     """R1-110 (Coinbase) / S061-11 (Kraken)."""
 

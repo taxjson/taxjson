@@ -312,6 +312,7 @@ class TestDaysHeldDrivesScheduleThreeAcqYear(unittest.TestCase):
         self.assertEqual(schedule3(res, 2025)['XYZ.TO']['acq_year'], '2023')
 
 
+@rule("CA-SL-02")
 class TestWashWindowBalanceAtDayThirty(unittest.TestCase):
     """S069-18: wash_window.bal_at_end counts rows dated ON day +30."""
 

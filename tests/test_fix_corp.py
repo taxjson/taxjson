@@ -10,6 +10,7 @@ from pathlib import Path
 
 from taxjson.lib.core import TaxTransaction
 from taxjson.lib.corporate_timeline import SplitTimeline
+from tax_rules import rule
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -43,6 +44,7 @@ type = "taxable"
 
 
 # --------------------------------------------------------------- R1-135
+@rule("CA-CORP-01")
 class TestSplitBookedOnTwoDates(unittest.TestCase):
     """R1-135: one split booked on two dates by two brokers must apply
     once (the event key used to include the exact date)."""
@@ -196,6 +198,7 @@ def _ib_spinoff_project(tmp, acct_type='taxable'):
 
 
 # --------------------------------------------------------------- R1-137
+@rule("CA-CORP-06")
 class TestIbSpinoffElection(unittest.TestCase):
     """R1-137: an IB 'Spinoff' row goes through the spin-off election
     (it was always booked as a dividend at IB's Value)."""
@@ -247,6 +250,7 @@ class TestIbSpinoffElection(unittest.TestCase):
 
 
 # --------------------------------------------------------------- R1-134
+@rule("CA-CORP-07")
 class TestSpinoffBrokerValue(unittest.TestCase):
     """R1-134: the deemed dividend uses the broker's value when it
     reported one; a $0 taxable spin-off warns on every run."""

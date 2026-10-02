@@ -218,6 +218,7 @@ class TestAssignmentRootResolution(unittest.TestCase):
     from the delivered line (RCI for RCI.B.TO, BRKB for BRK.B.US, F:CL
     for F:CLG6.US) still rolls the premium into that line."""
 
+    @rule("CA-OPT-08")
     def test_ca_montreal_class_root(self):
         rows = """
             BUYSELL 2025-12-01 10:00:00 RCI260116P00050000.TO -1 CAD 2 199
@@ -231,6 +232,7 @@ class TestAssignmentRootResolution(unittest.TestCase):
         self.assertAlmostEqual(sale['cost'], 4801.0, places=2)
         self.assertEqual(_rows(res, 'RCI260116P00050000.TO'), [])
 
+    @rule("US-OPT-05")
     def test_us_brkb_root(self):
         rows = """
             BUYSELL 2025-06-02 10:00:00 BRKB251219C00050000.US 1 USD 5 500
@@ -244,6 +246,7 @@ class TestAssignmentRootResolution(unittest.TestCase):
         self.assertNotIn('2025', yrs)
         self.assertAlmostEqual(yrs['2026'], -301.0, places=2)
 
+    @rule("CA-OPT-08")
     def test_ca_futures_option_exercise(self):
         rows = """
             BUYSELL 2025-11-03 10:00:00 F:CL260114C00060000.US 1 USD 2000 2000
@@ -599,6 +602,7 @@ class TestPhantomRowsInTracesAndExplain(unittest.TestCase):
                  '--no-wash', f)
         self.assertNotIn('WASH+', p.stdout)
 
+    @rule("CA-SL-04")
     def test_affiliated_help_excludes_related_persons(self):
         # S033-15.
         for mod in ('taxjson.bin.taxjson_gains', 'taxjson.bin.taxjson_explain'):
@@ -758,6 +762,7 @@ class TestGrantTiming(unittest.TestCase):
         self.assertIn('--option-premium-timing not given', r.stderr)
 
 
+@rule("CA-CORP-02")
 class TestMergerFold(unittest.TestCase):
 
     def test_merger_booked_on_two_dates_folds_into_one_event(self):
@@ -786,6 +791,7 @@ class TestMergerFold(unittest.TestCase):
 
 class TestDiagnosticsReachTheUser(unittest.TestCase):
 
+    @rule("CA-ACB-12")
     def test_superficial_loss_warnings_printed_and_split(self):
         # R1-325: a clean loss next to a phantom-basis sale.
         import json
@@ -903,6 +909,7 @@ class TestPerAccountSplit(unittest.TestCase):
         self.assertAlmostEqual(y[0]['qty'], 2000.0)
 
 
+@rule("CA-ACB-11")
 class TestPhantomWalks(unittest.TestCase):
     """phantom_holdings: detect / relevance / zero-basis / openings."""
 
@@ -1196,6 +1203,8 @@ class TestFxSources(unittest.TestCase):
         self.assertEqual(src['2006-06-15'][1], 'yahoo')
         self.assertEqual(errors, [])
 
+    @rule("CA-FX-03")
+    @rule("US-FX-02")
     def test_failed_yahoo_download_is_asked_again(self):
         # S055-02: an empty answer with no later data is a failure.
         T = self.T
