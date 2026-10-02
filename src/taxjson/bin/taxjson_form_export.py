@@ -505,6 +505,22 @@ def _foot_cells(proceeds_u: float, outlays_u: float,
         else:
             gain = round(proceeds - outlays, 2) + 0.0
     return proceeds, acb, outlays, gain
+def grant_buyback_units(e: Dict[str, Any], year: Optional[int]) -> float:
+    """Units of a (non-grant) SHORT close row that buy back a grant-
+    timing WRITE of the same year `year`: those contracts were disposed
+    of once (the write), so Schedule 3 and reconcile-slips count them
+    with the write, not again at the buy-back (R1-18, S003-04). A buy-
+    back of an EARLIER year's write, or of a close-timing (pre-since)
+    write, is a disposition of its own and counts (A2-0320, A2-0650,
+    A2-0651). The engine names the write years a close consumed in
+    `grant_closed`; a gains file written before that field nets every
+    short close (the old count)."""
+    gc = e.get("grant_closed")
+    if isinstance(gc, dict):
+        return sum(abs(float((v or {}).get("units") or 0.0))
+                   for y, v in gc.items()
+                   if year is None or str(y) == str(year))
+    return abs(float(e.get("qty") or 0.0))
 
 
 def build_schedule3(entries: List[Dict[str, Any]],
@@ -593,7 +609,7 @@ def build_schedule3(entries: List[Dict[str, Any]],
             rec["grant_units"] += qty
         else:
             if direction == "SHORT":
-                rec["short_close_units"] += qty
+                rec["short_close_units"] += grant_buyback_units(e, year)
             rec["units"] += qty
         rec["gain"] += gain
         rec["denied"] += float(e.get("disallowed_amount") or 0.0)

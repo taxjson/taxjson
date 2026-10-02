@@ -60,6 +60,41 @@
   list instead of calling them "stale or truncated saved books" with
   exit 1 (A2-0640, A2-1098), and quotes an option's per-share price at
   its declared contract size (A2-1099).
+- fees report: `--to cad` / `--to " CAD"` no longer converts CAD fees at
+  the 1.35 fallback (re-audit A2-0645); fees in a generic import with no
+  `[broker] name` no longer leave a broker listed as fee-free (A2-0646);
+  the title says the year is windowed by TRADE date, unlike the .sum and
+  trades-sum (A2-1102; JSON `meta.date_basis`).
+
+- `.sum` per-asset block: under grant timing each written option is one
+  trade whose result is its premium plus a same-year buy-back; the block
+  dropped every premium (an expired write vanished, a bought-back one
+  showed only its loss) while TOTAL REALIZED OPTION GAIN kept it
+  (re-audit A2-1114).
+
+- Schedule 3 / reconcile-slips: under grant timing a buy-back nets
+  against this year's write only when it closes a write of the same
+  year; a buy-back of an earlier year's write (grant or pre-`since`
+  close timing) next to a new write of the same series is its own
+  disposition (units 2, not 1; re-audit A2-0320, A2-0650, A2-0651). The
+  engine's buy-back rows name the write years they close
+  (`grant_closed`).
+- reconcile-slips: an option written under grant timing and still open
+  at Dec 31 is NO_SLIP_EXPECTED in the write year, and the close year's
+  T5008 (premium as proceeds) reconciles with a note; both years failed
+  (re-audit A2-0657). A computed row with no slip row keeps its listing
+  suffix in the label. Two columns that are both exact spellings of one
+  amount are refused as ambiguous (A2-0656), and a broker option
+  description with a grouped strike (`5,000.00`) is matched (A2-1113).
+
+- option-boundary: an assignment whose option root drops the share
+  class (RCI for RCI.B.TO, BRKB for BRK.B.US) is paired with its share
+  leg by the engine's own resolver; it was called cash-settled with
+  "no amendment" while the engine folds the premium (re-audit A2-0114,
+  a regression of S075-09, and A2-0328). A buy-back carried with a
+  negative net (a .tt book) is a cost of its magnitude ('net 500.00' and
+  '--101.00' before, A2-1111), and a contract on its own expiry day is
+  open, not 'expired, missing its expiry row' (A2-1112).
 
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a
