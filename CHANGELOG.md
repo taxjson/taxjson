@@ -22,6 +22,12 @@
   stray quote is one line, exit 2) (A2-1136, A2-1138); handoff flags a
   record closed before its year ended as a partial-year snapshot
   (A2-0349).
+- close-year's year-end cost places each superficial-loss addition
+  where the engine lands it (per replacement symbol, on its own trade
+  and settle date) instead of one lump on the first replacement, so a
+  January replacement's share is no longer in the Dec 31 cost; a US
+  record carries the §1091 basis addition `list` shows (A2-0669,
+  A2-0352, A2-1140, A2-0353).
 
 - Questrade / RBC: an option description whose strike is only partly
   readable ('2,50' read as 2, '1,0000' as 1000) is refused, and a

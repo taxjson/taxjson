@@ -136,6 +136,41 @@ def _parse_adjust(cmd: str) -> Optional[Dict[str, Any]]:
             "amount": amt}
 
 
+def _landings(w: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Where a superficial-loss record's s.53(1)(f) additions land: the
+    engine's own `adjusts` (one per taxable replacement, each with its
+    pool symbol, trade and settle stamps), else — a gains file written
+    before `adjusts` existed — the single lump `adjust_cmd`. The lump
+    put a multi-symbol allocation on the first symbol (A2-0352), a
+    January landing at Dec 31 (A2-0669), and on settle basis a bump
+    dated the trade day before the losing sale settled (A2-1140)."""
+    out: List[Dict[str, Any]] = []
+    if isinstance(w.get("adjusts"), list):
+        for a in w["adjusts"]:
+            try:
+                amt = float(a.get("amount") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if not a.get("symbol") or not a.get("date") or abs(amt) < 1e-9:
+                continue
+            out.append({"symbol": a["symbol"], "date": a["date"],
+                        "date_settle": a.get("date_settle") or a["date"],
+                        "time": a.get("time") or "00:00:00",
+                        "currency": a.get("currency") or "",
+                        "account": a.get("account") or "",
+                        "amount": amt})
+        if out:
+            cur = _parse_adjust(w.get("adjust_cmd") or "")
+            for a in out:
+                a["currency"] = a["currency"] or (cur or {}).get(
+                    "currency", "")
+        return out
+    a = _parse_adjust(w.get("adjust_cmd") or "")
+    if a:
+        out.append(dict(a, date_settle=a["date"], account=""))
+    return out
+
+
 def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
              run_gains: RunGains, common_flags: List[str],
              phantoms: Optional[Path] = None) -> Dict[str, Any]:
@@ -149,6 +184,11 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
         _ir = IncomeRules.from_settings(settings)
     except ValueError:          # no country: no record-date rule to apply
         _ir = IncomeRules(country="")
+    from taxjson.lib.country import settings_country
+    try:
+        us = settings_country(settings) == "usa"
+    except Exception:                               # noqa: BLE001
+        us = False
     sheltered = cache / "sheltered_base.json"
     sheltered_ids = {r.get("id") for r in _rows(sheltered)} \
         if sheltered.exists() else set()
@@ -162,32 +202,39 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                 rows += _rows(cache / f"{n}_base.json")
             if not rows:
                 continue
-            full = tdp / f"{g}_full.json"
-            full.write_text(json.dumps({"transactions": rows}))
-            tail = ["--taxable"] + common_flags
-            if sheltered.exists() and g == "equity":
-                tail += ["--sheltered", str(sheltered)]
-            if phantoms is not None and phantoms.exists():
-                tail += ["--incomplete-history", str(phantoms)]
-            full_out = tdp / f"{g}_full_gains.json"
-            run_gains(tail + [str(full)], full_out)
-            fdoc = json.loads(full_out.read_text(encoding="utf-8"))
+            fdoc: Dict[str, Any] = {}
+            if not us:          # §1091: the US engine re-runs below
+                full = tdp / f"{g}_full.json"
+                full.write_text(json.dumps({"transactions": rows}))
+                tail = ["--taxable"] + common_flags
+                if sheltered.exists() and g == "equity":
+                    tail += ["--sheltered", str(sheltered)]
+                if phantoms is not None and phantoms.exists():
+                    tail += ["--incomplete-history", str(phantoms)]
+                full_out = tdp / f"{g}_full_gains.json"
+                run_gains(tail + [str(full)], full_out)
+                fdoc = json.loads(full_out.read_text(encoding="utf-8"))
             deferred: Dict[str, float] = {}
             adjust_rows = []
             for i, w in enumerate(fdoc.get("wash_sales") or []):
                 if w.get("trigger_lot_id") in sheltered_ids:
                     continue            # permanent: lands in no taxable pool
-                a = _parse_adjust(w.get("adjust_cmd") or "")
-                if not a or not _d(a["date"]) or _d(a["date"]) > cut:
-                    continue
-                deferred[a["symbol"]] = deferred.get(a["symbol"], 0.0) \
-                    + a["amount"]
-                adjust_rows.append({
-                    "action": "ADJUST", "date": a["date"],
-                    "date_settle": a["date"], "time": a["time"],
-                    "symbol": a["symbol"], "currency": a["currency"],
-                    "net_amount": a["amount"], "quantity": 0.0,
-                    "account": names[0], "id": f"HANDOFF_WASH_{i}"})
+                for j, a in enumerate(_landings(w)):
+                    d = (_d(a.get("date_settle")) or _d(a.get("date"))
+                         if basis == "settle" else _d(a.get("date")))
+                    if d is None or d > cut:
+                        continue        # lands after Dec 31 (A2-0669)
+                    deferred[a["symbol"]] = deferred.get(a["symbol"], 0.0) \
+                        + a["amount"]
+                    adjust_rows.append({
+                        "action": "ADJUST", "date": a["date"],
+                        "date_settle": a.get("date_settle") or a["date"],
+                        "time": a.get("time") or "00:00:00",
+                        "symbol": a["symbol"],
+                        "currency": a.get("currency") or "",
+                        "net_amount": a["amount"], "quantity": 0.0,
+                        "account": a.get("account") or names[0],
+                        "id": f"HANDOFF_WASH_{i}_{j}"})
             # A trust ROC counts on its record date, as the engine books
             # it (CA-INC-DATE-ROC-TRUST; A2-0202).
             kept = [r for r in rows
@@ -196,7 +243,18 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                     and d <= cut]
             trunc = tdp / f"{g}_asof.json"
             trunc.write_text(json.dumps({"transactions": kept + adjust_rows}))
-            tail = ["--taxable", "--no-wash"] + common_flags
+            if us:
+                # The US engine adds a disallowed loss to the
+                # replacement lot's basis itself (§1091(d)) and records
+                # no ADJUST landing: the Dec-31 rows are re-run WITH the
+                # wash rule, so the year-end basis carries it, as `list`
+                # shows (A2-0353). A replacement after Dec 31 is not in
+                # a Dec-31 lot either way.
+                tail = ["--taxable"] + common_flags
+                if sheltered.exists() and g == "equity":
+                    tail += ["--sheltered", str(sheltered)]
+            else:
+                tail = ["--taxable", "--no-wash"] + common_flags
             if phantoms is not None and phantoms.exists():
                 tail += ["--incomplete-history", str(phantoms)]
             trunc_out = tdp / f"{g}_asof_gains.json"
@@ -212,6 +270,9 @@ def snapshot(cache: Path, cfg: Dict[str, Any], as_of: str,
                                          "deferred": 0.0})
                 p["qty"] += q
                 p["acb"] += float(h.get("total_cost") or 0.0)
+                if us:
+                    deferred[sym] = deferred.get(sym, 0.0) + float(
+                        h.get("deferred_wash") or 0.0)
             for sym, amt in deferred.items():
                 if sym in pos:
                     pos[sym]["deferred"] = round(amt, 2)

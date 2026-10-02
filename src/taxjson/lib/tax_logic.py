@@ -852,8 +852,10 @@ def _canada(s: Dict[str, Any]) -> List[RuleSection]:
                  "superficial-loss verdict turns on a boundary."),
             Rule("CA-RPT-08",
                  "`taxjson close-year` records each closed year's sales, "
-                 "year-end positions and cost, and trades settling in "
-                 "January; `taxjson handoff` checks the next year starts "
+                 "year-end positions and cost (each superficial-loss "
+                 "addition where the engine lands it, so a January "
+                 "replacement's share is not in the Dec 31 cost), and "
+                 "trades settling in January; `taxjson handoff` checks the next year starts "
                  "from exactly that, so no sale is reported twice or "
                  "never. It also flags a written option carried out of "
                  "the closed year that this project puts on another "
@@ -1368,8 +1370,9 @@ def _usa(s: Dict[str, Any]) -> List[RuleSection]:
                  "nothing, and a long call is listed as a warning only."),
             Rule("US-RPT-06",
                  "`taxjson close-year` records each closed year's sales, "
-                 "year-end positions and basis, its country and date "
-                 "basis; `check-filed` and `handoff` refuse a record "
+                 "year-end positions and basis (a disallowed loss "
+                 "included in the replacement's basis, as `list` shows), "
+                 "its country and date basis; `check-filed` and `handoff` refuse a record "
                  "closed under Canadian rules instead of recomputing it "
                  "under US law."),
         ]),

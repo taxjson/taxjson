@@ -324,5 +324,111 @@ class TestPartialYearRecord(unittest.TestCase):
             self.assertIn("partial-year snapshot", rep["partial"][0]["why"])
 
 
+GENERIC_MAP = """[columns]
+date="Date"
+settle="Settle"
+action="Type"
+symbol="Ticker"
+quantity="Shares"
+price="Price"
+amount="Amount"
+currency="Currency"
+[actions]
+"BUY"="buy"
+"SELL"="sell"
+"""
+
+
+def _year_end(p, year):
+    r = _run_cli(p, "run", "--no-input")
+    assert r.returncode == 0, r.stderr
+    r = _run_cli(p, "close-year")
+    assert r.returncode == 0, r.stderr
+    return json.loads((p / "filed" / f"{year}.json").read_text()
+                      )["year_end"]["equity"]
+
+
+class TestYearEndLandings(unittest.TestCase):
+    """close-year's year-end cost places each s.53(1)(f) addition where
+    the engine lands it (wash_sales[].adjusts), not the adjust_cmd lump."""
+
+    @rule("CA-RPT-08")
+    def test_january_landing_is_not_in_the_dec31_cost(self):
+        # A2-0669: 1,000 of the 2,000 denied loss lands on the Jan 5
+        # replacement; the lump put all 2,000 on the Dec 22 lot.
+        with tempfile.TemporaryDirectory() as td:
+            p = _project(Path(td) / "p", 2025, (
+                "BUYSELL 2025-06-02 09:30:00 FOO.TO 100 CAD 50 5000 0\n"
+                "BUYSELL 2025-12-19 09:30:00 FOO.TO -100 CAD 30 3000 0\n"
+                "BUYSELL 2025-12-22 09:30:00 FOO.TO 50 CAD 30 1500 0\n"
+                "BUYSELL 2026-01-05 09:30:00 FOO.TO 50 CAD 30 1500 0\n"))
+            ye = _year_end(p, 2025)
+            self.assertEqual(ye["FOO.TO"]["qty"], 50.0)
+            self.assertAlmostEqual(ye["FOO.TO"]["acb"], 2500.0, places=2)
+            self.assertAlmostEqual(ye["FOO.TO"]["deferred"], 1000.0,
+                                   places=2)
+
+    @rule("CA-RPT-08")
+    def test_multi_symbol_allocation_lands_per_symbol(self):
+        # A2-0352: the loss is replaced by shares AND a call; the lump
+        # booked all of it on the shares.
+        with tempfile.TemporaryDirectory() as td:
+            p = _project(Path(td) / "p", 2024, (
+                "BUYSELL 2024-11-01 10:00:00 XYZ.TO 200 CAD 20 4000 0\n"
+                "BUYSELL 2024-12-02 10:00:00 XYZ.TO -200 CAD 10 2000 0\n"
+                "BUYSELL 2024-12-05 10:00:00 XYZ.TO 100 CAD 10 1000 0\n"
+                "BUYSELL 2024-12-05 10:01:00 XYZ250321C00012000.TO 1 CAD "
+                "1 100 0\n"))
+            ye = _year_end(p, 2024)
+            inv = {i["symbol"]: i["total_cost"] for i in json.loads(
+                (p / "work" / "margin_gains_wash.json").read_text()
+            )["inventory"]}
+            for sym in ("XYZ.TO", "XYZ250321C00012000.TO"):
+                self.assertAlmostEqual(ye[sym]["acb"], inv[sym], places=2)
+            self.assertGreater(ye["XYZ250321C00012000.TO"]["deferred"], 0)
+
+    @rule("CA-RPT-08")
+    def test_settle_basis_bump_lands_after_the_losing_sale(self):
+        # A2-1140: the pre-loss bump was dated settle = trade day, so on
+        # settle basis it was applied before the sale settled (1,650
+        # instead of the engine's 1,800).
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "p"
+            p.mkdir()
+            (p / "taxjson.toml").write_text(
+                '[settings]\nyear = 2025\ncountry = "canada"\n'
+                'base_currency = "CAD"\n\n[accounts.zeta]\n'
+                'type = "taxable"\n\n[accounts.alpha]\ntype = "taxable"\n')
+            rows = {"zeta": ["2025-01-06,2025-01-07,BUY,XYZ.TO,100,10,"
+                             "-1000,CAD",
+                             "2025-03-03,2025-03-04,SELL,XYZ.TO,-100,12,"
+                             "1200,CAD"],
+                    "alpha": ["2025-03-03,2025-03-04,BUY,XYZ.TO,100,20,"
+                              "-2000,CAD"]}
+            for a, rs in rows.items():
+                (p / "inputs" / a).mkdir(parents=True)
+                (p / "inputs" / a / "generic.toml").write_text(GENERIC_MAP)
+                (p / "inputs" / a / "generic_t.csv").write_text(
+                    "Date,Settle,Type,Ticker,Shares,Price,Amount,Currency\n"
+                    + "\n".join(rs) + "\n")
+            ye = _year_end(p, 2025)
+            self.assertAlmostEqual(ye["XYZ.TO"]["acb"], 1800.0, places=2)
+
+    @rule("US-RPT-06")
+    def test_us_year_end_basis_carries_the_1091_addition(self):
+        # A2-0353: US wash_sales carry no adjust_cmd; the record dropped
+        # the disallowed loss from the replacement's basis.
+        with tempfile.TemporaryDirectory() as td:
+            p = _project(Path(td) / "p", 2024, (
+                "BUYSELL 2024-01-15 09:30:00 MSFT.US 100 USD 100 10000 0\n"
+                "BUYSELL 2024-12-10 09:30:00 MSFT.US -100 USD 98 9800 0\n"
+                "BUYSELL 2024-12-20 09:30:00 MSFT.US 60 USD 97.5 5850 0\n"),
+                country="usa", cur="USD")
+            ye = _year_end(p, 2024)
+            self.assertAlmostEqual(ye["MSFT.US"]["acb"], 5970.0, places=2)
+            self.assertAlmostEqual(ye["MSFT.US"]["deferred"], 120.0,
+                                   places=2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,6 @@ CA-DISP-04      ok              A short sale gain/loss is realized when covered
 CA-INC-01       imprecise       Dividends on Canadian listings (.TO, .V, .CN, .NE) count as Canadian, all others
 CA-INC-02       ok              Take the return's line numbers from your slips.
 CA-RPT-06       unpinned        estimate: interest is left out.
-CA-RPT-08       ok              close-year records each closed year's sales, year-end positions and cost, and tr
 US-BASIS-02     ok              Specific-lot identification is not supported.
 US-OPT-04       ok              Not modelled: §1256 60/40 contracts, §1233 and §1259.
 US-SEND-01      imprecise       Paying with crypto is a sale at fair value; `crypto-sends` records `payment` and
