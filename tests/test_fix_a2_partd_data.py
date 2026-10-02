@@ -43,6 +43,7 @@ class TestIbAsiaClock(unittest.TestCase):
     """A2-1302: every Asia-Pacific fill takes its exchange's date."""
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_jpy_hkd_cnh_evening_fills_move_to_the_local_day(self):
         from taxjson.lib.brokerages.ib_extractor import _ib_market_trade_date
         for cur in ("JPY", "HKD", "CNH", "SGD", "AUD", "NZD"):

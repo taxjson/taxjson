@@ -37,6 +37,7 @@ class TestIbExchangeTradeDate(unittest.TestCase):
         return txs[0]
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_christmas_night_fill_trades_next_day(self):
         t = self._one('2025-12-25, 22:07:41')
         self.assertEqual(t['date'], '2025-12-26')
@@ -46,12 +47,14 @@ class TestIbExchangeTradeDate(unittest.TestCase):
         self.assertEqual(t['broker_time'], '2025-12-25 22:07:41 ET')
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_sunday_night_fill_trades_monday(self):
         t = self._one('2026-07-05, 21:00:00')         # a Sunday
         self.assertEqual((t['date'], t['date_settle']),
                          ('2026-07-06', '2026-07-07'))
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_regular_and_after_midnight_fills_are_unchanged(self):
         for when, d in (('2026-07-08, 15:30:00', '2026-07-08'),
                         ('2026-07-08, 19:59:59', '2026-07-08'),
@@ -62,6 +65,7 @@ class TestIbExchangeTradeDate(unittest.TestCase):
                 self.assertNotIn('broker_time', t)
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_friday_night_fill_is_left_for_check_dates(self):
         # There is no Friday-night session: the row stays as stamped and
         # check-dates reports it.
@@ -74,11 +78,13 @@ class TestIbExchangeTradeDate(unittest.TestCase):
         self.assertEqual(hit[1], 'friday-night-trade')
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_tsx_and_option_rows_are_not_shifted(self):
         t = self._one('2026-07-08, 21:00:00', cur='CAD')
         self.assertEqual(t['date'], '2026-07-08')
 
     @rule("CA-DATE-SESSION")
+    @rule("US-DATE-SESSION")
     def test_asx_fill_is_dated_in_sydney(self):
         # 18:22 EST on Tue Mar 3 is 10:22 AEDT on Wed Mar 4.
         t = self._one('2026-03-03, 18:22:08', sym='QZA', cur='AUD')

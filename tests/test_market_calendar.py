@@ -73,6 +73,7 @@ class TestHolidayLists(unittest.TestCase):
         self.assertFalse(mc.is_settlement_day('2026-07-03', 'USD'))
 
     @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_canadian_bank_holidays_trade_but_do_not_settle(self):
         for d in ('2025-11-11', '2023-11-13', '2025-09-30', '2023-10-02'):
             self.assertTrue(mc.is_trading_day(d, 'CAD'), d)
@@ -91,6 +92,7 @@ class TestHolidayLists(unittest.TestCase):
 
 class TestSettlementDates(unittest.TestCase):
     @rule("CA-DATE-05")
+    @rule("US-DATE-05")
     def test_holiday_inside_the_lag(self):
         cases = [('2025-04-17', 'USD', '2025-04-21'),   # Good Friday
                  ('2025-01-17', 'USD', '2025-01-21'),   # MLK
