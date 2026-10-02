@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **RBC / Questrade: book-cost adjustment rows.** An RBC 'Return of
+  Capital' row lowers the ACB whatever its description words (a
+  'ROC ADJUSTMENT TO BOOK COST' raised it); a Return of Capital row
+  describing a NOTIONAL distribution is refused; a $0 adjustment books
+  nothing (it booked a 0.00 ADJUST under two contradicting lines); the
+  year-end ROC book-cost row is an ATTENTION that the same dollars are
+  usually already in the income totals (take income and box 42 from
+  the T3). A Questrade zero-cash row stating a book-cost adjustment is
+  an UNBOOKED warning, not an 'informational' row (re-audit A2-0094,
+  A2-0273, A2-1047, A2-1062).
 - **Questrade / RBC: reversals pair across all of an account's exports.**
   A Questrade stock-dividend, cash-in-lieu or DRIP reversal (and an RBC
   REI CANCEL) cancelled its original only inside its own file: with an

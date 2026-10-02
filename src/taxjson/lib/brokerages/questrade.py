@@ -133,6 +133,9 @@ _QT_CA_LEG_RE = re.compile(r'\b(SPINOFF|RTS\s+DIST|RIGHTS\s+DIST)\b',
 _BRW_BOOK_VALUE_RE = re.compile(
     r'BOOK\s+VALUE:?\s*\$?\s*([\d,]+(?:\.\d+)?)', re.IGNORECASE)
 _BRW_CNV_RE = re.compile(r'\bCNV\s*@\s*([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE)
+# A zero-cash row stating a book-cost change ("... RETURN OF CAPITAL
+# ADJUSTMENT TO BOOK COST $1.16"), the shape RBC exports.
+_QT_BOOK_COST_RE = re.compile(r'\bADJUSTMENT\s+TO\s+BOOK\s+COST\b', re.I)
 # A dividend Questrade posts NET of non-resident withholding.
 _NONRES_NET_RE = re.compile(r'NON-?RES\w*\.?\s+TAX\s+WITH', re.IGNORECASE)
 
@@ -874,6 +877,20 @@ class QuestradeBrokerage(BaseBrokerage):
                         net_of_tax.append(
                             f"{tx['symbol']} {tx['date']} "
                             f"{tx['net_amount']:.2f}")
+                elif _QT_BOOK_COST_RE.search(desc):
+                    # A zero-cash row that STATES a book-cost change
+                    # (RBC's year-end ROC / notional distribution shape,
+                    # re-audit A2-1062): the ACB moves and nothing here
+                    # books it — not an informational row.
+                    self.count_skip("book-cost adjustment row (see "
+                                    "warning)")
+                    self._unbooked(
+                        lineno, f"{(row.get('Symbol') or '').strip() or '?'}"
+                        f": the description states a book-cost adjustment "
+                        f"({desc[:80]!r}) on a row with no cash — NOT "
+                        f"booked; the ACB is wrong until it is. Book it as "
+                        f"a .tt ADJUST (a return of capital lowers the "
+                        f"ACB, a notional distribution raises it).")
                 else:
                     # Zero-net informational row: was marked consumed
                     # with nothing emitted, which the lint reconciled

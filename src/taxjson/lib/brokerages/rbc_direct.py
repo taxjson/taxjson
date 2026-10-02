@@ -1602,7 +1602,7 @@ class RbcBrokerage(BaseBrokerage):
                        f"{r.value:,.2f} as {cls} and drop the shares; book "
                        f"the row in a .tt file.")
         if cls == 'book-adjust':
-            return [self._build_book_adjust(r)]
+            return self._build_book_adjust(r)
         if cls == 'roc':
             if abs(r.value) < 0.005:
                 self._warn(f"$0 return-of-capital row — {r.label()}; "
@@ -2029,23 +2029,50 @@ class RbcBrokerage(BaseBrokerage):
         }
         return [tx]
 
-    def _build_book_adjust(self, r):
+    def _build_book_adjust(self, r) -> List[Dict[str, Any]]:
         """RBC's book-cost adjustments carry the amount in the description,
         not the Value column (Value is 0):
           "... 2022 NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK COST $5293.06"
               → a reinvested (notional) distribution: ACB UP
           "... RETURN OF CAPITAL ADJUSTMENT TO BOOK COST $1.16"
-              → ACB DOWN (return of capital)."""
+              → ACB DOWN (return of capital).
+        The direction comes from the Activity label too: a 'Return of
+        Capital' row lowers the ACB whatever its description words
+        (re-audit A2-0273 — 'ROC ADJUSTMENT TO BOOK COST' raised it); an
+        activity and a description that disagree are refused."""
         m = _RBC_BOOK_COST_RE.search(r.desc)
         amount = (desc_number(m.group(1), where=self._at(r),
                               field='ADJUSTMENT TO BOOK COST') if m else 0.0)
         if amount < 0.005:
+            # Nothing to book: a 0.00 ADJUST plus a 'raises its ACB'
+            # warning contradicted this line (re-audit A2-1047).
             self._warn(f"$0 book-cost adjustment — {r.label()}; nothing "
                        f"booked.")
+            return []
         symbol = self._equity_symbol(r.symbol, r.currency, r, market=True)
-        if is_roc_description(r.desc):
-            return self.tx_roc_adjust(symbol=symbol, currency=r.currency,
-                                      date=r.date, desc=r.desc, amount=amount)
+        act_roc = (r.activity or '').strip().lower() == 'return of capital'
+        notional = bool(re.search(r'\bNOTIONAL\b', r.desc or '', re.I))
+        if act_roc and notional:
+            raise _err(Path(self._fname), r.line,
+                       f"a 'Return of Capital' row describes a NOTIONAL "
+                       f"distribution ({r.desc[:80]!r}) — one lowers the "
+                       f"ACB, the other raises it; refusing to guess. Book "
+                       f"it in a .tt ADJUST from the fund's T3.")
+        if act_roc or is_roc_description(r.desc):
+            # The year-end ROC book-cost row reclassifies part of the
+            # cash distributions already booked as income (its Value is
+            # 0): the ACB comes down, and the income totals still hold
+            # those dollars (re-audit A2-0094).
+            self._warn(f"line {r.line}: year-end return of capital "
+                       f"{amount:,.2f} {r.currency} on {symbol} lowers "
+                       f"its ACB; RBC posts no cash for it, so it is "
+                       f"usually part of the cash distributions already in "
+                       f"the income totals (counted twice) — take the "
+                       f"income (and box 42) from the fund's T3, not from "
+                       f"divs-sum.", attention=True)
+            return [self.tx_roc_adjust(symbol=symbol, currency=r.currency,
+                                       date=r.date, desc=r.desc,
+                                       amount=amount)]
         # The notional (reinvested) distribution is taxable income of the
         # year as well as an ACB increase; the export carries only the
         # book-cost side and taxjson books only that (audit S063-17 —
@@ -2055,13 +2082,13 @@ class RbcBrokerage(BaseBrokerage):
                    f"distribution itself is income reported on the fund's "
                    f"T3 (usually box 21) and is NOT in taxjson's income "
                    f"totals — take it from the slip.", attention=True)
-        return {
+        return [{
             'action': 'ADJUST',
             'date': r.date, 'time': '09:30:00', 'date_settle': r.date,
             'symbol': symbol, 'quantity': 0.0, 'currency': r.currency,
             'net_amount': amount, 'gross_amount': 0.0, 'type': 'dist',
             'account': self.DEFAULT_ACCOUNT, 'description': r.desc,
-        }
+        }]
 
     def _build_dividend(self, r) -> List[Dict[str, Any]]:
         # `currency` is the dividend's payment currency (stays on the

@@ -496,5 +496,53 @@ class TestRbcReinvestReversalsAcrossExports(unittest.TestCase):
             parse_files({"rbc_2026.csv": self.CXL})
 
 
+
+class TestRbcBookCostAdjustments(unittest.TestCase):
+    """A2-0094, A2-0273, A2-1047."""
+
+    def _one(self, activity, desc):
+        return parse_one(row("December 31, 2025", activity, "XYZ.UN",
+                             "XYZ TRUST", "", "", "0", "CAD", desc,
+                             settle="March 20, 2026"))
+
+    def test_return_of_capital_activity_lowers_the_acb(self):
+        for desc in ("XYZ TRUST 2025 ADJUSTMENT TO BOOK COST $50.00",
+                     "XYZ TRUST ROC ADJUSTMENT TO BOOK COST $50.00"):
+            txs, err, _ = self._one("Return of Capital", desc)
+            self.assertEqual([(t["action"], t["net_amount"]) for t in txs],
+                             [("ADJUST", -50.0)], (desc, err))
+
+    def test_activity_and_description_disagreeing_is_refused(self):
+        from taxjson.lib.brokerages.rbc_direct import RbcFormatError
+        with self.assertRaises(RbcFormatError):
+            self._one("Return of Capital", "XYZ TRUST 2025 NOTIONAL "
+                      "DISTRIBUTION ADJUSTMENT TO BOOK COST $50.00")
+
+    def test_year_end_roc_says_the_income_already_holds_it(self):
+        txs, err, _ = self._one("Distribution", "RTC - XYZ TRUST RETURN OF "
+                                "CAPITAL ADJUSTMENT TO BOOK COST $30.00")
+        self.assertEqual([t["net_amount"] for t in txs], [-30.0])
+        self.assertTrue(any("counted twice" in ln for ln in _attention(err)),
+                        err)
+
+    def test_zero_adjustment_books_nothing(self):
+        for desc in ("XYZ TRUST NOTIONAL DISTRIBUTION ADJUSTMENT TO BOOK "
+                     "COST $0.00",
+                     "XYZ TRUST RETURN OF CAPITAL ADJUSTMENT TO BOOK COST "
+                     "$0.00"):
+            txs, err, _ = self._one("Distribution", desc)
+            self.assertEqual(txs, [], desc)
+            self.assertNotIn("raises its ACB", err)
+
+
+    def test_questrade_zero_net_book_cost_row_is_unbooked(self):
+        # A2-1062: the Questrade twin was an 'informational' non-event.
+        txs, err, _ = qt_parse(qdiv("XYZ.UN.TO", "XYZ TRUST RETURN OF CAPITAL "
+                                    "ADJUSTMENT TO BOOK COST $1.16", "0",
+                                    cur="CAD"))
+        self.assertEqual(txs, [])
+        self.assertIn("warning: UNBOOKED:", err)
+
+
 if __name__ == "__main__":
     unittest.main()
